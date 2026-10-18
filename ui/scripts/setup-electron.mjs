@@ -12,7 +12,7 @@ export function setupElectron({ root = fileURLToPath(new URL('../', import.meta.
   const installer = join(dirname(require.resolve('electron/package.json')), 'install.js')
   const result = spawnSync(process.execPath, [installer], { env, stdio: 'inherit' })
   if (result.error || result.status !== 0) {
-    throw new Error('Electron runtime setup failed. Check the download error above, then retry npm run setup:electron.', {
+    throw new Error('Electron runtime setup failed. Check the download error above, then retry pnpm run setup:electron.', {
       cause: result.error,
     })
   }

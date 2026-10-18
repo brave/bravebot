@@ -51,7 +51,7 @@ PHRASES = (
 
 # This file lists the phrases above, so it would report itself. Lockfiles are generated.
 OWN_FILE = "contrib/check-narration.py"
-LOCKFILES = ("Cargo.lock", "package-lock.json")
+LOCKFILES = ("Cargo.lock", "package-lock.json", "pnpm-lock.yaml")
 PATHSPECS = (f":(exclude){OWN_FILE}", *(f":(exclude,glob)**/{name}" for name in LOCKFILES))
 
 WORD = re.compile(r"[a-z0-9']+")
@@ -246,6 +246,13 @@ def selftest():
                 "c.txt:2: \"my mistake\"",
                 "pull request body:2: \"i initially\"",
             ]),
+        )
+        (root / "ui").mkdir()
+        (root / "ui/pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n# i assumed\n")
+        expect(
+            "an untracked pnpm lockfile is not read",
+            [g for g in check(root, "main", {}) if "pnpm-lock" in g],
+            [],
         )
         (root / "a.txt").write_text("one\ntwo\ni verified it\n")
         expect("an uncommitted edit is read", [g for g in check(root, "main", {}) if g.startswith("a.txt")],

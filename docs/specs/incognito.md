@@ -12,6 +12,8 @@ governs:
   - crates/session/src/store.rs
   - crates/session/src/sessions.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/auth.rs
 documented-by: docs/website/docs/using/sessions.md
 ---
 
@@ -107,8 +109,8 @@ would add one is not offered either. So is the record of reach a person remember
 which [sandboxing.md](sandboxing.md#SANDBOX-23) governs: a grant already in it is attached as it is
 anywhere, and `/reach` adds none and says so. So is the record of answers to the startup question
 somebody asked to be kept, which [trust-map.md](trust-map.md#TRUST-23) governs: a kept answer settles
-the question here as anywhere, the session says so as it opens, the key that would keep one is not
-offered, and `/forget-trust` writes nothing and names the file.
+the question here as anywhere, the session says so as it opens, a yes is not kept and the question
+says so, and `/forget-trust` writes nothing and names the file.
 
 **The one read refused is the standing answer about whether a check answers in somebody's place.**
 The word a person's own directory holds about that is not read in this mode, so a session here asks
@@ -158,6 +160,7 @@ cleared and by what, and one missed ordering writes the thing the mode exists no
 `verified-by: bravebot_cli::main::asking_for_incognito_twice_is_asking_once`
 `verified-by: bravebot_cli::main::incognito_alone_leaves_the_interactive_session`
 `verified-by: bravebot_cli::main::an_invocation_without_the_flag_is_left_alone`
+`verified-by: bravebot_cli::running::the_mode_is_engaged_by_the_flag_wherever_it_stands_and_by_nothing_else`
 
 <a id="INCOG-7"></a>
 ### INCOG-7: importing a subscription is refused rather than silently skipped

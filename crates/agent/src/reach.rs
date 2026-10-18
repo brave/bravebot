@@ -20,6 +20,13 @@
 //! scope this build does not know, is skipped: it grants nothing. So is one that is bound to no
 //! checkout where it should be.
 //!
+//! # A key chosen for an owner
+//!
+//! The same file holds the ssh key a person chose at a run prompt for the repositories of one owner
+//! on one host (SANDBOX-16), in lines of their own shape. Neither kind of line parses as the other,
+//! so each reader skips the other's lines, and a build that knows only grants reads the file as it
+//! did.
+//!
 //! # Everything degrades to asking
 //!
 //! No state directory, an unreadable file or a failed write each mean no grant, and a plan with no
@@ -29,7 +36,7 @@ use crate::granted::WrittenPath;
 use crate::trusted::Identity;
 use bravebot_core::command::Step;
 use bravebot_i18n::t;
-use bravebot_sandbox::scope::{Scope, judged_directory};
+use bravebot_sandbox::scope::{Address, Scope, judged_directory};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -241,7 +248,7 @@ impl Grant {
     /// at `~/.ssh` is refused here whatever it was when it was allowed.
     pub fn directory(&self, home: &Path) -> Option<PathBuf> {
         match &self.reached {
-            Reached::Directory(path) => judged_directory(path, home),
+            Reached::Directory(path) => judged_directory(path, home, self.write),
             Reached::Scope(_) => None,
         }
     }
@@ -301,6 +308,79 @@ struct Written {
     allowed: String,
     session: Option<String>,
     workspace: Option<WrittenWorkspace>,
+}
+
+/// The key a person chose at a run prompt for the repositories of one owner on one host, which a
+/// `git` stage whose argv names an ssh address of that owner has ssh offer first (SANDBOX-16).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChosenKey {
+    /// The host and owner the address named.
+    pub address: Address,
+    /// The public key file, or `None` where the person chose to leave the key to ssh.
+    pub key: Option<PathBuf>,
+    /// The day it was chosen, `YYYY-MM-DD`.
+    pub allowed: String,
+}
+
+impl ChosenKey {
+    /// The host and owner as a `git.identities` entry names them.
+    pub fn owner(&self) -> String {
+        self.address.entry_name()
+    }
+
+    /// The key as a person reads it: the file, or the words for ssh's own choice.
+    pub fn display(&self) -> String {
+        match &self.key {
+            Some(key) => key.display().to_string(),
+            None => t!(reach_key_default).to_string(),
+        }
+    }
+}
+
+/// One line of the record holding a [`ChosenKey`], as it is spelled on disk.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WrittenKey {
+    action: Action,
+    /// `<host>/<owner>`, as a `git.identities` entry is named.
+    key_for: String,
+    key: Option<String>,
+    allowed: String,
+}
+
+impl WrittenKey {
+    /// `None` for a key whose path is not text, which no stage could be told to offer.
+    fn of(action: Action, chosen: &ChosenKey) -> Option<Self> {
+        Some(Self {
+            action,
+            key_for: chosen.owner(),
+            key: match &chosen.key {
+                Some(key) => Some(key.to_str()?.to_string()),
+                None => None,
+            },
+            allowed: chosen.allowed.clone(),
+        })
+    }
+
+    fn into_chosen(self) -> Option<(Action, ChosenKey)> {
+        let address = Address::from_entry_name(&self.key_for)?;
+        let key = match self.key {
+            Some(key) => {
+                let key = PathBuf::from(key);
+                key.is_absolute().then_some(())?;
+                Some(key)
+            }
+            None => None,
+        };
+        Some((
+            self.action,
+            ChosenKey {
+                address,
+                key,
+                allowed: self.allowed,
+            },
+        ))
+    }
 }
 
 /// The checkout a line is bound to, as it is spelled on disk.
@@ -445,6 +525,10 @@ impl Store {
     }
 
     fn append(&self, action: Action, grant: &Grant) -> bool {
+        Written::of(action, grant).is_some_and(|written| self.append_line(&written))
+    }
+
+    fn append_line(&self, written: &impl Serialize) -> bool {
         if !may_be_added_to() {
             return false;
         }
@@ -454,16 +538,44 @@ impl Store {
         if crate::home::create_directory(parent).is_err() {
             return false;
         }
-        let Some(written) = Written::of(action, grant) else {
-            return false;
-        };
-        let Ok(mut encoded) = serde_json::to_string(&written) else {
+        let Ok(mut encoded) = serde_json::to_string(written) else {
             return false;
         };
         encoded.push('\n');
         crate::home::append_to_file(&self.path)
             .and_then(|mut file| file.write_all(encoded.as_bytes()))
             .is_ok()
+    }
+
+    /// The key chosen for each host and owner, one each, in the order they were last chosen. A later
+    /// line for a host and owner replaces an earlier one, compared without regard to ASCII case as
+    /// a `git.identities` entry is.
+    pub fn chosen_keys(&self) -> Vec<ChosenKey> {
+        let Ok(contents) = std::fs::read_to_string(&self.path) else {
+            return Vec::new();
+        };
+        let mut held: Vec<ChosenKey> = Vec::new();
+        for (action, chosen) in contents
+            .lines()
+            .filter_map(|line| serde_json::from_str::<WrittenKey>(line).ok())
+            .filter_map(WrittenKey::into_chosen)
+        {
+            held.retain(|existing| !existing.address.same_as(&chosen.address));
+            if action == Action::Allow {
+                held.push(chosen);
+            }
+        }
+        held
+    }
+
+    /// Remember `chosen` in place of whatever was chosen before for its host and owner. Whether a
+    /// line was written.
+    pub fn choose_key(&self, chosen: &ChosenKey) -> bool {
+        WrittenKey::of(Action::Allow, chosen).is_some_and(|written| self.append_line(&written))
+    }
+
+    fn forget_key(&self, chosen: &ChosenKey) -> bool {
+        WrittenKey::of(Action::Revoke, chosen).is_some_and(|written| self.append_line(&written))
     }
 }
 
@@ -602,6 +714,11 @@ pub fn command(typed: &Typed<'_>, argument: &str) -> String {
     if argument.is_empty() {
         return listing(&store.read(Some(typed.session), typed.directory));
     }
+    if let Some(rest) = argument.strip_prefix("keys")
+        && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+    {
+        return keys_command(&store, rest.trim());
+    }
     if let Some(number) = argument.strip_prefix("remove") {
         return match number.trim().parse::<usize>() {
             Ok(number) => remove(&store, typed.session, typed.directory, number),
@@ -609,6 +726,107 @@ pub fn command(typed: &Typed<'_>, argument: &str) -> String {
         };
     }
     allow(&store, typed, argument)
+}
+
+fn path_access(row: &crate::workspace::PathReach) -> String {
+    match row.write {
+        true => t!(reach_access_writes).to_string(),
+        false => t!(reach_access_reads).to_string(),
+    }
+}
+
+/// The rows `/reach paths` lists for the paths the person let programs reach this session, each
+/// numbered as `/reach paths remove <number>` counts them (SANDBOX-28). What `/status` shows, so
+/// the two cannot word a path differently. The planner's reason is not carried: it is the
+/// planner's text and the row is the person's record of what they allowed.
+pub fn requested_paths_listed(held: &[crate::workspace::PathReach]) -> Vec<String> {
+    held.iter()
+        .enumerate()
+        .map(|(at, row)| {
+            t!(
+                path_listed,
+                number = (at + 1).to_string(),
+                access = path_access(row),
+                path = row.path.display().to_string()
+            )
+            .to_string()
+        })
+        .collect()
+}
+
+/// `/reach paths` and `/reach paths remove <number>`, or `None` for an argument that is neither
+/// (SANDBOX-28). Nothing here reads or writes a file: the paths are the workspace's, for the
+/// session.
+pub fn requested_paths_command(
+    workspace: &crate::workspace::Workspace,
+    argument: &str,
+) -> Option<String> {
+    let rest = argument.trim().strip_prefix("paths")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let rest = rest.trim();
+    if rest.is_empty() {
+        let held = requested_paths_listed(&workspace.path_reach());
+        return Some(match held.is_empty() {
+            true => t!(path_none).to_string(),
+            false => held.join("\n"),
+        });
+    }
+    let Some(number) = rest.strip_prefix("remove") else {
+        return Some(t!(path_usage).to_string());
+    };
+    let Ok(number) = number.trim().parse::<usize>() else {
+        return Some(t!(path_usage).to_string());
+    };
+    Some(match workspace.end_path_reach(number) {
+        Some(ended) => t!(
+            path_removed,
+            access = path_access(&ended),
+            path = ended.path.display().to_string()
+        )
+        .to_string(),
+        None => t!(path_refused_number, number = number.to_string()).to_string(),
+    })
+}
+
+/// `/reach keys` and `/reach keys remove <number>`: the key chosen at a run prompt for each owner,
+/// and forgetting one so that the next such prompt asks again (SANDBOX-16).
+fn keys_command(store: &Store, rest: &str) -> String {
+    let held = store.chosen_keys();
+    if rest.is_empty() {
+        if held.is_empty() {
+            return t!(reach_key_none).to_string();
+        }
+        return held
+            .iter()
+            .enumerate()
+            .map(|(at, chosen)| {
+                t!(
+                    reach_key_listed,
+                    number = (at + 1).to_string(),
+                    owner = chosen.owner(),
+                    key = chosen.display(),
+                    date = chosen.allowed.as_str()
+                )
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    let Some(number) = rest
+        .strip_prefix("remove")
+        .and_then(|number| number.trim().parse::<usize>().ok())
+    else {
+        return t!(reach_key_usage).to_string();
+    };
+    let Some(chosen) = number.checked_sub(1).and_then(|at| held.get(at)) else {
+        return t!(reach_key_refused_number, number = number.to_string()).to_string();
+    };
+    if !store.forget_key(chosen) {
+        return t!(reach_refused_incognito).to_string();
+    }
+    t!(reach_key_removed, owner = chosen.owner()).to_string()
 }
 
 fn listing(held: &[Grant]) -> String {
@@ -691,7 +909,7 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
                 Some(rest) => profile.join(rest),
                 None => PathBuf::from(entry),
             };
-            match judged_directory(&named, profile) {
+            match judged_directory(&named, profile, write) {
                 Some(path) => Reached::Directory(path),
                 None => return t!(reach_refused_entry, entry = entry).to_string(),
             }
@@ -752,6 +970,68 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
 mod tests {
     use super::*;
     use crate::testutil::scratch_dir;
+
+    /// SANDBOX-28: `/reach paths` lists what was let through `request_path`, `remove` ends one by its
+    /// number and says so, a number that names none ends none, and anything else is the usage line.
+    /// Another word after `/reach` is not this command's, so the rest of `/reach` still reads it.
+    #[test]
+    fn reach_paths_lists_ends_and_leaves_other_words_alone() {
+        let workspace = {
+            let root = scratch_dir("request-path-listing");
+            std::fs::create_dir_all(&root).expect("scratch");
+            crate::workspace::Workspace::new(root).expect("workspace")
+        };
+        let command = |argument: &str| requested_paths_command(&workspace, argument);
+
+        assert_eq!(command("paths"), Some(t!(path_none).to_string()));
+        workspace.grant_path_reach(
+            PathBuf::from("/data/in"),
+            false,
+            "UNIQUE-REASON-IN".to_string(),
+        );
+        workspace.grant_path_reach(
+            PathBuf::from("/data/out"),
+            true,
+            "UNIQUE-REASON-OUT".to_string(),
+        );
+
+        let listed = command("paths").expect("the listing");
+        let rows: Vec<&str> = listed.lines().collect();
+        assert_eq!(rows.len(), 2, "{listed}");
+        assert!(rows[0].starts_with("1.") && rows[0].contains("reads /data/in"));
+        assert!(rows[1].starts_with("2.") && rows[1].contains("reads and writes /data/out"));
+        assert!(
+            !listed.contains("UNIQUE-REASON"),
+            "the planner's reason was listed: {listed}"
+        );
+
+        assert_eq!(
+            command("paths remove 9"),
+            Some(t!(path_refused_number, number = "9").to_string())
+        );
+        assert_eq!(workspace.path_reach().len(), 2);
+        for (malformed, expected) in [
+            ("paths remove", t!(path_usage).to_string()),
+            ("paths remove x", t!(path_usage).to_string()),
+            ("paths forget 1", t!(path_usage).to_string()),
+            (
+                "paths remove 0",
+                t!(path_refused_number, number = "0").to_string(),
+            ),
+        ] {
+            assert_eq!(command(malformed), Some(expected), "{malformed}");
+            assert_eq!(workspace.path_reach().len(), 2, "{malformed}");
+        }
+        let removed = command("paths remove 1").expect("a reply");
+        assert!(removed.contains("/data/in"), "{removed}");
+        assert!(!removed.contains("UNIQUE-REASON"), "{removed}");
+        assert_eq!(workspace.path_reach().len(), 1);
+        assert_eq!(workspace.path_reach()[0].path, Path::new("/data/out"));
+
+        for other in ["", "remove 1", "pathsx", "docker", "paths-elsewhere"] {
+            assert_eq!(command(other), None, "{other:?}");
+        }
+    }
 
     /// A fresh directory under `target/`, as the shell canonicalises it.
     fn fresh(name: &str) -> PathBuf {
@@ -1071,6 +1351,7 @@ mod tests {
     #[test]
     fn a_directory_that_holds_a_key_or_does_not_exist_is_refused() {
         let place = Place::new("refused-directory");
+        std::fs::create_dir_all(place.profile.join(".bravebot/logs")).expect("logs");
         let above = place
             .profile
             .parent()
@@ -1083,11 +1364,7 @@ mod tests {
             place.profile.join(".ssh").display().to_string(),
             "~/.ssh".to_string(),
             place.profile.join(".bravebot").display().to_string(),
-            place
-                .profile
-                .join(".bravebot/sessions")
-                .display()
-                .to_string(),
+            place.profile.join(".bravebot/logs").display().to_string(),
             "~/.bravebot".to_string(),
             place.profile.join("missing").display().to_string(),
             "relative/dir".to_string(),
@@ -1103,6 +1380,38 @@ mod tests {
         }
         assert!(place.held("s").is_empty());
         assert!(!Store::new(&place.home).path().exists());
+    }
+
+    /// The session records are the one part of `~/.bravebot` a person may open to a program, and
+    /// only for reading. The regression it rejects: the records refused for a read, which sends
+    /// back every script that reads them for a request, or allowed for a write, which lets a
+    /// program rewrite a transcript a later session resumes from.
+    #[test]
+    fn the_session_records_may_be_reached_for_reading_and_not_for_writing() {
+        let place = Place::new("reach-session-records");
+        let sessions = place.profile.join(".bravebot/sessions");
+        for entry in [
+            sessions.display().to_string(),
+            "~/.bravebot/sessions".to_string(),
+        ] {
+            let refused = t!(reach_refused_entry, entry = entry.as_str()).to_string();
+            assert_ne!(
+                place.say("s", &format!("{entry} -- ls")),
+                refused,
+                "{entry}"
+            );
+            assert_eq!(
+                place.say("s", &format!("{entry} write -- ls")),
+                refused,
+                "{entry}"
+            );
+        }
+        let held = place.held("s");
+        assert!(!held.is_empty());
+        for grant in &held {
+            assert!(!grant.write);
+            assert_eq!(grant.directory(&place.profile), Some(sessions.clone()));
+        }
     }
 
     /// A directory that was fine when it was allowed is judged again when it is used. The
@@ -1466,5 +1775,140 @@ mod tests {
         assert_eq!(second[0].binary, PathBuf::from("/usr/bin/gh"));
         assert_eq!(second[0].workspace, None);
         assert_eq!(place.held_in("other", &place.first).len(), 0);
+    }
+
+    fn chosen(host: &str, owner: &str, key: Option<&str>) -> ChosenKey {
+        ChosenKey {
+            address: Address::spelled(host, owner).expect("an address"),
+            key: key.map(PathBuf::from),
+            allowed: "2026-10-13".to_string(),
+        }
+    }
+
+    /// SANDBOX-16: a key chosen at a prompt is read back by host and owner, a later choice for the
+    /// same owner replaces the earlier one whatever the case it was spelled in, and leaving the key
+    /// to ssh is a choice of its own. The regressions it rejects are the first choice winning,
+    /// which keeps a person on a key they replaced, and two spellings of one owner held as two.
+    #[test]
+    fn a_chosen_key_is_read_back_by_host_and_owner_and_the_latest_choice_wins() {
+        let place = Place::new("chosen-keys");
+        let store = Store::new(&place.home);
+        assert!(store.chosen_keys().is_empty());
+
+        assert!(store.choose_key(&chosen("github.com", "acme", Some("/k/first.pub"))));
+        assert!(store.choose_key(&chosen("github.com", "other", None)));
+        assert!(store.choose_key(&chosen("GitHub.com", "ACME", Some("/k/second.pub"))));
+
+        let held = store.chosen_keys();
+        assert_eq!(held.len(), 2, "{held:?}");
+        assert_eq!(held[0], chosen("github.com", "other", None));
+        assert_eq!(held[1], chosen("GitHub.com", "ACME", Some("/k/second.pub")));
+    }
+
+    /// SANDBOX-16: a key whose path is not text is refused and writes nothing, so the record never
+    /// holds the replacement-character spelling of its name, which names another file for ssh to
+    /// offer. The lookalike is text, and is chosen and read back as itself.
+    #[cfg(unix)]
+    #[test]
+    fn a_key_whose_path_is_not_text_is_refused_rather_than_kept_as_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let place = Place::new("chosen-key-not-text");
+        let store = Store::new(&place.home);
+        let invalid = ChosenKey {
+            key: Some(PathBuf::from(OsStr::from_bytes(b"/k/\xff.pub"))),
+            ..chosen("github.com", "acme", None)
+        };
+        let lookalike = chosen("github.com", "acme", Some("/k/\u{FFFD}.pub"));
+        assert_ne!(invalid, lookalike);
+
+        assert!(!store.choose_key(&invalid));
+        assert!(!store.path().exists(), "a refused key wrote a line");
+        assert!(store.chosen_keys().is_empty());
+
+        assert!(store.choose_key(&lookalike));
+        assert_eq!(store.chosen_keys(), [lookalike]);
+    }
+
+    /// The record holds grants and chosen keys in one file, and neither reader takes the other's
+    /// lines: a grant line written in the format earlier builds wrote still reads as that grant and
+    /// is no chosen key, a chosen key's line is no grant, and a key line naming a relative path or
+    /// an owner no `git.identities` entry could spell chooses nothing. The regression it rejects is
+    /// a reader that takes any line it can half parse, which would attach a scope a person never
+    /// granted or offer a key from a path that resolves somewhere else.
+    #[test]
+    fn grant_lines_and_key_lines_are_each_read_by_their_own_reader_only() {
+        let place = Place::new("grant-and-key-lines");
+        let store = Store::new(&place.home);
+        let earlier = r#"{"action":"allow","binary":"/usr/bin/gh","operation":"pr","scope":"remote","directory":null,"write":false,"allowed":"2026-10-07","session":null,"workspace":null}"#;
+        let lines = [
+            earlier,
+            r#"{"action":"allow","key_for":"github.com/acme","key":"/k/work.pub","allowed":"2026-10-13"}"#,
+            r#"{"action":"allow","key_for":"github.com/rel","key":"k/work.pub","allowed":"2026-10-13"}"#,
+            r#"{"action":"allow","key_for":"github.com/a b","key":"/k/work.pub","allowed":"2026-10-13"}"#,
+            r#"{"action":"allow","key_for":"github.com","key":"/k/work.pub","allowed":"2026-10-13"}"#,
+        ];
+        std::fs::write(store.path(), lines.join("\n") + "\n").expect("record");
+
+        let grants = store.read(None, &place.project);
+        assert_eq!(grants.len(), 1, "{grants:?}");
+        assert_eq!(grants[0].binary, PathBuf::from("/usr/bin/gh"));
+        assert_eq!(grants[0].reached, Reached::Scope(Scope::Remote));
+        assert_eq!(
+            store.chosen_keys(),
+            [chosen("github.com", "acme", Some("/k/work.pub"))]
+        );
+    }
+
+    /// SANDBOX-16: `/reach keys` lists each owner's chosen key, `remove` forgets the numbered one
+    /// and says the next prompt asks again, a number that names none forgets nothing, and a word
+    /// that only begins with `keys` is not this command. The regressions it rejects are a removal
+    /// that forgets the wrong owner or every owner, and `keys` swallowing another argument.
+    #[test]
+    fn reach_keys_lists_the_chosen_keys_and_remove_forgets_one() {
+        let place = Place::new("reach-keys");
+        let store = Store::new(&place.home);
+        assert_eq!(place.say("s", "keys"), t!(reach_key_none).to_string());
+        store.choose_key(&chosen("github.com", "acme", Some("/k/work.pub")));
+        store.choose_key(&chosen("github.com", "other", None));
+
+        let listed = place.say("s", "keys");
+        let rows: Vec<&str> = listed.lines().collect();
+        assert_eq!(rows.len(), 2, "{listed}");
+        assert!(
+            rows[0].starts_with("1.")
+                && rows[0].contains("github.com/acme")
+                && rows[0].contains("/k/work.pub"),
+            "{listed}"
+        );
+        assert!(
+            rows[1].starts_with("2.")
+                && rows[1].contains("github.com/other")
+                && rows[1].contains(&t!(reach_key_default).to_string()),
+            "{listed}"
+        );
+
+        assert_eq!(
+            place.say("s", "keys remove 3"),
+            t!(reach_key_refused_number, number = "3").to_string()
+        );
+        for malformed in ["keys remove", "keys remove x", "keys forget 1"] {
+            assert_eq!(
+                place.say("s", malformed),
+                t!(reach_key_usage).to_string(),
+                "{malformed}"
+            );
+        }
+        assert_eq!(store.chosen_keys().len(), 2);
+
+        let removed = place.say("s", "keys remove 1");
+        assert!(removed.contains("github.com/acme"), "{removed}");
+        assert_eq!(store.chosen_keys(), [chosen("github.com", "other", None)]);
+        assert_ne!(
+            place.say("s", "keysx"),
+            place.say("s", "keys"),
+            "a word beginning with keys was taken for it"
+        );
     }
 }

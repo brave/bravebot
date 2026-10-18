@@ -6,7 +6,14 @@ governs:
   - crates/agent/src/cmdline.rs
   - crates/agent/src/exec.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
+  - crates/agent/src/turn/setup.rs
+  - crates/agent/src/turn/round_steps.rs
+  - crates/agent/src/turn/prompts.rs
+  - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/agent/src/programs.rs
   - crates/core/src/command.rs
   - crates/core/src/pure.rs
@@ -14,6 +21,7 @@ governs:
   - crates/core/src/policy.rs
   - crates/agent/src/confirm.rs
   - crates/tui/src/confirm.rs
+  - crates/tui/src/confirm/run.rs
   - crates/ui-bridge/src/wire.rs
 guards:
   - symbol: cmdline::compile
@@ -137,15 +145,16 @@ Refused, as a compile error with the offending span named:
 
 | Construct | Why |
 |---|---|
-| `$(…)`, `` `…` `` | a command whose text is computed is a destination nobody saw |
+| `$(…)`, `` `…` `` | a command whose text is computed is a destination nobody saw; inside double quotes it is still one, and the refusal says single quotes pass it as text |
 | `<(…)`, `>(…)` | same, plus a file descriptor nobody named |
-| `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line |
-| `$((…))` | arithmetic is a language, and a language needs an interpreter |
+| `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line; a `$` that names nothing (the end anchor in `grep -E "x$"`) is an ordinary character, and a literal one before a name is written `'$'` or `\$` |
+| `$((…))` | arithmetic is a language, and a language needs an interpreter; inside double quotes it is still one, and the refusal says single quotes pass it as text |
 | `&` | backgrounding is a parameter of the call, not a token in the line |
 | `<<`, `<<<` | here-documents are content wearing the shape of syntax |
 | `eval`, `source`, `.`, `exec`, `trap` | reintroduce interpretation by name |
 | `if`, `while`, `for`, `case`, `function` | control flow is a program |
 | `!` | history expansion is text the user typed reaching a line the planner wrote |
+| `(` or `)` written onto the end of an argument | grouping is syntax, so an argument holding a parenthesis has to be quoted, and the refusal says so |
 | a glob in program position | a program worked out from what is on disk is a program that changes when the tree does |
 
 **A refusal returns an error and runs nothing.** There is no degraded mode, no "fall back to
@@ -173,12 +182,18 @@ is the same thing as the planner having written them.
 `verified-by: bravebot_agent::cmdline::a_command_whose_text_would_be_computed_is_refused`
 `verified-by: bravebot_agent::cmdline::process_substitution_is_refused`
 `verified-by: bravebot_agent::cmdline::a_variable_is_refused`
+`verified-by: bravebot_agent::cmdline::a_dollar_that_names_nothing_is_an_ordinary_character`
+`verified-by: bravebot_agent::cmdline::a_dollar_that_opens_an_expansion_is_still_refused`
+`verified-by: bravebot_agent::cmdline::the_variable_refusal_names_the_quoting_that_works`
+`verified-by: bravebot_agent::cmdline::the_substitution_and_arithmetic_refusals_name_single_quotes`
 `verified-by: bravebot_agent::cmdline::arithmetic_is_refused`
 `verified-by: bravebot_agent::cmdline::backgrounding_is_refused`
 `verified-by: bravebot_agent::cmdline::a_here_document_is_refused`
 `verified-by: bravebot_agent::cmdline::a_program_that_reintroduces_interpretation_is_refused`
 `verified-by: bravebot_agent::cmdline::a_word_that_opens_control_flow_is_refused`
 `verified-by: bravebot_agent::cmdline::an_unquoted_exclamation_mark_is_refused`
+`verified-by: bravebot_agent::cmdline::an_unquoted_parenthesis_written_onto_an_argument_says_to_quote_the_argument`
+`verified-by: bravebot_agent::cmdline::a_parenthesis_not_written_onto_an_argument_keeps_the_general_refusal`
 `verified-by: bravebot_agent::cmdline::a_pattern_in_program_position_is_refused`
 `verified-by: bravebot_agent::cmdline::quoting_makes_a_refused_construct_ordinary_text`
 `verified-by: bravebot_agent::cmdline::a_line_that_half_compiles_yields_nothing`
@@ -213,11 +228,26 @@ approval covers without the text changing at all.
 ### CMDLINE-4: globs are expanded by the harness, before the prompt, and bounded
 
 Expansion happens against the workspace at compile time, so the person sees the file list rather
-than the pattern. A pattern matching nothing is a compile error and not an argument passed through
-literally, which is what a shell would do and is never what anyone meant.
+than the pattern. A pattern matching no file is passed to the program as written, as a shell
+without `failglob` does, so `find . -name *.md` gives `find` the pattern `*.md` when no `.md` file
+is where it runs, and the plan shows `*.md`. A pattern that matches is replaced by the files it
+matches, so a pattern meant for the program is written quoted, as in `find . -name '*.md'`.
+
+**An option carrying a value is not a file pattern.** A word that starts with a dash and names the
+option before an `=` that comes ahead of any pattern, such as `--include=*.md`, stands for itself.
+It is never looked up, so it is passed as written whether or not anything matches it, and a file
+named like it cannot change what the program receives. A dash with no name before the `=`, a
+pattern ahead of the `=`, and a dash with no `=` are still patterns.
 
 Expansion is bounded. Past the bound the compile fails and says the count, rather than putting a
 thousand paths in front of a reader who will approve them unread.
+
+**The names a pattern matched are for the person, not the planner.** What is said to the planner
+about a line is said in the words the planner wrote: the result of a run, the account of a job that
+started, moved or ended, an error that the line did not start or run, and a refusal by a deny rule,
+which names the program and not its operands. The expanded plan is what the person is shown and
+endorses, so a file name read out of a directory nobody vouched for is never spelled into a
+sentence the driver writes to the planner.
 
 Ignored directories are ignored the way the tree walk ignores them, so `**` does not descend into
 `.git` or `node_modules`.
@@ -236,7 +266,13 @@ everything and asks nothing.
 
 `verified-by: bravebot_agent::cmdline::a_pattern_becomes_the_files_it_matches`
 `verified-by: bravebot_agent::cmdline::a_pattern_matches_within_one_segment_and_a_tree_across_them`
-`verified-by: bravebot_agent::cmdline::a_pattern_matching_nothing_is_refused_rather_than_passed_through`
+`verified-by: bravebot_agent::cmdline::a_pattern_matching_nothing_is_passed_through_as_written`
+`verified-by: bravebot_agent::cmdline::a_pattern_for_find_matching_nothing_here_reaches_find_as_written`
+`verified-by: bravebot_agent::cmdline::an_option_value_pattern_is_passed_through_as_written`
+`verified-by: bravebot_agent::cmdline::an_option_value_pattern_is_not_replaced_by_a_file_named_like_it`
+`verified-by: bravebot_agent::cmdline::an_option_value_with_braces_is_passed_through_for_each_spelling`
+`verified-by: bravebot_agent::cmdline::only_an_option_carrying_a_value_is_passed_through`
+`verified-by: bravebot_agent::tools::the_run_description_says_when_a_pattern_for_the_program_is_quoted`
 `verified-by: bravebot_agent::cmdline::expansion_is_bounded_and_the_refusal_says_the_count`
 `verified-by: bravebot_agent::cmdline::a_tree_pattern_does_not_descend_into_an_ignored_directory`
 `verified-by: bravebot_agent::cmdline::a_dot_file_is_matched_only_by_a_pattern_that_writes_the_dot`
@@ -244,6 +280,10 @@ everything and asks nothing.
 `verified-by: bravebot_agent::cmdline::a_word_with_no_pattern_names_a_file_that_need_not_exist`
 `verified-by: bravebot_agent::cmdline::a_quoted_pattern_is_not_expanded`
 `verified-by: bravebot_agent::cmdline::braces_multiply_a_word`
+`verified-by: bravebot_agent::cmdline::a_plan_is_told_to_the_planner_with_each_pattern_as_it_was_written`
+`verified-by: bravebot_agent::turn::a_run_result_does_not_spell_the_names_a_glob_matched_to_the_planner`
+`verified-by: bravebot_agent::turn::a_finished_jobs_account_does_not_spell_the_names_a_glob_matched_to_the_planner`
+`verified-by: bravebot_agent::turn::a_deny_rule_refusal_does_not_spell_the_names_a_glob_matched_to_the_planner`
 `verified-by: bravebot_agent::cmdline::a_range_counts_and_keeps_the_padding_it_was_written_with`
 `verified-by: bravebot_agent::cmdline::a_leading_tilde_becomes_the_home_directory`
 `verified-by: bravebot_agent::cmdline::a_tilde_with_no_home_to_stand_for_is_refused`
@@ -261,6 +301,34 @@ everything and asks nothing.
 set, it is shown at the prompt, and it is subject to every rule that governs writing a file: the
 permission rules, the trust map's answer for that path, and the confinement that keeps a write
 inside the workspace.
+
+That confinement is applied when the line is compiled and again immediately before each destination
+is opened, including one the line has already opened once. The parts of the line before it have run
+by then, and a program in one of them can have left a link at the name the person approved. A
+destination that lands outside the workspace and every opened directory at that moment is not
+opened, and the line stops there. The window between that check and the open is the one the known
+costs of [trust-map.md](../trust-map.md) accept for every write.
+
+**The one line it is not applied to is a line whose programs start with no profile**: one the
+person approved with no sandbox ([SANDBOX-29](../sandboxing.md#SANDBOX-29)), and any line under the
+mode `off` ([SANDBOX-22](../sandboxing.md#SANDBOX-22)), but not a delegate's. This process opens a
+destination in place of the stage, so the confinement is what keeps a redirection from reaching
+what the stage's profile holds its programs back from. Where the programs have no profile there is
+nothing for it to hold back, and a program in the same line can already write the same file. The
+prompt lists every destination, the person's `deny` rules still refuse a path, and a destination
+that is outside every opened directory is asked about under the name it was written with
+([TRUST-18](../trust-map.md#TRUST-18)). When the line is refused for leaving the workspace in a
+session that would accept the request, the refusal says that `unconfined` is the argument that
+makes the write possible.
+
+`verified-by: bravebot_agent::turn::an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace`
+`verified-by: bravebot_agent::turn::a_line_under_off_may_redirect_into_a_file_outside_the_workspace`
+`verified-by: bravebot_agent::tools::a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile`
+
+`verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_of_its_line_linked_out_of_the_workspace_is_refused_when_opened`
+`verified-by: bravebot_agent::turn::a_destination_reopened_after_an_earlier_part_linked_it_out_of_the_workspace_is_refused`
+`verified-by: bravebot_agent::turn::a_redirection_into_an_added_directory_is_confined_again_when_it_is_opened`
+`verified-by: bravebot_agent::turn::a_redirection_an_earlier_part_linked_inside_the_workspace_lands_at_the_link_target`
 
 `>>` is a write. `<` is a read and joins the read set, and it is standard input as well: the
 file's bytes go into a program, so the plan reports it as private input and it takes the
@@ -614,6 +682,7 @@ never be able to spend a large fraction of the conversation.
 
 `verified-by: bravebot_agent::tools::a_capped_output_keeps_its_head_and_its_tail`
 `verified-by: bravebot_agent::tools::an_output_inside_the_cap_is_left_alone`
+`verified-by: bravebot_agent::tools::a_capped_output_says_how_many_bytes_and_lines_went`
 `verified-by: bravebot_core::policy::content_the_planner_saw_a_sample_of_is_kept_whole`
 `verified-by: bravebot_agent::turn::the_middle_of_a_capped_output_stays_reachable`
 `verified-by: bravebot_agent::turn::the_middle_of_a_capped_job_output_stays_reachable`
@@ -684,7 +753,9 @@ A call may say it should not be waited for. It is endorsed the same way, starts 
 answers immediately with a handle. The turn carries on.
 
 When it exits, the turn is told: the handle, the status, and the output under the label the plan
-earned. A background run that is still going when the session ends is killed.
+earned. A background run that is still going when the turn ends is killed, except in an interactive
+session, where it is left running and is killed when the session ends ([RUN-15](run.md#RUN-15)). A
+job that ended between two turns is told at the next turn's first round.
 
 The output of a background run obeys every other clause here. Backgrounding changes when the planner
 is told, never what it is allowed to read.

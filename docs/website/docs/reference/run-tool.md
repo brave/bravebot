@@ -15,7 +15,7 @@ Runs a command line. **You approve the compiled plan before anything runs.**
 | `deadline_seconds` | how long to wait, defaulting to 300 seconds ([below](#a-line-has-a-deadline)) |
 | `background` | start the line and hand back a job name instead of waiting ([below](#leaving-a-pipeline-running)) |
 | `stdin_ref` | a reference whose contents are fed to the first program ([below](#filtering-something-the-agent-may-not-read)) |
-| `scopes` | credential scopes and toolchain lists to add to every stage, by name; `strict` mode only, asked about every time and never remembered |
+| `scopes` | credential scopes and toolchain lists to add to every stage, by name; not in `off` mode, and asked about every time |
 | `read` | ask for the output in this result; honoured only when [bypassing with no screening](#reading-the-output-in-the-same-result) |
 
 ```
@@ -86,6 +86,7 @@ runs nothing**. There is no falling back to a shell and no running the prefix th
 | `eval`, `source`, `.`, `exec`, `trap` | they put an interpreter back in the plan |
 | `if`, `while`, `for`, `case`, `function` | control flow is a program |
 | `!` | history expansion is text you typed reaching a line the planner wrote |
+| `(` or `)` written onto the end of an argument | grouping is syntax, so an argument that holds a parenthesis has to be quoted |
 | a pattern in program position | a program worked out from what is on disk changes when the tree does |
 | anything that would open `/dev/tty` | the terminal is not this program's to hand over |
 
@@ -227,11 +228,45 @@ answers for them.
 `ask` rule you wrote still decides, because proof removes the default prompt and does not overrule a
 rule you wrote down. Private input still asks.
 
+## A confined line in a directory you trusted does not ask
+
+Saying yes to the startup question ([trusted directories](../security/trust.md)), in the terminal or in the
+desktop app, also lets a plain
+line the sandbox holds run in that directory without asking. The question says so before you answer.
+It does not apply to a directory you trusted before the question said it, and a session resumed from
+such a record, `--trust-workspace` and a client that does not show the sentence do not grant it either: those keep asking until you answer a question
+that says so.
+
+A line runs unasked only where all of these hold:
+
+- it starts in the directory you trusted, not below it and not in another worktree, each of which has an
+  answer of its own;
+- every stage runs confined, no stage keeps the network (a package manager's fetch, `git` or `gh` with a remote
+  operation, `curl`, `ssh` or a credential scope), and the platform holds a repository's `.git` back
+  from every stage, which today is macOS;
+- no stage is `git`, and the line asks for no scope, toolchain list or `unconfined`, reads no private
+  input, redirects nothing and starts with no `NAME=value`;
+- no stage starts a file under a directory the session may write, and no stage is handed one as an
+  argument where it is executable or the stage is a shell or interpreter (`sh`, `python3`, `node`, `env`
+  and the like), including inside a `sh -c` string or an option's value.
+
+Its output is untrusted and private, as for any line nobody vouched for. Such a line runs with the network
+closed for that line, even where the session's network is open, which is the default: a plain command that needs
+the network fails, and you are asked when it runs with `unconfined`. A program that finds its own files, such as `make` or
+`cargo`, still runs whatever a stage wrote, held to the same sandbox.
+
+A resumed session keeps the answer its own record holds, in the directory it was given in and no other: a record
+resumed in a directory the project has moved to asks again.
+
+To be asked about every line again, add `Bash(*)` to `permissions.ask` in a settings file. Any layer may
+write it, and a checkout's file may too, since it only asks for more.
+
 ## Patterns become the files they match
 
 Expansion happens against the tree at approval time, so what you read at the prompt is the file list
-rather than the pattern. A pattern matching nothing is an error rather than an argument passed
-through unchanged. `**` steps over the directories a listing steps over, so it does not descend into
+rather than the pattern. A pattern matching nothing is passed to the program as written, as a shell
+does, so a pattern meant for the program, as in `find . -name '*.md'`, is quoted in case a file
+matches it. `**` steps over the directories a listing steps over, so it does not descend into
 `.git` or `node_modules`.
 
 Expansion is bounded in both directions: a word standing for more than 100 arguments is refused with
@@ -244,6 +279,16 @@ everything and asks nothing.
 at the prompt, and it takes every rule a write takes: the permission rules, the trust map's answer
 for that path, and the confinement that keeps a write inside the workspace. `>>` is a write, and
 `2>&1` renames a stream and touches no file.
+
+**A redirection outside the workspace needs a line with no sandbox.** bravebot, not the sandboxed
+program, opens the file a redirection names, so a destination outside the workspace and the
+directories you opened is refused. When you ask for a file there, such as `create ../hello.txt with
+howdy`, the planner is told it can start the line with `unconfined: true`. You are asked about that
+one line every time, the prompt lists the file and says the line runs with no sandbox, and no answer
+to it is remembered. The same redirection runs without the argument under `--sandbox off`, where no
+program is sandboxed. A delegate, the desktop app, and the `strict` and `read-only` modes do not
+accept it, and neither does a directory you did not trust. The file tools stay inside the workspace
+whatever you answer.
 
 **`> /dev/null` discards, so it is not a write.** Sending a stream to `/dev/null` (with `>`, `>>`,
 `2>`, `2>>` or `&>`) writes no file, so the path joins no write set and no write rule is asked about
@@ -309,6 +354,11 @@ running them, which is not what happened: the label is about who answered for th
 shown the output and a run the mode approved vouches for nothing: the planner is told that
 `read_output` hands it back as text it can read, and, on a run's result, that `read: true` returns it
 in the same result. The advice does not name the mode, which the planner is told only in plan mode.
+Screening changes it too, in any mode ([`--vet`](../security/permissions.md#bypassing)). A check's
+word answers `read_output` first, so the user is not shown the output a check finds nothing in, and
+the planner is told that `read_output` hands the output back as text it can read or reports it kept
+back, and, on a run's result that passed `read: true`, that the argument was not applied. It says
+nothing of what decided, and names neither the mode nor the check.
 
 A command that printed nothing, such as a `mkdir`, has nothing to keep back. The planner is told it
 printed nothing, with no reference and no advice, and the transcript does not mark it as kept from
@@ -372,6 +422,10 @@ quarantined document as trusted text, which is the thing the split exists to pre
 or the other and not both, and a background line may have neither: nothing is waited for there and
 nothing is fed either.
 
+Output the planner may already read needs none of this to be narrowed: `read_output` takes a
+[`pattern`](tools.md#read_output) over it and answers with the matching lines, so no second line is
+run and nobody is asked.
+
 ## What a program is handed
 
 A step gets the environment bravebot is running in, **less the credentials bravebot authenticates to
@@ -379,6 +433,11 @@ its own backend with**: `SERVICES_KEY_AICHAT` and `BRAVE_SERVICES_KEY_ID`. Every
 first, and removed rather than blanked, so a program that tells an unset variable from an empty one
 sees what a machine that never held the credential sees. You approve the plan, the resolved binaries
 and the directory. The environment is not among them.
+
+The description of `run` tells the planner that these two are removed, and that the variables your
+settings name as a gateway's token or in `run.scrubEnv` are removed too, without listing those. It
+also says that a program reporting one of them unset says nothing about whether you have set it, so a
+build that fails for want of one is not reported to you as a gap in your setup.
 
 **The rest of your environment stays, and that is not an oversight.** `run aws s3 ls` and `run gh pr
 list` are ordinary requests, and no rule matching variable names can tell one of those from an
@@ -443,10 +502,14 @@ lists the jobs a turn has started and stops one.
 the part before it, and nothing waits here; a redirection names a destination nothing is reading.
 Both are refused rather than half-honoured.
 
-**A job cannot outlive the turn that started it.** The turn owns the pipeline and ending the turn
-kills it. A background program still running afterwards would be an effect nobody is watching,
-nobody is being asked about, and nobody can stop. The terminal shows each job while it runs and says
-when the turn stopped one ([Moving a command to the
+**In the terminal interface a job outlives its turn.** The session owns the pipeline: a server
+started in one turn is still running when you ask the next question, and the model is told at the
+start of each turn which jobs are still going and under which names. A job ends when it exits, when
+you or the model stops it, when you `/clear` the conversation, or when the session ends. A job that
+finishes between turns is reported at the next turn's first round. `/jobs stop` between turns stops
+the job at once, since no turn is there to read it. A one-shot run (`-p`), an incognito session and
+a delegate keep the older rule: the turn owns the pipeline and ending the turn kills it. The terminal
+shows each job while it runs ([Moving a command to the
 background](../using/interactive-mode.md#moving-a-command-to-the-background)).
 
 ## Moving a running command to the background
@@ -454,6 +517,8 @@ background](../using/interactive-mode.md#moving-a-command-to-the-background)).
 A line the turn is waiting on can be moved to the background by the person at the terminal, with the
 key the hint line names (`ctrl-b` unless you [moved it](../using/interactive-mode.md#moving-a-key)).
 Only the interactive terminal client has the key: one-shot mode and the desktop app wait as before.
+In the terminal client, a message sent while the line runs also moves it once the line has run for
+10 seconds, so the turn reads the message without waiting for the line to end.
 The command is not stopped or started again. It becomes a job exactly as if it had been started with
 `background: true`, and the agent's result for the call says the user moved it, after how many
 seconds, and under which job name. Nothing it printed is in that result, including what it printed

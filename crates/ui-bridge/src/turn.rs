@@ -16,7 +16,7 @@ use crate::emit::Emitter;
 use crate::protocol::Event;
 use crate::wire;
 use bravebot_agent::confirm::{
-    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, ManifestRequest,
     McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
     ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
@@ -59,6 +59,8 @@ pub enum Kind {
     McpCall,
     /// Whether a remote MCP server moved where its reply pointed (SERVERS-11).
     McpMove,
+    /// Whether programs may reach more hosts through the session proxy for this session (SANDBOX-24).
+    Host,
     Ask,
 }
 
@@ -101,6 +103,7 @@ pub enum Reply {
     /// Three answers: no, yes, and yes without asking again about this tool in this project.
     McpCall(CallDecision),
     McpMove(Decision),
+    Host(Decision),
     /// One answer per question, in the order they were asked. Empty means nobody could be
     /// asked — see [`Confirmer::ask_user`].
     Ask(Vec<Answer>),
@@ -122,6 +125,7 @@ impl Reply {
             Reply::McpTools(_) => Kind::McpTools,
             Reply::McpCall(_) => Kind::McpCall,
             Reply::McpMove(_) => Kind::McpMove,
+            Reply::Host(_) => Kind::Host,
             Reply::Ask(_) => Kind::Ask,
         }
     }
@@ -143,7 +147,8 @@ impl Reply {
             | Reply::Manifest(decision)
             | Reply::Exposure(decision)
             | Reply::McpTools(decision)
-            | Reply::McpMove(decision) => Some(*decision),
+            | Reply::McpMove(decision)
+            | Reply::Host(decision) => Some(*decision),
             Reply::Run(_) | Reply::McpServer(_) | Reply::McpCall(_) | Reply::Ask(_) => None,
         }
     }
@@ -173,6 +178,7 @@ impl Kind {
             Kind::McpTools => Reply::McpTools(Decision::Reject),
             Kind::McpCall => Reply::McpCall(CallDecision::reject()),
             Kind::McpMove => Reply::McpMove(Decision::Reject),
+            Kind::Host => Reply::Host(Decision::Reject),
             // No answers at all, which is how this question says nobody was asked.
             Kind::Ask => Reply::Ask(Vec::new()),
         }
@@ -453,6 +459,8 @@ pub struct BridgeConfirmer {
     cancel: bravebot_core::cancel::Cancel,
     /// Whether a plan was put to the person and not approved. See [`Self::declined_a_plan`].
     declined_a_plan: bool,
+    /// Which kinds somebody can answer now. Every kind, until a host says otherwise.
+    answerers: crate::answerers::Answerers,
 }
 
 impl BridgeConfirmer {
@@ -472,7 +480,14 @@ impl BridgeConfirmer {
             ids,
             cancel,
             declined_a_plan: false,
+            answerers: crate::answerers::Answerers::default(),
         }
+    }
+
+    /// Ask only what `answerers` says somebody can answer, and refuse the rest without showing it.
+    pub(crate) fn answerable_by(mut self, answerers: crate::answerers::Answerers) -> Self {
+        self.answerers = answerers;
+        self
     }
 
     /// Whether a plan was put to the person and came back without a yes.
@@ -502,10 +517,6 @@ impl BridgeConfirmer {
         if self.cancel.is_cancelled() {
             return None;
         }
-        // From the session's own counter, so a later turn does not reuse a number. A counter with
-        // nothing left refuses the question, like every other way of not asking.
-        let id = next_question(&self.ids)?;
-
         // Registered before the question goes out, so an answer that arrives immediately
         // has something to match against. The other order has a race the front-end wins.
         let Ok(mut pending) = self.pending.lock() else {
@@ -513,6 +524,15 @@ impl BridgeConfirmer {
             // nothing can be answered, so nothing is approved.
             return None;
         };
+        // Checked under the lock that registers the question. A controller lost after this point
+        // finds the question registered and refuses it; one lost before it is seen here. Checked
+        // anywhere else, a question could be registered between the two and wait for nobody.
+        if !self.answerers.can_answer(kind) {
+            return None;
+        }
+        // From the session's own counter, so a later turn does not reuse a number. A counter with
+        // nothing left refuses the question, like every other way of not asking.
+        let id = next_question(&self.ids)?;
         *pending = Some(Question { id, kind });
         self.emitter
             .send(Event::new(event, &self.session, data(id)));
@@ -603,8 +623,7 @@ impl Confirmer for BridgeConfirmer {
     /// Ask whether to offer an MCP server's tools to the model (SERVERS-8).
     ///
     /// The request carries each tool as the client drew it, the server's descriptions among them.
-    /// A yes offers the list and is recorded beside the server's approval, so the same list is
-    /// offered unasked in a later session. A no offers none of its tools for the rest of this one.
+    /// A yes offers the list for this session and records nothing. A no offers none of its tools for the rest of this one.
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         self.yes_or_no(Kind::McpTools, "mcp-tools.request", |id| {
             wire::mcp_tools_request(id, request)
@@ -625,6 +644,32 @@ impl Confirmer for BridgeConfirmer {
             Some(Reply::McpCall(decision)) => decision,
             _ => CallDecision::reject(),
         }
+    }
+
+    /// Refuses (SANDBOX-28). The desktop app has no card for a request for a path, so the planner
+    /// is told nobody was there to ask, the same as for a run with no one to answer.
+    fn confirm_path(&mut self, _request: &bravebot_agent::confirm::PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Ask whether programs may reach more hosts through the session proxy (SANDBOX-24).
+    ///
+    /// The request names each host the program tried to reach and the list did not allow. A yes
+    /// allows them for the rest of this session and writes no rule. A no leaves the connection
+    /// refused.
+    fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+        self.yes_or_no(Kind::Host, "host.request", |id| {
+            wire::host_request(id, request)
+        })
+    }
+
+    /// Declined without asking: the desktop hosts no background session, and a session offered no
+    /// way to send is never asked (MSG-3).
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
     }
 
     /// Ask whether a remote MCP server moved where its reply pointed (SERVERS-11).
@@ -695,6 +740,11 @@ impl Confirmer for BridgeConfirmer {
     /// a program on the strength of a question nobody saw. `RunDecision::reject()` is that
     /// pair, and it is what every failure here resolves to.
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+        // A window has no line that shows a program is unconfined, and reads the mode `off` as
+        // `workspace-write` for that reason (SANDBOX-22), so it draws no card for the request and refuses.
+        if request.unconfined {
+            return RunDecision::reject();
+        }
         match self.ask(Kind::Run, "run.request", |id| {
             wire::run_request(id, request)
         }) {
@@ -781,3 +831,7 @@ impl bravebot_agent::servers::Asker for BridgeConfirmer {
         self.confirm_move(request) == Decision::Approve
     }
 }
+
+#[cfg(test)]
+#[path = "answering_tests.rs"]
+mod answering_tests;

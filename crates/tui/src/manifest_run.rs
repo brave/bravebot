@@ -4,9 +4,38 @@ use crate::remote_confirm::ToMain;
 use crate::state::Session;
 use bravebot_agent::{Outcome, Spent, TurnError};
 use bravebot_core::cancel::Cancel;
-use bravebot_session::audit::Stamped;
+use bravebot_core::trust::TrustStore;
+use bravebot_i18n::t;
+use bravebot_session::audit::{Stamped, Trail};
 use bravebot_session::sessions::{self, Front, Handle, Standing};
 use std::path::Path;
+use std::thread::JoinHandle;
+
+/// What a manifest worker ends with: the outcome, the audit trail and the file decisions it holds.
+pub type Worked = (Result<Outcome, TurnError>, Trail, TrustStore);
+
+/// Join the worker and leave the session's map holding the decisions it ended with.
+///
+/// The worker's map is the one it was lent, so it carries attachment grants and every file
+/// decision the run made, whether the run finished, failed or was stopped. A worker that panicked
+/// returns nothing, and the map the session held before the run stays.
+pub fn join(
+    worker: JoinHandle<Worked>,
+    trust: &mut TrustStore,
+) -> (Result<Outcome, TurnError>, Trail) {
+    match worker.join() {
+        Ok((outcome, sink, worker_trust)) => {
+            *trust = worker_trust;
+            (outcome, sink)
+        }
+        Err(_) => (
+            Err(TurnError::Precommit(
+                t!(manifest_ended_unexpectedly).to_string(),
+            )),
+            Trail::new(),
+        ),
+    }
+}
 
 /// Cumulative progress belongs to one run and is replaced by its final outcome on success.
 #[derive(Default)]

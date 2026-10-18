@@ -2,6 +2,7 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
 import { setExperience, useExperience } from '../experience'
 import { rememberCatalogue } from '../context-window'
+import { useDelayedFlag, useFocusReturn } from '../hooks'
 import { Alert, Button, ButtonMenu, Hr, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
 
 /** The two capabilities this app uses; the rest are in the catalogue but not shown. */
@@ -45,6 +46,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
   const preferences = useExperience()
   const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null)
   const [loading, setLoading] = useState(false)
+  const showLoading = useDelayedFlag(loading)
   const [problem, setProblem] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
@@ -53,7 +55,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
   const search = useRef<HTMLElement>(null)
   const list = useRef<HTMLElement>(null)
   const byKeyboard = useRef(false)
-  const shutReason = useRef<string>('explicit')
+  const { onClose, restoreFocus } = useFocusReturn(trigger)
   const id = useId()
 
   const close = () => {
@@ -73,7 +75,8 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     }).catch(() => {
       if (!gone) setProblem('Could not load models. Try again.')
     }).finally(() => { if (!gone) setLoading(false) })
-    return () => { gone = true }
+    // Closing the menu abandons the load, so the next open waits its 150ms again.
+    return () => { gone = true; setLoading(false) }
   }, [open, revision, session])
 
   const options = useMemo(() => {
@@ -164,7 +167,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
       isOpen={open && !disabled}
       placement="top-end"
       positionStrategy="fixed"
-      onClose={(detail) => { shutReason.current = detail.reason }}
+      onClose={onClose}
       onChange={({ isOpen: next }) => {
         if (next) {
           if (disabled) return
@@ -176,8 +179,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
         setOpen(false)
         // Outside click is a blur: leave focus where the pointer landed. Escape
         // and a choice return to the button that opened the menu.
-        if (shutReason.current !== 'blur') trigger.current?.focus()
-        shutReason.current = 'explicit'
+        restoreFocus()
       }}
     >
       <Button ref={trigger} slot="anchor-content" kind={scope === 'bot' ? 'plain' : 'plain-faint'} size={compact ? 'tiny' : 'medium'} className="model-trigger" isDisabled={disabled}
@@ -214,7 +216,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
           }
         }} />
       <div className="model-notices">
-        {loading && <p className="model-status" role="status"><ProgressRing mode="indeterminate" /> Loading available models…</p>}
+        {loading && <p className="model-status" role="status" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Loading available models…</p>}
         {problem && <Alert type="error" size="small" className="model-status" role="alert">{problem}</Alert>}
         {catalogue?.warnings.map((warning) => <p className="model-status" key={warning}>{warning}</p>)}
         {!loading && options.length === 0 && <p className="model-status">{query ? 'No models match your search.' : 'No models available. Check your backend settings.'}</p>}

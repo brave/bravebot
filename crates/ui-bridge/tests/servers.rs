@@ -437,6 +437,40 @@ fn a_server_the_window_approves_is_started_offered_and_called() {
     );
 }
 
+/// VIEW-25 in the window: a call to a server's tool reaches the transcript row with the server, the
+/// tool and the arguments it sends, on the started line and the finished one alike, since the
+/// finished one replaces the started one and a call no prompt is put for is shown nowhere else.
+#[test]
+fn a_call_to_a_servers_tool_reaches_the_window_with_what_it_sends() {
+    let scratch = Scratch::new("bridge-mcp-drawn");
+    let (url, _received) = weather_server();
+    scratch.declare(&url);
+    let mut front = FrontEnd::start(&scratch.home());
+    let session = front.session(&scratch.project());
+
+    let events = front.turn(
+        &session,
+        &[
+            ("mcp-server.request", "approve", false),
+            ("mcp-tools.request", "approve", false),
+            ("mcp-call.request", "approve", false),
+        ],
+    );
+    assert_eq!(events.last().unwrap()["event"], "turn.done", "{events:?}");
+
+    for line in ["tool.started", "tool.finished"] {
+        let drawn: Vec<&Value> = named(&events, line)
+            .iter()
+            .map(|event| &event["data"]["target"])
+            .collect();
+        assert_eq!(
+            drawn,
+            [&json!(r#"weather:get_forecast {"city":"Paris"}"#)],
+            "{line}"
+        );
+    }
+}
+
 /// SERVERS-4: a no leaves the server out of the session. Nothing is sent to it, nothing is
 /// recorded, the window is told why, and the rest of the session does not ask again.
 #[test]

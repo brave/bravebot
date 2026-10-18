@@ -6,12 +6,13 @@
 //!
 //! # Why the anchors are what they are
 //!
-//! A `~/` rule points at the user's home directory. A `/` rule points at the directory the
-//! settings file sits in, which is `~/.bravebot`: Claude Code anchors a single leading slash at
-//! the settings source rather than at the filesystem root, so a rule written in a user-level file
-//! means something inside that file's own directory. That is a trap worth reproducing rather than
-//! improving on, because somebody who has read those docs will write `//` when they mean the root,
-//! and quietly meaning something else here would be worse than agreeing.
+//! A `~/` rule points at the user's home directory. A `/` rule that reaches this module as written
+//! points at the directory the person's settings file sits in, which is `~/.bravebot`; the settings
+//! crate has already respelled one from any other layer (PERM-3). Claude Code anchors a single
+//! leading slash at the settings source rather than at the filesystem root, so a rule written in a
+//! user-level file means something inside that file's own directory. That is a trap worth
+//! reproducing rather than improving on, because somebody who has read those docs will write `//`
+//! when they mean the root, and quietly meaning something else here would be worse than agreeing.
 
 use crate::granted::Proposed;
 use bravebot_config::{PermissionLists, Settings};
@@ -100,9 +101,45 @@ pub fn filesystem_reason(reason: bravebot_sandbox::rules::Reason) -> &'static st
         Reason::ConfinesNothing => t!(sandbox_rule_confines_nothing),
         Reason::PrivateKey => t!(sandbox_rule_private_key),
         Reason::StateDirectory => t!(sandbox_rule_state_directory),
+        Reason::HoldsCredentials => t!(sandbox_rule_holds_credentials),
         Reason::TooBroad => t!(sandbox_rule_too_broad),
         Reason::Overridden => t!(sandbox_rule_overridden),
     }
+}
+
+/// Every entry of the four filesystem lists with why it is not in force, or `None` where it is.
+///
+/// An entry that resolved is still not in force where the backend cannot subtract from a grant and
+/// the entry is a denial beneath `directory`, which every stage is granted, or beneath an allowance
+/// of the person's: each such stage is refused. `capabilities` is `None` where no backend is available, and then nothing starts at all.
+pub fn filesystem_standing<'a>(
+    rules: &'a bravebot_sandbox::rules::Rules,
+    directory: &std::path::Path,
+    capabilities: Option<&bravebot_sandbox::policy::Capabilities>,
+) -> Vec<(&'a bravebot_sandbox::rules::Item, Option<&'static str>)> {
+    use bravebot_sandbox::rules::State;
+    let unsubtractable = match capabilities {
+        Some(capabilities) if !capabilities.subtracts_from_a_grant => {
+            rules.denials_beneath_a_grant(directory)
+        }
+        _ => Vec::new(),
+    };
+    rules
+        .items()
+        .iter()
+        .map(|item| {
+            let why = match item.state {
+                State::Refused(reason) => Some(filesystem_reason(reason)),
+                State::InForce(_)
+                    if unsubtractable.iter().any(|held| std::ptr::eq(*held, item)) =>
+                {
+                    Some(t!(sandbox_rule_cannot_subtract))
+                }
+                State::InForce(_) => None,
+            };
+            (item, why)
+        })
+        .collect()
 }
 
 /// What was wrong, as a clause to follow the entry.
@@ -145,6 +182,7 @@ pub fn for_an_unattended_run(
     let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
     let (mut permissions, mut rejected) =
         Permissions::parse(&lists.deny, &lists.ask, &[], &anchors);
+    explain(&mut permissions, settings);
     follow_links(&mut permissions, workspace);
     // Read for its rejects and then dropped, rather than not read at all. A line the person
     // believes is in force and that nothing can act on is worth saying out loud wherever it was
@@ -159,6 +197,20 @@ pub fn for_an_unattended_run(
     let (_, unreadable) = dropped_allow_entries(settings, &anchors);
     rejected.extend(unreadable);
     (permissions, rejected)
+}
+
+/// Put the reason the person wrote beside each rule onto the rule (PERM-1).
+///
+/// The settings crate answers, and it answers only for the person's own file: a `reason` written in
+/// a project, local or `--settings` layer is not read at all, because the sentence would be text a
+/// checkout wrote and the places a reason is shown present it as the person's own words. That is
+/// the same layering `summaryModel` and the `provider` block have, and it is what keeps a
+/// checkout's sentence out of the refusal the planner is given.
+///
+/// The reason reaches nothing that decides. It is carried on the rule and handed to a report, and
+/// [`Permissions::explain`] states the half of that the kernel is responsible for.
+fn explain(permissions: &mut Permissions, settings: &Settings) {
+    permissions.explain(|list, written| settings.rule_reason(list, written).map(str::to_string));
 }
 
 /// What a leading `~` and a leading `/` in a rule are resolved against.
@@ -265,6 +317,7 @@ pub fn with_granted(
     let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
     let (mut permissions, mut rejected) =
         Permissions::parse(&lists.deny, &lists.ask, &allow, &anchors);
+    explain(&mut permissions, settings);
     follow_links(&mut permissions, workspace);
     rejected.extend(entries_that_are_not_lines(lists));
     rejected.extend(values_that_are_not_lists(settings));
@@ -317,6 +370,22 @@ pub fn proposed(settings: &Settings, profile: Option<&std::path::Path>) -> Vec<P
     dropped_allow_entries(settings, &anchors(profile, false)).0
 }
 
+/// The rules `proposed` holds as an `allow` list of their own, read as [`with_granted`] reads one.
+///
+/// Not in force wherever they are used: it is what a report matches a call against to say that a
+/// rule a checkout wrote would have allowed it once granted ([PERM-15]).
+///
+/// [PERM-15]: ../../../docs/specs/permissions.md
+pub fn as_allow_list(
+    proposed: &[Proposed],
+    profile: Option<&std::path::Path>,
+    workspace: &std::path::Path,
+) -> Permissions {
+    let allow: Vec<String> = proposed.iter().map(|rule| rule.rule.clone()).collect();
+    let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
+    Permissions::parse(&[], &[], &allow, &anchors).0
+}
+
 /// The directories a settings file asked to have opened, in the order it named them.
 ///
 /// Names only, and a name is a request: a file that arrived with a checkout must not be able to
@@ -333,6 +402,121 @@ mod tests {
     use super::*;
     use bravebot_core::permissions::{Decision, Ruling, Subject};
     use std::path::{Path, PathBuf};
+
+    /// A backend that reports whether it can hold a path back from a directory it grants.
+    fn backend(subtracts_from_a_grant: bool) -> bravebot_sandbox::policy::Capabilities {
+        bravebot_sandbox::policy::Capabilities {
+            level: bravebot_sandbox::policy::ConfinementLevel::Partial,
+            mechanisms: vec!["a mechanism"],
+            network_denial_enforced: true,
+            egress_limited_to_a_port: false,
+            grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant,
+            governs_sockets_with_a_path: true,
+        }
+    }
+
+    /// A denial inside the session directory is not in force where the backend cannot hold it
+    /// back, since every stage there is refused. Where it can, and for every entry the backend
+    /// has no part in, the answer is what the entry resolved to.
+    #[test]
+    fn a_denial_the_backend_cannot_subtract_is_not_in_force_and_nothing_else_changes() {
+        use bravebot_sandbox::rules::{Entry, Lists, resolve};
+        let root = crate::testutil::scratch_dir("Permissions-Cannot-Subtract");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("inside")).unwrap();
+        std::fs::create_dir_all(root.join("beside")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let session = root.join("inside");
+        let entry = |path: &str| Entry {
+            path: path.to_string(),
+            by: None,
+            pinned: false,
+        };
+        let beside = root.join("beside").join("secret.env");
+        let beside = beside.to_str().unwrap();
+        let lists = Lists {
+            allow_read: vec![entry("notes.txt")],
+            deny_read: vec![entry("secret.env"), entry(beside)],
+            deny_write: vec![entry("secret.env"), entry("../../outside-the-root")],
+            ..Lists::default()
+        };
+        let rules = resolve(&lists, None, &session);
+        let cannot = t!(sandbox_rule_cannot_subtract);
+        let climbs = filesystem_reason(bravebot_sandbox::rules::Reason::Climbs);
+        let standing = |capabilities: Option<&bravebot_sandbox::policy::Capabilities>| {
+            filesystem_standing(&rules, &session, capabilities)
+                .into_iter()
+                .map(|(item, why)| (item.list.key(), item.entry.path.as_str(), why))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            standing(Some(&backend(false))),
+            [
+                ("allowRead", "notes.txt", None),
+                ("denyRead", "secret.env", Some(cannot)),
+                ("denyRead", beside, None),
+                ("denyWrite", "secret.env", Some(cannot)),
+                ("denyWrite", "../../outside-the-root", Some(climbs)),
+            ]
+        );
+        for held in [standing(Some(&backend(true))), standing(None)] {
+            assert_eq!(
+                held,
+                [
+                    ("allowRead", "notes.txt", None),
+                    ("denyRead", "secret.env", None),
+                    ("denyRead", beside, None),
+                    ("denyWrite", "secret.env", None),
+                    ("denyWrite", "../../outside-the-root", Some(climbs)),
+                ]
+            );
+        }
+    }
+
+    /// The denial is judged against the allowances too: one beneath an `allowWrite` entry is not in
+    /// force where the backend cannot subtract, though the session directory is somewhere else.
+    #[test]
+    fn a_denial_beneath_an_allowance_is_not_in_force_where_the_backend_cannot_subtract() {
+        use bravebot_sandbox::rules::{Entry, Lists, resolve};
+        let root = crate::testutil::scratch_dir("Permissions-Cannot-Subtract-Allowance");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("inside")).unwrap();
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let session = root.join("inside");
+        let shared = root.join("shared");
+        let secret = shared.join("secret.env");
+        let entry = |path: &std::path::Path| Entry {
+            path: path.to_str().unwrap().to_string(),
+            by: None,
+            pinned: false,
+        };
+        let lists = Lists {
+            allow_write: vec![entry(&shared)],
+            deny_write: vec![entry(&secret)],
+            ..Lists::default()
+        };
+        let rules = resolve(&lists, None, &session);
+        let why = |capabilities: &bravebot_sandbox::policy::Capabilities| {
+            filesystem_standing(&rules, &session, Some(capabilities))
+                .into_iter()
+                .map(|(item, why)| (item.list.key(), why))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            why(&backend(false)),
+            [
+                ("allowWrite", None),
+                ("denyWrite", Some(t!(sandbox_rule_cannot_subtract)))
+            ]
+        );
+        assert_eq!(
+            why(&backend(true)),
+            [("allowWrite", None), ("denyWrite", None)]
+        );
+    }
 
     /// The rules take the answer of the volume the workspace is on, and a workspace that cannot be
     /// read gets byte comparison: a rule about `Docs` covers `docs` only where the two are one file.
@@ -795,6 +979,88 @@ mod tests {
         );
     }
 
+    /// PERM-1, PERM-14: a `reason` is read from the person's own file and from no other layer, and
+    /// the rule decides the same either way. A reason is shown to the person as their own words, so
+    /// a sentence a checkout wrote is not read at all, which is the layering `summaryModel` has.
+    ///
+    /// Both layers in one test, because an implementation that read every layer's reason passes an
+    /// assertion about the home layer alone, and that is the case the scope of this field exists to
+    /// close.
+    #[test]
+    fn a_reason_the_person_wrote_reaches_the_rule_and_a_checkouts_does_not() {
+        let own = r#"{"permissions": {"deny": [{"rule": "Read(own.env)", "reason": "my keys"}]}}"#;
+        let checkout = r#"{"permissions": {"deny": [{"rule": "Read(theirs.env)", "reason": "their sentence"}]}}"#;
+        let settings = layered_settings("reason-layers", Some(checkout), Some(own));
+        let (permissions, rejected) = from_settings(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        let (ruling, rule) = permissions
+            .rule_for_path(Subject::Read, "own.env")
+            .expect("the person's own deny rule");
+        assert_eq!(ruling, Ruling::Deny);
+        assert_eq!(
+            rule.reason(),
+            Some("my keys"),
+            "the reason the person wrote did not reach the rule"
+        );
+
+        let (ruling, rule) = permissions
+            .rule_for_path(Subject::Read, "theirs.env")
+            .expect("the checkout's deny rule");
+        assert_eq!(
+            ruling,
+            Ruling::Deny,
+            "a checkout's deny rule stopped deciding"
+        );
+        assert_eq!(
+            rule.reason(),
+            None,
+            "a sentence a checkout wrote was carried on the rule"
+        );
+    }
+
+    /// PERM-1, PERM-15: granting a checkout's `allow` entry puts the rule in force and carries no
+    /// sentence with it. What the person accepted was the rule text the question showed, which is
+    /// not agreement with a sentence the same file wrote, and a dropped checkout entry records no
+    /// source for a reason to be read back from.
+    #[test]
+    fn a_reason_a_checkout_wrote_does_not_reach_a_rule_the_person_granted() {
+        let block = r#"{"permissions": {"allow": [{"rule": "Bash(bash scripts/check.sh)", "reason": "their sentence"}]}}"#;
+        let checkout = layered_settings("granted-reason", Some(block), None);
+        let profile = PathBuf::from("/home/x");
+
+        let offered: Vec<String> = proposed(&checkout, Some(&profile))
+            .into_iter()
+            .map(|rule| rule.rule)
+            .collect();
+        assert_eq!(
+            offered,
+            ["Bash(bash scripts/check.sh)"],
+            "an object entry was not offered as the rule it holds"
+        );
+
+        let (permissions, rejected) = with_granted(
+            &checkout,
+            &["Bash(bash scripts/check.sh)".to_string()],
+            Some(&profile),
+            Path::new("/nonexistent"),
+        );
+        assert!(rejected.is_empty(), "{rejected:?}");
+        let (ruling, rule) = permissions
+            .rule_for_command(&["bash", "scripts/check.sh"])
+            .expect("the granted rule");
+        assert_eq!(ruling, Ruling::Allow);
+        assert_eq!(
+            rule.reason(),
+            None,
+            "a sentence a checkout wrote was carried on the rule the person granted"
+        );
+    }
+
     /// A scratch home and working directory with the layers the arguments name, read the way a
     /// session reads them.
     ///
@@ -840,34 +1106,34 @@ mod tests {
         );
     }
 
-    /// PERM-3 end to end: a `/x` rule in a checkout's own settings file covers the directory beside
-    /// that file, and not the one beside the global file.
+    /// PERM-3 end to end: a `/x` rule in a checkout's own settings file covers `x` at the top of
+    /// the workspace, by the relative name a gate holds it by, and not the directory beside that
+    /// file or beside the global one.
     #[test]
-    fn a_checkouts_slash_rule_is_anchored_beside_the_checkouts_file() {
+    fn a_checkouts_slash_rule_starts_at_the_workspace() {
         let name = "slash-rule-in-a-checkout";
         let block = r#"{"permissions": {"deny": ["Read(/secrets/**)"]}}"#;
         let settings = layered_settings(name, Some(block), None);
         let root = crate::testutil::scratch_dir(&format!("bravebot-permission-layers-{name}"));
-        let beside_the_file = root
-            .join("cwd")
-            .join(".bravebot")
-            .join("secrets")
-            .join("key");
         let (permissions, _) =
             from_settings(&settings, Some(&root.join("profile")), &root.join("cwd"));
         assert_eq!(
-            permissions.for_path(Subject::Read, &beside_the_file.display().to_string()),
+            permissions.for_path(Subject::Read, "secrets/key"),
             Decision::Ruled(Ruling::Deny)
         );
-        let beside_the_global = root
-            .join("profile")
-            .join(".bravebot")
-            .join("secrets")
-            .join("key");
         assert_eq!(
-            permissions.for_path(Subject::Read, &beside_the_global.display().to_string()),
+            permissions.for_path(Subject::Read, ".bravebot/secrets/key"),
             Decision::Unmatched
         );
+        for beside in [root.join("cwd"), root.join("profile")] {
+            let beside = beside.join(".bravebot").join("secrets").join("key");
+            assert_eq!(
+                permissions.for_path(Subject::Read, &beside.display().to_string()),
+                Decision::Unmatched,
+                "{}",
+                beside.display()
+            );
+        }
     }
 
     /// A scratch directory holding a project with `real/secret.txt` and `real/notes.md` in it and a

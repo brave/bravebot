@@ -6,6 +6,10 @@
 //! a tool answers is quarantined like any other content from off this machine. Each is asserted on
 //! the bytes that went out, to the model or to the server, rather than on a label.
 
+#[allow(dead_code)]
+#[path = "../test-support/turns.rs"]
+mod turns;
+
 use bravebot_agent::confirm::{CallDecision, McpCallRequest, MoveRequest, ToolListRequest};
 use bravebot_agent::mcp::{Connection, Offering, Reached, Session};
 use bravebot_agent::turn::{self, Task};
@@ -439,6 +443,22 @@ impl Confirmer for Answering {
         self.call
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &bravebot_agent::confirm::PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &bravebot_agent::confirm::HostRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
         self.moves.push(request.clone());
         self.moved
@@ -465,7 +485,7 @@ fn run_turn<C: Confirmer + Send>(
     confirmer: &mut C,
 ) -> bravebot_agent::Outcome {
     let workspace = Workspace::new(project).expect("workspace");
-    turn::run(
+    turns::run(
         &config_for(endpoint),
         &Egress::new(),
         &workspace,
@@ -562,10 +582,6 @@ fn a_vouched_list_offers_its_tool_and_a_call_answers_quarantined() {
         );
     };
     assert_eq!(list.alias, "weather");
-    assert!(
-        !list.changed,
-        "a list nobody vouched for before was drawn as changed"
-    );
     let [tool] = list.tools.as_slice() else {
         panic!("the list was drawn as {:?}", list.tools);
     };
@@ -616,10 +632,11 @@ fn a_vouched_list_offers_its_tool_and_a_call_answers_quarantined() {
     assert!(call.contains(r#""name":"get_forecast""#), "{call}");
     assert!(call.contains(r#""city":"Paris""#), "{call}");
 
-    let vouched = Approvals::read(&scratch.state()).vouched_list(&declaration());
     assert!(
-        vouched.is_some(),
-        "a person's yes to the list was not recorded"
+        !std::fs::read_to_string(approvals_file(&scratch.state()))
+            .unwrap_or_default()
+            .contains("tools"),
+        "a person's yes to the list was recorded"
     );
     assert!(
         !tools_file(&scratch.state()).exists(),
@@ -964,7 +981,7 @@ fn a_turn_stopped_at_the_list_leaves_it_to_be_asked_again() {
     let mut stopping = Answering::new(Decision::Reject, CallDecision::reject());
     stopping.stop = Some(cancel.clone());
     let workspace = Workspace::new(scratch.project()).expect("workspace");
-    let _ = turn::run_cancellable(
+    let _ = turns::run_cancellable(
         &config_for(&endpoint),
         &Egress::new(),
         &workspace,
@@ -1080,6 +1097,166 @@ fn answer_two_stops_asking_for_the_one_tool_in_the_one_project() {
     assert!(called[1].contains(r#""city":"Lyon""#), "{}", called[1]);
 }
 
+/// One turn in `project`, as [`run_turn`] runs it, with every call it announced recorded.
+fn reported_turn<C: Confirmer + Send>(
+    endpoint: &str,
+    project: &Path,
+    task: Task,
+    confirmer: &mut C,
+) -> bravebot_agent::report::RecordingReporter {
+    let workspace = Workspace::new(project).expect("workspace");
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turns::run_cancellable(
+        &config_for(endpoint),
+        &Egress::new(),
+        &workspace,
+        &task,
+        confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_agent::workspace::trust_store(workspace.root()),
+        &Cancel::new(),
+    )
+    .expect("the turn runs");
+    reporter
+}
+
+/// Every line a turn drew for its calls, started and finished, in order.
+fn drawn_calls(reporter: &bravebot_agent::report::RecordingReporter) -> Vec<String> {
+    reporter
+        .started
+        .iter()
+        .chain(&reporter.finished)
+        .map(|activity| activity.line())
+        .collect()
+}
+
+/// A call answer 2 lets through puts no prompt in front of the person, so the transcript row is
+/// the one place they see what it sent. The row carries the arguments of that call, from the
+/// moment it is announced to the moment it is summarised, and not those of the call that was
+/// asked about.
+#[test]
+fn a_call_answer_two_lets_through_is_drawn_with_what_it_sends() {
+    let scratch = Scratch::new("standing-drawn");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+        tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+        reply_with("done again"),
+    ]);
+    let mut standing = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(session.clone())),
+        &mut standing,
+    );
+
+    let mut refusing = Answering::new(Decision::Reject, CallDecision::reject());
+    let reporter = reported_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Lyon").with_mcp(Some(session)),
+        &mut refusing,
+    );
+    assert!(
+        refusing.calls.is_empty(),
+        "the call was asked about, so this is not the unasked road"
+    );
+    let called: Vec<String> = server.try_iter().collect();
+    assert!(
+        called
+            .last()
+            .is_some_and(|sent| sent.contains(r#""city":"Lyon""#)),
+        "the server was sent {called:?}"
+    );
+    assert_eq!(
+        drawn_calls(&reporter),
+        vec![r#"MCP(weather:get_forecast {"city":"Lyon"})"#.to_string(); 2]
+    );
+    assert_eq!(
+        drawn_calls(&reporter)[0],
+        bravebot_agent::tools::describe_stored_call(FORECAST, r#"{"city":"Lyon"}"#),
+        "a resumed session draws the call differently"
+    );
+}
+
+/// A call to a server's tool that no offer holds is answered as an unknown name, and drawn from
+/// the name alone. That is how a resumed session draws every recorded call to a server's tool,
+/// since the record keeps no offer, so the live row and the resumed one describe it alike.
+#[test]
+fn a_call_to_a_tool_no_server_offers_is_drawn_as_a_resumed_session_draws_it() {
+    const ALERTS: &str = "mcp__weather__get_alerts";
+    let scratch = Scratch::new("unoffered-drawn");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(ALERTS, r#"{"city":"Lyon"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    let reporter = reported_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("any alerts").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    assert!(
+        methods(&server).is_empty(),
+        "a tool nobody offered reached the server"
+    );
+    let sent = rounds(&chat);
+    assert!(sent[1].contains("no such tool"), "{}", sent[1]);
+
+    let resumed = bravebot_agent::tools::describe_stored_call(ALERTS, r#"{"city":"Lyon"}"#);
+    assert_eq!(resumed, r#"MCP(weather:get_alerts {"city":"Lyon"})"#);
+    assert_eq!(drawn_calls(&reporter), vec![resumed; 2]);
+}
+
+/// A call an allow rule makes with nobody asked still sends its arguments, and where they carry
+/// a value that declared itself a credential the row names the server and the tool and leaves
+/// the arguments off, since a transcript is one of the places CRED-11 keeps a credential out of.
+#[test]
+fn a_call_carrying_a_credential_is_drawn_without_its_arguments() {
+    let scratch = Scratch::new("credential-drawn");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Lyon","key":"AKIAIOSFODNN7EXAMPLE"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::reject());
+    let reporter = reported_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast")
+            .with_mcp(Some(session))
+            .with_permissions(allowing_the_weather()),
+        &mut confirmer,
+    );
+    assert!(
+        confirmer.calls.is_empty(),
+        "the call was asked about, so this is not the unasked road"
+    );
+    assert_eq!(
+        methods(&server),
+        ["tools/call"],
+        "the call the rule allows was not made"
+    );
+    assert_eq!(
+        drawn_calls(&reporter),
+        vec!["MCP(weather:get_forecast)".to_string(); 2]
+    );
+}
+
 /// Answer 2 is about the project the session is in when it is read, so once the session has moved
 /// to another one the next call asks again and its answer 2 names the new project.
 #[test]
@@ -1172,10 +1349,11 @@ fn a_record_that_cannot_be_read_is_not_written_over() {
     }
 }
 
-/// A list vouched for under this declaration before is offered with nobody asked, and one that
-/// changed since is asked about again and drawn as changed.
+/// A list is put to the person every session: a yes records nothing, and a `tools` line that
+/// matches the list does not stand in for the answer, since deciding from a server's bytes
+/// whether it was seen before is the driver's decision taken from untrusted content.
 #[test]
-fn a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again() {
+fn a_list_is_asked_about_every_session_and_a_yes_records_nothing() {
     let scratch = Scratch::new("recorded");
     let (url, _server) = serve_weather();
 
@@ -1188,6 +1366,12 @@ fn a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again() {
         &mut vouching,
     );
     assert_eq!(vouching.lists.len(), 1);
+    assert!(
+        !std::fs::read_to_string(approvals_file(&scratch.state()))
+            .unwrap_or_default()
+            .contains("tools"),
+        "a yes was recorded"
+    );
 
     let next = session(&url, &scratch, true);
     let mut refusing = Answering::new(Decision::Reject, CallDecision::reject());
@@ -1197,21 +1381,25 @@ fn a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again() {
         Task::new("second session").with_mcp(Some(next.clone())),
         &mut refusing,
     );
-    assert!(
-        refusing.lists.is_empty(),
-        "the list vouched for before was asked about again"
+    assert_eq!(
+        refusing.lists.len(),
+        1,
+        "the list said yes to before was not asked about again"
     );
     assert_eq!(
         next.offering(),
-        [("weather".to_string(), Offering::Tools(1))]
+        [("weather".to_string(), Offering::Declined)]
     );
 
-    let mut approvals = Approvals::read(&scratch.state());
-    approvals.vouch_list(
-        declaration(),
-        Digest::of_list("the list as it was last week"),
-    );
-    std::fs::write(approvals_file(&scratch.state()), approvals.to_text()).expect("rewrite");
+    // The digest an earlier version recorded for the list this server sends, so that the line is
+    // one that would have answered for it and the only thing that can fail this is that answer.
+    let digest = declaration();
+    let list = "8f7dc1133696e730f427675b9f2f6d1ebdf97a7ecc29ef909393c7167fb33f7e";
+    std::fs::write(
+        approvals_file(&scratch.state()),
+        format!("tools {digest} {list}\n"),
+    )
+    .expect("write a line an earlier version wrote");
     let (endpoint, _chat) = serve_chat(vec![reply_with("three")]);
     let mut asked = Answering::new(Decision::Reject, CallDecision::reject());
     run_turn(
@@ -1220,10 +1408,11 @@ fn a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again() {
         Task::new("third session").with_mcp(Some(session(&url, &scratch, true))),
         &mut asked,
     );
-    let [list] = asked.lists.as_slice() else {
-        panic!("a changed list was not asked about: {:?}", asked.lists);
-    };
-    assert!(list.changed, "a changed list was drawn as new");
+    assert_eq!(
+        asked.lists.len(),
+        1,
+        "a recorded line answered for the list"
+    );
 }
 
 /// Bypassing answers the list and the call and records neither, so the next session that asks
@@ -1268,9 +1457,9 @@ fn bypassing_answers_both_prompts_and_records_nothing() {
         "a list nobody reads was checked"
     );
     assert!(
-        Approvals::read(&scratch.state())
-            .vouched_list(&declaration())
-            .is_none(),
+        !std::fs::read_to_string(approvals_file(&scratch.state()))
+            .unwrap_or_default()
+            .contains("tools"),
         "bypassing recorded a vouch for the list"
     );
     assert!(
@@ -2361,7 +2550,7 @@ fn noticed_turn<C: Confirmer + Send>(
 ) -> Vec<String> {
     let workspace = Workspace::new(project).expect("workspace");
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
-    turn::run_cancellable(
+    turns::run_cancellable(
         &config_for(endpoint),
         &Egress::new(),
         &workspace,
@@ -2808,4 +2997,579 @@ fn a_moved_server_is_held_to_the_call_bound_it_had() {
         !second.contains("timed out"),
         "the call was held to the startup bound: {second}"
     );
+}
+
+/// Run one turn whose server tools are offered by name once their definitions weigh more than
+/// `threshold` tokens (SERVERS-16).
+fn run_deferring<C: Confirmer + Send>(
+    endpoint: &str,
+    project: &Path,
+    threshold: u64,
+    task: Task,
+    confirmer: &mut C,
+) -> bravebot_agent::Outcome {
+    let workspace = Workspace::new(project).expect("workspace");
+    let mut config = config_for(endpoint);
+    config.defer_mcp_tools_above = Some(threshold);
+    turns::run(
+        &config,
+        &Egress::new(),
+        &workspace,
+        &task,
+        confirmer,
+        &mut RecordingSink::new(),
+    )
+    .expect("the turn runs")
+}
+
+/// The names of the functions a request offered.
+fn offered_names(request: &str) -> Vec<String> {
+    let request: Value = serde_json::from_str(request).expect("a request");
+    request["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .map(|tool| {
+            tool["function"]["name"]
+                .as_str()
+                .expect("a name")
+                .to_string()
+        })
+        .collect()
+}
+
+/// What the planner was sent as the answer to its one tool call, which is the last tool message.
+fn answer_to_the_call(request: &str) -> String {
+    let request: Value = serde_json::from_str(request).expect("a request");
+    request["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "tool")
+        .and_then(|message| message["content"].as_str())
+        .expect("a tool message")
+        .to_string()
+}
+
+/// SERVERS-16: past the threshold the planner is offered the names a person vouched for under one
+/// `load_tool`, with none of the server's own words, and a definition joins the offer on the
+/// request after the one that loaded it.
+#[test]
+fn a_deferred_tool_is_offered_by_name_and_its_definition_arrives_once_loaded() {
+    let scratch = Scratch::new("deferred-load");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request("load_tool", r#"{"name":"weather:get_forecast"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_deferring(
+        &endpoint,
+        &scratch.project(),
+        1,
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    let sent = rounds(&chat);
+    let [first, second, ..] = sent.as_slice() else {
+        panic!("the turn made {} rounds", sent.len());
+    };
+    let before = offered_names(first);
+    assert!(before.contains(&"load_tool".to_string()), "{before:?}");
+    assert!(
+        !before.contains(&FORECAST.to_string()),
+        "an unloaded tool was offered in full: {before:?}"
+    );
+    assert!(
+        first.contains("weather:get_forecast"),
+        "the name was not listed: {first}"
+    );
+    assert!(
+        !first.contains(DESCRIPTION),
+        "the server's description was sent before anything was loaded: {first}"
+    );
+    let after = offered_names(second);
+    assert!(
+        after.contains(&FORECAST.to_string()),
+        "the loaded tool was not offered on the next request: {after:?}"
+    );
+    assert!(
+        second.contains(DESCRIPTION),
+        "the loaded definition lacks the description"
+    );
+    assert!(
+        confirmer.calls.is_empty(),
+        "loading a tool was put to the person as a call: {:?}",
+        confirmer.calls
+    );
+}
+
+/// SERVERS-16: the name is matched exactly, so one character out, another case and a prefix each
+/// load nothing, and the planner is told so.
+#[test]
+fn a_name_close_to_a_deferred_tool_loads_nothing() {
+    for near in [
+        "weather:get_forecas",
+        "Weather:get_forecast",
+        "weather:get_forecast ",
+        "weather:get_",
+        "get_forecast",
+    ] {
+        let scratch = Scratch::new("deferred-near");
+        let (url, _server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let arguments = serde_json::json!({ "name": near }).to_string();
+        let (endpoint, chat) = serve_chat(vec![
+            tool_request("load_tool", &arguments),
+            reply_with("done"),
+        ]);
+        let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+        run_deferring(
+            &endpoint,
+            &scratch.project(),
+            1,
+            Task::new("what is the forecast").with_mcp(Some(session)),
+            &mut confirmer,
+        );
+        let sent = rounds(&chat);
+        let [_, second, ..] = sent.as_slice() else {
+            panic!("the turn made {} rounds", sent.len());
+        };
+        assert!(
+            !offered_names(second).contains(&FORECAST.to_string()),
+            "{near:?} loaded a tool"
+        );
+        assert!(
+            answer_to_the_call(second).contains("no tool named"),
+            "{near:?} was not refused: {}",
+            answer_to_the_call(second)
+        );
+    }
+}
+
+/// SERVERS-16: naming a tool that is on the list and not loaded is refused with the way to load it,
+/// and neither the person nor the server hears of it.
+#[test]
+fn a_call_to_a_deferred_tool_that_is_not_loaded_is_refused_and_reaches_no_one() {
+    let scratch = Scratch::new("deferred-call");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_deferring(
+        &endpoint,
+        &scratch.project(),
+        1,
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    let sent = rounds(&chat);
+    let [_, second, ..] = sent.as_slice() else {
+        panic!("the turn made {} rounds", sent.len());
+    };
+    let told = answer_to_the_call(second);
+    assert!(
+        told.contains("not loaded") && told.contains("load_tool"),
+        "{told}"
+    );
+    assert!(confirmer.calls.is_empty(), "{:?}", confirmer.calls);
+    assert!(
+        methods(&server).iter().all(|method| method != "tools/call"),
+        "the server was called"
+    );
+}
+
+/// SERVERS-16: loading changes what is offered and nothing about who is asked, so a loaded tool is
+/// still put to the person before each call.
+#[test]
+fn a_loaded_tool_is_still_put_to_the_person_before_each_call() {
+    let scratch = Scratch::new("deferred-ask");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request("load_tool", r#"{"name":"weather:get_forecast"}"#),
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_deferring(
+        &endpoint,
+        &scratch.project(),
+        1,
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    let [call] = confirmer.calls.as_slice() else {
+        panic!(
+            "the call was not put to the person once: {:?}",
+            confirmer.calls
+        );
+    };
+    assert_eq!(call.name(), "weather:get_forecast");
+}
+
+/// SERVERS-16: below the threshold nothing is deferred, so the tool is offered in full and there is
+/// no `load_tool` to name.
+#[test]
+fn tools_under_the_threshold_are_offered_in_full_with_no_loader() {
+    let scratch = Scratch::new("deferred-under");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, chat) = serve_chat(vec![reply_with("done")]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_deferring(
+        &endpoint,
+        &scratch.project(),
+        1_000_000,
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    let sent = rounds(&chat);
+    let names = offered_names(&sent[0]);
+    assert!(names.contains(&FORECAST.to_string()), "{names:?}");
+    assert!(!names.contains(&"load_tool".to_string()), "{names:?}");
+}
+
+/// Run a deferring turn whose planner spawns a delegate with `spawn`, whose own planner then names
+/// `load_tool`. Returns the delegate's requests, what the person was asked and the MCP methods the
+/// server was sent past its handshake.
+fn defer_to_a_delegate(name: &str, spawn: &str) -> Delegated {
+    let scratch = Scratch::new(name);
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, chat) = serve_chat_by_marker(vec![
+        (
+            PARENT,
+            vec![
+                tool_request("spawn_agent", spawn),
+                reply_with("waiting"),
+                reply_with("the delegate reported"),
+            ],
+        ),
+        (
+            DELEGATED,
+            vec![
+                tool_request("load_tool", r#"{"name":"weather:get_forecast"}"#),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    run_deferring(
+        &endpoint,
+        &scratch.project(),
+        1,
+        Task::new(PARENT).with_mcp(Some(session)),
+        &mut asked,
+    );
+    let delegate = rounds(&chat)
+        .into_iter()
+        .filter(|body| body.contains(DELEGATED) && !body.contains(PARENT))
+        .collect();
+    Delegated {
+        delegate,
+        asked,
+        called: methods(&server),
+    }
+}
+
+/// SERVERS-16: a delegate that holds no server is offered no `load_tool`, because it has no tool to
+/// load, and its call to one is refused as an unknown name. A reader and a checker hold none by
+/// kind, and a worker spawned keeping no server holds none by its call.
+#[test]
+fn a_delegate_holding_no_server_is_offered_no_loader_and_cannot_call_one() {
+    for (name, spawn) in [
+        (
+            "reader",
+            format!(r#"{{"kind":"reader","task":"{DELEGATED}"}}"#),
+        ),
+        (
+            "checker",
+            format!(r#"{{"kind":"checker","task":"{DELEGATED}"}}"#),
+        ),
+        (
+            "worker-keeping-none",
+            format!(r#"{{"kind":"worker","task":"{DELEGATED}","mcp_servers":[]}}"#),
+        ),
+    ] {
+        let Delegated {
+            delegate,
+            asked,
+            called,
+        } = defer_to_a_delegate(&format!("deferred-delegate-{name}"), &spawn);
+        let [first, second, ..] = delegate.as_slice() else {
+            panic!("the {name} made {} requests", delegate.len());
+        };
+        assert_eq!(
+            asked.lists.len(),
+            1,
+            "{name}: the turn did not settle the list, so this says nothing"
+        );
+        assert!(
+            !offered_names(first).contains(&"load_tool".to_string()),
+            "{name}: was offered a loader: {:?}",
+            offered_names(first)
+        );
+        assert!(
+            answer_to_the_call(second).contains("no such tool"),
+            "{name}: its call to load_tool was not refused: {}",
+            answer_to_the_call(second)
+        );
+        assert!(
+            asked.calls.is_empty(),
+            "{name}: a call was put to the person: {:?}",
+            asked.calls
+        );
+        assert!(called.is_empty(), "{name}: the server heard {called:?}");
+    }
+}
+
+/// SERVERS-16: the control for the test above. A worker that holds the server is offered the
+/// loader, loads the tool through it, and is offered the definition on its next request.
+#[test]
+fn a_delegate_holding_the_server_is_offered_the_loader_and_loads_through_it() {
+    let spawn = format!(r#"{{"kind":"worker","task":"{DELEGATED}"}}"#);
+    let Delegated {
+        delegate, asked, ..
+    } = defer_to_a_delegate("deferred-delegate-worker", &spawn);
+    let [first, second, ..] = delegate.as_slice() else {
+        panic!("the worker made {} requests", delegate.len());
+    };
+    let before = offered_names(first);
+    assert!(before.contains(&"load_tool".to_string()), "{before:?}");
+    assert!(!before.contains(&FORECAST.to_string()), "{before:?}");
+    assert!(
+        offered_names(second).contains(&FORECAST.to_string()),
+        "the loaded tool was not offered on the next request: {:?}",
+        offered_names(second)
+    );
+    assert!(asked.calls.is_empty(), "{:?}", asked.calls);
+}
+
+/// SERVERS-16: a definition's `tools:` line selects no server unless an `mcpServers:` line names
+/// one, so an addressed worker with only the first holds none and is offered no loader, and its call
+/// to `load_tool` is refused. The same definition naming the weather server holds it and loads.
+#[test]
+fn an_addressed_worker_with_a_tools_line_is_offered_no_loader_unless_it_names_the_server() {
+    for (name, line, holds) in [
+        ("tools-only", "tools: read_file\n", false),
+        (
+            "tools-and-server",
+            "tools: read_file\nmcpServers: weather\n",
+            true,
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("deferred-addressed-{name}"));
+        let home = Scratch::new(&format!("deferred-addressed-{name}-home"));
+        std::fs::create_dir_all(home.path.join("agents"))
+            .expect("create the definitions directory");
+        std::fs::write(
+            home.path.join("agents").join("scout.md"),
+            format!(
+                "---\nname: scout\ndescription: Looks things up.\nkind: worker\n{line}---\n\nSCOUT-BY-DEFINITION\n"
+            ),
+        )
+        .expect("write the definition");
+        let (url, server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let _ = methods(&server);
+        let (endpoint, chat) = serve_chat(vec![
+            tool_request("load_tool", r#"{"name":"weather:get_forecast"}"#),
+            reply_with("done"),
+        ]);
+        let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+        run_deferring(
+            &endpoint,
+            &scratch.project(),
+            1,
+            Task::new("what is the forecast")
+                .with_home(Some(home.path.clone()))
+                .addressing(Some("scout".to_string()))
+                .with_mcp(Some(session)),
+            &mut asked,
+        );
+        let sent = rounds(&chat);
+        let [first, second, ..] = sent.as_slice() else {
+            panic!("{name}: the turn made {} rounds", sent.len());
+        };
+        assert!(
+            first.contains("SCOUT-BY-DEFINITION"),
+            "{name}: the turn did not run under the definition, so this says nothing: {first}"
+        );
+        assert_eq!(
+            offered_names(first).contains(&"load_tool".to_string()),
+            holds,
+            "{name}: {:?}",
+            offered_names(first)
+        );
+        assert_eq!(
+            offered_names(second).contains(&FORECAST.to_string()),
+            holds,
+            "{name}: {}",
+            answer_to_the_call(second)
+        );
+        if !holds {
+            assert!(
+                answer_to_the_call(second).contains("no such tool"),
+                "{name}: {}",
+                answer_to_the_call(second)
+            );
+            assert!(asked.calls.is_empty(), "{name}: {:?}", asked.calls);
+            assert!(
+                methods(&server).is_empty(),
+                "{name}: the server was sent something"
+            );
+        }
+    }
+}
+
+#[test]
+fn withheld_mcp_tools_are_not_offered_and_reported_in_confirmation() {
+    let (url, server) = serve_two_tools();
+    let scratch = Scratch::new("tool-filter");
+    let home = bravebot_agent::servers::Home {
+        directory: Some(scratch.state()),
+        writable: true,
+    };
+    let declared = Declaration::http(url.clone())
+        .expect("http declaration")
+        .filtering(vec!["get_alerts".to_string()], Vec::new())
+        .expect("filter");
+    let mut declarations = Declarations::default();
+    declarations.insert("weather", &declared);
+    std::fs::write(declarations_file(&scratch.state()), declarations.to_text())
+        .expect("write mcp.json");
+
+    let mut approvals = Approvals::default();
+    approvals.approve("weather", declared.digest());
+    std::fs::write(approvals_file(&scratch.state()), approvals.to_text())
+        .expect("write mcp-approved");
+
+    let requested = vec![(
+        scratch.project().join(".bravebot/settings.json"),
+        "weather".to_string(),
+    )];
+    let mut person = bravebot_agent::servers::Person {
+        answers: &b""[..],
+        screen: Vec::new(),
+        present: true,
+    };
+    let reached = bravebot_agent::servers::reach(
+        &requested,
+        &scratch.project(),
+        &home,
+        &Managed::default(),
+        bravebot_agent::servers::Asking::Bypass,
+        &mut person,
+        bravebot_sandbox::Stream::Null,
+    );
+    let session = reached
+        .session()
+        .expect("session reached through real handshake");
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the weather").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    let [list] = confirmer.lists.as_slice() else {
+        panic!("the list was not put to the person: {:?}", confirmer.lists);
+    };
+    assert_eq!(list.alias, "weather");
+    assert_eq!(list.tools.len(), 1);
+    assert_eq!(list.tools[0].name, "weather:get_alerts");
+    assert_eq!(list.withheld, 1);
+
+    let sent = rounds(&chat);
+    let first: Value = serde_json::from_str(&sent[0]).expect("first round request");
+    let tools = first["tools"].as_array().expect("tools array in payload");
+    let offered_names: Vec<&str> = tools
+        .iter()
+        .filter_map(|t| t["function"]["name"].as_str())
+        .collect();
+    assert!(
+        offered_names.contains(&"mcp__weather__get_alerts"),
+        "allowed tool should be offered: {offered_names:?}"
+    );
+    assert!(
+        !offered_names.contains(&FORECAST),
+        "withheld tool must not be offered to model: {offered_names:?}"
+    );
+
+    assert!(
+        confirmer.calls.is_empty(),
+        "call confirmation was requested for withheld tool: {:?}",
+        confirmer.calls
+    );
+    assert!(
+        methods(&server).iter().all(|m| m != "tools/call"),
+        "MCP server was called for withheld tool"
+    );
+    let second = &sent[1];
+    let told = answer_to_the_call(second);
+    assert!(
+        told.contains("error: no such tool") && told.contains("get_forecast"),
+        "turn did not refuse call to withheld tool: {told}"
+    );
+}
+
+fn serve_two_tools() -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            let reply = reply_for_two_tools(&body);
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+fn reply_for_two_tools(body: &str) -> String {
+    let request: Value = serde_json::from_str(body).unwrap_or_default();
+    let result = match request.get("method").and_then(|m| m.as_str()) {
+        Some("initialize") => json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "weather", "version": "1.0.0"},
+        }),
+        Some("tools/list") => json!({"tools": [
+            {
+                "name": "get_forecast",
+                "description": "Get forecast for a city",
+                "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+            {
+                "name": "get_alerts",
+                "description": "Get weather alerts",
+                "inputSchema": {"type": "object", "properties": {"area": {"type": "string"}}},
+            },
+        ]}),
+        Some("tools/call") => json!({"content": [{"type": "text", "text": "tool output"}]}),
+        _ => json!({}),
+    };
+    let reply = json!({"jsonrpc": "2.0", "id": request.get("id"), "result": result}).to_string();
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+        reply.len()
+    )
 }

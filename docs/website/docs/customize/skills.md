@@ -109,6 +109,21 @@ never a path: a name holding `../` or an absolute path matches nothing and the c
 there is no lookup for it to reach. A name merely close to a real one is refused too rather than
 guessed at, because guessing would load instructions nobody asked for.
 
+## Files beside the skill
+
+A skill is a directory, so it can keep a `reference.md` or a `scripts/` folder next to its
+`SKILL.md` and say in the body when to read them. When the skill is loaded the result ends with the
+directory and the names of the regular files beneath it, found before the turn started. The planner
+reads one with `read_file`, naming the directory and the file.
+
+For a skill in `~/.bravebot/skills` that read is allowed once the skill has been loaded, for the rest
+of the turn, and the file is trusted as the skill is: it is your own directory. Nothing else there
+opens up: a write is refused, a path that climbs out of the skill's directory or leaves it through a
+link is refused, and a setting that keeps the file tools inside the project still does. A skill in a
+project is read through the trust map like any other file of the project, so a file you have not
+vouched for is not named, and one a `deny` rule covers is not named either. A link in the skill's
+directory is never listed. Running a script kept there is not part of this; `run` has its own gate.
+
 ## Trust
 
 | Source | Trusted because |
@@ -121,6 +136,15 @@ guessed at, because guessing would load instructions nobody asked for.
 Each project skills directory is checked for trust **before it is enumerated at all**, because a
 directory name is content too. A source that fails the gate is dropped entirely, and what was skipped
 is counted rather than named. See [Instructions](instructions.md#trust).
+
+Where the working directory is your home directory or a directory holding it, or you opened such a
+directory with `/add-dir`, `~/.bravebot/skills` is inside the session's reach and a turn can write
+to it. So it can where the way to a skill goes through the project, for example when
+`~/.bravebot/skills` links into a dotfiles repository you are working in. Those skills are then not
+read as your own. In a session started in your home directory they are read through the trust map
+as `<workspace>/.bravebot/skills`. From a directory above it, they are read that way once the
+session has read or written something under your home directory, as any directory's
+`.bravebot/skills` is. Where nothing reads them, you are told how many were not loaded.
 
 A project skill replaces a global one of the same name, and one in `.bravebot/skills` replaces one
 of the same name in `.claude/skills` or `.agents/skills`.

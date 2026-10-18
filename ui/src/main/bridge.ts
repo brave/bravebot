@@ -59,7 +59,7 @@ export class Bridge {
     if (!existsSync(path)) {
       throw new BridgeError(
         'no_binary',
-        `bravebot-rpc is not built. Run \`npm run bridge\`. Looked in ${path}`,
+        `bravebot-rpc is not built. Run \`pnpm run bridge\`. Looked in ${path}`,
       )
     }
 

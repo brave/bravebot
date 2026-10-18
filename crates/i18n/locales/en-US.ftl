@@ -23,6 +23,7 @@ count-turns = { $count ->
 cli-tagline = bravebot { $version }: a general-purpose agent resistant to prompt injection
 cli-usage-heading = Usage:
 cli-usage-interactive = Start an interactive session
+cli-usage-interactive-prompt = Start an interactive session and send the prompt as its first turn
 cli-usage-plain = Start a session in lines, taking nothing from the terminal
 cli-usage-task = Run a single task
 cli-usage-piped = ...with piped input, never trusted
@@ -34,6 +35,7 @@ cli-usage-continue-task = Send a one-shot task as the next turn of the most rece
 cli-usage-fork = Fork a session and start exploring a different path
 cli-usage-doctor = Check configuration and confinement
 cli-usage-doctor-sandbox = Run everyday workflows under the sandbox and report which work
+cli-usage-update = Print the command that updates this copy
 cli-usage-bug-report = Write the version, what doctor reports and the newest log's name to a file to attach to a bug report
 cli-usage-import = Import a Leo Premium subscription
 cli-usage-import-providers = Import a model service Claude Code or opencode configured
@@ -43,8 +45,21 @@ cli-usage-auth-status = Say whether a sign-in is usable, exiting 0 only if it is
 cli-usage-mcp = Declare, list and approve MCP servers
 cli-usage-completion = Print a shell completion script
 cli-usage-shell-init = Print the shell hook that gives @bravebot the commands you ran
-cli-usage-sessions = List the sessions that keep running after the terminal closes
+cli-usage-permissions = Report which permission rule decides a tool call
+permissions-check-usage = permissions check takes a family and what to ask about: Read <path>, Edit <path>, Bash <program> [arguments], WebFetch <host or URL>, or Mcp <server:tool>
+permissions-check-decision = decision
+permissions-check-deny = deny
+permissions-check-ask = ask
+permissions-check-allow = allow
+permissions-check-none = no rule matches, so the ordinary gates decide
+permissions-check-rule = rule
+permissions-check-file = file
+permissions-check-reason = reason
+permissions-check-granted = granted at the question for this workspace, written in { $path }
+permissions-check-not-in-force = not in force: { $rule } in { $path } would allow this once it is granted at the question
+cli-usage-sessions = List the sessions that keep running after the terminal closes, grouped by state on a terminal
 cli-usage-sessions-stop = Stop one of them
+cli-usage-sessions-list = List the sessions recorded for this directory
 cli-usage-sessions-import = Copy sessions another agent kept for this directory
 cli-usage-bg = Start a session that keeps running after the terminal closes
 cli-usage-attach = Join a background session's terminal
@@ -79,16 +94,30 @@ cli-plain-takes-nothing-else =
     --plain starts a session and takes no other arguments. --incognito,
     --dangerously-skip-permissions, --settings and --agent go with it; everything else is another
     way of starting.
-# Said where the startup question was not put because an earlier session here was told to remember
-# the answer (TRUST-23). A session in lines has no slash commands, so the ways to be asked again are
+# Said where the startup question was not put because an earlier session here was answered yes and
+# the yes was kept (TRUST-23). A session in lines has no slash commands, so the ways to be asked again are
 # the ones it can name: the command in the interface that draws, or the lines in the file. The
 # lines rather than the file, since a directory whose path is spelled alike shares the file.
+# Said on stderr by a one-shot run that opens with a kept answer about its working directory
+# or the root of the git worktree around it, naming the directory the answer was about.
+cli-trusting-kept =
+    trusting { $directory } (you trusted it { $when }; to be asked again, run
+    /forget-trust in bravebot, or delete the lines naming it from { $path })
+
 cli-plain-trusting-kept =
-    trusting { $directory } (you said to remember it { $when }; to be asked again, run
+    trusting { $directory } (you trusted it { $when }; to be asked again, run
     /forget-trust in bravebot without --plain, or delete the lines naming it from { $path })
 cli-plain-trusting-kept-root =
-    trusting { $directory }, inside { $root } (you said to remember { $root } { $when }; to be asked again, run
+    trusting { $directory }, inside { $root } (you trusted { $root } { $when }; to be asked again, run
     /forget-trust in bravebot without --plain, or delete the lines naming { $root } from { $path })
+# Said in a session in lines (CLI-14) after a yes is kept, and in the lines before the question. It
+# has no /forget-trust of its own, so both name the command in the interface that draws.
+cli-plain-trust-kept =
+    trusting { $directory }, and later sessions started here will not ask; to take it back, run
+    /forget-trust in bravebot without --plain, or delete the lines naming it from { $path }
+cli-plain-trust-remember-where =
+    To take it back, run /forget-trust in bravebot without --plain, or delete the lines naming
+    this directory from this file:
 
 # Said when a background session is started again and its earlier conversation was read back from
 # its record (BG-1).
@@ -107,7 +136,9 @@ mode-bypass = ⏵⏵ bypass permissions on
 
 cli-options-heading = Options:
 cli-option-file = Include a workspace file as context (repeatable)
+cli-option-session-ref = Add the newest part of an earlier session of this directory to the task (repeatable)
 cli-option-add-dir = Reach into a directory outside the working one (repeatable)
+cli-option-trust-workspace = Trust the working directory for this run, as answering yes to the startup question does
 cli-option-settings = Read this settings file for this run, above the ones found on disk
 cli-option-run-network =
     Whether programs `run` starts may reach the network. closed denies it to every one except a package
@@ -124,6 +155,8 @@ cli-option-log-level =
     How much of a failure's shape is written to the diagnostic log: error (the default), info or debug.
     Hosts, statuses and counts only, never content; an incognito session writes none
 cli-option-agent = Address every turn to this definition, as /agent does for one
+cli-option-issue = Give the session it opens this issue link, as /issue does
+cli-option-pr = Give the session it opens this pull request link, as /pr does
 cli-option-system-prompt =
     Replace the opening sentence of the planner's system prompt for every turn. The rest of it stays
 cli-option-append-system-prompt =
@@ -135,9 +168,11 @@ cli-option-tools = Offer the agent only these tools, comma separated. It cannot 
 cli-option-no-shell = Offer the agent no tool that runs a program or reads what one printed
 cli-option-effort = How hard this run asks the model to think, in place of the remembered or configured level
 cli-option-print = Non-interactive. Reads piped stdin as quarantined context
+cli-option-interactive = Open the interactive session and send this prompt as its first turn; --model and --effort may follow it
 cli-option-trace = Print the audit trail
 cli-option-json = Print one result object on stdout instead of the reply
 cli-option-json-stream = Print one event per line on stdout as the run goes, then the result object
+cli-option-output-schema = Require the reply to match the JSON Schema in this file; with --json the value is in "structured"
 cli-option-incognito = Write nothing to ~/.bravebot: no history, no session record, no preference
 cli-option-safe =
     Load none of your own hooks, skills, definitions, MCP servers or AGENTS.md. Sign-in, model and permissions still apply
@@ -149,7 +184,7 @@ cli-option-vet =
     For this run, let a check answer: content it finds nothing in is promoted without asking you,
     and where nobody can be asked, anything else is kept back
 cli-option-sandbox =
-    How far the programs `run` starts may reach: strict, standard or off. A managed file may set a
+    How far the programs `run` starts may reach: strict, read-only, workspace-write or off. A managed file may set a
     floor this cannot go below
 cli-option-dangerously-skip-permissions =
     Bypass all permission checks. Recommended only for sandboxes with no internet access
@@ -163,9 +198,11 @@ cli-unknown-option = unknown option: { $flag }
 cli-completion-needs-a-shell = completion takes one of bash, zsh or fish
 cli-shell-init-needs-a-shell = shell-init takes one of bash, zsh or fish
 cli-bug-report-takes-nothing-else = bug-report takes no arguments
+cli-update-takes-nothing-else = update takes no arguments
 bug-report-no-state-directory = bug-report writes nothing in an incognito session or where there is no home directory
 bug-report-not-written = the bug report was not written: { $problem }
 cli-file-needs-a-path = --file requires a path
+cli-session-ref-needs-an-id = --session-ref requires a session id
 cli-resume-needs-an-id = --resume requires the id of a session when it goes with a task
 # The flag is --resume or --continue, as typed.
 cli-resume-not-with-a-manifest =
@@ -227,16 +264,24 @@ cli-bypass-unreachable =
     that mode unreachable here. Remove it there, or run without the flag.
 cli-sandbox-needs-a-mode = --sandbox requires one of { $names }
 # The file that holds the floor is named, and the file that asked when there was one, because a
-# refusal that names neither sends somebody looking for a fault in the program.
+# refusal that names neither sends somebody looking for a fault in the program. $looser is one of the
+# sandbox-looser- sentences. The pin is the mode suggested, since no mode is stricter than a pin of
+# strict or of read-only.
 cli-sandbox-refused-flag =
     --sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a run may
-    be stricter than that but not looser. Run with --sandbox { $pinned } or stricter, or without the flag.
+    read and write no more than that. { $looser } Run with --sandbox { $pinned }, or without the flag.
 cli-sandbox-refused-file =
     sandbox.mode { $asked } in { $asked_in } is refused: { $pinned_in } sets sandbox.mode to { $pinned },
-    and a run may be stricter than that but not looser. Change it there, or remove it.
+    and a run may read and write no more than that. { $looser } Change it to { $pinned } there, or
+    remove it.
+# Why a mode is looser than the managed file's sandbox.mode pin. The modes are not a line, so a
+# refusal says which of reading and writing the asked mode does more of.
+sandbox-looser-reads = { $asked } reads more of the machine than { $pinned }.
+sandbox-looser-writes = { $asked } writes more than { $pinned }.
+sandbox-looser-both = { $asked } reads more of the machine and writes more than { $pinned }.
 cli-sandbox-refused-network-flag =
     --sandbox { $asked } is refused: { $pinned_in } pins run.network to closed, and a program started
-    with no sandbox is not held to that. Run with --sandbox standard or stricter, or without the flag.
+    with no sandbox is not held to that. Run with --sandbox workspace-write or stricter, or without the flag.
 cli-sandbox-refused-network-file =
     sandbox.mode { $asked } in { $asked_in } is refused: { $pinned_in } pins run.network to closed, and
     a program started with no sandbox is not held to that. Change it there, or remove it.
@@ -245,6 +290,24 @@ cli-model-needs-a-name = --model requires the name of a model
 cli-advisor-needs-a-name = --advisor requires the name of a model
 cli-advisor-not-with-a-manifest = --advisor cannot be used with --mode manifest, which runs its plan without a planner to ask
 cli-effort-needs-a-level = --effort requires one of { $levels }
+cli-output-schema-needs-a-path = --output-schema requires the path of a JSON Schema file
+cli-output-schema-not-with-a-manifest = --output-schema cannot be used with --mode manifest, which has a reply for each step and none for the run
+cli-output-schema-not-served = --output-schema cannot be used with { $model }, which cannot be asked for a reply that matches a schema
+cli-output-schema-unreadable = cannot read the output schema { $path }: { $problem }
+cli-output-schema-not-json = the output schema { $path } is not JSON
+cli-output-schema-not-an-object = in the output schema { $path }, { $at } is not a JSON object
+cli-output-schema-unsupported = the output schema { $path } uses { $keyword } at { $at }, which is not supported
+cli-output-schema-malformed = the output schema { $path } gives { $keyword } at { $at } a value it cannot take
+cli-output-schema-mismatch = the reply does not match the output schema at { $at }: { $problem }
+cli-output-schema-rule-not-json = the reply is not a single JSON value
+cli-output-schema-rule-type = the value is of another type
+cli-output-schema-rule-enum = the value is not one of those listed
+cli-output-schema-rule-const = the value is not the one allowed
+cli-output-schema-rule-required = a required property is missing
+cli-output-schema-rule-extra = a property the schema does not list is present
+cli-output-schema-rule-length = the string is shorter or longer than allowed
+cli-output-schema-rule-count = the array has fewer or more items than allowed
+cli-output-schema-rule-range = the number is below or above what is allowed
 cli-unexpected-argument = unexpected argument: { $argument }
 cli-task-required = a task is required
 cli-configuration-problem = configuration error: { $problem }
@@ -254,7 +317,31 @@ cli-directory-unknown = cannot tell which directory this is
 cli-no-such-session = no session { $id } in this directory
 cli-manifest-run = { $id } is a manifest run, so there is nothing to continue; this is what it did
 cli-nothing-to-continue = no session to continue in this directory
+cli-issue-needs-a-link = --issue requires one http or https address
+cli-pr-needs-a-link = --pr requires one http or https address
+# Said where --issue or --pr is given to a line that opens no interactive session: a task, a session
+# in lines, a background session, or a command that starts none.
+cli-links-need-a-session =
+    --issue and --pr give the session they open its links, and this command line opens no interactive session
 cli-from-pr-needs-a-value = --from-pr requires a pull request number or address
+cli-interactive-needs-a-prompt = -i takes the prompt to send as the session's first turn
+# Said where something other than --model or --effort follows the prompt of -i. The session it opens
+# takes the flags every way of starting takes, which are already out of the line by then; what is
+# left describes a one-shot run.
+cli-interactive-takes-nothing-else =
+    -i takes one prompt, quoted where it has spaces, and then --model and --effort, so '{ $argument }'
+    is refused. --file and the other options for a task go with a one-shot run (-p).
+# Said where -i came after a task's own options rather than first.
+cli-interactive-not-with-a-task =
+    -i opens a session and comes first, followed by its prompt and then --model and --effort. --file
+    and the other options for a task go with a one-shot run (-p).
+# Said where -i came after another way of starting a session, such as --resume or --fork.
+cli-interactive-not-with-another-start = -i opens a new session and comes first, so it does not go with { $flag }.
+# Said where -i was given with something other than a terminal on stdin or stdout, where there is
+# nothing to draw the session on and nobody to watch the task.
+cli-interactive-needs-a-terminal =
+    -i opens a session on this terminal, so its input and output must be one. Use -p to run the
+    task with nobody watching.
 cli-fork-needs-a-name = --fork requires a session id
 cli-piped-input-unreadable = warning: could not read piped input: { $problem }
 cli-piped-input-too-large =
@@ -508,6 +595,8 @@ doctor-settings-summary-ignored =
     summaryModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-agent-ignored =
     agent in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-style-ignored =
+    style in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-references-ignored =
     references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 # A key that only ever refuses, spelled as something other than a boolean. It is read as absence, so
@@ -536,6 +625,12 @@ doctor-settings-sandbox-hosts-ignored =
     sandbox.network.{ $key } in { $path } is not obeyed: a checkout can refuse a host and never allow one, so it is read from ~/.bravebot/settings.json, the file --settings names and the managed file only
 doctor-settings-sandbox-hosts-misshapen =
     sandbox.network.{ $key } in { $path } is not a list of strings (onUnlisted: ask or refuse), so it is read as absent
+doctor-settings-git-identities-ignored =
+    git.identities in { $path } is not obeyed: a checkout cannot choose which key a push offers, so it is read from ~/.bravebot/settings.json and the file --settings names outside the workspace only
+doctor-settings-git-identities-misshapen =
+    { $key } in { $path } is not read: git.identities maps a name <host>/<owner> to the path of a public key file
+doctor-settings-git-identities-key-refused =
+    { $key } in { $path } names { $value }, which is not a key a push can be given: it has to be a regular *.pub file outside every credential location but ~/.ssh, such as ~/.aws, with no ', % or $ in its path, so ssh offers its default key for that owner
 doctor-managed-sandbox-misshapen =
     sandbox.filesystem.{ $key } in { $path } is not a list of strings, so it pins nothing
 doctor-managed-sandbox-unread =
@@ -545,9 +640,11 @@ sandbox-rule-climbs = it climbs out of the directory it is read from, or holds .
 sandbox-rule-glob-on-a-write = a wildcard applies to reads and not to writes
 sandbox-rule-confines-nothing = a write row over the home directory or the whole filesystem confines nothing
 sandbox-rule-private-key = no list adds reach to ~/.ssh, where a private key is
-sandbox-rule-state-directory = no list adds reach to ~/.bravebot, where the gateway keys are
+sandbox-rule-state-directory = no list adds reach to ~/.bravebot, where the gateway keys are, except to read ~/.bravebot/sessions
+sandbox-rule-holds-credentials = on this platform a row over a directory reaches everything inside it, so no list adds a directory that holds a credential location such as ~/.ssh, ~/.aws or ~/.bravebot
 sandbox-rule-too-broad = its wildcard looked at more of the disk than a pattern may, so what it names is not known
 sandbox-rule-overridden = another entry decides that path: a refusal at the same path, or one the managed file wrote
+sandbox-rule-cannot-subtract = this platform cannot hold back a path inside a directory every stage is granted, so a stage is refused instead of started with the path reachable
 # An allow rule a layer that may not grant one wrote. Named one at a time and with its file, for
 # the reason the vetting line gives: a rule that looks like configuration and does nothing is the
 # one worth saying out loud.
@@ -576,8 +673,15 @@ doctor-settings-mcp-declared =
 doctor-settings-sandbox-ignored =
     sandbox.mode { $mode } in { $path } is not obeyed: a project's file may ask for strict only, and the
     other modes are read from ~/.bravebot/settings.json and from the file --settings names only
+# A `strict` from a file inside the workspace that is not obeyed, because the person's own file or the
+# managed file chose a mode `strict` is looser than. `strict` writes the session's directories and
+# `read-only` does not.
+doctor-settings-sandbox-strict-ignored =
+    sandbox.mode strict in { $path } is not obeyed: strict lets programs write the session's
+    directories, which { $mode } from { $held } does not, and a file inside the workspace may not
+    loosen the mode
 doctor-settings-sandbox-unreadable =
-    sandbox.mode in { $path } is not strict, standard or off, so it is read as absent and the default applies
+    sandbox.mode in { $path } is not strict, read-only, workspace-write or off, so it is read as absent and the default applies
 doctor-sandbox-mode = sandbox mode
 doctor-sandbox-default = { $mode } (the default)
 doctor-sandbox-from = { $mode } from { $path }
@@ -639,6 +743,10 @@ doctor-network-denial = network denial
 doctor-kernel-enforced = kernel-enforced
 doctor-not-enforced = NOT enforced
 doctor-confinement-unavailable = confinement unavailable
+doctor-no-network-namespace = network namespaces: unavailable ({ $reason }). A stage with no network, or held to sandbox.network.allowedHosts, is refused here. Allow unprivileged user namespaces to use either.
+# Said only where the kernel cannot hold a connect to a unix socket that has a path to a stage's
+# grants, which is Landlock below ABI 9.
+doctor-sockets-with-a-path-reachable = unix sockets with a path: reachable. Landlock on this kernel is below ABI 9 (Linux 7.1), so a stage under sandbox mode read-only or workspace-write, and a local MCP server under any mode, reaches every such socket, the user's D-Bus, SSH_AUTH_SOCK and docker.sock among them. A stage under strict is refused here.
 # The network a request actually crosses: which certificate authorities a handshake is validated
 # against, and which proxy it is routed through. Both are stated outside this program, and neither
 # is visible anywhere else when a connection fails.
@@ -709,6 +817,21 @@ subscription-unusable =
 # printed goes to the view a person can open; this is the sentence saying the thing has ended.
 background-job-finished = `{ $command }` finished in the background: { $outcome }
 
+# The heading over a message another session sent, where it reaches the planner of this one. The
+# sender is named by the start of its id and by its name as the list of background sessions shows
+# them, and the label is the one the message was given on arrival, which is the sender's word only
+# where it was a label.
+session-message-heading = message from session { $from } ({ $name }) · { $label }
+
+# The heading over a message this session's planner sent to another session. The receiver is named
+# as the list of background sessions names it, and the label is the one the message was sent under.
+session-message-sent-heading = message to session { $to } ({ $name }) · { $label }
+
+# Under the heading of a resumed session's message that the planner was not given the words of: a
+# message whose label was not trusted reaches the planner as a reference, and the record keeps no
+# content for it.
+session-message-kept = its words were kept from the planner and are not in this record
+
 # Said when a reply reached the output limit and the model is asked again rather than the turn
 # ending. Which one follows from what the reply was doing when it stopped: a call it was writing
 # was never made, so the work is asked for in parts, and a reply that wrote nothing is asked again.
@@ -716,16 +839,27 @@ ceiling-stop-in-call = the model reached its output limit of { $tokens } tokens 
 ceiling-stop-in-a-call = the model reached its output limit of { $tokens } tokens while writing a tool call, so the call was not made; asking it to do the work in smaller parts
 ceiling-stop-thinking = the model reached its output limit of { $tokens } tokens while thinking, before it wrote anything; asking it again
 ceiling-stop-silent = the model reached its output limit of { $tokens } tokens before it wrote anything; asking it again
-# The question put when a session has spent as many tokens as its limit allows.
+# What a limit counts, as the noun the sentences below fill in.
+limit-unit-tokens = tokens
+limit-unit-credits = credits
+# The question put when a session has spent as much as its limit allows.
 spend-limit-header = Limit
-spend-limit-reached = This session has spent { $spent } tokens, which reaches its limit of { $limit }.
+spend-limit-reached = This session has spent { $spent } { $unit }, which reaches its limit of { $limit }.
 spend-limit-how-to-raise = To go on under a new limit, answer in your own words with a figure in tokens, such as 2m.
-spend-limit-not-a-limit = { $text } is not a limit above the { $spent } tokens spent. Use a whole number, with k or m after it for thousands or millions.
+spend-limit-how-to-raise-credits = To go on under a new limit, answer in your own words with a figure in credits, such as 200.
+spend-limit-not-a-limit = { $text } is not a limit above the { $spent } { $unit } spent. Use a whole number, with k or m after it for thousands or millions.
 spend-limit-stop = Stop here
 spend-limit-without-a-limit = Go on without a limit
-spend-limit-raised = the session limit is now { $limit } tokens
+spend-limit-raised = the session limit is now { $limit } { $unit }
 spend-limit-lifted = the session has no limit
-spend-limit-stopped = stopped at the session limit: { $spent } tokens spent against a limit of { $limit }
+spend-limit-stopped = stopped at the session limit: { $spent } { $unit } spent against a limit of { $limit }
+repeated-call-header = Repeated call
+repeated-call-reached = The planner has made the same { $tool } call { $count } times in a row. It was not run. Run it again, or choose another way forward.
+repeated-call-refuse = Do not run it, and tell the planner to try another approach
+repeated-call-run-it = Run it this once
+repeated-call-stop = Stop the turn
+repeated-call-refused = { $tool } was not run: the same call { $count } times in a row
+repeated-call-stopped = stopped at a repeated call: { $tool } made { $count } times in a row
 # Said when a turn's model kept failing and the person's fallbackModel takes over for the rest of it.
 fallback-model-in-use = { $from } failed as { $category }; this turn moves to { $to }
 # Said instead where the turn has no tools left, so the model is asked for an answer rather than
@@ -965,6 +1099,8 @@ mcp-two-transports = add takes a program after -- or --http, not both
 mcp-stdio-needs-a-program =
     a program and its arguments come after a bare --, as in -- npx -y weather-mcp
 mcp-http-needs-a-url = --http needs a url
+mcp-bearer-env-needs-a-name = --bearer-env needs the name of an environment variable
+mcp-header-env-needs-a-pair = --header-env needs <HEADER>=<ENVIRONMENT_VARIABLE>
 mcp-env-needs-a-name = -e needs NAME=value, or the name of a variable read from your environment
 mcp-env-after-the-alias =
     -e and --env come after the alias, as in add weather -e KEY=value -- weather-mcp
@@ -972,6 +1108,8 @@ mcp-env-word-refused =
     word { $position } after add is not NAME=value, and is not repeated since it may be a value: a
     name alone is read from your environment only as the one word its -e takes
 mcp-dir-needs-a-path = --dir needs a directory
+mcp-tools-needs-a-list = --tools needs a tool name or a comma-separated list of tool names
+mcp-exclude-tools-needs-a-list = --exclude-tools needs a tool name or a comma-separated list of tool names
 mcp-dir-not-a-directory = { $path } is not a directory
 mcp-dir-not-a-directory-unshown =
     the word after --dir is not a directory, and is not repeated since it may be a value
@@ -999,8 +1137,11 @@ mcp-problem-directory = the directory is not an absolute path
 mcp-problem-url = the url is not http or https with a host
 mcp-problem-credentials =
     the url carries a user or a password, which would keep a credential in plain text
+mcp-problem-header = { $name } is not a valid HTTP header token
 mcp-problem-remote = a remote server takes no { $key }
 mcp-problem-timeout = { $key } is not a whole number of seconds from 1 to { $most }
+mcp-problem-tool = { $name } is not a tool name
+mcp-problem-tools = { $key } is not a list of tool names
 mcp-unreadable = { $path } cannot be read: { $reason }
 mcp-unreadable-too-large = it is larger than a declarations file has any reason to be
 mcp-unreadable-not-read = it could not be read as text
@@ -1016,6 +1157,8 @@ mcp-no-state-directory =
 mcp-not-written = { $path } could not be written ({ $error })
 mcp-declared = declared { $alias } in { $path }
 mcp-variables = variables: { $names }
+# HTTP headers sent from environment variables, shown as "Header: $VAR"
+mcp-headers = headers: { $headers }
 # A variable given its value at add, which is kept in mcp.json and is never shown.
 mcp-variable-stored = { $name } (stored)
 # A file a stored value or an argument names, which the server is let read.
@@ -1023,6 +1166,8 @@ mcp-may-read = may read: { $path }
 mcp-directory = directory, which it may write: { $path }
 # The seconds a server has for its handshake and for each call, where a declaration gives either.
 mcp-timeouts = time allowed: { $startup } seconds to start, { $tool } seconds for each call
+mcp-declaration-tools = tools: { $names }
+mcp-declaration-exclude-tools = exclude tools: { $names }
 mcp-digest = digest: { $digest }
 # Where a declaration replaced one that was approved, which of its fields differ.
 mcp-changed = changed: { $fields }
@@ -1183,6 +1328,10 @@ delegate-model-refused =
 # Said among a delegate's own lines when a person stopped it from the delegate view: the turn goes on.
 delegate-stopped-narration = you stopped this delegate, so it has to finish with what it has
 
+# Said among a delegate's own lines when it has spent the token budget its definition or the call
+# set: it loses its tools and answers with what it has. The figure is a count of tokens.
+delegate-budget-narration = this delegate has spent its budget of { $budget } tokens, so it has to finish with what it has
+
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
 mcp-tools-title = offer these tools to the model?
@@ -1192,7 +1341,6 @@ mcp-tools-offered =
        *[other] { $alias } offers { $count } tools
     }
 mcp-tools-none = { $alias } lists no tool it can offer
-mcp-tools-changed = this is not the list you said yes to before: the tools it offers have changed
 mcp-tools-explained =
     The model will read each tool's name, its arguments and what the server says about it, as
     shown here. Every call is still put to you. Say no if a description gives instructions.
@@ -1200,6 +1348,11 @@ mcp-tools-not-listed =
     { $count ->
         [one] one more tool is not listed: its name or its arguments cannot be offered
        *[other] { $count } more tools are not listed: their names or their arguments cannot be offered
+    }
+mcp-tools-withheld =
+    { $count ->
+        [one] one tool was withheld by the server's allow or deny list
+       *[other] { $count } tools were withheld by the server's allow or deny list
     }
 # How one argument's kind reads in a list, as in `city_name (string, required)`. The kinds are
 # the server's JSON Schema words and stay as it wrote them.
@@ -1209,9 +1362,6 @@ mcp-tools-yes = Yes, offer them
 mcp-tools-no = No, continue without them
 mcp-tools-declined = { $alias } offers no tool in this session: its list was not approved
 mcp-tools-refused = { $alias } offers no tool in this session: { $reason }
-mcp-tools-not-recorded =
-    the tools { $alias } offers are approved for this session only, since the answer could not be
-    recorded: { $error }
 
 ## One call to a tool of an MCP server
 
@@ -1262,6 +1412,59 @@ mcp-move-not-recorded =
 mcp-move-no-handshake = { $alias } did not complete its handshake where its reply pointed: { $reason }
 mcp-move-again = { $alias } was redirected again, off where it was just moved, so that was refused
 
+## Programs asking for one more path for the session
+
+path-title = let programs reach another path?
+path-reads = programs this session starts may read { $path }
+path-writes = programs this session starts may read and write { $path }
+path-why = the planner says: { $why }
+path-explained =
+    Every command the planner runs from now until this session ends gets it. Nothing is written to
+    disk, so the next session asks again. /reach paths lists what was allowed and
+    /reach paths remove <number> ends one.
+path-not-trusted =
+    The directory is not marked trusted: what is in it is still labelled as it was, and a file
+    there is no more believed than before.
+path-yes = Yes, for this session
+path-no = No
+path-listed = { $number }. every command also { $access } { $path }, for this session
+path-none = no path was requested this session
+path-removed = ended: commands no longer { $access } { $path }
+path-refused-number = no requested path is numbered { $number }
+path-usage = /reach paths lists the paths programs were allowed to reach this session. /reach paths remove <number> ends one.
+
+## Programs asking for hosts the allowed-hosts list does not cover
+
+host-title = let programs reach more hosts?
+host-asked = { $count ->
+    [one] a program this session started asked for a host that sandbox.network.allowedHosts does not list:
+   *[other] programs this session started asked for { $count } hosts that sandbox.network.allowedHosts does not list:
+    }
+host-row = { $host }
+host-explained =
+    The program was refused, so run it again after a yes. Every command the planner runs from now
+    until this session ends may reach these hosts, unless sandbox.network.deniedHosts names them.
+    Nothing is written to disk, so the next session asks again.
+host-yes = Yes, for this session
+host-no = No
+
+## A message to another background session, asked before it is sent
+
+message-title = send a message to another session?
+message-to = To the session "{ $name }" ({ $state }), working in { $directory }:
+message-label = Sent as { $label }.
+message-explained =
+    A yes sends this text to that session's planner as advice from another session. It answers
+    nothing that session is holding, grants it no permission and starts no turn there. The planner
+    wrote the text.
+message-explained-turn =
+    Answering { $key } sends this one and the later ones to this session until this turn ends.
+    Nothing is written down, so the next turn asks again.
+# What a line on a terminal accepts: y sends this one, the key named in message-answer-turn sends
+# this one and the later ones this turn, and any other line, and the end of the input, sends nothing.
+message-answer = [y/t/N]
+message-answer-turn = t
+
 ## Vouching for a directory, asked once when a session starts somewhere new
 
 trust-directory-title = trust this directory?
@@ -1272,23 +1475,34 @@ trust-directory-explained =
 trust-directory-regardless =
     Either way, anything derived from the web or from an untrusted file is still shown
     before it is written.
+# What a yes grants beyond the files (RUN-5), above the lines that scroll so that it is on the screen
+# whenever the yes can be taken. It names the cases where a line still asks, since a person who
+# reads it should not expect more than they get.
+trust-directory-confined-lines =
+    A yes also lets a command run here without asking when the sandbox confines it, with the
+    network closed for that command, which today is on macOS only. Anything that needs more still asks.
+# The yes where the answer cannot be kept (TRUST-23): no state directory, a filesystem root, the home
+# directory or one holding it, a filesystem that does not say when a directory was made, or an
+# incognito session.
 trust-directory-yes = trust it
 trust-directory-no = ask me about every write
-# The key that keeps the answer for later sessions (TRUST-23). Offered only where it can be written
-# down, and its lines say what it covers and where it goes, since nobody can endorse a record they
-# were not shown.
+# The yes where it keeps the answer for later sessions (TRUST-23). Its lines say what it covers and
+# where it goes, since nobody can endorse a record they were not shown.
 trust-directory-remember = trust and remember
 trust-directory-remember-explained =
-    r: trust it, and skip this question in later sessions started in this directory, or below it if it is a git root
+    A yes is kept: later sessions started in this directory, or below it if it is a git root, are not asked.
 trust-directory-remember-exact =
     A session started above it is still asked, and so is one in a nested repository or in a directory deleted and made again here.
 trust-directory-remember-where = /forget-trust takes it back, and it is written down here:
-# Above the keys while the lines saying what r does and where it writes have not been on the screen
-# together, which is when r is not taken. What r does comes first, so a narrow terminal that cuts the
+# Said where a yes cannot be kept, so the person is not left to find out from the next session.
+trust-directory-not-remembered =
+    This answer cannot be kept here, so a session started in this directory later asks again.
+# Above the keys while the lines saying what y keeps and where it writes have not been on the screen
+# together, which is when y is not taken. What y does comes first, so a narrow terminal that cuts the
 # line off keeps it.
-trust-directory-remember-unseen = ↑↓ r remembers nothing: what it writes is not shown yet
+trust-directory-remember-unseen = ↑↓ y trusts nothing yet: what it keeps is not shown yet
 # The same where those lines are taller than the box, so no scroll shows them together.
-trust-directory-remember-too-small = r remembers nothing: what it writes is taller than this box
+trust-directory-remember-too-small = y trusts nothing: what it keeps is taller than this box
 quit = quit
 trust-quit-again = again
 
@@ -1365,6 +1579,10 @@ picker-premium = premium
 # The heading over the models Brave's own endpoint serves. Named rather than left blank, because a
 # list whose other sections name a service reads as though the unlabelled rows came from nowhere.
 picker-service-brave = Brave
+# What a tier set to an inference-profile ARN is called where no section heading says whose account
+# answers: the info panel and /status. The tier word alone would read as the Brave roster's model of
+# that name.
+model-label-bedrock = { $name } (Bedrock)
 # Both rosters are offered at once, and a tier name alone does not say which of the two it is: the
 # same model is reachable through either, billed and reached differently. Not "Bedrock" alone, which
 # the Brave roster already says of the models it serves through its own account.
@@ -1374,8 +1592,9 @@ picker-service-bedrock = Bedrock, your AWS account
 history-search-title = Search prompts
 history-scope-everywhere = everywhere
 history-scope-here = this project
+history-scope-session = this session
 history-search-placeholder = Filter history…
-history-search-keys = ↑↓ to move  ·  Enter to use  ·  { $scope } to scope  ·  Esc to cancel
+history-search-keys = ↑↓ to move  ·  Enter to use  ·  { $scope } to cycle the scope  ·  Esc to cancel
 history-search-nothing-matches = nothing matches that
 history-search-more-lines =
     { $count ->
@@ -1393,10 +1612,11 @@ history-age-months = { $count }mo ago
 # in the box, of how many.
 input-history-position = { $scope } { $index }/{ $total }
 input-history-this-session = This session
+input-history-this-project = This project
 input-history-all = All
 input-history-widen = { $chord } all prompts
 input-history-narrow = { $chord } this session
-input-history-none-here = nothing sent this session  ·  { $chord } for earlier ones
+input-history-project = { $chord } project prompts
 # At the other end of that same border, the ways in: the search over every prompt, and the search
 # narrowed to the ones sent from this project. The narrower one is dropped where the row will not
 # hold both beside the position, and then the other one is, so a longer wording is one that fewer
@@ -1407,6 +1627,7 @@ resume-heading = Resume session
 resume-search-placeholder = Search titles and what was said… (since:7d for recent)
 resume-keys = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc for a new session
 resume-from-pr = for pull request { $pull_request }
+resume-handed-off = from { $id }
 resume-keys-within = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc to stay in this session
 resume-nothing-matches = nothing matches that
 resume-manifest-run = that was a manifest run, which cannot be continued; start a new session
@@ -1514,13 +1735,22 @@ run-not-sandboxed = this is not sandboxed: it runs with the access your own shel
 # directories it is held to and by one sentence for each toolchain and credential a stage brings.
 run-confined = its files are confined to these directories, the system temporary directory and the system files every program needs:
 run-confined-machine = it can read this machine except the places that hold a credential, and write only these directories, the system temporary directory and the toolchain caches:
+# The two above, where the platform cannot hold a `.git` back from a program that is not git.
+run-confined-git = its files are confined to these directories, the system temporary directory and the system files every program needs, and a program in it other than git can write a repository's hooks and configuration, which git runs later with no sandbox:
+run-confined-machine-git = it can read this machine except the places that hold a credential, and write only these directories, the system temporary directory and the toolchain caches, and a program in it other than git can write a repository's hooks and configuration, which git runs later with no sandbox:
 run-carries-known-hosts = { $program } also adds to your ssh known hosts and can reach your ssh agent
 run-carries-toolchain = { $program } also reaches the install and the cache of the { $toolchain } toolchain
+run-carries-loopback = { $program } can also listen on, and connect to, ports of this machine
+run-carries-ssh-key = the planner asked that you choose again which ssh key { $program } offers first, where more than one could be offered, and nothing more is lent
 run-carries-remote = { $program } also reads your git and gh logins, your ssh configuration and public keys, never a private key, and adds to your ssh known hosts
 run-carries-aws = { $program } also reads your aws credentials in ~/.aws
 run-carries-kubernetes = { $program } also reads your kubernetes credentials in ~/.kube
 run-carries-docker = { $program } also reads your docker credentials in ~/.docker
+run-carries-signing = { $program } also reads the public key your git configuration signs with, and signs through your ssh agent, never reading a private key
 run-carries-reach = { $program } also reads { $path }, where your { $variable } points
+run-carries-identity = { $program } has ssh offer the key { $path } first, which your git.identities names for the owner of this address, and after it only keys your ssh configuration names
+run-carries-identity-chosen = { $program } has ssh offer the key { $path } first, which you chose for { $owner } on { $date }, and after it only keys your ssh configuration names
+run-carries-identity-chosen-default = { $program } leaves the key to ssh, which offers your keys in order, as you chose for { $owner } on { $date }
 run-network-closed = the network is closed for programs this session starts, except for those below
 run-keeps-network = { $program } also reaches the network
 # Said for reach a person attached to a command with /reach. The date is the day they allowed it,
@@ -1530,7 +1760,7 @@ run-carries-remembered = { $sentence } (remembered for this command, allowed { $
 run-carries-remembered-read = { $program } also reads { $path } (remembered for this command, allowed { $date })
 run-carries-remembered-write = { $program } also reads and writes { $path } (remembered for this command, allowed { $date })
 # The /reach command: what it lists, what it says it did, and why it did nothing.
-reach-usage = /reach lists the reach remembered for commands. /reach <remote|aws|kubernetes|docker|directory> [write] [always] -- <command> remembers it for that command. /reach remove <number> forgets one.
+reach-usage = /reach lists the reach remembered for commands. /reach <remote|aws|kubernetes|docker|directory> [write] [always] -- <command> remembers it for that command. /reach remove <number> forgets one. /reach paths lists the paths a session was let reach, and /reach paths remove <number> ends one. /reach keys lists the ssh key chosen at a run prompt for each owner, and /reach keys remove <number> forgets one.
 reach-none = no reach is remembered for any command
 reach-listed = { $number }. { $command } also { $access } { $entry }, allowed { $date }, { $lifetime }
 reach-access-reads = reads
@@ -1541,7 +1771,7 @@ reach-lifetime-session-in = for this session in { $workspace }
 reach-lifetime-always-in = always in { $workspace }
 reach-added = remembered: { $command } also { $access } { $entry }, { $lifetime }. The next plan for it shows this row.
 reach-removed = forgotten: { $command } no longer also { $access } { $entry }
-reach-refused-entry = { $entry } is not a credential scope (remote, aws, kubernetes, docker) or a directory that can be reached. It must be an absolute path or start with ~/, exist, and not be your home directory, ~/.ssh, or a directory above them.
+reach-refused-entry = { $entry } is not a credential scope (remote, aws, kubernetes, docker) or a directory that can be reached. It must be an absolute path or start with ~/, exist, and not be your home directory, a directory above it, ~/.ssh, or a credential location such as ~/.aws or ~/.gnupg.
 reach-refused-write = a credential scope is read only. Only a directory can be written.
 reach-refused-line = that command line cannot be run as written, so there is nothing to remember the reach for
 reach-refused-assignment = a command with NAME=value in front of it carries no remembered reach
@@ -1550,6 +1780,12 @@ reach-refused-workspace = this directory cannot be told apart from another made 
 reach-refused-incognito = this session adds nothing to ~/.bravebot, so nothing was remembered
 reach-refused-no-home = this session has no home directory to judge a reach against
 reach-refused-number = no reach is numbered { $number }
+reach-key-none = no ssh key is chosen for any owner
+reach-key-listed = { $number }. { $owner }: { $key }, chosen { $date }
+reach-key-default = whichever key ssh tries first
+reach-key-usage = /reach keys lists the ssh key chosen at a run prompt for each owner, and /reach keys remove <number> forgets one.
+reach-key-refused-number = no key is numbered { $number }
+reach-key-removed = forgotten: the key for { $owner }. The next run prompt for a git command that reaches it asks again, where it could offer more than one key.
 run-filesystem-rules = your own filesystem rules apply to these programs: { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 # Said above the list of what a line reaches that nothing here holds: no credential is handed
 # over, nobody is asked at the moment it is used, and nothing here can take the access back. Said
@@ -1576,19 +1812,28 @@ run-write-not-remembered =
     a line naming a file to write is asked about every time, so this one cannot be remembered
 run-stdin-not-remembered =
     a line fed a reference is asked about every time, so this one cannot be remembered
+run-unconfined = the planner asked for this one line to run with no sandbox: no profile holds it, and the next line is held to the session's mode again
+run-unconfined-not-remembered =
+    a line the planner asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered
 run-scopes-not-remembered =
-    a line the planner asked to carry a credential scope or a toolchain list is asked about every time, so the line itself cannot be remembered
+    a line the planner asked to carry a credential scope, toolchain list or loopback is asked every time, so it cannot be remembered
 # Said only where the plan asked for a credential scope and a record of reach can be written. The
 # lines under it are the programs, each with its operation word, as `/reach` lists them.
 run-keep-reach-explained = m: also remember the requested reach for these commands, so the next plan for them carries it
 run-keep-reach-scopes = the reach remembered is { $scopes }, read only
 run-keep-reach-still-asked = the line is still asked about every time, with that reach shown on it, and nothing it prints is trusted
-run-keep-reach-lifetimes = m lasts for this session. k lasts until removed, in this checkout, or in every checkout for a program the scope belongs to, such as git for remote.
-run-keep-reach-toolchains = { $toolchains } is not remembered: a toolchain list is asked for again each time
+run-keep-reach-lifetimes = m lasts for this session. e lasts until removed, in this checkout, or in every checkout for a program the scope belongs to, such as git for remote.
+run-keep-reach-asked-again = { $names } is not remembered: it is asked for again each time
 run-keep-reach-where = it is written down here:
 run-keep-reach-undo = /reach lists what is remembered, and /reach remove <number> forgets one
 run-keep-reach = remember the reach
 run-keep-reach-always = remember it for every session
+run-key-choice-explained = { $first }-{ $last }: run it, and from now on have ssh offer that key first whenever git reaches { $owner }:
+run-key-choice-default = leave the key to ssh, which offers your keys in order, and stop asking
+run-key-choice-yes = y runs it with whichever key ssh tries first, and asks again next time
+run-key-choice-undo = /reach keys lists the keys chosen, and /reach keys remove <number> forgets one
+run-key-choose = offer that key
+run-key-leave = leave it to ssh
 run-remember-explained = r: stop asking about this exact line, in this directory, from now on
 run-remember-where = it is written down here, and deleting the line is the way back:
 run-remember-only-asking = it stops the asking only: what it prints stays quarantined
@@ -1731,6 +1976,11 @@ server-workspace = to index { $workspace }
 server-build-tooling =
     this runs code from your project and its dependencies with your own access, the way
     building or testing the project does. it stays running for this session.
+server-arguments = with { $arguments }
+server-declared-unknown =
+    you declared this server yourself, so what starting it runs is not known: it may run code
+    from your project and its dependencies. it runs with your own access, and stays running for
+    this session.
 server-reads-only =
     it reads the project and stays running for this session. nothing is written to your
     project.
@@ -1805,6 +2055,10 @@ count-commands = { $count ->
     [one] { $count } command
    *[other] { $count } commands
     }
+count-requested-paths = { $count ->
+    [one] { $count } path
+   *[other] { $count } paths
+    }
 count-reach-grants = { $count ->
     [one] { $count } grant
    *[other] { $count } grants
@@ -1842,6 +2096,9 @@ status-model = Model
 status-model-chosen = chosen with /model
 status-model-default = the configured default
 status-model-definitions = the one { $definition } asks for
+# Under the model line when the line gives the name the configuration chose and not what a request
+# names, since an error from the service quotes the latter.
+status-model-id = sent to the service as { $id }
 status-agent = Agent
 status-agent-every-turn = every turn is addressed to it, named with --agent
 status-agent-by-setting = every turn is addressed to it, chosen by the agent setting
@@ -1903,6 +2160,9 @@ status-goal-rounds = { $rounds ->
 # one that says otherwise.
 status-permissions = Permissions
 status-permissions-cycle = shift-tab to change
+status-programs-write = Programs write
+status-programs-write-anywhere = anywhere a request_path would be granted
+status-programs-write-except = not a credential location, your denyWrite paths, or a new entry in your home directory or beside a credential location
 # Said only where auto-vetting is on. The file is named because that is where the answer is kept
 # and where it is undone; nothing in the interface turns it back off.
 status-vetting = Vetting
@@ -1918,11 +2178,23 @@ status-network-by-settings = closed by run.network in { $path }
 status-network-by-a-setting = closed by run.network in a settings file
 status-network-pinned = pinned closed by { $path } and not changeable by a flag or a settings file
 status-network-pinned-by-policy = pinned closed by the managed settings and not changeable by a flag or a settings file
+# Said only under sandbox mode read-only or workspace-write, where the kernel leaves every unix socket that has a path
+# open to the programs a command starts. The note says why, and what strict does there.
+status-path-sockets = Programs' unix sockets
+status-path-sockets-reachable = every one with a path is reachable: D-Bus, SSH_AUTH_SOCK, docker.sock
+status-path-sockets-why = Landlock here is below ABI 9 (Linux 7.1), and strict refuses programs
 # Said only where one of the four sandbox.filesystem lists has an entry. The note names the files.
 status-sandbox-filesystem = Filesystem rules
 status-sandbox-filesystem-counts = { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 status-sandbox-filesystem-files = from { $files }
 status-sandbox-filesystem-flags = the command line
+status-hosts = Allowed hosts
+status-hosts-counts = { $allowed } allowed, { $denied } denied
+status-hosts-files = from { $files }; a host no entry covers is refused
+status-hosts-managed = the managed settings
+status-hosts-refused = a host no entry covers is refused
+status-hosts-files-ask = from { $files }; a host no entry covers is asked about
+status-hosts-asked = a host no entry covers is asked about
 status-this-session = This session
 # Where a session's wall clock went. Four figures, because the whole is unactionable: a session
 # that took an hour on the model, an hour on subprocesses, and an hour waiting for its user to
@@ -1966,6 +2238,8 @@ status-remembered-this-session = remembered in this session
 status-remembered-earlier = remembered in an earlier session
 status-remembered-where = delete a line from { $path } to be asked again
 status-reach = Remembered reach
+status-requested-paths = Requested paths
+status-requested-paths-note = programs this session starts may reach these; the directories are not trusted. /reach paths remove <number> ends one
 status-reach-note = added to the plan of the command each names; /reach remove <number> forgets one
 status-remembered-and-more = { $count ->
     [one] … and 1 more, { $earlier } of them from an earlier session
@@ -1993,11 +2267,11 @@ cost-turn = Turn { $number }
 cost-before-the-first-turn = Before turn 1
 cost-nothing-spent = nothing spent yet
 session-limit-none = this session has no spend limit
-session-limit-in-force = the session limit is { $limit } tokens, and { $spent } are spent
-session-limit-set = the session limit is { $limit } tokens, and { $spent } are spent
-session-limit-set-below-spent = the session limit is { $limit } tokens, and { $spent } are already spent, so the next request asks whether to go on
+session-limit-in-force = the session limit is { $limit } { $unit }, and { $spent } are spent
+session-limit-set = the session limit is { $limit } { $unit }, and { $spent } are spent
+session-limit-set-below-spent = the session limit is { $limit } { $unit }, and { $spent } are already spent, so the next request asks whether to go on
 session-limit-cleared = the session has no spend limit
-session-limit-unknown = { $figure } is not a limit. Use a whole number of tokens, with k or m after it for thousands or millions, or off to remove the limit
+session-limit-unknown = { $figure } is not a limit. Use a whole number, with k or m after it for thousands or millions, and credits after that to count Leo Premium credits instead of tokens, or off to remove the limit
 request-none-yet = No request has been sent to the model in this session yet.
 # What /context reports. The section names are fixed words, and none is read from a file or a result.
 context-not-measured = The context has not been measured yet, so there is no breakdown.
@@ -2017,6 +2291,9 @@ context-section-other = Other messages
 request-title = The last request sent to { $model }, read from the request itself
 request-tools = Tools offered: { $names }
 request-no-tools = Tools offered: none
+request-instruction-files = Instruction files loaded: { $files }
+request-no-instruction-files = Instruction files loaded: none
+request-instruction-file = { $path } ({ $bytes } bytes)
 request-trusted = { $what } (trusted)
 request-bytes-mark = [a picture or file, sent as bytes]
 request-label-typed = typed
@@ -2055,6 +2332,9 @@ indicator-checking = { $lines ->
     [one] Checking { $lines } line
    *[other] Checking { $lines } lines
     }
+# Said while the turn waits for a delegate to finish and has nothing to ask the model until its
+# report arrives. The argument is the delegate's number, such as d1.
+indicator-waiting-on-delegate = Waiting on { $delegate }
 # Said while a hook holds the turn open. The moment is the word the hooks file spells it with and
 # the program is the first word of the command the person wrote there: nothing the hook printed.
 indicator-hook = Running hook: { $program } ({ $moment })
@@ -2164,6 +2444,7 @@ scroller-key-prompts = previous / next prompt
 scroller-key-search = search, next/previous match
 scroller-key-count = a count first goes that many times as far
 scroller-key-search-run = run it / delete, then abandon
+scroller-key-expand = expand or collapse a call's result
 scroller-key-editor = open the transcript in $EDITOR
 scroller-key-this-list = this list
 scroller-key-close = close the scroller   (also ctrl-c)
@@ -2302,7 +2583,7 @@ jobs-command-takes =
 command-status = Report this session, what it may touch, and what it has spent
 command-cost = Show what each turn of this session has spent
 command-context = Show what fills the context window, by category
-command-limit = Show the session's spend limit, set it in tokens, or remove it
+command-limit = Show the session's spend limit, set it in tokens or credits, or remove it
 command-request = Show the last request sent to the model, and where each part of it came from
 command-model = Choose which model to think with
 command-theme = Choose which theme paints the interface
@@ -2312,10 +2593,14 @@ command-style = Choose how the planner answers: list the styles, pick one, or cl
 command-config = Choose how the input box edits text
 command-add-dir = Open another directory and trust it for this session, or close one
 command-reach = Remember a directory or credential for a command, or list and remove them
+command-sandbox = Show the sandbox mode, or change it from the next turn
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
+command-note = Note something on this session's record, without putting it in the conversation
 command-branch = Copy this session and carry on in the copy, keeping the original to return to
+command-handoff = Start a new session from a brief you can edit, written for the next goal
 command-resume = Pick up another session of this directory, by id or from a list
+command-background = Hand this session to a background process and leave it running
 command-issue = Say which issue this session is for, show it, or clear it
 command-pr = Say which pull request this session is for, show it, or clear it
 command-compact = Summarise the conversation so far, keeping the recent part
@@ -2340,6 +2625,7 @@ command-export = Export the session transcript to a markdown file
 command-copy = Put the last reply on the clipboard, or the one that many replies back
 command-undo = Rewind one turn and put back the files it wrote
 command-rewind = List the turns a rewind could go back to, or go back that many
+command-hunks = List the hunks the last turn wrote, or put one back as it stood before the turn
 command-exit = Leave
 
 
@@ -2366,6 +2652,10 @@ session-resumed = resumed session: { $title }
 session-renamed = renamed to { $title }
 session-rename-needs-a-name = /rename needs a name, as in /rename the parser bug
 session-rename-needs-something = /rename needs a name with something in it
+session-note-added = noted on turn { $turn }, in the record only: the planner is not given it
+session-note-needs-text = /note needs the note, as in /note the wrong file was edited here
+session-note-not-recorded = not noted: this session writes no record, so a note would be kept nowhere
+session-note-listed = turn { $turn }: { $text }
 # What /issue and /pr say back. A refused value is not repeated, since it may hold a control
 # character.
 session-issue-is = this session is for { $url }. /issue clear removes it
@@ -2396,6 +2686,16 @@ session-resume-already-here = that is the session already open
 session-resume-no-such = no session with that id in this directory
 # Left in the transcript when /resume names a session a running background session holds.
 session-resume-held-by-background = that session is held by a running background session, so it cannot be resumed here
+# Left in the transcript when a prompt named a session with @session:<id> and part of it was added.
+session-mention-added = added { $chars } characters of session { $id } to the message
+session-mention-added-cut = added the newest { $chars } characters of session { $id } to the message, and left out older turns
+session-mention-no-such = no session { $id } in this directory, so nothing was added for it
+session-mention-manifest = session { $id } is a manifest run with no conversation to quote, so nothing was added for it
+session-mention-not-ours = session { $id } holds words this build cannot vouch for, so nothing was added for it
+session-mention-private = session { $id } had been shown private content, so nothing was added for it
+session-mention-empty = session { $id } has nothing to quote, so nothing was added for it
+# A row of the @ list for an earlier session: when it was last written, the most a mention adds, and its title.
+session-mention-row = { $when } · up to { $chars } characters · { $title }
 session-branch-nothing-written = nothing to branch yet: the session has no record until its first turn ends
 # Left in the transcript when /branch is typed where session records are not written.
 session-branch-unwritable = /branch needs a session record to copy, and this session does not write one
@@ -2432,6 +2732,60 @@ session-rewind-goes-no-further =
         [one] this session can go back one turn, no further
        *[other] this session can go back { $kept } turns, no further
     }
+# Drawn after a line of a hunk that has no terminator, which only a file's final line can lack.
+diff-no-final-newline = [no newline at end of file]
+# What /hunks says. A hunk is a run of changed lines in a file the last turn wrote.
+session-hunks-heading = turn { $turn } wrote these hunks. /hunks <number> puts one back, and leaves the rest of the file
+session-hunks-wrote-nothing = turn { $turn } wrote no files, so there are no hunks to put back
+# One hunk: the line it starts at in the file now, and how many lines it added and removed.
+session-hunk-row = from line { $line }: { $added }, { $removed }
+# A hunk that only removes lines has none of its own in the file now, so the line before it places it.
+session-hunk-row-after = after line { $line }: { $removed }
+session-hunk-row-at-start = at the start of the file: { $removed }
+session-hunk-added =
+    { $count ->
+        [one] added 1 line
+       *[other] added { $count } lines
+    }
+session-hunk-removed =
+    { $count ->
+        [one] removed 1 line
+       *[other] removed { $count } lines
+    }
+# A file the last turn wrote that has no hunks to list, and why.
+session-hunks-left-row = { $path }: { $why }
+session-hunks-left-created = the turn created it, so a hunk cannot be taken out of it. /undo removes it, with the rest of the turn
+session-hunks-left-not-kept = what it held before the turn was not kept, so it will not go back
+session-hunks-left-untrusted =
+    its contents are not vouched for, so they are not compared. Only /undo puts it back, with the rest of the turn
+session-hunks-left-not-text = it is not text
+session-hunks-left-too-different = so much of it changed that its hunks cannot be lined up
+session-hunks-left-outside = it does not resolve inside the project now, so it is not read
+session-hunks-left-unreadable = it is gone, is not a file, or is larger than a rewind keeps
+session-hunks-left-as-it-was = it holds what it held before the turn
+session-hunk-put-back = put back hunk { $number } of { $path } as it stood before turn { $turn }
+session-hunk-not-put-back = hunk { $number } of { $path } was not put back: { $why }
+session-hunk-changed =
+    { $path } no longer holds hunk { $number } as it was listed, so nothing was written. /hunks lists
+    what it holds now
+session-hunk-failed =
+    writing { $path } failed, so it may hold part of the change and is not vouched for: { $problem }
+session-hunks-unavailable = /hunks could not begin: { $problem }
+session-hunks-needs-a-number = /hunks takes the number of a hunk it listed, as in /hunks 2
+session-hunks-more =
+    { $count ->
+        [one] 1 more hunk is not listed. /undo puts it back, with the rest of the turn
+       *[other] { $count } more hunks are not listed. /undo puts them back, with the rest of the turn
+    }
+session-hunks-uncovered = the list may be missing changes. Not fully covered: { $causes }.
+session-hunks-list-first = list the hunks with /hunks first, then put one back by its number
+session-hunks-turn-moved =
+    the session has had another turn since that list. /hunks lists the hunks of the last one
+session-hunk-no-such =
+    { $hunks ->
+        [one] there is no hunk { $number }; the last list had 1 hunk
+       *[other] there is no hunk { $number }; the last list had { $hunks } hunks
+    }
 session-exported = exported transcript to { $path }
 session-export-failed = could not export transcript: { $problem }
 session-copy-needs-a-number = /copy takes how many replies back to copy, as in /copy 2
@@ -2452,6 +2806,12 @@ session-cd-needs-a-path = /cd needs a directory, as in /cd ~/projects/other
 session-directory-changed = now working in { $directory }, and trusting it for this session
 # The mode the person was in, taken away by a settings layer of the directory they moved into.
 session-bypass-made-unreachable = permissions.bypassUnreachable is set here, so bypassing is off and the session is asking again
+session-bg-bypass = /bg is refused in bypass, because a session nobody is watching does not run in a mode that answers every question. Switch to another mode first, or use a one-shot run.
+session-bg-option-lost = /bg is refused because this session was started with { $flag }, which a background session does not receive. Start a session without that option to use /bg.
+session-bg-sandbox-moved = /bg is refused because /sandbox moved this session to { $mode }, and a background session starts in { $settled }. Run /sandbox { $settled } first to use /bg.
+session-bg-keeps-nothing-running = /bg is refused while a loop, a goal or a watch is running, because the background session would not run it. Stop it first.
+session-bg-nothing-recorded = /bg hands over the session's record, and this session has none yet. Send a prompt first.
+session-bg-incognito = /bg is refused in an incognito session, which writes no record to hand over.
 # Said once per directory that was open and is not any more, so nobody discovers it by being
 # refused a file they could read a minute ago.
 session-directory-closed = closed { $directory }; open it again with /add-dir { $directory }
@@ -2522,13 +2882,13 @@ session-trusting-as-left = trusting { $directory } (as this session left it)
 # what made it.
 session-trusting-unasked =
     trusting { $directory } (--dangerously-skip-permissions, so you were not asked)
-# Said where the question was not put because an earlier session here was told to remember the
-# answer (TRUST-23). When it was given and how to take it back, because this is a grant nobody made
+# Said where the question was not put because an earlier session here was answered yes and the yes
+# was kept (TRUST-23). When it was given and how to take it back, because this is a grant nobody made
 # in this session and the line is the only thing on the screen that says where it came from.
 session-trusting-kept =
-    trusting { $directory } (you said to remember it { $when }; /forget-trust to be asked again)
+    trusting { $directory } (you trusted it { $when }; /forget-trust to be asked again)
 session-trusting-kept-root =
-    trusting { $directory }, inside { $root } (you said to remember { $root } { $when }; /forget-trust to be asked again)
+    trusting { $directory }, inside { $root } (you trusted { $root } { $when }; /forget-trust to be asked again)
 session-trust-kept =
     trusting { $directory }, and later sessions started here will not ask; /forget-trust takes it back
 # The answer was given, but writing it down failed, so the next session will ask after all.
@@ -2564,6 +2924,16 @@ session-vetting-in-force =
 # installs whatever is newest when it runs.
 update-available =
     a newer bravebot is out (this is { $running }); update with: { $command }
+# Printed by `bravebot update`. The command is passed in for the reason it is above: which line
+# updates this copy depends on how it was installed, and it is not a translator's to reword.
+# Nothing is asked of a registry, so this says how to update rather than whether to.
+update-how = update with: { $command }
+# Printed by `bravebot update` for a copy neither the npm package nor the install script put
+# here, a build from source above all. There is no command to name, and naming one would replace
+# a binary this program did not install.
+update-not-installed-by-us =
+    this copy was not installed by the npm package or by the install script, so there is no update
+    command for it. A build from source is updated by pulling and building again.
 session-started-server = running the { $language } language server for this session ({ $program })
 # Said when a person agrees to offer a server's tools to the model. The list is recorded, so it
 # is offered again in later sessions until the server's list changes.
@@ -2576,6 +2946,13 @@ session-offered-tools =
 session-stands-for-tool = calling { $tool } without asking in this project
 session-answered-already = answered already: { $question }
 session-something-was-refused = a policy gate refused something during that turn
+# Said under a finished turn for refusals that no later call to the same tool got past. A refusal
+# a later call got past is left to the audit trail.
+session-refusals-left =
+    { $count ->
+        [one] the turn ended with a refused call left undone. Refused: { $first }
+       *[other] the turn ended with { $count } refused calls left undone. First refused: { $first }
+    }
 # The endpoint substitutes a model it will not serve rather than refusing, so without this a
 # session can ask for one model and be answered by another with nothing said.
 session-model-substituted =
@@ -2583,6 +2960,7 @@ session-model-substituted =
     subscription was expected.
 session-error = error: { $problem }
 session-no-output = no output
+shell-kept-private = typed with !!, so this output was not sent to the model
 
 ## Why a turn failed
 
@@ -2692,9 +3070,6 @@ goal-spent =
     the goal has sent the work back { $rounds } times without being met, and has stopped rather
     than carrying on
 goal-failed = the goal could not be checked ({ $problem }), so it is cleared
-goal-uninterruptible =
-    the check already in flight is one request and cannot be stopped part way, but nothing
-    more will be sent
 goal-ended-unexpectedly = the goal check ended unexpectedly
 goal-replaces-loop =
     the loop that was running has been stopped: a session works towards one thing at a time
@@ -2862,6 +3237,12 @@ paste-invisible-removed = { $count ->
     [one] removed { $count } invisible character from that paste
    *[other] removed { $count } invisible characters from that paste
     }
+cli-prompt-invisible-removed = { $count ->
+    [one] removed { $count } invisible character from the prompt -i gave
+   *[other] removed { $count } invisible characters from the prompt -i gave
+    }
+drop-name-not-written =
+    a dropped file's name holds a control character or one a terminal draws as nothing, so no path was written into the command
 kilobytes = { $size } KB
 megabytes = { $size } MB
 gigabytes = { $size } GB
@@ -2875,7 +3256,7 @@ command-reported-a-failure = the command reported a failure
 
 ## Shortening a long conversation
 
-compact-uninterruptible = summarising cannot be interrupted; it takes one request
+compact-stopped = summarising was stopped; the conversation is as it was
 compact-ended-unexpectedly = the summary ended unexpectedly
 compact-done =
     summarised { $summarised } earlier messages, keeping the last { $kept } as they are
@@ -2887,9 +3268,17 @@ turn-ended-unexpectedly = the turn ended unexpectedly
 ## Asking something beside the work
 
 btw-needs-a-question = /btw takes the question to ask, which the conversation will not read
-btw-uninterruptible = the question cannot be interrupted; it takes one request
+btw-stopped = the question was stopped
 btw-ended-unexpectedly = the question ended unexpectedly
 btw-failed = the question could not be answered: { $problem }
+
+handoff-needs-a-goal = /handoff takes the next piece of work, which the brief is written for
+handoff-nothing-to-hand-off = nothing to hand off yet: the session has no record until its first turn ends
+handoff-ready = the brief is in the box. Edit it, then Enter starts a new session from it, or Esc drops it. The file decisions and permissions given here do not carry over
+handoff-untrusted = the brief was not offered: this conversation has met something untrusted, so the new session would not be starting from what the planner could have held
+handoff-failed = the brief could not be written: { $problem }
+handoff-stopped = the brief was stopped
+handoff-started = handed off: this is a new session, and the earlier one is as it was. To return to it, run `bravebot --resume { $id }`
 
 # What the session says about a manifest run started from it. The plan, each step and the reply are
 # shown as they happen, so what is left to say is that a run is starting, where it was written down,
@@ -2941,6 +3330,11 @@ session-model-is-the-definitions =
 agent-model-outranked =
     { $definition } asked for { $model }, and --model outranks it, so this run asked for the model
     the command line named
+# Said where a project's output style was picked and the turn could not read it: the trust map no
+# longer vouches for the file, or it is no longer a style. The name is what the person typed.
+agent-style-not-used =
+    the { $style } style was not used: its file is not trusted or is no longer a style, so this turn
+    opened with the usual words
 # Said where a turn is addressed to a definition whose isolation line asks for a checkout of its
 # own. Only a delegate is given one, so the person's own turn works in their working directory. The
 # definition's name is the word of a vouched-for file.
@@ -2957,6 +3351,7 @@ agent-checkout-not-applied =
 opening-confinement = confinement available: { $level }
 opening-network-closed = network closed
 opening-filesystem-rules = filesystem rules in force
+opening-path-sockets-reachable = programs reach sockets with a path: D-Bus, SSH agent, docker.sock
 opening-invitation = Ask a question about this workspace.
 
 
@@ -2969,6 +3364,8 @@ verb-list-files = List
 verb-search = Search
 # The history of a repository, read without starting git.
 verb-read-git = History
+# A map of the declarations in a directory's source files.
+verb-repo-map = Map
 # A question put to a language server rather than to the files: "Look up" reads as asking
 # something that knows the code, where "Search" reads as looking through it.
 verb-lsp = Look up
@@ -2981,16 +3378,20 @@ verb-todo-write = Plan
 # remember which of the verbs meant that.
 verb-spawn-processor = Isolated processor
 verb-load-skill = Skill
+verb-load-tool = Load
 verb-ask-user = Ask
+verb-request-path = Reach
 verb-run = Run
 verb-read-output = Read output
 verb-vet-content = Vet
 verb-fetch-url = Fetch
+verb-download-url = Download
 verb-job-output = Job
 verb-spawn-agent = Delegate
 verb-schedule-next = Schedule
 verb-watch-file = Watch
 verb-advisor = Advise
+verb-message-session = Message
 verb-mcp-call = MCP
 verb-unknown = Tool
 
@@ -3002,7 +3403,6 @@ verb-unknown = Tool
 landed-in-the-planner = read into the planner's context
 landed-quarantined = not in the planner's context; only an isolated processor can be sent to read it
 landed-reserved = read by nothing: only its name is known
-reach-not-the-planner = not in the planner's context; a processor can be sent to read it
 reach-no-model = in no model's context: nothing can be sent to read this
 
 # How many calls a delegate has made, where its block shows only the last few.
@@ -3048,6 +3448,9 @@ delegate-servers-declared = { $definition } declares an MCP server in its mcpSer
 # A definition's rounds line is not a whole number above zero, so the file did not load. The
 # definition is its file's path.
 delegate-rounds-not-a-count = { $definition } was skipped: its rounds must be a whole number above zero
+# A definition's budget line is not a count of tokens above zero, so the file did not load. The
+# definition is its file's path. "budget" is the key and stays as it is.
+delegate-budget-not-a-count = { $definition } was skipped: its budget must be a count of tokens above zero, such as 500k or 2m
 # A definition asked for more rounds than its kind may make. The kind is its key's value (reader,
 # checker or worker), left as written because it is typed.
 delegate-rounds-held = { $definition } asks for { $asked } rounds, more than the { $most } a { $kind } may make, so its delegate is given { $most }
@@ -3120,6 +3523,14 @@ skill-model-substituted = { $skill } asked for { $model } and was answered by a 
 # settings deny reading, so it was left out of the turn. The source is its workspace-relative path
 # and stays as it is. "deny" is the name of the settings list the rule sits in.
 source-denied-by-rule = { $source } was not loaded: a deny rule in your settings covers it
+# Skills in the person's own ~/.bravebot/skills that were not loaded, because the way to the file goes
+# through the working directory or a directory opened beside it, where a turn can write, and no
+# skill directory of the project offered them in their place. ~/.bravebot/skills stays as it is.
+home-skills-reached-through-the-workspace =
+    { $count ->
+        [one] 1 skill in ~/.bravebot/skills was not loaded: the way to its file goes through a directory this session can write to
+       *[other] { $count } skills in ~/.bravebot/skills were not loaded: the way to their files goes through a directory this session can write to
+    }
 # An entry of "references" in the person's settings that was not offered. The alias is the name they
 # gave it. One message per reason: the alias cannot be used, the entry names a repository, which
 # is not fetched, the entry names no directory, and a directory that could not be opened.
@@ -3133,6 +3544,12 @@ reference-not-opened = reference { $alias } was not opened: { $problem }
 import-too-deep = { $import } was not imported: imports are nested too deeply or there are too many
 import-cycle = { $import } was not imported: a file above it already imports it
 import-not-loaded = { $import } was not imported: it is outside this project, cannot be read or is not trusted
+# Said about a standing instructions file long enough to be worth a word, which goes out with every
+# request of the session. The source is its workspace-relative path, or ~/.bravebot/AGENTS.md, and
+# stays as it is; the sizes are numbers of bytes. The file still loaded.
+source-is-large = { $source } is { $bytes } bytes, and every request this session sends carries it
+# Said once for the turn, about every instructions file together rather than any one of them.
+sources-large-together = standing instructions are { $bytes } bytes in all, past { $limit }, and every request this session sends carries them
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }
@@ -3149,7 +3566,7 @@ doctor-direnv-missing = not found on PATH; see https://direnv.net/ or run `brew 
 
 status-undecided = not decided
 
-sessions-usage = sessions takes --json, stop and a session's id, import and a tool's name, or search and some text
+sessions-usage = sessions takes --json, stop and a session's id, list, import and a tool's name, or search and some text
 sessions-none = No background sessions.
 sessions-no-home = There is no state directory to find background sessions in.
 sessions-missing = No background session { $id }.
@@ -3172,6 +3589,13 @@ sessions-import-ambiguous = More than one Claude Code session here begins with {
 sessions-import-failed = Could not write "{ $title }": { $problem }
 sessions-search-usage = sessions search takes some text to find, and may add since:<n>h, since:<n>d or since:<n>w, and workspace:<directory> if it is not this one
 sessions-search-none = No session matches.
+sessions-list-usage = sessions list takes --json, and --limit and a count
+sessions-list-none = No session is recorded for this directory.
+sessions-list-row = { $id }  { $when }  { $title }  { $branch }  { $front }  { $state }
+sessions-list-continuable = can be continued
+sessions-list-not-continuable = cannot be continued
+sessions-list-unknown = unknown
+sessions-list-more = { $held } more. Pass --limit to see them.
 sessions-state-working = working
 sessions-state-idle = idle
 sessions-state-stopped = stopped
@@ -3188,6 +3612,10 @@ sessions-held-tools = tools
 sessions-held-move = move
 sessions-held-manifest = manifest
 sessions-held-question = question
+sessions-held-message = message
+sessions-view-title = Background sessions
+sessions-view-keys = ↑↓ choose  ·  Enter attach  ·  Esc leave
+sessions-view-failed = Could not draw the list of background sessions: { $problem }
 bg-needs-a-prompt = --bg takes the prompt to start with
 bg-needs-a-terminal = --bg starts a session from a terminal, and this is not one
 bg-takes-nothing-else = --bg takes a prompt and no other option, and { $flag } cannot reach the session it starts
@@ -3196,6 +3624,7 @@ bg-not-started = The background session did not start.
 bg-started = Started { $id }. Join it with: bravebot attach { $id }
 bg-spawn-failed = Could not start the background session: { $problem }
 bg-unsupported = Background sessions are not available on this platform.
+bg-handed-over = Handed this session to a background process. Join it with: bravebot attach { $id }
 attach-usage = attach takes a session's id
 attach-needs-a-terminal = attach answers a session's prompts from the lines typed, and this is not a terminal
 reply-usage = reply takes a session's id and the prompt to send
@@ -3244,3 +3673,40 @@ doctor-sandbox-fix-login = gh has a login outside the sandbox that it cannot rea
 doctor-sandbox-log = log
 doctor-sandbox-total = total
 doctor-sandbox-counts = { $passed } passed, { $failed } failed, { $skipped } skipped
+
+# /sandbox. The mode is a person's to choose, and the sentences say what it changes and from when.
+session-sandbox-report = sandbox mode: { $detail }
+session-sandbox-from-command = { $mode } from /sandbox
+session-sandbox-from-flag = { $mode } from --sandbox
+session-sandbox-needs-a-mode = /sandbox takes one of { $names }, or nothing to report the mode in force
+session-sandbox-already = The sandbox mode is already { $mode }.
+session-sandbox-kept = The sandbox mode stays { $mode }.
+session-sandbox-set = The sandbox mode is { $mode } from the next turn, for the rest of this session.
+session-sandbox-set-off = The sandbox mode is off from the next turn, for the rest of this session: programs `run` starts have no profile.
+session-sandbox-refused-mode =
+    /sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a session may
+    read and write no more than that. { $looser }
+session-sandbox-refused-network =
+    /sandbox { $asked } is refused: { $pinned_in } pins run.network to closed, and a program started with
+    no sandbox is not held to that. Use /sandbox workspace-write, read-only or strict.
+ask-sandbox-off-title = sandbox
+ask-sandbox-off-header = Sandbox off
+ask-sandbox-off-question = Programs `run` starts will have no profile, so nothing confines what they read, write or reach. Turn the sandbox off for the rest of this session?
+ask-sandbox-off-no = No, keep { $mode }
+ask-sandbox-off-yes = Yes, start programs with no profile
+ask-sandbox-off-yes-detail = Applies from the next turn. /sandbox workspace-write or /sandbox strict turns it back on.
+cli-usage-doctor-push-identity = Ask GitHub which account each of your ssh keys pushes as
+cli-doctor-push-identity-argument = doctor --push-identity takes at most one argument, written <host>/<owner>.
+doctor-push-no-home = There is no home directory to look for ssh keys in.
+doctor-push-no-keys = No public key file was found at ssh's default names or in an IdentityFile line of ~/.ssh/config, so there is no key to ask about.
+doctor-push-remote = Remote
+doctor-push-no-remote = no owner named, so no login can be compared with one; pass <host>/<owner> or run it in a repository whose origin is an ssh address on { $host }
+doctor-push-no-fingerprint = fingerprint unreadable
+doctor-push-login = registered to { $login }
+doctor-push-login-owns = registered to { $login }, which owns { $owner }
+doctor-push-login-differs = registered to { $login }, which is not { $owner } (it can still write there as a member of an organisation, or as a collaborator)
+doctor-push-not-recognised = no account on { $host } has this key (Permission denied (publickey))
+doctor-push-unanswered = { $host } gave no answer for this key
+doctor-push-chosen = Chosen
+doctor-push-chosen-by = git.identities names this key for the owner
+doctor-push-chosen-at-prompt = you chose this key for the owner at a run prompt; /reach keys in the terminal client lists and forgets it

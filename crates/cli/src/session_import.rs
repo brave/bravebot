@@ -66,23 +66,9 @@ fn read(words: &[String]) -> Option<Request> {
 }
 
 fn claude_code(request: Request) -> ExitCode {
-    let directory = match request.project {
-        Some(path) => path,
-        None => match std::env::current_dir() {
-            Ok(here) => here,
-            Err(_) => return fail(Ending::Failed, t!(cli_directory_unknown)),
-        },
-    };
-    let Ok(project) = directory.canonicalize().and_then(|resolved| {
-        resolved
-            .is_dir()
-            .then_some(resolved)
-            .ok_or(std::io::ErrorKind::NotADirectory.into())
-    }) else {
-        return fail(
-            Ending::Argument,
-            t!(sessions_import_no_project, path = directory.display()),
-        );
+    let project = match crate::background::project_directory(request.project) {
+        Ok(path) => path,
+        Err(code) => return code,
     };
     let Some(claude_dir) = bravebot_config::import::Places::from_env()
         .claude_code

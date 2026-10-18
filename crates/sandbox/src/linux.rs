@@ -1,23 +1,29 @@
-//! Linux confinement via Landlock.
+//! Linux confinement via Landlock and a network namespace.
 //!
 //! Filesystem restrictions are applied with Landlock, which needs kernel 5.19 or
 //! newer. Availability is probed at runtime rather than assumed: an older kernel, or a
 //! container that masks the syscall, means confinement is unavailable and the process
 //! is refused instead of run unconfined.
 //!
-//! Landlock governs the filesystem only. Network denial and subprocess denial need
-//! separate mechanisms (e.g. an empty network namespace, or seccomp filtering),
-//! which are not implemented yet, so [`Capabilities::network_denial_enforced`] is
-//! `false` and the reported level is [`ConfinementLevel::Partial`]. Claiming
-//! kernel-level network or subprocess denial here would misreport the guarantee;
-//! policies requiring either are refused.
+//! Landlock governs the filesystem, and with it the connect to a socket that has a path and
+//! to an abstract one. The network is governed by a user and network namespace the stage is
+//! started in ([`crate::netns`]), which leaves it a loopback and nothing else, and a forwarder
+//! in it relays one port to the allowed-hosts proxy's unix socket. Landlock's own network
+//! rules are not used: they filter by port and not by address, and leave UDP open. Where the
+//! kernel will not make the namespace, [`Capabilities::network_denial_enforced`] and
+//! [`Capabilities::egress_limited_to_a_port`] are `false` and a policy needing either is
+//! refused. Subprocess denial needs a separate mechanism (e.g. seccomp filtering), which is
+//! not implemented yet, so the reported level is [`ConfinementLevel::Partial`] and a policy
+//! requiring it is refused.
 
+use crate::netns::Namespace;
 use crate::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
 use crate::process::{ConfinedChild, Environment, Streams};
 use crate::{Sandbox, SandboxError};
 use landlock::{
-    ABI, Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, RulesetAttr,
-    RulesetCreatedAttr, RulesetError, RulesetStatus, path_beneath_rules,
+    ABI, Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, PathFdError,
+    RulesetAttr, RulesetCreated, RulesetCreatedAttr, RulesetError, RulesetStatus, Scope,
+    path_beneath_rules,
 };
 use std::ffi::{OsStr, OsString};
 use std::os::unix::process::CommandExt;
@@ -64,6 +70,11 @@ const HANDLED_ABI: ABI = ABI::V9;
 /// v2 costs is the kernels between 5.13 and 5.19, which have Landlock without that right.
 const MINIMUM_ABI_VERSION: libc::c_long = 2;
 
+/// The Landlock ABI version carrying the right that governs a connect to a unix socket that has
+/// a path, Linux 7.1. A write row grants it and a read row does not, which is the rule SANDBOX-3
+/// states.
+const PATH_SOCKET_ABI_VERSION: libc::c_long = 9;
+
 /// `landlock_create_ruleset`, stable since Linux 5.13.
 const SYS_LANDLOCK_CREATE_RULESET: libc::c_long = 444;
 
@@ -85,6 +96,14 @@ fn landlock_abi_version() -> libc::c_long {
             LANDLOCK_CREATE_RULESET_VERSION,
         )
     }
+}
+
+/// Whether a kernel reporting `version` holds a connect to a socket that has a path to the
+/// policy's write rows. Below [`PATH_SOCKET_ABI_VERSION`] no ruleset can, and every such socket on
+/// the machine is reachable from a confined process. A version rather than the syscall, for the
+/// reason [`abi_meets_minimum`] takes one.
+fn governs_sockets_with_a_path(version: libc::c_long) -> bool {
+    version >= PATH_SOCKET_ABI_VERSION
 }
 
 /// Whether a kernel reporting `version` carries [`MINIMUM_ABI_VERSION`].
@@ -157,6 +176,77 @@ fn rules_for_every_path(
     Ok(rules)
 }
 
+/// Opens every row of `policy` once. Returns the policy without the listed rows whose names are
+/// gone, or `None` where every row opened, or the error for the first row that cannot be.
+///
+/// A listed row is an entry a directory had when it was listed. When its name is gone by the time
+/// the row is opened there is nothing to grant, so the row is left out where any other row
+/// refuses the policy. A name is gone when it is not found, is under something that is no longer
+/// a directory, or is a stale handle on a network file system. The same open decides it, so a
+/// name present at that open and removed later is the installer's to skip. A listed row that is
+/// there and cannot be opened, and a path the caller named, are refused (SANDBOX-6).
+fn opened_rows(policy: &SandboxPolicy) -> Result<Option<SandboxPolicy>, PathFdError> {
+    for path in &policy.readable {
+        PathFd::new(path)?;
+    }
+    let mut gone = Vec::new();
+    for (index, row) in policy.writable.iter().enumerate() {
+        match PathFd::new(&row.path) {
+            Ok(_) => {}
+            Err(PathFdError::OpenCall { source, .. }) if row.listed && name_is_gone(&source) => {
+                gone.push(index);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if gone.is_empty() {
+        return Ok(None);
+    }
+    let mut kept = policy.clone();
+    let mut index = 0;
+    kept.writable.retain(|_| {
+        index += 1;
+        !gone.contains(&(index - 1))
+    });
+    Ok(Some(kept))
+}
+
+/// Whether opening a path failed because its name is gone: not found, under something that is no
+/// longer a directory, or a stale handle on a network file system.
+fn name_is_gone(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::NotADirectory
+            | std::io::ErrorKind::StaleNetworkFileHandle
+    )
+}
+
+/// `ruleset` with a rule for each of `paths` whose name is still there.
+///
+/// For the rows a listing produced, which are opened again here after the fork. One whose name is
+/// gone has nothing to grant and is left out, as [`opened_rows`] leaves out a listed row before
+/// it. One that is there and cannot be opened is a grant this backend cannot install, and is the
+/// error. Each rule is added as it is built, so a large directory holds one descriptor at a time
+/// and not one for each entry.
+fn with_the_listed_rules(
+    mut ruleset: RulesetCreated,
+    paths: &[PathBuf],
+    access: BitFlags<AccessFs>,
+) -> std::io::Result<RulesetCreated> {
+    for path in paths {
+        let fd = match PathFd::new(path) {
+            Ok(fd) => fd,
+            Err(PathFdError::OpenCall { source, .. }) if name_is_gone(&source) => continue,
+            Err(error) => return Err(std::io::Error::other(format!("landlock: {error}"))),
+        };
+        ruleset = ruleset
+            .add_rule(PathBeneath::new(fd, access))
+            .map_err(|e| std::io::Error::other(format!("landlock: {e}")))?;
+    }
+    Ok(ruleset)
+}
+
 /// Landlock-based confinement.
 #[derive(Debug, Default)]
 pub struct LandlockSandbox;
@@ -191,16 +281,26 @@ impl LandlockSandbox {
 
 impl Sandbox for LandlockSandbox {
     fn capabilities(&self) -> Capabilities {
+        let namespaces = crate::netns::available().is_ok();
         Capabilities {
-            // Filesystem restrictions are kernel-enforced, but network and subprocess
-            // denial are not implemented yet, so this is deliberately not reported
+            // Filesystem restrictions and the network are kernel-enforced, but subprocess
+            // denial is not implemented yet, so this is deliberately not reported
             // as full kernel confinement.
             level: ConfinementLevel::Partial,
-            mechanisms: vec!["landlock"],
-            network_denial_enforced: false,
+            mechanisms: if namespaces {
+                vec!["landlock", "network-namespace"]
+            } else {
+                vec!["landlock"]
+            },
+            // Both are the namespace's, so both are reported only where one can be made.
+            network_denial_enforced: namespaces,
+            egress_limited_to_a_port: namespaces,
             // A rule is a right attached to an open descriptor, so a path nothing can
-            // open cannot be named in one and a policy naming one is refused.
+            // open cannot be named in one and a policy naming one is refused. A row that
+            // stands for an entry a listing produced is left out instead when its name is gone.
             grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: governs_sockets_with_a_path(landlock_abi_version()),
         }
     }
 
@@ -229,6 +329,40 @@ impl Sandbox for LandlockSandbox {
     }
 }
 
+/// The namespace a stage is started in, or the refusal where this kernel will not make one.
+fn namespace_for(forward: Option<(u16, &std::path::Path)>) -> Result<Namespace, SandboxError> {
+    namespace_given(crate::netns::available(), forward)
+}
+
+/// [`namespace_for`] given what this kernel answered, so the refusal can be held to without a
+/// kernel that gives it.
+fn namespace_given(
+    available: &Result<(), String>,
+    forward: Option<(u16, &std::path::Path)>,
+) -> Result<Namespace, SandboxError> {
+    if let Err(why) = available {
+        return Err(SandboxError::SetupFailed {
+            mechanism: "network namespace",
+            detail: format!(
+                "this kernel does not let an unprivileged user make a user and network \
+                 namespace ({why}), so a stage cannot be given no network or held to a proxy; \
+                 refusing rather than reporting confinement that is not applied"
+            ),
+        });
+    }
+    Namespace::prepare(forward).map_err(|detail| SandboxError::SetupFailed {
+        mechanism: "network namespace",
+        detail,
+    })
+}
+
+/// Why a stage cannot be put in a network namespace of its own here, or `None` where it can.
+/// `doctor` says it, since it decides whether a closed network or an allowed-hosts list can be
+/// applied on this machine.
+pub fn network_namespace_unavailable() -> Option<String> {
+    crate::netns::available().as_ref().err().cloned()
+}
+
 impl LandlockSandbox {
     /// The command for `program` with the ruleset installed between the fork and the exec, or
     /// a refusal of the policy.
@@ -241,16 +375,25 @@ impl LandlockSandbox {
             return Err(SandboxError::PolicyTooPermissive);
         }
 
-        // Network denial is not yet enforceable here, so a policy that requires it
-        // must not be silently downgraded.
-        if !policy.allow_network {
-            return Err(SandboxError::SetupFailed {
-                mechanism: "landlock",
-                detail: "network denial is not implemented on Linux yet; refusing rather \
-                         than reporting confinement that is not applied"
-                    .into(),
-            });
-        }
+        // A stage with no network, or held to a proxy's port, runs in a network namespace of its
+        // own, where it has a loopback and nothing else. A kernel that will not make one refuses
+        // the stage rather than run it with the host's network.
+        let namespace = if !policy.allow_network {
+            Some(namespace_for(None)?)
+        } else if let Some(port) = policy.egress_only_to {
+            let Some(socket) = policy.egress_through.as_deref() else {
+                return Err(SandboxError::SetupFailed {
+                    mechanism: "network namespace",
+                    detail: "limiting egress to one port needs the unix socket the proxy listens \
+                             on, and the policy names none; refusing rather than reporting \
+                             confinement that is not applied"
+                        .into(),
+                });
+            };
+            Some(namespace_for(Some((port, socket)))?)
+        } else {
+            None
+        };
 
         // Subprocess denial is not yet enforceable here, so a policy that requires it
         // must not be silently downgraded.
@@ -267,21 +410,15 @@ impl LandlockSandbox {
         // the rest of the policy instead would hand the caller a narrower confinement
         // than the one it asked for with nothing saying so. The caller hears it here,
         // before a process exists, rather than from a program refused a path the policy
-        // named.
-        if let Some(e) = policy
-            .readable
-            .iter()
-            .chain(policy.writable.iter().map(|row| &row.path))
-            .find_map(|path| PathFd::new(path).err())
-        {
-            return Err(SandboxError::SetupFailed {
-                mechanism: "landlock",
-                detail: format!(
-                    "the policy names a path no rule can be built for ({e}); refusing \
-                     rather than confining to less than it asked for"
-                ),
-            });
-        }
+        // named. A listed row whose name is gone is the exception: it is left out.
+        let trimmed = opened_rows(policy).map_err(|e| SandboxError::SetupFailed {
+            mechanism: "landlock",
+            detail: format!(
+                "the policy names a path no rule can be built for ({e}); refusing \
+                 rather than confining to less than it asked for"
+            ),
+        })?;
+        let policy = trimmed.as_ref().unwrap_or(policy);
 
         let mut command = Command::new(program);
         command.args(args);
@@ -290,9 +427,15 @@ impl LandlockSandbox {
         }
 
         // A refusal is made by listing: Landlock grants a directory with everything beneath it.
-        let enumerated = !policy.unreadable.is_empty() || !policy.unwritable.is_empty();
-        let readable = policy.readable_by_enumeration();
-        let writable = policy.writable_by_enumeration();
+        let unlistable = |e: std::io::Error| SandboxError::SetupFailed {
+            mechanism: "landlock",
+            detail: format!(
+                "the policy names a path above a refusal that cannot be listed ({e}); refusing \
+                 rather than confining to less than it asked for"
+            ),
+        };
+        let readable = policy.readable_by_enumeration().map_err(unlistable)?;
+        let writable = policy.writable_by_enumeration().map_err(unlistable)?;
 
         // Landlock applies to the calling thread and is inherited across exec, so the
         // ruleset is installed in the child between fork and exec.
@@ -304,46 +447,70 @@ impl LandlockSandbox {
             command.pre_exec(move || {
                 use std::io::Error;
 
+                // The kernel refuses `TIOCSTI` to a process whose controlling terminal is not the
+                // one it names, and a session of its own has none. Landlock governs an ioctl on a
+                // device only from ABI 5 (kernel 6.10), so older kernels rely on this alone.
+                // SAFETY: `setsid` takes no pointers and is async-signal-safe.
+                if libc::setsid() == -1 {
+                    return Err(Error::last_os_error());
+                }
+
+                // Before the ruleset, so the forwarder it leaves behind is not confined by the
+                // stage's filesystem rules and the stage needs no grant to the proxy's socket.
+                if let Some(namespace) = &namespace {
+                    namespace.enter()?;
+                }
+
                 let mut ruleset = landlock::Ruleset::default()
                     .set_compatibility(CompatLevel::BestEffort)
                     .handle_access(AccessFs::from_all(HANDLED_ABI))
+                    // A connect to an abstract socket made outside this domain. The socket has
+                    // no path, so no filesystem right sees it, and `BestEffort` drops the scope
+                    // on a kernel below Landlock ABI 6.
+                    .and_then(|r| r.scope(Scope::AbstractUnixSocket))
                     .and_then(|r| r.create())
                     .map_err(|e| Error::other(format!("landlock: {e}")))?;
 
-                // An entry that went away between the listing and here has nothing to grant, and
-                // the rules are added as they are built so a large directory holds one
-                // descriptor at a time and not one for each entry.
-                if enumerated {
-                    ruleset = ruleset
-                        .add_rules(path_beneath_rules(
-                            &readable,
-                            AccessFs::from_read(HANDLED_ABI),
-                        ))
-                        .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
-                } else if !readable.is_empty() {
-                    ruleset = ruleset
-                        .add_rules(rules_for_every_path(
-                            &readable,
-                            AccessFs::from_read(HANDLED_ABI),
-                        )?)
-                        .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
+                // A path the caller named is granted at the exec, or the exec is refused
+                // (SANDBOX-6). A row granted as its entries has no rule of its own, so what is
+                // asked of it is that it is still a directory: one that has gone, or become a
+                // file, leaves every entry with nothing to grant.
+                for path in readable
+                    .above_a_refusal
+                    .iter()
+                    .chain(&writable.above_a_refusal)
+                {
+                    if !std::fs::metadata(path).is_ok_and(|found| found.is_dir()) {
+                        return Err(Error::other(format!(
+                            "landlock: {} is no longer a directory",
+                            path.display()
+                        )));
+                    }
                 }
 
-                if enumerated {
-                    ruleset = ruleset
-                        .add_rules(path_beneath_rules(
-                            &writable,
-                            AccessFs::from_all(HANDLED_ABI),
-                        ))
-                        .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
-                } else if !writable.is_empty() {
-                    ruleset = ruleset
-                        .add_rules(rules_for_every_path(
-                            &writable,
-                            AccessFs::from_all(HANDLED_ABI),
-                        )?)
-                        .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
-                }
+                ruleset = ruleset
+                    .add_rules(rules_for_every_path(
+                        &readable.named,
+                        AccessFs::from_read(HANDLED_ABI),
+                    )?)
+                    .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
+                ruleset = with_the_listed_rules(
+                    ruleset,
+                    &readable.listed,
+                    AccessFs::from_read(HANDLED_ABI),
+                )?;
+
+                ruleset = ruleset
+                    .add_rules(rules_for_every_path(
+                        &writable.named,
+                        AccessFs::from_all(HANDLED_ABI),
+                    )?)
+                    .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
+                ruleset = with_the_listed_rules(
+                    ruleset,
+                    &writable.listed,
+                    AccessFs::from_all(HANDLED_ABI),
+                )?;
 
                 let status = ruleset
                     .restrict_self()
@@ -369,8 +536,11 @@ impl LandlockSandbox {
 mod tests {
     use super::*;
     use crate::base::{Prelude, base};
+    use crate::hosts::HostList;
+    use crate::proxy::{Proxy, ProxyConfig};
     use crate::testutil::{
-        capturing_stdout, nothing_attached, printed_by, variable_names_received_by,
+        a_directory_for_sockets, arrived, capturing_stdout, listening_in, nothing_attached,
+        printed_by, variable_names_received_by,
     };
     use std::io::Write;
     use std::os::unix::fs::MetadataExt;
@@ -393,6 +563,9 @@ mod tests {
     /// this backend refuses a kernel below.
     const TRUNCATE_ABI_VERSION: libc::c_long = 3;
     const IOCTL_ABI_VERSION: libc::c_long = 5;
+
+    /// The version carrying the scopes, which is what bounds a connect to an abstract socket.
+    const SCOPE_ABI_VERSION: libc::c_long = 6;
 
     /// What a file a test reads back is filled with, so that an emptied one is a length
     /// rather than an absence.
@@ -523,39 +696,257 @@ mod tests {
         );
     }
 
+    /// The two capabilities are the namespace's, so they are reported together and only where a
+    /// namespace can be made. The regression it rejects: either reported on a kernel that
+    /// refuses the namespace, which hands the caller a stage with the host's network.
     #[test]
-    fn capabilities_do_not_overstate_network_denial() {
+    fn capabilities_report_the_network_only_where_a_namespace_can_be_made() {
         let caps = LandlockSandbox.capabilities();
-        assert!(
-            !caps.network_denial_enforced,
-            "network denial is not implemented on Linux yet"
-        );
+        let made = network_namespace_unavailable().is_none();
+        assert_eq!(caps.network_denial_enforced, made);
+        assert_eq!(caps.egress_limited_to_a_port, made);
+        assert_eq!(caps.mechanisms.contains(&"network-namespace"), made);
         assert_eq!(caps.level, ConfinementLevel::Partial);
     }
 
-    /// Until network denial is implemented, asking for it must be an error rather than
-    /// a sandbox that quietly permits sockets.
+    /// A connect to a socket that has a path is reported governed from the ABI that carries the
+    /// right and on no kernel below it, since below it the user's D-Bus, the agent
+    /// `SSH_AUTH_SOCK` names and `docker.sock` are reachable from a stage. The regressions it
+    /// rejects: the capability reported on every kernel, which lets a strict stage run where those
+    /// sockets are open, a threshold one ABI off, and the right granted by a read row.
     #[test]
-    fn a_policy_requiring_network_denial_is_refused() {
+    fn sockets_with_a_path_are_reported_governed_from_landlock_abi_9() {
+        assert!(!governs_sockets_with_a_path(-1));
+        assert!(!governs_sockets_with_a_path(PATH_SOCKET_ABI_VERSION - 1));
+        assert!(governs_sockets_with_a_path(PATH_SOCKET_ABI_VERSION));
+        assert!(governs_sockets_with_a_path(PATH_SOCKET_ABI_VERSION + 1));
+        assert_eq!(PATH_SOCKET_ABI_VERSION, 9);
+        assert_eq!(
+            LandlockSandbox.capabilities().governs_sockets_with_a_path,
+            landlock_abi_version() >= PATH_SOCKET_ABI_VERSION
+        );
+        assert!(AccessFs::from_all(HANDLED_ABI).contains(AccessFs::ResolveUnix));
+        assert!(!AccessFs::from_read(HANDLED_ABI).contains(AccessFs::ResolveUnix));
+    }
+
+    /// A kernel that refuses the namespace refuses the stage, with the namespace named. The
+    /// regression it rejects: running the stage with the host's network after the refusal.
+    #[test]
+    fn a_kernel_that_refuses_the_namespace_refuses_the_stage() {
+        let refusal = Err("Operation not permitted (os error 1)".to_string());
+        for forward in [None, Some((8123, std::path::Path::new("/run/proxy.sock")))] {
+            match namespace_given(&refusal, forward) {
+                Err(SandboxError::SetupFailed { mechanism, detail }) => {
+                    assert_eq!(mechanism, "network namespace");
+                    assert!(detail.contains("Operation not permitted"), "{detail}");
+                }
+                Err(other) => panic!("expected SetupFailed, got: {other:?}"),
+                Ok(_) => panic!("a refused namespace was made"),
+            }
+        }
+    }
+
+    /// A policy limiting egress to a port with no socket to relay it to is refused on any
+    /// kernel, since the stage would have a port named and nothing behind it.
+    #[test]
+    fn a_policy_limiting_egress_to_one_port_without_the_proxys_socket_is_refused() {
         let err = LandlockSandbox
             .spawn(
                 OsStr::new("/bin/true"),
                 &[],
-                &SandboxPolicy::strict(),
+                &SandboxPolicy::strict()
+                    .allow_network_egress_only_to(8123)
+                    .allow_subprocesses(),
                 nothing_attached(),
                 Environment::Inherited,
             )
             .expect_err("must refuse rather than under-enforce");
         match err {
             SandboxError::SetupFailed { mechanism, detail } => {
-                assert_eq!(mechanism, "landlock");
-                assert!(
-                    detail.contains("network denial"),
-                    "unexpected detail: {detail}"
-                );
+                assert_eq!(mechanism, "network namespace");
+                assert!(detail.contains("one port"), "unexpected detail: {detail}");
+            }
+            other => panic!("expected SetupFailed for the egress limit, got: {other:?}"),
+        }
+    }
+
+    /// A policy that takes the network away is refused where this kernel cannot make a
+    /// namespace, and not run with sockets.
+    #[test]
+    fn a_policy_requiring_network_denial_is_refused_where_no_namespace_can_be_made() {
+        if network_namespace_unavailable().is_none() {
+            let _ = writeln!(
+                std::io::stderr(),
+                "SKIPPED: this kernel lets an unprivileged user make a network namespace, so \
+                 there is no refusal to observe"
+            );
+            return;
+        }
+        let err = LandlockSandbox
+            .spawn(
+                OsStr::new("/bin/true"),
+                &[],
+                &SandboxPolicy::strict().allow_subprocesses(),
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect_err("must refuse rather than under-enforce");
+        match err {
+            SandboxError::SetupFailed { mechanism, .. } => {
+                assert_eq!(mechanism, "network namespace");
             }
             other => panic!("expected SetupFailed for network denial, got: {other:?}"),
         }
+    }
+
+    /// Whether this kernel lets a stage be put in a namespace of its own, announcing the skip
+    /// where it does not. Ubuntu 24.04 restricts unprivileged user namespaces by default and
+    /// many containers block them, and a test of what runs inside one cannot say anything there.
+    fn can_make_a_namespace() -> bool {
+        match network_namespace_unavailable() {
+            None => true,
+            Some(why) => {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "SKIPPED: this kernel does not let an unprivileged user make a network \
+                     namespace ({why})"
+                );
+                false
+            }
+        }
+    }
+
+    /// What `script` printed when run by bash in a stage under `policy`.
+    fn printed_by_bash(sandbox: &LandlockSandbox, policy: &SandboxPolicy, script: &str) -> String {
+        let mut child = sandbox
+            .spawn(
+                OsStr::new("/bin/bash"),
+                &["-c".into(), script.into()],
+                policy,
+                capturing_stdout(),
+                Environment::Inherited,
+            )
+            .expect("a stage in a namespace starts");
+        printed_by(&mut child)
+    }
+
+    /// A shell function that says whether a connection to `address` was made within three
+    /// seconds, over the transport `kind` (`tcp` or `udp`). The bound is what makes a stage
+    /// that reached the host's network fail the test and not hang it.
+    const PROBE: &str = "probe() { if timeout 3 bash -c \"exec 3<>/dev/$1/$2/$3\" 2>/dev/null; \
+                         then echo \"$1 $2:$3 connected\"; else echo \"$1 $2:$3 refused\"; fi; }";
+
+    fn a_listener_on_this_hosts_loopback() -> (std::net::TcpListener, u16) {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("a loopback port");
+        let port = listener.local_addr().expect("a bound address").port();
+        listener
+            .set_nonblocking(true)
+            .expect("a listener that can be polled");
+        (listener, port)
+    }
+
+    /// A stage given no network has a namespace with nothing in it: a listener on the host's
+    /// loopback is not there, and neither is any other address or protocol. The regression it
+    /// rejects: the stage running in the host's network, where the listener accepts it.
+    #[test]
+    fn a_stage_with_no_network_cannot_connect_to_anything() {
+        if !can_make_a_namespace() {
+            return;
+        }
+        let sandbox = LandlockSandbox;
+        let (listener, port) = a_listener_on_this_hosts_loopback();
+        let policy = loadable_policy().allow_subprocesses();
+        assert!(!policy.allow_network);
+
+        let printed = printed_by_bash(
+            &sandbox,
+            &policy,
+            &format!(
+                "{PROBE}; probe tcp 127.0.0.1 {port}; probe tcp 192.0.2.1 80; \
+                 probe udp 192.0.2.1 9; exit 0"
+            ),
+        );
+
+        assert!(!printed.contains("connected"), "{printed}");
+        assert!(
+            listener.accept().is_err(),
+            "the stage reached a listener on the host's loopback"
+        );
+    }
+
+    /// A stage held to the proxy reaches it through the forwarder, and the request arrives at
+    /// the proxy that was named. The regressions it rejects: a forwarder relaying to no socket or
+    /// the wrong one, which the proxy's own record of the host asked for shows.
+    #[test]
+    fn a_stage_held_to_the_proxy_reaches_it_through_the_forwarder() {
+        if !can_make_a_namespace() {
+            return;
+        }
+        let sandbox = LandlockSandbox;
+        let proxy = Proxy::start(ProxyConfig::new(HostList::default())).expect("a proxy");
+        let socket = proxy.socket_path().expect("a unix socket").to_path_buf();
+        let port = proxy.addr().port();
+        let policy = loadable_policy()
+            .allow_subprocesses()
+            .allow_network_egress_only_to(port)
+            .with_egress_through(socket);
+
+        let printed = printed_by_bash(
+            &sandbox,
+            &policy,
+            &format!(
+                "exec 3<>/dev/tcp/127.0.0.1/{port} || {{ echo no-forwarder; exit 0; }}; \
+                 printf 'CONNECT unlisted.example:443 HTTP/1.1\\r\\n\\r\\n' >&3; \
+                 read -r line <&3; echo \"$line\"; exit 0"
+            ),
+        );
+
+        assert!(printed.contains("403"), "{printed}");
+        let asked: Vec<_> = proxy
+            .decisions()
+            .into_iter()
+            .filter_map(|decision| decision.host)
+            .collect();
+        assert_eq!(asked, ["unlisted.example"]);
+    }
+
+    /// A stage held to the proxy has no other way out: not a host, not the proxy's port on
+    /// another address, not UDP. The regression it rejects: a namespace that still has the
+    /// host's interfaces, or one where only TCP is held.
+    #[test]
+    fn a_stage_held_to_the_proxy_cannot_connect_around_it() {
+        if !can_make_a_namespace() {
+            return;
+        }
+        let sandbox = LandlockSandbox;
+        let proxy = Proxy::start(ProxyConfig::new(HostList::default())).expect("a proxy");
+        let socket = proxy.socket_path().expect("a unix socket").to_path_buf();
+        let port = proxy.addr().port();
+        let (listener, other) = a_listener_on_this_hosts_loopback();
+        let policy = loadable_policy()
+            .allow_subprocesses()
+            .allow_network_egress_only_to(port)
+            .with_egress_through(socket);
+
+        let printed = printed_by_bash(
+            &sandbox,
+            &policy,
+            &format!(
+                "{PROBE}; probe tcp 127.0.0.1 {port}; probe tcp 127.0.0.1 {other}; \
+                 probe tcp 127.0.0.2 {port}; probe tcp 192.0.2.1 80; probe udp 192.0.2.1 9; \
+                 exit 0"
+            ),
+        );
+
+        assert!(
+            printed.contains(&format!("tcp 127.0.0.1:{port} connected")),
+            "the forwarder was not listening: {printed}"
+        );
+        assert_eq!(printed.matches("connected").count(), 1, "{printed}");
+        assert!(
+            listener.accept().is_err(),
+            "the stage reached a listener on the host's loopback"
+        );
     }
 
     /// Until subprocess denial is implemented, asking for it must be an error rather than
@@ -940,6 +1331,7 @@ mod tests {
             ".bravebot/gateway-keys.json",
             ".bravebot/leo-premium.json",
             ".bravebot/mcp.json",
+            ".bravebot-browser/secret",
             ".ssh/id_ed25519",
             ".ssh/id_rsa",
             ".aws/credentials",
@@ -954,6 +1346,56 @@ mod tests {
             ".config/google-chrome/Default/Cookies",
             ".config/chromium/Default/Cookies",
             ".mozilla/firefox/x/cookies.sqlite",
+            ".config/sops/age/keys.txt",
+            ".bash_history",
+            ".zsh_history",
+            ".zsh_sessions/A1B2.history",
+            ".bash_sessions/A1B2.history",
+            ".local/share/fish/fish_history",
+            ".psql_history",
+            ".mysql_history",
+            ".node_repl_history",
+            ".python_history",
+            ".rediscli_history",
+            ".sqlite_history",
+            ".dbshell",
+            ".mongodb/mongosh/mongosh_repl_history",
+            ".claude/.credentials.json",
+            ".claude.json",
+            ".codex/auth.json",
+            ".gemini/oauth_creds.json",
+            ".local/share/opencode/auth.json",
+            ".config/github-copilot/hosts.json",
+            ".config/openconnect/vpn.conf",
+            ".gitlab-runner/config.toml",
+            ".pgadmin/pgadmin4.db",
+            "Postman/files/environment.json",
+            ".config/google-chrome-beta/Default/Cookies",
+            ".config/google-chrome-unstable/Default/Cookies",
+            ".config/microsoft-edge/Default/Cookies",
+            ".config/microsoft-edge-beta/Default/Cookies",
+            ".config/microsoft-edge-dev/Default/Cookies",
+            ".config/vivaldi/Default/Cookies",
+            "snap/firefox/common/.mozilla/firefox/x/cookies.sqlite",
+            "snap/chromium/common/chromium/Default/Cookies",
+            "snap/brave/current/.config/BraveSoftware/Brave-Browser/Default/Cookies",
+            ".var/app/org.mozilla.firefox/.mozilla/firefox/x/cookies.sqlite",
+            ".thunderbird/x/logins.json",
+            ".local/share/kwalletd/kdewallet.kwl",
+            ".Xauthority",
+            ".config/Slack/Cookies",
+            ".config/discord/Local Storage/leveldb/000003.log",
+            ".config/Signal/config.json",
+            ".config/1Password/1password.sqlite",
+            ".config/Code/User/globalStorage/state.vscdb",
+            ".config/Code - Insiders/User/globalStorage/state.vscdb",
+            ".config/VSCodium/User/globalStorage/state.vscdb",
+            ".config/Cursor/User/globalStorage/state.vscdb",
+            ".config/JetBrains/IntelliJIdea2025.1/options/security.xml",
+            ".config/Insomnia/insomnia.Environment.db",
+            ".config/Bruno/preferences.json",
+            ".config/Postman/Partitions/x/Cookies",
+            ".local/share/DBeaverData/workspace6/General/.dbeaver/credentials-config.json",
         ];
         let read = [
             ".gitconfig",
@@ -970,6 +1412,11 @@ mod tests {
             ".ssh/id_ed25519.pub",
             ".bravebotx/state",
             "docs/notes.txt",
+            ".vault-token",
+            ".yarnrc.yml",
+            "snap/firefox/common/other/state",
+            ".local/share/fish/fish_variables",
+            ".mongodb/mongosh/snippets/state",
         ];
         for row in held_back.iter().chain(&read) {
             let file = home.join(row);
@@ -1220,6 +1667,446 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A policy with a refusal beneath `top`, which is what makes a caller list the directories
+    /// above the refusal and pass each entry as a row of its own.
+    fn a_policy_with_a_refusal_beneath(top: &Path) -> SandboxPolicy {
+        loadable_policy()
+            .allow_read(top)
+            .deny_read(top.join("refused"))
+    }
+
+    /// A directory another process is changing has entries that are gone by the time a row for
+    /// each is opened, and a stage refused for that is refused over a path nobody named. A name
+    /// under something that has stopped being a directory is as gone as a name that was removed.
+    /// A listed row that is still there is granted as before: leaving every listed row out would
+    /// pass the first assertion and fail the write. The row whose name is not UTF-8 is there
+    /// beside the row spelled with its replacement character, which is not, so an implementation
+    /// that opened the lossy spelling would take the first for the second.
+    #[test]
+    fn a_listed_row_whose_name_went_away_is_left_out_and_the_ones_still_there_are_granted() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-listed-row-gone");
+        std::fs::create_dir_all(top.join("refused")).expect("the refused directory is creatable");
+        std::fs::create_dir_all(top.join("kept")).expect("the kept directory is creatable");
+        let not_utf8 = top.join(OsStr::from_bytes(b"kept-\xff"));
+        std::fs::create_dir_all(&not_utf8).expect("the not UTF-8 directory is creatable");
+        std::fs::write(top.join("now-a-file"), "").expect("the file is writable");
+        let policy = a_policy_with_a_refusal_beneath(&top)
+            .allow_write_listed(top.join("kept"))
+            .allow_write_listed(&not_utf8)
+            .allow_write_listed(top.join("listed-then-removed"))
+            .allow_write_listed(top.join("kept-\u{FFFD}"))
+            .allow_write_listed(top.join("now-a-file").join("entry"));
+        let written = [top.join("kept"), not_utf8].map(|directory| directory.join("written"));
+
+        for written in &written {
+            let mut child = sandbox
+                .spawn(
+                    OsStr::new("/usr/bin/touch"),
+                    &[written.clone().into_os_string()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("a listed name that is gone leaves nothing to grant, so the stage starts");
+
+            assert_eq!(
+                child.wait().expect("should wait").code(),
+                Some(0),
+                "the listed row that is there was not granted: {written:?}"
+            );
+            assert!(written.exists(), "the write did not land: {written:?}");
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// Only a row a listing produced may be left out. The same path named by the caller, in the
+    /// same policy with the same refusal, is a grant the caller asked for and is refused
+    /// (SANDBOX-6), so a backend that ignored every missing path whenever a policy lists would pass
+    /// the test above and fail this one. The caller also names a path that a listing produced as
+    /// well, as the whole-machine rows of a session can include a path it holds already, and the
+    /// named row is still the one that refuses.
+    #[test]
+    fn a_row_the_caller_named_is_refused_when_it_went_away_in_a_policy_that_lists() {
+        let top = a_temporary_directory("bravebot-landlock-named-row-gone");
+        std::fs::create_dir_all(top.join("refused")).expect("the refused directory is creatable");
+        let gone = top.join("named-then-removed");
+
+        for policy in [
+            a_policy_with_a_refusal_beneath(&top).allow_write(&gone),
+            a_policy_with_a_refusal_beneath(&top)
+                .allow_write(&gone)
+                .allow_write_listed(&gone),
+            a_policy_with_a_refusal_beneath(&top)
+                .allow_write_listed(&gone)
+                .allow_write(&gone),
+        ] {
+            let err = LandlockSandbox
+                .spawn(
+                    OsStr::new("/bin/true"),
+                    &[],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect_err("a named row that is gone must refuse the policy");
+            match err {
+                SandboxError::SetupFailed { mechanism, detail } => {
+                    assert_eq!(mechanism, "landlock");
+                    assert!(
+                        detail.contains(&gone.display().to_string()),
+                        "the refusal has to name the path: {detail}"
+                    );
+                }
+                other => panic!("expected SetupFailed naming the path, got: {other:?}"),
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// A listed row is left out because its name is not there, and for no other reason. One that
+    /// is there and cannot be opened is a grant this backend cannot install, which is refused like
+    /// any other. A pair of links that lead to each other cannot be opened by any account, so the
+    /// row is there and unopenable without depending on a mode that root ignores.
+    #[test]
+    fn a_listed_row_that_is_there_and_cannot_be_opened_is_refused() {
+        let top = a_temporary_directory("bravebot-landlock-listed-row-looping");
+        std::fs::create_dir_all(top.join("refused")).expect("the refused directory is creatable");
+        let looping = top.join("looping");
+        std::os::unix::fs::symlink(top.join("other-end"), &looping).expect("the link is creatable");
+        std::os::unix::fs::symlink(&looping, top.join("other-end")).expect("the link is creatable");
+
+        let err = LandlockSandbox
+            .spawn(
+                OsStr::new("/bin/true"),
+                &[],
+                &a_policy_with_a_refusal_beneath(&top).allow_write_listed(&looping),
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect_err("a listed row that cannot be opened must refuse the policy");
+
+        match err {
+            SandboxError::SetupFailed { mechanism, detail } => {
+                assert_eq!(mechanism, "landlock");
+                assert!(
+                    detail.contains(&looping.display().to_string()),
+                    "the refusal has to name the path: {detail}"
+                );
+            }
+            other => panic!("expected SetupFailed naming the path, got: {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// The rows are opened before the fork and the rules are built after it, so a row can go away
+    /// in between. A row the caller named that is gone at the exec is a process running under less
+    /// than the policy with nothing saying so (SANDBOX-6), whether the row is granted whole or, above
+    /// a refusal, as its entries. A row above a refusal that has become a file is as gone, since
+    /// none of its entries can be granted. Each case starts while its row is there, so the refusal is the
+    /// missing row's and not the program's or the policy's, and each names its row in one list
+    /// alone, because a check over one list leaves the other silently narrowing.
+    #[test]
+    fn a_named_row_gone_between_the_check_and_the_exec_refuses_the_exec() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-named-row-at-exec");
+        let (listed, named, written) = (top.join("listed"), top.join("named"), top.join("written"));
+        let lists = a_policy_with_a_refusal_beneath(&listed);
+        let cases = [
+            (
+                "a read row granted whole",
+                lists.clone().allow_read(&named),
+                &named,
+                false,
+            ),
+            (
+                "a write row granted whole",
+                lists.clone().allow_write(&named),
+                &named,
+                false,
+            ),
+            (
+                "a read row granted whole, with no refusal",
+                loadable_policy().allow_read(&named),
+                &named,
+                false,
+            ),
+            (
+                "a write row granted whole, with no refusal",
+                loadable_policy().allow_write(&named),
+                &named,
+                false,
+            ),
+            ("a read row above a refusal", lists.clone(), &listed, false),
+            (
+                "a read row above a refusal that becomes a file",
+                lists.clone(),
+                &listed,
+                true,
+            ),
+            (
+                "a write row above a refusal",
+                loadable_policy()
+                    .allow_write(&written)
+                    .deny_write(written.join("kept")),
+                &written,
+                false,
+            ),
+        ];
+
+        let mut wrong = Vec::new();
+        for (case, policy, row, becomes_a_file) in &cases {
+            let command = || {
+                for directory in [&listed, &named, &written] {
+                    std::fs::create_dir_all(directory).expect("the directory is creatable");
+                }
+                sandbox
+                    .command(
+                        OsStr::new("/bin/true"),
+                        &[],
+                        policy,
+                        &Environment::Inherited,
+                    )
+                    .expect("every row is there when the policy is opened")
+            };
+            let there = command().stdin(std::process::Stdio::null()).status();
+            if !matches!(&there, Ok(status) if status.success()) {
+                wrong.push(format!(
+                    "{case}: did not start while the row was there: {there:?}"
+                ));
+                continue;
+            }
+            let mut gone = command();
+            std::fs::remove_dir_all(row).expect("the row is removable");
+            if *becomes_a_file {
+                std::fs::write(row, "").expect("the file is writable");
+            }
+            let after = gone.stdin(std::process::Stdio::null()).status();
+            if after.is_ok() {
+                wrong.push(format!("{case}: started after the row went: {after:?}"));
+            }
+            if row.is_file() {
+                std::fs::remove_file(row).expect("the file is removable");
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// An entry a listing produced is not a path anybody named, so one that goes away between the
+    /// listing and the exec has nothing to grant and the program starts, as does a row the caller
+    /// passed as listed, in a policy with a refusal or without one. Refusing the exec over any of
+    /// them would make starting a program depend on whatever else was changing the directory,
+    /// which is what a backend refusing every path that has no rule at the exec does. A read entry
+    /// and a write entry are each listed in one list alone.
+    #[test]
+    fn an_entry_listed_before_the_exec_and_gone_by_it_is_left_out() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-listed-entry-at-exec");
+        let (read, written) = (top.join("read"), top.join("written"));
+        let cases = [
+            (
+                "a read entry",
+                a_policy_with_a_refusal_beneath(&read),
+                read.join("entry"),
+            ),
+            (
+                "a write entry",
+                loadable_policy()
+                    .allow_write(&written)
+                    .deny_write(written.join("kept")),
+                written.join("entry"),
+            ),
+            (
+                "a row passed as listed",
+                a_policy_with_a_refusal_beneath(&read).allow_write_listed(top.join("entry")),
+                top.join("entry"),
+            ),
+            (
+                "a row passed as listed, with no refusal",
+                loadable_policy().allow_write_listed(top.join("entry")),
+                top.join("entry"),
+            ),
+        ];
+
+        let mut wrong = Vec::new();
+        for (case, policy, entry) in &cases {
+            for directory in [&read, &written, entry] {
+                std::fs::create_dir_all(directory).expect("the directory is creatable");
+            }
+            let mut command = sandbox
+                .command(
+                    OsStr::new("/bin/true"),
+                    &[],
+                    policy,
+                    &Environment::Inherited,
+                )
+                .expect("every row is there when the policy is opened");
+            std::fs::remove_dir(entry).expect("the entry is removable");
+            let after = command.stdin(std::process::Stdio::null()).status();
+            if !matches!(&after, Ok(status) if status.success()) {
+                wrong.push(format!("{case}: {after:?}"));
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+        assert!(
+            wrong.is_empty(),
+            "an entry gone by the exec has nothing to grant, so the program starts: {wrong:#?}"
+        );
+    }
+
+    /// An entry is left out at the exec because its name has gone, and for no other reason, as a
+    /// listed row is before the fork. One that is there and cannot be opened is a grant this
+    /// backend cannot install, and refuses the exec. A pair of links that lead to each other
+    /// stands in for it, since no account can open one. Each case starts while its entry is a
+    /// directory, so the refusal is the entry's.
+    #[test]
+    fn an_entry_listed_before_the_exec_that_cannot_be_opened_by_it_refuses_the_exec() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let top = a_temporary_directory("bravebot-landlock-listed-entry-looping");
+        let (read, written, other_end) =
+            (top.join("read"), top.join("written"), top.join("other-end"));
+        let cases = [
+            (
+                "a read entry",
+                a_policy_with_a_refusal_beneath(&read),
+                read.join("entry"),
+            ),
+            (
+                "a write entry",
+                loadable_policy()
+                    .allow_write(&written)
+                    .deny_write(written.join("kept")),
+                written.join("entry"),
+            ),
+            (
+                "a row passed as listed",
+                a_policy_with_a_refusal_beneath(&read).allow_write_listed(top.join("entry")),
+                top.join("entry"),
+            ),
+        ];
+
+        let mut wrong = Vec::new();
+        for (case, policy, entry) in &cases {
+            let command = || {
+                for directory in [&read, &written, entry] {
+                    std::fs::create_dir_all(directory).expect("the directory is creatable");
+                }
+                sandbox
+                    .command(
+                        OsStr::new("/bin/true"),
+                        &[],
+                        policy,
+                        &Environment::Inherited,
+                    )
+                    .expect("every row is there when the policy is opened")
+            };
+            let there = command().stdin(std::process::Stdio::null()).status();
+            if !matches!(&there, Ok(status) if status.success()) {
+                wrong.push(format!(
+                    "{case}: did not start while the entry was there: {there:?}"
+                ));
+                continue;
+            }
+            let mut looping = command();
+            std::fs::remove_dir(entry).expect("the entry is removable");
+            std::os::unix::fs::symlink(&other_end, entry).expect("the link is creatable");
+            std::os::unix::fs::symlink(entry, &other_end).expect("the link is creatable");
+            let after = looping.stdin(std::process::Stdio::null()).status();
+            if after.is_ok() {
+                wrong.push(format!(
+                    "{case}: started with the entry unopenable: {after:?}"
+                ));
+            }
+            for link in [entry, &other_end] {
+                std::fs::remove_file(link).expect("the link is removable");
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A row the caller named above a refusal is granted as the entries a listing of it finds, so
+    /// one that cannot be listed would be granted as nothing while the policy reads as applied.
+    /// It is refused before a process exists, naming the row. The row is a file, which no account
+    /// can list, so the test does not depend on a mode that root ignores. Both lists. The same row
+    /// passed as listed is not a path anybody named, and adds nothing rather than refusing.
+    #[test]
+    fn a_named_row_above_a_refusal_that_cannot_be_listed_is_refused() {
+        let top = a_temporary_directory("bravebot-landlock-unlistable-row");
+        let named = top.join("notes");
+        std::fs::write(&named, "notes").expect("the file is writable");
+        let cases = [
+            (
+                "a read row",
+                loadable_policy()
+                    .allow_read(&named)
+                    .deny_read(named.join("inside")),
+            ),
+            (
+                "a write row",
+                loadable_policy()
+                    .allow_read(&top)
+                    .allow_write(&named)
+                    .deny_write(named.join("inside")),
+            ),
+        ];
+
+        let mut wrong = Vec::new();
+        for (case, policy) in &cases {
+            let started = LandlockSandbox
+                .spawn(
+                    OsStr::new("/bin/true"),
+                    &[],
+                    policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .map(|_| ());
+            match started {
+                Err(SandboxError::SetupFailed {
+                    mechanism: "landlock",
+                    detail,
+                }) if detail.contains(&named.display().to_string()) => {}
+                other => wrong.push(format!("{case}: {other:?}")),
+            }
+        }
+        let listed = loadable_policy()
+            .allow_read(&top)
+            .allow_write_listed(&named)
+            .deny_write(named.join("inside"));
+        if let Err(error) = LandlockSandbox.command(
+            OsStr::new("/bin/true"),
+            &[],
+            &listed,
+            &Environment::Inherited,
+        ) {
+            wrong.push(format!("a row passed as listed: {error:?}"));
+        }
+
+        let _ = std::fs::remove_dir_all(&top);
+        assert!(
+            wrong.is_empty(),
+            "a named row that cannot be listed refuses the policy and names the row: {wrong:#?}"
+        );
     }
 
     /// The refusal above is the right answer to a caller that named the wrong path and the
@@ -1557,6 +2444,236 @@ mod tests {
             "a device granted for reading was driven, so the right that governs an ioctl \
              is granted by a read or handled by nothing"
         );
+    }
+
+    /// An abstract socket has no path, so no filesystem grant names it and none can withhold
+    /// it: the session bus, the X server and every daemon that listens in the abstract
+    /// namespace are reachable from a confined process unless the ruleset scopes the connect.
+    ///
+    /// The listener belongs to this test process, which is outside the confined domain. Three
+    /// connects run from one witness: an unconfined run reaches the listener, which shows the
+    /// witness and the address are sound; the confined run first connects to a listener it
+    /// made itself, which shows the scope leaves its own domain alone and that sockets as a
+    /// whole were not refused; and then to the one outside, which is the denial. A ruleset
+    /// that scopes nothing reaches the listener, and one that refuses every socket fails the
+    /// control, so neither passes.
+    #[test]
+    fn a_confined_process_cannot_connect_to_an_abstract_socket_made_outside_it() {
+        use std::os::linux::net::SocketAddrExt;
+        use std::os::unix::net::{SocketAddr, UnixListener};
+
+        /// The witness's exit codes. A script that stopped for a reason of its own exits with
+        /// 1 or by signal, and neither says anything about a scope.
+        const REACHED: i32 = 0;
+        const REFUSED: i32 = 3;
+        const OWN_SOCKET_UNREACHABLE: i32 = 4;
+        const FAILED_FOR_ANOTHER_REASON: i32 = 5;
+
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        if !kernel_governs(
+            "a connect to an abstract socket",
+            SCOPE_ABI_VERSION,
+            "6.12+",
+        ) {
+            return;
+        }
+
+        let name = format!("bravebot-landlock-scope-{}", std::process::id());
+        let outside = UnixListener::bind_addr(
+            &SocketAddr::from_abstract_name(name.as_bytes()).expect("an abstract address"),
+        )
+        .expect("this process can listen on an abstract address");
+
+        let witness = "import socket, sys\n\
+                       own = socket.socket(socket.AF_UNIX)\n\
+                       own.bind(b'\\0' + sys.argv[1].encode() + b'-own')\n\
+                       own.listen(1)\n\
+                       try:\n\
+                       \x20   socket.socket(socket.AF_UNIX).connect(b'\\0' + sys.argv[1].encode() + b'-own')\n\
+                       except OSError:\n\
+                       \x20   sys.exit(4)\n\
+                       try:\n\
+                       \x20   socket.socket(socket.AF_UNIX).connect(b'\\0' + sys.argv[1].encode())\n\
+                       except PermissionError:\n\
+                       \x20   sys.exit(3)\n\
+                       except OSError:\n\
+                       \x20   sys.exit(5)\n";
+        let arguments =
+            || -> Vec<OsString> { vec!["-c".into(), witness.into(), name.clone().into()] };
+
+        let unconfined = Command::new("/usr/bin/python3")
+            .args(arguments())
+            .env_clear()
+            .status()
+            .expect("python runs")
+            .code();
+        assert_eq!(
+            unconfined,
+            Some(REACHED),
+            "the witness did not reach a listener nothing confines, so the refusal below means \
+             nothing"
+        );
+
+        let confined = sandbox
+            .spawn(
+                OsStr::new("/usr/bin/python3"),
+                &arguments(),
+                &loadable_policy(),
+                nothing_attached(),
+                Environment::Empty,
+            )
+            .expect("python starts under the policy")
+            .wait()
+            .expect("should wait")
+            .code();
+        assert_ne!(
+            confined,
+            Some(OWN_SOCKET_UNREACHABLE),
+            "the confined process could not reach a socket it made itself, so the scope refuses \
+             more than the sockets made outside it"
+        );
+        assert_ne!(
+            confined,
+            Some(FAILED_FOR_ANOTHER_REASON),
+            "the connect to the outside socket failed, but not with a refusal"
+        );
+        assert_eq!(
+            confined,
+            Some(REFUSED),
+            "the abstract socket made outside the confined process was reachable, or the \
+             witness stopped for a reason of its own"
+        );
+        drop(outside);
+    }
+
+    /// Landlock counts a connect to a socket that has a path as a write, so a socket is reached
+    /// under a write grant and not under a read grant, and a refusal of a write or of a read
+    /// beneath a write grant holds for a connect too, since the write row is spread around it.
+    /// The macOS profile holds the same rule, so the two backends agree on which sockets a stage
+    /// reaches: the agent `SSH_AUTH_SOCK` names, a Docker daemon's.
+    ///
+    /// One witness connects to every socket and the assertions are on which listeners a
+    /// connection arrived at. The socket under the write grant is what makes the refusals mean
+    /// anything: a witness that reached nothing would pass every one of them.
+    #[test]
+    fn a_socket_with_a_path_is_reached_under_a_write_grant_and_not_under_a_read_grant_or_a_refusal()
+    {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        if !kernel_governs(
+            "a connect to a socket that has a path",
+            PATH_SOCKET_ABI_VERSION,
+            "7.1+",
+        ) {
+            return;
+        }
+
+        // A socket directly in a directory spread around a refusal is granted as a file of its
+        // own, so each listener here is in a directory of its own.
+        let scratch = a_directory_for_sockets(&[
+            "read",
+            "write/open",
+            "write/unwritable",
+            "write/unreadable",
+        ]);
+        let listening = |dir: &str| listening_in(&scratch.join(dir));
+        let (readable, readable_listener) = listening("read");
+        let (writable, writable_listener) = listening("write/open");
+        let (unwritable, unwritable_listener) = listening("write/unwritable");
+        let (unreadable, unreadable_listener) = listening("write/unreadable");
+
+        let policy = loadable_policy()
+            .allow_read(&scratch)
+            .allow_write(scratch.join("write"))
+            .deny_write(scratch.join("write/unwritable"))
+            .deny_read(scratch.join("write/unreadable"));
+        let witness = "import socket, sys\n\
+                       for path in sys.argv[1:]:\n\
+                       \x20   try:\n\
+                       \x20       socket.socket(socket.AF_UNIX).connect(path)\n\
+                       \x20   except OSError:\n\
+                       \x20       pass\n";
+        let mut arguments: Vec<OsString> = vec!["-c".into(), witness.into()];
+        arguments.extend(
+            [&readable, &writable, &unwritable, &unreadable].map(|path| path.clone().into()),
+        );
+        sandbox
+            .spawn(
+                OsStr::new("/usr/bin/python3"),
+                &arguments,
+                &policy,
+                nothing_attached(),
+                Environment::Empty,
+            )
+            .expect("python starts under the policy")
+            .wait()
+            .expect("should wait");
+
+        assert!(
+            arrived(&writable_listener),
+            "a socket under a write grant was refused"
+        );
+        assert!(
+            !arrived(&readable_listener),
+            "a socket under a read grant was reached"
+        );
+        assert!(
+            !arrived(&unwritable_listener),
+            "a socket inside a refusal of writes beneath a write grant was reached"
+        );
+        assert!(
+            !arrived(&unreadable_listener),
+            "a socket inside a refusal of reads beneath a write grant was reached"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A confined process leads a session of its own, so it has no controlling terminal to push
+    /// keystrokes into on a kernel where Landlock does not govern an ioctl on a device.
+    ///
+    /// The regression it rejects: starting the program in the caller's session, where its session
+    /// id is the caller's and not its own process id. Both ways of starting a program are read,
+    /// since a stage is started through the command and a server through the spawn.
+    #[test]
+    fn a_confined_process_leads_a_session_of_its_own() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let leads_its_session = "import os, sys\n\
+                                 sys.exit(0 if os.getsid(0) == os.getpid() else 1)\n";
+        let arguments = ["-c".into(), leads_its_session.into()];
+
+        let through_the_command = sandbox
+            .command(
+                OsStr::new("/usr/bin/python3"),
+                &arguments,
+                &loadable_policy(),
+                &Environment::Inherited,
+            )
+            .expect("a command")
+            .stdin(std::process::Stdio::null())
+            .status()
+            .expect("spawned")
+            .code();
+        let through_the_spawn = sandbox
+            .spawn(
+                OsStr::new("/usr/bin/python3"),
+                &arguments,
+                &loadable_policy(),
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("python is what reads the session id here")
+            .wait()
+            .expect("should wait")
+            .code();
+
+        assert_eq!(through_the_command, Some(0), "a command's program");
+        assert_eq!(through_the_spawn, Some(0), "a spawned program");
     }
 
     /// Emptying a file and writing it again is what every `>` redirect, every

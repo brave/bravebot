@@ -98,11 +98,39 @@ tool set, and both appear.
 
 ## The mode and what answered are recorded
 
-Each turn begins with a `permission_mode` line naming the mode it ran in: `ask`, `accept-edits`, `plan`
-or `bypass`. A command or write that was put to you gets an `approval` line after it that says either
-`no mode answered, left to the confirmer` or `answered by <mode> mode, nobody was asked`, so an entry
-ending in "asking" is never the only thing the trail says about who answered. A fetch or a server
-start that a mode answers carries no such line.
+Each turn and each manifest run begins with a `permission_mode` line naming the mode it began in:
+`ask`, `accept-edits`, `plan` or `bypass`. A command or write that was put to you gets an `approval`
+line after it that says either `no mode answered, left to the confirmer` or
+`answered by <mode> mode, nobody was asked`, so an entry ending in "asking" is never the only thing
+the trail says about who answered. A fetch or a server start that a mode answers carries no such
+line.
+
+A write call plan mode refused before the tool ran, and a planned run it refused for a step that
+writes, each get a blocked `permission_mode` line naming the tool, or the step and its tool, so the
+trail says why nothing was written:
+
+```
+BLOCK   permission_mode: write_file: plan mode refuses a write, so nothing was written
+```
+
+The [sandbox mode](security.md#confinement) `read-only` is recorded the same way, under `sandbox`:
+for a write call it refused, a planned run it refused for a step that writes, and a command line it
+refused for redirecting output into a file.
+
+```
+BLOCK   sandbox: write_file: the read-only sandbox mode refuses a write, so nothing was written
+```
+
+A `run` call that asks for no sandbox (`unconfined`) or for a credential scope (`scopes`) and is
+refused gets a blocked `sandbox` line naming the argument and every cause that held. The planner is
+told one sentence that names no setting, so this line is where to read which one withheld the
+request: the sandbox mode, a workspace you have not trusted, a managed closed network, a delegate,
+a turn that confines none of its runs, or for `scopes` a platform with no sandbox or a session with
+no profile directory.
+
+```
+BLOCK   sandbox: run.unconfined: the request was refused and the line did not run: the strict sandbox mode does not take it
+```
 
 ## Delegates and checkouts are recorded
 

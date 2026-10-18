@@ -168,6 +168,27 @@ impl RequestView {
                 .map_or(0, |sent| sent.len() as u64),
         }
     }
+
+    /// The instruction files the system prompt was built from, each with the bytes it contributed,
+    /// in the order they were composed.
+    ///
+    /// Read back out of the spans rather than recorded beside them, so the list cannot name a file
+    /// whose words are not in the request. Only the system prompt's spans: a file a person sent
+    /// with a prompt is trusted and carries its path too, but it is a message rather than an
+    /// instruction.
+    ///
+    /// A length of what was sent and nothing read out of it: the bytes are counted, never looked
+    /// at, and the path is the one the composing code recorded.
+    pub fn instruction_files(&self) -> Vec<(&str, u64)> {
+        self.spans
+            .iter()
+            .filter(|span| span.role == "system")
+            .filter_map(|span| match &span.provenance {
+                Provenance::TrustedFile(path) => Some((path.as_str(), span.text.len() as u64)),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 fn role_of(role: Role) -> &'static str {
@@ -281,6 +302,47 @@ mod tests {
         let offered = request(vec![Message::system("")]).with_tools(vec![tool]);
         assert_eq!(RequestView::of(&offered, &prompt, &[]).tools_bytes, sent);
         assert!(sent > 0);
+    }
+
+    /// The list names each instruction file the system prompt carried, with the bytes it
+    /// contributed, and nothing else: not a trusted file sent as a message, and not the driver's
+    /// own paragraphs or the skill list that sit beside it in the prompt.
+    #[test]
+    fn the_instruction_files_are_the_trusted_files_the_system_prompt_was_built_from() {
+        let mut prompt = Prompt::default();
+        prompt.push(Provenance::Driver, "You are careful.\n");
+        prompt.push(
+            Provenance::TrustedFile("~/.bravebot/AGENTS.md".into()),
+            "Be brief.",
+        );
+        prompt.push(Provenance::TrustedFile("AGENTS.md".into()), "Use tabs.");
+        prompt.push(Provenance::Trusted("skill list"), "- design\n");
+        let sent = request(vec![
+            Message::system(prompt.text()),
+            Message::user("read main.rs"),
+        ]);
+
+        let view = RequestView::of(&sent, &prompt, &[Provenance::TrustedFile("main.rs".into())]);
+
+        assert_eq!(
+            view.instruction_files(),
+            vec![("~/.bravebot/AGENTS.md", 9), ("AGENTS.md", 9)]
+        );
+    }
+
+    /// A prompt with no instruction file in it names none, so the view cannot report one that was
+    /// refused or absent.
+    #[test]
+    fn a_prompt_with_no_instruction_file_names_none() {
+        let mut prompt = Prompt::default();
+        prompt.push(Provenance::Driver, "You are careful.\n");
+        let sent = request(vec![Message::system(prompt.text())]);
+
+        assert!(
+            RequestView::of(&sent, &prompt, &[])
+                .instruction_files()
+                .is_empty()
+        );
     }
 
     #[test]

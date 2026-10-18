@@ -79,7 +79,9 @@ name, and the POSIX `C` locale asks for no catalog at all.
 `verified-by: bravebot_i18n::lib::a_bare_language_takes_a_catalog_in_that_language`
 `verified-by: bravebot_i18n::lib::a_language_that_did_not_ship_falls_back`
 `verified-by: bravebot_i18n::lib::the_encoding_and_modifier_a_shell_appends_are_not_part_of_the_tag`
+`verified-by: bravebot_i18n::lib::a_modifier_with_no_encoding_before_it_is_not_part_of_the_tag`
 `verified-by: bravebot_i18n::lib::the_posix_locale_asks_for_no_catalog`
+`verified-by: bravebot_i18n::lib::the_posix_locale_is_not_read_as_a_language_even_where_a_tag_spells_it`
 
 <a id="LOCALE-5"></a>
 ### LOCALE-5: a plural is formed by the rules of the language it is written in
@@ -97,6 +99,7 @@ no review in English will catch.
 `verified-by: bravebot_i18n::lib::a_language_with_a_plural_rule_is_the_only_kind_a_select_may_ship_in`
 `verified-by: bravebot_i18n::generate::a_message_a_translation_omits_is_pluralised_by_the_language_it_is_written_in`
 `verified-by: bravebot_i18n::generate::a_message_a_translation_has_is_pluralised_by_that_translation_s_rules`
+`verified-by: bravebot_i18n::generate::a_select_in_a_language_with_no_plural_rule_is_found`
 
 <a id="LOCALE-6"></a>
 ### LOCALE-6: no catalog is read while the agent is running

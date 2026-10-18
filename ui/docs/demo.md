@@ -1,15 +1,15 @@
 # Recording a demo
 
-The [drivers](testing.md) assert; `npm run demo` performs. Same Playwright, same real window, same
+The [drivers](testing.md) assert; `pnpm run demo` performs. Same Playwright, same real window, same
 class names — but paced in beats rather than in milliseconds, and it films itself:
 
 ```bash
-npm run demo -- --record             # cached world: no new model calls; first run seeds it
-npm run demo -- --record --live      # plus a real turn, an approval card, a question,
+pnpm run demo -- --record             # cached world: no new model calls; first run seeds it
+pnpm run demo -- --record --live      # plus a real turn, an approval card, a question,
                                      #   a bot at work — its face looking down at the page —
                                      #   writing its own memory, and what it kept
-npm run demo -- --only 08-fork       # one scene, for a retake
-npm run demo -- --list               # what it would film, in order
+pnpm run demo -- --only 08-fork       # one scene, for a retake
+pnpm run demo -- --list               # what it would film, in order
 ```
 
 `--record` points macOS's own `screencapture` at the window's rectangle and drops a WebVTT

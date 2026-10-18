@@ -36,6 +36,7 @@ still had to be endorsed on its own.
 `verified-by: bravebot_agent::turn::a_quarantined_file_is_rewritten_by_a_processor`
 `verified-by: bravebot_agent::turn::a_write_that_names_two_bodies_or_none_is_refused`
 `verified-by: bravebot_agent::turn::a_write_with_blank_references_beside_its_path_and_contents_goes_through`
+`verified-by: bravebot_agent::turn::a_blank_contents_is_the_body_and_writes_an_empty_file`
 
 <a id="WRITE-2"></a>
 ### WRITE-2: a reference that names no file is not a destination
@@ -75,3 +76,44 @@ directory and are the only party who can say whether that file should be rewritt
 `verified-by: bravebot_agent::turn::every_write_through_a_reference_is_shown`
 `verified-by: bravebot_agent::turn::a_write_through_a_reference_says_what_landed_and_that_it_is_done`
 `verified-by: bravebot_agent::turn::a_reference_write_is_reviewed_as_a_diff`
+
+<a id="WRITE-5"></a>
+### WRITE-5: the result says what a running language server found wrong
+
+Where a language server for the file's language is already running, the result of a write adds
+the line numbers of the errors it reports, as [LSP-12](lsp.md#LSP-12) specifies: counts and lines
+in this repository's words, never the server's, never started by the write, and given only for a
+file the trust map vouches for after the write.
+
+**Why.** A planner that finds a syntax error only by running a build spends a round and a second
+approval on something the server already knew.
+
+`verified-by: bravebot_agent::lsp::a_write_reports_the_error_lines_a_running_server_found`
+`verified-by: bravebot_agent::lsp::a_write_starts_no_language_server`
+`verified-by: bravebot_agent::lsp::a_write_of_quarantined_bytes_reports_no_diagnostics`
+
+<a id="WRITE-6"></a>
+### WRITE-6: a replaced file keeps its line endings and its byte order mark
+
+Where `contents` replaces a file the trust map vouches for, the body takes that file's format
+before the diff is built: its line endings become the ones the file uses, and it begins with a
+byte order mark where the file began with one. A file holding `\r\n` anywhere uses CRLF, and any
+other file uses LF. A body that begins with a byte order mark keeps it whatever the file had.
+
+WRITE-1 still says `contents` becomes the file. The normalised text is what lands and is what the
+person approves, because the detection happens before the diff: the diff then shows the lines the
+write changes rather than every line of the file.
+
+Nothing is converted in three cases. A file nobody vouched for is left alone, since its ending is
+a fact about untrusted bytes and converting on it would be the driver branching on content, which
+the rule in `agents/AGENTS.md` forbids. A body from `contents_ref` is left alone, since it is
+bytes nobody has read. A path with no file yet is written as given.
+
+**Why.** A planner that sends LF text over a CRLF file changes every line, and the approval diff
+then shows the whole file as changed. The person has to decline and ask again, or accept a diff
+they cannot read and a change of format nobody wanted.
+
+`verified-by: bravebot_agent::turn::a_crlf_file_rewritten_with_lf_contents_keeps_crlf`
+`verified-by: bravebot_agent::turn::an_untrusted_pre_image_converts_nothing`
+`verified-by: bravebot_agent::turn::a_contents_ref_write_over_a_trusted_crlf_file_keeps_its_own_endings`
+`verified-by: bravebot_agent::workspace::a_replaced_files_format_is_detected_and_applied`

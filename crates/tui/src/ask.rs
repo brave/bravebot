@@ -93,10 +93,28 @@ const CHIP_WIDTH: usize = 12;
 /// question. Saying nothing is the one reply that cannot be wrong about how many questions there
 /// were.
 pub fn ask<B: Backend>(terminal: &mut Terminal<B>, asking: &Asking) -> Vec<Answer> {
+    ask_titled(terminal, asking, None)
+}
+
+/// [`ask`] for a question the driver puts and not the planner, so the box is not called "the agent
+/// is asking".
+///
+/// A person who sees that title takes the question for a request from the model, which is what
+/// they are taught to read with suspicion. `title` is a sentence from this program's own catalog.
+pub fn ask_as<B: Backend>(terminal: &mut Terminal<B>, asking: &Asking, title: &str) -> Vec<Answer> {
+    ask_titled(terminal, asking, Some(title))
+}
+
+fn ask_titled<B: Backend>(
+    terminal: &mut Terminal<B>,
+    asking: &Asking,
+    title: Option<&str>,
+) -> Vec<Answer> {
     if asking.prompts.is_empty() {
         return Vec::new();
     }
     let mut picker = Picker::new(asking);
+    picker.named = title.map(str::to_string);
 
     loop {
         // A terminal that cannot show the question cannot collect a considered answer, so
@@ -170,6 +188,8 @@ struct Picker<'a> {
     /// Settled so far, one per question, in the order they were asked.
     answers: Vec<Answer>,
     here: State,
+    /// What the box is called when the driver asked and the planner did not.
+    named: Option<String>,
 }
 
 impl<'a> Picker<'a> {
@@ -179,6 +199,7 @@ impl<'a> Picker<'a> {
             at: 0,
             answers: Vec::new(),
             here: State::starting(&asking.prompts[0]),
+            named: None,
         }
     }
 
@@ -501,6 +522,9 @@ impl<'a> Picker<'a> {
     /// A lone question is not counted: "1 of 1" is noise on the common case, and the count is
     /// there to tell someone partway through a series how much of it is left.
     fn title(&self) -> String {
+        if let Some(named) = &self.named {
+            return format!(" {named} ");
+        }
         if self.asking.prompts.len() == 1 {
             return format!(" {} ", t!(ask_title));
         }
@@ -720,6 +744,28 @@ mod tests {
             ],
             multiple,
         ))
+    }
+
+    /// A question the driver puts is not titled as the planner's. The regression it rejects is the
+    /// `/sandbox off` question drawn under "the agent is asking", which reads as the model asking to
+    /// be unconfined, and a title that is ignored where the planner asks.
+    #[test]
+    fn a_question_the_driver_puts_is_not_titled_as_the_agents() {
+        let asking = one(&prompt(false));
+        let top_row = |named: Option<&str>| {
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+            let mut picker = Picker::new(&asking);
+            picker.named = named.map(str::to_string);
+            terminal.draw(|frame| picker.draw(frame)).expect("drawn");
+            let buffer = terminal.backend().buffer().clone();
+            (0..24)
+                .flat_map(|y| (0..80).map(move |x| (x, y)))
+                .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+                .collect::<String>()
+        };
+        assert!(top_row(None).contains(t!(ask_title)));
+        let driver = top_row(Some("sandbox"));
+        assert!(driver.contains("sandbox") && !driver.contains(t!(ask_title)));
     }
 
     /// A series of one, which is what most of these tests are about.

@@ -556,7 +556,7 @@ impl ConverseRequest {
 /// The message list is the same conversation, restated. System turns are hoisted into the top-level
 /// field, tool results move from their own role into blocks on a user turn, and consecutive turns
 /// that would now share a role are merged, because the API rejects two turns of the same role in a
-/// row.
+/// row. A request offering no tools sends each call and each result as text.
 ///
 /// The model is not a parameter: Bedrock names it in the URL path rather than in the body, which is
 /// one of the differences from the other backend.
@@ -565,6 +565,12 @@ pub fn request_from(
     tools: Option<&[bravebot_aichat::protocol::Tool]>,
 ) -> ConverseRequest {
     use bravebot_aichat::protocol::Role;
+
+    // An empty list is no list. This API refuses `tools: []` rather than reading it as a request
+    // to use none, so a turn offering nothing has to omit the field entirely.
+    let tools = tools.filter(|tools| !tools.is_empty());
+    // This API refuses a `toolUse` or `toolResult` block in a request with no `toolConfig`.
+    let calls_as_text = tools.is_none();
 
     let mut system: Vec<String> = Vec::new();
     let mut converted: Vec<ConverseMessage> = Vec::new();
@@ -575,8 +581,16 @@ pub fn request_from(
             // are joined in order, which is the order they would have been read in.
             Role::System => system.push(message.content.text()),
             Role::User => push(&mut converted, "user", user_blocks(message)),
-            Role::Tool => push(&mut converted, "user", tool_result_blocks(message)),
-            Role::Assistant => push(&mut converted, "assistant", assistant_blocks(message)),
+            Role::Tool => push(
+                &mut converted,
+                "user",
+                tool_result_blocks(message, calls_as_text),
+            ),
+            Role::Assistant => push(
+                &mut converted,
+                "assistant",
+                assistant_blocks(message, calls_as_text),
+            ),
         }
     }
 
@@ -603,13 +617,9 @@ pub fn request_from(
         inference_config: InferenceConfig {
             max_tokens: bravebot_config::bedrock::OUTPUT_LIMIT,
         },
-        // An empty list is no list. This API refuses `tools: []` rather than reading it as a
-        // request to use none, so a turn offering nothing has to omit the field entirely.
-        tool_config: tools
-            .filter(|tools| !tools.is_empty())
-            .map(|tools| ToolConfig {
-                tools: tools.iter().map(tool_from).collect(),
-            }),
+        tool_config: tools.map(|tools| ToolConfig {
+            tools: tools.iter().map(tool_from).collect(),
+        }),
         additional_model_request_fields: None,
     }
 }
@@ -676,21 +686,37 @@ fn user_blocks(message: &bravebot_aichat::protocol::Message) -> Vec<Block> {
     }
 }
 
-fn tool_result_blocks(message: &bravebot_aichat::protocol::Message) -> Vec<Block> {
+fn tool_result_blocks(message: &bravebot_aichat::protocol::Message, as_text: bool) -> Vec<Block> {
     let Some(id) = message.tool_call_id.clone() else {
         // A result with no id cannot be matched to its call, and the API rejects one. Sent as plain
         // text it would read as something the user said, so it is dropped.
         return Vec::new();
     };
+    if as_text {
+        return vec![Block::Text(format!(
+            "[result of call {id}]\n{}",
+            message.content.text()
+        ))];
+    }
     vec![Block::ToolResult(ToolResult {
         tool_use_id: id,
         content: vec![ToolResultBlock::Text(message.content.text())],
     })]
 }
 
-fn assistant_blocks(message: &bravebot_aichat::protocol::Message) -> Vec<Block> {
+fn assistant_blocks(
+    message: &bravebot_aichat::protocol::Message,
+    calls_as_text: bool,
+) -> Vec<Block> {
     let mut blocks = text_block(&message.content.text());
     for call in message.tool_calls.iter().flatten() {
+        if calls_as_text {
+            blocks.push(Block::Text(format!(
+                "[call {}: {} {}]",
+                call.id, call.function.name, call.function.arguments
+            )));
+            continue;
+        }
         blocks.push(Block::ToolUse(ToolUse {
             tool_use_id: call.id.clone(),
             name: call.function.name.clone(),
@@ -818,6 +844,23 @@ mod tests {
         serde_json::to_value(request).expect("serialises")
     }
 
+    /// The tools a turn offers, which is what sends its calls and results in this API's blocks.
+    fn offered() -> Vec<Tool> {
+        vec![Tool::function("read", "Read a file", json!({}))]
+    }
+
+    fn call(id: &str, name: &str, arguments: &str) -> ToolCallRequest {
+        ToolCallRequest {
+            id: id.into(),
+            kind: "function".into(),
+            function: ToolCallRequestFunction {
+                name: name.into(),
+                arguments: arguments.into(),
+            },
+            extra_content: None,
+        }
+    }
+
     /// A system turn is a top-level field here, not a message. Sent as one it would be a user turn
     /// the model reads as something the person said.
     #[test]
@@ -922,31 +965,12 @@ mod tests {
                 Message::user("go"),
                 Message::assistant_calling(
                     "",
-                    vec![
-                        ToolCallRequest {
-                            id: "a".into(),
-                            kind: "function".into(),
-                            function: ToolCallRequestFunction {
-                                name: "one".into(),
-                                arguments: "{}".into(),
-                            },
-                            extra_content: None,
-                        },
-                        ToolCallRequest {
-                            id: "b".into(),
-                            kind: "function".into(),
-                            function: ToolCallRequestFunction {
-                                name: "two".into(),
-                                arguments: "{}".into(),
-                            },
-                            extra_content: None,
-                        },
-                    ],
+                    vec![call("a", "one", "{}"), call("b", "two", "{}")],
                 ),
                 Message::tool_result("a", "first result"),
                 Message::tool_result("b", "second result"),
             ],
-            None,
+            Some(&offered()),
         );
         let roles: Vec<&str> = request.messages.iter().map(|m| m.role).collect();
         assert_eq!(roles, ["user", "assistant", "user"]);
@@ -962,7 +986,10 @@ mod tests {
     /// to tell which of several calls was answered.
     #[test]
     fn a_tool_result_keeps_the_id_of_the_call_it_answers() {
-        let request = request_from(&[Message::tool_result("call-1", "the output")], None);
+        let request = request_from(
+            &[Message::tool_result("call-1", "the output")],
+            Some(&offered()),
+        );
         match &request.messages[0].content[0] {
             Block::ToolResult(result) => {
                 assert_eq!(result.tool_use_id, "call-1");
@@ -996,17 +1023,9 @@ mod tests {
         let request = request_from(
             &[Message::assistant_calling(
                 "",
-                vec![ToolCallRequest {
-                    id: "a".into(),
-                    kind: "function".into(),
-                    function: ToolCallRequestFunction {
-                        name: "read".into(),
-                        arguments: r#"{"path":"src/lib.rs"}"#.into(),
-                    },
-                    extra_content: None,
-                }],
+                vec![call("a", "read", r#"{"path":"src/lib.rs"}"#)],
             )],
-            None,
+            Some(&offered()),
         );
         match &request.messages[0].content[0] {
             Block::ToolUse(call) => assert_eq!(call.input["path"], "src/lib.rs"),
@@ -1021,17 +1040,9 @@ mod tests {
         let request = request_from(
             &[Message::assistant_calling(
                 "",
-                vec![ToolCallRequest {
-                    id: "a".into(),
-                    kind: "function".into(),
-                    function: ToolCallRequestFunction {
-                        name: "read".into(),
-                        arguments: "{not json".into(),
-                    },
-                    extra_content: None,
-                }],
+                vec![call("a", "read", "{not json")],
             )],
-            None,
+            Some(&offered()),
         );
         match &request.messages[0].content[0] {
             Block::ToolUse(call) => {
@@ -1047,19 +1058,8 @@ mod tests {
     #[test]
     fn an_assistant_turn_with_no_text_sends_no_text_block() {
         let request = request_from(
-            &[Message::assistant_calling(
-                "",
-                vec![ToolCallRequest {
-                    id: "a".into(),
-                    kind: "function".into(),
-                    function: ToolCallRequestFunction {
-                        name: "one".into(),
-                        arguments: "{}".into(),
-                    },
-                    extra_content: None,
-                }],
-            )],
-            None,
+            &[Message::assistant_calling("", vec![call("a", "one", "{}")])],
+            Some(&offered()),
         );
         assert_eq!(request.messages[0].content.len(), 1);
         assert!(matches!(
@@ -1325,7 +1325,10 @@ mod tests {
     /// round wants back.
     #[test]
     fn a_conversation_ending_in_a_tool_result_is_marked_too() {
-        let request = request_from(&[Message::tool_result("call-1", "the output")], None);
+        let request = request_from(
+            &[Message::tool_result("call-1", "the output")],
+            Some(&offered()),
+        );
         assert_eq!(
             request.messages[0].content.last(),
             Some(&Block::CachePoint(CachePoint::new())),
@@ -1596,6 +1599,61 @@ mod tests {
             );
             let body = serde_json::to_string(&request).expect("serialises");
             assert!(!body.contains("tool"), "{body}");
+        }
+    }
+
+    /// This API refuses a whole request that holds a call or a result in its own block and names no
+    /// tools, which is how a recap or a summary is asked over an exchange that called them. What the
+    /// calls were and what they returned is most of what such a request is asked about.
+    #[test]
+    fn a_request_offering_no_tools_sends_its_calls_and_results_as_text() {
+        let exchange = [
+            Message::user("fix it"),
+            Message::assistant_calling(
+                "looking",
+                vec![
+                    call("a", "read", r#"{"path":"src/lib.rs"}"#),
+                    call("b", "run", "{}"),
+                ],
+            ),
+            Message::tool_result("a", "fn main() {}"),
+            Message::tool_result("b", "exit 0"),
+            Message::assistant("fixed"),
+            Message::user("recap"),
+        ];
+        for tools in [None, Some(&[][..])] {
+            let request = request_from(&exchange, tools);
+            let body = serde_json::to_string(&request).expect("serialises");
+            for refused in ["toolUse", "toolResult", "toolConfig"] {
+                assert!(!body.contains(refused), "{tools:?} sent {refused}: {body}");
+            }
+            let roles: Vec<&str> = request.messages.iter().map(|m| m.role).collect();
+            assert_eq!(roles, ["user", "assistant", "user", "assistant", "user"]);
+            let text = |index: usize| -> Vec<&str> {
+                request.messages[index]
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        Block::Text(text) => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            assert_eq!(
+                text(1),
+                [
+                    "looking",
+                    r#"[call a: read {"path":"src/lib.rs"}]"#,
+                    "[call b: run {}]"
+                ]
+            );
+            assert_eq!(
+                text(2),
+                [
+                    "[result of call a]\nfn main() {}",
+                    "[result of call b]\nexit 0"
+                ]
+            );
         }
     }
 

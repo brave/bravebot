@@ -45,14 +45,17 @@ it true of the call site written next year.
 ### DIAG-2: a run's log is a private file under the state directory, and the oldest are removed
 
 Each process writes its own file under `logs/` in the state directory, readable by its owner alone
-in a directory readable by its owner alone. Ten files are kept: making a new one removes the oldest
-of those this program made, never the one just made, and leaves any other file in the directory
-alone.
+in a directory readable by its owner alone. A `logs/` that is a link is stepped over rather than
+followed, as every writer into the state directory steps over one, so the directory it leads to
+keeps its mode and the file written there is still its owner's alone. Ten files are kept: making a
+new one removes the oldest of those this program made, never the one just made, and leaves any
+other file in the directory alone.
 
 **Why.** The directory grows with every run otherwise, and the files name the hosts a person
 talks to, which is theirs to share and nobody else's to read.
 
 `verified-by: bravebot_diag::lib::the_log_and_its_directory_are_private`
+`verified-by: bravebot_diag::lib::narrowing_does_not_follow_a_linked_log_directory`
 `verified-by: bravebot_diag::lib::retention_keeps_the_newest_and_leaves_foreign_files`
 `verified-by: bravebot_diag::lib::the_file_being_written_survives_retention_when_the_clock_is_behind`
 `verified-by: bravebot_cli::running::a_failed_request_leaves_its_host_and_status_and_no_content_in_the_log`
@@ -73,6 +76,7 @@ only after the failure they wanted it for.
 `verified-by: bravebot_diag::lib::no_file_is_made_until_a_line_is_written`
 `verified-by: bravebot_cli::main::the_log_level_flag_is_taken_out_with_its_word_and_refuses_any_other`
 `verified-by: bravebot_cli::running::a_log_level_that_is_not_one_is_refused`
+`verified-by: bravebot_cli::running::the_level_on_the_command_line_reaches_the_log_and_the_default_is_error`
 
 <a id="DIAG-4"></a>
 ### DIAG-4: an incognito session, or a machine with no home, writes no log
@@ -91,7 +95,7 @@ had been would be the trace the mode exists to avoid.
 **Why.** Asking somebody to attach the log is no use if they cannot be told where it is, and the
 state directory moves with the profile variable, so the path is not one to be assumed.
 
-`verified-by: bravebot_cli::main::doctor_names_the_diagnostic_log_directory`
+`verified-by: bravebot_cli::doctor::doctor_names_the_diagnostic_log_directory`
 `verified-by: bravebot_cli::running::doctor_names_the_log_directory`
 
 <a id="DIAG-6"></a>

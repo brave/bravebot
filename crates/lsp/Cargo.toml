@@ -10,6 +10,8 @@ repository.workspace = true
 [dependencies]
 bravebot-core = { path = "../core" }
 bravebot-diag = { path = "../diag" }
+# For the gate every start of a program in this process runs under (RPCVIEW-8).
+bravebot-sandbox = { path = "../sandbox" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

@@ -477,6 +477,7 @@ const ALLOWED = new Set([
   'session.delete',
   'session.close',
   'session.mode',
+  'session.sandbox',
   'session.rewind',
   'turn.send',
   'turn.cancel',
@@ -497,6 +498,7 @@ const ALLOWED = new Set([
   'mcp-tools.reply',
   'mcp-call.reply',
   'mcp-move.reply',
+  'host.reply',
   'ask.reply',
   'trust.reply',
   'permissions.list',
@@ -964,7 +966,7 @@ app.whenReady().then(() => {
       // is for the person, and the payload is the one thing they cannot act on.
       return { status: 'failed', message: 'that is not a file in this project' }
     }
-    return openInApp(session, path)
+    return openInApp(session, path, window)
   })
 
   // What the window can currently do, so the menu can grey what it cannot. The renderer is

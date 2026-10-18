@@ -485,7 +485,10 @@ impl Sandbox for ProgramWouldNotStart {
             level: ConfinementLevel::Kernel,
             mechanisms: vec!["none"],
             network_denial_enforced: true,
+            egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: true,
         }
     }
 
@@ -1027,7 +1030,7 @@ fn a_handshake_not_answered_within_its_bound_is_a_timeout_naming_the_request() {
 /// Called with `one_at_a_time` held, which is what keeps another test from writing to it.
 fn logged(level: bravebot_diag::Level, run: impl FnOnce()) -> String {
     let dir = tempfile::tempdir().expect("a scratch directory");
-    bravebot_diag::configure(level, Some(dir.path().join("logs")));
+    bravebot_diag::configure(level, Some(dir.path().to_path_buf()));
     run();
     bravebot_diag::configure(bravebot_diag::Level::Error, None);
     std::fs::read_dir(dir.path().join("logs"))

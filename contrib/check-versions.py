@@ -14,8 +14,11 @@ which is why CI runs it and why `make bump-version` runs it before committing wh
 bump that misses one of these files fails instead of being found later.
 
 What is in scope is the version of the thing people install: the workspace, the published npm
-wrapper, and the desktop application. docs/website is a documentation site whose package version
-names nothing anybody installs, so it is deliberately not here.
+wrapper and the platform packages it depends on, and the desktop application. docs/website is a
+documentation site whose package version names nothing anybody installs, so it is deliberately
+not here. The platform packages are built at publish time from the wrapper's own manifest, so the
+only place one states a version is the wrapper's `optionalDependencies`, each at exactly the
+wrapper's version.
 
 Standard library only, like the other checks CI runs without a toolchain.
 """
@@ -28,11 +31,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# A manifest states the version once. A lockfile states it twice, in its own header and in the
-# entry for the package it locks, and npm rewrites both, so a hand edit that moves one is exactly
-# the mistake this has to catch.
+# A manifest states the version once. The lockfiles are pnpm's, which do not record the version of
+# the project they lock, so a manifest is the only place each package states it.
 MANIFESTS = ("package.json", "ui/package.json")
-LOCKFILES = ("package-lock.json", "ui/package-lock.json")
+
+# The manifest whose `optionalDependencies` are the platform packages, each pinned to the version
+# the wrapper is published at: npm installs the one for the machine, and a range would let it take
+# a binary from a release other than the wrapper's.
+PUBLISHED = "package.json"
+PLATFORM_PACKAGES = "optionalDependencies"
 
 VERSION_LINE = re.compile(r'version\s*=\s*"([^"]+)"')
 
@@ -55,6 +62,12 @@ def workspace_version(text):
     return None
 
 
+def platform_packages(data):
+    """The wrapper's platform packages and the version each is pinned to, empty where it has none."""
+    packages = pick(data, PLATFORM_PACKAGES)
+    return packages if isinstance(packages, dict) else {}
+
+
 def stated(root):
     """Every place a version is written down, as (where, version), with None for unreadable.
 
@@ -65,11 +78,9 @@ def stated(root):
     for name in MANIFESTS:
         data = read_json(root / name)
         found.append((name, pick(data, "version")))
-    for name in LOCKFILES:
-        data = read_json(root / name)
-        found.append((name, pick(data, "version")))
-        locked = pick(data, "packages")
-        found.append((f'{name} packages[""]', pick(pick(locked, ""), "version")))
+        if name == PUBLISHED:
+            for package, pinned in sorted(platform_packages(data).items()):
+                found.append((f"{name} {PLATFORM_PACKAGES} {package}", pinned))
     return found
 
 
@@ -85,7 +96,7 @@ def pick(data, key):
 
 
 def serialise(data):
-    """The form npm writes a manifest or a lockfile in: two spaces and a trailing newline."""
+    """The form npm writes a manifest in: two spaces and a trailing newline."""
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -93,17 +104,18 @@ def write(root, version):
     """Set the version in every JSON file that states it, and change nothing else.
 
     The cargo half of a bump is cargo's: the workspace manifest is rewritten before this is
-    called and `cargo update` follows it through to the lockfile. What is here is the four JSON
-    files, in one place with the check that reads them, because they were rewritten by a node
+    called and `cargo update` follows it through to the lockfile. What is here is the two JSON
+    files and the platform packages the wrapper pins, in one place with the check that reads
+    them, because they were rewritten by a node
     program embedded in a make recipe that could not run: a recipe's line continuations are
     literal backslashes inside the single quotes holding the program, so node was handed a source
     beginning with one and refused it.
 
     A file is left alone where re-serialising it as read would not reproduce it. What is being
-    written is a version, and a lockfile silently reformatted is a diff nobody asked for.
+    written is a version, and a manifest silently reformatted is a diff nobody asked for.
     """
     ready = []
-    for name in MANIFESTS + LOCKFILES:
+    for name in MANIFESTS:
         path = root / name
         try:
             text = path.read_text(encoding="utf-8")
@@ -119,9 +131,9 @@ def write(root, version):
             )
             return 1
         data["version"] = version
-        locked = pick(data, "packages")
-        if isinstance(pick(locked, ""), dict):
-            locked[""]["version"] = version
+        if name == PUBLISHED:
+            for package in platform_packages(data):
+                data[PLATFORM_PACKAGES][package] = version
         ready.append((path, serialise(data)))
 
     # Every file is read and checked before any is written, so a refusal leaves the tree as it
@@ -170,34 +182,27 @@ def check(root):
     return 0
 
 
-# One fixture per file this has to read, each broken in one way, because a check that reads four
-# of the six files passes on this tree today and would have passed on the tree that shipped the
+# The statement of a platform package's version in the fixture, named as `stated` names it.
+FIXTURE_PIN = f"{PUBLISHED} {PLATFORM_PACKAGES} @brave/bravebot-linux-x64"
+
+# One fixture per file this has to read, each broken in one way, because a check that reads one
+# of the manifests passes on this tree today and would have passed on the tree that shipped the
 # front end at 0.1.0.
 CASES = [
     ("an agreeing tree passes", {}, None),
-    ("the published wrapper lagging", {"package.json": "0.8.0"}, "package.json"),
-    (
-        "the wrapper's lockfile header lagging",
-        {"package-lock.json": "0.8.0"},
-        "package-lock.json",
-    ),
-    (
-        "the wrapper's locked entry lagging",
-        {"package-lock.json packages": "0.8.0"},
-        'package-lock.json packages[""]',
-    ),
+    ("the published wrapper lagging", {"package.json": "0.8.0"}, "package.json: states 0.8.0"),
     ("the application lagging", {"ui/package.json": "0.1.0"}, "ui/package.json"),
-    (
-        "the application's lockfile header lagging",
-        {"ui/package-lock.json": "0.1.0"},
-        "ui/package-lock.json",
-    ),
-    (
-        "the application's locked entry lagging",
-        {"ui/package-lock.json packages": "0.1.0"},
-        'ui/package-lock.json packages[""]',
-    ),
     ("a file that is not there", {"ui/package.json": None}, "ui/package.json"),
+    (
+        "a platform package pinned to another version",
+        {FIXTURE_PIN: "0.8.0"},
+        f"{FIXTURE_PIN}: states 0.8.0",
+    ),
+    (
+        "a platform package pinned by a range",
+        {FIXTURE_PIN: "^0.9.0"},
+        f"{FIXTURE_PIN}: states ^0.9.0",
+    ),
 ]
 
 
@@ -212,25 +217,13 @@ def fixture(root, version, broken):
     for name in MANIFESTS:
         if broken.get(name, version) is None:
             continue
-        (root / name).write_text(
-            serialise({"name": name, "version": broken.get(name, version)}), encoding="utf-8"
-        )
-    for name in LOCKFILES:
-        if broken.get(name, version) is None:
-            continue
-        (root / name).write_text(
-            serialise(
-                {
-                    "name": name,
-                    "version": broken.get(name, version),
-                    "packages": {
-                        "": {"version": broken.get(f"{name} packages", version)},
-                        "node_modules/react": {"version": "19.0.0"},
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
+        data = {"name": name, "version": broken.get(name, version)}
+        if name == PUBLISHED:
+            data[PLATFORM_PACKAGES] = {
+                "@brave/bravebot-linux-x64": broken.get(FIXTURE_PIN, version),
+                "@brave/bravebot-win32-x64": version,
+            }
+        (root / name).write_text(serialise(data), encoding="utf-8")
 
 
 def quietly(run):
@@ -270,8 +263,7 @@ def selftest():
 
     # Every file behind at once, which is the state a bump starts from, and then the check as the
     # question of whether the write reached all of them.
-    behind = {name: "0.8.0" for name in MANIFESTS + LOCKFILES}
-    behind.update({f"{name} packages": "0.8.0" for name in LOCKFILES})
+    behind = {name: "0.8.0" for name in MANIFESTS} | {FIXTURE_PIN: "0.8.0"}
     with tempfile.TemporaryDirectory() as scratch:
         root = Path(scratch)
         fixture(root, "0.9.0", behind)
@@ -280,20 +272,20 @@ def selftest():
     checks.append(("writing a version: succeeds", wrote == 0, wrote))
     checks.append(("writing a version: leaves every file agreeing", code == 0, said))
 
-    # A file this cannot write back as it found it, which is a lockfile it would silently
+    # A file this cannot write back as it found it, which is a manifest it would silently
     # reformat around the one value it was asked to change.
     with tempfile.TemporaryDirectory() as scratch:
         root = Path(scratch)
         fixture(root, "0.9.0", {})
-        hand_edited = root / "ui/package-lock.json"
+        hand_edited = root / "ui/package.json"
         hand_edited.write_text(
             hand_edited.read_text(encoding="utf-8").replace("\n  ", "\n    "), encoding="utf-8"
         )
-        before = {name: (root / name).read_text(encoding="utf-8") for name in MANIFESTS + LOCKFILES}
+        before = {name: (root / name).read_text(encoding="utf-8") for name in MANIFESTS}
         wrote, said = quietly(lambda: write(root, "1.0.0"))
-        after = {name: (root / name).read_text(encoding="utf-8") for name in MANIFESTS + LOCKFILES}
+        after = {name: (root / name).read_text(encoding="utf-8") for name in MANIFESTS}
     checks.append(("a file it cannot write back: refuses", wrote == 1, wrote))
-    checks.append(("a file it cannot write back: names it", "ui/package-lock.json" in said, said))
+    checks.append(("a file it cannot write back: names it", "ui/package.json" in said, said))
     checks.append(("a file it cannot write back: writes nothing at all", after == before, wrote))
 
     broke = [(claim, got) for claim, held, got in checks if not held]
@@ -329,7 +321,7 @@ def main():
     ap.add_argument(
         "--set",
         dest="version",
-        help="write this version into every JSON file that states one, for `make bump-version`",
+        help="write this version into every JSON manifest that states one, for `make bump-version`",
     )
     ap.add_argument(
         "--selftest", action="store_true", help="check the verdict on known trees, reading no tree"

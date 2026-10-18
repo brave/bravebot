@@ -20,10 +20,25 @@ make github-release
 # later: make publish-npm TAG=v<version>
 ```
 
+Before it changes anything, `bump-version` warns and asks whether to go on when any of these hold:
+
+- open issues carry the `release-blocking` label, which it lists with their links;
+- a translation is missing messages, counted per locale from `contrib/untranslated-messages.txt`;
+- the peer-advisories skill last ran more than seven days ago. The date is the newest run the
+  skill recorded in a comment on [#1901](https://github.com/brave/bravebot/issues/1901), written by
+  a person with write access, and the warning says it came from there. Where there is no such
+  comment yet or `gh` cannot read it, the date is the last commit to `docs/peer-advisories-vetted`
+  and the warning says so.
+
+The checks are in `contrib/release-preflight.py` and use no model. Answering `n`, or running without a
+terminal, stops the bump, and `make bump-version BUMP=bugfix YES=1` goes on without asking. The
+ledger's commit date is only a lower bound on when the advisory check last ran, because a run that
+finds nothing new commits nothing, which is why the comment is preferred.
+
 `bump-version` rewrites the version in `Cargo.toml`, `Cargo.lock`, `package.json`,
-`package-lock.json`, `ui/package.json`, and `ui/package-lock.json`, commits exactly those six as
+and `ui/package.json`, commits exactly those four as
 `Bump version to <version>`, and stops there: nothing is pushed and nothing is tagged. It refuses
-if any of the six is already modified, rather than committing changes it did not write, and it
+if any of the four is already modified, rather than committing changes it did not write, and it
 runs `make check-versions` before committing, so a bump that misses one fails there rather than
 at the tag. `github-release` refuses to tag unless the tree is clean, every file that states the
 version agrees, and HEAD is `main` at the release remote's `main`, then pushes `v<version>` there.
@@ -55,23 +70,30 @@ binaries plus the `.sha256` files written after signing. `gh release create` fai
 release already exists.
 
 After Jenkins has created that GitHub release, `make publish-npm TAG=v<version>` dispatches
-`publish-npm.yml` from that tag to publish `@brave/bravebot`. Without `TAG` it takes the latest
-GitHub release rather than the version in the tree, which may already be bumped past it. The
-workflow, not the target, refuses a tag that does not match its tree or a release missing an
-asset. OIDC trusted publishing; there is no `NPM_TOKEN`. The trusted publisher on npmjs.com must
-name that workflow file. The npm `postinstall` verifies the binary against its published
-`.sha256` before writing it, and then its signature: the `.sha256` on Linux, the code signature
-on macOS and Windows. `install.sh` does the same except on Windows, which it does not install.
+`publish-npm.yml` from that tag. It publishes seven packages: `@brave/bravebot-<platform>-<arch>`
+for each of the six platforms, each holding that platform's binary, and then `@brave/bravebot`,
+which lists the six as `optionalDependencies` at its own version and holds no binary. Without
+`TAG` the target takes the latest GitHub release rather than the version in the tree, which may
+already be bumped past it. The workflow, not the target, refuses a tag that does not match its
+tree or a release missing an asset. OIDC trusted publishing; there is no `NPM_TOKEN`, and the
+trusted publisher on npmjs.com must name that workflow file for each of the seven packages.
+
+Each platform package is built by `npm/scripts/stage-platform-package.js` on a runner of that
+platform's own kind. It verifies the binary against its published `.sha256` before writing it, and
+then its signature: the `.sha256` on Linux, the code signature on macOS and Windows. `install.sh`
+does the same when it runs, except on Windows, which it does not install. Installing the npm
+package runs no script and checks nothing itself. A dispatch after a partial failure publishes
+the packages that are missing and skips the ones the registry already has.
 
 `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD` is set in GitHub Actions so forks and PRs compile without
 secrets. Jenkins does not set it on an upload, so a missing credential fails the release
 instead of shipping a binary that cannot reach the backend.
 
-Darwin binaries are codesigned and notarised, Windows binaries are Authenticode-signed, and the
-installers hold each to that: the Developer ID team `KL8N8XSYF4` on macOS, the signer
-`Brave Software, Inc.` on Windows. A change of certificate or team has to be made in `install.sh`
-and `npm/scripts/postinstall.js` before the first release signed by the new one is published, or
-installs of it are refused. The commands for checking a download by hand are in the quickstart.
+Darwin binaries are codesigned and notarised, Windows binaries are Authenticode-signed, and
+`install.sh` and the platform package script hold each to that: the Developer ID team `KL8N8XSYF4`
+on macOS, the signer `Brave Software, Inc.` on Windows. A change of certificate or team has to be
+made in `install.sh` and `npm/scripts/stage-platform-package.js` before the first release signed
+by the new one is published, or installs and publishes of it are refused. The commands for checking a download by hand are in the quickstart.
 
 ## The desktop application
 
@@ -124,7 +146,7 @@ consumes it.
 
 `make app-bundle` is the same app for the machine it runs on, from this checkout's own release
 build rather than from `dist/`, left in `ui/dist/` with no image. It refuses a build with no
-backend credentials in it, which the front end's own `npm run bridge` allows on purpose: a bundle
+backend credentials in it, which the front end's own `pnpm run bridge` allows on purpose: a bundle
 built from an unconfigured shell starts, lists sessions, opens them, and fails at the first
 inference request, and Finder loads no shell configuration for the person who would then report
 that. So the credentials have to be in the environment `make` runs in, as they are for the
@@ -255,7 +277,7 @@ cannot sign it afterwards the way it signs the installer. electron-builder signs
 build when given a certificate there, and setting that up is
 [#770](https://github.com/brave/bravebot/issues/770).
 
-**What CI checks.** CI's `Windows installers` job builds both installers with
+**What CI checks.** CI's `Windows installer` jobs build one installer each, per architecture, with
 `make app-release-windows` from the cross-built helpers, and `Install on Windows` installs each on a
 hosted runner of its own architecture, `windows-latest` and `windows-11-arm`, with
 `ui/scripts/check-windows-install.mjs`. The install is silent, its Apps list entry is the per-user

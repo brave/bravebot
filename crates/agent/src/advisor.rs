@@ -128,13 +128,7 @@ pub fn consult<S: Sink>(
 
     let request = request_for(model, context, question);
 
-    let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
-    if let Some(cancel) = chat.cancel {
-        client = client.with_cancel(cancel.clone());
-    }
-    if let Some(subscription) = chat.subscription.as_deref_mut() {
-        client = client.with_subscription(subscription);
-    }
+    let mut client = chat.backend(model);
 
     // Streamed because that is the shape the backend answers in. Nothing watches the pieces go by:
     // the answer is shown once, whole, as the result of the call.

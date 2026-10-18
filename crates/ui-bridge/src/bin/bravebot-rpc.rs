@@ -10,15 +10,22 @@
 
 #![forbid(unsafe_code)]
 
+use bravebot_ui_bridge::arguments::{Launch, launch};
 use bravebot_ui_bridge::bridge::Bridge;
 use bravebot_ui_bridge::protocol::{Event, Request, Unreadable, response};
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 
 fn main() {
-    // First of all, and for the reason the terminal entry point does it first: a credential is in
-    // this process's memory from the first turn, and a crash after this writes no image of it.
-    // See CRED-23.
+    // First of all, before anything else runs: the descriptors this process speaks over exist
+    // from the moment it starts, and they are the channel to the window. Another process of the
+    // same user must not be able to copy them out of it. See RPCVIEW-8. The protection starts
+    // here, so a process already positioned to act before this runs is outside what it claims.
+    if let Some(notice) = bravebot_sandbox::inspection::refuse_same_user_inspection().notice() {
+        eprintln!("bravebot-rpc: {notice}");
+    }
+    // And for the reason the terminal entry point does it early: a credential is in this process's
+    // memory from the first turn, and a crash after this writes no image of it. See CRED-23.
     let _ = bravebot_agent::crash::disable_core_dumps();
 
     // The desktop window is in English only, so the notes this process builds for it are too,
@@ -31,50 +38,27 @@ fn main() {
     // settings file for a developer driving this by hand, and what that file may then grant
     // is decided by the policy layer rather than here. Nothing is authorised by an argument.
     // nosemgrep: rust.lang.security.args.args
-    let mut args = std::env::args().skip(1);
-    let mut settings = None;
-    if let Some(flag) = args.next() {
-        match flag.as_str() {
-            "--settings" => {
-                let Some(path) = args.next() else {
-                    eprintln!("--settings requires a file path");
-                    std::process::exit(2);
-                };
-                if args.next().is_some() {
-                    eprintln!("unexpected arguments after settings file");
-                    std::process::exit(2);
-                }
-                settings = Some(std::path::PathBuf::from(path));
-            }
-            "--version" | "-V" => {
-                println!(
-                    "bravebot-rpc {} (agent {})",
-                    env!("CARGO_PKG_VERSION"),
-                    bravebot_ui_bridge::agent_build()
-                );
-                return;
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                eprintln!("usage: bravebot-rpc            speak NDJSON on stdin/stdout");
-                eprintln!("       bravebot-rpc --version");
-                std::process::exit(2);
-            }
+    let args = std::env::args().skip(1);
+    let settings = match launch("bravebot-rpc", "speak NDJSON on stdin/stdout", args) {
+        Launch::Serve { settings } => settings,
+        Launch::Version(line) => {
+            println!("{line}");
+            return;
         }
-    }
+        Launch::Refused(lines) => {
+            for line in lines {
+                eprintln!("{line}");
+            }
+            std::process::exit(2);
+        }
+    };
 
     // Before a session is assembled, so every turn this process runs reads one answer for the
-    // network its programs keep. Nothing in a window sets the flag; the person's settings, the
-    // file this was started on and the managed pin decide, as they do for the terminal. See
-    // SANDBOX-20.
-    let here = std::env::current_dir().ok();
-    let layers = bravebot_ui_bridge::settings::layers(here.as_deref(), settings.as_deref());
-    bravebot_config::settle_run_network_in(None, &layers);
-    // Likewise for the lists of paths a person wrote, so every stage a turn in this process starts
-    // holds one answer. See SANDBOX-25.
-    bravebot_config::settle_sandbox_filesystem_in(
-        &bravebot_sandbox::rules::Lists::default(),
-        &layers,
+    // network its programs keep, for the lists of paths a person wrote and for the hosts a stage is
+    // held to. Nothing in a window sets them. See SANDBOX-20, SANDBOX-25 and SANDBOX-24.
+    bravebot_ui_bridge::settings::settle_for_process(
+        std::env::current_dir().ok().as_deref(),
+        settings.as_deref(),
     );
 
     // One writer behind a lock, so a line from an event and a line from a response cannot

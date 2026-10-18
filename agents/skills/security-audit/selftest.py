@@ -18,6 +18,7 @@ import io
 import json
 import os
 import re
+import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -42,7 +43,6 @@ audit = load("security-audit")
 verifying = load("verify-findings")
 collect = load("collect-findings")
 drafts = load("draft-issues")
-posting = load("post-issues")
 
 FAILURES = []
 
@@ -1027,6 +1027,26 @@ def test_privileged_job_runs_only_its_own_code():
     for name, command in (
         ("npm exec", "npm exec -- lockfile-lint"),
         ("yarn install", "yarn install --frozen-lockfile"),
+        ("npm with an option first", "npm --prefix ui ci"),
+        ("pnpm install", "pnpm install --frozen-lockfile"),
+        ("pnpm i", "pnpm i"),
+        ("pnpm add", "pnpm add left-pad"),
+        ("pnpm run", "pnpm run lint"),
+        ("pnpm run-script", "pnpm run-script lint"),
+        ("pnpm exec", "pnpm exec lockfile-lint"),
+        ("pnpm dlx", "pnpm dlx lockfile-lint"),
+        ("pnpm x", "pnpm x lockfile-lint"),
+        ("pnpm with a script name", "pnpm lint:lockfile"),
+        ("pnpm test", "pnpm test"),
+        ("pnpm start", "pnpm start"),
+        ("pnpm rebuild", "pnpm rebuild"),
+        ("pnpm approve-builds", "pnpm approve-builds"),
+        ("pnpm --dir before the subcommand", "pnpm --dir ui install"),
+        ("pnpm -C before the subcommand", "pnpm -C ui run build"),
+        ("pnpm --filter before the subcommand", "pnpm --filter app exec tsc"),
+        ("pnpm -r before the subcommand", "pnpm -r run build"),
+        ("pnpm -w before the subcommand", "pnpm -w test"),
+        ("corepack pnpm", "corepack pnpm install --frozen-lockfile"),
     ):
         other = in_tree(
             {
@@ -1045,6 +1065,25 @@ def test_privileged_job_runs_only_its_own_code():
             kinds(found) == ["privileged-job-runs-dependencies"],
             str(kinds(found)),
         )
+
+    for name, command in (
+        ("pnpm publish", "pnpm publish --provenance"),
+        ("pnpm config", "pnpm config set registry https://registry.npmjs.org/"),
+        ("a sentence that names pnpm", "echo pnpm build is not run here"),
+    ):
+        other = in_tree(
+            {
+                ".github/workflows/publish-npm.yml": "jobs:\n"
+                "  publish:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+                "    steps:\n"
+                f"      - run: {command}\n"
+            }
+        )
+        found = with_cwd(other, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+        check(f"{name} runs no dependency code", kinds(found) == [], str(kinds(found)))
 
     # The publish workflow holds the one grant in this tree, and this is what keeps the install out of
     # the job that holds it.
@@ -1988,7 +2027,7 @@ def test_the_prompt_lane_starts_from_every_prompt():
     class Governing:
         id = "PROMPT"
         rel = "docs/specs/asking.md"
-        governs = ["crates/tui/src/asks.rs"]
+        governs = ["crates/tui/src/asks.rs", "ui/src/Cards.tsx"]
 
     sources = {
         Path("crates/tui/src/asks.rs"): [
@@ -1998,18 +2037,34 @@ def test_the_prompt_lane_starts_from_every_prompt():
             "pub(crate) fn ask_move(request: &MoveRequest) -> Answer {",
         ],
         Path("crates/tui/src/elsewhere.rs"): ["pub fn ask_other<B: Backend>() {}"],
+        Path("ui/src/Cards.tsx"): [
+            "    case 'write': {",
+            "      return (",
+            "        <DecisionCard",
+            "          head={<YesOrNo />}",
+            "    case 'plan-task':",
+            "    case 'plan-reply':",
+            "      return <div className=\"plan-reply\" />",
+            "    case 'fetch': {",
+            "          <YesOrNo",
+            "    case 'move':",
+            "      return <ThreeAnswers />",
+        ],
     }
     found = [
         (site["path"], site["line"], site["function"])
         for site in audit.prompt_sites(sources, [Governing()])
     ]
     check(
-        "the prompt lane starts from every function the prompting spec's files ask with",
+        "the prompt lane starts from every function and card the prompting spec's files ask with",
         found
         == [
             ("crates/tui/src/asks.rs", 1, "ask"),
             ("crates/tui/src/asks.rs", 2, "ask_vet"),
             ("crates/tui/src/asks.rs", 4, "ask_move"),
+            ("ui/src/Cards.tsx", 1, "case 'write'"),
+            ("ui/src/Cards.tsx", 8, "case 'fetch'"),
+            ("ui/src/Cards.tsx", 10, "case 'move'"),
         ],
         str(found),
     )
@@ -2018,10 +2073,17 @@ def test_the_prompt_lane_starts_from_every_prompt():
         ROOT, lambda: audit.prompt_sites(audit.mechanics.load_sources(), audit.load_specs())
     )
     names = {(Path(site["path"]).name, site["function"]) for site in real}
-    wanted = {("confirm.rs", "ask"), ("confirm.rs", "ask_mcp_call"), ("trust_prompt.rs", "ask")}
+    wanted = {
+        ("write.rs", "ask"),
+        ("mcp.rs", "ask_mcp_call"),
+        ("trust_prompt.rs", "ask"),
+        ("Transcript.tsx", "case 'confirm'"),
+        ("Transcript.tsx", "case 'vet'"),
+        ("Transcript.tsx", "case 'mcp-call'"),
+    }
     check(
-        "the tree's write, call and trust prompts are on the lane's list",
-        wanted <= names,
+        "the tree's write, call and trust prompts and the window's cards are on the lane's list",
+        wanted <= names and ("Transcript.tsx", "case 'ask'") not in names,
         str(sorted(names)),
     )
 
@@ -2037,6 +2099,494 @@ def test_the_prompt_lane_starts_from_every_prompt():
             )
     finally:
         audit.mechanics.changed_files = was
+
+
+PINNED_ROW = (
+    "| one effect | a write | the body | the value | the one effect "
+    "| `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart` |"
+)
+ACCEPTED_ROW = (
+    "| the trust map | `y` | the directory | the path | the session "
+    "| accepted: [costs.md](costs.md#known-costs) |"
+)
+KEPT = [
+    "Confirmer::confirm_write: one effect",
+    "Confirmer::interjection: nothing",
+    "Answers::trust: the trust map",
+    "trust_prompt::ask: the trust map",
+]
+
+
+def register_findings(
+    kept=KEPT,
+    rows=(PINNED_ROW, ACCEPTED_ROW),
+    trait="Confirmer",
+    methods=("confirm_write", "interjection"),
+    fields=("trust",),
+    asks=("ask",),
+    spec_id="PROMPT",
+    elsewhere="",
+    visibility="pub ",
+):
+    """Run the register check in a tree holding one of each declaration it reads."""
+    front = "".join(f"  - {one}\n" for one in kept)
+    tree = in_tree(
+        {
+            "docs/specs/asking.md": f"---\nid: {spec_id}\ntitle: Asking\nstatus: normative\n"
+            f"governs:\n  - crates/tui/src/trust_prompt.rs\nkept_in:\n{front}---\n\n"
+            '<a id="PROMPT-11"></a>\n### PROMPT-11: the register\n\n'
+            "| Answer kept | Asked by | Shown | Kept under | Lasts | Evidence |\n"
+            "|---|---|---|---|---|---|\n" + "".join(f"{row}\n" for row in rows) + "\n**Why.** So.\n",
+            "docs/specs/costs.md": "---\nid: COST\n---\n\n## Known costs\n\n- **One.** It costs.\n",
+            "docs/specs/plain.md": f"---\nid: PLAIN\n{elsewhere}---\n\n### Known costs\n\nNone.\n",
+            "crates/agent/src/confirm.rs": f"pub trait {trait} {{\n"
+            + "".join(f"    /// Asks.\n    fn {one}(&mut self) -> Decision;\n" for one in methods)
+            + "}\n",
+            "crates/agent/src/answers.rs": "pub struct Answers<Rules = ()> {\n"
+            + "".join(f"    /// Kept.\n    {visibility}{one}: Kept,\n" for one in fields)
+            + "}\n",
+            "crates/tui/src/trust_prompt.rs": "".join(
+                f"{one}<B: Backend>(terminal: &mut Terminal<B>) -> Answer {{\n}}\n"
+                for one in (f"pub fn {ask}" if " " not in ask else ask for ask in asks)
+            ),
+            "crates/demo/Cargo.toml": '[package]\nname = "bravebot-demo"\n',
+            "crates/demo/src/keys.rs": "#[cfg(test)]\nmod tests {\n    #[test]\n"
+            "    fn a_key_tells_two_cases_apart() {}\n}\n",
+        }
+    )
+    return with_cwd(
+        tree,
+        lambda: list(
+            audit.check_answers_registered(audit.load_specs(), audit.mechanics.load_sources())
+        ),
+    )
+
+
+def test_answers_registered():
+    """A question or a remembered set with no row is how a yes comes to cover something unshown.
+
+    The check reads the declarations rather than a list, so each fixture adds a member to one of
+    them and expects the finding that names it, and each row fault is one a reader would take for a
+    decision somebody made.
+    """
+    found = register_findings()
+    check("a register accounting for every question and set is silent", found == [], str(kinds(found)))
+
+    cases = [
+        ("a confirmer method nobody listed", {"methods": ("confirm_write", "interjection", "confirm_new")}, ["answer-unregistered"]),
+        ("a remembered set nobody listed", {"fields": ("trust", "granted")}, ["answer-unregistered"]),
+        ("a trust question nobody listed", {"asks": ("ask", "ask_again")}, ["answer-unregistered"]),
+        ("a field with no visibility nobody listed", {"fields": ("trust", "granted"), "visibility": ""}, ["answer-unregistered"]),
+        (
+            "a field visible to the crate nobody listed",
+            {"fields": ("trust", "granted"), "visibility": "pub(crate) "},
+            ["answer-unregistered"],
+        ),
+        ("an entry for a member that is gone", {"kept": KEPT + ["Answers::gone: the trust map"]}, ["kept-in-stale"]),
+        (
+            "an entry landing in a row the table does not have",
+            {"kept": KEPT[:2] + ["Answers::trust: a row nobody wrote", KEPT[3]]},
+            ["register-row-unknown"],
+        ),
+        ("an entry that is not member and row", {"kept": KEPT + ["the trust map"]}, ["kept-in-malformed"]),
+        ("an entry for a declaration the check reads nothing of", {"kept": KEPT + ["Elsewhere::thing: nothing"]}, ["kept-in-malformed"]),
+        ("a row with a cell left empty", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("the session", ""))}, ["register-cell-empty"]),
+        ("a row with a cell past the last column", {"rows": (PINNED_ROW, ACCEPTED_ROW + " more |")}, ["register-cell-empty"]),
+        (
+            "a row citing a test that does not exist",
+            {"rows": (PINNED_ROW.replace("a_key_tells_two_cases_apart", "a_key_tells_nothing_apart"), ACCEPTED_ROW)},
+            ["register-test-missing"],
+        ),
+        ("a row citing neither a test nor a cost", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("accepted:", "see"))}, ["register-unpinned"]),
+        (
+            "a row accepting a cost from a spec that admits none",
+            {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("costs.md", "plain.md"))},
+            ["register-cost-missing"],
+        ),
+        ("a clause with no rows under its header", {"rows": ()}, ["register-unreadable"]),
+        ("a confirmer that is no longer a trait the check can find", {"trait": "Asker"}, ["register-unreadable"]),
+        ("a trust prompt that asks nothing the check can read", {"asks": ()}, ["register-unreadable"]),
+        ("a prompting spec that is no longer the one with the register's id", {"spec_id": "ASKING"}, ["register-unreadable"]),
+        ("a trust question only the crate can see", {"asks": ("ask", "pub(crate) fn ask_again")}, ["answer-unregistered"]),
+        ("a public helper whose name only starts like a question", {"asks": ("ask", "asking_line")}, []),
+        ("a member listed twice", {"kept": KEPT + ["Answers::trust: one effect"]}, ["kept-in-duplicate"]),
+        ("an entry keeping nothing and naming a row", {"kept": KEPT[:1] + ["Confirmer::interjection: nothing; one effect"] + KEPT[2:]}, ["kept-in-malformed"]),
+        ("a list in a spec the check does not read it from", {"elsewhere": "kept_in:\n  - Answers::trust: the trust map\n"}, ["kept-in-misplaced"]),
+        ("a cell holding a dash", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("the session", "-"))}, ["register-cell-empty"]),
+        ("a cell holding n/a", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("the session", "n/a"))}, ["register-cell-empty"]),
+        ("a row of empty cells", {"rows": (PINNED_ROW, ACCEPTED_ROW, "| | | | | | |")}, ["register-cell-empty", "register-unpinned"]),
+        ("a cost the cell says is not accepted", {"rows": (PINNED_ROW, ACCEPTED_ROW.replace("accepted:", "not accepted:"))}, ["register-unpinned"]),
+    ]
+    for name, change, expected in cases:
+        found = register_findings(**change)
+        check(f"{name} is reported", kinds(found) == expected, str(kinds(found)))
+
+    stale = register_findings(kept=KEPT + ["Answers::gone: the trust map"])
+    check(
+        "an entry outliving its member is a warning, since nothing is let through by it yet",
+        [one["severity"] for one in stale] == [audit.WARNING],
+        str(stale),
+    )
+    unlisted = register_findings(fields=("trust", "granted"))
+    check(
+        "the finding names the member and where it is declared",
+        unlisted and "Answers::granted" in unlisted[0]["title"] and "crates/agent/src/answers.rs" in unlisted[0]["summary"],
+        str(unlisted[0] if unlisted else "no finding"),
+    )
+
+    missing = with_cwd(ROOT, lambda: [one for one in audit.REMEMBERED_SETS if not Path(one).is_file()])
+    check("every file the binding lane is selected by exists", missing == [], str(missing))
+
+    class Governing:
+        id = "PROMPT"
+        rel = "docs/specs/asking.md"
+        governs = ["crates/tui/src/asks.rs"]
+
+    was = audit.mechanics.changed_files
+    try:
+        for touched, wanted in [
+            ("crates/agent/src/confirm.rs", True),
+            ("crates/core/src/credentials.rs", True),
+            ("crates/agent/src/tools.rs", True),
+            ("crates/tui/src/asks.rs", True),
+            ("crates/tui/src/app.rs", True),
+            ("crates/tui/src/app/actions.rs", True),
+            ("docs/specs/asking.md", True),
+            ("crates/core/src/label.rs", False),
+        ]:
+            audit.mechanics.changed_files = lambda base, touched=touched: iter([touched])
+            lanes = audit.changed_lanes("base", [Governing()])
+            check(
+                f"a branch that touches {touched} "
+                + ("runs" if wanted else "does not run")
+                + " the lane that asks what a kept answer covers",
+                ("approval-binding" in lanes) == wanted,
+                str(lanes),
+            )
+    finally:
+        audit.mechanics.changed_files = was
+
+
+CHANGED = (
+    "Moved",
+    "New session",
+    "Subject replaced",
+    "Other directory",
+    "Invocation changed",
+    "Declaration changed",
+    "More than shown",
+)
+CHANGES_HEADER = "| Answer kept | " + " | ".join(CHANGED) + " |"
+NOT_REACHED = "not reached: the key holds nothing of it"
+TABLE_TEST = "bravebot_agent::kept_answers::changing_the_world_under_a_yes_asks_again"
+
+
+def changes_row(name, **said):
+    """One row of the table of changes, every cell a reason unless the caller says otherwise."""
+    cells = {change: NOT_REACHED for change in CHANGED}
+    cells.update(said)
+    return "| " + name + " | " + " | ".join(cells[change] for change in CHANGED) + " |"
+
+
+def changes_findings(
+    rows=None,
+    header=CHANGES_HEADER,
+    table=True,
+    cases=(("the trust map", "Moved"),),
+    registered=("one effect", "the trust map"),
+):
+    """Run the check on what changes do to an answer in a tree holding a register and its cases."""
+    if rows is None:
+        rows = (
+            changes_row(
+                "one effect",
+                **{"Moved": "asked again: the key holds the root `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`"},
+            ),
+            changes_row(
+                "the trust map",
+                **{
+                    "Moved": f"asked again: a rule is a path made absolute `verified-by: {TABLE_TEST}`",
+                    "Subject replaced": "accepted: [costs.md](costs.md#known-costs)",
+                    "Other directory": "by design: a directory covers what is beneath it; asked again: a sibling is not reached `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`",
+                },
+            ),
+        )
+    register = "".join(
+        f"| {name} | `y` | the directory | the path | the session | accepted: [costs.md](costs.md#known-costs) |\n"
+        for name in registered
+    )
+    second = (
+        f"\nWhat changes do.\n\n{header}\n|---|{'---|' * len(CHANGED)}\n"
+        + "".join(f"{row}\n" for row in rows)
+        if table
+        else ""
+    )
+    literals = "".join(
+        f'        Case {{\n            row: "{row}",\n            change: "{change}",\n            asked_again: f,\n        }},\n'
+        for row, change in cases
+    )
+    tree = in_tree(
+        {
+            "docs/specs/asking.md": "---\nid: PROMPT\ntitle: Asking\nstatus: normative\n"
+            "governs:\n  - crates/tui/src/trust_prompt.rs\nkept_in:\n  - Answers::trust: the trust map\n---\n\n"
+            '<a id="PROMPT-11"></a>\n### PROMPT-11: the register\n\n'
+            "| Answer kept | Asked by | Shown | Kept under | Lasts | Evidence |\n"
+            "|---|---|---|---|---|---|\n" + register + second + "\n**Why.** So.\n",
+            "docs/specs/costs.md": "---\nid: COST\n---\n\n## Known costs\n\n- **One.** It costs.\n",
+            "docs/specs/plain.md": "---\nid: PLAIN\n---\n\n### Known costs\n\nNone.\n",
+            "crates/demo/Cargo.toml": '[package]\nname = "bravebot-demo"\n',
+            "crates/demo/src/keys.rs": "#[cfg(test)]\nmod tests {\n    #[test]\n"
+            "    fn a_key_tells_two_cases_apart() {}\n}\n",
+            "crates/agent/Cargo.toml": '[package]\nname = "bravebot-agent"\n',
+            "crates/agent/src/kept_answers.rs": "fn table() {\n    let cases = vec![\n" + literals + "    ];\n}\n"
+            "#[test]\nfn changing_the_world_under_a_yes_asks_again() {}\n",
+        }
+    )
+    return with_cwd(
+        tree,
+        lambda: list(
+            audit.check_changes_under_a_yes(audit.load_specs(), audit.mechanics.load_sources())
+        ),
+    )
+
+
+def test_changes_under_a_yes():
+    """A kept answer with nothing said of a moved checkout or a replaced file is how a yes covers more.
+
+    Each fixture is the clean table with one thing wrong, and the finding it expects is the one a
+    reader would otherwise find out by a person being asked nothing. The cells are read for the
+    leader and the reason because a cell holding a mark reads as decided when nobody decided it.
+    """
+    found = changes_findings()
+    check("a table with a reasoned cell for every answer and change is silent", found == [], str(kinds(found)))
+
+    good = {
+        "Other directory": "asked again: a sibling is not reached `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`",
+    }
+    cases = [
+        ("a register with no second table", {"table": False}, ["changes-unreadable"]),
+        (
+            "a table whose columns are not the changes",
+            {"header": CHANGES_HEADER.replace("Moved", "Relocated")},
+            ["changes-unreadable"],
+        ),
+        (
+            "an answer in the register with no row in the table",
+            {"registered": ("one effect", "the trust map", "hosts answered")},
+            ["changes-row-missing"],
+        ),
+        (
+            "a row for an answer the register does not have",
+            {"registered": ("one effect",)},
+            ["changes-row-unknown"],
+        ),
+        (
+            "a row written twice",
+            {
+                "rows": (
+                    changes_row("one effect", **good),
+                    changes_row("one effect", **good),
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-row-duplicate"],
+        ),
+        (
+            "a cell left empty",
+            {"rows": (changes_row("one effect", **{"Moved": ""}), changes_row("the trust map", **good)), "cases": ()},
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a cell holding n/a",
+            {"rows": (changes_row("one effect", **{"Moved": "n/a"}), changes_row("the trust map", **good)), "cases": ()},
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a cell that opens with none of the four words",
+            {
+                "rows": (changes_row("one effect", **{"Moved": "see the spec for this one"}), changes_row("the trust map", **good)),
+                "cases": (),
+            },
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a not reached with no reason",
+            {"rows": (changes_row("one effect", **{"Moved": "not reached: no"}), changes_row("the trust map", **good)), "cases": ()},
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a cell past the last column",
+            {
+                "rows": (
+                    changes_row("one effect", **good).replace(" |\n", " | more |\n") + " more |",
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "an asked again that cites no test",
+            {
+                "rows": (changes_row("one effect", **{"Moved": "asked again: the key holds the root"}), changes_row("the trust map", **good)),
+                "cases": (),
+            },
+            ["changes-unpinned"],
+        ),
+        (
+            "an asked again citing a test that does not exist",
+            {
+                "rows": (
+                    changes_row("one effect", **{"Moved": "asked again: the key holds the root `verified-by: bravebot_demo::keys::a_key_tells_nothing`"}),
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-test-missing"],
+        ),
+        (
+            "an accepted that links no Known cost",
+            {
+                "rows": (changes_row("one effect", **{"Moved": "accepted: it is fine"}), changes_row("the trust map", **good)),
+                "cases": (),
+            },
+            ["changes-cost-missing"],
+        ),
+        (
+            "an accepted linking a spec that admits none",
+            {
+                "rows": (
+                    changes_row("one effect", **{"Moved": "accepted: [plain.md](plain.md#known-costs)"}),
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-cost-missing"],
+        ),
+        ("a cell citing the table test with no case for it", {"cases": ()}, ["changes-case-missing"]),
+        (
+            "a case that no cell cites",
+            {"cases": (("the trust map", "Moved"), ("one effect", "Other directory"))},
+            ["changes-case-unlisted"],
+        ),
+    ]
+    for name, change, expected in cases:
+        found = changes_findings(**change)
+        check(f"{name} is reported", kinds(found) == expected, str(kinds(found)))
+
+    found = changes_findings(
+        rows=(
+            changes_row("one effect", **{"Moved": "by design: the move keeps it; asked again: a copy forgets it `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`"}),
+            changes_row("the trust map", **{"Moved": f"asked again: the root moves `verified-by: {TABLE_TEST}`"}),
+        ),
+    )
+    check("a cell of two statements is read as two", found == [], str(kinds(found)))
+
+
+def test_the_stop_hook():
+    """A task that ends with the register broken is sent back, and one that never went near it is not.
+
+    The hook decides two things a session depends on: whether the working tree's diff is one the
+    check is worth running for, and what to say when it fails. A hook that never blocks and one that
+    blocks forever both read as a quiet failure, so each is run against the input that tells it apart
+    from the other.
+    """
+    broken = audit.finding(audit.ERROR, "answer-unregistered", "t", "a set nobody listed", "trust", "low")
+    only_warned = audit.finding(audit.WARNING, "kept-in-stale", "t", "an entry outliving its member", "trust", "low")
+
+    check("a tree the pass finds nothing in is let stop", audit.stop_response({}, []) is None)
+    check("a warning alone is let stop", audit.stop_response({}, [only_warned]) is None)
+    blocked = audit.stop_response({}, [only_warned, broken])
+    check(
+        "an error blocks the stop and hands the session the finding to fix",
+        blocked is not None
+        and blocked.get("decision") == "block"
+        and "a set nobody listed" in blocked["reason"]
+        and "an entry outliving its member" not in blocked["reason"],
+        str(blocked),
+    )
+    again = audit.stop_response({"stop_hook_active": True}, [broken])
+    check(
+        "a stop after a block is let through with the finding shown, so a session that cannot fix it ends",
+        again is not None and "decision" not in again and "a set nobody listed" in again["systemMessage"],
+        str(again),
+    )
+
+    specs = with_cwd(ROOT, audit.load_specs)
+    for touched, wanted in [
+        ("crates/agent/src/answers.rs", True),
+        ("crates/agent/src/kept_answers.rs", True),
+        ("crates/ui-bridge/src/running.rs", True),
+        ("crates/cli/src/plain.rs", True),
+        ("crates/tui/src/app.rs", True),
+        ("crates/tui/src/app/actions.rs", True),
+        ("crates/tui/src/confirm.rs", True),
+        ("docs/specs/prompting.md", True),
+        ("crates/core/src/label.rs", False),
+        ("README.md", False),
+    ]:
+        check(
+            f"a working tree that touches {touched} "
+            + ("is checked" if wanted else "is not checked"),
+            audit.touches_kept_answers({touched}, specs) == wanted,
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        def git(*arguments):
+            subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *arguments],
+                cwd=tmp,
+                check=True,
+                capture_output=True,
+            )
+
+        git("init", "-q")
+        for name in ("edited.txt", "moved.txt", "same.txt"):
+            (Path(tmp) / name).write_text("before\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-q", "-m", "start")
+        none_yet = sorted(with_cwd(tmp, audit.branch_files))
+        check(
+            "a clean tree with no default branch to measure from has changed nothing",
+            none_yet == [],
+            str(none_yet),
+        )
+        git("update-ref", "refs/remotes/upstream/main", "HEAD")
+        (Path(tmp) / "committed.txt").write_text("kept\n", encoding="utf-8")
+        git("add", "committed.txt")
+        git("commit", "-q", "-m", "a change the session already committed")
+        (Path(tmp) / "edited.txt").write_text("after\n", encoding="utf-8")
+        git("mv", "moved.txt", "renamed.txt")
+        (Path(tmp) / "staged.txt").write_text("new\n", encoding="utf-8")
+        git("add", "staged.txt")
+        (Path(tmp) / "deep").mkdir()
+        (Path(tmp) / "deep" / "untracked.txt").write_text("new\n", encoding="utf-8")
+        got = sorted(with_cwd(tmp, audit.uncommitted_files))
+        check(
+            "the working tree's diff is the edited, staged, untracked and both ends of a renamed path",
+            got == sorted(["edited.txt", "moved.txt", "renamed.txt", "staged.txt", "deep/untracked.txt"]),
+            str(got),
+        )
+        whole = sorted(with_cwd(tmp, audit.branch_files))
+        check(
+            "the branch's changes are those and what it has already committed since the default branch",
+            whole == sorted(got + ["committed.txt"]),
+            str(whole),
+        )
+
+    wired = json.loads((ROOT / "agents" / "settings.json").read_text(encoding="utf-8"))
+    commands = [
+        hook.get("command", "")
+        for entry in wired.get("hooks", {}).get("Stop", [])
+        for hook in entry.get("hooks", [])
+    ]
+    check(
+        "the Stop hook in agents/settings.json runs this script in the mode that answers it",
+        commands == ['python3 "$CLAUDE_PROJECT_DIR/agents/skills/security-audit/security-audit.py" --stop-hook']
+        and (ROOT / "agents/skills/security-audit/security-audit.py").is_file(),
+        str(commands),
+    )
 
 
 def test_verifier_prompt_composes():
@@ -2307,40 +2857,12 @@ def test_bodies_say_where_and_why():
     )
 
 
-def test_posting_skips_what_the_tracker_already_holds():
-    """Dedup, on the pair of findings that break the obvious way of doing it.
+def test_a_draft_key_is_one_its_title_keeps():
+    """The key the issue-poster definition searches the tracker for has to be in the title.
 
-    Two specs with unpinned clauses produce one sentence with one word changed. Comparing wording
-    alone calls the second a duplicate of the first, and the second never gets filed.
+    The summary names a path and the title shortens it to the file name, so a key taken from the
+    summary can match no title on the tracker, and a search for it reads as nothing like this being filed.
     """
-    tracker = []
-
-    def fake_gh(args, repo):
-        """`gh issue list --search`, near enough: every term has to be in the title.
-
-        Returning the whole tracker whatever was asked for would pass a query that finds nothing,
-        which is the way a duplicate actually got filed: the search looked for a key that no title
-        holds, found none, and read that as nothing like this being on the tracker.
-        """
-        if args[:2] != ["issue", "list"]:
-            raise AssertionError(f"a dedup check called gh {' '.join(args[:2])}")
-        query = args[args.index("--search") + 1]
-        terms = [one.lower() for one in query.split() if ":" not in one]
-        return json.dumps(
-            [one for one in tracker if all(term in one["title"].lower() for term in terms)]
-        )
-
-    posting.gh = fake_gh
-
-    check(
-        "a run is paced to one issue every ten seconds and change",
-        posting.PACE == 10.0 and posting.JITTER == (1.0, 5.0),
-        f"{posting.PACE}, {posting.JITTER}",
-    )
-
-    # The shape the enumerator writes, including the part that makes this hard: the summary names a
-    # path and the title shortens it to the file name, so the summary's own string is not in the
-    # title and a key taken from it matches nothing on the tracker.
     findings = [
         {
             "kind": "unpinned-guarantee",
@@ -2356,95 +2878,20 @@ def test_posting_skips_what_the_tracker_already_holds():
             "title": "nothing pins 2 clauses of `processors.md`, so a change that breaks one passes every check",
             "summary": "`docs/specs/processors.md` has 2 clauses at `verified-by: none`",
         },
-        # And the case with nothing to anchor to: everything this one names is a path its title does
-        # not keep, so the wording is the whole of what dedup has.
-        {
-            "kind": "exception-count-disagreement",
-            "impact": "low",
-            "area": "trust",
-            "title": "the review pass names fewer admitted exceptions than the spec, so an unnamed one reads as a violation",
-            "summary": "`docs/development/reviewing-for-the-rule.md` says 2 and `docs/specs/labels.md` names 3",
-        },
     ]
     out = Path(tempfile.mkdtemp(prefix="security-audit-selftest-")) / "issues"
     written = with_cwd(ROOT, lambda: drafts.draft(findings, out))
     check(
         "a draft's key is one its own title keeps, where the finding names one at all",
-        all(one["key"].lower() in one["title"].lower() for one in written[:2]),
-        str([(one["key"], one["title"]) for one in written[:2]]),
+        all(one["key"].lower() in one["title"].lower() for one in written),
+        str([(one["key"], one["title"]) for one in written]),
     )
-
-    tracker = [{"number": 11, "state": "OPEN", "url": "u", "title": written[0]["title"]}]
+    report = drafts.report(written, out)
     check(
-        "a finding the tracker already holds is not filed again",
-        posting.already_filed("brave/bravebot", written[0]) is not None,
+        "the report sends each draft to the issue-poster definition",
+        "agents/agents/issue-poster.md" in report and "post-issues" not in report,
+        report,
     )
-    check(
-        "a finding whose wording matches another spec's is still filed",
-        posting.already_filed("brave/bravebot", written[1]) is None,
-    )
-
-    tracker = [{"number": 12, "state": "CLOSED", "url": "u", "title": written[0]["title"]}]
-    check(
-        "an issue somebody read and closed is an answer, not a gap",
-        posting.already_filed("brave/bravebot", written[0]) is not None,
-    )
-
-    tracker = [{"number": 13, "state": "OPEN", "url": "u", "title": written[2]["title"]}]
-    check(
-        "a finding with no key its title keeps is still recognised by its wording",
-        posting.already_filed("brave/bravebot", written[2]) is not None,
-        f"key {written[2]['key']!r} is not in {written[2]['title']!r}",
-    )
-
-    tracker = []
-    check(
-        "a finding nothing on the tracker names is filed",
-        posting.already_filed("brave/bravebot", written[0]) is None,
-    )
-
-
-def test_an_assignee_reaches_the_create():
-    """The login has to arrive at `gh issue create`, not just at the parser.
-
-    Nothing else in this file calls `post`, so an `--assignee` that is parsed and never threaded
-    through files every issue unassigned and still passes every other check here.
-    """
-    original = posting.helper.gh
-    calls = []
-
-    def fake_gh(args, repo=None):
-        calls.append(list(args))
-        return "https://github.com/brave/bravebot/issues/1"
-
-    posting.helper.gh = fake_gh
-    draft = {"title": "t", "body_file": "b", "labels": ["security"]}
-
-    posting.post("brave/bravebot", draft, "netzenbot")
-    passed = calls[-1]
-    check(
-        "the login a run was given is the one the create is passed",
-        "--assignee" in passed and passed[passed.index("--assignee") + 1] == "netzenbot",
-        str(passed),
-    )
-
-    posting.post("brave/bravebot", draft)
-    check(
-        "a run given no login names no assignee, so an unassigned issue stays the default",
-        "--assignee" not in calls[-1],
-        str(calls[-1]),
-    )
-
-    def refusing_gh(args, repo=None):
-        raise RuntimeError("Not Found")
-
-    posting.helper.gh = refusing_gh
-    check(
-        "a login the repository would refuse is caught before anything is posted",
-        not posting.assignable("brave/bravebot", "nobody"),
-    )
-
-    posting.helper.gh = original
 
 
 def test_a_run_writes_a_manifest_and_posts_nothing():
@@ -2476,10 +2923,75 @@ def test_a_run_writes_a_manifest_and_posts_nothing():
     )
 
 
+def test_the_manifest_is_read_from_the_work_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "manifest.json").write_text('{"lanes": []}', encoding="utf-8")
+        check("a manifest in the work directory is read", collect.read_manifest(tmp) == {"lanes": []})
+        empty = Path(tmp) / "empty"
+        empty.mkdir()
+        err = io.StringIO()
+        with redirect_stderr(err):
+            missing = collect.read_manifest(empty)
+        check(
+            "a work directory without one reads as none and says where it looked",
+            missing is None and err.getvalue() == f"no manifest at {empty / 'manifest.json'}\n",
+            err.getvalue(),
+        )
+
+
+def audit_programs(files):
+    where = in_tree(files)
+    return with_cwd(
+        where,
+        lambda: list(audit.check_programs_are_resolved(audit.mechanics.load_sources())),
+    )
+
+
+def test_programs_are_resolved():
+    spawn = 'fn go() {\n    let _ = std::process::Command::new("ssh-keygen").status();\n}\n'
+    found = audit_programs({"crates/cli/src/identity.rs": spawn})
+    check(
+        "a bare name in production code is an error naming the file, line and program",
+        kinds(found) == ["program-started-by-bare-name"]
+        and found[0]["severity"] == audit.ERROR
+        and "crates/cli/src/identity.rs:2" in found[0]["summary"]
+        and "ssh-keygen" in found[0]["summary"],
+        str([one["summary"] for one in found]),
+    )
+
+    found = audit_programs(
+        {"crates/cli/src/identity.rs": 'fn go() { Command::new("/usr/bin/ssh-keygen"); }\n'}
+    )
+    check("an absolute path is not a finding", found == [], str(found))
+
+    found = audit_programs(
+        {"crates/cli/src/identity.rs": 'fn go() { Command::new(resolved); }\n'}
+    )
+    check("a name held in a variable is left to review", found == [], str(found))
+
+    for name, body in {
+        "a test module": 'fn go() {}\n#[cfg(test)]\nmod t {\n    fn x() { Command::new("sh"); }\n}\n',
+        "a platform test module": 'fn go() {}\n#[cfg(all(test, target_os = "macos"))]\nmod t {\n'
+        '    fn x() { Command::new("cc"); }\n}\n',
+    }.items():
+        found = audit_programs({"crates/cli/src/identity.rs": body})
+        check(f"a bare name inside {name} is not a finding", found == [], str(found))
+
+    for path in ("crates/cli/tests/run.rs", "crates/cli/src/identity_tests.rs"):
+        found = audit_programs({path: 'fn x() { Command::new("sh"); }\n'})
+        check(f"a bare name in {path} is not a finding", found == [], str(found))
+
+    found = audit_programs(
+        {"crates/cli/src/identity.rs": '// Command::new("sh") was the old way\nfn go() {}\n'}
+    )
+    check("a bare name in a comment is not a finding", found == [], str(found))
+
+
 def main():
     for test in (
         test_exception_counts,
         test_network_clients_are_recorded,
+        test_programs_are_resolved,
         test_prompt_split,
         test_exhaustive_reader_docs,
         test_labelled_impls,
@@ -2495,15 +3007,18 @@ def main():
         test_declassify_counts_match_the_spec,
         test_every_lane_prompt_composes,
         test_the_prompt_lane_starts_from_every_prompt,
+        test_answers_registered,
+        test_changes_under_a_yes,
+        test_the_stop_hook,
         test_verifier_prompt_composes,
         test_impact_sets_severity,
         test_labels,
         test_titles,
         test_a_name_stays_a_name,
         test_bodies_say_where_and_why,
-        test_posting_skips_what_the_tracker_already_holds,
-        test_an_assignee_reaches_the_create,
+        test_a_draft_key_is_one_its_title_keeps,
         test_a_run_writes_a_manifest_and_posts_nothing,
+        test_the_manifest_is_read_from_the_work_directory,
     ):
         print(test.__name__)
         test()

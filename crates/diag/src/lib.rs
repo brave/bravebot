@@ -114,20 +114,21 @@ fn host_of(url: &str) -> String {
     host.to_string()
 }
 
-/// One log: a level, a directory, and the file made on the first line that is written.
+/// One log: a level, a state directory, and the file made on the first line that is written.
 pub struct Log {
     level: Level,
-    dir: Option<PathBuf>,
+    state: Option<PathBuf>,
     file: Option<File>,
     gave_up: bool,
 }
 
 impl Log {
-    /// A log that writes into `dir` at `level`. With no directory nothing is ever written.
-    pub fn new(level: Level, dir: Option<PathBuf>) -> Log {
+    /// A log that writes into [`DIRECTORY`] under the state directory `state` at `level`. With no
+    /// state directory nothing is ever written.
+    pub fn new(level: Level, state: Option<PathBuf>) -> Log {
         Log {
             level,
-            dir,
+            state,
             file: None,
             gave_up: false,
         }
@@ -140,11 +141,11 @@ impl Log {
         if level > self.level || self.gave_up {
             return;
         }
-        let Some(dir) = self.dir.clone() else {
+        let Some(state) = self.state.clone() else {
             return;
         };
         if self.file.is_none() {
-            match open_new(&dir) {
+            match open_new(&state) {
                 Some(file) => self.file = Some(file),
                 None => {
                     self.gave_up = true;
@@ -251,11 +252,12 @@ fn file_name(millis: u128) -> String {
     )
 }
 
-fn open_new(dir: &Path) -> Option<File> {
-    make_directory(dir).ok()?;
+fn open_new(state: &Path) -> Option<File> {
+    let dir = state.join(DIRECTORY);
+    make_directory(state, &dir).ok()?;
     let path = dir.join(file_name(now_millis()));
     let file = create_private(&path).ok()?;
-    prune(dir, &path);
+    prune(&dir, &path);
     Some(file)
 }
 
@@ -278,18 +280,42 @@ fn prune(dir: &Path, current: &Path) {
     }
 }
 
+/// Create `dir` reachable only by this user, and narrow it and `state` above it where either is
+/// already there.
+///
+/// This crate sits below the one holding the state directory's helper, so it keeps its own copy of
+/// the modes. A run whose only write is a log line is the first writer, so `state` is narrowed here
+/// too and nothing above it is. A log directory that cannot be narrowed is not written into, since
+/// it holds nothing else; `state` is narrowed where it can be, as the shared helper narrows it.
 #[cfg(unix)]
-fn make_directory(dir: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+fn make_directory(state: &Path, dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(dir)?;
-    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+    narrow(dir)?;
+    let _ = narrow(state);
+    Ok(())
+}
+
+/// Narrow one directory, unless the name is a link.
+///
+/// `set_permissions` follows a link, and where one leads is outside the state directory: somebody
+/// who links `logs` or `~/.bravebot` to a shared volume would otherwise have a log line setting the
+/// mode of the volume's directory.
+#[cfg(unix)]
+fn narrow(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let is_link = fs::symlink_metadata(path).is_ok_and(|found| found.file_type().is_symlink());
+    if is_link {
+        return Ok(());
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 
 #[cfg(not(unix))]
-fn make_directory(dir: &Path) -> std::io::Result<()> {
+fn make_directory(_state: &Path, dir: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dir)
 }
 
@@ -310,11 +336,11 @@ fn create_private(path: &Path) -> std::io::Result<File> {
 
 static LOG: Mutex<Option<Log>> = Mutex::new(None);
 
-/// Sets where this process logs and how much. Before this is called nothing is written. The CLI
-/// calls it with no directory under incognito or with no home.
-pub fn configure(level: Level, dir: Option<PathBuf>) {
+/// Sets the state directory this process logs under and how much. Before this is called nothing is
+/// written. The CLI calls it with no directory under incognito or with no home.
+pub fn configure(level: Level, state: Option<PathBuf>) {
     let mut guard = LOG.lock().unwrap_or_else(|e| e.into_inner());
-    *guard = Some(Log::new(level, dir));
+    *guard = Some(Log::new(level, state));
 }
 
 fn record(level: Level, event: &'static str, fields: &[(&'static str, Field)]) {
@@ -413,7 +439,7 @@ mod tests {
         log.record(Level::Debug, "too.detailed", &[]);
         log.record(Level::Info, "step", &[]);
         log.record(Level::Error, "failure", &[]);
-        let text = fs::read_to_string(only_file(&dir)).unwrap();
+        let text = fs::read_to_string(only_file(&dir.join(DIRECTORY))).unwrap();
         assert!(!text.contains("too.detailed"));
         assert!(text.contains("INFO step"));
         assert!(text.contains("ERROR failure"));
@@ -426,7 +452,7 @@ mod tests {
         let tmp = scratch();
         let dir = tmp.path().to_path_buf();
         let logs = dir.join("logs");
-        let mut log = Log::new(Level::Error, Some(logs.clone()));
+        let mut log = Log::new(Level::Error, Some(dir.clone()));
         log.record(Level::Info, "step", &[]);
         log.record(Level::Debug, "detail", &[]);
         assert!(!logs.exists(), "a log directory was made for nothing");
@@ -445,16 +471,89 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_log_and_its_directory_are_private() {
-        use std::os::unix::fs::PermissionsExt;
         let tmp = scratch();
         let dir = tmp.path().to_path_buf();
-        let mut log = Log::new(Level::Error, Some(dir.join("logs")));
+        let mut log = Log::new(Level::Error, Some(dir.clone()));
         log.record(Level::Error, "failure", &[]);
         let logs = dir.join("logs");
         let file = only_file(&logs);
-        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&file), 0o600);
-        assert_eq!(mode(&logs), 0o700);
+        assert_eq!(mode_of(&file), 0o600);
+        assert_eq!(mode_of(&logs), 0o700);
+    }
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    fn open_up(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// STATE-1. A run whose only write is a log line is the first writer into a state directory an
+    /// older build left open, so the state directory is narrowed then. The directory above it is
+    /// the user's home and is left as it was.
+    #[cfg(unix)]
+    #[test]
+    fn a_state_directory_left_open_is_narrowed_and_nothing_above_it() {
+        let tmp = scratch();
+        let home = tmp.path().join("home");
+        let state = home.join(".bravebot");
+        let logs = state.join(DIRECTORY);
+        fs::create_dir_all(&logs).unwrap();
+        for open in [&home, &state, &logs] {
+            open_up(open);
+        }
+        let mut log = Log::new(Level::Error, Some(state.clone()));
+        log.record(Level::Error, "failure", &[]);
+        assert_eq!(mode_of(&logs), 0o700, "the log directory");
+        assert_eq!(mode_of(&state), 0o700, "the state directory");
+        assert_eq!(mode_of(&home), 0o755, "the home above the state directory");
+    }
+
+    /// STATE-1. A log directory linked to a shared volume leads outside the state directory, so the
+    /// volume's directory keeps the mode its owner gave it. The log written there is still private,
+    /// and the state directory is still narrowed.
+    #[cfg(unix)]
+    #[test]
+    fn narrowing_does_not_follow_a_linked_log_directory() {
+        let tmp = scratch();
+        let state = tmp.path().join(".bravebot");
+        let shared = tmp.path().join("shared-logs");
+        fs::create_dir_all(&state).unwrap();
+        fs::create_dir_all(&shared).unwrap();
+        open_up(&state);
+        open_up(&shared);
+        std::os::unix::fs::symlink(&shared, state.join(DIRECTORY)).unwrap();
+        let mut log = Log::new(Level::Error, Some(state.clone()));
+        log.record(Level::Error, "failure", &[]);
+        assert_eq!(mode_of(&shared), 0o755, "the linked directory was narrowed");
+        assert_eq!(mode_of(&only_file(&shared)), 0o600);
+        assert_eq!(mode_of(&state), 0o700);
+    }
+
+    /// STATE-1. A state directory linked to a synced volume leads outside what this was given, so
+    /// the volume's directory keeps its mode, while the log directory made inside it is private.
+    #[cfg(unix)]
+    #[test]
+    fn narrowing_does_not_follow_a_linked_state_directory() {
+        let tmp = scratch();
+        let synced = tmp.path().join("synced");
+        fs::create_dir_all(&synced).unwrap();
+        open_up(&synced);
+        let state = tmp.path().join(".bravebot");
+        std::os::unix::fs::symlink(&synced, &state).unwrap();
+        let mut log = Log::new(Level::Error, Some(state.clone()));
+        log.record(Level::Error, "failure", &[]);
+        assert_eq!(
+            mode_of(&synced),
+            0o755,
+            "the linked state directory was narrowed"
+        );
+        assert_eq!(mode_of(&synced.join(DIRECTORY)), 0o700);
     }
 
     /// Old logs go, so the directory does not grow without bound, but a file this crate did not
@@ -462,14 +561,14 @@ mod tests {
     #[test]
     fn retention_keeps_the_newest_and_leaves_foreign_files() {
         let tmp = scratch();
-        let dir = tmp.path().to_path_buf();
+        let dir = tmp.path().join(DIRECTORY);
         fs::create_dir_all(&dir).unwrap();
         for day in 1..=14 {
             fs::write(dir.join(format!("202601{day:02}T000000Z-1.log")), "old").unwrap();
         }
         fs::write(dir.join("notes.txt"), "mine").unwrap();
         fs::write(dir.join("20260101T000000Z.log"), "not ours").unwrap();
-        let mut log = Log::new(Level::Error, Some(dir.clone()));
+        let mut log = Log::new(Level::Error, Some(tmp.path().to_path_buf()));
         log.record(Level::Error, "failure", &[]);
         let mut ours: Vec<String> = fs::read_dir(&dir)
             .unwrap()
@@ -490,12 +589,12 @@ mod tests {
     #[test]
     fn the_file_being_written_survives_retention_when_the_clock_is_behind() {
         let tmp = scratch();
-        let dir = tmp.path().to_path_buf();
+        let dir = tmp.path().join(DIRECTORY);
         fs::create_dir_all(&dir).unwrap();
         for day in 1..=KEEP {
             fs::write(dir.join(format!("20990101T0000{day:02}Z-1.log")), "future").unwrap();
         }
-        let mut log = Log::new(Level::Error, Some(dir.clone()));
+        let mut log = Log::new(Level::Error, Some(tmp.path().to_path_buf()));
         log.record(Level::Error, "failure", &[]);
         let text: String = fs::read_dir(&dir)
             .unwrap()

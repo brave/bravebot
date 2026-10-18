@@ -25,13 +25,13 @@ fn extension_manifest() -> Value {
     serde_json::from_str(&extension_file("manifest.json")).unwrap()
 }
 
-/// The names inside `export const <name> = {` ... `};` in tools.js, each being the word before a
+/// The names inside `const <name> = {` ... `};` in an extension file, each being the word before a
 /// `:` or a `(`, one member to a line.
 fn members(source: &str, object: &str) -> Vec<String> {
-    let opening = format!("export const {object} = ");
+    let opening = format!("const {object} = ");
     let start = source
         .find(&opening)
-        .unwrap_or_else(|| panic!("tools.js has no `{opening}`"));
+        .unwrap_or_else(|| panic!("the source has no `{opening}`"));
     let body = &source[start..];
     // The nearer of the two ways an object ends, since a later `});` belongs to other code.
     let end = ["\n});", "\n};"]
@@ -92,6 +92,14 @@ fn the_extension_answers_every_tool_the_server_offers_and_no_other() {
     let offered: Vec<&str> = TOOLS.iter().map(|tool| tool.name).collect();
     assert_eq!(members(&source, "TOOLS"), offered);
     assert_eq!(members(&source, "DEFAULT_SETTINGS"), offered);
+}
+
+/// The options page looks up each setting's title and note by name, so a tool with a switch and no
+/// entry makes the page throw and leaves that tool and every one after it without a switch.
+#[test]
+fn the_options_page_labels_every_tool_the_server_offers_and_no_other() {
+    let offered: Vec<&str> = TOOLS.iter().map(|tool| tool.name).collect();
+    assert_eq!(members(&extension_file("options.js"), "LABELS"), offered);
 }
 
 /// A tool that lists frames needs the browser's frame-navigation records, so the extension asks for

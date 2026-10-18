@@ -61,3 +61,8 @@ test('the request handler refuses session.new, session.open and session.delete b
   assert.ok(gate, 'an unoffered folder is answered with an error, unconditionally')
   assert.ok(index.indexOf('bridge.request(method', gate.index) > gate.index, 'and the check comes before the request is forwarded')
 })
+
+test('the request handler forwards a session list through the sanitiser, which drops a directory', () => {
+  const index = readFileSync('src/main/index.ts', 'utf8')
+  assert.match(index, /bridge\.request\(method, sanitised\(method, params\)\)/, 'every method the window sends, session.list included, is forwarded sanitised')
+})

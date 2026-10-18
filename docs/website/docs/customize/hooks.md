@@ -81,6 +81,10 @@ credentials, which are the same names taken off a program the planner asks to
 [run](../reference/tools.md#run). You read the program and the arguments you wrote down, so a secret
 travelling beside those is something you were never shown, and a formatter has no use for one.
 
+A relative path such as `./scripts/format.sh` runs whatever file is at that name in the working
+directory when the hook fires, and a program the agent ran there may have written it. Where that
+matters, name the hook's program by an absolute path outside the project.
+
 ## What a hook is told
 
 One line of JSON on standard input, naming the moment and nothing else:

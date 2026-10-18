@@ -6,14 +6,27 @@ governs:
   - crates/agent/src/backend.rs
   - crates/agent/src/outcome.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
+  - crates/agent/src/turn/setup.rs
+  - crates/agent/src/turn/round_steps.rs
+  - crates/agent/src/turn/prompts.rs
+  - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/agent/src/subscription.rs
   - crates/cli/src/import.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/model.rs
+  - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
   - crates/bedrock/src/credentials.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/models.rs
+  - crates/tui/src/app/terminal.rs
   - crates/tui/src/status.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/accounts.rs
+  - crates/tui/src/state/settings.rs
   - crates/config/src/bedrock.rs
   - crates/config/src/env_var.rs
   - crates/config/src/lib.rs
@@ -171,6 +184,7 @@ repeated down a hundred rows.
 `verified-by: bravebot_tui::app::a_configured_tier_is_not_confusable_with_a_brave_model_served_through_bedrock`
 `verified-by: bravebot_tui::app::a_tier_with_no_profile_configured_still_names_the_account`
 `verified-by: bravebot_tui::app::a_gateway_row_says_which_service_answers_it`
+`verified-by: bravebot_tui::app::the_note_left_on_choosing_a_model_names_its_service`
 `verified-by: bravebot_aichat::models::a_fetched_row_carries_the_gateway_that_serves_it`
 
 <a id="BACKEND-7"></a>
@@ -485,7 +499,7 @@ offering its models is not offering rows that fail when picked.
 `verified-by: bravebot_agent::backend::a_gateway_naming_no_credential_sends_unauthenticated`
 `verified-by: bravebot_aichat::lib::a_gateway_needing_no_credential_sends_no_authorization_header`
 `verified-by: bravebot_aichat::client::a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated`
-`verified-by: bravebot_cli::main::a_gateway_needing_no_credential_is_reported_as_needing_none`
+`verified-by: bravebot_cli::doctor::a_gateway_needing_no_credential_is_reported_as_needing_none`
 
 <a id="BACKEND-17"></a>
 ### BACKEND-17: a gateway named by a name this system knows needs no endpoint written down
@@ -494,8 +508,18 @@ A block naming a gateway this system already knows an endpoint for reaches it wi
 endpoint the block does state is where its requests go regardless. Where neither holds, the entry
 configures no service.
 
-The set of known names is compiled in. Nothing is fetched to resolve one, and no service is asked what
-its own endpoint is.
+The set of known names is compiled in: `openrouter`, reached at `https://openrouter.ai/api/v1`, and
+`openai`, reached at `https://api.openai.com/v1`. Nothing is fetched to resolve one, and no service is
+asked what its own endpoint is.
+
+A known name supplies an endpoint. An `openai` entry is otherwise reached as any other gateway is,
+with its key as a bearer token in `authorization`, and names where that key lives as
+[BACKEND-16](#BACKEND-16) says. Its models are asked for as [BACKEND-19](#BACKEND-19) says, and
+[Known costs](#known-costs) records what that offers for this service.
+
+One thing differs for `openai`: the name a reply reports is not compared with the name asked for, as
+[BACKEND-18](#BACKEND-18) compares a gateway's. A name such as `gpt-4o` is an alias for a dated model,
+and the reply names the model behind it, which is the alias working and not a substitution.
 
 **Why.** The tool this block's shape is borrowed from resolves an endpoint from a registry it fetches,
 so a block copied out of it names one nowhere and requiring the field refuses a block that tool
@@ -511,6 +535,9 @@ what keeps a known name usable against a proxy or a private deployment.
 
 `verified-by: bravebot_config::provider::a_known_provider_name_supplies_its_own_endpoint`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in`
+`verified-by: bravebot_config::provider::an_openai_entry_is_reached_at_openais_host_like_any_other_gateway`
+`verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in_for_openai`
+`verified-by: bravebot_agent::backend::an_openai_alias_is_not_expected_to_be_the_name_that_comes_back`
 `verified-by: bravebot_config::provider::a_provider_without_a_base_url_is_not_offered`
 
 <a id="BACKEND-18"></a>
@@ -595,6 +622,7 @@ the same conservative default a stated roster gets.
 `verified-by: bravebot_aichat::models::a_window_the_block_stated_outranks_the_one_reported`
 `verified-by: bravebot_aichat::models::a_gateway_model_that_cannot_call_tools_is_not_offered`
 `verified-by: bravebot_aichat::models::a_gateway_that_reports_no_capabilities_still_offers_its_models`
+`verified-by: bravebot_aichat::client::an_openai_listing_that_reports_no_capabilities_offers_every_model_it_lists`
 `verified-by: bravebot_aichat::models::a_fetched_entry_with_no_usable_name_is_dropped`
 `verified-by: bravebot_aichat::models::fetched_gateway_models_are_not_marked_premium`
 `verified-by: bravebot_aichat::client::a_gateway_with_a_credential_is_asked_what_that_account_may_reach`
@@ -903,6 +931,8 @@ with it.
 `verified-by: bravebot_config::settings::a_project_or_local_layer_cannot_name_an_advisor`
 `verified-by: bravebot_config::settings::an_unparseable_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::an_oversized_project_layer_leaves_the_global_one_in_force`
+`verified-by: bravebot_config::settings::a_project_layer_that_is_a_device_is_skipped`
+`verified-by: bravebot_config::settings::a_read_stops_one_byte_past_the_bound`
 `verified-by: bravebot_config::settings::a_directory_with_no_project_layer_reads_the_global_one_alone`
 `verified-by: bravebot_config::settings::a_command_line_file_adds_to_the_names_kept_from_a_program`
 `verified-by: bravebot_config::settings::a_command_line_file_is_reported_as_the_layer_that_won_a_name`
@@ -936,6 +966,7 @@ is the thing that knows.
 `verified-by: bravebot_aichat::lib::a_request_without_a_gateway_is_still_signed`
 `verified-by: bravebot_aichat::lib::a_gateway_request_goes_to_the_configured_host_with_a_bearer_token`
 `verified-by: bravebot_aichat::client::the_model_listing_is_fetched_from_the_models_path`
+`verified-by: bravebot_aichat::client::a_gateways_roster_request_carries_no_brave_product_header`
 
 
 <a id="BACKEND-26"></a>
@@ -1175,7 +1206,9 @@ Whatever presents these figures presents nothing when they are zero, rather than
 that may not have happened. That holds of each figure alone: a turn that established a prefix and
 read nothing back reports the write and says nothing about the read.
 
-**The status panel and footer report the last turn's.** The last turn rather than a total over the
+**The status panel and footer report the last turn's.** A turn in flight reports its own running
+totals from the first round that completed a request ([PANEL-8](info-panel.md#PANEL-8)), and the
+last turn's until then. The last turn rather than a total over the
 session, because caching is a property of a request: a session that compacted part way through has
 turns whose prefix survived and turns whose prefix was rewritten, and a total averages away the
 thing the figures are for. The footer shows the cached read as a percentage of the turn's prompt
@@ -1615,6 +1648,8 @@ that path rather than with the person in front of the screen.
 
 `verified-by: bravebot_config::managed::an_endpoint_is_pinnable`
 `verified-by: bravebot_config::managed::a_name_outside_the_pinnable_set_pins_nothing`
+`verified-by: bravebot_config::managed::every_name_the_clause_lists_is_pinnable_and_the_set_holds_no_other`
+`verified-by: bravebot_config::managed::the_file_is_read_from_the_directory_the_platform_reserves`
 `verified-by: bravebot_config::managed::the_switch_that_reaches_a_personal_account_is_pinnable`
 `verified-by: bravebot_config::managed::an_empty_gateway_block_says_there_are_no_gateways`
 `verified-by: bravebot_config::managed::a_file_with_no_gateway_block_leaves_the_gateways_alone`
@@ -2193,7 +2228,7 @@ exactly what is offered, as for any other gateway.
 `verified-by: bravebot_tui::app::a_google_vertex_block_naming_models_is_offered_those_alone`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_the_compiled_models_for_a_google_vertex_service_naming_none`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_a_google_vertex_block_its_own_models_alone`
-`verified-by: bravebot_cli::main::doctor_names_the_compiled_models_a_google_vertex_service_is_offered`
+`verified-by: bravebot_cli::doctor::doctor_names_the_compiled_models_a_google_vertex_service_is_offered`
 `verified-by: bravebot_config::lib::a_name_qualified_by_the_google_vertex_id_names_that_service_and_the_rest_is_sent`
 
 <a id="BACKEND-50"></a>
@@ -2616,3 +2651,55 @@ as the `model` key is, and the switch is decided by a category the driver derive
   and sends `extra_content` back, even where its `baseURL` names a proxy. A proxy that wants a
   bearer token is reached by keying the entry with another name, which gets the behaviour of any
   other gateway.
+
+- **An `aws` that lives only in a directory a stage can write is not found.** The same holds for
+  a bare hook program, a language server and the Ctrl-G editor, which read as not found, not
+  installed and not configured. The AWS CLI is
+  started unconfined, so [SANDBOX-30](sandboxing.md#SANDBOX-30) searches only the `PATH` entries a
+  confined stage cannot write. Somebody whose only `aws` is in an activated virtualenv, or in the
+  session's own directory or the temporary directory, gets `NotInstalled` until they install it
+  elsewhere or open the session from a directory that does not hold it. A session opened on a
+  directory that holds the install, `~/.local/bin` under a session opened on the home directory
+  among them, is the same case. The same holds for a
+  directory a toolchain was granted writes in once a stage has run with it, so a CLI installed under
+  such a cache is found before the first such stage and not after. Where the permission mode
+  answers every question and the sandbox mode is workspace-write, a stage is given every path the account
+  can write, so an `aws` in a directory the account owns, such as a Homebrew prefix, is found before
+  the first stage runs and not after, and every Bedrock request from then until bravebot exits gets
+  `NotInstalled`.
+  An editor found outside those directories still starts, with a `PATH` of the searched entries
+  alone, so a program it starts by name that lives only in a directory left out is not found by it:
+  a tool a plugin runs from a project's `node_modules/.bin`, or one in `~/.local/bin` under a
+  session opened on the home directory. A program the editor leaves running keeps that `PATH`.
+
+- **An `openai` entry naming no models is offered everything OpenAI's listing returns.** The listing
+  states an id and an owner for each model and nothing about what it can do, so BACKEND-19 has
+  nothing to drop on, and the picker holds embedding, speech and image models beside the chat ones.
+  That waives BACKEND-5's promise that picking a listed name works, for the rows of this one
+  service. Filtering by id would be a guess about OpenAI's naming, and a model named otherwise would
+  be hidden from somebody who could use it. A list compiled into the binary, as BACKEND-49 compiles
+  one for Vertex AI, would go stale with each release, and each id on it would first have to be
+  answered with a tool call and its result by the service. A block naming `models` is offered those
+  and no others.
+
+- **A model OpenAI serves only through its Responses API is offered and fails when picked.** The
+  route is chat completions, and the listing does not say which models take it. A block naming
+  `models` offers only the ones it names.
+
+- **Each OpenAI roster costs a request that is expected to be refused.** BACKEND-19 asks what the
+  credential may reach at `/models/user` before it asks for the whole listing, and OpenAI is not
+  known to serve that route. The listing is asked second.
+
+- **A refusal of the `cache_control` markers of BACKEND-32 by OpenAI costs one refused request.**
+  Whether OpenAI reads them is not known here. A refusal with an invalid-request status is asked
+  again without them, once for each model in each process, and an accepted request is marked as
+  BACKEND-32 says.
+
+- **The name `openai` means OpenAI's behaviour at any endpoint.** An entry keyed `openai` is not
+  checked for a substituted model, even where its `baseURL` names a proxy that does substitute
+  one. A proxy whose replies should be compared is reached by keying the entry with another name.
+
+- **A bare name beginning `openai/` reaches an `openai` entry.** BACKEND-18 reads a name as
+  qualified before it reads it as a bare name a block lists, so `openai/gpt-oss-120b` listed by
+  another gateway and written without that gateway's id goes to OpenAI. A name picked from `/model`
+  is recorded qualified, as `openrouter/openai/gpt-oss-120b`, and is not affected.

@@ -8,16 +8,17 @@ cargo test
 make check     # fmt, clippy -D warnings, tests, and toolchain age: what CI enforces
 ```
 
-The desktop front end is built from `ui/`, and additionally needs Node 22.12+:
+The desktop front end is built from `ui/`, and additionally needs Node 22.12+ and pnpm (`corepack enable` provides the version `ui/package.json`
+pins):
 
 ```sh
 cd ui
-npm ci
-npm run dev    # builds bravebot-rpc and bravebot-ui-files, then starts Electron
+pnpm install --frozen-lockfile
+pnpm run dev    # builds bravebot-rpc and bravebot-ui-files, then starts Electron
 ```
 
 `cargo build` at the root already compiles those two binaries, as workspace members like
-any other; `npm run dev` builds them through `ui/scripts/build-bridge.sh`, which loads
+any other; `pnpm run dev` builds them through `ui/scripts/build-bridge.sh`, which loads
 backend credentials where a checkout has them. What a built binary holds is
 [configuration.md](configuration.md), and the front end's own commands, packaging and
 tests are [ui/docs/development.md](../../ui/docs/development.md).

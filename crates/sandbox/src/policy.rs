@@ -38,6 +38,16 @@ pub struct SandboxPolicy {
     /// process needs no network of its own, and without a socket, an instruction to
     /// exfiltrate data has nowhere to send it.
     pub allow_network: bool,
+    /// The one loopback TCP port egress is limited to, where `allow_network` is true and the
+    /// caller means a proxy on that port to be the only thing the process reaches by IP.
+    ///
+    /// `None` is egress to any address. A unix socket under a write row is reached as before, and
+    /// no resolver is granted: the proxy resolves the names it is asked for.
+    pub egress_only_to: Option<u16>,
+    /// The unix socket the proxy behind `egress_only_to` also listens on, for a backend that
+    /// holds the process in a network of its own and so cannot reach the proxy's port. Linux
+    /// relays the port to this socket from inside that network; the other backends ignore it.
+    pub egress_through: Option<PathBuf>,
     /// Whether the process may spawn children. False stops a confined process from
     /// launching an unconfined helper.
     pub allow_subprocesses: bool,
@@ -51,6 +61,14 @@ pub struct SandboxPolicy {
     ///
     /// [SANDBOX-14]: ../../../docs/specs/sandboxing.md
     pub git_directories_writable: bool,
+    /// Whether the process may listen on a port of the loopback interface and connect to one. A
+    /// process with `allow_network` connects to one already, so for it this adds listening.
+    ///
+    /// Only the macOS backend acts on it: its profile starts from a refusal of everything, so a
+    /// server such as the one `sccache` starts, or a test that binds `127.0.0.1:0`, is refused
+    /// there. Linux and Windows hold loopback by other rules and this field changes nothing for
+    /// them. No address other than this machine's own is reached.
+    pub allow_loopback: bool,
 }
 
 impl SandboxPolicy {
@@ -62,9 +80,12 @@ impl SandboxPolicy {
             unwritable: Vec::new(),
             writable: Vec::new(),
             allow_network: false,
+            egress_only_to: None,
+            egress_through: None,
             allow_subprocesses: false,
             starting_in: None,
             git_directories_writable: false,
+            allow_loopback: false,
         }
     }
 
@@ -102,6 +123,23 @@ impl SandboxPolicy {
         self.writable.push(WriteGrant {
             path: path.into(),
             kind: PathKind::Unsaid,
+            listed: false,
+        });
+        self
+    }
+
+    /// Permit writing an entry that a listing of its directory produced.
+    ///
+    /// For the rows that stand for every entry of a directory except what is refused beneath it.
+    /// They are the entries the directory had when it was listed, and one can be removed before a
+    /// backend opens it. A backend that opens every row before it starts the process leaves out
+    /// a listed row whose name is gone, where it refuses the policy over any other row. A path
+    /// the caller named is not listed, whatever directory it is in.
+    pub fn allow_write_listed(mut self, path: impl Into<PathBuf>) -> Self {
+        self.writable.push(WriteGrant {
+            path: path.into(),
+            kind: PathKind::Unsaid,
+            listed: true,
         });
         self
     }
@@ -112,6 +150,7 @@ impl SandboxPolicy {
         self.writable.push(WriteGrant {
             path: path.into(),
             kind: PathKind::File,
+            listed: false,
         });
         self
     }
@@ -122,6 +161,7 @@ impl SandboxPolicy {
         self.writable.push(WriteGrant {
             path: path.into(),
             kind: PathKind::Directory,
+            listed: false,
         });
         self
     }
@@ -133,10 +173,39 @@ impl SandboxPolicy {
         self
     }
 
+    /// Permit network access to one loopback TCP port and nothing else by IP, for a stage whose
+    /// hosts a proxy on that port decides.
+    ///
+    /// Named to be conspicuous in review: a backend that cannot hold a process to one port does
+    /// not report [`Capabilities::egress_limited_to_a_port`] and refuses the policy, since
+    /// falling back to open egress would leave the proxy something a program may go around.
+    pub fn allow_network_egress_only_to(mut self, port: u16) -> Self {
+        self.allow_network = true;
+        self.egress_only_to = Some(port);
+        self
+    }
+
+    /// Name the unix socket the proxy named by [`SandboxPolicy::allow_network_egress_only_to`]
+    /// listens on as well, which a backend that runs the process in an empty network uses to
+    /// bring the proxy's port into it.
+    pub fn with_egress_through(mut self, socket: impl Into<PathBuf>) -> Self {
+        self.egress_through = Some(socket.into());
+        self
+    }
+
+    /// Permit listening on and connecting to a port of the loopback interface, and nothing
+    /// that is not this machine. See [`SandboxPolicy::allow_loopback`].
+    pub fn allow_loopback(mut self) -> Self {
+        self.allow_loopback = true;
+        self
+    }
+
     /// Take the network back from a policy that granted it, for a stage a closed session gives
     /// none. Whatever resolver or socket the backend ties to egress goes with it.
     pub fn without_network_egress(mut self) -> Self {
         self.allow_network = false;
+        self.egress_only_to = None;
+        self.egress_through = None;
         self
     }
 
@@ -199,9 +268,12 @@ impl SandboxPolicy {
                 unwritable: self.unwritable.clone(),
                 writable,
                 allow_network: self.allow_network,
+                egress_only_to: self.egress_only_to,
+                egress_through: self.egress_through.clone(),
                 allow_subprocesses: self.allow_subprocesses,
                 starting_in: self.starting_in.clone(),
                 git_directories_writable: self.git_directories_writable,
+                allow_loopback: self.allow_loopback,
             },
             omitted,
         }
@@ -302,12 +374,12 @@ impl SandboxPolicy {
     /// as well. A refusal that is not on disk still shapes the rows, so a directory made there
     /// during the run is outside every grant.
     ///
-    /// Without a refusal this is [`SandboxPolicy::readable`].
-    pub fn readable_by_enumeration(&self) -> Vec<PathBuf> {
-        if self.unreadable.is_empty() {
-            return self.readable.clone();
-        }
-        self.around_the_refusals(self.readable.iter())
+    /// Without a refusal every row is granted whole. A row above a refusal that cannot be listed
+    /// is the error, naming the row: none of what it grants is among the rows, and the row is a
+    /// path the caller named (SANDBOX-6).
+    pub fn readable_by_enumeration(&self) -> std::io::Result<Enumeration> {
+        let refused = with_their_resolved_spelling(&self.unreadable);
+        enumerate(self.readable.iter().map(|row| (row, false)), &refused)
     }
 
     /// The write rows a backend that cannot hold back a subdirectory grants instead of
@@ -318,38 +390,21 @@ impl SandboxPolicy {
     /// the refusals the way [`SandboxPolicy::readable_by_enumeration`] spreads a read row, which
     /// leaves the directory itself without the right to make an entry directly in it.
     ///
-    /// Without a refusal this is the path of each row of [`SandboxPolicy::writable`].
-    pub fn writable_by_enumeration(&self) -> Vec<PathBuf> {
-        if self.unreadable.is_empty() && self.unwritable.is_empty() {
-            return self.writable.iter().map(|row| row.path.clone()).collect();
-        }
+    /// Without a refusal every row is granted whole. A row above a refusal that cannot be listed
+    /// is the error, as in [`SandboxPolicy::readable_by_enumeration`], unless the caller passed it
+    /// as listed: such a row is not a path anybody named, and adds nothing.
+    pub fn writable_by_enumeration(&self) -> std::io::Result<Enumeration> {
         let withdrawn = with_their_resolved_spelling(&self.unwritable);
         let mut refused = with_their_resolved_spelling(&self.unreadable);
         refused.extend(withdrawn.iter().cloned());
-        let mut granted: Vec<PathBuf> = Vec::new();
-        for row in self.writable.iter().map(|row| &row.path) {
-            // A row equal to a refusal of writes is the person's refusal of the row itself, and
-            // one beneath it is the narrower grant that stands.
-            if withdrawn.contains(row) {
-                continue;
-            }
-            spread_around(row, &refused, &mut granted);
-        }
-        granted.sort();
-        granted.dedup();
-        granted
-    }
-
-    fn around_the_refusals<'a>(&self, rows: impl Iterator<Item = &'a PathBuf>) -> Vec<PathBuf> {
-        let refused = with_their_resolved_spelling(&self.unreadable);
-
-        let mut granted: Vec<PathBuf> = Vec::new();
-        for row in rows {
-            spread_around(row, &refused, &mut granted);
-        }
-        granted.sort();
-        granted.dedup();
-        granted
+        // A row equal to a refusal of writes is the person's refusal of the row itself, and one
+        // beneath it is the narrower grant that stands.
+        let rows = self
+            .writable
+            .iter()
+            .filter(|row| !withdrawn.contains(&row.path))
+            .map(|row| (&row.path, row.listed));
+        enumerate(rows, &refused)
     }
 
     /// Whether this policy would confine anything at all.
@@ -370,9 +425,72 @@ impl SandboxPolicy {
     }
 }
 
+/// The rows a backend that cannot hold back a subdirectory grants for one of a policy's two
+/// lists, told apart by whether the caller named them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Enumeration {
+    /// The rows the caller named that are granted whole.
+    pub named: Vec<PathBuf>,
+    /// The rows the caller named with a refusal beneath them. Each is granted as its entries in
+    /// [`Enumeration::listed`], has no row of its own, and is still a path the caller named.
+    pub above_a_refusal: Vec<PathBuf>,
+    /// The entries a listing produced and the rows the caller passed as listed, apart from those
+    /// the caller also named.
+    pub listed: Vec<PathBuf>,
+}
+
+/// `rows`, each marked with whether the caller passed it as listed, spread around `refused`.
+fn enumerate<'a>(
+    rows: impl Iterator<Item = (&'a PathBuf, bool)>,
+    refused: &[PathBuf],
+) -> std::io::Result<Enumeration> {
+    let mut enumeration = Enumeration::default();
+    for (row, listed) in rows {
+        if !refused_beneath(row, refused) {
+            if listed {
+                enumeration.listed.push(row.clone());
+            } else {
+                enumeration.named.push(row.clone());
+            }
+            continue;
+        }
+        let spread = list_around(row, refused, &mut enumeration.listed);
+        if !listed {
+            enumeration.above_a_refusal.push(row.clone());
+            spread.map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!("failed to list {}: {error}", row.display()),
+                )
+            })?;
+        }
+    }
+    for rows in [
+        &mut enumeration.named,
+        &mut enumeration.above_a_refusal,
+        &mut enumeration.listed,
+    ] {
+        rows.sort();
+        rows.dedup();
+    }
+    let named = &enumeration.named;
+    enumeration
+        .listed
+        .retain(|path| named.binary_search(path).is_err());
+    Ok(enumeration)
+}
+
+/// Whether a refusal lies beneath `path`, which makes a backend that grants a directory with
+/// everything beneath it grant the entries of `path` instead of `path`.
+fn refused_beneath(path: &Path, refused: &[PathBuf]) -> bool {
+    refused
+        .iter()
+        .any(|refusal| refusal.starts_with(path) && refusal != path)
+}
+
 /// `paths` and, for each that is on disk, where it leads, so a refusal written as a link is
 /// held where the link goes as well as where it stands.
-fn with_their_resolved_spelling(paths: &[PathBuf]) -> Vec<PathBuf> {
+pub(crate) fn with_their_resolved_spelling(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut all = paths.to_vec();
     all.extend(paths.iter().filter_map(|path| fs::canonicalize(path).ok()));
     all
@@ -405,6 +523,9 @@ pub(crate) fn names_a_filesystem_root(path: &Path) -> bool {
 pub struct WriteGrant {
     pub path: PathBuf,
     pub kind: PathKind,
+    /// Whether the row is an entry a listing of its directory produced
+    /// ([`SandboxPolicy::allow_write_listed`]). Such a row says nothing about what is at it.
+    pub listed: bool,
 }
 
 /// What a write row says is at the path it names.
@@ -436,37 +557,56 @@ pub struct Resolution {
     pub omitted: Vec<PathBuf>,
 }
 
-/// The rows of `paths` that are on disk, appending the rest to `omitted`.
-///
-/// Existence is read through the symlink, since a grant is installed on what a path opens
-/// and a dangling one opens nothing.
 /// `path` as the rows that reach all of it except the refused paths beneath it.
 ///
 /// A directory with no refusal beneath it is one row. One with a refusal beneath it, present or
 /// not, is each of its entries, descended into the same way, so only the entries on the way to a
-/// refusal are listed. A directory this cannot list contributes nothing, since a process that
-/// could not list it has no entries to name.
-fn spread_around(path: &Path, refused: &[PathBuf], granted: &mut Vec<PathBuf>) {
-    if !refused
-        .iter()
-        .any(|refusal| refusal.starts_with(path) && refusal != path)
-    {
+/// refusal are listed ([`list_around`]).
+pub(crate) fn spread_around(
+    path: &Path,
+    refused: &[PathBuf],
+    granted: &mut Vec<PathBuf>,
+) -> std::io::Result<()> {
+    if !refused_beneath(path, refused) {
         granted.push(path.to_path_buf());
-        return;
+        return Ok(());
     }
-    let Ok(entries) = fs::read_dir(path) else {
-        return;
-    };
-    for entry in entries.flatten() {
+    list_around(path, refused, granted)
+}
+
+/// The entries of `path` as [`spread_around`] makes them, for a `path` with a refusal beneath it.
+///
+/// A failure to list `path` itself, at its start or at an entry, is the error, after every entry
+/// that could be read is in `granted`. An entry this cannot list contributes nothing, since a
+/// process that could not list it has no entries to name.
+fn list_around(
+    path: &Path,
+    refused: &[PathBuf],
+    granted: &mut Vec<PathBuf>,
+) -> std::io::Result<()> {
+    let mut failed = None;
+    for entry in fs::read_dir(path)? {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                failed.get_or_insert(error);
+                continue;
+            }
+        };
         let child = entry.path();
         let is_a_link = entry.file_type().is_ok_and(|kind| kind.is_symlink());
         if is_a_link || refused.contains(&child) {
             continue;
         }
-        spread_around(&child, refused, granted);
+        let _ = spread_around(&child, refused, granted);
     }
+    failed.map_or(Ok(()), Err)
 }
 
+/// The rows of `paths` that are on disk, appending the rest to `omitted`.
+///
+/// Existence is read through the symlink, since a grant is installed on what a path opens
+/// and a dangling one opens nothing.
 fn keep_the_paths_that_are_there(paths: &[PathBuf], omitted: &mut Vec<PathBuf>) -> Vec<PathBuf> {
     let mut kept = Vec::with_capacity(paths.len());
     for path in paths {
@@ -592,6 +732,10 @@ pub struct Capabilities {
     pub mechanisms: Vec<&'static str>,
     /// Whether network denial is enforced by the kernel rather than by convention.
     pub network_denial_enforced: bool,
+    /// Whether egress can be limited to one loopback port
+    /// ([`SandboxPolicy::allow_network_egress_only_to`]), so that a program which ignores a
+    /// proxy's variables cannot connect around it.
+    pub egress_limited_to_a_port: bool,
     /// Whether a grant may name a path that does not exist yet.
     ///
     /// A caller assembling a policy out of paths whose existence is not its own to decide
@@ -602,6 +746,17 @@ pub struct Capabilities {
     /// backend rather than of the platform the build targets: a caller reading the platform
     /// instead pays one of those costs on the platform where neither was necessary.
     pub grants_paths_that_do_not_exist: bool,
+    /// Whether a path can be held back from a directory a policy grants.
+    ///
+    /// A backend that cannot starts no stage whose policy refuses a path inside a grant, since
+    /// nothing it could do would keep the program from the path. A caller reporting a person's
+    /// refusal asks this of the backend, so it does not say a refusal is in force where the stage
+    /// it applies to is refused.
+    pub subtracts_from_a_grant: bool,
+    /// Whether a connect to a unix socket that has a path is held to the policy's write rows
+    /// (SANDBOX-3). Where it is not, a confined program reaches every such socket on the machine,
+    /// the user's D-Bus, the agent `SSH_AUTH_SOCK` names and `docker.sock` among them.
+    pub governs_sockets_with_a_path: bool,
 }
 
 #[cfg(test)]
@@ -628,6 +783,7 @@ mod tests {
             vec![WriteGrant {
                 path: PathBuf::from("/workspace/out"),
                 kind: PathKind::Unsaid,
+                listed: false,
             }]
         );
     }
@@ -729,7 +885,10 @@ mod tests {
             level: ConfinementLevel::Kernel,
             mechanisms: vec!["a mechanism"],
             network_denial_enforced: true,
+            egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist,
+            subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: true,
         }
     }
 
@@ -740,7 +899,10 @@ mod tests {
             level: ConfinementLevel::None,
             mechanisms: Vec::new(),
             network_denial_enforced: false,
+            egress_limited_to_a_port: false,
             grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: false,
         }
     }
 
@@ -797,6 +959,46 @@ mod tests {
         assert_eq!(
             written_paths(&resolved.policy),
             vec![a_path_that_is_there()]
+        );
+    }
+
+    /// The port egress is limited to is carried like the grant it narrows. Dropping it hands the
+    /// backend a policy with egress to everywhere, and keeping it after the network is taken back
+    /// leaves a port named on a policy that grants no egress.
+    #[test]
+    fn the_port_egress_is_limited_to_is_carried_and_goes_with_the_network() {
+        let limited = SandboxPolicy::strict()
+            .allow_read(a_path_that_is_there())
+            .allow_network_egress_only_to(8123);
+        assert!(limited.allow_network);
+        assert_eq!(limited.egress_only_to, Some(8123));
+        assert_eq!(
+            limited
+                .nameable_under(&capabilities(false))
+                .policy
+                .egress_only_to,
+            Some(8123)
+        );
+
+        let relayed = limited.clone().with_egress_through("/run/proxy.sock");
+        assert_eq!(
+            relayed
+                .nameable_under(&capabilities(false))
+                .policy
+                .egress_through,
+            Some(PathBuf::from("/run/proxy.sock"))
+        );
+        assert_eq!(relayed.without_network_egress().egress_through, None);
+
+        let taken_back = limited.without_network_egress();
+        assert!(!taken_back.allow_network);
+        assert_eq!(taken_back.egress_only_to, None);
+        assert_eq!(SandboxPolicy::strict().egress_only_to, None);
+        assert_eq!(
+            SandboxPolicy::strict()
+                .allow_network_egress()
+                .egress_only_to,
+            None
         );
     }
 
@@ -916,6 +1118,23 @@ mod tests {
             "a row that said nothing was created anyway"
         );
         assert!(created.is_empty());
+    }
+
+    /// A listed row is an entry a directory had when it was listed. Creating the name again
+    /// would put an entry on the user's disk that nothing asked for, in a directory the program
+    /// is only meant to reach the other entries of.
+    #[test]
+    fn a_row_a_listing_produced_is_not_created() {
+        let dir = a_directory_of_this_tests_own("sandbox-policy-listed-row");
+        let gone = dir.join("an-entry-that-was-listed");
+
+        let policy = SandboxPolicy::strict().allow_write_listed(&gone);
+        let created = policy.create_missing_write_rows(&capabilities(false));
+
+        assert!(!gone.exists(), "a listed row was created anyway");
+        assert!(created.is_empty());
+        assert!(policy.writable[0].listed);
+        assert_eq!(policy.writable[0].kind, PathKind::Unsaid);
     }
 
     /// Creating a path costs a write on the user's disk, and a backend that grants a
@@ -1091,6 +1310,7 @@ mod tests {
             vec![WriteGrant {
                 path: wanted,
                 kind: PathKind::Directory,
+                listed: false,
             }]
         );
         assert!(
@@ -1190,12 +1410,20 @@ mod tests {
         assert!(held.is_meaningful());
     }
 
+    /// Every row an enumeration grants, named or listed.
+    fn granted(enumeration: std::io::Result<Enumeration>) -> Vec<PathBuf> {
+        let enumeration = enumeration.expect("each row lists");
+        let mut rows = [enumeration.named, enumeration.listed].concat();
+        rows.sort();
+        rows
+    }
+
     #[test]
     fn without_a_refusal_the_enumeration_is_the_read_rows() {
         let policy = SandboxPolicy::strict().allow_read("/").allow_read("/usr");
 
         assert_eq!(
-            policy.readable_by_enumeration(),
+            granted(policy.readable_by_enumeration()),
             vec![PathBuf::from("/"), PathBuf::from("/usr")]
         );
     }
@@ -1210,7 +1438,7 @@ mod tests {
             .allow_read(&top)
             .deny_read(top.join("home/.aws"));
 
-        let rows = policy.readable_by_enumeration();
+        let rows = granted(policy.readable_by_enumeration());
 
         let mut expected = vec![
             top.join("bin"),
@@ -1232,7 +1460,7 @@ mod tests {
             .deny_read(top.join("home/.ssh"))
             .allow_read(top.join("home/.ssh/config"));
 
-        let rows = policy.readable_by_enumeration();
+        let rows = granted(policy.readable_by_enumeration());
 
         assert!(rows.contains(&top.join("home/.ssh/config")), "{rows:?}");
         assert!(!rows.contains(&top.join("home/.ssh")), "{rows:?}");
@@ -1258,7 +1486,7 @@ mod tests {
             .allow_read(&top)
             .deny_read(top.join("home/.aws"));
 
-        let rows = policy.readable_by_enumeration();
+        let rows = granted(policy.readable_by_enumeration());
 
         assert!(!rows.contains(&top.join("home/leads-to-aws")), "{rows:?}");
         assert!(rows.contains(&top.join("home/docs")), "{rows:?}");
@@ -1275,7 +1503,7 @@ mod tests {
             .allow_read(&top)
             .deny_read(top.join("etc/aws"));
 
-        let rows = policy.readable_by_enumeration();
+        let rows = granted(policy.readable_by_enumeration());
 
         assert!(!rows.contains(&top.join("home/.aws")), "{rows:?}");
         assert!(!rows.contains(&top.join("home")), "{rows:?}");
@@ -1290,7 +1518,7 @@ mod tests {
             .allow_read(&top)
             .deny_read(top.join("home/.kube"));
 
-        let rows = policy.readable_by_enumeration();
+        let rows = granted(policy.readable_by_enumeration());
 
         assert!(!rows.contains(&top.join("home")), "{rows:?}");
         assert!(rows.contains(&top.join("home/.aws")), "{rows:?}");
@@ -1309,7 +1537,7 @@ mod tests {
             .allow_write(top.join("etc"))
             .deny_read(top.join("home/.aws"));
 
-        let rows = policy.writable_by_enumeration();
+        let rows = granted(policy.writable_by_enumeration());
 
         assert!(!rows.contains(&top.join("home")), "{rows:?}");
         assert!(!rows.contains(&top.join("home/.aws")), "{rows:?}");
@@ -1333,7 +1561,7 @@ mod tests {
             .deny_write(top.join("home/docs"))
             .deny_write(top.join("etc"));
 
-        let rows = policy.writable_by_enumeration();
+        let rows = granted(policy.writable_by_enumeration());
 
         assert!(!rows.contains(&top.join("home")), "{rows:?}");
         assert!(!rows.contains(&top.join("home/docs")), "{rows:?}");
@@ -1347,7 +1575,82 @@ mod tests {
             !rows.contains(&top.join("etc")),
             "a row at the refused path was kept: {rows:?}"
         );
-        assert_eq!(policy.readable_by_enumeration(), vec![top.clone()]);
+        assert_eq!(granted(policy.readable_by_enumeration()), vec![top.clone()]);
+    }
+
+    /// The regression it rejects: a named row above a refusal filed nowhere, which leaves a
+    /// backend nothing to hold it to at the exec since it has no rule of its own; or an entry or a
+    /// listed row that is also a named row filed with the listed ones only, which a backend leaves
+    /// out when it has gone.
+    #[test]
+    fn an_enumeration_tells_the_rows_the_caller_named_from_the_entries_it_listed() {
+        let top = a_machine_with_a_home("sandbox-policy-named-or-listed");
+        let policy = SandboxPolicy::strict()
+            .allow_read(&top)
+            .allow_read(top.join("etc"))
+            .deny_read(top.join("home/.aws"))
+            .allow_write(top.join("home"))
+            .allow_write(top.join("bin"))
+            .allow_write_listed(top.join("bin"))
+            .allow_write_listed(top.join("etc"));
+
+        let readable = policy.readable_by_enumeration().expect("each row lists");
+        let writable = policy.writable_by_enumeration().expect("each row lists");
+
+        assert_eq!(readable.named, vec![top.join("etc")]);
+        assert_eq!(readable.above_a_refusal, vec![top.clone()]);
+        assert!(readable.listed.contains(&top.join("bin")), "{readable:?}");
+        assert!(!readable.listed.contains(&top.join("etc")), "{readable:?}");
+        assert_eq!(writable.named, vec![top.join("bin")]);
+        assert_eq!(writable.above_a_refusal, vec![top.join("home")]);
+        assert!(writable.listed.contains(&top.join("etc")), "{writable:?}");
+        assert!(
+            writable.listed.contains(&top.join("home/docs")),
+            "{writable:?}"
+        );
+        assert!(!writable.listed.contains(&top.join("bin")), "{writable:?}");
+    }
+
+    /// The regression it rejects: a row the caller named above a refusal left out of the rows
+    /// when it cannot be listed, which grants none of it while the policy reads as applied
+    /// (SANDBOX-6). The row is a file, which no account can list. An entry on the way to a refusal
+    /// is not a row anybody named, and neither is a row the caller passed as listed, so one of
+    /// those that cannot be listed adds nothing and is no error: failing over it would refuse a
+    /// stage over whatever else was changing that directory.
+    #[test]
+    fn a_named_row_above_a_refusal_that_cannot_be_listed_is_an_error_naming_it() {
+        let top = a_directory_of_this_tests_own("sandbox-policy-unlistable");
+        let named = top.join("notes");
+        fs::write(&named, "notes").expect("a file");
+
+        let read = SandboxPolicy::strict()
+            .allow_read(&named)
+            .deny_read(named.join("inside"));
+        let write = SandboxPolicy::strict()
+            .allow_read(&top)
+            .allow_write(&named)
+            .deny_write(named.join("inside"));
+        for error in [
+            read.readable_by_enumeration().expect_err("a read row"),
+            write.writable_by_enumeration().expect_err("a write row"),
+        ] {
+            assert!(
+                error.to_string().contains(&named.display().to_string()),
+                "the error has to name the row: {error}"
+            );
+        }
+
+        let entry = SandboxPolicy::strict()
+            .allow_read(&top)
+            .allow_write(&top)
+            .deny_read(named.join("inside"));
+        assert!(entry.readable_by_enumeration().is_ok());
+        assert!(entry.writable_by_enumeration().is_ok());
+        let listed = SandboxPolicy::strict()
+            .allow_read(&top)
+            .allow_write_listed(&named)
+            .deny_write(named.join("inside"));
+        assert!(listed.writable_by_enumeration().is_ok());
     }
 
     #[test]
@@ -1357,7 +1660,7 @@ mod tests {
             .allow_write("/work");
 
         assert_eq!(
-            policy.writable_by_enumeration(),
+            granted(policy.writable_by_enumeration()),
             vec![PathBuf::from("/tmp"), PathBuf::from("/work")]
         );
     }

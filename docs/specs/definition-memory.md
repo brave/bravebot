@@ -7,9 +7,16 @@ governs:
   - crates/agent/src/preamble.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
+  - crates/agent/src/turn/setup.rs
+  - crates/agent/src/turn/round_steps.rs
+  - crates/agent/src/turn/prompts.rs
+  - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/agent/src/memory.rs
   - crates/agent/src/workspace.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/rewind.rs
   - crates/agent/src/manifest.rs
   - crates/core/src/delegate.rs
@@ -316,6 +323,7 @@ in that directory, which [INCOG-3](incognito.md#INCOG-3) otherwise refuses, so
 `verified-by: bravebot_agent::memory::a_directory_sharing_a_record_file_reads_none_of_the_other_s_lines`
 `verified-by: bravebot_agent::memory::an_untrusted_memory_write_with_nowhere_to_record_it_is_refused`
 `verified-by: bravebot_agent::memory::a_record_that_cannot_be_written_refuses_the_write`
+`verified-by: bravebot_agent::incognito::an_untrusted_write_to_a_memory_in_an_incognito_session_is_recorded`
 `verified-by: bravebot_agent::memory::a_path_trusted_again_leaves_the_record_and_the_rest_stays`
 `verified-by: bravebot_agent::memory::trusting_the_last_recorded_path_again_removes_the_record`
 `verified-by: bravebot_agent::memory::a_path_recorded_after_a_half_written_line_is_read_back`

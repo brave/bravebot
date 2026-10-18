@@ -44,6 +44,7 @@ destination it chose. A tool for the advisor would make it a second planner.
 
 `verified-by: bravebot_agent::turn::the_advisor_is_asked_with_the_planners_context_and_no_tools`
 `verified-by: bravebot_agent::advisor::the_request_offers_no_tools_and_ends_with_the_question`
+`verified-by: bravebot_agent::turn::the_advisor_is_sent_the_whole_request_the_planner_was_sent_that_round`
 
 <a id="ADVISOR-3"></a>
 ### ADVISOR-3: a private question is not sent
@@ -89,6 +90,7 @@ it has, and sends no request. A call that failed counts.
 bound is on a loop and not a budget.
 
 `verified-by: bravebot_agent::turn::a_turn_may_ask_its_advisor_only_three_times`
+`verified-by: bravebot_agent::turn::a_failed_advisor_call_counts_against_the_three_a_turn_may_make`
 `verified-by: bravebot_agent::tools::a_call_to_an_advisor_nobody_was_offered_is_answered_as_an_unknown_name`
 
 <a id="ADVISOR-7"></a>
@@ -100,6 +102,7 @@ refuse is not asked, whichever route named it, and the planner is told to carry 
 
 `verified-by: bravebot_agent::turn::a_failed_advisor_call_tells_the_planner_only_the_category`
 `verified-by: bravebot_agent::turn::an_advisor_model_the_machine_refuses_is_not_asked`
+`verified-by: bravebot_agent::turn::a_stop_while_the_advisor_is_asked_ends_the_turn_as_a_stop_with_what_it_sent`
 
 <a id="ADVISOR-8"></a>
 ### ADVISOR-8: the `advisorModel` setting names the advisor when the command line does not
@@ -125,6 +128,7 @@ for this run and a run that silently lacked it would not say so.
 `verified-by: bravebot_config::settings::the_home_and_the_named_file_may_name_an_advisor`
 `verified-by: bravebot_config::lib::the_advisor_setting_resolves_a_tier_word_and_is_absent_when_unset`
 `verified-by: bravebot_ui_bridge::settings::a_project_files_advisor_is_reported_as_ignored`
+`verified-by: bravebot_agent::turn::a_refused_advisor_the_settings_name_is_answered_per_call_and_stops_nothing`
 
 <a id="ADVISOR-9"></a>
 ### ADVISOR-9: `/advisor` names the advisor for the rest of an interactive session
@@ -155,3 +159,4 @@ gone.
 `verified-by: bravebot_tui::app::an_advisor_needing_a_sign_in_is_refused_and_the_held_one_stays`
 `verified-by: bravebot_tui::app::dropping_the_advisor_says_whether_the_setting_still_names_one`
 `verified-by: bravebot_tui::app::the_bare_advisor_command_says_which_advisor_is_in_force`
+`verified-by: bravebot_tui::app::a_session_advisor_is_not_written_to_the_record_and_a_resume_starts_from_the_setting`

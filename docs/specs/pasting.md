@@ -5,7 +5,9 @@ status: normative
 governs:
   - crates/tui/src/clipboard.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/editing.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/keys.rs
   - crates/tui/src/invisible.rs
   - crates/ui-bridge/src/attached.rs
   - ui/src/main/pastes.ts
@@ -210,7 +212,10 @@ Command-V is the terminal's chord and never reaches this process: the byte strea
 no encoding for that modifier, and the terminal writes the clipboard's *text* into the pty instead,
 which is why a picture silently arrives as nothing. Ctrl-V comes through as a byte, so the TUI goes
 around the terminal and reads the clipboard itself. An empty paste is read as the picture that was
-meant. A picture wins over text when the clipboard holds both, since copying an image in a browser
+meant, except while the scroller ([SCROLL-2](scroller.md#SCROLL-2)), the delegate view
+([WATCH-9](watching.md#WATCH-9)), a picker ([CMD-8](commands.md#CMD-8)) or the prompt search
+([INPUT-19](terminal-input.md#INPUT-19)) is open, where every paste is ignored and none reads the
+clipboard. A picture wins over text when the clipboard holds both, since copying an image in a browser
 leaves the page's URL behind as text and text has another key.
 
 On macOS this reads the pasteboard through `osascript`. On Linux it needs `wl-paste` or `xclip`.
@@ -338,7 +343,7 @@ and a reopened session shows those words and draws no bytes ([PASTE-9](#PASTE-9)
 
 Two parts do not follow. A message queued while a turn runs keeps its pictures and sends them as
 its own turn when the running one ends, as a dropped file does
-([DROP-11](dropping.md#DROP-11)), rather than becoming words; the window's queue never joins a
+([DROP-12](dropping.md#DROP-12)), rather than becoming words; the window's queue never joins a
 running turn. And Plan is off while a picture is staged, where the terminal's `/manifest`
 carries one to the planner (PASTE-6): the bridge's `manifest.run` takes a task and no pictures.
 
@@ -363,10 +368,11 @@ carries one to the planner (PASTE-6): the bridge's `manifest.run` takes a task a
   that the user chose what to copy, can see on their own screen what they pasted, and is the party
   this serves. It is the cost shell mode carries, reached by another route.
 
-- **Only a paste is cleaned.** Text typed at the keyboard, a path a dropped file names
-  ([dropping.md](dropping.md)), and a prompt given with `-p` or in the desktop application's
+- **Only a paste is cleaned.** Text typed at the keyboard, a path a file dropped onto a prompt
+  writes ([dropping.md](dropping.md)), and a prompt given with `-p` or in the desktop application's
   message box are not run through the filter, so a character nobody can see can still reach a
-  message by those routes.
+  message by those routes. A drop onto a shell line where a name holds such a character writes nothing
+  ([DROP-6](dropping.md#DROP-6)).
 
 - **A listed character is removed even when it was meant.** A soft hyphen or a word joiner in text
   a person copied from a typeset page goes too. The notice says how many, and the words read the

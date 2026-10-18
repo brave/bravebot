@@ -38,6 +38,24 @@ Sending a prompt that ends in a half-typed reference completes it rather than se
 A name containing a space is written with a backslash before the space, as in
 `@My\ Documents/notes.md`. Completing it from the picker writes that form for you.
 
+## Naming an earlier session: `@session:<id>`
+
+After the files, the `@` picker lists earlier sessions of this directory by title and age. Typing a
+word narrows them by title, and `@session:` narrows them by id. Choosing one writes
+`@session:<id>`, and sending the line adds the newest part of that session to your message: your
+prompts and the replies it gave, newest turn first, cut at 8,000 characters. The transcript says how
+many characters were added, and the audit trail records the id and the count without the words.
+
+```
+carry on from @session:3f2a9c1e-7b44-4d0e-9a51-0c6d2b8e4f10, but use the new parser
+```
+
+What a session read with its tools is not in its record, so the excerpt says its tool results and
+file contents are not included. A manifest run, an imported session, and a session whose planner had
+been shown private content are not quoted, and the transcript says which. On the command line,
+`--session-ref <id>` does the same and is repeatable; an id that cannot be quoted stops the run
+before anything is sent. The desktop app does not offer sessions in its message box.
+
 The desktop app's message box works the same way: `@` opens the list over the project, Tab and the
 arrows choose, and Enter completes a half-typed name or sends a finished one. A name that is not a
 text file inside the project stops the send and says which name it was, so nothing goes that you
@@ -85,7 +103,7 @@ removed 6 invisible characters from that paste
 Compare the count with what you copied. Letters, emoji and the spellings that need a zero-width
 joiner, such as Persian and Hindi, are left as they were, and a paste that held none of them says
 nothing. Only a paste is cleaned: text you type, a path in a dropped file's name and a prompt given
-with `-p` are not.
+with `-p` are not. A drop onto a line armed with `!` where a name holds such a character writes nothing.
 
 ### Pictures
 
@@ -144,7 +162,11 @@ or JPEG also gets a thumbnail under the box, as a pasted picture does.
 
 **Onto a line armed with `!`, a drop writes each file's path and attaches nothing**, as dropping a
 file into a shell does. The shell is handed the line as it stands, so there is no marker and no
-trust or reach is granted.
+trust or reach is granted. A path holding a space, a quote or anything else a shell would read as
+syntax is written in single quotes, so the name reaches the command as one word. The quotes are
+written for the place a word starts: drop the file there, not inside a quote you opened. When a
+dropped file's name holds a control character or a character the terminal draws as nothing, no path
+from that drop is written, and a note says so.
 
 **A prompt recalled from your history names the file rather than the marker.** Nothing staged beside
 a line outlives the session that staged it. The name is enough: the planner reads it and goes to the

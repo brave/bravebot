@@ -332,7 +332,7 @@ pub struct BedrockClient<'a> {
     recalled: Refusals,
     /// How long to wait before the first retry. Doubled for each retry after that.
     ///
-    /// [`BACKOFF`] unless overridden by [`Self::with_backoff`].
+    /// [`BACKOFF`] unless a test shortens it.
     backoff: Duration,
 }
 
@@ -384,6 +384,7 @@ impl<'a> BedrockClient<'a> {
     /// Wait this long before the first retry instead of [`BACKOFF`]. Later retries still double it.
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
+    #[cfg(test)]
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
         self.backoff = backoff;
         self
@@ -2394,6 +2395,49 @@ mod tests {
         }
     }
 
+    /// A recap, a side question and a summary each send the conversation so far, calls and all,
+    /// in a request that offers no tools. The service refuses that whole request if a call or a
+    /// result is sent in its own block, so none of them answered.
+    #[test]
+    fn a_request_offering_no_tools_over_an_exchange_that_called_them_sends_no_call_blocks() {
+        let config = config();
+        let egress = Egress::new();
+        let client = BedrockClient::new(&config, &egress);
+        let call = bravebot_aichat::protocol::ToolCallRequest {
+            id: "a".into(),
+            kind: "function".into(),
+            function: bravebot_aichat::protocol::ToolCallRequestFunction {
+                name: "read".into(),
+                arguments: r#"{"path":"src/lib.rs"}"#.into(),
+            },
+            extra_content: None,
+        };
+        let messages = vec![
+            Message::system("answer from what you are shown"),
+            Message::user("fix it"),
+            Message::assistant_calling("", vec![call]),
+            Message::tool_result("a", "fn main() {}"),
+            Message::assistant("fixed"),
+            Message::user("recap"),
+        ];
+        let aside = ChatRequest::new("opus-arn", messages).giving_up_its_conversation();
+
+        for streaming in [false, true] {
+            let body = serde_json::to_string(&client.converse_for(&aside, "opus-arn", streaming))
+                .expect("a body");
+            for refused in ["toolUse", "toolResult", "toolConfig"] {
+                assert!(
+                    !body.contains(refused),
+                    "streaming {streaming}: sent {refused}: {body}"
+                );
+            }
+            assert!(
+                body.contains("fn main() {}"),
+                "streaming {streaming}: the result was dropped: {body}"
+            );
+        }
+    }
+
     /// An egress layer that gives up on a reply after a short silence, standing in for the idle
     /// bound a real one has.
     fn impatient() -> Egress {
@@ -3090,7 +3134,7 @@ mod tests {
         };
         let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("a scratch directory");
-        bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().join("logs")));
+        bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().to_path_buf()));
         for (streaming, base_ms) in [(false, 7), (true, 11)] {
             let config = config();
             let egress = Egress::new();

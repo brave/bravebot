@@ -10,6 +10,7 @@
 
 use crate::turn::Reply;
 use bravebot_agent::Conversation;
+use bravebot_agent::answers::Answers;
 use bravebot_agent::conversation::Snapshot;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::programs::TrustedPrograms;
@@ -18,9 +19,9 @@ use bravebot_core::trust::TrustStore;
 use bravebot_session::sessions::Handle;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 
 /// Everything a session carries between turns.
 ///
@@ -29,21 +30,29 @@ use std::sync::mpsc::Sender;
 pub struct State {
     /// The exchange so far, which is what resuming restores.
     pub conversation: Conversation,
-    /// Which paths this session's user vouched for, and what its writes recorded since.
+    /// What this session's user has agreed to, kept past the prompt that asked.
     ///
-    /// Carried forward turn to turn rather than re-derived: a turn that writes untrusted
-    /// data into a trusted path records that path as untrusted, and losing that would let
-    /// the next turn read the same data back as trusted.
-    pub trust: TrustStore,
-    /// Which programs this session's user vouched for.
+    /// The map is carried forward turn to turn rather than re-derived: a turn that writes
+    /// untrusted data into a trusted path records that path as untrusted, and losing that would
+    /// let the next turn read the same data back as trusted. The programs are a vouch, a
+    /// standing answer about a command, read back off the record when a session resumes, so
+    /// re-asking about one already answered, or forgetting one, would both be wrong. The prompts
+    /// drawn and the files agreed to be shown are live only and in no record. Opening, forking,
+    /// undoing and the end of a turn each take it apart with no `..` in [`Answers`].
     ///
-    /// Carried forward turn to turn for the same reason as [`State::trust`], and read back
-    /// off the record when a session resumes: a vouch is a standing answer about a command,
-    /// so re-asking about one already answered — or forgetting one — would both be wrong.
-    pub programs: TrustedPrograms,
-    /// Live prompt history; neither field is stored in a session record.
-    pub asked_about: bravebot_core::programs::AskedAbout,
-    pub exposed: bravebot_core::credentials::Exposed,
+    /// The rules are the permission rules this session opened under (PERM-12): empty until the
+    /// session is opened, and for a session no settings file wrote a rule for. Read once and
+    /// kept, so a settings file edited while the session is open changes nothing about it. Not
+    /// saved: a reopened session reads the files again.
+    ///
+    /// The language servers are the ones this session has started (LSP-8): `None` until a turn
+    /// builds the set. The session holds the set so that an approved server answers later turns.
+    /// A set owned by a turn would stop at the end of it, and the next turn would ask about the
+    /// same language and index the same tree again. Each turn takes the set and puts it back. The
+    /// set is not saved to the record: a reopened or forked session starts with none and asks
+    /// before starting a server. Dropping this state stops the servers, which happens when the
+    /// session closes or the process ends.
+    pub answers: Answers<crate::rules::SettingsRules>,
     /// Which directories beyond the project this session has open, canonical.
     ///
     /// This front-end opens none: there is no `/add-dir` in the protocol, so a session begun
@@ -53,6 +62,10 @@ pub struct State {
     /// map says. Held so a turn taken here restores the reach beside the rules it inherited,
     /// and so saving writes the grant back rather than dropping it on the session's behalf.
     pub directories: Vec<PathBuf>,
+    /// The checkouts the session's delegates were given and it keeps, which each turn's workspace
+    /// is given because it is dropped when the turn ends (CHECKOUT-16). `None` until the first
+    /// turn, or until a record that lists checkouts is opened.
+    pub kept: Option<bravebot_agent::workspace::KeptBetweenTurns>,
     /// How the session is written down.
     ///
     /// `None` for a fresh session until its first turn creates it, so a window somebody
@@ -88,27 +101,11 @@ pub struct State {
     pub rewind: bravebot_session::rewind::RewindStack,
     /// The first thing the user asked, which is what a list calls the session.
     pub first_prompt: Option<String>,
-    /// The permission rules this session opened under (PERM-12). Empty until the session is
-    /// opened, and for a session no settings file wrote a rule for.
-    ///
-    /// Read once and kept, so a settings file edited while the session is open changes nothing
-    /// about it. Not saved: a reopened session reads the files again.
-    pub rules: crate::rules::SettingsRules,
     /// How many manifest runs this open session has started. Numbers the runs in events.
     ///
     /// Not saved: a run is written as its own record (MANIFEST-11), and the session's record
     /// holds nothing about it.
     pub runs: usize,
-    /// The language servers this session has started (LSP-8). `None` until a turn builds the set.
-    ///
-    /// The session holds the set so that an approved server answers later turns. A set owned by
-    /// a turn would stop at the end of it, and the next turn would ask about the same language
-    /// and index the same tree again. Each turn takes the set and puts it back.
-    ///
-    /// The set is not saved to the record. A reopened or forked session starts with none and
-    /// asks before starting a server. Dropping this state stops the servers, which happens when
-    /// the session closes or the process ends.
-    pub servers: Option<bravebot_agent::lsp::LanguageServers>,
     /// The MCP servers this session started, once its first turn has started them (SERVERS-9).
     pub mcp: Mcp,
     /// The directory of its own outside the project, made as the session opened (TRUST-14).
@@ -181,11 +178,9 @@ impl State {
     pub fn fresh(trust: TrustStore) -> Self {
         Self {
             conversation: Conversation::new(),
-            trust,
-            programs: TrustedPrograms::new(),
-            asked_about: Default::default(),
-            exposed: Default::default(),
+            answers: Answers::opening(trust, TrustedPrograms::new(), Default::default()),
             directories: Vec::new(),
+            kept: None,
             handle: None,
             turns: 0,
             history: Some(Vec::new()),
@@ -197,9 +192,7 @@ impl State {
             asides: Vec::new(),
             rewind: Default::default(),
             first_prompt: None,
-            rules: Default::default(),
             runs: 0,
-            servers: None,
             mcp: Mcp::Unstarted,
             scratch: Scratch::open(),
             question_ids: Arc::new(AtomicU64::new(0)),
@@ -226,11 +219,9 @@ impl State {
         handle.set_agent(None);
         Self {
             conversation: Conversation::restored(record.conversation.clone()),
-            trust,
-            programs: record.trusted_programs(project),
-            asked_about: Default::default(),
-            exposed: Default::default(),
+            answers: Answers::opening(trust, record.trusted_programs(project), Default::default()),
             directories: record.directories.iter().map(PathBuf::from).collect(),
+            kept: None,
             handle: Some(handle),
             turns: record.turns,
             history: record.history.clone(),
@@ -242,9 +233,7 @@ impl State {
             asides: bravebot_session::sessions::recall(project, record).asides,
             rewind: bravebot_session::rewind::RewindStack::of(record.rewind_points(project)),
             first_prompt: Some(record.title.clone()),
-            rules: Default::default(),
             runs: 0,
-            servers: None,
             mcp: Mcp::Unstarted,
             scratch: Scratch::open(),
             question_ids: Arc::new(AtomicU64::new(0)),
@@ -289,11 +278,9 @@ impl State {
     ) -> Self {
         Self {
             conversation: Conversation::restored(before),
-            trust,
-            programs,
-            asked_about: Default::default(),
-            exposed: Default::default(),
+            answers: Answers::opening(trust, programs, Default::default()),
             directories,
+            kept: None,
             handle: Some(handle),
             turns,
             // The parent's boundaries are offsets into a conversation this one has cut, so none
@@ -307,9 +294,7 @@ impl State {
             asides: Vec::new(),
             rewind: Default::default(),
             first_prompt,
-            rules: Default::default(),
             runs: 0,
-            servers: None,
             mcp: Mcp::Unstarted,
             scratch: Scratch::open(),
             question_ids: Arc::new(AtomicU64::new(0)),
@@ -348,7 +333,49 @@ pub fn next_target() -> u64 {
     NEXT.fetch_add(1, Ordering::SeqCst) + 1
 }
 
+/// A [`Running`] together with the halves of it the worker thread keeps.
+pub struct Started {
+    /// What the session holds while the work runs.
+    pub running: Running,
+    /// The worker's end of the stop.
+    pub cancel: Cancel,
+    /// The worker's view of the question slot.
+    pub pending: crate::turn::Pending,
+    /// Where the worker receives answers.
+    pub answers: Receiver<Reply>,
+    /// The flag the worker sets on its way out.
+    pub finished: Arc<AtomicBool>,
+    /// What a cancel names to stop this work, the same number [`Running::target`] holds.
+    pub target: u64,
+}
+
 impl Running {
+    /// A turn or run beginning: a fresh stop, answer channel, question slot, finished flag and
+    /// target. Nothing is reused from earlier work, since a reused stop could cancel work before
+    /// it started and a reused channel could deliver yesterday's answer to today's question.
+    pub fn start() -> Started {
+        let cancel = Cancel::new();
+        let (answers_tx, answers_rx) = mpsc::channel();
+        let pending: crate::turn::Pending = Arc::new(Mutex::new(None));
+        let finished = Arc::new(AtomicBool::new(false));
+        let target = next_target();
+        let running = Running {
+            cancel: cancel.clone(),
+            answers: answers_tx,
+            pending: Arc::clone(&pending),
+            target,
+            finished: Arc::clone(&finished),
+        };
+        Started {
+            running,
+            cancel,
+            pending,
+            answers: answers_rx,
+            finished,
+            target,
+        }
+    }
+
     /// Answer the question that is waiting, if this is an answer to that question.
     ///
     /// Both halves have to match. The id makes an approval single-use, and the kind makes
@@ -392,13 +419,25 @@ impl Running {
     /// the same effect, since the confirmer treats a closed channel as a refusal, but
     /// saying it outright does not depend on when a drop happens to run.
     pub fn refuse_pending(&self) {
-        if let Ok(mut pending) = self.pending.lock()
-            && let Some(question) = pending.take()
-        {
-            // Refused in the shape of the question that was asked, so the worker's own
-            // match arm accepts it. A `Write` sent at a waiting run would be discarded as
-            // a mismatch and the turn would block until the channel dropped instead.
-            let _ = self.answers.send(question.kind.refusal());
-        }
+        self.refuse_pending_with(|_| {});
+    }
+
+    /// As [`Self::refuse_pending`], and publish the refused question's number before waking the
+    /// worker, as an answer does ([`Self::answer_with`]).
+    pub fn refuse_pending_with(&self, refused: impl FnOnce(u64)) {
+        let Ok(mut pending) = self.pending.lock() else {
+            return;
+        };
+        let Some(question) = pending.take() else {
+            return;
+        };
+        // The lock is held through the refusal, so the worker cannot leave its wait and register
+        // another question that this refusal would then answer. Publishing under it takes the
+        // update lock in the order `ask` does.
+        refused(question.id);
+        // Refused in the shape of the question that was asked, so the worker's own
+        // match arm accepts it. A `Write` sent at a waiting run would be discarded as
+        // a mismatch and the turn would block until the channel dropped instead.
+        let _ = self.answers.send(question.kind.refusal());
     }
 }

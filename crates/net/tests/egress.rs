@@ -1084,3 +1084,306 @@ fn a_body_that_stops_partway_is_a_failure_rather_than_a_short_body() {
         "expected a transport failure, got {error:?}"
     );
 }
+
+/// A fetch the way `fetch_url` runs one: approved for this URL, then in flight.
+fn fetch_approved(egress: &Egress, url: &str) -> Result<bravebot_net::Response, EgressError> {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+    policy.endorse_fetch(url);
+    policy.before_fetch(url).expect("approved");
+    let outcome = egress.fetch(&mut policy, Request::get(url), Label::untrusted_public());
+    policy.fetch_finished();
+    outcome
+}
+
+/// `localhost` is a name, so what the system resolver answers for it is classified: the approval
+/// was for a host as written, and a name is the case it says nothing about. The listener answers,
+/// so a refusal that came from nothing being there to connect to would still show a connection.
+#[test]
+fn a_fetched_name_that_resolves_to_this_machine_is_refused_without_a_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    listener.set_nonblocking(true).expect("nonblocking");
+
+    let url = format!("http://localhost:{port}/page");
+    let error = fetch_approved(&Egress::new(), &url).expect_err("must be refused");
+
+    assert!(
+        matches!(&error, EgressError::AddressRefused { url: named } if *named == url),
+        "{error:?}"
+    );
+    thread::sleep(Duration::from_millis(100));
+    assert!(
+        listener.accept().is_err(),
+        "a connection reached the listener"
+    );
+    assert!(!error.to_string().contains("127.0.0.1"), "{error}");
+}
+
+/// The refusal is the fetch's. The same name, reached by something that is not a fetch in flight,
+/// is a local model endpoint and goes through.
+#[test]
+fn the_same_name_is_reached_when_no_fetch_is_in_flight() {
+    let base = serve_as("localhost", vec![ok_response("a local model")]);
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let response = Egress::new()
+        .fetch(&mut policy, Request::get(&base), Label::untrusted_public())
+        .expect("not a fetch");
+    assert_eq!(response.status, 200);
+}
+
+/// An address the person approved as written is not a lookup. The same server, asked for by name,
+/// is the case above.
+#[test]
+fn an_approved_address_literal_on_this_machine_is_fetched() {
+    let base = serve(vec![ok_response("local page")]);
+    let response = fetch_approved(&Egress::new(), &format!("{base}/page")).expect("a literal");
+    assert_eq!(response.status, 200);
+}
+
+fn serve_recording_headers(
+    responses: Vec<String>,
+) -> (String, std::sync::mpsc::Receiver<Vec<(String, String)>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    thread::spawn(move || {
+        for response in responses {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+            let mut headers = Vec::new();
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 {
+                    break;
+                }
+                if header == "\r\n" || header == "\n" {
+                    break;
+                }
+                if let Some((name, val)) = header.split_once(':') {
+                    headers.push((name.trim().to_ascii_lowercase(), val.trim().to_string()));
+                }
+            }
+            let _ = tx.send(headers);
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+
+    (format!("http://127.0.0.1:{port}"), rx)
+}
+
+#[test]
+fn socket_scoped_headers_are_sent_to_declared_socket() {
+    let (base, rx) = serve_recording_headers(vec![ok_response("ok")]);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let request = Request::get(&base)
+        .header("x-regular", "keep")
+        .socket_header("authorization", "Bearer test-secret")
+        .socket_header("x-scoped", "socket-secret");
+
+    let response = egress
+        .fetch(&mut policy, request, Label::untrusted_public())
+        .expect("fetch succeeds");
+    assert_eq!(response.status, 200);
+
+    let headers = rx.recv().expect("received headers");
+    assert!(
+        headers
+            .iter()
+            .any(|(k, v)| k == "authorization" && v == "Bearer test-secret"),
+        "authorization must be present: {headers:?}"
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|(k, v)| k == "x-scoped" && v == "socket-secret"),
+        "x-scoped must be present: {headers:?}"
+    );
+    assert!(
+        headers.iter().any(|(k, v)| k == "x-regular" && v == "keep"),
+        "x-regular must be present: {headers:?}"
+    );
+}
+
+#[test]
+fn socket_scoped_headers_and_authorization_are_dropped_across_different_sockets_on_redirect() {
+    let (second, second_rx) = serve_recording_headers(vec![ok_response("second")]);
+    let (first, first_rx) = serve_recording_headers(vec![redirect_to(&format!("{second}/target"))]);
+
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let request = Request::get(&first)
+        .header("x-regular", "keep")
+        .socket_header("authorization", "Bearer test-secret")
+        .socket_header("x-scoped", "socket-secret");
+
+    let response = egress
+        .fetch(&mut policy, request, Label::untrusted_public())
+        .expect("fetch succeeds through redirect");
+    assert_eq!(response.status, 200);
+
+    // First hop (declared socket) receives all headers.
+    let first_headers = first_rx.recv().expect("first hop headers");
+    assert!(
+        first_headers
+            .iter()
+            .any(|(k, v)| k == "authorization" && v == "Bearer test-secret")
+    );
+    assert!(
+        first_headers
+            .iter()
+            .any(|(k, v)| k == "x-scoped" && v == "socket-secret")
+    );
+    assert!(
+        first_headers
+            .iter()
+            .any(|(k, v)| k == "x-regular" && v == "keep")
+    );
+
+    // Second hop (different socket) drops socket headers and authorization.
+    let second_headers = second_rx.recv().expect("second hop headers");
+    assert!(
+        !second_headers.iter().any(|(k, _)| k == "authorization"),
+        "authorization must be dropped on redirect to different socket: {second_headers:?}"
+    );
+    assert!(
+        !second_headers.iter().any(|(k, _)| k == "x-scoped"),
+        "socket-scoped header must be dropped on redirect to different socket: {second_headers:?}"
+    );
+    assert!(
+        second_headers
+            .iter()
+            .any(|(k, v)| k == "x-regular" && v == "keep"),
+        "regular header must be preserved: {second_headers:?}"
+    );
+}
+
+#[test]
+fn socket_scoped_headers_are_kept_on_same_socket_redirect() {
+    let (server, rx) = serve_recording_headers(vec![
+        redirect_to("/destination"),
+        ok_response("destination reached"),
+    ]);
+
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let request = Request::get(format!("{server}/start"))
+        .header("x-regular", "keep")
+        .socket_header("authorization", "Bearer test-secret")
+        .socket_header("x-scoped", "socket-secret");
+
+    let response = egress
+        .fetch(&mut policy, request, Label::untrusted_public())
+        .expect("fetch succeeds through same socket redirect");
+    assert_eq!(response.status, 200);
+
+    let first_headers = rx.recv().expect("first hop headers");
+    assert!(
+        first_headers
+            .iter()
+            .any(|(k, v)| k == "authorization" && v == "Bearer test-secret")
+    );
+
+    let second_headers = rx.recv().expect("second hop headers");
+    assert!(
+        second_headers
+            .iter()
+            .any(|(k, v)| k == "authorization" && v == "Bearer test-secret"),
+        "same socket redirect must retain socket headers: {second_headers:?}"
+    );
+    assert!(
+        second_headers
+            .iter()
+            .any(|(k, v)| k == "x-scoped" && v == "socket-secret"),
+        "same socket redirect must retain socket headers: {second_headers:?}"
+    );
+}
+
+#[test]
+fn plain_authorization_header_is_stripped_on_cross_socket_redirect() {
+    let (second, second_rx) = serve_recording_headers(vec![ok_response("second")]);
+    let (first, first_rx) = serve_recording_headers(vec![redirect_to(&format!("{second}/target"))]);
+
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let request = Request::get(&first)
+        .header("x-regular", "keep")
+        .header("authorization", "Bearer plain-secret");
+
+    let response = egress
+        .fetch(&mut policy, request, Label::untrusted_public())
+        .expect("fetch succeeds through redirect");
+    assert_eq!(response.status, 200);
+
+    let first_headers = first_rx.recv().expect("first hop headers");
+    assert!(
+        first_headers
+            .iter()
+            .any(|(k, v)| k == "authorization" && v == "Bearer plain-secret")
+    );
+
+    let second_headers = second_rx.recv().expect("second hop headers");
+    assert!(
+        !second_headers.iter().any(|(k, _)| k == "authorization"),
+        "plain authorization header must be stripped on redirect to different socket: {second_headers:?}"
+    );
+    assert!(
+        second_headers
+            .iter()
+            .any(|(k, v)| k == "x-regular" && v == "keep"),
+        "regular header must be preserved: {second_headers:?}"
+    );
+}

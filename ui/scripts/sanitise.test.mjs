@@ -51,3 +51,11 @@ test('a manifest run forwards a task and a model, and no file or picture under a
 
   assert.deepEqual(forwarded, { session: 's1', task: 'plan', model: 'm' })
 })
+
+test('a session list is always the whole one, whatever directory the window put in it', () => {
+  const forwarded = sanitised('session.list', { directory: '/Users/me/my app', other: 1 })
+
+  assert.equal('directory' in forwarded, false, 'the window does not choose which store is read')
+  assert.deepEqual(forwarded, { other: 1 })
+  assert.deepEqual(sanitised('session.list', undefined), {})
+})

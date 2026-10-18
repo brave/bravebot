@@ -3,6 +3,7 @@ import type { FileSearch } from '../../shared/files'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Fold } from './Fold'
 import { FileGlyph } from './FileGlyph'
+import { useDelayedFlag } from '../hooks'
 import { type FileRow, type Listing, isSubpath, under } from '../../shared/files'
 import { Alert, Icon, Input, ProgressRing } from '../nala'
 import { IconButton } from './IconButton'
@@ -70,13 +71,14 @@ export function FileTree({
   }, [searchOpen])
   const [results, setResults] = useState<FileSearch | null>(null)
   const [searching, setSearching] = useState(false)
+  const showSearching = useDelayedFlag(searching)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   useEffect(() => {
     if (!search.trim()) { setResults(null); setSearching(false); return }
     let gone = false
     setResults(null)
-    setSearching(true)
-    const timer = setTimeout(() => { void window.bravebot.searchFiles(session, search, hidden).then((value) => {
+    // Searching starts with the request, so the ring's 150ms are the request's and not the debounce's.
+    const timer = setTimeout(() => { setSearching(true); void window.bravebot.searchFiles(session, search, hidden).then((value) => {
       if (!gone) setResults(value)
     }).catch(() => { if (!gone) setProblem('Project search failed. Try again.') }).finally(() => { if (!gone) setSearching(false) }) }, 180)
     return () => { gone = true; clearTimeout(timer) }
@@ -207,7 +209,7 @@ export function FileTree({
           take the header with it. */}
       <div className="tree-body">
         {terms.length > 0 ? <div className="file-search-results">
-          {searching && <p className="tree-status" role="status"><span className="tree-spinner" aria-hidden="true"><ProgressRing mode="indeterminate" /></span>Searching project…</p>}
+          {searching && <p className="tree-status" role="status" data-delayed={!showSearching || undefined}><span className="tree-spinner" aria-hidden="true"><ProgressRing mode="indeterminate" /></span>Searching project…</p>}
           {!searching && results?.paths.length === 0 && <p className="tree-empty">No matching files.</p>}
           {results?.paths.map((path) => (
             <button key={path} type="button" className="search-result" onClick={() => setPreviewPath(path)} data-tooltip={`Preview ${path}`}>

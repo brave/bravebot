@@ -1,7 +1,7 @@
 //! Safe failure details and distinct turn endings.
 
 use crate::timing::Timing;
-use bravebot_aichat::protocol::Cached;
+use bravebot_aichat::protocol::{Cached, Usage};
 
 /// Fixed failure categories, distinguished by what the user can do about them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,9 +158,88 @@ pub struct Spent {
     pub timing: Timing,
 }
 
+impl Spent {
+    /// Add one request's usage to the cost: its total, what the model wrote and what the cache
+    /// served. The context reading and the timing are left as they are.
+    pub fn add_usage(&mut self, usage: Usage) {
+        self.tokens += usage.total();
+        self.output_tokens += usage.completion_tokens;
+        self.cached.add(usage.cached);
+    }
+
+    /// Add another run's cost, such as a delegate's, to this one: its total, what the model wrote
+    /// and what the cache served. The context reading is that run's own conversation and the timing
+    /// overlaps this one's clock, so both are left as they are.
+    pub fn add_spent(&mut self, other: &Spent) {
+        self.tokens += other.tokens;
+        self.output_tokens += other.output_tokens;
+        self.cached.add(other.cached);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn a_usage(prompt: u64, completion: u64, read: u64, written: u64) -> Usage {
+        Usage {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            cached: Cached {
+                read_tokens: read,
+                written_tokens: written,
+            },
+        }
+    }
+
+    #[test]
+    fn adding_usage_or_another_spent_sums_the_cost_and_leaves_context_and_timing() {
+        let timing = Timing {
+            wall_ms: 900,
+            inference_ms: 500,
+            ..Timing::default()
+        };
+        let mut spent = Spent {
+            tokens: 1_000,
+            output_tokens: 100,
+            context_tokens: 700,
+            cached: Cached {
+                read_tokens: 10,
+                written_tokens: 20,
+            },
+            timing,
+        };
+
+        spent.add_usage(a_usage(300, 50, 5, 7));
+        assert_eq!(
+            spent.tokens, 1_350,
+            "a request counts its prompt and completion"
+        );
+        assert_eq!(spent.output_tokens, 150);
+        assert_eq!(spent.cached.read_tokens, 15);
+        assert_eq!(spent.cached.written_tokens, 27);
+
+        spent.add_spent(&Spent {
+            tokens: 2_000,
+            output_tokens: 400,
+            context_tokens: 9_999,
+            cached: Cached {
+                read_tokens: 100,
+                written_tokens: 200,
+            },
+            timing: Timing {
+                wall_ms: 5_000,
+                ..Timing::default()
+            },
+        });
+        assert_eq!(spent.tokens, 3_350);
+        assert_eq!(spent.output_tokens, 550);
+        assert_eq!(spent.cached.read_tokens, 115);
+        assert_eq!(spent.cached.written_tokens, 227);
+
+        assert_eq!(spent.context_tokens, 700, "a context reading is not a cost");
+        assert_eq!(spent.timing, timing, "the clock is the turn's own");
+    }
 
     #[test]
     fn a_stop_is_neither_of_the_other_two_endings() {

@@ -632,10 +632,6 @@ impl SlotWriter<'_> {
         self.label
     }
 
-    pub fn slot_id(&self) -> &SlotId {
-        &self.id
-    }
-
     /// Write the slot, consuming the capability.
     pub fn write(self, content: impl Into<String>) -> Result<(), SlotError> {
         if self.store.is_written(&self.id) {

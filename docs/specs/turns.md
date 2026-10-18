@@ -4,12 +4,20 @@ title: What bounds a turn
 status: normative
 governs:
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
+  - crates/agent/src/turn/setup.rs
+  - crates/agent/src/turn/round_steps.rs
+  - crates/agent/src/turn/prompts.rs
+  - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/agent/src/spend_limit.rs
+  - crates/agent/src/repeated_call.rs
 documented-by:
   - docs/website/docs/customize/configuration.md
   - docs/website/docs/troubleshooting.md
   - docs/website/docs/reference/cli.md
   - docs/website/docs/using/transcript.md
+  - docs/website/docs/reference/tools.md
 ---
 
 ## Scope
@@ -18,7 +26,9 @@ How long a turn may go on, what happens when it does not stop, and what is said 
 without producing anything or ends without checking anything. What completed requests cost survives
 a later failure or stop. What happens when the model's reply says nothing at all, and when it runs
 into its output ceiling. What a session does when it has spent as many tokens as the person said
-it may.
+it may. What a turn does when the planner asks for the same call three times running. How the reads of one
+round are run when the planner asks for several together. What the note under a finished turn says
+about refusals.
 
 ## Clauses
 
@@ -60,6 +70,8 @@ silence is the answer for a caller nobody is watching, and a watched turn takes 
 `verified-by: bravebot_agent::turn::an_unbounded_turn_is_never_made_to_answer`
 `verified-by: bravebot_agent::turn::a_turn_that_keeps_calling_tools_is_made_to_answer`
 `verified-by: bravebot_ui_bridge::rounds::a_desktop_turn_is_not_cut_off_at_the_bound_an_unwatched_run_carries`
+`verified-by: bravebot_cli::running::a_one_shot_run_is_held_to_the_default_bound`
+`verified-by: bravebot_cli::running::a_session_in_lines_is_not_cut_off_at_the_bound_an_unwatched_run_carries`
 
 <a id="TURN-3"></a>
 ### TURN-3: a turn that has written nothing for long enough is told so
@@ -87,6 +99,19 @@ so the line says what to do if a change was wanted and to carry on if it was not
 **A requested write counts, not a completed one.** A write the user refused is a planner that
 tried to deliver, and telling it to start delivering would answer something nobody asked.
 
+**Plan mode is a turn where no write is possible.** It offers the write tools and refuses every
+call to them ([MODE-3](permission-modes.md#MODE-3)), so the line is not said while it is in force.
+The mode is read when the round ends, because the person can change it while the turn runs
+([MODE-8](permission-modes.md#MODE-8)), and rounds read in plan mode count toward the number once
+it has ended. The sandbox mode `read-only` is the same kind of turn: the file tools refuse every
+write in it ([SANDBOX-22](sandboxing.md#SANDBOX-22)), so the line is not said. The sandbox mode
+does not change during a turn.
+
+**A delegate's write counts.** A worker delegate that changed a file in the turn's workspace has
+written: the files are on disk and its report says which, so the line is not said once the delegate
+is taken back. Saying it would contradict the work just done and could send the planner to write the
+same change twice. It is the same record [TURN-4](#TURN-4) reads.
+
 **Counted since the last answer, not since the turn began.** A stop is usually not the end of a
 task: the next prompt is `continue`, and a change the stopped turn asked to write is the change
 being continued. An answer usually is the end of one, so the turn after it starts from nothing
@@ -97,6 +122,11 @@ at most a nudge the kept turns did not need, where starting set could withhold o
 
 `verified-by: bravebot_agent::turn::a_turn_that_writes_nothing_for_long_enough_is_told_so`
 `verified-by: bravebot_agent::turn::a_turn_that_has_written_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_whose_worker_delegate_wrote_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_in_plan_mode_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_under_read_only_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_moved_into_plan_mode_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_moved_out_of_plan_mode_is_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_after_a_stopped_turn_that_wrote_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_after_a_completed_turn_that_wrote_is_still_told_to_write`
 `verified-by: bravebot_agent::conversation::a_restored_conversation_remembers_a_write_asked_for_since_the_last_answer`
@@ -124,9 +154,22 @@ ending a person is least able to spot for themselves: no outcome is drawn to rea
 **What happened, not what was asked for.** Both lines are about the workspace, so both count a
 write that landed and a program that started, never the call the planner made. A write the person
 declined and a write plan mode refused leave nothing to build, and a run the person declined
-builds nothing. This is the opposite of [TURN-3](#TURN-3)'s nudge and for the opposite reason:
+builds nothing. A line refused for a credential it left behind counts, since a program in it put
+the credential there, and so does a line stopped with the turn, which is stopped only once its
+programs have started. A line that ended in any other error does not, since the error does not
+say whether a program in it had started. This is the opposite of [TURN-3](#TURN-3)'s nudge and for
+the opposite reason:
 that line is about what the planner tried to do, and these two are about what the person is
 about to act on.
+
+**Work a delegate did.** A delegate working in the turn's own workspace writes and runs there, so
+a file it changed and a program it ran count as the turn's from the round the turn takes it back
+in, whether it answered, stopped or failed. While one is still working the question waits, since
+it may be part way through the build. A delegate in a checkout of its own
+([CHECKOUT-7](checkouts.md#CHECKOUT-7)) builds the commit the checkout holds, which has none of
+the turn's changes in it, so nothing it does counts. That includes a write it makes in a directory
+the person opened beside the working directory, which a checkout leaves reachable, since the
+driver's record of a delegate's work does not say where a write landed.
 
 `verified-by: bravebot_agent::turn::a_turn_that_writes_without_running_is_asked_about_it`
 `verified-by: bravebot_agent::turn::a_turn_that_wrote_and_ran_is_not_asked_about_it`
@@ -137,14 +180,23 @@ about to act on.
 `verified-by: bravebot_agent::turn::a_turn_stopped_before_any_write_is_not_told_a_change_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_stopped_after_a_write_is_told_the_change_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_that_failed_after_a_write_is_told_the_change_was_never_built`
+`verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own`
+`verified-by: bravebot_agent::turn::a_file_a_delegate_changed_in_the_workspace_is_reported_by_the_turn_as_never_built`
+`verified-by: bravebot_agent::turn::a_file_a_delegate_changed_before_it_failed_is_reported_by_the_turn_as_never_built`
+`verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_its_own_checkout_leaves_the_change_reported_as_never_built`
+`verified-by: bravebot_agent::turn::the_question_waits_for_a_delegate_still_working_in_the_workspace`
+`verified-by: bravebot_agent::turn::a_line_refused_for_a_credential_it_left_counts_as_run`
+`verified-by: bravebot_agent::turn::a_line_that_failed_before_its_program_started_leaves_the_change_reported_as_never_built`
+`verified-by: bravebot_agent::turn::a_line_stopped_with_the_turn_counts_as_run`
 
 <a id="TURN-5"></a>
 ### TURN-5: completed work remains charged when a turn fails or stops
 
 The turn reports cumulative usage after completed planner, processor and compaction calls, and
-when delegates are collected. Each report replaces the previous total. A delegate retains its own
-progress until collection, so it cannot overwrite the parent's total. Collection adds either its
-successful outcome or its retained progress on failure, once. A failed or stopped parent collects
+when delegates are collected. Each report replaces the previous total. While a delegate runs, each
+report of its own adds to the parent's total, so the total includes the requests it has completed
+and never drops to the delegate's alone. Collection adds either its successful outcome or its
+retained progress on failure, and the total counts that usage once. A failed or stopped parent collects
 outstanding delegates before returning and reports the resulting total and elapsed timing.
 
 A completed reply also contributes valid reported usage when its content is rejected by the
@@ -172,7 +224,13 @@ Raw backend errors remain outside planner context and user-facing history.
 `verified-by: bravebot_agent::turn::failed_parents_collect_outstanding_delegate_usage_once`
 `verified-by: bravebot_agent::turn::stopped_parents_collect_outstanding_delegate_usage_once`
 `verified-by: bravebot_agent::turn::the_last_request_keeps_elapsed_time_on_failure_and_cancellation`
-`verified-by: bravebot_agent::shared::what_a_delegate_has_spent_is_not_reported_as_what_the_turn_has`
+`verified-by: bravebot_agent::shared::what_a_running_delegate_has_spent_is_added_to_the_turns_total_as_it_goes`
+`verified-by: bravebot_agent::shared::every_running_delegates_spend_is_in_the_total`
+`verified-by: bravebot_agent::shared::a_collected_delegates_spend_is_in_the_total_once`
+`verified-by: bravebot_agent::shared::a_delegates_context_reading_is_not_the_turns`
+`verified-by: bravebot_agent::shared::a_nested_delegates_spend_reaches_the_turns_total`
+`verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
+`verified-by: bravebot_agent::turn::a_report_the_policy_refuses_ends_its_delegate_and_leaves_its_spend_in_the_total_once`
 
 `verified-by: bravebot_agent::turn::planner_retry_costs_do_not_replace_the_last_prompt_measurement`
 `verified-by: bravebot_agent::turn::completed_empty_reply_keeps_reported_usage_on_failure`
@@ -226,6 +284,7 @@ on ordinary endings; file authority remains shared and child advice remains loca
 `verified-by: bravebot_agent::turn::two_empty_replies_in_a_row_end_the_turn`
 `verified-by: bravebot_agent::turn::completed_empty_reply_keeps_reported_usage_on_failure`
 `verified-by: bravebot_agent::backend::only_a_finished_reply_with_nothing_in_it_is_an_empty_reply`
+`verified-by: bravebot_agent::turn::the_person_is_told_nothing_when_an_empty_reply_is_asked_about`
 
 <a id="TURN-7"></a>
 ### TURN-7: a reply the output ceiling stopped is told why and asked once for less
@@ -285,12 +344,14 @@ what says whether the work wanted splitting.
 <a id="TURN-8"></a>
 ### TURN-8: a session that has spent its limit asks before the next request
 
-A session may carry a limit, a number of tokens, from the `limit` setting or from `/limit`. Before a
-turn sends a request, the driver compares the tokens the session has spent with it: what earlier
-turns were charged, plus what this turn's completed requests reported ([TURN-5](#TURN-5)). Once the
-spent total is at or over the limit, the request is not sent and the person is asked one question
+A session may carry a limit, a number of tokens or a number of Leo Premium credits, from the `limit`
+setting or from `/limit`. Before a turn sends a request, the driver compares what the session has
+spent, in the unit the limit counts, with it. Tokens are what earlier turns were charged, plus what
+this turn's completed requests reported ([TURN-5](#TURN-5)). Credits are the credentials the session
+has presented, one per premium request ([PREM-5](premium-credentials.md#PREM-5)), those of a delegate
+it started included. Once the spent total is at or over the limit, the request is not sent and the person is asked one question
 with three answers: stop, go on without a limit, or go on under a new limit, typed in their own
-words. A new limit has to be above what is spent. A figure that is not asks again, up to three
+words. A new limit has to be in the unit the limit counts and above what is spent. A figure that is not asks again, up to three
 times in all, and then the turn stops.
 
 **Stopping is the default.** A stop, a declined question, an answer that is none of the three, and
@@ -303,11 +364,17 @@ question the planner asks, and every permission mode passes it on, bypassing inc
 asks about nothing still stops here, unless the person set no limit. A new limit or going on without
 one is the session's from then on, including for a turn already running when `/limit` is typed.
 
-**The figure is a count and the stop depends on no content.** It is the sum of the usage the
+**The figure is a count and the stop depends on no content.** Tokens are the sum of the usage the
 backends reported ([BACKEND-31](backends.md#BACKEND-31), [BACKEND-40](backends.md#BACKEND-40)). A
 request that reported nothing adds nothing, so a backend that reports no usage is never stopped by
-this. The question is built from that count, the limit and fixed words, and reads no reply or tool
+a limit in tokens. Credits are counted as each credential is handed out, whichever request spends
+it, so a session that spends none, with no subscription imported, is never stopped by a limit in
+credits, and tokens spent do not reach one. The question is built from that count, the limit and fixed words, and reads no reply or tool
 result.
+
+**A delegate's own budget is separate.** A delegate is never asked this question. What it spends
+reaches the session's total when it is collected, and a token budget of its own
+([DELEGATE-29](delegation.md#DELEGATE-29)) stops it by removing its tools, with nobody asked.
 
 **Asked each time.** The question carries a key of its own on every ask, because an interface may
 remember an answer by key, and the same figures can come back after a stop.
@@ -321,7 +388,9 @@ starts. A one-shot run, a manifest run and the desktop window set none, for the 
 
 **Known costs.** The check comes before a request, so a limit is passed by the round that reached it
 and by whatever a delegate in flight spends before it is collected. A limit counted in tokens says
-nothing about money: it is not a per-model price and not a count of Leo Premium credentials.
+nothing about money, and is not a per-model price. A limit counted in credits leaves out the
+credentials spent by `/compact`, `/aside`, a goal check and a manifest run, which present them
+outside the turn; it is not kept when a session is resumed, and `/clear` starts it again from zero.
 
 `verified-by: bravebot_agent::turn::a_turn_under_its_limit_is_not_asked_about`
 `verified-by: bravebot_agent::turn::a_turn_that_reaches_its_limit_asks_before_the_next_request_and_stops_on_a_stop`
@@ -333,7 +402,145 @@ nothing about money: it is not a per-model price and not a count of Leo Premium 
 `verified-by: bravebot_agent::turn::going_on_without_a_limit_clears_it`
 `verified-by: bravebot_agent::turn::a_question_nobody_answers_stops_the_turn`
 `verified-by: bravebot_agent::turn::no_permission_mode_answers_the_limit_question`
+`verified-by: bravebot_agent::turn::a_limit_in_credits_asks_once_that_many_credentials_are_spent`
+`verified-by: bravebot_agent::turn::tokens_spent_do_not_reach_a_limit_in_credits`
+`verified-by: bravebot_agent::turn::credits_spent_do_not_reach_a_limit_in_tokens`
+`verified-by: bravebot_agent::turn::a_figure_in_the_other_unit_is_not_a_limit`
+`verified-by: bravebot_agent::turn::a_credential_a_delegate_spends_is_counted`
 `verified-by: bravebot_agent::turn::two_questions_about_the_same_figures_are_different_questions`
 `verified-by: bravebot_agent::turn::a_session_with_no_limit_is_never_asked`
 `verified-by: bravebot_tui::app::a_turn_shares_the_sessions_limit_and_carries_what_was_spent`
 `verified-by: bravebot_config::settings::only_a_positive_count_is_a_session_limit`
+
+<a id="TURN-9"></a>
+### TURN-9: the same call three times running is held and asked about
+
+When the planner asks for a call whose tool name and arguments equal those of the two calls
+before it, with no different call between them, the driver does not run it. The person is asked
+one question with three answers: do not run it and tell the planner to try another approach, run
+it this once, or stop the turn. A refusal is answered to the planner in place of a result, as the
+driver's own error that names the tool and the count. Each further identical call is held in the
+same way.
+
+**Arguments only.** The comparison reads the tool name and the arguments the planner wrote, with
+the keys of a JSON object in sorted order, so the same object written in another key order is the
+same call. It never reads a result. A result can carry untrusted bytes, which the driver may not
+branch on, and the planner's own call is built from a context holding none ([LABEL-8](labels.md#LABEL-8)).
+
+**What it costs.** A call whose result changes between identical calls, such as polling
+`read_output` or running a test again without an edit between, is held at the third. A different
+call between two identical ones starts the count again, so a write between two runs does.
+
+**A yes covers one call.** It runs that call and starts the count again, so the next held call is
+the third after it. The question carries a key of its own on every ask, because an interface may
+remember an answer by key.
+
+**No rule and no mode answers it.** Every permission mode passes the question on, bypassing
+included, for the reason [TURN-8](#TURN-8) gives. Where nobody can be asked, which is a one-shot
+run, a manifest run, a closed channel or a delegate, the call is dropped and the planner told
+([PROMPT-9](prompting.md#PROMPT-9)). The first row is the refusal, so a bare Enter is the safe
+answer, and an answer that is none of the three is a refusal.
+
+**Not a safety property,** for the reason [TURN-1](#TURN-1) gives. A call that differs by one
+argument each round is not caught, such as the glob after glob that clause describes.
+
+**Recorded.** The trail gets a line with the round, the count and the answer, which carries no
+call and no result ([TRACE-2](trace.md#TRACE-2)). There is no setting for the number.
+
+`verified-by: bravebot_agent::turn::a_third_identical_call_is_not_run_and_the_person_is_asked`
+`verified-by: bravebot_agent::turn::a_differing_argument_starts_the_count_again`
+`verified-by: bravebot_agent::turn::a_yes_runs_the_call_once_and_the_count_starts_again`
+`verified-by: bravebot_agent::turn::a_stop_at_the_question_ends_the_turn`
+`verified-by: bravebot_agent::turn::where_nobody_can_be_asked_the_call_is_dropped_and_the_planner_told`
+`verified-by: bravebot_agent::turn::no_permission_mode_answers_the_repeated_call_question`
+`verified-by: bravebot_agent::turn::the_trail_records_the_count_and_the_answer_and_nothing_the_call_carried`
+`verified-by: bravebot_agent::turn::two_held_calls_are_two_questions`
+`verified-by: bravebot_agent::repeated_call::the_same_arguments_in_another_key_order_are_the_same_call`
+
+<a id="TURN-10"></a>
+### TURN-10: the independent reads of a round run at the same time
+
+When one reply from the planner asks for several calls, each run of consecutive `list_files` and
+`search` calls is read at the same time, at most 8 at once. Every other call runs alone and in the
+order it was asked, after the calls before it have finished and before the calls after it start.
+`read_file`, `read_git` and `lsp` are among them. Each can ask the person, call a model, or keep
+state that a later call reads, so running one beside another call would change what that call sees
+or the order the person is asked in.
+
+**Nothing the planner is given changes.** Results are added in the order the calls were asked and
+not the order the reads finished. A reference is numbered, a note drawn and a line recorded in the
+trail where that call's turn comes, so a round of reads leaves the same conversation, trail and
+screen as the same calls run one after another. A call in a run is announced when its result is
+taken and not while it reads.
+
+**What joins a run.** A call joins when it is a `list_files` or `search` that this run offers, its
+arguments are JSON, the person has declared no hook for a finished call of that tool, and it would
+not be held as a third identical repeat ([TURN-9](#TURN-9)). One such call is not a run. A hook is
+left out because it can change the files the next read looks at, and a held call asks a question.
+
+**Each read decides as the turn would.** A read runs under a branch of the turn's policy, which
+holds the same rules, capabilities and context, shares the one file authority, and records into a
+buffer of its own. The buffer reaches the turn's trail when that call's turn comes, and a refusal in
+it is counted then. A read is used only while the planner's context is what it was when the run
+began. If the context has met something untrusted since, the call runs for itself under the context
+the calls before it left. No label, routing or approval decision changes.
+
+**Reads wait for effects and not for each other.** A read holds the file authority's access lock
+shared, and an effect entering or completing holds it exclusive ([TRUST-4](trust-map.md#TRUST-4)).
+Two reads therefore overlap, and neither captures bytes while an effect on a file is entering.
+
+**Cancelling.** The cancel is checked before the run starts, before a thread starts each read, and
+before each call is taken. A read already running finishes, as a search does when it runs alone. A
+call after the one the cancel stopped at never has its result used or its lines recorded, so the
+trail holds the calls before the cancel and no others.
+
+**No setting.** The limit of 8 and what joins a run are fixed.
+
+**Known costs.** A run that is slow shows nothing until its first call is announced, where a
+call run alone is announced as it starts. The time a run took is added to the turn's tool time once,
+and each call in it is shown as finishing at once.
+
+`verified-by: bravebot_agent::turn::results_come_back_in_the_order_the_calls_were_made`
+`verified-by: bravebot_agent::turn::references_are_numbered_in_the_order_the_calls_were_made`
+`verified-by: bravebot_agent::turn::a_call_that_writes_separates_the_reads_before_it_from_the_reads_after`
+`verified-by: bravebot_agent::turn::a_cancel_during_the_reads_leaves_only_the_calls_before_it_in_the_trail`
+`verified-by: bravebot_agent::turn::a_run_of_reads_ends_at_a_call_that_asks_or_is_hooked_or_would_be_held`
+`verified-by: bravebot_agent::tools::reads_taken_beforehand_leave_the_trail_the_screen_and_the_answers_a_sequential_run_does`
+`verified-by: bravebot_agent::tools::the_reads_of_a_round_are_inside_their_captures_at_the_same_time`
+`verified-by: bravebot_agent::tools::no_more_reads_run_at_once_than_the_limit`
+`verified-by: bravebot_agent::tools::a_cancel_stops_the_reads_not_yet_started`
+`verified-by: bravebot_agent::tools::reads_taken_beforehand_wait_for_an_effect_entering_a_file`
+`verified-by: bravebot_agent::tools::a_read_is_used_only_while_the_context_is_what_it_ran_under`
+`verified-by: bravebot_agent::tools::only_a_read_the_run_offers_is_taken_beforehand`
+`verified-by: bravebot_core::policy::a_branch_decides_what_the_policy_it_came_from_would`
+`verified-by: bravebot_core::policy::a_branch_reads_the_file_decisions_made_after_it_began`
+`verified-by: bravebot_core::policy::what_a_branch_records_reaches_the_policy_when_it_rejoins_and_in_order`
+
+<a id="TURN-11"></a>
+### TURN-11: the note under a finished turn names only the refusals no later call got past
+
+A turn that ends with a gate having refused a call says so under the reply, as a note. A refusal
+is *standing* unless a later call to the same tool was refused by no gate, which recovers every
+refusal earlier calls to that tool left standing. A recovered refusal is not drawn. A turn whose
+refusals are all recovered shows no note, and the turn is still not clean: the refusals stay in
+the audit trail ([TRACE-1](trace.md#TRACE-1)) and are counted when the turn finishes.
+
+**One tool is one purpose, as far as this goes.** A later `run` of another line recovers an
+earlier refused `run`. The decision only picks what is drawn, so a wrong guess hides nothing the
+trail does not hold. A refusal a branch recorded and the turn took back at rejoin is never
+recovered, because no call to a tool settled it.
+
+**Counted, and the first named.** Where refusals stand the note gives how many and names the
+first, as `gate: reason`. It does not list the rest. The general sentence that a gate refused
+something is said only where the turn was not clean and holds no list of what was refused, as a
+manifest run's does not.
+
+**No result is read.** Which tool a call named and whether a gate refused it are the only facts
+used, so nothing untrusted a tool returned reaches the decision ([LABEL-8](labels.md#LABEL-8)).
+
+`verified-by: bravebot_core::policy::a_refusal_a_later_call_to_the_same_tool_got_past_is_not_standing`
+`verified-by: bravebot_core::policy::a_refusal_stands_until_the_same_tool_runs_without_one`
+`verified-by: bravebot_core::policy::a_rejoined_refusal_stands_whatever_runs_after_it`
+`verified-by: bravebot_agent::turn::a_refusal_a_later_call_to_the_same_tool_got_past_is_not_left_standing`
+`verified-by: bravebot_agent::turn::a_refusal_no_later_call_to_its_tool_got_past_stays_standing`
+`verified-by: bravebot_tui::app::a_refusal_a_later_call_got_past_is_not_drawn_and_one_left_standing_is_counted_and_named`

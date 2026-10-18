@@ -30,6 +30,8 @@ pub enum ErrorCode {
     NoHome,
     /// The agent's configuration could not be read.
     Config,
+    /// The host does not offer this method, parameter or session to this client.
+    NotAllowed,
     /// A bug here. The message is for a report, not for a user.
     Internal,
 }
@@ -44,6 +46,7 @@ impl ErrorCode {
             Self::NotADirectory => "not_a_directory",
             Self::NoHome => "no_home",
             Self::Config => "config",
+            Self::NotAllowed => "not_allowed",
             Self::Internal => "internal",
         }
     }

@@ -37,8 +37,9 @@ bravebot -c                # the same
 The list is sorted on what each record says it was last written, not by id.
 
 Typing narrows the list by title, branch and linked issue or pull request, and by what was said in
-the session: the prompts you typed, the model's replies, and the paths and commands its calls
-named. A session found that way shows the first matching line under its title. Add `since:7d`
+the session: the prompts you typed, the model's replies, the paths and commands its calls named,
+and the [notes](#noting-something-on-a-session) you added. A session found that way shows the first
+matching line under its title. Add `since:7d`
 (`h` for hours, `d` for days, `w` for weeks) to keep only sessions written within that long. Tool
 results, files you attached and [imported sessions](#importing-sessions-from-claude-code) are not
 searched. The records are read when you type the first character, so a long list pauses once.
@@ -239,16 +240,43 @@ that needs an answer can be found without opening each one. At the box there is 
 left with an empty one rather than this session's name. An incognito session leaves the title alone,
 and so does setting [`terminalTitle`](../customize/configuration.md#terminaltitle) to `false`.
 
+## Noting something on a session
+
+```
+/note it edited the wrong config file
+```
+
+`/note` adds a note to the session while it runs, on the turn the session is on. It is written to the
+record at once, with the turn number and the fact that you typed it, in a place of its own. It is not
+part of the conversation: the model is never given it, so it changes nothing about the work. Typed
+while a turn runs with nothing waiting, it is carried out at once. A resume, a `/branch` and a
+continued session keep the notes, and a record from before notes existed has none. The resume list
+and `bravebot sessions search` find a session by the words of its notes.
+`/note` on its own lists the notes the session holds, one line each with its turn. A session that writes
+no record, as an incognito one does, says a note reached none.
+
+A note is for whoever reviews the session later. `/session-review` reads the notes of the sessions it
+reviews and treats each as a lead from you: it checks the note against the session's audit trail and
+the code, and reports it only when the cause is in bravebot. Nothing in a note is run or followed as
+an instruction, and a filed issue carries none of its words. A session with a new note is reviewed
+again for that note.
+
 ## Telling sessions apart
 
 The title says which session a terminal holds. The info panel says the rest: press Ctrl-X, or type
 `/panel`, and a column 36 wide opens on the right of the screen with
 
-- the session's name, its directory and its branch,
+- the session's name, with a GitHub pull request or issue address in it shown as
+  `brave/bravebot#1975` and still a link to the address in a terminal that supports links,
+  its directory and its branch, and below them its id over two rows, the one
+  `bravebot --resume`, `--fork` and `/resume` take, so you can resume or fork a running session from
+  another terminal without `/status`; it appears once the session has been saved,
 - the model you chose and the effort level in force,
 - the goal, while one stands,
 - the pull request and the issue the session is for, once you give them with `/pr` and `/issue`,
-  each cut from the left where it is long so the number at the end stays in view,
+  each cut from the left where it is long so the number at the end stays in view. A GitHub pull
+  request or issue address is shown as `brave/bravebot#1975` and is still a link to the address in
+  a terminal that supports links,
 - how full the context is, the tokens the session has spent (the figure `/cost` opens with), the
   cache hit rate, and what the last turn read from the cache and wrote
   into it, as two figures,
@@ -307,8 +335,8 @@ build cannot read.
 ```
 
 `/clear` begins a new session in the same directory and keeps the current one resumable. Because it
-is a new session it asks the trust question again, unless you said to
-[remember the answer](../security/trust.md#remembering-the-answer) there, restores no standing
+is a new session it asks the trust question again, unless a yes was
+[kept](../security/trust.md#remembering-the-answer) there, restores no standing
 permissions, and closes any directory `/add-dir` had opened.
 
 ## Starting a plan-then-execute run
@@ -363,6 +391,18 @@ was asked, and every path that turn wrote over, or that it wrote over none.
 back every row from the first down to the one chosen. A number past what the session remembers
 rewinds nothing and says how far back it does go, rather than going as far as it can: reading a tree
 two turns younger than you believe it is would be worse than a refusal.
+
+### Putting back one hunk
+
+`/hunks` lists the hunks the last turn wrote, numbered from one across its files, and `/hunks 2` puts
+hunk 2 back as it stood before the turn while every other line of the file stays as it is. The list
+is drawn again afterwards, since the numbers below the hunk have moved, and `/undo` still puts the
+whole turn back.
+
+It is for the case where most of a turn is right and one change is not. A file you have edited since
+is protected: the file is compared with what the turn kept, and a hunk that has moved or changed is
+refused rather than written over. Only a file the session trusts is compared, so any other is named
+and left to `/undo`. The [command reference](../reference/commands.md#hunks-number) has the rest.
 
 ### What will not go back
 
@@ -435,6 +475,13 @@ replaces the earlier figure rather than leaving it standing. See
 A cut has to free more than it keeps, so a conversation with nothing worth giving up is left long
 rather than summarised once per round.
 
+A skill the planner loaded before the cut is not left to the summary. Its text is sent again after
+the summary, word for word: the newest load of each skill, the first 5,000 tokens of any one skill
+(estimated at four bytes a token) and 25,000 tokens for all of them, newest first. A skill that
+is cut says so and names `load_skill` for the rest. These count as kept when deciding whether a cut
+frees enough. A skill whose result was sent as prose, which is the fallback for a round whose calls
+carried no ids, is summarised like any other message.
+
 Compaction never touches three things: the quarantine, which holds the only copy of what a surviving
 reference names; the reference counter, since a slot name handed out twice would collide; and the
 context's integrity, since nothing here has un-read what the conversation read. The cut never lands
@@ -460,10 +507,10 @@ from before stays resumable. It stops being updated for as long as the incognito
 your skills and your imported credentials are all read as usual, so the session is the one you
 configured rather than a fresh install. The record of command lines you asked to be remembered past a
 session is read on the same terms: a line already in it still stops the asking, and the key that would
-add one is not offered. So is the record of directories you told the startup question to
-[remember](../security/trust.md#remembering-the-answer): a kept answer still trusts the directory,
-the session says so as it opens, `r` is not offered, and `/forget-trust` changes nothing and names
-the file so you can remove it yourself.
+add one is not offered. So is the record of directories you answered yes to at the startup question,
+which is [kept](../security/trust.md#remembering-the-answer): a kept yes still trusts the directory,
+the session says so as it opens, a new yes is not kept and the question says so, and `/forget-trust`
+changes nothing and names the file so you can remove it yourself.
 
 **One thing is not read: your standing answer about [vetting](../security/vetting.md).** If you have
 pressed the key that stops bravebot asking before content nobody vouched for reaches the planner,

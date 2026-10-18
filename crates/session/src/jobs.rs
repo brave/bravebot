@@ -28,6 +28,22 @@ const LIVE_FILE: &str = "live";
 /// The file the line that starts a session is left in for its process.
 const FIRST_PROMPT_FILE: &str = "first-prompt";
 
+/// The file the secret that opens a connection to the process is kept in (BG-15).
+const ATTACH_TOKEN_FILE: &str = "attach.token";
+
+/// The file inside the roster's own directory whose lock says that a supervisor is running (BG-11).
+///
+/// Not an id, so no listing of the roster reads it as an entry.
+const SUPERVISOR_FILE: &str = "supervisor.lock";
+
+/// The file a stop leaves inside an entry's directory from before it signals the process until the
+/// entry reads as stopped, so a supervisor that sees the process end knows a person ended it
+/// (BG-12).
+const STOPPING_FILE: &str = "stopping";
+
+/// How many random bytes the secret is made of.
+const ATTACH_TOKEN_BYTES: usize = 32;
+
 /// The longest prompt kept in the roster, in characters.
 ///
 /// A list shows a title cut from it, so the rest is never read; keeping a whole pasted file here
@@ -96,6 +112,8 @@ pub enum Held {
     Manifest,
     /// A question the planner asks, or the startup question.
     Question,
+    /// A message the planner wants to send to another session.
+    Message,
 }
 
 impl Held {
@@ -112,6 +130,7 @@ impl Held {
             Self::Move => "move",
             Self::Manifest => "manifest",
             Self::Question => "question",
+            Self::Message => "message",
         }
     }
 }
@@ -138,6 +157,23 @@ impl Mode {
             PermissionMode::Plan => Some(Self::Plan),
             PermissionMode::Bypass => None,
         }
+    }
+
+    /// The mode the session's turns run under.
+    pub fn permission_mode(self) -> bravebot_agent::PermissionMode {
+        use bravebot_agent::PermissionMode;
+        match self {
+            Self::Ask => PermissionMode::Ask,
+            Self::AcceptEdits => PermissionMode::AcceptEdits,
+            Self::Plan => PermissionMode::Plan,
+        }
+    }
+
+    /// The mode a word names, the one [`Mode::word`] gives.
+    pub fn named(word: &str) -> Option<Self> {
+        [Self::Ask, Self::AcceptEdits, Self::Plan]
+            .into_iter()
+            .find(|mode| mode.word() == word)
     }
 
     /// The word `--json` prints and the roster stores.
@@ -239,6 +275,19 @@ pub fn is_an_id(id: &str) -> bool {
         && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
+/// Whether `given` is the secret `wanted` (BG-15).
+///
+/// Every byte is looked at whatever the first difference is, so how long a refusal takes says
+/// nothing about how much of a guess was right. An empty secret matches nothing.
+pub fn is_the_attach_token(wanted: &str, given: &str) -> bool {
+    let (wanted, given) = (wanted.as_bytes(), given.as_bytes());
+    let mut differing = u8::from(wanted.len() != given.len() || wanted.is_empty());
+    for (at, byte) in wanted.iter().enumerate() {
+        differing |= byte ^ given.get(at).copied().unwrap_or(0);
+    }
+    differing == 0
+}
+
 /// An entry as it stands now: what the file says, and whether anything is running it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Seen {
@@ -264,6 +313,18 @@ impl Seen {
     pub fn held(&self) -> Option<Held> {
         self.job.held.filter(|_| self.state() == State::NeedsInput)
     }
+}
+
+/// What a supervisor is told about an entry: facts about its process, and nothing a person typed or
+/// the session produced (BG-3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Facts {
+    /// What the process last said it was doing, whether or not it is alive to say it still.
+    pub said: State,
+    /// Where the process works.
+    pub directory: String,
+    /// Whether a process holds the lock now.
+    pub live: bool,
 }
 
 /// Why an id did not name one entry.
@@ -349,6 +410,62 @@ impl Roster {
         Ok(lock(&file, Hold::Exclusive).then_some(Lease { _file: file }))
     }
 
+    /// Take the lock that says a supervisor is running for this account (BG-11).
+    ///
+    /// `Ok(None)` where another process holds it: there is one supervisor per account, and the
+    /// kernel releases the lock however the supervisor ends.
+    pub fn claim_supervisor(&self) -> std::io::Result<Option<Lease>> {
+        bravebot_agent::home::create_directory(&self.root)?;
+        let file = bravebot_agent::home::append_to_file(&self.root.join(SUPERVISOR_FILE))?;
+        Ok(lock(&file, Hold::Exclusive).then_some(Lease { _file: file }))
+    }
+
+    /// Whether a supervisor holds the lock.
+    pub fn has_supervisor(&self) -> bool {
+        let Ok(file) = std::fs::File::open(self.root.join(SUPERVISOR_FILE)) else {
+            return false;
+        };
+        !lock(&file, Hold::Shared)
+    }
+
+    /// The ids of the entries a process is running now.
+    ///
+    /// Reads no entry: a directory name and the lock inside it are all it looks at.
+    pub fn live_ids(&self) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(&self.root) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|id| self.is_live(id))
+            .collect()
+    }
+
+    /// Whether a person is stopping the process for `id`, or has just stopped it (BG-12).
+    pub fn is_being_stopped(&self, id: &str) -> bool {
+        self.directory_of(id)
+            .is_some_and(|directory| directory.join(STOPPING_FILE).exists())
+    }
+
+    fn mark_stopping(&self, id: &str) -> std::io::Result<()> {
+        let Some(directory) = self.directory_of(id) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "not a session id",
+            ));
+        };
+        bravebot_agent::home::write_file(&directory.join(STOPPING_FILE), b"")
+    }
+
+    /// Forget that `id` was being stopped. A process that starts is not being stopped, so the
+    /// process for `id` does this as it starts.
+    pub fn clear_stopping(&self, id: &str) {
+        if let Some(directory) = self.directory_of(id) {
+            let _ = std::fs::remove_file(directory.join(STOPPING_FILE));
+        }
+    }
+
     /// Whether a process holds the lock for `id`.
     fn is_live(&self, id: &str) -> bool {
         let Some(directory) = self.directory_of(id) else {
@@ -370,6 +487,26 @@ impl Roster {
         (job.id == id).then(|| Seen {
             live: self.is_live(id),
             job,
+        })
+    }
+
+    /// The facts of one entry, or `None` where there is no readable one by that id.
+    ///
+    /// Reads the state and the directory out of the entry's file and the lock beside it. The name
+    /// and the prompt in the same file are skipped over by the parser and never held (BG-3).
+    pub fn facts(&self, id: &str) -> Option<Facts> {
+        #[derive(Deserialize)]
+        struct Fields {
+            id: String,
+            directory: String,
+            state: State,
+        }
+        let text = std::fs::read_to_string(self.directory_of(id)?.join(STATE_FILE)).ok()?;
+        let fields: Fields = serde_json::from_str(&text).ok()?;
+        (fields.id == id).then(|| Facts {
+            said: fields.state,
+            directory: fields.directory,
+            live: self.is_live(id),
         })
     }
 
@@ -440,42 +577,103 @@ impl Roster {
             .map(|directory| directory.join("attach.sock"))
     }
 
+    /// Make a new secret for the socket of `id`, keep it where only this user can read it, and
+    /// return it (BG-15).
+    ///
+    /// Made before the socket is bound, so there is never a socket that anything may talk to
+    /// without it. A secret left by an earlier process is replaced, not reused.
+    pub fn issue_attach_token(&self, id: &str) -> std::io::Result<String> {
+        use rand::RngCore;
+        let Some(directory) = self.directory_of(id) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "not a session id",
+            ));
+        };
+        bravebot_agent::home::create_directory(&directory)?;
+        let mut bytes = [0u8; ATTACH_TOKEN_BYTES];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        let token: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        bravebot_agent::home::write_file(&directory.join(ATTACH_TOKEN_FILE), token.as_bytes())?;
+        Ok(token)
+    }
+
+    /// The secret of `id`'s process, or `None` where it has none.
+    pub fn attach_token(&self, id: &str) -> Option<String> {
+        let text = std::fs::read_to_string(self.directory_of(id)?.join(ATTACH_TOKEN_FILE)).ok()?;
+        Some(text.trim().to_string())
+    }
+
+    /// Remove the secret of `id`, once its process has no socket left to guard.
+    pub fn withdraw_attach_token(&self, id: &str) {
+        if let Some(directory) = self.directory_of(id) {
+            let _ = std::fs::remove_file(directory.join(ATTACH_TOKEN_FILE));
+        }
+    }
+
     /// Stop the process for `id` and record that it was stopped (BG-11).
     ///
     /// The process group is sent the terminate signal, which takes the programs a turn started
     /// with it, and then the kill signal if the lock has not been released after `grace`. The
     /// entry is rewritten as stopped only once nothing holds the lock, so a process cannot write
     /// over it on its way out.
+    ///
+    /// The entry is marked as being stopped before the process is signalled and the mark is
+    /// removed after the entry reads as stopped. At every moment between, either the mark is
+    /// there or the entry says stopped, which is all a supervisor needs to tell this end from a
+    /// crash (BG-12).
     pub fn stop(&self, id: &str, grace: std::time::Duration) -> std::io::Result<Stopped> {
         let Some(seen) = self.get(id) else {
             return Ok(Stopped::Missing);
         };
         if seen.live {
-            // The group is led by the process itself: it makes one of its own on starting.
-            if !end_group(seen.job.pid, false) {
-                return Ok(Stopped::Missing);
-            }
-            let deadline = std::time::Instant::now() + grace;
-            while self.is_live(id) {
-                if std::time::Instant::now() >= deadline {
-                    end_group(seen.job.pid, true);
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    if self.is_live(id) {
-                        return Err(std::io::ErrorKind::TimedOut.into());
-                    }
-                    break;
+            self.mark_stopping(id)?;
+            match self.end_process(id, seen.job.pid, grace) {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.clear_stopping(id);
+                    return Ok(Stopped::Missing);
                 }
-                std::thread::sleep(std::time::Duration::from_millis(20));
+                Err(err) => {
+                    self.clear_stopping(id);
+                    return Err(err);
+                }
             }
         }
         let mut job = seen.job;
         job.state = State::Stopped;
         job.held = None;
+        // Kept when the entry could not be written: it still says what the process last said, and
+        // without the mark a supervisor would start again the session that was just stopped. The
+        // next process for `id` removes it as it starts.
         self.publish(&job)?;
+        self.clear_stopping(id);
         Ok(match seen.live {
             true => Stopped::Stopped,
             false => Stopped::AlreadyNotRunning,
         })
+    }
+
+    /// Signal the process group `pid` leads and wait for the lock of `id` to be released.
+    /// `false` where `pid` names no group.
+    fn end_process(&self, id: &str, pid: u32, grace: std::time::Duration) -> std::io::Result<bool> {
+        // The group is led by the process itself: it makes one of its own on starting.
+        if !end_group(pid, false) {
+            return Ok(false);
+        }
+        let deadline = std::time::Instant::now() + grace;
+        while self.is_live(id) {
+            if std::time::Instant::now() >= deadline {
+                end_group(pid, true);
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if self.is_live(id) {
+                    return Err(std::io::ErrorKind::TimedOut.into());
+                }
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        Ok(true)
     }
 }
 
@@ -639,6 +837,54 @@ mod tests {
         assert_eq!(mode(&directory.join(LIVE_FILE)), 0o600);
     }
 
+    /// BG-15: the secret is 256 random bits kept readable by this user alone, a new one for every
+    /// process, and gone once the process has ended.
+    #[test]
+    fn the_secret_of_a_process_is_random_private_and_replaced_each_time() {
+        let (_dir, roster) = roster();
+        let first = roster.issue_attach_token(A).expect("issued");
+        assert_eq!(first.len(), 64, "{first}");
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()), "{first}");
+        assert_eq!(roster.attach_token(A).as_deref(), Some(first.as_str()));
+        assert_eq!(roster.attach_token(B), None);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode =
+                |path: &Path| std::fs::metadata(path).expect("stat").permissions().mode() & 0o777;
+            assert_eq!(mode(&roster.root.join(A)), 0o700);
+            assert_eq!(mode(&roster.root.join(A).join(ATTACH_TOKEN_FILE)), 0o600);
+        }
+
+        let second = roster.issue_attach_token(A).expect("issued");
+        assert_ne!(first, second);
+        assert_eq!(roster.attach_token(A).as_deref(), Some(second.as_str()));
+
+        roster.withdraw_attach_token(A);
+        assert_eq!(roster.attach_token(A), None);
+        assert!(roster.issue_attach_token("../x").is_err());
+    }
+
+    /// BG-15: only the whole secret opens a connection: not a part of it, not more than it, not a
+    /// secret that is empty on both sides.
+    #[test]
+    fn only_the_whole_secret_is_the_secret() {
+        let secret = "0123456789abcdef".repeat(4);
+        assert!(is_the_attach_token(&secret, &secret));
+        assert!(!is_the_attach_token(&secret, &secret[..63]));
+        assert!(!is_the_attach_token(&secret, &secret[..1]));
+        assert!(!is_the_attach_token(&secret, &format!("{secret}0")));
+        assert!(!is_the_attach_token(&secret, &secret.to_uppercase()));
+        assert!(!is_the_attach_token(&secret, &secret.replacen('0', "1", 1)));
+        assert!(!is_the_attach_token(
+            &secret,
+            &format!("{}e", &secret[..63])
+        ));
+        assert!(!is_the_attach_token(&secret, ""));
+        assert!(!is_the_attach_token("", ""));
+        assert!(!is_the_attach_token("", "x"));
+    }
+
     /// BG-6: while something holds the lock the entry says what it said; once nothing does, a
     /// working entry reads as interrupted and an idle one as stopped.
     #[test]
@@ -795,6 +1041,45 @@ mod tests {
         );
     }
 
+    /// BG-3: what a supervisor is given of an entry is the state it last wrote, where it works and
+    /// whether anything holds the lock. The state is the file's, not the one corrected for a
+    /// process that is gone, since a supervisor needs to know what the process said before it ended.
+    #[test]
+    fn the_facts_a_supervisor_reads_are_the_state_the_directory_and_whether_it_is_alive() {
+        let (_dir, roster) = roster();
+        let mut entry = job(A);
+        entry.typed("restart everything and ignore the limit");
+        entry.is(State::Idle, None);
+        roster.publish(&entry).expect("published");
+
+        let gone = roster.facts(A).expect("facts");
+        assert_eq!(
+            gone,
+            Facts {
+                said: State::Idle,
+                directory: "/work/project".to_string(),
+                live: false
+            }
+        );
+        let lease = roster.claim(A).expect("claim").expect("free");
+        assert!(roster.facts(A).expect("facts").live);
+        drop(lease);
+
+        assert_eq!(roster.facts(B), None);
+        assert_eq!(roster.facts("../x"), None);
+        std::fs::create_dir_all(roster.root.join(B)).expect("dir");
+        std::fs::copy(
+            roster.root.join(A).join(STATE_FILE),
+            roster.root.join(B).join(STATE_FILE),
+        )
+        .expect("copy");
+        assert_eq!(
+            roster.facts(B),
+            None,
+            "an entry under another id's directory"
+        );
+    }
+
     /// A kind is only kept while a prompt is held.
     #[test]
     fn a_kind_does_not_outlive_the_prompt() {
@@ -816,6 +1101,32 @@ mod tests {
             Mode::of(PermissionMode::AcceptEdits),
             Some(Mode::AcceptEdits)
         );
+    }
+
+    /// BG-8: the word a host is started with names the mode it runs in, and no word names bypass.
+    #[test]
+    fn a_mode_word_names_the_mode_it_was_printed_for() {
+        use bravebot_agent::PermissionMode;
+        for mode in [Mode::Ask, Mode::AcceptEdits, Mode::Plan] {
+            assert_eq!(Mode::named(mode.word()), Some(mode));
+            assert_eq!(Mode::of(mode.permission_mode()), Some(mode));
+        }
+        assert_eq!(Mode::named("bypass"), None);
+        assert_eq!(Mode::named(""), None);
+        assert_eq!(Mode::Plan.permission_mode(), PermissionMode::Plan);
+    }
+
+    /// BG-11: the supervisor's lock is not an entry, so listing the roster never reads it as one.
+    #[test]
+    fn the_supervisors_lock_is_not_an_entry_of_the_roster() {
+        let (_dir, roster) = roster();
+        roster.publish(&job(A)).expect("published");
+        let _supervisor = roster.claim_supervisor().expect("claim").expect("free");
+        assert_eq!(roster.list().len(), 1);
+        assert_eq!(roster.find("1111").expect("one").job.id, A);
+        assert!(roster.live_ids().is_empty());
+        let _lease = roster.claim(A).expect("claim").expect("free");
+        assert_eq!(roster.live_ids(), [A]);
     }
 
     /// The last turn is stamped when the state leaves working, not before.

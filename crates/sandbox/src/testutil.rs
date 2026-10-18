@@ -5,6 +5,8 @@ use crate::process::ConfinedChild;
 use crate::process::{Stream, Streams};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::io::Read;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 
 /// For a test that cares only about how a confined process exited.
@@ -80,4 +82,51 @@ pub(crate) fn scratch_dir(name: &str) -> PathBuf {
     path.push("test-scratch");
     path.push(name);
     path
+}
+
+/// A new directory under the temporary directory holding `dirs`, with its links followed.
+///
+/// For a test that binds a unix socket: a socket path must fit in `sun_path` (104 bytes on
+/// macOS, 108 on Linux), which a checkout's [`scratch_dir`] need not leave room for. The name is
+/// this process's id, a clock reading and a count of the directories this process has made, and
+/// the directory is created rather than reused, so no two tests share one.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn a_directory_for_sockets(dirs: &[&str]) -> PathBuf {
+    static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.subsec_nanos())
+        .unwrap_or_default();
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
+    let scratch = std::env::temp_dir().join(format!("bb{}-{stamp}-{made}", std::process::id()));
+    std::fs::create_dir(&scratch).expect("the scratch directory is creatable");
+    for dir in dirs {
+        std::fs::create_dir_all(scratch.join(dir)).expect("the scratch directory is creatable");
+    }
+    scratch
+        .canonicalize()
+        .expect("the scratch directory is there")
+}
+
+/// A socket listening at `dir/s`, which can be asked whether a connection arrived without
+/// waiting for one.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn listening_in(dir: &std::path::Path) -> (PathBuf, UnixListener) {
+    let path = dir.join("s");
+    let listener = UnixListener::bind(&path).expect("a socket to connect to");
+    listener
+        .set_nonblocking(true)
+        .expect("the listener can be polled");
+    (path, listener)
+}
+
+/// Whether a connection is waiting on `listener`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn arrived(listener: &UnixListener) -> bool {
+    match listener.accept() {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => false,
+        Err(error) => panic!("the listener failed: {error}"),
+    }
 }

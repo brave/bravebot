@@ -5,6 +5,10 @@
 //! are the ones that matter, and each asserts the negative directly, that no extra request went
 //! out and no file appeared, rather than asserting that a reply looked sensible.
 
+#[allow(dead_code)]
+#[path = "../test-support/turns.rs"]
+mod turns;
+
 use bravebot_agent::manifest;
 use bravebot_agent::turn::Task;
 use bravebot_agent::{Mode, Workspace};
@@ -290,6 +294,75 @@ fn a_slot_no_step_reads_is_never_opened() {
     );
 }
 
+/// A slot only shown to the person has no file for the marker to protect, so a processor's
+/// unmarked answer stands as the answer, with no call to ask again.
+#[test]
+fn an_unmarked_answer_for_a_slot_only_shown_stands_as_the_answer() {
+    let scratch = Scratch::new("shown-only");
+    std::fs::write(scratch.path.join("README.md"), "bravebot is a coding agent").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "README.md", "out_slot": "readme"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["readme"], "instruction": "summarise", "out_slot": "summary"}},
+            {"capability": "ANSWER", "args": {"from_slot": "summary"}},
+        ])),
+        says("A coding agent, said without the line."),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let outcome = run(&config, &workspace, "summarise the readme", &mut sink).expect("runs");
+
+    assert_eq!(
+        outcome.reply_for_display(),
+        "A coding agent, said without the line."
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        3,
+        "shape, plan and one processor call"
+    );
+}
+
+/// A slot an answer shows and a write also reads is not only shown, so the marker rule holds for it:
+/// two unmarked answers fail the step, the file is never written, and nothing is shown.
+#[test]
+fn an_unmarked_answer_for_a_slot_a_write_also_reads_still_fails() {
+    let scratch = Scratch::new("shown-and-written");
+    std::fs::write(scratch.path.join("README.md"), "bravebot is a coding agent").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "README.md", "out_slot": "readme"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["readme"], "instruction": "summarise", "out_slot": "summary"}},
+            {"capability": "ANSWER", "args": {"from_slot": "summary"}},
+            {"capability": "FILE_WRITE", "args": {"path": "summary.md", "from_slot": "summary"}},
+        ])),
+        says("A coding agent, said without the line."),
+        says("Still without the line."),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let failure = run(&config, &workspace, "summarise the readme", &mut sink)
+        .expect_err("an unmarked answer for a slot a write reads");
+    assert!(
+        failure.to_string().contains("no document"),
+        "got: {failure}"
+    );
+    assert!(!scratch.path.join("summary.md").exists());
+    assert_eq!(
+        received.try_iter().count(),
+        4,
+        "shape, plan and the two processor calls"
+    );
+}
+
 #[test]
 fn a_read_transform_answer_plan_runs_end_to_end() {
     let scratch = Scratch::new("end-to-end");
@@ -545,6 +618,12 @@ fn a_picture_dropped_onto_the_task_reaches_the_planner() {
             body.contains("data:image/png;base64,iVA="),
             "the dropped picture did not reach the planner: {body}"
         );
+        // DROP-11: both calls name the file beside its bytes, so the planner can write a step
+        // about the path it was shown rather than about a marker standing for nothing.
+        assert!(
+            body.contains("Dropped file: shot.png"),
+            "the dropped file's path did not reach the planner: {body}"
+        );
     }
 }
 
@@ -799,6 +878,62 @@ fn plan_mode_refuses_a_plan_that_writes() {
     );
 }
 
+/// A plan that plan mode refused is a refusal in the trail, naming the step that writes.
+///
+/// The run is refused before any step is read or the plan is put to the person, so no other gate
+/// sees the write. With no record of its own, the trail ends at the planning calls that passed.
+#[test]
+fn a_plan_refused_by_plan_mode_is_recorded_as_a_refusal() {
+    let scratch = Scratch::new("plan-mode-write-recorded");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "FILE_WRITE", "args": {"path": "out.md", "contents": "a body the plan carried"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("write a summary").with_permission_mode(bravebot_agent::PermissionMode::Plan),
+        &mut bravebot_agent::Confining::new(
+            &mut bravebot_agent::confirm::ApprovePlans,
+            bravebot_agent::PermissionMode::Plan,
+            false,
+        ),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("plan mode must refuse a plan that writes");
+
+    let refused: Vec<String> = sink
+        .blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "permission_mode",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        refused,
+        ["step 2: write_file: plan mode refuses a write, so nothing was written"],
+        "the refused plan was not recorded once, under the step that writes: {:?}",
+        sink.events()
+    );
+}
+
 /// The other half of the same clause: the mode refuses writes and nothing else, so a plan that
 /// reads and answers is a plan plan mode has no business stopping. Refusing every run would make
 /// the mode mean "no manifest runs", which is not what it says.
@@ -839,6 +974,95 @@ fn plan_mode_runs_a_plan_that_writes_nothing() {
         outcome.reply_for_display().contains("raw text"),
         "got: {}",
         outcome.reply_for_display()
+    );
+}
+
+/// SANDBOX-22: under the sandbox mode `read-only` a plan with a step that writes a file is refused
+/// from the plan, in the mode that approves the plan and every write in it, so the refusal is the
+/// sandbox mode's. The control is the same plan under `workspace-write`, where the file is written,
+/// and a plan that writes nothing still runs under `read-only`, since the mode holds back writes
+/// and not runs.
+#[test]
+fn under_read_only_a_plan_that_writes_is_refused_and_one_that_writes_nothing_runs() {
+    use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
+    let plan_under = |name: &str, sandbox, steps| {
+        let scratch = Scratch::new(name);
+        std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve(vec![any_shape(), plan(steps)]);
+        let mut sink = RecordingSink::new();
+        let outcome = manifest::run(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("write a summary")
+                .with_confined_runs(true)
+                .with_sandbox_mode(sandbox)
+                .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+            skipping_permissions!(),
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            TrustStore::new("/work"),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .map(|outcome| outcome.reply_for_display().to_string())
+        .map_err(|failure| failure.to_string());
+        let refused: Vec<String> = sink
+            .blocked()
+            .filter_map(|event| match event {
+                Event::GateBlocked {
+                    gate: "sandbox",
+                    reason,
+                    ..
+                } => Some(reason.clone()),
+                _ => None,
+            })
+            .collect();
+        (outcome, scratch.path.join("out.md").exists(), refused)
+    };
+    let writing = || {
+        json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "FILE_WRITE", "args": {"path": "out.md", "contents": "a body the plan carried"}},
+        ])
+    };
+
+    let (control, written, refused) =
+        plan_under("read-only-plan-control", WorkspaceWrite, writing());
+    assert!(control.is_ok(), "the control was refused: {control:?}");
+    assert!(written, "the control did not write");
+    assert!(refused.is_empty(), "the control recorded {refused:?}");
+
+    let (held, written, refused) = plan_under("read-only-plan-held", ReadOnly, writing());
+    let failure = held.expect_err("read-only must refuse a plan that writes");
+    assert!(
+        failure.contains("the sandbox mode is read-only, and step 2 of this plan writes a file"),
+        "got: {failure}"
+    );
+    assert!(!written, "a manifest run wrote a file under read-only");
+    assert_eq!(
+        refused,
+        ["step 2: write_file: the read-only sandbox mode refuses a write, so nothing was written"],
+        "the refused plan was not recorded once, under the step that writes"
+    );
+
+    let (reading, _, refused) = plan_under(
+        "read-only-plan-reads",
+        ReadOnly,
+        json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "ANSWER", "args": {"from_slot": "raw"}},
+        ]),
+    );
+    assert!(
+        reading
+            .as_deref()
+            .is_ok_and(|reply| reply.contains("raw text")),
+        "a plan that writes nothing did not run under read-only: {reading:?}"
+    );
+    assert!(
+        refused.is_empty(),
+        "a plan that writes nothing recorded {refused:?}"
     );
 }
 
@@ -900,6 +1124,7 @@ fn an_unmarked_transform_does_not_become_a_file() {
             {"capability": "FILE_WRITE", "args": {"path": "out.md", "from_slot": "loud"}},
         ])),
         says("this is an explanation, not a file"),
+        says("still an explanation, not a file"),
     ]);
     let config = config_for(&endpoint);
     let mut sink = RecordingSink::new();
@@ -911,6 +1136,106 @@ fn an_unmarked_transform_does_not_become_a_file() {
     assert!(
         !scratch.path.join("out.md").exists(),
         "the remark was written as a file"
+    );
+}
+
+/// An empty processor reply is asked for once more, and the second, marked answer fills the slot.
+#[test]
+fn an_empty_processor_reply_is_asked_for_once_more() {
+    let scratch = Scratch::new("empty-again");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+        ])),
+        says(""),
+        processor_reply("RAW TEXT"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    run(&config, &workspace, "shout in.md", &mut sink).expect("the run");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("in.md")).unwrap(),
+        "RAW TEXT"
+    );
+}
+
+/// The one further try is shared: an empty reply and then an unmarked one, or two empty ones, fail
+/// the step, and no third call is made.
+#[test]
+fn a_processor_gets_one_further_try_whatever_went_wrong() {
+    for (first, second) in [("", "an unmarked answer"), ("", "")] {
+        let scratch = Scratch::new("one-further-try");
+        std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve(vec![
+            any_shape(),
+            plan(json!([
+                {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+                {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+                {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+            ])),
+            says(first),
+            says(second),
+            processor_reply("NEVER ASKED FOR"),
+        ]);
+        let config = config_for(&endpoint);
+        let mut sink = RecordingSink::new();
+
+        assert!(
+            run(&config, &workspace, "shout in.md", &mut sink).is_err(),
+            "{first:?} then {second:?} filled the slot"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("in.md")).unwrap(),
+            "raw text"
+        );
+        // Shape, plan, and the two processor calls.
+        assert_eq!(received.try_iter().count(), 4, "{first:?} then {second:?}");
+    }
+}
+
+/// A plan has no planner to ask again for the line, so the driver asks once more itself, and a
+/// second answer that marks its document fills the slot with that document and nothing else.
+#[test]
+fn an_unmarked_transform_is_asked_once_more_for_its_document() {
+    let scratch = Scratch::new("unmarked-again");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+        ])),
+        says("RAW TEXT, said without the line"),
+        processor_reply("RAW TEXT"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    run(&config, &workspace, "shout in.md", &mut sink).expect("the run");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("in.md")).unwrap(),
+        "RAW TEXT"
+    );
+    let asked: Vec<String> = received.try_iter().collect();
+    let again = asked.last().expect("a second processor call");
+    assert!(
+        again.contains("marked no document") && again.contains("shout"),
+        "the second call is the plan's instruction and the fixed sentence: {again}"
+    );
+    assert!(
+        !again.contains("said without the line"),
+        "the first answer was fed back into the second call: {again}"
     );
 }
 
@@ -1331,6 +1656,28 @@ impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -1485,6 +1832,28 @@ impl bravebot_agent::confirm::Confirmer for ApprovesThePlanOnly {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(
+        &mut self,
+        _request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_host(
+        &mut self,
+        _request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
     }
 
     fn confirm_move(
@@ -1649,6 +2018,191 @@ fn bypassing_answers_a_credential_a_plan_writes() {
     );
 }
 
+/// TRACE-7 over a planned run. The policy's entry ending in "asking" reads as a person having been
+/// asked, so a step's write it put to somebody is followed by an entry saying what answered, as a
+/// turn's is. Without one, a run the mode answered reads as a run a person approved.
+#[test]
+fn a_planned_write_names_what_answered_it() {
+    use bravebot_agent::PermissionMode;
+    // One step writing `contents` to `notes.md`, with a person behind the mode who says yes, held
+    // to both what the trail says answered and how many writes the person was shown. `vouched`
+    // vouches for the whole tree, which leaves a credential as the only thing that puts the write
+    // to anybody.
+    let check = |mode: PermissionMode, contents: &str, vouched: bool, answered: &[&str], shown| {
+        let scratch = Scratch::new("planned-write-answered");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve(vec![
+            any_shape(),
+            plan(json!([
+                {"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": contents}},
+            ])),
+        ]);
+        let mut trust = TrustStore::new("/work");
+        if vouched {
+            trust.trust(".");
+        }
+        let mut sink = RecordingSink::new();
+        let mut person = RecordsEveryQuestion::default();
+        manifest::run(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("write the notes").with_permission_mode(mode),
+            &mut bravebot_agent::Confining::new(&mut person, mode, false),
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            trust,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("runs");
+        let recorded: Vec<String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "approval",
+                    detail,
+                } if detail.starts_with("answered by")
+                    || detail.starts_with("no mode answered") =>
+                {
+                    Some(detail.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(recorded, answered, "{mode:?}, vouched: {vouched}");
+        assert_eq!(
+            person.writes.len(),
+            shown,
+            "{mode:?}, vouched: {vouched}: the writes the person was shown"
+        );
+    };
+
+    // A path nobody vouched for puts the write to somebody, and accepting edits answers it as
+    // bypassing does.
+    let plain = "notes\n";
+    check(
+        PermissionMode::Ask,
+        plain,
+        false,
+        &["no mode answered, left to the confirmer"],
+        1,
+    );
+    check(
+        PermissionMode::AcceptEdits,
+        plain,
+        false,
+        &["answered by accept-edits mode, nobody was asked"],
+        0,
+    );
+    check(
+        PermissionMode::Bypass,
+        plain,
+        false,
+        &["answered by bypass mode, nobody was asked"],
+        0,
+    );
+
+    // A credential is put to the person under accepting edits, so no mode answered it there.
+    let credential = format!("{GENERATED_SECRET}\n");
+    check(
+        PermissionMode::AcceptEdits,
+        &credential,
+        true,
+        &["no mode answered, left to the confirmer"],
+        1,
+    );
+    check(
+        PermissionMode::Bypass,
+        &credential,
+        true,
+        &["answered by bypass mode, nobody was asked"],
+        0,
+    );
+
+    // A write the policy did not put to anybody was not answered by anything.
+    check(PermissionMode::Bypass, plain, true, &[], 0);
+}
+
+/// TRACE-7 over a planned run: the trail names the permission mode the run began in, once, before
+/// the plan is frozen and so before any step runs. A run under the flag that skips permissions and
+/// one that asked look the same once the key has moved off bypass, and the trail is the only record
+/// that outlives the screen.
+#[test]
+fn a_manifest_run_records_the_mode_it_began_with() {
+    use bravebot_agent::PermissionMode;
+    for mode in [
+        PermissionMode::Ask,
+        PermissionMode::AcceptEdits,
+        PermissionMode::Plan,
+        PermissionMode::Bypass,
+    ] {
+        // A plan that writes nothing, so plan mode runs it as the other three do.
+        let scratch = Scratch::new("records-the-mode");
+        std::fs::write(scratch.path.join("a.md"), "hello").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve(vec![
+            any_shape(),
+            plan(json!([
+                {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+                {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+            ])),
+        ]);
+        let mut trust = TrustStore::new("/work");
+        trust.trust(".");
+        let mut sink = RecordingSink::new();
+        manifest::run(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("what is in a.md").with_permission_mode(mode),
+            &mut bravebot_agent::Confining::new(&mut RecordsEveryQuestion::default(), mode, false),
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            trust,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("runs");
+        let trail = sink.events();
+        let recorded: Vec<(usize, &str)> = trail
+            .iter()
+            .enumerate()
+            .filter_map(|(at, event)| match event {
+                Event::GatePassed {
+                    gate: "permission_mode",
+                    detail,
+                } => Some((at, detail.as_str())),
+                _ => None,
+            })
+            .collect();
+        let expected = format!("the manifest run began in {} mode", mode.name());
+        assert_eq!(
+            recorded
+                .iter()
+                .map(|(_, detail)| *detail)
+                .collect::<Vec<_>>(),
+            [expected.as_str()],
+            "{mode:?}: {trail:?}"
+        );
+        let frozen = trail
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    Event::GatePassed {
+                        gate: "manifest",
+                        ..
+                    }
+                )
+            })
+            .expect("the plan was frozen");
+        assert!(
+            recorded[0].0 < frozen,
+            "{mode:?}: the mode was recorded after the plan was frozen: {trail:?}"
+        );
+    }
+}
+
 /// CRED-13's `a` over a planned run: a second step putting another secret in the same file is not
 /// asked about, and the run ends with the last value in it. The control is the same plan answered
 /// with a plain yes, which is asked twice.
@@ -1743,6 +2297,55 @@ fn a_plan_whose_routing_field_is_not_text_is_refused() {
     let _ = received.recv();
     let _ = received.recv();
     assert!(received.try_recv().is_err(), "something asked the model");
+}
+
+/// A body the planner gave as a number or a list is refused as a plan. It used to pass validation
+/// and reach the driver as an empty string, so an approved `write notes.md` truncated the file.
+#[test]
+fn a_plan_whose_body_field_is_not_text_is_refused() {
+    let cases = [
+        (
+            json!({"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": 42}}),
+            "'contents' must be text",
+        ),
+        (
+            json!({"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": ["a"]}}),
+            "'contents' must be text",
+        ),
+        (
+            json!({"capability": "TRANSFORM", "args": {"reads": ["doc"], "instruction": 7, "out_slot": "out"}}),
+            "'instruction' must be text",
+        ),
+    ];
+    for (index, (step, message)) in cases.into_iter().enumerate() {
+        let scratch = Scratch::new(&format!("body-shape-{index}"));
+        std::fs::write(scratch.path.join("notes.md"), "keep me").unwrap();
+        std::fs::write(scratch.path.join("a.md"), "hello").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve(vec![
+            any_shape(),
+            plan(json!([
+                {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+                step,
+            ])),
+        ]);
+        let config = config_for(&endpoint);
+        let mut sink = RecordingSink::new();
+
+        let failure = run(&config, &workspace, "write notes", &mut sink).expect_err("must refuse");
+        assert!(
+            failure.to_string().contains(message),
+            "unhelpful message: {failure}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+            "keep me"
+        );
+        let _ = received.recv();
+        let _ = received.recv();
+        assert!(received.try_recv().is_err(), "something asked the model");
+    }
 }
 
 /// A path leaving the workspace is refused at validation, so it never reaches a person to
@@ -1895,7 +2498,7 @@ fn a_turn_reports_no_planning_record() {
     let config = config_for(&endpoint);
     let mut sink = RecordingSink::new();
 
-    let outcome = bravebot_agent::turn::run(
+    let outcome = turns::run(
         &config,
         &bravebot_net::Egress::new(),
         &workspace,
@@ -2404,5 +3007,49 @@ fn a_plan_writing_untrusted_bytes_into_a_memory_records_it() {
         bravebot_agent::memory::Record::new(&home.path, &directory).paths(),
         vec![format!("{directory}/.bravebot/memory/notes-keeper.md")],
         "a plan left a memory untrusted and nothing recorded it"
+    );
+}
+
+/// The answer step counts the lines it reports inside the kernel, before the text is released.
+///
+/// The note says how many lines were shown. Taking that count from the text after it was
+/// released for the screen is the driver counting bytes a witness was minted to carry, so the
+/// trail has to show the answer reshaped by the gate, and before the display release.
+#[test]
+fn the_answer_steps_line_count_is_taken_inside_the_kernel() {
+    let scratch = Scratch::new("answer-count");
+    std::fs::write(scratch.path.join("a.md"), "one\ntwo\nthree\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "one"}},
+            {"capability": "ANSWER", "args": {"from_slot": "one"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let outcome = run(&config, &workspace, "say what a.md holds", &mut sink).expect("runs");
+    assert_eq!(outcome.reply_for_display(), "one\ntwo\nthree\n");
+
+    let position = |gate: &str, detail: &str| {
+        sink.events().iter().position(|event| {
+            matches!(
+                event,
+                Event::GatePassed { gate: passed, detail: said }
+                    if *passed == gate && said.contains(detail)
+            )
+        })
+    };
+    let counted = position("render", "answer: content reshaped without being read")
+        .unwrap_or_else(|| panic!("the answer was never reshaped: {:?}", sink.events()));
+    let released = position("display", "what a step produced")
+        .unwrap_or_else(|| panic!("no display release: {:?}", sink.events()));
+    assert!(
+        counted < released,
+        "the answer was counted after it was released: {:?}",
+        sink.events()
     );
 }

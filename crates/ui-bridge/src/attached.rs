@@ -161,7 +161,7 @@ fn over_the_cap(path: &Path, bytes: u64) -> Option<String> {
 /// More files than one drop names; a longer list is not a drop.
 const MOST_IN_ONE_DROP: usize = 100;
 
-/// What each dropped file is, for a front end staging a drop (DROP-11).
+/// What each dropped file is, for a front end staging a drop (DROP-12).
 ///
 /// `files` is a list of `{ "path", "bytes" }`, the size being what the front end found on disk, and
 /// the answer is one entry per file in the same order: `null` for a type nothing takes, whose path

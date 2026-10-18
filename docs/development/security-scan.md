@@ -44,3 +44,12 @@ Branch scans select `sveltegrep` only when the diff includes an HTML or Svelte f
 that still exists. Without those inputs, its search for extracted scripts would walk
 ignored build output and nested worktrees for no benefit. Full scans and explicit
 `--runners` selections retain it. Branch scans print each runner's start and finish.
+
+## Socket
+
+The "Socket Security" checks read the dependency manifests in the tree. `socket.yml` at the
+repository root excludes `ui/scripts/demo/project/`, whose `package.json` files belong to fictional
+demo fixtures that nothing installs and that have no lockfile. Without the exclusion Socket
+resolves their version ranges on every scan and reports whatever release is newest, so a pull
+request fails the "Recently published" rule each time one of those packages publishes. A manifest
+added elsewhere is scanned, so give it a lockfile.

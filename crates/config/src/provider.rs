@@ -29,11 +29,20 @@ use std::fmt;
 ///
 /// The third column is the variable the other tool reads that id's token from. A block copied out of
 /// it relies on that variable without naming it, so an import names it for the block.
-const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[(
-    "openrouter",
-    "https://openrouter.ai/api/v1",
-    "OPENROUTER_API_KEY",
-)];
+const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[
+    (
+        "openrouter",
+        "https://openrouter.ai/api/v1",
+        "OPENROUTER_API_KEY",
+    ),
+    (OPENAI_ID, "https://api.openai.com/v1", "OPENAI_API_KEY"),
+];
+
+/// The id naming OpenAI, which is reached at the endpoint compiled in for it.
+///
+/// Named apart from the table because a reply from it is read differently: see
+/// [`Provider::answers_under_the_model_behind_an_alias`].
+const OPENAI_ID: &str = "openai";
 
 /// The id naming AWS Bedrock, which is reached by signing rather than by a bearer token.
 ///
@@ -340,6 +349,16 @@ impl Provider {
     /// Another service either ignores the member or refuses the request for carrying it.
     pub fn takes_extra_content(&self) -> bool {
         self.id == GOOGLE_VERTEX_ID
+    }
+
+    /// Whether a reply names the model behind the name the request carried, not that name.
+    ///
+    /// OpenAI only: a name such as `gpt-4o` is an alias, and the reply names the dated model it
+    /// resolved to. Every other gateway answers under the slug it was asked for, so a name that
+    /// comes back changed is a substitution there and the alias working here. OpenAI refuses a
+    /// name it does not serve, so there is no substitution for the comparison to find.
+    pub fn answers_under_the_model_behind_an_alias(&self) -> bool {
+        self.id == OPENAI_ID
     }
 
     /// What to show a person choosing this provider.
@@ -1048,6 +1067,43 @@ mod tests {
                 "options": {"baseURL": "https://proxy.example.invalid/v1"}
             }}}"#);
         assert_eq!(provider.base_url, "https://proxy.example.invalid/v1");
+    }
+
+    /// OpenAI is a gateway like any other once its host is known: the key goes in `authorization`,
+    /// nothing is compiled in to offer, and no tool call carries anything back that this program
+    /// keeps. A name that changed any of that would be a second code path for a service that
+    /// speaks the protocol everything else here speaks.
+    #[test]
+    fn an_openai_entry_is_reached_at_openais_host_like_any_other_gateway() {
+        let provider = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        assert_eq!(provider.base_url, "https://api.openai.com/v1");
+        assert_eq!(
+            provider.chat_completions_url(),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(provider.models_url(), "https://api.openai.com/v1/models");
+        assert_eq!(provider.host(), "api.openai.com");
+        assert_eq!(
+            provider.credential_header("a-key"),
+            ("authorization", "Bearer a-key".to_string())
+        );
+        assert_eq!(provider.compiled_roster(), None);
+        assert!(!provider.takes_extra_content());
+
+        let exported = |name: &str| (name == "OPENAI_API_KEY").then(|| "a-key".to_string());
+        assert_eq!(token(&provider.credential(exported)), Some("a-key"));
+    }
+
+    /// A proxy, or an Azure-style deployment of the same protocol, is reached by stating where it
+    /// is; the host compiled in for the name is only what an absent `baseURL` falls back to.
+    #[test]
+    fn a_stated_endpoint_beats_the_one_compiled_in_for_openai() {
+        let provider = one(r#"{"provider": {"openai": {
+                "env": ["OPENAI_API_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/openai/v1"}
+            }}}"#);
+        assert_eq!(provider.base_url, "https://proxy.example.invalid/openai/v1");
+        assert_eq!(provider.host(), "proxy.example.invalid");
     }
 
     /// A trailing slash on the endpoint would otherwise produce a double slash in the path, which

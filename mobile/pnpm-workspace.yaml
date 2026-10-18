@@ -1,0 +1,10 @@
+# Gradle includes @react-native/gradle-plugin from ../node_modules, a package react-native
+# depends on rather than the app, and Metro and the React Native CLI also walk node_modules
+# from the app directory. pnpm's default layout puts neither at the top level.
+nodeLinker: hoisted
+
+# Known high advisory in build-time tooling (Metro and the React Native CLI) that is not part of the app
+# bundle; braces has no patched release. Any other high or critical advisory fails `pnpm audit --audit-level=high` in CI.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-vfj7-8cjw-p6xm

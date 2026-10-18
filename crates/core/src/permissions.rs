@@ -69,7 +69,7 @@ impl Subject {
     }
 
     /// The name in a rule, or `None` for anything this agent has no family for.
-    fn parse(name: &str) -> Option<Self> {
+    pub fn parse(name: &str) -> Option<Self> {
         match name {
             "Read" => Some(Self::Read),
             "Edit" => Some(Self::Edit),
@@ -201,6 +201,14 @@ pub struct Rule {
     /// it are followed ([`Permissions::follow_links`]). Part of this rule rather than rules of
     /// their own, since they are one rule about one file and a report counts what was written.
     landed: Vec<Pattern>,
+    /// The rule as the list spelled it, trimmed, for a report that names which rule decided.
+    written: String,
+    /// Why the person wrote it, where their own settings file said so (PERM-1).
+    ///
+    /// Display text and nothing else. Nothing here reads it, compares it, or matches on it: it is
+    /// set after the rules are read, by whoever held the file, and is only ever handed to a report.
+    /// A rule decides exactly what it decided before one was written.
+    reason: Option<String>,
 }
 
 impl Rule {
@@ -213,10 +221,25 @@ impl Rule {
         // A rejection names the entry in the spelling the file used, not the trimmed text that was
         // read. Two lines that differ only in surrounding space are two entries somebody has to
         // find in their file, and a report that trimmed them names neither.
-        Self::parse_trimmed(text.trim(), anchors).map_err(|rejected| Rejected {
-            text: text.to_string(),
-            ..rejected
-        })
+        Self::parse_trimmed(text.trim(), anchors)
+            .map(|rule| Self {
+                written: text.trim().to_string(),
+                ..rule
+            })
+            .map_err(|rejected| Rejected {
+                text: text.to_string(),
+                ..rejected
+            })
+    }
+
+    /// The rule as the list spelled it.
+    pub fn written(&self) -> &str {
+        &self.written
+    }
+
+    /// Why the person wrote it, or `None` where no reason of theirs is attached (PERM-1).
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
     }
 
     /// [`Rule::parse`] on text with its surrounding space already removed.
@@ -267,6 +290,8 @@ impl Rule {
             subject,
             pattern,
             landed: Vec::new(),
+            written: String::new(),
+            reason: None,
         })
     }
 
@@ -576,6 +601,27 @@ impl Permissions {
         (permissions, rejected)
     }
 
+    /// Attach to each rule the reason the person gave for writing it (PERM-1).
+    ///
+    /// `reason_of` is asked about every rule in turn, by the list it is in (`deny`, `ask` or
+    /// `allow`) and the text it was written as, and answers with the reason or `None`. Asked rather
+    /// than passed in alongside the lists because which file wrote an entry is not this crate's to
+    /// know, and only the person's own file's reason is theirs to show.
+    ///
+    /// Nothing in this crate reads what comes back. It is stored on the rule, handed to a report,
+    /// and never matched, compared or branched on, so this cannot change what any rule decides.
+    pub fn explain(&mut self, reason_of: impl Fn(&str, &str) -> Option<String>) {
+        for (list, rules) in [
+            ("deny", &mut self.deny),
+            ("ask", &mut self.ask),
+            ("allow", &mut self.allow),
+        ] {
+            for rule in rules.iter_mut() {
+                rule.reason = reason_of(list, &rule.written);
+            }
+        }
+    }
+
     /// The paths a definition's `writes:` line lets a delegate edit, read as `Edit` patterns on the
     /// terms of this host (DELEGATE-28).
     ///
@@ -634,6 +680,18 @@ impl Permissions {
         self.deny.is_empty() && self.ask.is_empty() && self.allow.is_empty()
     }
 
+    /// Whether any `deny` rule is about reading or writing a path.
+    pub fn denies_any_path(&self) -> bool {
+        self.deny
+            .iter()
+            .any(|rule| matches!(rule.subject, Subject::Read | Subject::Edit))
+    }
+
+    /// Whether any `deny` rule is about reading a path.
+    pub fn denies_any_read(&self) -> bool {
+        self.deny.iter().any(|rule| rule.subject == Subject::Read)
+    }
+
     /// How many rules are in force, for a report.
     pub fn len(&self) -> usize {
         self.deny.len() + self.ask.len() + self.allow.len()
@@ -685,8 +743,13 @@ impl Permissions {
     /// rather than at each gate, so a path reaches the rules one way whichever gate it came through
     /// and a gate added later cannot be the one that forgot.
     pub fn for_path(&self, subject: Subject, path: &str) -> Decision {
+        decision_of(self.rule_for_path(subject, path))
+    }
+
+    /// The rule that decides [`Permissions::for_path`], and which list it is in.
+    pub fn rule_for_path(&self, subject: Subject, path: &str) -> Option<(Ruling, &Rule)> {
         let path = key_of(path, self.backslash_separates, self.folds_case);
-        self.decide(|rule, restricting| {
+        self.deciding(|rule, restricting| {
             rule.subject == subject && rule.covers_path(&path, restricting)
         })
     }
@@ -697,8 +760,13 @@ impl Permissions {
     /// The words and not a line, because a line loses where one word ends. `"ls /x"`, one program
     /// word naming a script at `ls /x`, would read as `ls` given `/x` (PERM-5).
     pub fn for_command<S: AsRef<str>>(&self, argv: &[S]) -> Decision {
+        decision_of(self.rule_for_command(argv))
+    }
+
+    /// The rule that decides [`Permissions::for_command`] for one stage.
+    pub fn rule_for_command<S: AsRef<str>>(&self, argv: &[S]) -> Option<(Ruling, &Rule)> {
         let argv = places(argv);
-        self.decide(|rule, restricting| {
+        self.deciding(|rule, restricting| {
             rule.subject == Subject::Bash && rule.covers_command(&argv, restricting)
         })
     }
@@ -708,11 +776,16 @@ impl Permissions {
     /// The host alone, never the path or the query: those are where a URL carries what somebody
     /// asked for, and a rule matching on them would be answering a different question each time.
     pub fn for_host(&self, host: &str) -> Decision {
+        decision_of(self.rule_for_host(host))
+    }
+
+    /// The rule that decides [`Permissions::for_host`].
+    pub fn rule_for_host(&self, host: &str) -> Option<(Ruling, &Rule)> {
         // A URL may spell a fully-qualified name with a trailing dot; that dot is spelling, not a
         // label, and a rule about `example.com` is about the same host either way.
         let host = host.to_ascii_lowercase();
         let host = host.strip_suffix('.').unwrap_or(&host);
-        self.decide(|rule, _| rule.subject == Subject::WebFetch && rule.covers_host(host))
+        self.deciding(|rule, _| rule.subject == Subject::WebFetch && rule.covers_host(host))
     }
 
     /// What the rules say about calling `tool` of the server declared as `alias`.
@@ -722,7 +795,12 @@ impl Permissions {
     /// in part from what it read, so a rule matching them would be the driver branching on
     /// content. SERVERS-7.
     pub fn for_mcp(&self, alias: &str, tool: &str) -> Decision {
-        self.decide(|rule, _| rule.subject == Subject::Mcp && rule.covers_tool(alias, tool))
+        decision_of(self.rule_for_mcp(alias, tool))
+    }
+
+    /// The rule that decides [`Permissions::for_mcp`].
+    pub fn rule_for_mcp(&self, alias: &str, tool: &str) -> Option<(Ruling, &Rule)> {
+        self.deciding(|rule, _| rule.subject == Subject::Mcp && rule.covers_tool(alias, tool))
     }
 
     /// What the rules say about running a whole pipeline.
@@ -760,17 +838,27 @@ impl Permissions {
     /// The order is the whole of the precedence, and specificity does not enter into it: a broad
     /// deny beats a narrow allow, so a deny rule cannot carry exceptions. That is what makes a
     /// deny rule readable as a statement about what will not happen.
-    fn decide(&self, matches: impl Fn(&Rule, bool) -> bool) -> Decision {
-        for (rules, ruling, restricting) in [
+    fn deciding(&self, matches: impl Fn(&Rule, bool) -> bool) -> Option<(Ruling, &Rule)> {
+        [
             (&self.deny, Ruling::Deny, true),
             (&self.ask, Ruling::Ask, true),
             (&self.allow, Ruling::Allow, false),
-        ] {
-            if rules.iter().any(|rule| matches(rule, restricting)) {
-                return Decision::Ruled(ruling);
-            }
-        }
-        Decision::Unmatched
+        ]
+        .into_iter()
+        .find_map(|(rules, ruling, restricting)| {
+            rules
+                .iter()
+                .find(|rule| matches(rule, restricting))
+                .map(|rule| (ruling, rule))
+        })
+    }
+}
+
+/// What a deciding rule, or the lack of one, comes to.
+fn decision_of(deciding: Option<(Ruling, &Rule)>) -> Decision {
+    match deciding {
+        Some((ruling, _)) => Decision::Ruled(ruling),
+        None => Decision::Unmatched,
     }
 }
 
@@ -907,19 +995,17 @@ impl PathPattern {
     /// pattern whose first segment is a plain name and which has more after it is the case Claude
     /// Code treats asymmetrically, and `floats_when_restricting` carries that.
     ///
-    /// `dotted` is whether the specifier was written `./x`, which starts at the workspace even with
-    /// one segment: it is not a name, so it neither floats to any depth nor restricts at one.
+    /// `dotted` is whether the specifier was written `./x`, which starts at the top of the
+    /// workspace however many segments it has: it is not a name, so it neither floats to any depth
+    /// nor reaches a nested copy where it restricts.
     fn relative(pattern: &str, dotted: bool) -> Self {
         let segments = split(pattern);
         let is_a_bare_name = segments.len() == 1 && !dotted;
-        let anchored_segment = segments.len() == 1 && dotted;
         let starts_at_a_named_segment = segments
             .first()
             .is_some_and(|first| first != "**" && !first.contains('*'));
         Self {
-            floats_when_restricting: !is_a_bare_name
-                && !anchored_segment
-                && starts_at_a_named_segment,
+            floats_when_restricting: !is_a_bare_name && !dotted && starts_at_a_named_segment,
             segments: if is_a_bare_name {
                 // A name matches at any depth, which is a leading `**` and nothing else.
                 let mut floated = vec!["**".to_string()];
@@ -1273,6 +1359,135 @@ mod tests {
         assert_eq!(
             permissions.for_command(&words("git push origin main")),
             Decision::Ruled(Ruling::Ask)
+        );
+    }
+
+    /// The rule a report names is the one PERM-2 picks: a broad deny over a narrow allow, and the
+    /// first of two matching rules in one list. An implementation that named the most specific
+    /// match, or the last, would name another rule while the decision stayed the same.
+    #[test]
+    fn the_deciding_rule_is_the_one_the_order_picks() {
+        let permissions = rules(
+            &["Bash(git *)", "Bash(git push *)"],
+            &[],
+            &["Bash(git push origin main)"],
+        );
+        let (ruling, rule) = permissions
+            .rule_for_command(&words("git push origin main"))
+            .expect("a rule decides");
+        assert_eq!((ruling, rule.written()), (Ruling::Deny, "Bash(git *)"));
+
+        let permissions = rules(&[], &["Read(src/**)"], &["Read(src/lib.rs)"]);
+        let (ruling, rule) = permissions
+            .rule_for_path(Subject::Read, "src/lib.rs")
+            .expect("a rule decides");
+        assert_eq!((ruling, rule.written()), (Ruling::Ask, "Read(src/**)"));
+
+        assert!(
+            permissions
+                .rule_for_path(Subject::Read, "docs/a.md")
+                .is_none()
+        );
+        assert!(
+            permissions
+                .rule_for_path(Subject::Edit, "src/lib.rs")
+                .is_none()
+        );
+    }
+
+    /// The host and the server's tool are what the other two families are decided on, so the rule
+    /// named for them is the one whose name matches whole.
+    #[test]
+    fn the_deciding_rule_is_named_for_a_host_and_for_a_tool() {
+        let permissions = rules(
+            &["WebFetch(domain:example.com)"],
+            &["Mcp(weather:get)"],
+            &[],
+        );
+        let (ruling, rule) = permissions
+            .rule_for_host("API.example.com.")
+            .expect("a rule decides");
+        assert_eq!(
+            (ruling, rule.written()),
+            (Ruling::Deny, "WebFetch(domain:example.com)")
+        );
+        assert!(permissions.rule_for_host("notexample.com").is_none());
+        let (ruling, rule) = permissions
+            .rule_for_mcp("weather", "get")
+            .expect("a rule decides");
+        assert_eq!((ruling, rule.written()), (Ruling::Ask, "Mcp(weather:get)"));
+        assert!(permissions.rule_for_mcp("weather", "set").is_none());
+    }
+
+    /// A rule read from a list carries no reason of its own. A field defaulted to anything but
+    /// absence would have a report quote a sentence nobody wrote.
+    #[test]
+    fn a_rule_carries_no_reason_until_one_is_attached() {
+        let permissions = rules(&["Read(.env)"], &["Bash(git push *)"], &["Bash(ls *)"]);
+        for rule in permissions
+            .deny
+            .iter()
+            .chain(&permissions.ask)
+            .chain(&permissions.allow)
+        {
+            assert_eq!(rule.reason(), None);
+        }
+    }
+
+    /// Each rule is asked about by the list it is in and the text it was written as, so a reason
+    /// lands on the rule the person wrote it beside. An implementation that asked by text alone
+    /// would put one list's reason on another list's rule of the same spelling.
+    #[test]
+    fn explain_attaches_a_reason_by_list_and_written_text() {
+        let mut permissions = rules(&["Read(.env)"], &["Read(.env)"], &["Bash(ls *)"]);
+        permissions.explain(|list, written| match (list, written) {
+            ("deny", "Read(.env)") => Some("holds the deployment key".to_string()),
+            ("ask", "Read(.env)") => Some("asked about on purpose".to_string()),
+            _ => None,
+        });
+        assert_eq!(
+            permissions.deny[0].reason(),
+            Some("holds the deployment key")
+        );
+        assert_eq!(permissions.ask[0].reason(), Some("asked about on purpose"));
+        assert_eq!(permissions.allow[0].reason(), None);
+    }
+
+    /// A reason is display text. Every decision is the same after one is attached, including for a
+    /// reason whose own words name a path and a program the rules decide about, which an
+    /// implementation that matched or trimmed against a reason would answer differently.
+    #[test]
+    fn a_reason_decides_nothing() {
+        let deny = ["Read(.env)"];
+        let ask = ["Bash(git push *)"];
+        let allow = ["Bash(git diff *)"];
+        let plain = rules(&deny, &ask, &allow);
+        let mut explained = rules(&deny, &ask, &allow);
+        explained.explain(|_, _| Some("allow Read(.env) and Bash(git push *)".to_string()));
+
+        for (subject, path) in [
+            (Subject::Read, ".env"),
+            (Subject::Read, "src/main.rs"),
+            (Subject::Edit, ".env"),
+        ] {
+            assert_eq!(
+                explained.for_path(subject, path),
+                plain.for_path(subject, path)
+            );
+        }
+        for line in ["git push origin main", "git diff --stat", "rm -rf /"] {
+            assert_eq!(
+                explained.for_command(&words(line)),
+                plain.for_command(&words(line))
+            );
+        }
+        assert_eq!(
+            explained
+                .rule_for_path(Subject::Read, ".env")
+                .map(|(ruling, rule)| (ruling, rule.written().to_string())),
+            plain
+                .rule_for_path(Subject::Read, ".env")
+                .map(|(ruling, rule)| (ruling, rule.written().to_string()))
         );
     }
 
@@ -1630,6 +1845,34 @@ mod tests {
             rules(&[], &[], &["Edit(notes.md)"]).for_path(Subject::Edit, "vendor/pkg/notes.md"),
             Decision::Ruled(Ruling::Allow)
         );
+    }
+
+    /// PERM-4: `./src/**` names the `src` at the top of the workspace in every list, so a deny or
+    /// ask rule written that way does not reach the nested copy that `src/**` reaches. It is the
+    /// spelling a `/x` rule from a checkout's settings file is read as (PERM-3), and there it pins
+    /// the rule to one place.
+    #[test]
+    fn a_dotted_pattern_of_several_segments_stays_at_the_top_in_every_list() {
+        for list in 0..3 {
+            let rule = "Edit(./src/**)";
+            let permissions = match list {
+                0 => rules(&[rule], &[], &[]),
+                1 => rules(&[], &[rule], &[]),
+                _ => rules(&[], &[], &[rule]),
+            };
+            assert!(
+                matches!(
+                    permissions.for_path(Subject::Edit, "src/app.ts"),
+                    Decision::Ruled(_)
+                ),
+                "list {list}: ./src/** missed the workspace's own src"
+            );
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "vendor/pkg/src/lib.js"),
+                Decision::Unmatched,
+                "list {list}: ./src/** floated to a nested copy"
+            );
+        }
     }
 
     /// An anchored pattern means the place it names, in every list, which is how somebody pins a

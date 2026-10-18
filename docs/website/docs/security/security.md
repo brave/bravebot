@@ -6,6 +6,70 @@ description: What Brave Bot defends against, what it does not, and what leaves t
 
 # Security
 
+:::caution[The logins and caches a program the agent runs can reach by default]
+On Linux and macOS, under the default sandbox mode, a program the agent runs, and every program it
+starts, such as the install scripts an `npm install` runs, can:
+
+- read the files tools keep a login in outside the locations the sandbox refuses, such as
+  `~/.config/gh`, `~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc`, `~/.npmrc`,
+  `~/.cargo/credentials.toml`, `~/.pypirc`, `~/.m2/settings.xml` and `~/.gradle/gradle.properties`;
+- read every environment variable Brave Bot was started with except its own signing key and the
+  variables a gateway you configured names as holding its key, so `GITHUB_TOKEN`, `NPM_TOKEN` and
+  `AWS_SECRET_ACCESS_KEY` among them;
+- on macOS, read the login keychain file `~/Library/Keychains/login.keychain-db`, which lets a
+  lookup through the keychain service reach the items in it, where macOS decides which items it
+  answers with and which it asks you about first;
+- write the toolchain caches, among them `~/.cargo/registry`, `~/.cargo/git`, `~/go/pkg/mod`,
+  `~/.m2/repository` and `~/.gradle/wrapper`, which the next `cargo build`, `go build`, `mvn` or
+  `./gradlew` you run yourself runs code from, outside the sandbox;
+- with the network open, which is the default, send what it read to any host.
+
+These are the default because `git`, `gh`, `npm` and `cargo` read their logins and write their
+caches there, including when `make` or another script starts them, and the program the sandbox sees
+then is the script. Each is withheld by a setting in `~/.bravebot/settings.json`, and the programs
+that use what it withholds then fail under the sandbox:
+
+- `{"sandbox": {"network": {"allowedHosts": ["registry.npmjs.org"]}}}` holds a program to the hosts
+  listed, with GitHub added for a `git` or `gh` command that talks to a remote and its own registry
+  added for `cargo`, `npm`, `pip` and `go`. Other hosts are refused, and so is a listed name that
+  resolves to this machine, a private network or the cloud metadata address, unless each such
+  address is an entry of its own. An entry cannot be an IPv6 address, so `localhost`, which most
+  machines also resolve to `::1`, is refused; list `127.0.0.1` and ask for that.
+  An allowed host can still
+  receive what a program read, such as a package it publishes to that registry, and on macOS a
+  certificate check can fetch from the address the certificate names.
+- `{"sandbox": {"filesystem": {"denyRead": ["~/.npmrc", "~/Library/Keychains/login.keychain-db"]}}}`
+  refuses a token file or the keychain file, to `gh` and git's `osxkeychain` helper as well.
+- `{"run": {"scrubEnv": ["GITHUB_TOKEN", "NPM_TOKEN", "AWS_*"]}}` withholds those variables.
+- `{"sandbox": {"mode": "strict"}}` reads a credential only for a command that is lent one (a `git`
+  or `gh` command that talks to a remote, `aws`, `kubectl` or `docker`, or a scope you approved for
+  the line), reads no keychain file, and lets a program reach only the cache of its own toolchain or
+  one you approved for the line, so a `cargo build` that `make` starts has no cache to read or
+  write. A `denyWrite` entry takes one cache from every program instead.
+
+`{"run": {"network": "closed"}}` takes the network from a program that has no reason for it. A
+package manager keeps it, and so do the install scripts it runs.
+
+`{"git": {"identities": {"github.com/your-account": "~/.ssh/your-account.pub"}}}` has a `git`
+command whose arguments name an ssh address of that owner, such as
+`git push git@github.com:your-account/repo.git main`, offer GitHub that key first, and after it only
+keys your `~/.ssh/config` names for the host. ssh otherwise offers the agent's keys in order and
+GitHub takes the first one it knows, so with keys of two accounts in one agent every push goes out
+as one of them. A remote given by name, such as `origin`, is not matched, because its address is in
+the repository's own configuration. On those commands it replaces a `GIT_SSH_COMMAND`, `GIT_SSH` or
+`core.sshCommand` of yours. Only your own settings file and a `--settings` file outside the
+workspace can set it.
+
+Without an entry for the owner, the run prompt in the terminal interface numbers the public keys
+your own ssh files name and asks which one to offer, once per owner, and keeps the answer in
+`~/.bravebot/reach.jsonl`. An entry still decides over a kept answer.
+
+On Linux, on a kernel whose Landlock is older than its ninth version, a program also reaches every
+unix socket that has a path, whatever these settings say: the ssh agent's, with every key it holds,
+`docker.sock`, and the session bus, through which `systemd-run --user` starts a program outside the
+sandbox.
+:::
+
 ## What this defends against
 
 **Indirect prompt injection.** Text that arrives from somewhere nobody vouched for (a web page, a
@@ -49,17 +113,23 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   was opened on, its scratch directory, the system temporary directory and the toolchain caches. A
   command that names `aws`, `kubectl` or `docker` is lent that tool's directory, and a `git push` the
   agent socket, never a private key. The files a tool reads by name to do its job, such as the `gh`
-  login, `~/.npmrc` and `~/.netrc`, are readable. On Windows programs are not confined and run
-  with the access your own shell would give them. Their own network requests do not go through the
-  one way out described below, so an approved `curl`, `git push` or package install can read what its
-  profile reaches and send it with nothing here routing or inspecting the traffic.
+  login, `~/.npmrc` and `~/.netrc`, are readable. On macOS a program cannot listen on a port of the
+  machine unless the planner asks for `loopback` on that line and you approve it, and only `git`
+  itself writes a `.git`, so a script, `make`, `npm` or `gh` that runs git to commit, check out or
+  clone is refused. On Windows a program runs in a container that reaches only the directories the
+  session was opened on, its scratch directory, the system temporary directory, the system and
+  program directories, git's configuration files, its toolchain's caches and the credential scope
+  its command names, so in no sandbox mode but `off` does it read the rest of the machine. A
+  program's own network requests do not go through the one way out described below, so an approved
+  `curl`, `git push` or package install can read what its profile reaches and send it with nothing
+  here routing or inspecting the traffic.
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
 
-## Three deliberate exceptions
+## Four deliberate exceptions
 
-The policy layer looks at untrusted bytes in exactly three places, all written down rather than left
-to be found.
+Brave Bot looks at untrusted bytes to decide something in four places, three in the policy layer
+and one in the search, all written down rather than left to be found.
 
 **Splitting a processor's answer.** A processor returns one piece of text holding two things: a remark
 for the person watching, and the document to be written. It marks where the document begins, and the
@@ -82,6 +152,17 @@ which banner the approval prompt carries: the bytes are drawn below it either wa
 answer the question are offered either way, and nothing is promoted until you say so. An attacker who
 owns the content can force the reassuring word, and what that buys them is a quieter sentence above
 content you are still reading for yourself.
+
+**Searching files nobody vouched for.** A search tests every line of every file it walks against the
+pattern, including files you did not vouch for, so which lines match, how many, and whether the search
+reports itself incomplete are decided by those files' bytes. The lines never reach the model: one
+unvouched file makes the whole result untrusted, and the model is given a reference to it. What
+reaches the model is the result's size, whether it was cut short and which limit cut it, the offset
+for the next page, and, when it asks for a page past the last match, how many there were. An attacker
+who owns one of the files can set those numbers, make the model spend searches paging through a large
+result, and make one search read a very large file.
+They cannot choose which files are searched, how the result is labelled, or any destination, and the
+model never sees a line of text from the file.
 
 ## What leaves the process
 
@@ -157,15 +238,31 @@ Confinement bounds a process started to run code Brave Bot did not write, so a s
 none of those is inside no such boundary, and the level is what your machine offers rather than
 something holding the session back.
 
-**Sandbox modes.** The programs the agent runs start under one of three modes. `standard` is the one
-above and is the default. `strict` reads nothing on the machine beyond what the program's binary
-needs, the session's directories and the credential scope its command names. `off` starts programs
-with no profile. Choose one with `--sandbox <mode>` or with `{"sandbox": {"mode": "strict"}}` in
-`~/.bravebot/settings.json`. A repository's `.bravebot/settings.json` can ask for `strict` and
-nothing looser, so a checkout cannot unconfine whoever opens it. A managed file that pins a mode is a
+**Sandbox modes.** The programs the agent runs start under one of four modes. On Linux and macOS,
+`read-only` reads the machine as above and writes nothing in the session's directories, the scratch
+directory or the toolchain caches. `workspace-write` reads the same and also writes the session's
+directories, the scratch directory and the toolchain caches. `strict` reads nothing on the machine
+beyond what the program's binary needs, the session's directories and the credential scope its
+command names. On Windows no mode but `off` reads the machine: `strict` and `workspace-write` give a
+program the same container, and `read-only` gives it that container without its writes to the
+session's directories, the scratch directory and the toolchain caches. `off` starts programs with no
+profile. The default is `workspace-write`. Choose one with `--sandbox <mode>` or with
+`{"sandbox": {"mode": "strict"}}` in `~/.bravebot/settings.json`. The
+earlier name of `workspace-write`, `standard`, is still read in the
+flag, `/sandbox`, the settings files and the managed file, and is reported as `workspace-write`. A repository's `.bravebot/settings.json` can ask for `strict` and
+nothing looser, so a checkout cannot unconfine whoever opens it. Its `strict` is not obeyed where your
+settings or the managed file chose `read-only`, since `strict` writes the session's directories. A managed file that pins a mode is a
 floor: a flag or a setting looser than it stops the session from starting, and `bravebot doctor`
-says which files disagree. The desktop app reads `off` as `standard`. When the mode is not
-`standard`, the opening screen and `/status` say so.
+says which files disagree. A pin of `strict` also refuses `read-only`, and a pin of `read-only` also
+refuses `strict`, since `strict` writes the session's directories. `read-only` stops writes on this
+machine only: the network stays as `run.network` sets it, and `git push` or `gh pr create` still
+reaches the remote with your credentials. Under it the agent's file tools write nothing either,
+a manifest run that writes a file is refused, a delegate is not given a checkout of its own, a
+command line that redirects output into a file is refused, and a request from the agent to write a
+path is refused, all of these even in accept-edits mode and with `--dangerously-skip-permissions`.
+Redirecting to `/dev/null` still runs. The desktop app reads `off` as
+`workspace-write`. When the mode is not `workspace-write`, the opening screen and `/status` say so,
+and `bravebot doctor` and `/sandbox` say what chose it.
 
 Where confinement is used, it **fails closed**: if it cannot be established the process does not run,
 rather than running unconfined. A profile starts denying everything and grants accumulate onto it, and
@@ -183,7 +280,11 @@ is the same silent degradation, reached one grant at a time.
 **On macOS a write grant does not reach a `.git`.** git runs the commands a repository's
 configuration and hooks name, unconfined, the next time anybody runs git there, so a confined process
 that could write one could run code outside its confinement. A grant to write a directory refuses a
-write to any `.git` beneath it, in any case. On every platform an MCP server is also refused a
+write to any `.git` beneath it, in any case. A program `run` starts is held to that unless the
+program is `git` itself, so an install script, a build or a test cannot plant a hook or a setting
+for git to run later, and a build that clones a git dependency fails there. On Linux and Windows
+nothing holds a `.git` back from a program `run` starts.
+On every platform an MCP server is also refused a
 directory inside a repository. Linux's Landlock cannot hold one directory back from a grant, so there
 a `.git` beneath a server's directory, its home or the temporary directory is one it may write.
 
@@ -218,7 +319,10 @@ survives.
 **The environment is the caller's.** A confined process starts with the environment this process
 holds. A grant over paths can neither withhold nor hand over what sits in a variable, and a credential
 or an agent socket does, so which of its own variables a program is trusted with stays the caller's
-decision rather than something that differs per platform.
+decision rather than something that differs per platform. On macOS a confined process cannot use
+`sysctl(KERN_PROCARGS2)` to read another process's exec-time environment, including bravebot's.
+Machine-information queries needed by ordinary tools remain available. This does not erase the
+kernel's saved environment or protect it from an unconfined process of the same user.
 
 Confinement does not cover the rest of the system. A processor is a model call made by our own code,
 and a program you asked for runs with the access your own shell would give it. Everywhere else, the

@@ -781,14 +781,6 @@ pub fn read_set(program: &str, args: &[String]) -> Option<Vec<String>> {
     Some(paths)
 }
 
-/// Whether a resolved program with these arguments only transforms stdin.
-///
-/// The narrow case of [`read_set`]: an answer that names no path at all, so the output is a
-/// function of what was piped in and of nothing on disk.
-pub fn is_pure_filter(program: &str, args: &[String]) -> bool {
-    read_set(program, args).is_some_and(|paths| paths.is_empty())
-}
-
 /// The file name part of a program path, so `/usr/bin/wc` matches `wc`.
 fn program_name(program: &str) -> &str {
     program
@@ -892,6 +884,12 @@ fn effect_of(filter: &Filter, spelling: &str) -> Option<Effect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whether the program with these arguments names no path at all, so its output is a function
+    /// of what was piped in.
+    fn is_pure_filter(program: &str, args: &[String]) -> bool {
+        read_set(program, args).is_some_and(|paths| paths.is_empty())
+    }
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|a| a.to_string()).collect()

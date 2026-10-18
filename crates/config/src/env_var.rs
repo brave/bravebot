@@ -36,9 +36,10 @@ pub const CONTEXT_BUDGET: &str = "BRAVEBOT_CONTEXT_BUDGET";
 /// A model may state its own in a `provider` block, and this outranks that, for the reason the
 /// rest of the file's order gives.
 ///
-/// Absent from ALL and from [`BEDROCK_ALL`], on the same footing as [`CONTEXT_BUDGET`]: it is a
-/// knob one person turns while working rather than a property of a build or of an account, and a
-/// value exported to get one long answer should not ship to everyone who used that release.
+/// Absent from ALL, along with the rest of the Bedrock names, on the same footing as
+/// [`CONTEXT_BUDGET`]: it is a knob one person turns while working rather than a property of a
+/// build or of an account, and a value exported to get one long answer should not ship to everyone
+/// who used that release.
 pub const OUTPUT_BUDGET: &str = "BRAVEBOT_OUTPUT_BUDGET";
 
 /// Set to `1` to reach a model through AWS Bedrock rather than the aichat backend.
@@ -80,16 +81,6 @@ pub const GOOGLE_CLOUD_PROJECT: &str = "GOOGLE_CLOUD_PROJECT";
 
 /// The location a Vertex AI request is made in. `global` where it is not set.
 pub const VERTEX_LOCATION: &str = "VERTEX_LOCATION";
-
-/// Every name the Bedrock backend reads, in the order `doctor` reports them.
-pub const BEDROCK_ALL: [&str; 6] = [
-    USE_BEDROCK,
-    AWS_REGION,
-    AWS_PROFILE,
-    BEDROCK_OPUS_MODEL,
-    BEDROCK_SONNET_MODEL,
-    BEDROCK_HAIKU_MODEL,
-];
 
 /// Every name a build may bake in, in the order `doctor` reports them.
 pub const ALL: [&str; 5] = [SIGNING_KEY, KEY_ID, ENDPOINT, PREMIUM_ENDPOINT, DEFAULT_MODEL];

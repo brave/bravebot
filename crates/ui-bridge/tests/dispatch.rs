@@ -3,6 +3,9 @@
 //! Events are collected into a vector instead of being written anywhere, which is the
 //! point of the callback: the library has no opinion about where they go.
 
+#[path = "../../session/test-support/profile.rs"]
+mod test_profile;
+
 use bravebot_ui_bridge::bridge::Bridge;
 use bravebot_ui_bridge::protocol::{ErrorCode, Event, Request};
 use serde_json::{Value, json};
@@ -290,6 +293,29 @@ fn a_confirmation_for_no_running_turn_is_refused() {
         call(
             &mut bridge,
             "confirm.reply",
+            json!({ "session": &handle, "request": 1, "decision": "approve" })
+        ),
+        Err(ErrorCode::NoSuchRequest)
+    );
+}
+
+/// `host.reply` is a method the bridge routes. With no host question waiting it is refused as an
+/// answer to nothing, which tells it apart from a method the bridge does not know.
+#[test]
+fn a_host_answer_for_no_waiting_question_is_refused_as_an_answer_to_nothing() {
+    let (mut bridge, _) = harness();
+    let opened = call(
+        &mut bridge,
+        "session.new",
+        json!({ "directory": std::env::temp_dir().display().to_string() }),
+    )
+    .expect("opens");
+    let handle = opened["session"].as_str().expect("a handle").to_string();
+
+    assert_eq!(
+        call(
+            &mut bridge,
+            "host.reply",
             json!({ "session": &handle, "request": 1, "decision": "approve" })
         ),
         Err(ErrorCode::NoSuchRequest)
@@ -596,15 +622,17 @@ fn a_malformed_dropped_list_costs_the_files_and_not_the_turn() {
     }
 }
 
+/// In a profile of its own: a yes is kept for later sessions in the directory, and none of this
+/// belongs in the developer's home.
 #[test]
 fn permission_review_can_only_remove_existing_grants() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let directory = test_profile::project("permission-review");
+    std::fs::create_dir_all(&directory).expect("a project directory");
     let (mut bridge, _) = harness();
-    let made = call(
-        &mut bridge,
-        "session.new",
-        json!({"directory": std::env::temp_dir()}),
-    )
-    .unwrap();
+    let made = call(&mut bridge, "session.new", json!({"directory": directory})).unwrap();
     let session = made["session"].as_str().unwrap();
     call(
         &mut bridge,

@@ -69,9 +69,6 @@ const MAX_ALIAS: usize = 64;
 /// What the digested form starts with, so a later change to that form cannot collide with this one.
 const DIGEST_FORM: &str = "bravebot-mcp-declaration-1";
 
-/// What a vouched tool list's digested form starts with, so no list digests alike with a declaration.
-const LIST_FORM: &str = "bravebot-mcp-tool-list-1";
-
 /// The longest word a server's tool may be offered under.
 pub const MAX_TOOL: usize = 64;
 
@@ -139,6 +136,19 @@ pub fn is_alias(alias: &str) -> bool {
         && characters.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// Whether `name` may name a tool in a tool allow or deny filter.
+///
+/// Either a tool word alone, or qualified under an alias as `alias:tool`.
+pub fn is_tool_filter_name(name: &str) -> bool {
+    if is_tool_word(name) {
+        return true;
+    }
+    if let Some((alias, word)) = name.split_once(':') {
+        return is_alias(alias) && is_tool_word(word);
+    }
+    false
+}
+
 /// Whether `name` is a variable name.
 ///
 /// The portable spelling, a letter or `_` and then letters, digits and `_`. Anything else is not
@@ -149,6 +159,31 @@ pub fn is_variable_name(name: &str) -> bool {
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && characters.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Whether `name` is a valid HTTP header token (RFC 9110).
+pub fn is_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
 }
 
 /// What is wrong with one entry, or with one flag that would have made it.
@@ -183,11 +218,17 @@ pub enum Problem {
     Url,
     /// `url` carries a user or a password.
     Credentials,
+    /// A header name is not a valid HTTP token.
+    Header(String),
     /// A remote server was given something only a process can use, and this is the key.
     Remote(&'static str),
     /// A timeout, by the key the file spells it with, is not a whole number of seconds from one to
     /// [`MAX_TIMEOUT_SECS`].
     Timeout(&'static str),
+    /// A tool name in a tool filter is not accepted by [`is_tool_filter_name`].
+    Tool(String),
+    /// `tools` or `exclude_tools` is not a list of tool names.
+    Tools(&'static str),
 }
 
 /// How long a server has for its handshake and for each call, where a declaration says.
@@ -276,13 +317,28 @@ pub enum Declaration {
         directory: Option<String>,
         /// How long it has for its handshake and for each call.
         timeouts: Timeouts,
+        /// The tools this server offers where a filter was given, each once. Empty where every
+        /// tool is offered.
+        tools: Vec<String>,
+        /// The tools withheld from this server where a filter was given, each once.
+        exclude_tools: Vec<String>,
     },
     /// A server somewhere else, reached over HTTP.
     Http {
         /// Where it is, as somebody wrote it.
         url: String,
+        /// Headers to send to the server, mapping header name to the environment variable name
+        /// read at launch.
+        env_http_headers: BTreeMap<String, String>,
+        /// Environment variable name for a bearer token to send in `Authorization: Bearer <token>`.
+        bearer_env: Option<String>,
         /// How long it has for its handshake and for each call.
         timeouts: Timeouts,
+        /// The tools this server offers where a filter was given, each once. Empty where every
+        /// tool is offered.
+        tools: Vec<String>,
+        /// The tools withheld from this server where a filter was given, each once.
+        exclude_tools: Vec<String>,
     },
 }
 
@@ -296,6 +352,8 @@ impl std::fmt::Debug for Declaration {
                 reads,
                 directory,
                 timeouts,
+                tools,
+                exclude_tools,
             } => f
                 .debug_struct("Stdio")
                 .field("argv", argv)
@@ -304,11 +362,24 @@ impl std::fmt::Debug for Declaration {
                 .field("reads", reads)
                 .field("directory", directory)
                 .field("timeouts", timeouts)
+                .field("tools", tools)
+                .field("exclude_tools", exclude_tools)
                 .finish(),
-            Self::Http { url, timeouts } => f
+            Self::Http {
+                url,
+                env_http_headers,
+                bearer_env,
+                timeouts,
+                tools,
+                exclude_tools,
+            } => f
                 .debug_struct("Http")
                 .field("url", url)
+                .field("env_http_headers", env_http_headers)
+                .field("bearer_env", bearer_env)
                 .field("timeouts", timeouts)
+                .field("tools", tools)
+                .field("exclude_tools", exclude_tools)
                 .finish(),
         }
     }
@@ -326,6 +397,11 @@ pub enum Field {
     Reads,
     Directory,
     Url,
+    /// The headers for a remote server, with the name of each header whose mapping was added,
+    /// changed or removed.
+    Headers(Vec<String>),
+    Tools,
+    ExcludeTools,
 }
 
 impl Field {
@@ -339,6 +415,9 @@ impl Field {
             Self::Reads => "reads",
             Self::Directory => "directory",
             Self::Url => "url",
+            Self::Headers(_) => "env_http_headers",
+            Self::Tools => "tools",
+            Self::ExcludeTools => "exclude_tools",
         }
     }
 }
@@ -364,6 +443,8 @@ impl Declaration {
             reads: Vec::new(),
             directory,
             timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
         })
     }
 
@@ -378,6 +459,8 @@ impl Declaration {
             reads,
             directory,
             timeouts,
+            tools,
+            exclude_tools,
             ..
         } = self
         else {
@@ -404,6 +487,8 @@ impl Declaration {
             reads,
             directory,
             timeouts,
+            tools,
+            exclude_tools,
         })
     }
 
@@ -415,6 +500,8 @@ impl Declaration {
             env,
             directory,
             timeouts,
+            tools,
+            exclude_tools,
             ..
         } = self
         else {
@@ -439,6 +526,8 @@ impl Declaration {
             reads: kept,
             directory,
             timeouts,
+            tools,
+            exclude_tools,
         })
     }
 
@@ -451,6 +540,8 @@ impl Declaration {
                 env,
                 reads,
                 directory,
+                tools,
+                exclude_tools,
                 ..
             } => Self::Stdio {
                 argv,
@@ -459,9 +550,85 @@ impl Declaration {
                 reads,
                 directory,
                 timeouts,
+                tools,
+                exclude_tools,
             },
-            Self::Http { url, .. } => Self::Http { url, timeouts },
+            Self::Http {
+                url,
+                env_http_headers,
+                bearer_env,
+                tools,
+                exclude_tools,
+                ..
+            } => Self::Http {
+                url,
+                env_http_headers,
+                bearer_env,
+                timeouts,
+                tools,
+                exclude_tools,
+            },
         }
+    }
+
+    /// The tool names this server offers where a filter was given, or empty where every tool is
+    /// offered.
+    pub fn tools(&self) -> &[String] {
+        match self {
+            Self::Stdio { tools, .. } | Self::Http { tools, .. } => tools,
+        }
+    }
+
+    /// The tool names withheld from this server where a filter was given.
+    pub fn exclude_tools(&self) -> &[String] {
+        match self {
+            Self::Stdio { exclude_tools, .. } | Self::Http { exclude_tools, .. } => exclude_tools,
+        }
+    }
+
+    /// This declaration with `tools` as the allowed tool names and `exclude_tools` as the denied
+    /// tool names.
+    pub fn filtering(
+        self,
+        tools: Vec<String>,
+        exclude_tools: Vec<String>,
+    ) -> Result<Self, Problem> {
+        let tools = tool_filters(tools, "tools")?;
+        let exclude_tools = tool_filters(exclude_tools, "exclude_tools")?;
+        Ok(match self {
+            Self::Stdio {
+                argv,
+                variables,
+                env,
+                reads,
+                directory,
+                timeouts,
+                ..
+            } => Self::Stdio {
+                argv,
+                variables,
+                env,
+                reads,
+                directory,
+                timeouts,
+                tools,
+                exclude_tools,
+            },
+            Self::Http {
+                url,
+                env_http_headers,
+                bearer_env,
+                timeouts,
+                ..
+            } => Self::Http {
+                url,
+                env_http_headers,
+                bearer_env,
+                timeouts,
+                tools,
+                exclude_tools,
+            },
+        })
     }
 
     /// How long this server has for its handshake and for each call.
@@ -476,8 +643,87 @@ impl Declaration {
         remote(&url)?;
         Ok(Self::Http {
             url,
+            env_http_headers: BTreeMap::new(),
+            bearer_env: None,
             timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
         })
+    }
+
+    /// This declaration with headers to send over HTTP, each mapping a header name to an
+    /// environment variable name, and an optional variable name for a Bearer authorization header.
+    ///
+    /// The names are checked as a file's entry is. Setting headers on a stdio declaration is refused.
+    pub fn heading(
+        self,
+        env_http_headers: BTreeMap<String, String>,
+        bearer_env: Option<String>,
+    ) -> Result<Self, Problem> {
+        let Self::Http {
+            url,
+            timeouts,
+            tools,
+            exclude_tools,
+            ..
+        } = self
+        else {
+            return match env_http_headers.is_empty() && bearer_env.is_none() {
+                true => Ok(self),
+                false => Err(Problem::Remote("env_http_headers")),
+            };
+        };
+        let mut seen = BTreeSet::new();
+        for (header, var) in &env_http_headers {
+            if !is_header_name(header) {
+                return Err(Problem::Header(header.clone()));
+            }
+            if !is_variable_name(var) {
+                return Err(Problem::Name);
+            }
+            if !seen.insert(header.to_ascii_lowercase()) {
+                return Err(Problem::Twice(header.clone()));
+            }
+        }
+        if let Some(var) = &bearer_env {
+            if !is_variable_name(var) {
+                return Err(Problem::Name);
+            }
+            if seen.contains("authorization") {
+                return Err(Problem::Twice("Authorization".to_string()));
+            }
+        }
+        Ok(Self::Http {
+            url,
+            env_http_headers,
+            bearer_env,
+            timeouts,
+            tools,
+            exclude_tools,
+        })
+    }
+
+    /// The headers this remote server receives, mapping each header name to an environment
+    /// variable name.
+    pub fn env_http_headers(&self) -> impl Iterator<Item = (&str, &str)> {
+        let headers = match self {
+            Self::Http {
+                env_http_headers, ..
+            } => Some(env_http_headers),
+            Self::Stdio { .. } => None,
+        };
+        headers
+            .into_iter()
+            .flat_map(|headers| headers.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    }
+
+    /// The environment variable name for a Bearer authorization header. None for a stdio server
+    /// or where not declared.
+    pub fn bearer_env(&self) -> Option<&str> {
+        match self {
+            Self::Http { bearer_env, .. } => bearer_env.as_deref(),
+            Self::Stdio { .. } => None,
+        }
     }
 
     /// The transport's name, as the file spells it.
@@ -530,6 +776,8 @@ impl Declaration {
                 env,
                 reads,
                 directory,
+                tools,
+                exclude_tools,
                 ..
             } => {
                 let variables: BTreeSet<&String> = variables.iter().collect();
@@ -546,9 +794,46 @@ impl Declaration {
                     let reads: BTreeSet<&String> = reads.iter().collect();
                     form.push(serde_json::json!({ "env": env, "reads": reads }));
                 }
+                if !tools.is_empty() || !exclude_tools.is_empty() {
+                    let tools: BTreeSet<&String> = tools.iter().collect();
+                    let exclude_tools: BTreeSet<&String> = exclude_tools.iter().collect();
+                    form.push(
+                        serde_json::json!({ "tools": tools, "exclude_tools": exclude_tools }),
+                    );
+                }
                 serde_json::Value::Array(form)
             }
-            Self::Http { url, .. } => serde_json::json!([DIGEST_FORM, "http", url]),
+            Self::Http {
+                url,
+                env_http_headers,
+                bearer_env,
+                tools,
+                exclude_tools,
+                ..
+            } => {
+                let mut form = vec![DIGEST_FORM.into(), "http".into(), serde_json::json!(url)];
+                if !env_http_headers.is_empty() || bearer_env.is_some() {
+                    let mut extra = serde_json::Map::new();
+                    if !env_http_headers.is_empty() {
+                        extra.insert(
+                            "env_http_headers".into(),
+                            serde_json::json!(env_http_headers),
+                        );
+                    }
+                    if let Some(bearer) = bearer_env {
+                        extra.insert("bearer_env".into(), serde_json::json!(bearer));
+                    }
+                    form.push(serde_json::Value::Object(extra));
+                }
+                if !tools.is_empty() || !exclude_tools.is_empty() {
+                    let tools: BTreeSet<&String> = tools.iter().collect();
+                    let exclude_tools: BTreeSet<&String> = exclude_tools.iter().collect();
+                    form.push(
+                        serde_json::json!({ "tools": tools, "exclude_tools": exclude_tools }),
+                    );
+                }
+                serde_json::Value::Array(form)
+            }
         };
         Digest(Sha256::digest(form.to_string().as_bytes()).into())
     }
@@ -566,6 +851,8 @@ impl Declaration {
                     env,
                     reads,
                     directory,
+                    tools,
+                    exclude_tools,
                     ..
                 },
                 Self::Stdio {
@@ -574,6 +861,8 @@ impl Declaration {
                     env: other_env,
                     reads: other_reads,
                     directory: other_directory,
+                    tools: other_tools,
+                    exclude_tools: other_exclude_tools,
                     ..
                 },
             ) => {
@@ -592,15 +881,64 @@ impl Declaration {
                     (!restored.is_empty(), Field::Env(restored)),
                     (set(reads) != set(other_reads), Field::Reads),
                     (directory != other_directory, Field::Directory),
+                    (set(tools) != set(other_tools), Field::Tools),
+                    (
+                        set(exclude_tools) != set(other_exclude_tools),
+                        Field::ExcludeTools,
+                    ),
                 ]
                 .into_iter()
                 .filter_map(|(changed, field)| changed.then_some(field))
                 .collect()
             }
-            (Self::Http { url, .. }, Self::Http { url: other_url, .. }) => match url == other_url {
-                true => Vec::new(),
-                false => vec![Field::Url],
-            },
+            (
+                Self::Http {
+                    url,
+                    env_http_headers,
+                    bearer_env,
+                    tools,
+                    exclude_tools,
+                    ..
+                },
+                Self::Http {
+                    url: other_url,
+                    env_http_headers: other_env_http_headers,
+                    bearer_env: other_bearer_env,
+                    tools: other_tools,
+                    exclude_tools: other_exclude_tools,
+                    ..
+                },
+            ) => {
+                let set = |names: &[String]| names.iter().cloned().collect::<BTreeSet<_>>();
+                let mut changed = Vec::new();
+                if url != other_url {
+                    changed.push(Field::Url);
+                }
+                let mut header_diffs = BTreeSet::new();
+                for (k, v) in env_http_headers {
+                    if other_env_http_headers.get(k) != Some(v) {
+                        header_diffs.insert(k.clone());
+                    }
+                }
+                for k in other_env_http_headers.keys() {
+                    if !env_http_headers.contains_key(k) {
+                        header_diffs.insert(k.clone());
+                    }
+                }
+                if bearer_env != other_bearer_env {
+                    header_diffs.insert("Authorization".to_string());
+                }
+                if !header_diffs.is_empty() {
+                    changed.push(Field::Headers(header_diffs.into_iter().collect()));
+                }
+                if set(tools) != set(other_tools) {
+                    changed.push(Field::Tools);
+                }
+                if set(exclude_tools) != set(other_exclude_tools) {
+                    changed.push(Field::ExcludeTools);
+                }
+                changed
+            }
             _ => vec![Field::Transport],
         }
     }
@@ -636,9 +974,33 @@ impl Declaration {
                     entry.insert("directory".into(), directory.clone().into());
                 }
             }
-            Self::Http { url, .. } => {
+            Self::Http {
+                url,
+                env_http_headers,
+                bearer_env,
+                ..
+            } => {
                 entry.insert("url".into(), url.clone().into());
+                if !env_http_headers.is_empty() {
+                    let headers = env_http_headers
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone().into()))
+                        .collect();
+                    entry.insert(
+                        "env_http_headers".into(),
+                        serde_json::Value::Object(headers),
+                    );
+                }
+                if let Some(bearer) = bearer_env {
+                    entry.insert("bearer_env".into(), bearer.clone().into());
+                }
             }
+        }
+        if !self.tools().is_empty() {
+            entry.insert("tools".into(), self.tools().to_vec().into());
+        }
+        if !self.exclude_tools().is_empty() {
+            entry.insert("exclude_tools".into(), self.exclude_tools().to_vec().into());
         }
         self.timeouts().write_into(&mut entry);
         serde_json::Value::Object(entry)
@@ -656,12 +1018,18 @@ impl Declaration {
                 "env",
                 "reads",
                 "directory",
+                "tools",
+                "exclude_tools",
                 Timeouts::STARTUP_KEY,
                 Timeouts::TOOL_KEY,
             ],
             Some("http") => &[
                 "transport",
                 "url",
+                "env_http_headers",
+                "bearer_env",
+                "tools",
+                "exclude_tools",
                 Timeouts::STARTUP_KEY,
                 Timeouts::TOOL_KEY,
             ],
@@ -677,9 +1045,45 @@ impl Declaration {
             });
         }
         let timeouts = Timeouts::from_entry(entry)?;
+        let parse_tools = |key: &'static str| -> Result<Vec<String>, Problem> {
+            match entry.get(key) {
+                None => Ok(Vec::new()),
+                Some(serde_json::Value::Array(names)) => {
+                    let mut list = Vec::new();
+                    for name in names {
+                        let text = name.as_str().ok_or(Problem::Tools(key))?;
+                        list.push(text.to_string());
+                    }
+                    Ok(list)
+                }
+                Some(_) => Err(Problem::Tools(key)),
+            }
+        };
+        let tools = parse_tools("tools")?;
+        let exclude_tools = parse_tools("exclude_tools")?;
         if allowed.contains(&"url") {
             let url = entry.get("url").and_then(|url| url.as_str());
-            return Ok(Self::http(url.ok_or(Problem::Url)?.to_string())?.timing(timeouts));
+            let env_http_headers = match entry.get("env_http_headers") {
+                None => BTreeMap::new(),
+                Some(serde_json::Value::Object(headers)) => {
+                    let mut map = BTreeMap::new();
+                    for (header, var) in headers {
+                        let var_str = var.as_str().ok_or(Problem::Name)?;
+                        map.insert(header.clone(), var_str.to_string());
+                    }
+                    map
+                }
+                Some(_) => return Err(Problem::Header("env_http_headers".to_string())),
+            };
+            let bearer_env = match entry.get("bearer_env") {
+                None => None,
+                Some(serde_json::Value::String(name)) => Some(name.clone()),
+                Some(_) => return Err(Problem::Name),
+            };
+            return Ok(Self::http(url.ok_or(Problem::Url)?.to_string())?
+                .heading(env_http_headers, bearer_env)?
+                .filtering(tools, exclude_tools)?
+                .timing(timeouts));
         }
         let argv = match entry.get("argv") {
             Some(serde_json::Value::Array(words)) => words
@@ -729,8 +1133,23 @@ impl Declaration {
         Ok(Self::stdio(argv, variables, directory)?
             .storing(env)?
             .reading(reads)?
+            .filtering(tools, exclude_tools)?
             .timing(timeouts))
     }
+}
+
+/// Validate and deduplicate tool filter names.
+fn tool_filters(names: Vec<String>, _key: &'static str) -> Result<Vec<String>, Problem> {
+    let mut kept: Vec<String> = Vec::with_capacity(names.len());
+    for name in names {
+        if !is_tool_filter_name(&name) {
+            return Err(Problem::Tool(name));
+        }
+        if !kept.contains(&name) {
+            kept.push(name);
+        }
+    }
+    Ok(kept)
 }
 
 /// A program to run is a non-empty argument vector whose first word is not blank.
@@ -824,15 +1243,6 @@ impl Digest {
     /// The first eight hex characters, which is what a prompt shows.
     pub fn short(&self) -> String {
         self.to_string()[..8].to_string()
-    }
-
-    /// What a vouch for a tool list binds to: SHA-256 over the list as it was drawn.
-    ///
-    /// Over the text a person was shown and nothing else, so a list the server words differently
-    /// on its next start is a list nobody has seen.
-    pub fn of_list(text: &str) -> Self {
-        let form = serde_json::json!([LIST_FORM, text]);
-        Self(Sha256::digest(form.to_string().as_bytes()).into())
     }
 }
 
@@ -981,7 +1391,6 @@ fn entry(alias: &str, value: &serde_json::Value) -> Entry {
 /// ```text
 /// 4f1c9a2e...  weather
 /// changed docs
-/// tools 4f1c9a2e... 9b03d7c1...
 /// ```
 ///
 /// The alias is not what was approved: [`Approvals::approves`] asks about a digest and nothing else,
@@ -989,21 +1398,16 @@ fn entry(alias: &str, value: &serde_json::Value) -> Entry {
 /// server nobody has been asked about from one that changed since somebody answered, which a
 /// project path recorded by answer 2 may pre-answer and this may not (SERVERS-5).
 ///
-/// A `tools` line is a vouch for a tool list: the declaration it was listed by, and the digest of
-/// the list as it was drawn. One list per declaration, since a server started from one declaration
-/// has one list to offer at a time, and a list that changed is asked about again (SERVERS-8).
+/// A `tools` line, which an earlier version wrote as a vouch for a tool list, is passed over and
+/// dropped the next time the file is written: a list is asked about every session (SERVERS-8).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Approvals {
     approved: BTreeMap<Digest, BTreeSet<String>>,
     changed: BTreeSet<String>,
-    lists: BTreeMap<Digest, Digest>,
 }
 
 /// The word a line recording a changed declaration starts with.
 const CHANGED: &str = "changed";
-
-/// The word a line recording a vouched tool list starts with.
-const TOOLS: &str = "tools";
 
 impl Approvals {
     /// Read the approvals in a state directory.
@@ -1030,13 +1434,6 @@ impl Approvals {
                 [CHANGED, alias] if is_alias(alias) => {
                     approvals.changed.insert(alias.to_string());
                 }
-                [TOOLS, declaration, list] => {
-                    if let (Some(declaration), Some(list)) =
-                        (Digest::parse(declaration), Digest::parse(list))
-                    {
-                        approvals.lists.insert(declaration, list);
-                    }
-                }
                 [hex, alias @ ..] if alias.len() <= 1 && alias.iter().all(|a| is_alias(a)) => {
                     let Some(digest) = Digest::parse(hex) else {
                         continue;
@@ -1048,17 +1445,6 @@ impl Approvals {
             }
         }
         approvals
-    }
-
-    /// The digest of the tool list vouched for under this declaration, where one was.
-    pub fn vouched_list(&self, declaration: &Digest) -> Option<Digest> {
-        self.lists.get(declaration).copied()
-    }
-
-    /// Record a vouch for the tool list a server started from `declaration` drew, replacing any
-    /// earlier one: a list that changed and was vouched for again is the list now.
-    pub fn vouch_list(&mut self, declaration: Digest, list: Digest) {
-        self.lists.insert(declaration, list);
     }
 
     /// Whether this digest was approved.
@@ -1094,16 +1480,10 @@ impl Approvals {
     /// digest is dropped here, and what is kept of it is that its alias changed, which approves
     /// nothing. Called whenever the declarations are rewritten, so the two files agree about what
     /// is approved.
-    ///
-    /// A vouched list is kept while a declaration still resolves to the digest it was listed by,
-    /// approved or not: a server a project path started has a list somebody vouched for too.
     pub fn keep_only(&mut self, declarations: &Declarations) {
         let mut kept = Self::default();
         for Entry { alias, declaration } in declarations.entries() {
             let digest = declaration.as_ref().ok().map(Declaration::digest);
-            if let Some(list) = digest.and_then(|digest| self.vouched_list(&digest)) {
-                kept.lists.extend(digest.map(|digest| (digest, list)));
-            }
             match digest {
                 Some(digest) if self.approves(&digest) => {
                     kept.approved.entry(digest).or_default().insert(alias);
@@ -1122,8 +1502,7 @@ impl Approvals {
         *self = kept;
     }
 
-    /// The file's text, one approval per line, then one changed alias per line, then one vouched
-    /// list per line.
+    /// The file's text, one approval per line, then one changed alias per line.
     pub fn to_text(&self) -> String {
         let mut text = String::new();
         for (digest, aliases) in &self.approved {
@@ -1138,9 +1517,6 @@ impl Approvals {
         }
         for alias in &self.changed {
             text.push_str(&format!("{CHANGED} {alias}\n"));
-        }
-        for (declaration, list) in &self.lists {
-            text.push_str(&format!("{TOOLS} {declaration} {list}\n"));
         }
         text
     }
@@ -1859,6 +2235,126 @@ mod tests {
         );
         let remote = Declaration::http("https://weather.example.com".into()).unwrap();
         assert_eq!(weather().changes(&remote), vec![Field::Transport]);
+        let with_headers = remote
+            .clone()
+            .heading(
+                BTreeMap::from([("X-Key".into(), "KEY_VAR".into())]),
+                Some("TOKEN_VAR".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            remote.changes(&with_headers),
+            vec![Field::Headers(words(&["Authorization", "X-Key"]))]
+        );
+    }
+
+    #[test]
+    fn a_header_name_is_an_http_token() {
+        assert!(is_header_name("Authorization"));
+        assert!(is_header_name("X-Api-Key"));
+        assert!(is_header_name("content-type"));
+        assert!(is_header_name("Accept"));
+        assert!(is_header_name("custom_header"));
+        assert!(is_header_name("my-header.v1"));
+        for refused in [
+            "",
+            "header with spaces",
+            "header:colon",
+            "header/slash",
+            "header@at",
+            "header?query",
+            "header=value",
+            "non-ascii-é",
+            "\t",
+            "\n",
+        ] {
+            assert!(
+                !is_header_name(refused),
+                "{refused:?} was taken for a header token"
+            );
+        }
+    }
+
+    #[test]
+    fn http_headers_and_bearer_env_are_validated_digested_and_roundtripped() {
+        let remote = Declaration::http("https://api.example.com/mcp".into()).unwrap();
+
+        // Stdio rejects heading
+        assert_eq!(
+            weather().heading(BTreeMap::from([("X-Key".into(), "VAR".into())]), None,),
+            Err(Problem::Remote("env_http_headers"))
+        );
+
+        // Invalid header name
+        assert_eq!(
+            remote
+                .clone()
+                .heading(BTreeMap::from([("Bad:Header".into(), "VAR".into())]), None,),
+            Err(Problem::Header("Bad:Header".into()))
+        );
+
+        // Invalid env variable name
+        assert_eq!(
+            remote
+                .clone()
+                .heading(BTreeMap::from([("X-Key".into(), "BAD-VAR".into())]), None,),
+            Err(Problem::Name)
+        );
+
+        // Invalid bearer env variable name
+        assert_eq!(
+            remote
+                .clone()
+                .heading(BTreeMap::new(), Some("BAD-VAR".into()),),
+            Err(Problem::Name)
+        );
+
+        // Duplicate header under different casing
+        assert_eq!(
+            remote.clone().heading(
+                BTreeMap::from([
+                    ("X-Key".into(), "VAR1".into()),
+                    ("x-key".into(), "VAR2".into()),
+                ]),
+                None,
+            ),
+            Err(Problem::Twice("x-key".into()))
+        );
+
+        // Bearer env conflicting with Authorization header
+        assert_eq!(
+            remote.clone().heading(
+                BTreeMap::from([("authorization".into(), "AUTH_VAR".into())]),
+                Some("BEARER_VAR".into()),
+            ),
+            Err(Problem::Twice("Authorization".into()))
+        );
+
+        // Digest backward compatibility when no headers are declared
+        let legacy_json = serde_json::json!([DIGEST_FORM, "http", "https://api.example.com/mcp"]);
+        let expected_legacy = Digest(Sha256::digest(legacy_json.to_string().as_bytes()).into());
+        assert_eq!(remote.digest(), expected_legacy);
+
+        // Valid headers and bearer env
+        let configured = remote
+            .clone()
+            .heading(
+                BTreeMap::from([("X-Api-Key".into(), "API_KEY".into())]),
+                Some("BEARER_TOKEN".into()),
+            )
+            .unwrap();
+        assert_ne!(configured.digest(), remote.digest());
+        assert_eq!(configured.bearer_env(), Some("BEARER_TOKEN"));
+        assert_eq!(
+            configured.env_http_headers().collect::<Vec<_>>(),
+            [("X-Api-Key", "API_KEY")]
+        );
+
+        // JSON serialization and deserialization roundtrip
+        let mut declarations = Declarations::default();
+        declarations.insert("api", &configured);
+        let parsed = Declarations::parse(&declarations.to_text()).unwrap();
+        assert_eq!(parsed.get("api").unwrap().declaration, Ok(configured));
     }
 
     #[test]
@@ -1967,58 +2463,18 @@ mod tests {
         assert!(projects.contains(&other));
     }
 
+    /// A file an earlier version wrote carries a `tools` line per vouched list. The approval beside
+    /// it still reads, the line is passed over, and the next write drops it, so nothing is left to
+    /// vouch for a list nobody was asked about.
     #[test]
-    fn a_vouched_list_reads_back_beside_the_approval_it_was_listed_by() {
-        let mut approvals = Approvals::default();
-        approvals.approve("weather", weather().digest());
-        let list = Digest::of_list("[]");
-        approvals.vouch_list(weather().digest(), list);
-        let read = Approvals::parse(&approvals.to_text());
-        assert_eq!(read, approvals);
-        assert_eq!(read.vouched_list(&weather().digest()), Some(list));
-        assert!(read.approves(&weather().digest()));
-        assert_ne!(
-            Digest::of_list("[]"),
-            Digest::of_list("[ ]"),
-            "a list drawn differently digested alike"
-        );
-    }
-
-    /// A list is vouched for under a declaration, so a declaration rewritten to something else takes
-    /// its vouch with it, and one that is still there keeps it whether or not its digest is approved:
-    /// a project path starts a server nobody approved by digest, and its list was still vouched for.
-    #[test]
-    fn a_vouched_list_lasts_as_long_as_its_declaration_resolves() {
-        let mut declarations = Declarations::default();
-        declarations.insert("weather", &weather());
-        let mut approvals = Approvals::default();
-        approvals.vouch_list(weather().digest(), Digest::of_list("[]"));
-        approvals.keep_only(&declarations);
-        assert_eq!(
-            approvals.vouched_list(&weather().digest()),
-            Some(Digest::of_list("[]")),
-            "a vouch was dropped while its declaration still resolved"
-        );
-
-        let pinned = Declaration::stdio(
-            words(&["npx", "-y", "@dangahagan/weather-mcp@1.0.0"]),
-            words(&["PATH"]),
-            None,
-        )
-        .expect("a declaration");
-        declarations.insert("weather", &pinned);
-        approvals.keep_only(&declarations);
-        assert_eq!(approvals.vouched_list(&weather().digest()), None);
-        assert_eq!(approvals.vouched_list(&pinned.digest()), None);
-    }
-
-    #[test]
-    fn a_line_that_is_not_a_vouch_is_passed_over() {
+    fn a_tools_line_an_earlier_version_wrote_is_passed_over_and_dropped() {
         let digest = weather().digest();
-        let read = Approvals::parse(&format!(
-            "tools {digest}\ntools {digest} nothing\ntools {digest} {digest} more\n"
-        ));
-        assert_eq!(read, Approvals::default());
+        let before = format!("{digest} weather\ntools {digest} {digest}\nchanged docs\n");
+        let read = Approvals::parse(&before);
+
+        assert!(read.approves(&digest));
+        assert!(read.changed("docs", &Digest::parse(&"0".repeat(64)).expect("a digest")));
+        assert_eq!(read.to_text(), format!("{digest} weather\nchanged docs\n"));
     }
 
     #[test]
@@ -2149,5 +2605,164 @@ mod tests {
         std::fs::write(tools_file(&home), [0xff, 0xfe, b'\n']).unwrap();
         assert_eq!(Standing::to_change(&home), Err(Unreadable::NotRead));
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_tool_filter_name_is_a_tool_word_or_alias_qualified() {
+        for valid in [
+            "get_current_conditions",
+            "weather:get_forecast",
+            "fetch-data_1",
+            "srv:tool-name",
+        ] {
+            assert!(is_tool_filter_name(valid), "{valid} should be valid");
+        }
+        for invalid in [
+            "",
+            "not a tool",
+            "alias:tool:extra",
+            "alias:",
+            ":tool",
+            "tool@name",
+        ] {
+            assert!(!is_tool_filter_name(invalid), "{invalid} should be invalid");
+        }
+    }
+
+    #[test]
+    fn a_digest_covers_tool_filters_and_order_does_not_matter() {
+        let base = weather();
+        let with_tools = base
+            .clone()
+            .filtering(words(&["get_weather", "get_alerts"]), Vec::new())
+            .unwrap();
+        let with_tools_reordered = base
+            .clone()
+            .filtering(words(&["get_alerts", "get_weather"]), Vec::new())
+            .unwrap();
+        let with_exclude = base
+            .clone()
+            .filtering(Vec::new(), words(&["get_alerts"]))
+            .unwrap();
+        let with_both = base
+            .clone()
+            .filtering(words(&["get_weather"]), words(&["get_alerts"]))
+            .unwrap();
+
+        assert_ne!(base.digest(), with_tools.digest());
+        assert_ne!(base.digest(), with_exclude.digest());
+        assert_ne!(with_tools.digest(), with_exclude.digest());
+        assert_ne!(with_tools.digest(), with_both.digest());
+        assert_eq!(with_tools.digest(), with_tools_reordered.digest());
+    }
+
+    #[test]
+    fn a_declaration_with_no_tool_filters_digests_as_it_did_before() {
+        let plain_stdio = Declaration::stdio(words(&["server"]), Vec::new(), None).unwrap();
+        let filtered_empty_stdio = plain_stdio
+            .clone()
+            .filtering(Vec::new(), Vec::new())
+            .unwrap();
+        assert_eq!(plain_stdio.digest(), filtered_empty_stdio.digest());
+
+        let plain_http = Declaration::http("https://example.com/mcp".into()).unwrap();
+        let filtered_empty_http = plain_http
+            .clone()
+            .filtering(Vec::new(), Vec::new())
+            .unwrap();
+        assert_eq!(plain_http.digest(), filtered_empty_http.digest());
+    }
+
+    #[test]
+    fn tool_filters_are_read_written_and_roundtripped() {
+        let text = r#"{"servers": {
+            "stdio": {
+                "transport": "stdio",
+                "argv": ["weather-mcp"],
+                "tools": ["get_forecast", "get_alerts"],
+                "exclude_tools": ["get_radar"]
+            },
+            "http": {
+                "transport": "http",
+                "url": "https://api.github.com/mcp",
+                "tools": ["create_issue"],
+                "exclude_tools": ["delete_repo"]
+            }
+        }}"#;
+        let declarations = Declarations::parse(text).unwrap();
+        let stdio = declarations.get("stdio").unwrap().declaration.unwrap();
+        assert_eq!(stdio.tools(), ["get_forecast", "get_alerts"]);
+        assert_eq!(stdio.exclude_tools(), ["get_radar"]);
+
+        let http = declarations.get("http").unwrap().declaration.unwrap();
+        assert_eq!(http.tools(), ["create_issue"]);
+        assert_eq!(http.exclude_tools(), ["delete_repo"]);
+
+        let serialized = declarations.to_text();
+        let parsed = Declarations::parse(&serialized).unwrap();
+        assert_eq!(parsed, declarations);
+    }
+
+    #[test]
+    fn tool_filter_changes_are_named_by_field() {
+        let base = weather();
+        let with_tools = base
+            .clone()
+            .filtering(words(&["get_forecast"]), Vec::new())
+            .unwrap();
+        let with_exclude = base
+            .clone()
+            .filtering(Vec::new(), words(&["get_alerts"]))
+            .unwrap();
+
+        assert_eq!(base.changes(&with_tools), vec![Field::Tools]);
+        assert_eq!(base.changes(&with_exclude), vec![Field::ExcludeTools]);
+
+        let remote = Declaration::http("https://example.com/mcp".into()).unwrap();
+        let remote_tools = remote
+            .clone()
+            .filtering(words(&["create_issue"]), Vec::new())
+            .unwrap();
+        let remote_exclude = remote
+            .clone()
+            .filtering(Vec::new(), words(&["delete_repo"]))
+            .unwrap();
+        assert_eq!(remote.changes(&remote_tools), vec![Field::Tools]);
+        assert_eq!(remote.changes(&remote_exclude), vec![Field::ExcludeTools]);
+    }
+
+    #[test]
+    fn tools_and_exclude_tools_require_lists_of_valid_tool_names() {
+        let cases = [
+            (
+                r#"{"servers": {"srv": {"transport": "stdio", "argv": ["tool"], "tools": "not-a-list"}}}"#,
+                Err(Problem::Tools("tools")),
+            ),
+            (
+                r#"{"servers": {"srv": {"transport": "stdio", "argv": ["tool"], "tools": [123]}}}"#,
+                Err(Problem::Tools("tools")),
+            ),
+            (
+                r#"{"servers": {"srv": {"transport": "http", "url": "https://example.com/mcp", "exclude_tools": 42}}}"#,
+                Err(Problem::Tools("exclude_tools")),
+            ),
+            (
+                r#"{"servers": {"srv": {"transport": "http", "url": "https://example.com/mcp", "exclude_tools": [true]}}}"#,
+                Err(Problem::Tools("exclude_tools")),
+            ),
+            (
+                r#"{"servers": {"srv": {"transport": "stdio", "argv": ["tool"], "tools": ["bad tool name"]}}}"#,
+                Err(Problem::Tool("bad tool name".into())),
+            ),
+            (
+                r#"{"servers": {"srv": {"transport": "http", "url": "https://example.com/mcp", "exclude_tools": [":empty-alias"]}}}"#,
+                Err(Problem::Tool(":empty-alias".into())),
+            ),
+        ];
+        for (json, expected) in cases {
+            let declarations = Declarations::parse(json).unwrap();
+            let entry = declarations.get("srv").unwrap();
+            assert_eq!(entry.declaration, expected, "testing json: {json}");
+        }
     }
 }

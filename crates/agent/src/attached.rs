@@ -61,14 +61,27 @@ pub enum Carried {
 
 impl Carried {
     /// What the request holds for it, in the message the words it was dropped beside are in.
-    pub fn part(&self) -> Part {
+    ///
+    /// A shown file is its path and then its bytes, two parts in that order, so the planner is told
+    /// which file the bytes came from (`dropping.md` DROP-11). Bytes alone say only that a picture
+    /// arrived: the marker in the line is `[Image #2]`, the path is on the person's screen and
+    /// nowhere in the request, and a planner asked to look at a file it cannot name can neither read
+    /// it nor say which one it was shown.
+    ///
+    /// A withheld file is the sentence alone, which already names the path.
+    pub fn parts(&self) -> Vec<Part> {
         match self {
-            Self::Shown { uri, .. } => Part::ImageUrl {
-                image_url: ImageUrl { url: uri.clone() },
-            },
-            Self::Described { path, said } => Part::Text {
+            Self::Shown { path, uri } => vec![
+                Part::Text {
+                    text: format!("Dropped file: {path}"),
+                },
+                Part::ImageUrl {
+                    image_url: ImageUrl { url: uri.clone() },
+                },
+            ],
+            Self::Described { path, said } => vec![Part::Text {
                 text: format!("{path} could not be shown to you.\n\n{said}"),
-            },
+            }],
         }
     }
 }

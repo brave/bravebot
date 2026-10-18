@@ -47,8 +47,11 @@ const asked = (overrides = {}) =>
     request: 9,
     language: 'Rust',
     program: '/home/someone/.cargo/bin/rust-analyzer',
+    args: [],
+    argumentsLine: '',
     workspace: '/home/someone/project',
     runsBuildTooling: true,
+    declared: false,
     summary: 'start the Rust language server',
     ...overrides,
   })
@@ -79,6 +82,32 @@ test('a server that only reads does not claim that anything is built', () => {
   assert.ok(markup.includes('Nothing is written to your project'), markup)
   assert.ok(!markup.includes('code from your dependencies'), markup)
   assert.ok(!markup.includes('builds"'), markup)
+})
+
+test('a server the person declared shows its arguments and says what it runs is not known', () => {
+  const markup = draw(
+    asked({
+      language: 'clangd',
+      program: '/usr/bin/clangd',
+      args: ['--background-index', '--log=error'],
+      argumentsLine: '--background-index --log=error',
+      runsBuildTooling: false,
+      declared: true,
+    }),
+  )
+
+  assert.match(markup, /Arguments:<\/strong> <code>--background-index --log=error<\/code>/)
+  assert.ok(markup.includes('what starting it runs is not known'), markup)
+  // It is neither of the two sentences about a server this program chose.
+  assert.ok(!markup.includes('Nothing is written to your project'), markup)
+  assert.ok(!markup.includes('code from your dependencies runs'), markup)
+})
+
+test('a server from the table shows no arguments row and no unknown notice', () => {
+  const markup = draw(asked())
+
+  assert.ok(!markup.includes('Arguments:'), markup)
+  assert.ok(!markup.includes('is not known'), markup)
 })
 
 test('the card says how long a yes lasts and what it does not grant', () => {

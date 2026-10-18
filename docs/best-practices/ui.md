@@ -47,7 +47,7 @@ context on the terminal's terms ([NAME-1](../specs/naming-files.md#NAME-1),
 prompt itself and the agent's workspace confines it to the conversation's folder, so neither the
 renderer nor the main process supplies a path. A dropped file is taken by the preload only from a
 drop event the browser marks trusted (`isTrusted`), and the main process checks it and grants it by
-an opaque id ([DROP-11](../specs/dropping.md#DROP-11)), so the page never holds the path. A pasted
+an opaque id ([DROP-12](../specs/dropping.md#DROP-12)), so the page never holds the path. A pasted
 picture is taken only from a paste event the browser marks trusted, the main process reads the
 clipboard itself and grants the picture by an opaque id
 ([PASTE-11](../specs/pasting.md#PASTE-11)), so the page never holds the bytes. The reasoning is in

@@ -124,16 +124,16 @@ test('the fuse wire is written to the file its own platform keeps it in', () => 
 })
 
 // The fixture above spells the constants the way the code does, so this reads a header neither
-// of them wrote: the Electron `npm ci` downloaded for this machine.
+// of them wrote: the Electron `pnpm install` downloaded for this machine.
 test('the Electron installed for this machine reads as this machine', (t) => {
   const dist = fileURLToPath(new URL('../node_modules/electron/dist/', import.meta.url))
   const path = process.platform === 'darwin' ? `${dist}Electron.app/Contents/MacOS/Electron` : `${dist}electron`
-  if (!existsSync(path)) return t.skip(`no Electron at ${path}: npm ci runs its install script`)
+  if (!existsSync(path)) return t.skip(`no Electron at ${path}: pnpm install runs its postinstall setup`)
   assert.deepEqual(executableTarget(readFileSync(path).subarray(0, 20)), { platform: process.platform, arch: process.arch })
 })
 
 test('a missing executable is reported with the command that builds that profile', () => {
-  assert.equal(buildProfile([]).build, 'npm run bridge')
+  assert.equal(buildProfile([]).build, 'pnpm run bridge')
   assert.equal(buildProfile(['--release']).build, 'make app-bundle')
   // The prebuilt pair comes from a different target per platform, and each of the three builds
   // only its own, so naming another platform's is a loop back to the same missing file.
@@ -174,7 +174,7 @@ test('packaging refuses the profile that has not been built, naming the command 
   const script = fileURLToPath(new URL('package.mjs', import.meta.url))
 
   const refusals = [
-    [[], 'no debug binary at ../target/debug/bravebot-ui-files: run `npm run bridge` first'],
+    [[], 'no debug binary at ../target/debug/bravebot-ui-files: run `pnpm run bridge` first'],
     [['--release'], 'no release binary at ../target/release/bravebot-ui-files: run `make app-bundle` first'],
   ]
   for (const [argv, expected] of refusals) {
@@ -224,7 +224,7 @@ test('packaging refuses executables for another architecture, and an architectur
 // Only Windows is packaged anywhere but on itself, because everything platform-specific about that
 // bundle is written by JavaScript. Letting any platform through would produce a macOS bundle whose
 // signature was never restored, and letting a Windows one through without prebuilt executables
-// would send whoever asked for one to `npm run bridge`, which cannot build for Windows.
+// would send whoever asked for one to `pnpm run bridge`, which cannot build for Windows.
 test('packaging refuses a platform it does not build, and one this host cannot build', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'package-platform-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))

@@ -28,6 +28,7 @@
 
 #![forbid(unsafe_code)]
 
+mod address;
 pub mod transport;
 
 pub use transport::{Transport, TrustError, TrustRoots};
@@ -112,6 +113,12 @@ pub enum EgressError {
     InvalidUrl { url: String, detail: String },
     /// A redirect would have continued an https chain over cleartext http.
     InsecureRedirect { url: String },
+    /// The host resolved to an address that is not public: this machine, a private network, a link
+    /// local address or a metadata service.
+    ///
+    /// Carries the URL and nothing of the address. Where it was found is a fact about the network
+    /// the answer came from, and the request was never sent.
+    AddressRefused { url: String },
     /// Transport failure.
     Transport {
         url: String,
@@ -149,6 +156,12 @@ impl fmt::Display for EgressError {
             Self::InsecureRedirect { url } => {
                 write!(f, "{url} was redirected out of https to cleartext http")
             }
+            Self::AddressRefused { url } => {
+                write!(
+                    f,
+                    "{url} was not fetched: its host is not at a public address"
+                )
+            }
             Self::Transport { url, detail, .. } => {
                 write!(f, "request to {url} failed: {detail}")
             }
@@ -177,6 +190,9 @@ impl EgressError {
             | Self::InvalidUrl { .. }
             // The same chain answers the same way, so another attempt is the same downgrade.
             | Self::InsecureRedirect { .. }
+            // A name answers where it pointed a moment ago, and a person is not told to try again
+            // at something that was refused for where it is.
+            | Self::AddressRefused { .. }
             // The same reply takes as long again and is billed again.
             | Self::OutOfTime { .. }
             // The one error that says the reply is not wanted. Sending it again would be
@@ -207,6 +223,7 @@ impl EgressError {
             // The detail here is this crate's own sentence about a shape, so it survives.
             Self::InvalidUrl { detail, .. } => Self::InvalidUrl { url, detail },
             Self::InsecureRedirect { .. } => Self::InsecureRedirect { url },
+            Self::AddressRefused { .. } => Self::AddressRefused { url },
             // The detail here is the transport's, and a transport reports a URL it could not use
             // by quoting it: `ureq::Error::BadUri` is "bad uri: <the whole string>". Keeping the
             // ones that do not quote it would mean reading the detail to decide, which is a
@@ -272,9 +289,26 @@ pub struct Streamed<'r> {
     reader: Box<dyn std::io::Read + Send + 'r>,
     read: usize,
     truncated: bool,
+    /// The most of the body this will hand back, [`MAX_RESPONSE_BYTES`] unless the caller moved it.
+    cap: usize,
+    /// How much is asked of the reader at a time.
+    chunk: usize,
 }
 
 impl Streamed<'_> {
+    /// Raise or lower the cap this body is read under, for a caller that saves it to a file
+    /// instead of holding it in a conversation.
+    ///
+    /// Only the size changes. The label was fixed before the first byte and nothing here can
+    /// change it, and the cap is still enforced across the whole stream. Reads are larger too,
+    /// since a body worth raising the cap for is not one that has to look like it is being typed.
+    #[must_use]
+    pub fn capped_at(mut self, cap: usize) -> Self {
+        self.cap = cap;
+        self.chunk = DOWNLOAD_CHUNK_BYTES;
+        self
+    }
+
     /// The label every piece of this body carries.
     pub fn label(&self) -> Label {
         self.label
@@ -294,16 +328,16 @@ impl Streamed<'_> {
             return Ok(None);
         }
 
-        let remaining = MAX_RESPONSE_BYTES + 1 - self.read;
-        let mut buffer = vec![0u8; STREAM_CHUNK_BYTES.min(remaining)];
+        let remaining = self.cap + 1 - self.read;
+        let mut buffer = vec![0u8; self.chunk.min(remaining)];
         match self.reader.read(&mut buffer) {
             Ok(0) => Ok(None),
             Ok(n) => {
                 self.read += n;
                 buffer.truncate(n);
-                if self.read > MAX_RESPONSE_BYTES {
+                if self.read > self.cap {
                     self.truncated = true;
-                    buffer.truncate(n - (self.read - MAX_RESPONSE_BYTES));
+                    buffer.truncate(n - (self.read - self.cap));
                     if buffer.is_empty() {
                         return Ok(None);
                     }
@@ -312,6 +346,15 @@ impl Streamed<'_> {
             }
             Err(e) => Err(body_failure(&self.requested, e)),
         }
+    }
+
+    /// How many bytes [`Streamed::next_chunk`] has handed back so far.
+    ///
+    /// The stream's own count of what it moved, so a caller reporting a size reads a number and
+    /// not the released bytes. The one byte past the cap that is read to learn the body was cut is
+    /// never handed back and so is not counted.
+    pub fn handed_back(&self) -> usize {
+        self.read.min(self.cap)
     }
 
     /// Whether the cap stopped the read before the body ended.
@@ -336,12 +379,17 @@ impl fmt::Debug for Streamed<'_> {
 /// Small enough that a reply appears to arrive as it is written rather than in visible jumps.
 const STREAM_CHUNK_BYTES: usize = 1024;
 
+/// How much is read at a time from a body that is going to a file.
+const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
+
 /// A request to send.
 #[derive(Debug, Clone)]
 pub struct Request {
     pub method: Method,
     pub url: String,
     pub headers: Vec<(String, String)>,
+    /// Headers attached only when the request target matches the socket of [`Request::url`].
+    pub socket_headers: Vec<(String, String)>,
     pub body: Option<Vec<u8>>,
     /// How long the reply may take, where the request says. Otherwise [`Timeouts::reply`].
     pub reply: Option<ReplyBound>,
@@ -374,6 +422,7 @@ impl Request {
             method: Method::Get,
             url: url.into(),
             headers: Vec::new(),
+            socket_headers: Vec::new(),
             body: None,
             reply: None,
             patient_on_this_machine: false,
@@ -385,6 +434,7 @@ impl Request {
             method: Method::Post,
             url: url.into(),
             headers: Vec::new(),
+            socket_headers: Vec::new(),
             body: Some(body),
             reply: None,
             patient_on_this_machine: false,
@@ -393,6 +443,15 @@ impl Request {
 
     pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.push((name.into(), value.into()));
+        self
+    }
+
+    /// Add a header that is only sent when the target URL matches the socket of [`Request::url`].
+    ///
+    /// If a redirect hop leaves that socket, these headers are not sent, so credentials
+    /// or server-scoped headers never leak to an unintended destination.
+    pub fn socket_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.socket_headers.push((name.into(), value.into()));
         self
     }
 
@@ -428,6 +487,10 @@ impl Request {
 /// The one way out of the process.
 pub struct Egress {
     agent: ureq::Agent,
+    /// The same configuration, resolving through [`address::GuardedResolver`]. A fetch in flight is
+    /// sent with this one and everything else with `agent`, so a local model endpoint on loopback
+    /// is untouched.
+    guarded: ureq::Agent,
     /// What the agent was configured with, so a request stating its own reply bound can have the
     /// phases that carry it worked out again the same way.
     timeouts: Timeouts,
@@ -493,10 +556,53 @@ impl Egress {
             // Recomputed on every read, which is what makes it a gap rather than a total.
             .timeout_recv_body(Some(timeouts.idle))
             .build();
+        let guarded = ureq::Agent::with_parts(
+            config.clone(),
+            ureq::unversioned::transport::DefaultConnector::default(),
+            address::GuardedResolver::new(),
+        );
         Self {
             agent: config.into(),
+            guarded,
             timeouts,
         }
+    }
+
+    /// As built, with the lookup a fetch in flight makes replaced, so a test can state what a name
+    /// resolves to without a name server.
+    #[cfg(test)]
+    fn guarded_by(mut self, resolver: address::GuardedResolver) -> Self {
+        self.guarded = ureq::Agent::with_parts(
+            self.agent.config().clone(),
+            ureq::unversioned::transport::DefaultConnector::default(),
+            resolver,
+        );
+        self
+    }
+
+    /// The agent for one request: the guarded one for a fetch in flight that no proxy stands in
+    /// front of.
+    ///
+    /// A proxy resolves the target itself, and ureq resolves the proxy's own host through the
+    /// resolver instead, so guarding that lookup would refuse a proxy on this machine and check
+    /// nothing about the target. That cost is recorded in `docs/specs/tools/fetch-url.md`.
+    fn agent_for(&self, fetching: bool, url: &str) -> &ureq::Agent {
+        if fetching && !self.proxied(url) {
+            &self.guarded
+        } else {
+            &self.agent
+        }
+    }
+
+    /// Whether a proxy stands between this machine and `url`'s host.
+    fn proxied(&self, url: &str) -> bool {
+        let Ok(uri) = url.parse::<ureq::http::Uri>() else {
+            return false;
+        };
+        self.agent
+            .config()
+            .proxy()
+            .is_some_and(|proxy| !proxy.is_no_proxy(&uri))
     }
 
     /// Send a request, checking the policy before the initial URL and before every
@@ -564,6 +670,8 @@ impl Egress {
             reader,
             read: 0,
             truncated: false,
+            cap: MAX_RESPONSE_BYTES,
+            chunk: STREAM_CHUNK_BYTES,
         })
     }
 
@@ -603,12 +711,7 @@ impl Egress {
         let Ok(uri) = url.parse::<ureq::http::Uri>() else {
             return false;
         };
-        let proxied = self
-            .agent
-            .config()
-            .proxy()
-            .is_some_and(|proxy| !proxy.is_no_proxy(&uri));
-        !proxied && uri.host().is_some_and(names_this_machine)
+        !self.proxied(url) && uri.host().is_some_and(names_this_machine)
     }
 
     /// The redirect loop itself: send, revalidate, follow, and hand back the body reader unread.
@@ -623,6 +726,7 @@ impl Egress {
     ) -> Result<(u16, Option<String>, Box<dyn std::io::Read + Send>), EgressError> {
         let mut url = request.url.clone();
         let mut hops = 0;
+        let fetching = policy.fetch_in_flight();
 
         loop {
             require_http_scheme(&url)?;
@@ -636,8 +740,14 @@ impl Egress {
                 && hops == 0
                 && self.reaches_here(&url);
             let response = match cancel {
-                Some(cancel) => self.send_watching(request, &url, patient, cancel)?,
-                None => send(&self.agent, self.timeouts, request, &url, patient)?,
+                Some(cancel) => self.send_watching(request, &url, patient, fetching, cancel)?,
+                None => send(
+                    self.agent_for(fetching, &url),
+                    self.timeouts,
+                    request,
+                    &url,
+                    patient,
+                )?,
             };
             let status = response.0;
 
@@ -683,10 +793,15 @@ impl Egress {
         request: &Request,
         url: &str,
         patient: bool,
+        fetching: bool,
         cancel: &Cancel,
     ) -> Result<Sent, EgressError> {
         let (answered, waiting) = std::sync::mpsc::channel();
-        let (agent, hop, target) = (self.agent.clone(), request.clone(), url.to_string());
+        let (agent, hop, target) = (
+            self.agent_for(fetching, url).clone(),
+            request.clone(),
+            url.to_string(),
+        );
         let timeouts = self.timeouts;
         std::thread::spawn(move || {
             // A send that fails means the caller stopped, so there is nobody left to answer.
@@ -735,19 +850,29 @@ fn send(
     url: &str,
     patient: bool,
 ) -> Result<Sent, EgressError> {
+    let declared_socket = bravebot_core::url::socket_of(&request.url);
+    let current_socket = bravebot_core::url::socket_of(url);
+    let on_declared_socket = declared_socket.is_some() && declared_socket == current_socket;
+
+    let headers = request
+        .headers
+        .iter()
+        .filter(|(name, _)| on_declared_socket || !name.eq_ignore_ascii_case("authorization"))
+        .chain(request.socket_headers.iter().filter(|_| on_declared_socket));
+
     // GET and POST builders have different types in ureq, so the header loop is
     // repeated rather than abstracted over them.
     let result = match request.method {
         Method::Get => {
             let mut builder = agent.get(url);
-            for (name, value) in &request.headers {
+            for (name, value) in headers {
                 builder = builder.header(name, value);
             }
             within(builder, timeouts, request.reply, patient).call()
         }
         Method::Post => {
             let mut builder = agent.post(url);
-            for (name, value) in &request.headers {
+            for (name, value) in headers {
                 builder = builder.header(name, value);
             }
             let builder = within(builder, timeouts, request.reply, patient);
@@ -769,6 +894,11 @@ fn send(
             if matches!(request.reply, Some(ReplyBound::Whole(_))) =>
         {
             return Err(EgressError::OutOfTime {
+                url: url.to_string(),
+            });
+        }
+        Err(e) if address::is_refusal(&e) => {
+            return Err(EgressError::AddressRefused {
                 url: url.to_string(),
             });
         }
@@ -863,6 +993,7 @@ fn failure_fields(
         EgressError::MissingLocation { .. } => ("missing_location", None),
         EgressError::InvalidUrl { .. } => ("invalid_url", None),
         EgressError::InsecureRedirect { .. } => ("insecure_redirect", None),
+        EgressError::AddressRefused { .. } => ("address_refused", None),
         EgressError::Transport { .. } => ("transport", None),
         EgressError::OutOfTime { .. } => ("out_of_time", None),
         EgressError::Status { status, .. } => ("status", Some(*status)),
@@ -1289,8 +1420,8 @@ mod tests {
         });
 
         let tmp = tempfile::tempdir().expect("a scratch directory");
-        let dir = tmp.path().to_path_buf();
-        bravebot_diag::configure(bravebot_diag::Level::Error, Some(dir.clone()));
+        let dir = tmp.path().join(bravebot_diag::DIRECTORY);
+        bravebot_diag::configure(bravebot_diag::Level::Error, Some(tmp.path().to_path_buf()));
 
         let mut routing = bravebot_core::policy::Routing::new();
         routing.insert_trusted("task", "fetch a page");
@@ -1456,6 +1587,12 @@ mod tests {
     /// bytes inside one. Nothing about the gate is under test here; it is how the caller under
     /// test reads a chunk too.
     fn drain(mut stream: Streamed<'_>) -> (usize, bool) {
+        let total = drain_by_ref(&mut stream);
+        (total, stream.truncated())
+    }
+
+    /// The same, leaving the stream for the caller to ask about afterwards.
+    fn drain_by_ref(stream: &mut Streamed<'_>) -> usize {
         let mut routing = bravebot_core::policy::Routing::new();
         routing.insert_trusted("task", "read a stream");
         let mut sink = bravebot_core::event::NullSink;
@@ -1472,7 +1609,24 @@ mod tests {
         while let Some(chunk) = stream.next_chunk().expect("the read succeeds") {
             total += decoding.decode(chunk).0.len();
         }
-        (total, stream.truncated())
+        total
+    }
+
+    /// The size a download reports is the stream's own count, so it has to be the bytes handed
+    /// back: all of a body that ended at the cap, the cap's worth of one that was cut, and not
+    /// the one extra byte read to learn it was cut.
+    #[test]
+    fn a_stream_counts_the_bytes_it_handed_back_and_not_the_one_it_read_to_find_the_cut() {
+        for (body, cap) in [(5000, 3000), (3000, 3000), (2000, 3000)] {
+            let mut stream = streamed(vec![b'x'; body]).capped_at(cap);
+            let released = drain_by_ref(&mut stream);
+            assert_eq!(released, body.min(cap));
+            assert_eq!(
+                stream.handed_back(),
+                released,
+                "a {body}-byte body under a cap of {cap}"
+            );
+        }
     }
 
     fn streamed(body: Vec<u8>) -> Streamed<'static> {
@@ -1484,7 +1638,22 @@ mod tests {
             reader: Box::new(std::io::Cursor::new(body)),
             read: 0,
             truncated: false,
+            cap: MAX_RESPONSE_BYTES,
+            chunk: STREAM_CHUNK_BYTES,
         }
+    }
+
+    /// A download is held to the figure its caller was given and not to the built-in cap, in both
+    /// directions: a larger body than the built-in cap arrives whole, and a smaller figure cuts a
+    /// body the built-in cap would have let through.
+    #[test]
+    fn a_stream_raised_or_lowered_is_cut_at_the_figure_it_was_given() {
+        let (total, truncated) =
+            drain(streamed(vec![b'x'; MAX_RESPONSE_BYTES + 10]).capped_at(MAX_RESPONSE_BYTES + 10));
+        assert_eq!((total, truncated), (MAX_RESPONSE_BYTES + 10, false));
+
+        let (total, truncated) = drain(streamed(vec![b'x'; 5000]).capped_at(3000));
+        assert_eq!((total, truncated), (3000, true));
     }
 
     /// The flag has to mean the body was cut, not that the cap was reached: a caller that cannot
@@ -1517,5 +1686,310 @@ mod tests {
         }
 
         assert!(read_capped(Box::new(Interrupted)).is_err());
+    }
+
+    /// What `names` resolve to, one answer per lookup in order, the last one repeating. Counts the
+    /// lookups, since a second one is how an answer would differ from the address connected to.
+    #[derive(Debug)]
+    struct Answers {
+        lookups: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        answers: Vec<Vec<std::net::IpAddr>>,
+    }
+
+    impl ureq::unversioned::resolver::Resolver for Answers {
+        fn resolve(
+            &self,
+            uri: &ureq::http::Uri,
+            _: &ureq::config::Config,
+            _: ureq::unversioned::transport::NextTimeout,
+        ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+            let nth = self
+                .lookups
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let answer = &self.answers[nth.min(self.answers.len() - 1)];
+            let mut found = self.empty();
+            for ip in answer {
+                found.push(std::net::SocketAddr::new(*ip, uri.port_u16().unwrap_or(80)));
+            }
+            Ok(found)
+        }
+    }
+
+    fn ip(text: &str) -> std::net::IpAddr {
+        text.parse().expect("an address")
+    }
+
+    fn loopback_only(address: std::net::IpAddr) -> bool {
+        address == ip("127.0.0.1")
+    }
+
+    /// An egress whose fetches resolve through `answers`, with `admits` standing in for the
+    /// classification where a test needs an address it can actually connect to.
+    fn egress_resolving(
+        answers: Vec<Vec<&str>>,
+        admits: fn(std::net::IpAddr) -> bool,
+    ) -> (Egress, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let lookups = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let resolver = Answers {
+            lookups: lookups.clone(),
+            answers: answers
+                .into_iter()
+                .map(|answer| answer.into_iter().map(ip).collect())
+                .collect(),
+        };
+        let egress = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, None, None),
+        )
+        .guarded_by(address::GuardedResolver::over(resolver, admits));
+        (egress, lookups)
+    }
+
+    /// A listener that counts connections and answers each with `responses` in turn.
+    fn serve_counting(
+        responses: Vec<String>,
+    ) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = connections.clone();
+        std::thread::spawn(move || {
+            for response in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                    if line == "\r\n" {
+                        break;
+                    }
+                    line.clear();
+                }
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (port, connections)
+    }
+
+    fn page(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn redirect(location: &str) -> String {
+        format!(
+            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    }
+
+    /// Runs `request` as a `fetch_url` call would: approved, then in flight.
+    fn fetched(egress: &Egress, request: Request) -> Result<Response, EgressError> {
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "fetch a page");
+        let mut sink = bravebot_core::event::NullSink;
+        let Ok(mut policy) = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        ) else {
+            panic!("policy begins");
+        };
+        policy.endorse_fetch(&request.url);
+        assert!(policy.before_fetch(&request.url).is_ok(), "approved");
+        let outcome = egress.fetch(&mut policy, request, Label::untrusted_public());
+        policy.fetch_finished();
+        outcome
+    }
+
+    #[test]
+    fn a_name_resolving_to_a_non_public_address_is_refused_before_any_request_is_sent() {
+        for answer in [
+            "10.1.2.3",
+            "192.168.0.7",
+            "172.20.0.1",
+            "169.254.169.254",
+            "fe80::1",
+            "fd00:ec2::254",
+            "100.100.100.200",
+            "::ffff:169.254.169.254",
+        ] {
+            let (egress, lookups) = egress_resolving(vec![vec![answer]], address::is_public);
+            let outcome = fetched(&egress, Request::get("http://docs.example.test:9/page"));
+            assert!(
+                matches!(&outcome, Err(EgressError::AddressRefused { url }) if url == "http://docs.example.test:9/page"),
+                "{answer}: {outcome:?}"
+            );
+            assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+    }
+
+    /// Only the lookup is guarded. A listener on loopback that does answer shows the refusal came
+    /// before the connection and not from there being nothing to connect to.
+    #[test]
+    fn a_refused_address_is_never_connected_to() {
+        let (port, connections) = serve_counting(vec![page("secret")]);
+        let (egress, _) = egress_resolving(vec![vec!["127.0.0.1"]], address::is_public);
+        let outcome = fetched(
+            &egress,
+            Request::get(format!("http://rebind.example.test:{port}/")),
+        );
+        assert!(matches!(outcome, Err(EgressError::AddressRefused { .. })));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// An answer holding one address that is not public is the name pointing somewhere it should
+    /// not, however many of the others are fine.
+    #[test]
+    fn one_non_public_address_among_public_ones_refuses_the_name() {
+        let (port, connections) = serve_counting(vec![page("x")]);
+        let (egress, _) = egress_resolving(vec![vec!["127.0.0.1", "10.0.0.1"]], loopback_only);
+        let outcome = fetched(
+            &egress,
+            Request::get(format!("http://mixed.example.test:{port}/")),
+        );
+        assert!(matches!(outcome, Err(EgressError::AddressRefused { .. })));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// The same name on the next hop is looked up again and classified again, so an answer that
+    /// changes between hops is caught on the hop it changed.
+    #[test]
+    fn a_redirect_hop_resolving_to_a_non_public_address_is_refused_and_names_the_url_asked_for() {
+        // A path-absolute Location keeps the host, so the redirect is one the approval allows.
+        let (port, connections) = serve_counting(vec![redirect("/second"), page("not reached")]);
+        let (egress, lookups) = egress_resolving(
+            vec![vec!["127.0.0.1"], vec!["169.254.169.254"]],
+            |address| address == ip("127.0.0.1") || address::is_public(address),
+        );
+        let asked = format!("http://hop.example.test:{port}/first");
+        let outcome = fetched(&egress, Request::get(&asked));
+
+        match outcome {
+            Err(EgressError::AddressRefused { url }) => assert_eq!(url, asked),
+            other => panic!("expected the second hop refused: {other:?}"),
+        }
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 2);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            connections.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "only the first hop was sent"
+        );
+    }
+
+    /// The connection goes to the address that was classified: one lookup per hop, whatever a
+    /// later lookup would have said.
+    #[test]
+    fn the_connection_is_made_to_the_address_that_was_classified() {
+        let (port, connections) = serve_counting(vec![page("served")]);
+        let (egress, lookups) =
+            egress_resolving(vec![vec!["127.0.0.1"], vec!["10.255.255.1"]], loopback_only);
+        let response = fetched(
+            &egress,
+            Request::get(format!("http://pinned.example.test:{port}/")),
+        )
+        .expect("the classified address is connected to");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// A host written as an address is what the person approved, so nothing it resolves to is a
+    /// surprise to refuse.
+    #[test]
+    fn an_approved_host_that_is_itself_an_address_is_fetched() {
+        let (port, _) = serve_counting(vec![page("local")]);
+        let egress = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, None, None),
+        );
+        let response = fetched(&egress, Request::get(format!("http://127.0.0.1:{port}/")))
+            .expect("an address literal is not a name");
+        assert_eq!(response.status, 200);
+    }
+
+    /// Everything but a fetch keeps the agent it had: the model endpoint a person runs on
+    /// loopback is reached by name too.
+    #[test]
+    fn a_request_that_is_not_a_fetch_may_still_resolve_to_this_machine() {
+        let (port, _) = serve_counting(vec![page("model")]);
+        let egress = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, None, None),
+        );
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "ask the model");
+        let mut sink = bravebot_core::event::NullSink;
+        let mut policy = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy begins");
+        let response = egress
+            .fetch(
+                &mut policy,
+                Request::get(format!("http://localhost:{port}/")),
+                Label::untrusted_public(),
+            )
+            .expect("no fetch is in flight");
+        assert_eq!(response.status, 200);
+    }
+
+    /// A proxy resolves the target, and ureq asks this resolver for the proxy's own address, so a
+    /// guarded lookup there would refuse a proxy on this machine and check nothing about the
+    /// target.
+    #[test]
+    fn a_proxied_fetch_is_not_sent_through_the_guarded_lookup() {
+        let proxied = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, Some("http://127.0.0.1:3128"), None),
+        );
+        assert!(std::ptr::eq(
+            proxied.agent_for(true, "http://docs.example.com/"),
+            &proxied.agent
+        ));
+
+        let direct = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, None, None),
+        );
+        assert!(std::ptr::eq(
+            direct.agent_for(true, "http://docs.example.com/"),
+            &direct.guarded
+        ));
+        assert!(std::ptr::eq(
+            direct.agent_for(false, "http://docs.example.com/"),
+            &direct.agent
+        ));
+    }
+
+    #[test]
+    fn a_refused_address_is_a_failure_that_says_nothing_of_the_address_and_is_not_retried() {
+        let error = EgressError::AddressRefused {
+            url: "http://docs.example.com/".into(),
+        };
+        assert!(!error.is_transient());
+        let text = error.to_string();
+        assert!(text.contains("http://docs.example.com/"));
+        let fields = failure_fields("http://docs.example.com/", &error, Duration::ZERO)
+            .expect("a refusal is logged");
+        assert!(fields.iter().any(
+            |(name, value)| *name == "kind" && format!("{value:?}").contains("address_refused")
+        ));
     }
 }

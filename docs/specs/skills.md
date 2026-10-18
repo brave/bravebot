@@ -71,7 +71,27 @@ would be laundering.
 Nothing is assumed from silence. An empty directory offers nothing, and putting a file there is
 the grant, on the same footing as the configuration that picks the model and the endpoint.
 
+A skill file there whose path goes through the workspace is not read from provenance at all,
+because a turn can write it. The workspace here is every directory the file tools may write to:
+the working directory, a directory opened beside it ([TRUST-9](trust-map.md#TRUST-9)), and the
+session's own ([TRUST-16](trust-map.md#TRUST-16)). Every file there goes through it where one of
+those is, or holds, the home directory. So does a file reached through a link that sits inside the
+workspace, wherever that link leads, since a turn can change the link. Such a file is the
+project's, and is offered only where [SKILL-4](#SKILL-4) reads it through the trust map: in a
+session started in the home directory, that is `.bravebot/skills`. Those passed over are counted
+in a notice, as [SKILL-6](#SKILL-6) counts what it skips, except where `~/.bravebot/skills` is
+itself one of the project skill directories read, whose own notices already account for each.
+The two are compared as directories, so no entry's name is held or compared.
+
 `verified-by: bravebot_agent::skills::a_home_skill_is_not_labelled_by_a_rule_meant_for_the_workspace`
+`verified-by: bravebot_agent::skills::a_session_started_in_the_home_directory_reads_its_skills_through_the_trust_map`
+`verified-by: bravebot_agent::skills::a_skill_inside_a_working_directory_that_holds_the_home_directory_is_not_offered`
+`verified-by: bravebot_agent::skills::a_home_directory_reached_through_a_link_into_the_workspace_is_inside_it`
+`verified-by: bravebot_agent::skills::a_home_skill_named_inside_the_workspace_is_not_offered_through_a_link_out_of_it`
+`verified-by: bravebot_agent::skills::a_home_skill_reached_through_a_link_inside_the_workspace_is_not_offered`
+`verified-by: bravebot_agent::skills::a_home_skill_inside_a_directory_opened_beside_the_project_is_not_offered`
+`verified-by: bravebot_agent::skills::a_home_directory_spelled_in_another_case_is_inside_the_workspace_it_is`
+`verified-by: bravebot_agent::skills::a_home_skill_passed_over_is_counted_beside_a_project_skill_of_the_same_name`
 
 <a id="SKILL-4"></a>
 ### SKILL-4: a project's own files are read through the trust map
@@ -84,6 +104,8 @@ because a directory name is content too. Which directories those are, and in wha
 `verified-by: bravebot_agent::skills::a_skill_in_an_untrusted_project_is_not_named_to_the_planner`
 `verified-by: bravebot_agent::skills::a_skill_the_trust_map_distrusts_stops_being_offered`
 `verified-by: bravebot_agent::skills::a_foreign_skill_in_an_untrusted_project_is_counted_and_not_named`
+`verified-by: bravebot_agent::skills::an_untrusted_entry_named_like_a_vouched_skill_is_still_counted`
+`verified-by: bravebot_agent::skills::a_skill_from_no_vouched_root_leaves_an_untrusted_entry_counted`
 
 <a id="SKILL-5"></a>
 ### SKILL-5: a source that fails `read_trusted_content` is dropped entirely, never quarantined
@@ -222,12 +244,17 @@ turn would offer is. Each skill records whether it was found in the project, in 
 directory or in this program, and one that shadowed another records where it was found, not where
 the one it shadowed was.
 
+The list draws names, descriptions and argument hints and loads no skill, so it does not list the
+files beside each skill. Everything else it reads is what a turn reads.
+
 **Why.** A list that found skills its own way would sooner or later name one the planner is never
 shown, and a skill in a project nobody trusts is exactly the one [SKILL-6](#SKILL-6) counts rather
 than names. Where it was found is what lets a person tell a skill of their own from one a checkout
-brought with it.
+brought with it. Walking every skill's directory for files only `load_skill` reads on each slash
+would make the list lag behind the keys.
 
 `verified-by: bravebot_agent::skills::the_set_an_interface_resolves_is_the_one_a_turn_would`
+`verified-by: bravebot_agent::skills::the_set_the_box_offers_is_the_turns_without_the_files_beside_each_skill`
 `verified-by: bravebot_agent::skills::each_skill_records_which_of_the_three_places_it_came_from`
 `verified-by: bravebot_agent::skills::a_skill_a_deny_rule_covers_is_offered_nowhere_through_a_link_to_it`
 
@@ -273,6 +300,7 @@ unless its own definition names one.
 `verified-by: bravebot_agent::skills::a_model_that_names_nothing_leaves_the_session_its_own`
 `verified-by: bravebot_agent::skills::a_skill_carries_the_model_and_the_effort_its_file_named`
 `verified-by: bravebot_agent::turn::a_loaded_skill_asks_the_rounds_after_it_of_its_own_model_and_effort`
+`verified-by: bravebot_agent::turn::a_delegate_spawned_after_a_skill_switched_the_model_is_asked_of_that_model`
 `verified-by: bravebot_agent::turn::a_skill_naming_neither_key_leaves_the_session_its_own_choice`
 `verified-by: bravebot_agent::turn::a_skill_loaded_by_an_addressed_definition_keeps_the_definitions_model`
 `verified-by: bravebot_agent::turn::a_skill_under_a_definition_the_command_line_outranked_switches_the_model`
@@ -307,6 +335,8 @@ is read.
 `verified-by: bravebot_agent::skills::an_effort_word_naming_no_level_is_reported_and_the_skill_still_loads`
 `verified-by: bravebot_agent::skills::a_key_nothing_reads_is_carried_out_beside_the_skill_that_declared_it`
 `verified-by: bravebot_cli::running::doctor_names_a_skill_key_nothing_reads`
+`verified-by: bravebot_cli::running::doctor_says_nothing_of_a_skill_with_every_key_read_or_one_a_turn_drops`
+`verified-by: bravebot_cli::running::doctor_names_a_projects_unread_key_only_where_the_directory_is_trusted`
 `verified-by: bravebot_agent::turn::a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so`
 
 ## Known costs

@@ -7,23 +7,20 @@
 // found by a different path when packaged: `process.resourcesPath` rather than whatever
 // `cargo` last built, which no development run ever exercises.
 //
-// Costs nothing: it never sends a prompt. Run `npm run package` first.
+// Costs nothing: it never sends a prompt. Run `pnpm run package` first.
 import { _electron as electron } from 'playwright-core'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdirSync } from 'node:fs'
 import { acceptsInspect } from './fuses.mjs'
+import { checker } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
+const { check, problems } = checker()
 
 const BUNDLE = `dist/Brave Bot-darwin-${process.arch === 'arm64' ? 'arm64' : 'x64'}/Brave Bot.app`
 if (!existsSync(BUNDLE)) {
-  console.log(`RESULT: skipped — no bundle at ${BUNDLE}; run \`npm run package\``)
+  console.log(`RESULT: skipped: no bundle at ${BUNDLE}; run \`pnpm run package\``)
   process.exit(0)
 }
 
@@ -31,7 +28,7 @@ if (!existsSync(BUNDLE)) {
 // attaches through `--inspect`, so launching one waits out the timeout below and says only that
 // the launch failed.
 if (!acceptsInspect(readFileSync(`${BUNDLE}/Contents/Frameworks/Electron Framework.framework/Electron Framework`))) {
-  console.log(`RESULT: failed, because ${BUNDLE} is fused and Playwright cannot attach to it; run \`npm run package\``)
+  console.log(`RESULT: failed, because ${BUNDLE} is fused and Playwright cannot attach to it; run \`pnpm run package\``)
   process.exit(1)
 }
 

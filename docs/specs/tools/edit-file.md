@@ -10,8 +10,8 @@ documented-by: docs/website/docs/reference/tools.md
 
 ## Scope
 
-Replacing an exact passage in a file. `path` and `replace_all` are routing; `old_text` and
-`new_text` are content. The result is a confirmation.
+Replacing an exact passage in a file, or several in one call. `path` and `replace_all` are routing;
+`old_text`, `new_text` and `edits` are content. The result is a confirmation.
 
 ## Why this exists rather than a whole-file write
 
@@ -47,8 +47,14 @@ located and the body is shown to a person in full.
 <a id="EDIT-3"></a>
 ### EDIT-3: an edit is approved as a diff, and cannot leave the workspace
 
+The diff compares the whole file, so passages a long way apart are shown as separate changes. A
+file whose two sides cannot be matched line by line within the bound [`read_git`](read-git.md)
+states for `diff` is shown as a notice that the change is too large to show, with no changes
+listed.
+
 `verified-by: bravebot_agent::turn::an_edit_is_reviewed_as_a_diff`
 `verified-by: bravebot_agent::turn::a_reviewed_edit_carries_both_sides_of_the_diff`
+`verified-by: bravebot_agent::turn::edits_far_apart_in_a_long_file_are_approved_as_two_changes`
 `verified-by: bravebot_agent::turn::an_approved_edit_is_recorded_as_endorsed`
 `verified-by: bravebot_agent::turn::a_refused_edit_does_not_happen`
 `verified-by: bravebot_agent::turn::an_edit_cannot_escape_the_workspace`
@@ -74,7 +80,26 @@ label is untrusted the result is the count alone, because a quarantined excerpt 
 confirmation down with it and a planner that cannot be told its edit landed is worse off than one
 told only that. [EDIT-2](#EDIT-2) is what makes the file itself trusted by this point.
 
+**The lines are a read of the file, and are scanned as one is.** The excerpt is text from the file
+handed to the planner, so before the result is returned the lines it shows are scanned for
+credentials under [CRED-15](../credential-protection.md#CRED-15), and only those lines: a credential
+in the part of a long span the excerpt cuts, or beyond its context, is not in the planner's context.
+On a finding the person is asked, as for a read of that file, and one answer covers the file for
+this tool and for `read_file` alike. A value the edit's own words wrote is not asked about, since
+the planner wrote it and the write was put to the person with it. The edit has landed when the
+question is put, so a no does not undo it. The planner is told that the edit landed and that the
+lines around it are not shown because the file holds what looks like a credential, and is told
+nothing of the finding ([CRED-19](../credential-protection.md#CRED-19)).
+
 `verified-by: bravebot_agent::turn::an_edit_shows_the_lines_it_changed`
+`verified-by: bravebot_agent::turn::an_edit_does_not_show_the_planner_a_credential_beside_the_change_unless_the_person_agrees`
+`verified-by: bravebot_agent::turn::an_edit_shows_the_lines_around_the_change_once_the_person_agrees_and_asks_once`
+`verified-by: bravebot_agent::turn::an_agreement_to_show_a_file_covers_the_lines_an_edit_shows`
+`verified-by: bravebot_agent::turn::a_credential_outside_the_lines_an_edit_shows_is_not_asked_about`
+`verified-by: bravebot_agent::turn::an_edit_is_not_put_to_the_person_twice_over_a_value_the_planner_wrote`
+`verified-by: bravebot_agent::replace::the_runs_an_excerpt_hands_back_carry_the_line_numbers_of_the_file`
+`verified-by: bravebot_agent::replace::a_cut_excerpt_hands_back_only_the_lines_it_shows`
+`verified-by: bravebot_agent::replace::a_cut_excerpt_says_how_many_lines_it_dropped`
 `verified-by: bravebot_agent::replace::an_excerpt_shows_the_changed_line_with_its_neighbours`
 `verified-by: bravebot_agent::replace::a_long_span_is_cut_in_the_middle_and_says_so`
 `verified-by: bravebot_agent::replace::a_change_of_line_terminator_still_shows_the_line`
@@ -110,3 +135,40 @@ inconsistent and a diff that looks right.
 `verified-by: bravebot_agent::turn::an_edit_to_a_crlf_file_keeps_its_line_endings`
 `verified-by: bravebot_agent::confirm::an_edit_that_keeps_crlf_says_so`
 `verified-by: bravebot_agent::confirm::a_write_that_swaps_the_terminators_says_which_way`
+
+<a id="EDIT-6"></a>
+### EDIT-6: several passages in one file are one call, one diff and all or nothing
+
+`edits` is a non-empty array of `old_text` and `new_text` pairs for the one file `path` names, given
+instead of a top-level `old_text` and `new_text` and never beside them. The pairs apply in order to
+the text read once, each to the text the pair before it left, so a later pair may match text an
+earlier one wrote. `replace_all` applies to every pair. [EDIT-1](#EDIT-1) holds for each pair, and a
+call whose pairs together leave the file as it was is refused as unchanged. A refusal names the
+pair, as `edit 2 of 3`, and no pair is applied: the file is edited in full or not at all.
+
+The person is asked once, about one diff of the combined result, and [EDIT-4](#EDIT-4) shows each
+changed region of it. [EDIT-2](#EDIT-2) and the planner-argument gate apply to every pair.
+
+**Why.** Five changes to a file were five calls, five prompts and five diffs, and no point at which
+the person saw the whole change. Editing several files in one call is not offered: each path is a
+routing value a person approves alone ([TOOL-2](tool-surface.md)).
+
+`verified-by: bravebot_agent::turn::several_edits_to_one_file_are_approved_once_as_one_diff`
+`verified-by: bravebot_agent::turn::a_missing_passage_among_several_changes_nothing_and_names_the_pair`
+`verified-by: bravebot_agent::turn::a_later_edit_matches_the_text_an_earlier_one_wrote`
+`verified-by: bravebot_agent::turn::edits_beside_a_single_pair_or_cancelling_out_are_refused`
+`verified-by: bravebot_agent::turn::a_malformed_edits_argument_is_refused_without_asking_or_writing`
+
+<a id="EDIT-7"></a>
+### EDIT-7: the result says what a running language server found wrong
+
+Where a language server for the file's language is already running, the result of an edit adds the
+line numbers of the errors it reports, as [LSP-12](lsp.md#LSP-12) specifies: counts and lines in
+this repository's words, never the server's, never started by the edit, and given only for a file the
+trust map vouches for after the edit.
+
+**Why.** A planner that finds a type error an edit introduced only by running a build spends a round
+and a second approval on something the server already knew.
+
+`verified-by: bravebot_agent::lsp::an_edit_reports_the_error_lines_a_running_server_found`
+`verified-by: bravebot_agent::lsp::an_edit_starts_no_language_server`

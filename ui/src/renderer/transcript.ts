@@ -18,6 +18,7 @@ import type {
   ConfirmRequest,
   CutOff,
   ExposureRequest,
+  HostRequest,
   McpCallRequest,
   McpMoveRequest,
   McpServerRequest,
@@ -169,6 +170,8 @@ export type Entry = (
   | { kind: 'mcp-call'; id: string; request: McpCallRequest; decision: 'approve' | 'reject' | null; remember: boolean }
   /** A remote MCP server whose reply pointed somewhere else, awaiting a decision about moving it. */
   | { kind: 'mcp-move'; id: string; request: McpMoveRequest; decision: 'approve' | 'reject' | null }
+  /** Hosts a confined program asked for that the allowed-hosts list does not cover, awaiting a decision. */
+  | { kind: 'host'; id: string; request: HostRequest; decision: 'approve' | 'reject' | null }
   /** What starting the session's MCP servers came to. */
   | { kind: 'mcp-started'; id: string; started: McpStarted }
   /**
@@ -188,6 +191,8 @@ export type Entry = (
   | { kind: 'ask'; id: string; request: AskRequest; answers: AskAnswer[] | null }
   | { kind: 'error'; id: string; text: string; category?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
   | { kind: 'watch'; id: string; text: string }
+  /** A message between two background sessions, drawn apart from the prompts (MSG-11). */
+  | { kind: 'session-message'; id: string; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
   /** A replayed tool line from a stored session: no outcome, because none was kept. */
   | { kind: 'replayed-tool'; id: string; text: string; why: string }
 ) & { interrupted?: boolean; turn?: number }
@@ -231,6 +236,18 @@ export function fromSaid(said: Said[]): Entry[] {
         return narrated(
           `The ${entry.media === 'application/pdf' ? 'PDF' : 'picture'} ${entry.reference} held was let through and attached for the model`,
         )
+      case 'session_message':
+        return {
+          kind: 'session-message',
+          id: nextId(),
+          direction: entry.direction,
+          heading: entry.heading,
+          kept: entry.kept,
+          session: entry.session,
+          name: entry.name,
+          label: entry.label,
+          text: entry.text,
+        } as const
       default: {
         // A tag from a newer agent than this window. Drawn as a plain message and never as one of
         // the interface's own rows: those rows assert something about the conversation that this
@@ -293,6 +310,7 @@ export const askedMcpServer = (request: McpServerRequest): Entry => ({ kind: 'mc
 export const askedMcpTools = (request: McpToolsRequest): Entry => ({ kind: 'mcp-tools', id: nextId(), request, decision: null })
 export const askedMcpCall = (request: McpCallRequest): Entry => ({ kind: 'mcp-call', id: nextId(), request, decision: null, remember: false })
 export const askedMcpMove = (request: McpMoveRequest): Entry => ({ kind: 'mcp-move', id: nextId(), request, decision: null })
+export const askedHost = (request: HostRequest): Entry => ({ kind: 'host', id: nextId(), request, decision: null })
 export const mcpStarted = (started: McpStarted): Entry => ({ kind: 'mcp-started', id: nextId(), started })
 export const planAsked = (text: string): Entry => ({ kind: 'plan-task', id: nextId(), text })
 export const planReplied = (text: string, record: string | null): Entry => ({ kind: 'plan-reply', id: nextId(), text, record })
@@ -401,6 +419,7 @@ export const REPLY = {
   'mcp-tools': 'mcp-tools.reply',
   'mcp-call': 'mcp-call.reply',
   'mcp-move': 'mcp-move.reply',
+  host: 'host.reply',
 } as const
 
 /** Which kinds of question a person can answer with a yes or a no. */
@@ -569,6 +588,7 @@ export function conversation(entries: Entry[], tools = false): ExportTurn[] {
 
 /** Search user-visible content, excluding protocol identifiers and internal metadata. */
 export function searchableText(entry: Entry): string {
+  if (entry.kind === 'session-message') return [entry.name, entry.text ?? ''].join(' ')
   if ('text' in entry) return entry.text
   switch (entry.kind) {
     case 'turn-start': return ''
@@ -588,6 +608,7 @@ export function searchableText(entry: Entry): string {
     case 'mcp-tools': return [entry.request.alias, ...entry.request.tools.map((tool) => `${tool.name} ${tool.description ?? ''}`)].join(' ')
     case 'mcp-call': return [entry.request.name, ...entry.request.arguments.map((argument) => `${argument.name} ${argument.value}`)].join(' ')
     case 'mcp-move': return [entry.request.alias, entry.request.declared, entry.request.destination].join(' ')
+    case 'host': return entry.request.hosts.join(' ')
     case 'mcp-started': return [...entry.started.servers, ...entry.started.notes].join(' ')
     case 'plan-ended': return [entry.ended.problem ?? '', entry.ended.attempt?.plan ?? '', ...(entry.ended.attempt?.steps ?? [])].join(' ')
     case 'vouch': return [entry.request.path, entry.request.preview].join(' ')

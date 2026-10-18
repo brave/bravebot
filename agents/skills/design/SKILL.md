@@ -79,7 +79,7 @@ The structure is set in `styles/shell.css` and `columns.ts`. New surfaces fit in
 1. **Nala only.** Import components only from `ui/src/renderer/nala.ts`. Use `--leo-*` tokens or
    the semantic layer in `styles/tokens.css` that aliases them for colour, type, spacing, radius,
    elevation and motion. No raw hex, no raw `box-shadow`, no odd pixel values.
-   `node scripts/check-nala.mjs` (run by `npm run typecheck`) must pass. It only gets stricter.
+   `node scripts/check-nala.mjs` (run by `pnpm run typecheck`) must pass. It only gets stricter.
    Never loosen it or raise a ratchet to make a change pass.
 2. **Icons are Leo `Icon`s.** Sizes are 12 (caption), 14 (meta), 16 (controls) and 20 (empty
    states and dialog headers), from one stroke family. No inline `<svg>` except the pixel avatar
@@ -150,7 +150,9 @@ and at the minimum window size.
 - Every interactive element has hover, pressed, focus-visible and disabled states. Hover feedback
   lands within `--motion-fast`. Nothing animates on first paint.
 - Every list and panel has designed empty, loading and error states. Loading shows a skeleton or a
-  12px ring only after 150ms (`useDelayedFlag`), with no blank flash.
+  12px ring only after 150ms (`useDelayedFlag`), with no blank flash. The loading row mounts when
+  loading starts and carries `data-delayed` until the delay passes, so it holds its height while
+  hidden. An empty state and any other branch still read the raw flag.
 - Switching sessions shows the target's skeleton immediately and restores scroll, with no flash of
   the previous session.
 - An inactive window dims its chrome through `data-window-inactive`: selected rows go grey and
@@ -247,14 +249,15 @@ does not regress them.
 The current commands are in `ui/package.json` and `ui/docs/testing.md`, which win over this list if
 they differ. From `ui/`:
 
-- `npm run typecheck` (includes `check-nala`) and `npm run build`. Warnings count.
+- `pnpm run typecheck` (includes `check-nala`) and `pnpm run build`. Warnings count.
 - `node --test scripts/*.test.mjs`, including `marking.test.mjs` and `ux-state.test.mjs`.
 - The non-paid drivers that touch what you changed, for example `drive`, `drive:columns`,
   `drive:panels`, `drive:models`, `drive:menu`, `drive:export`, `drive:fork`, `drive:tree`,
   `drive:theme`, `drive:bots`, `drive:about`, `drive:vetting`, `drive:remembered-trust`,
   `drive:markdown`, `drive:perf`, `drive:session-list`, `drive:visual`, and
-  `drive-ux-acceptance.mjs` and `drive-conversation-workflow.mjs`. If you moved a label or a DOM
-  location, update the drivers and demo scenes that assert on it.
+  `drive-ux-acceptance.mjs` and `drive-conversation-workflow.mjs`, which take their bridge fixture
+  from `acceptance-fixture.mjs`. If you moved a label or a DOM location, update the drivers and
+  demo scenes that assert on it.
 - Docs: update `ui/docs/interface.md` (layout, toolbar, keyboard model), `ui/docs/development.md`
   (tokens, components, check rules) and `ui/docs/testing.md` (drivers, fixtures, budgets) when the
   behaviour they describe changes. Update this file when the application's look changes.

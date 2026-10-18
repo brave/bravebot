@@ -274,13 +274,7 @@ pub fn assess<S: Sink>(
     // it keep their mark, being the same bytes every check.
     let request = ChatRequest::new(model, check.messages).giving_up_its_conversation();
 
-    let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
-    if let Some(cancel) = chat.cancel {
-        client = client.with_cancel(cancel.clone());
-    }
-    if let Some(subscription) = chat.subscription.as_deref_mut() {
-        client = client.with_subscription(subscription);
-    }
+    let mut client = chat.backend(model);
 
     // Streaming, like every other request this program makes, including the aside this is modelled
     // on. Nothing here shows the answer arriving, so the progress is dropped: what the streaming
@@ -471,6 +465,20 @@ mod tests {
         assert_eq!(read(""), Verdict::Unreadable);
     }
 
+    /// The word has to be the whole first line. A reader that took a line beginning with one would
+    /// read `MET, mostly` as the condition holding and stop a session whose judge was hedging.
+    #[test]
+    fn a_first_line_that_only_begins_with_a_verdict_word_is_not_a_verdict() {
+        for answer in [
+            "MET, mostly\nthe tests pass on one platform",
+            "Metered work remains",
+            "NOT MET YET",
+            "IMPOSSIBLE?",
+        ] {
+            assert_eq!(read(answer), Verdict::Unreadable, "{answer:?}");
+        }
+    }
+
     /// A verdict with no reason after it is still a verdict. Only the first line decides, and a
     /// judge that answered `MET` and stopped has said everything that is needed.
     #[test]
@@ -502,6 +510,10 @@ mod tests {
         assert!(
             sent.contains("nothing above runs the tests"),
             "the reason did not travel with the work: {sent}"
+        );
+        assert!(
+            sent.contains("stopping condition") && sent.contains("has not been met"),
+            "nothing says a stopping condition has not been met: {sent}"
         );
     }
 

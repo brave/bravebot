@@ -60,10 +60,10 @@ const draw = (entry) =>
     }),
   )
 
-const confined = (preview) =>
+const confined = (preview, reach = 'not_the_planner') =>
   t.quarantined({
     origin: 'notes.md',
-    reach: 'not_the_planner',
+    reach,
     label: '(U,priv)',
     preview,
     lines: preview.length,
@@ -112,7 +112,22 @@ test('quarantined content cannot paint its own container', () => {
   // The head and the foot are what the reader is meant to trust, and they name the origin and
   // the reach rather than repeating a word the content could have written.
   assert.match(drawn, /class="origin"[^>]*>notes\.md</)
-  assert.ok(drawn.includes('not in the planner'), drawn)
+})
+
+test('a block says where its content went only where that is not the ordinary answer', () => {
+  // Kept from the planner is what every block is, and the mark in its head says so.
+  const ordinary = draw(confined(['first line']))
+  assert.match(ordinary, /<span class="mark">confined<\/span>/)
+  assert.ok(!ordinary.includes('planner'), ordinary)
+  assert.ok(!ordinary.includes('no model'), ordinary)
+
+  // Content in no model's context is the exception and says so in the heading (VIEW-7), where
+  // the other words about the block are, and not in the foot under the content.
+  const unread = draw(confined(['first line'], 'no_model'))
+  const [head, rest] = unread.split('<pre class="preview">')
+  assert.ok(head.includes('class="quarantine-head"'), unread)
+  assert.ok(head.includes('in no model’s context'), unread)
+  assert.ok(!rest.includes('no model’s context'), unread)
 })
 
 /** A write of bytes a processor produced, which is the card the clause marks explicitly. */
@@ -153,6 +168,7 @@ const CARDS = {
   attached: { entry: () => ({ kind: 'attached', id: 'a1', path: FORGED_CHROME }), marks: null, why: 'the path somebody named, never the file’s bytes' },
   watch: { entry: () => t.watchFired(1, FORGED_CHROME), marks: null, why: 'the watch’s own line: a number and a path' },
   error: { entry: () => t.errored(FORGED_CHROME), marks: null, why: 'a diagnostic from the service the agent spoke to' },
+  'session-message': { entry: () => ({ kind: 'session-message', id: 'm1', direction: 'from', heading: 'message from session 11111111 (planner)', kept: null, session: '11111111-aaaa', name: 'planner', label: '(T,pub)', text: FORGED_CHROME }), marks: '<blockquote>' },
   'replayed-tool': { entry: () => ({ kind: 'replayed-tool', id: 'r1', text: FORGED_CHROME, why: FORGED_CHROME }), marks: null, why: 'the line a record kept of a call and the planner’s reason for it, with no result in it' },
   tool: {
     // `Activity.changes` and `Activity.untrusted` are on the wire already and this card draws
@@ -183,11 +199,12 @@ const CARDS = {
     why: 'the address the planner wrote and the host the agent read out of it, asked about before any reply exists',
   },
   server: {
-    entry: () => t.askedServer({ request: 1, language: FORGED_CHROME, program: FORGED_CHROME, workspace: FORGED_CHROME, runsBuildTooling: true, summary: 'start a language server' }),
+    entry: () => t.askedServer({ request: 1, language: FORGED_CHROME, program: FORGED_CHROME, args: [FORGED_CHROME], argumentsLine: FORGED_CHROME, workspace: FORGED_CHROME, runsBuildTooling: true, declared: false, summary: 'start a language server' }),
     marks: null,
-    // docs/specs/tools/lsp.md: the language and the program come from a table in the agent, the
-    // path is what `$PATH` resolved that name to, and the workspace is the session's own root.
-    why: 'a language and a program out of the agent’s own table, the path that name resolved to, and the project’s root, asked about before any server has answered',
+    // docs/specs/tools/lsp.md: the language and the program come from a table in the agent or from
+    // a declaration the person wrote in their own directory (LSP-11), the path is what `$PATH`
+    // resolved that name to, and the workspace is the session's own root.
+    why: 'a language, a program and its arguments out of the agent’s own table or the person’s own declaration, the path that name resolved to, and the project’s root, asked about before any server has answered',
   },
   manifest: {
     entry: () => t.askedManifest({ request: 1, task: FORGED_CHROME, steps: [FORGED_CHROME] }),
@@ -210,7 +227,7 @@ const CARDS = {
   },
   // SERVERS-8: a tool's description is the server's own text, released for a person to read.
   'mcp-tools': {
-    entry: () => t.askedMcpTools({ request: 1, alias: 'weather', tools: [{ name: 'weather:get_forecast', arguments: [FORGED_CHROME], description: FORGED_CHROME }], refused: 0, changed: false, vetting: { verdict: 'safe' } }),
+    entry: () => t.askedMcpTools({ request: 1, alias: 'weather', tools: [{ name: 'weather:get_forecast', arguments: [FORGED_CHROME], description: FORGED_CHROME }], refused: 0, changed: false, vetting: { verdict: 'safe', reason: 'the descriptions are plain' } }),
     marks: 'class="mcp-tool-description"',
   },
   'mcp-call': {
@@ -221,6 +238,13 @@ const CARDS = {
   'mcp-move': {
     entry: () => t.askedMcpMove({ request: 1, alias: 'weather', declared: 'https://weather.example/mcp', destination: FORGED_CHROME, authority: 'elsewhere.example:443', mayRecord: true }),
     marks: 'class="mcp-destination"',
+  },
+  host: {
+    entry: () => t.askedHost({ request: 1, hosts: [FORGED_CHROME] }),
+    marks: null,
+    // docs/specs/sandboxing.md SANDBOX-24: a host is kept only where it is a host name or an IP
+    // address, so what a program chose to ask for cannot hold markup or a control character.
+    why: 'host names and addresses a program asked for, each checked to be one before it was put to a person',
   },
   'mcp-started': {
     entry: () => t.mcpStarted({ servers: [FORGED_CHROME], confined: false, notes: [FORGED_CHROME] }),
@@ -249,15 +273,15 @@ const CARDS = {
   confirm: { entry: () => t.asked(UNTRUSTED_WRITE), marks: 'class="confirm untrusted"' },
   output: {
     entry: () => t.askedOutput({ request: 1, command: 'cat notes.md', reference: 'output-1', lines: 1, output: FORGED_CHROME, summary: 'one line' }),
-    marks: '<pre class="preview">',
+    marks: '<pre class="preview" data-deciding="first">',
   },
   vet: {
     entry: () => t.askedVet({ request: 1, origin: 'notes.md', expects: 'a note', content: FORGED_CHROME, lines: 1, vetting: { verdict: 'safe' } }),
-    marks: '<pre class="preview">',
+    marks: '<pre class="preview" data-deciding="first">',
   },
   vouch: {
     entry: () => t.askedVouch({ request: 1, path: 'notes.md', preview: FORGED_CHROME, truncated: false }),
-    marks: '<pre class="preview">',
+    marks: '<pre class="preview" data-deciding="first">',
   },
 }
 

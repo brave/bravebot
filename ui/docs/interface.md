@@ -42,7 +42,11 @@ Three columns, each side one resizable and foldable:
   Overview summarises the plan, reads and confined material; Changes distinguishes
   pending decisions, approved writes and their actual execution outcomes. Files
   provides a lazily loaded tree and project-wide filename search, including folders
-  not yet expanded. Text files can be previewed or opened in their default app.
+  not yet expanded. Text files can be previewed. **Open in default app** opens plain text,
+  Markdown, JSON, PDF, images, audio and video at once. For any other file,
+  or one marked executable, it first asks whether to open it, show it in its
+  folder or cancel, because the system may run the file as a program when it is opened and a
+  program run in the project may have written it. A symbolic link is judged by the file it points at.
   On narrow windows the inspector opens as a drawer.
 
 The two side columns fold from controls at either end of the transcript header, and their
@@ -138,13 +142,23 @@ banners above the header. It goes where it is needed:
   clear themselves after four seconds, name where a file went, and at most three show at once.
   A failure is never a confirmation.
 
-The mode control in the composer, beside the model, says how much the next turn asks before it acts: **Ask** (every
+The mode control in the composer, beside the model, says how much the session asks before it acts: **Ask** (every
 write and command is put to you), **Accept edits** (writes go through, commands and writes that
 would create a credential are still asked about) or **Plan** (nothing is written, commands are still
 asked about). Ask is drawn plainly. The other two are tinted for as long as they hold. Every session
-opens in Ask, including a resumed one and a fork. A change while a turn runs applies from the next
-turn, and the tooltip says so. Bypassing every check is not offered here, because it is reached
+opens in Ask, including a resumed one and a fork. A change while a turn runs applies to the rest
+of that turn. Bypassing every check is not offered here, because it is reached
 only through the terminal's `--dangerously-skip-permissions` flag.
+
+The sandbox control beside it says how much a program the agent runs is held to: **Workspace write**
+(the machine can be read except credential locations, and writes stay in the session), **Read only**
+(the same reads and no writes in the session) or **Strict** (a program reads only what its command
+names). On Windows none of the three reads the machine and Strict gives a program what Workspace
+write does, and the menu says so there. Workspace write is drawn plainly and Strict is tinted for as long as
+it holds. The menu has no way to turn the sandbox off: that is reached only
+through the terminal's `--sandbox off` flag or `/sandbox off`. A change applies from the next turn,
+and a turn already running keeps the mode it began with. Every session opens in the mode the
+settings and the managed file give, never in another session's choice.
 
 The model control in the composer opens the conversation's model picker.
 Search by name, provider, or reported capability (for example, `text` or `tools`),
@@ -501,8 +515,8 @@ reads it from the running bundle's `CFBundleName` before any JavaScript runs, an
 built from, so using it would move `bravebot-ui.json` and orphan every remembered column.
 
 Unpackaged, the running bundle is Electron's own, so `scripts/name-dev-app.mjs` renames it.
-It runs from `npm run dev` and from `postinstall`, because an `npm install` restores the
-original. If the menu bar ever says "Electron" again, `npm run name-dev-app` puts it back.
+It runs from `pnpm run dev` and from `postinstall`, because an `pnpm install` restores the
+original. If the menu bar ever says "Electron" again, `pnpm run name-dev-app` puts it back.
 
 In a release there is no hack: `scripts/package.mjs` names the bundle `Brave Bot`, and AppKit
 reads that. See [packaging](development.md#packaging).

@@ -7,8 +7,12 @@ governs:
   - crates/aichat/src/ollama.rs
   - crates/cli/src/import.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/model.rs
+  - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
   - crates/cli/src/session_import.rs
+  - crates/cli/src/background.rs
 documented-by: docs/website/docs/customize/configuration.md
 ---
 
@@ -69,6 +73,7 @@ should not open with a question about another program.
 `verified-by: bravebot_cli::running::a_first_run_with_ollama_running_offers_to_import_it`
 `verified-by: bravebot_cli::running::a_first_run_with_nothing_importable_refuses_as_before`
 `verified-by: bravebot_cli::running::a_configured_service_with_a_brave_model_is_not_offered_an_import`
+`verified-by: bravebot_cli::running::nothing_is_asked_where_stdin_or_stdout_is_not_a_terminal`
 
 <a id="IMPORT-2"></a>
 ### IMPORT-2: only a person's own user-level configuration is read, never a checkout's
@@ -139,6 +144,12 @@ substitution and would send its requests nowhere. It is listed as left ([IMPORT-
 entry names none, so an entry for one of those ids is left as naming another SDK
 ([IMPORT-4](#IMPORT-4)). Any other id with no `npm` is OpenAI-compatible.
 
+**An `openai` entry is OpenAI-compatible when it names no `npm`**, and is offered at
+`https://api.openai.com/v1`. One naming `@ai-sdk/openai` is left as another SDK
+([IMPORT-4](#IMPORT-4)), that package speaking the Responses API, which this program does not send.
+An entry that names no variable is written with `OPENAI_API_KEY`, the variable opencode reads for
+this id.
+
 **A `google-vertex` entry naming a project is the exception.** The service it names is reached
 through its OpenAI-compatible endpoint ([BACKEND-49](backends.md#BACKEND-49)), so the entry is
 offered where it states `options.project`. One stating none is left ([IMPORT-4](#IMPORT-4)), because
@@ -185,6 +196,9 @@ build reads it.
 `verified-by: bravebot_config::import::an_entry_naming_another_sdk_is_not_offered`
 `verified-by: bravebot_config::import::disabled_providers_are_not_offered`
 `verified-by: bravebot_config::import::an_auth_json_key_for_a_known_id_is_a_provider`
+`verified-by: bravebot_config::import::an_openai_entry_naming_no_sdk_is_offered_at_openais_endpoint`
+`verified-by: bravebot_config::import::an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk`
+`verified-by: bravebot_config::import::an_auth_json_key_for_openai_is_a_provider`
 `verified-by: bravebot_config::import::only_the_fields_bravebot_reads_are_written`
 `verified-by: bravebot_config::import::a_top_level_model_is_copied_where_its_provider_is`
 `verified-by: bravebot_config::import::a_limit_is_written_wherever_bravebot_reads_half_of_it`
@@ -230,6 +244,7 @@ API key would otherwise see the three routes and no sign that their setup was lo
 
 `verified-by: bravebot_config::import::a_google_vertex_entry_naming_a_project_is_offered_with_its_project_and_location`
 `verified-by: bravebot_config::import::a_google_vertex_entry_naming_no_project_is_left_and_said`
+`verified-by: bravebot_config::import::an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk`
 `verified-by: bravebot_config::import::an_api_key_helper_is_never_imported`
 `verified-by: bravebot_config::import::permissions_hooks_and_mcp_servers_are_never_imported`
 `verified-by: bravebot_config::import::what_claude_code_uses_and_bravebot_cannot_is_named_and_not_shown`
@@ -291,8 +306,9 @@ file it would be kept in, says the key is kept there in plain text, and does not
 
 An affirmative answer writes `options.apiKey`. Any other answer writes the entry with `env` naming
 the variable opencode itself reads for that id, compiled in beside the endpoint (`openrouter` reads
-`OPENROUTER_API_KEY`), and says to export it. Where no variable is known, the entry is written with
-no credential, which is what a local model server needs, and the line says so.
+`OPENROUTER_API_KEY` and `openai` reads `OPENAI_API_KEY`), and says to export it. Where no variable
+is known, the entry is written with no credential, which is what a local model server needs, and the
+line says so.
 
 A `{file:path}` credential is not followed. It is treated as a declined key, and its line names the
 path.
@@ -317,6 +333,7 @@ spec's known costs, which an import should not make the easy path.
 `verified-by: bravebot_config::import::a_key_built_from_a_substitution_is_left`
 `verified-by: bravebot_cli::import::a_held_key_is_asked_about_separately_and_never_drawn`
 `verified-by: bravebot_cli::import::a_declined_key_names_the_variable_to_export`
+`verified-by: bravebot_cli::import::a_file_key_is_shown_by_path_and_treated_as_declined`
 
 <a id="IMPORT-7"></a>
 ### IMPORT-7: the import writes the user layer only, and replaces no value bravebot reads
@@ -408,6 +425,7 @@ working, and ending over one would refuse a service that answers.
 `verified-by: bravebot_cli::running::an_approved_import_opens_the_session_on_the_file_it_wrote`
 `verified-by: bravebot_cli::running::an_unset_variable_after_an_import_is_named_before_the_session_opens`
 `verified-by: bravebot_cli::running::an_unset_variable_for_another_entry_is_said_and_the_session_opens`
+`verified-by: bravebot_cli::running::an_import_that_leaves_no_model_to_run_ends_with_the_refusal_for_that_case`
 
 <a id="IMPORT-10"></a>
 ### IMPORT-10: a running Ollama is asked once, on this machine, within a bound, and says nothing where it does not answer
@@ -464,6 +482,9 @@ list every model twice in the model picker.
 `verified-by: bravebot_cli::import::an_opencode_entry_for_the_same_server_leaves_the_ollama_source_with_nothing_to_add`
 `verified-by: bravebot_cli::running::a_first_run_with_nothing_listening_refuses_as_before`
 `verified-by: bravebot_cli::running::a_first_run_whose_settings_file_cannot_be_imported_into_asks_ollama_once`
+`verified-by: bravebot_cli::running::a_start_with_no_service_asks_the_ollama_on_this_machine_once`
+`verified-by: bravebot_cli::running::an_incognito_start_opens_no_connection_to_ollama`
+`verified-by: bravebot_cli::running::a_start_with_a_service_configured_asks_ollama_nothing`
 
 <a id="IMPORT-11"></a>
 ### IMPORT-11: a session is copied only when a person runs the command, and only as words to read

@@ -38,8 +38,11 @@ Colour is never what makes that marking hold. A colour can be imitated by the co
 quarantine stands on the margin instead: no ink tells you whether something is quarantined, and a
 note drawn in the wrong one would still be outside a block.
 
-Where a result went is drawn only where that is not the ordinary answer. A quarantined read says so,
-and an ordinary one does not clutter the transcript saying what always happens.
+Where a result went is drawn only where that is not the ordinary answer. A quarantined read says so
+on its call, and an ordinary one does not clutter the transcript saying what always happens. The
+marked block holding quarantined content does not repeat it: its heading says `untrusted` and the
+margin marks every row. A block whose content is in no model's context at all, such as a
+processor's remark, says so in its heading.
 
 **Each call says why it was made.** In the terminal, and in a headless run's progress, the model's own
 words are the call's headline and the call itself (its verb and what it is about) is drawn under it,
@@ -84,7 +87,9 @@ and takes none of the colour of the one before it.
 program was run, the end of the turn tells you plainly that nothing was built or tested, whether it
 answered, failed, or you stopped it: the files are changed either way. Nothing else
 on your screen distinguishes that diff from a checked one. It is not a reproach: plenty of turns have
-nothing to build, and one of those says nothing.
+nothing to build, and one of those says nothing. A file a delegate changed and a program a delegate
+ran count as the turn's, except in a [checkout of its own](../customize/agents.md#a-checkout-of-its-own),
+which holds none of the turn's changes.
 
 The planner is asked the same question while the turn is still going, a set number of rounds after its
 first write, and pointed at a [checker delegate](../reference/tools.md#spawn_agent) where the log

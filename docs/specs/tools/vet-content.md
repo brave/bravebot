@@ -4,6 +4,7 @@ title: vet_content
 status: normative
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
 documented-by: docs/website/docs/security/vetting.md
 ---
 
@@ -40,6 +41,9 @@ the planner and nothing at all to the person being asked about it.
 `verified-by: bravebot_core::policy::a_private_expectation_cannot_direct_a_check`
 `verified-by: bravebot_core::policy::a_check_says_where_the_content_came_from_and_not_which_slot_it_is_in`
 `verified-by: bravebot_core::policy::a_check_over_a_file_reference_says_the_path_and_not_the_reference`
+`verified-by: bravebot_agent::turn::a_processors_output_is_vetted_under_the_file_it_was_made_from`
+`verified-by: bravebot_cli::plain::every_line_of_a_vetted_read_is_shown_before_a_yes_releases_it`
+`verified-by: bravebot_ui_bridge::acp::an_editor_is_shown_every_line_of_a_vetted_read_before_a_yes_releases_it`
 
 <a id="VET-2"></a>
 ### VET-2: what it refuses
@@ -94,6 +98,8 @@ rather than holding it as text, and [VET-4](#VET-4) says where it goes instead.
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_content_a_check_objected_to`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_promotes_content_a_check_found_nothing_in`
 `verified-by: bravebot_agent::turn::a_picture_a_person_keeps_out_is_never_attached`
+`verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_yes_whoever_gave_it_and_whatever_the_check_said`
+`verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_refusal_whoever_gave_it_and_whatever_the_check_said`
 
 <a id="VET-4"></a>
 ### VET-4: a picture or a PDF is vetted as text is, and put to a person as a file to open

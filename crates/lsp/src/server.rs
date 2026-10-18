@@ -11,15 +11,16 @@
 //! [`run`]: ../../../docs/specs/tools/run.md
 
 use crate::protocol::{
-    Operation, RpcNotification, RpcRequest, RpcResponse, content_length, frame, hover_text,
-    initialize_params, locations_in, path_to_uri, position_params, reference_params,
+    Diagnostics, Operation, RpcNotification, RpcRequest, RpcResponse, content_length,
+    diagnostic_text_in, diagnostics_in, frame, hover_text, initialize_params, locations_in,
+    path_to_uri, position_params, reference_params,
 };
 use crate::{Answer, LspError, LspResult};
 use bravebot_core::capability::Capability;
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
@@ -42,6 +43,20 @@ use std::time::{Duration, Instant};
 /// worse off than one told in twenty seconds. Reaching the bound is not a failure: LSP-7 answers
 /// from what the index has and says plainly that it may be short.
 pub const MAX_INDEX_WAIT: Duration = Duration::from_secs(20);
+
+/// How long a write waits for the server's verdict on the file it just wrote.
+///
+/// LSP-12. Short, because the caller is a `write_file` that has already landed and the wait is on
+/// top of it: a server that cannot say within this is reported as not having said, which is not a
+/// claim that the file is clean. Syntax errors arrive well inside it from every server this
+/// repository knows; type errors that need a build may not.
+pub const MAX_DIAGNOSTICS_WAIT: Duration = Duration::from_secs(3);
+
+/// How long after one report to wait for a revised one.
+///
+/// A server often publishes a fast first pass and refines it, so the first notice is not taken as
+/// the last. Bounded by [`MAX_DIAGNOSTICS_WAIT`] as a whole.
+const DIAGNOSTICS_SETTLE: Duration = Duration::from_millis(300);
 
 /// How long a single request may take once the index has settled.
 pub const MAX_REQUEST_WAIT: Duration = Duration::from_secs(20);
@@ -154,6 +169,100 @@ impl Language {
             Self::Go => "Go",
         }
     }
+}
+
+/// Which server answers: one of the table, or one a person declared.
+///
+/// What an error and a prompt name. For a declared server that is the declaration's name, which the
+/// person wrote, so it reads as theirs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Served {
+    Builtin(Language),
+    Declared(Arc<str>),
+}
+
+impl Served {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Builtin(language) => language.as_str(),
+            Self::Declared(name) => name,
+        }
+    }
+
+    /// What the diagnostic log may say, which is a word fixed at compile time. A declared server is
+    /// "declared": its name is the person's and is not a word this crate could have fixed.
+    fn diag_word(&self) -> &'static str {
+        match self {
+            Self::Builtin(language) => language.as_str(),
+            Self::Declared(_) => "declared",
+        }
+    }
+}
+
+impl From<Language> for Served {
+    fn from(language: Language) -> Self {
+        Self::Builtin(language)
+    }
+}
+
+/// A server a person declared, in their own directory, as the host read it.
+///
+/// This crate reads no file: the host reads the declaration, and a declaration it hands over is a
+/// program the person named. Nothing here is decided from a byte a workspace holds.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Declared {
+    /// What the person called it.
+    pub name: String,
+    /// A bare program name, looked up by the resolver, or an absolute path.
+    pub command: String,
+    pub args: Vec<String>,
+    /// File extension, lowercase and with no dot, to the language id sent with `didOpen`.
+    pub extensions: BTreeMap<String, String>,
+    /// Variables set for it, over what it would inherit.
+    pub env: Vec<(String, String)>,
+    pub initialization_options: Option<Value>,
+    /// What an approval binds to. Two declarations with one digest are one declaration, and an edit
+    /// to any field that decides what runs is a different one.
+    pub digest: String,
+}
+
+/// Shows the name and nothing else, since `env` holds values a person gave.
+impl std::fmt::Debug for Declared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Declared")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Declared {
+    /// The language id for a path this serves, decided from its extension alone.
+    pub fn serves(&self, path: &str) -> Option<&str> {
+        let extension = Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())?
+            .to_ascii_lowercase();
+        self.extensions.get(&extension).map(String::as_str)
+    }
+}
+
+/// What a person is told about the code starting a server runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildTooling {
+    /// It runs code the project or its dependencies carry, which is [`Language::runs_build_tooling`].
+    Runs,
+    /// Nothing here knows what a declared server runs, and says so rather than saying it runs none.
+    Unknown,
+}
+
+/// What a running server is filed under.
+///
+/// A declared server by the digest of its declaration, so an edited declaration is not the server
+/// that was approved.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum Key {
+    Builtin(Language),
+    Declared(String),
 }
 
 /// The directory holding one index per workspace, directly under the state directory.
@@ -467,9 +576,24 @@ fn read_messages(mut stdout: BufReader<ChildStdout>, sender: &std::sync::mpsc::S
     }
 }
 
+/// What a launch starts, whichever kind of server it is.
+struct Spec {
+    served: Served,
+    /// The name looked up, which is what a missing binary is reported by.
+    program: String,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+    initialization_options: Option<Value>,
+    language_ids: BTreeMap<String, String>,
+}
+
 /// One running server.
 pub struct Server {
-    language: Language,
+    served: Served,
+    /// The language ids a declared server's extensions map to. Empty for one from the table.
+    language_ids: BTreeMap<String, String>,
+    /// Sent with `initialize`, for a declared server that has any.
+    initialization_options: Option<Value>,
     child: Child,
     stdin: ChildStdin,
     /// Messages the reader thread has parsed, in the order they arrived.
@@ -488,13 +612,34 @@ pub struct Server {
     /// that as partial, because a `findReferences` against a half-built index looks exactly like
     /// one that found everything.
     indexed: bool,
+    /// The progress tokens a declared server has begun and not ended.
+    ///
+    /// A declared server reports indexing under a token this crate cannot have fixed in advance, so
+    /// what is read instead is structure: it has settled once it has begun some work and every piece
+    /// of it has ended. Unused for a server from the table, whose end token is known.
+    working: std::collections::BTreeSet<String>,
+    /// Whether a declared server has begun any progress at all.
+    began_work: bool,
+    /// Whether a declared server sent the end token a server from the table is known by.
+    told_finished: bool,
+    /// Whether a declared server was already waited on for the whole bound.
+    ///
+    /// A server that reports no progress never settles, and waiting out [`MAX_INDEX_WAIT`] on every
+    /// question would make each one that slow. It is waited on once and answers partial after.
+    waited: bool,
+    /// The version last sent for each document the server has been told about, by URI.
+    ///
+    /// A document already open is changed rather than opened again, which a server may ignore, so
+    /// a question or a diagnostics check after a write puts the bytes on disk in front of it
+    /// either way, and versions only ever go up.
+    opened: HashMap<String, i64>,
 }
 
 /// Shows what it is but nothing it has sent, so a log line cannot leak a file's contents.
 impl std::fmt::Debug for Server {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Server")
-            .field("language", &self.language.as_str())
+            .field("language", &self.served.as_str())
             .field("pid", &self.child.id())
             .field("indexed", &self.indexed)
             .finish_non_exhaustive()
@@ -508,7 +653,7 @@ impl Drop for Server {
         let deadline = Instant::now() + SHUTDOWN_GRACE;
         let language = (
             "language",
-            bravebot_diag::Field::word(self.language.as_str()),
+            bravebot_diag::Field::word(self.served.diag_word()),
         );
         loop {
             match self.child.try_wait() {
@@ -555,8 +700,50 @@ impl Server {
         cache: &Path,
         withheld: &[String],
     ) -> LspResult<Self> {
-        let launched = Self::start(language, resolved, root, cache, withheld);
-        let language_word = ("language", bravebot_diag::Field::word(language.as_str()));
+        let (program, args) = language.server();
+        let spec = Spec {
+            served: language.into(),
+            program: program.to_string(),
+            args: args.iter().map(|a| (*a).to_string()).collect(),
+            env: Vec::new(),
+            initialization_options: None,
+            language_ids: BTreeMap::new(),
+        };
+        Self::launch_spec(spec, resolved, root, cache, withheld)
+    }
+
+    /// Start a server a person declared.
+    ///
+    /// Everything [`Server::launch`] says holds: `resolved` is what the person was shown, `cache` is
+    /// always somewhere, and a binary that is not there is reported as missing.
+    pub fn launch_declared(
+        declared: &Declared,
+        resolved: &Path,
+        root: &Path,
+        cache: &Path,
+        withheld: &[String],
+    ) -> LspResult<Self> {
+        let spec = Spec {
+            served: Served::Declared(declared.name.as_str().into()),
+            program: declared.command.clone(),
+            args: declared.args.clone(),
+            env: declared.env.clone(),
+            initialization_options: declared.initialization_options.clone(),
+            language_ids: declared.extensions.clone(),
+        };
+        Self::launch_spec(spec, resolved, root, cache, withheld)
+    }
+
+    fn launch_spec(
+        spec: Spec,
+        resolved: &Path,
+        root: &Path,
+        cache: &Path,
+        withheld: &[String],
+    ) -> LspResult<Self> {
+        let served = spec.served.clone();
+        let launched = Self::start(spec, resolved, root, cache, withheld);
+        let language_word = ("language", bravebot_diag::Field::word(served.diag_word()));
         match &launched {
             Ok(_) => bravebot_diag::info(
                 "lsp.launch",
@@ -578,17 +765,23 @@ impl Server {
     }
 
     fn start(
-        language: Language,
+        spec: Spec,
         resolved: &Path,
         root: &Path,
         cache: &Path,
         withheld: &[String],
     ) -> LspResult<Self> {
-        let (program, args) = language.server();
-        let owned: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
+        let Spec {
+            served,
+            program,
+            args,
+            env,
+            initialization_options,
+            language_ids,
+        } = spec;
 
         let mut command = std::process::Command::new(resolved);
-        command.args(&owned);
+        command.args(&args);
 
         // The user's environment reaches the server, because it runs with their access and a
         // toolchain reads its own variables to work: `CARGO_HOME`, `GOPATH`, `NODE_PATH`. What does
@@ -611,7 +804,7 @@ impl Server {
         // tree instead, which is what LSP-10 forbids.
         let private = |path: &Path, create: fn(&Path) -> std::io::Result<()>| {
             create(path).map_err(|e| LspError::Start {
-                language,
+                language: served.clone(),
                 detail: format!(
                     "its index directory {} could not be created: {e}",
                     path.display()
@@ -619,46 +812,58 @@ impl Server {
             })
         };
         private(cache, create_cache)?;
-        match language {
-            Language::Rust => {
+        match &served {
+            Served::Builtin(Language::Rust) => {
                 command.env("CARGO_TARGET_DIR", cache);
             }
-            Language::Go => {
+            Served::Builtin(Language::Go) => {
                 let build = cache.join("go-build");
                 private(&build, create_private)?;
                 command.env("GOCACHE", build);
             }
-            Language::TypeScript | Language::Python => {
-                // Neither reads a variable for this; both use the system temporary directory,
-                // and pointing that at the cache keeps it out of the workspace.
+            // Neither TypeScript's nor Python's reads a variable for this, and nothing is known of
+            // a declared one; all use the system temporary directory, and pointing that at the
+            // cache keeps it out of the workspace.
+            Served::Builtin(Language::TypeScript | Language::Python) | Served::Declared(_) => {
                 command.env("TMPDIR", cache);
             }
         }
+        // The person's own variables go last: they wrote them for this server.
+        for (name, value) in &env {
+            command.env(name, value);
+        }
 
-        let mut child = command
-            .current_dir(root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            // A server's diagnostics are noisy and are not this process's business.
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    LspError::NoBinary { language, program }
-                } else {
-                    LspError::Start {
-                        language,
-                        detail: e.to_string(),
-                    }
+        // Under the gate every start of a program in this process shares with the creation of a
+        // control channel, so a server started on another thread holds neither end of one.
+        let mut child = bravebot_sandbox::process::starting_a_program(|| {
+            command
+                .current_dir(root)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                // A server's diagnostics are noisy and are not this process's business.
+                .stderr(Stdio::null())
+                .spawn()
+        })
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                LspError::NoBinary {
+                    language: served.clone(),
+                    program: program.clone(),
                 }
-            })?;
+            } else {
+                LspError::Start {
+                    language: served.clone(),
+                    detail: e.to_string(),
+                }
+            }
+        })?;
 
-        let stdin = child.stdin.take().ok_or(LspError::Start {
-            language,
+        let stdin = child.stdin.take().ok_or_else(|| LspError::Start {
+            language: served.clone(),
             detail: "the server's stdin was not available".into(),
         })?;
-        let stdout = child.stdout.take().ok_or(LspError::Start {
-            language,
+        let stdout = child.stdout.take().ok_or_else(|| LspError::Start {
+            language: served.clone(),
             detail: "the server's stdout was not available".into(),
         })?;
 
@@ -668,20 +873,27 @@ impl Server {
         std::thread::spawn(move || read_messages(BufReader::new(stdout), &sender));
 
         let mut server = Self {
-            language,
+            served,
+            language_ids,
+            initialization_options,
             child,
             stdin,
             incoming,
             next_id: 1,
             root: root.to_path_buf(),
             indexed: false,
+            working: std::collections::BTreeSet::new(),
+            began_work: false,
+            told_finished: false,
+            waited: false,
+            opened: HashMap::new(),
         };
         server.initialize()?;
         Ok(server)
     }
 
-    pub fn language(&self) -> Language {
-        self.language
+    pub fn served(&self) -> &Served {
+        &self.served
     }
 
     /// Whether the server has finished indexing.
@@ -697,6 +909,7 @@ impl Server {
                 &root_uri,
                 "bravebot",
                 env!("CARGO_PKG_VERSION"),
+                self.initialization_options.as_ref(),
             )),
             MAX_REQUEST_WAIT,
         )?;
@@ -712,7 +925,7 @@ impl Server {
     fn notify(&mut self, method: &str, params: Option<Value>) -> LspResult<()> {
         let notification = RpcNotification::new(method, params);
         let body = serde_json::to_string(&notification).map_err(|e| LspError::Transport {
-            language: self.language,
+            language: self.served.clone(),
             detail: e.to_string(),
         })?;
         self.write(&frame(&body))
@@ -723,7 +936,7 @@ impl Server {
             .write_all(framed.as_bytes())
             .and_then(|()| self.stdin.flush())
             .map_err(|e| LspError::Transport {
-                language: self.language,
+                language: self.served.clone(),
                 detail: format!("could not send a request: {e}"),
             })
     }
@@ -738,7 +951,7 @@ impl Server {
             Ok(message) => Ok(Some(message)),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(LspError::Exited {
-                language: self.language,
+                language: self.served.clone(),
             }),
         }
     }
@@ -759,7 +972,7 @@ impl Server {
 
         let request = RpcRequest::new(id, method, params);
         let body = serde_json::to_string(&request).map_err(|e| LspError::Transport {
-            language: self.language,
+            language: self.served.clone(),
             detail: e.to_string(),
         })?;
         self.write(&frame(&body))?;
@@ -771,7 +984,7 @@ impl Server {
             let remaining = deadline.saturating_duration_since(Instant::now());
             let Some(message) = self.next_message(remaining)? else {
                 return Err(LspError::TimedOut {
-                    language: self.language,
+                    language: self.served.clone(),
                     method: method.to_string(),
                 });
             };
@@ -800,7 +1013,7 @@ impl Server {
                 // LSP-5 keeps out of the planner's context. `RpcError` does not carry it here to
                 // be dropped, because it is never deserialised.
                 return Err(LspError::Server {
-                    language: self.language,
+                    language: self.served.clone(),
                     code: error.code,
                     method: method.to_string(),
                 });
@@ -848,17 +1061,24 @@ impl Server {
     ///
     /// The contents are read off disk and handed straight over. This module never looks at them; see
     /// the note in [`Server::ask`] about why passing them through is a carry rather than a read.
-    fn open(&mut self, path: &str, uri: &str) -> LspResult<()> {
+    fn send_open(&mut self, path: &str, uri: &str) -> LspResult<()> {
         let text = std::fs::read_to_string(path).map_err(|e| LspError::Transport {
-            language: self.language,
+            language: self.served.clone(),
             detail: format!("could not read {path} to open it: {e}"),
         })?;
 
-        let language_id = match self.language {
-            Language::Rust => "rust",
-            Language::TypeScript => "typescript",
-            Language::Python => "python",
-            Language::Go => "go",
+        let language_id = match &self.served {
+            Served::Builtin(Language::Rust) => "rust",
+            Served::Builtin(Language::TypeScript) => "typescript",
+            Served::Builtin(Language::Python) => "python",
+            Served::Builtin(Language::Go) => "go",
+            // Decided from the path alone, like the choice of server. A path the declaration does
+            // not name was never routed here, so the fallback is only a word the protocol accepts.
+            Served::Declared(_) => Path::new(path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .and_then(|e| self.language_ids.get(&e.to_ascii_lowercase()))
+                .map_or("plaintext", String::as_str),
         };
 
         self.notify(
@@ -871,7 +1091,112 @@ impl Server {
                     "text": text,
                 }
             })),
-        )
+        )?;
+        self.opened.insert(uri.to_string(), 1);
+        Ok(())
+    }
+
+    /// Put the file as it is on disk in front of the server: opened if it has not seen it, changed
+    /// if it has.
+    fn open(&mut self, path: &str, uri: &str) -> LspResult<()> {
+        let Some(version) = self.opened.get(uri).copied() else {
+            return self.send_open(path, uri);
+        };
+        let text = std::fs::read_to_string(path).map_err(|e| LspError::Transport {
+            language: self.served.clone(),
+            detail: format!("could not read {path} to send it: {e}"),
+        })?;
+        self.notify(
+            "textDocument/didChange",
+            Some(serde_json::json!({
+                "textDocument": { "uri": uri, "version": version + 1 },
+                "contentChanges": [{ "text": text }],
+            })),
+        )?;
+        self.opened.insert(uri.to_string(), version + 1);
+        Ok(())
+    }
+
+    /// What the server says is wrong with a file, as it stands on disk now.
+    ///
+    /// LSP-12. Sends the file and waits up to [`MAX_DIAGNOSTICS_WAIT`] for the server to publish
+    /// about it, taking the last notice that arrives. `None` is the server not having said
+    /// anything in time, which is a different fact from a notice with nothing in it. The index is
+    /// not waited for: [`Diagnostics`]' caller is told through [`Server::is_indexed`] whether what
+    /// came back may be short.
+    pub fn diagnostics(&mut self, path: &str) -> LspResult<Option<Diagnostics>> {
+        self.last_notice(path, diagnostics_in)
+    }
+
+    /// Send the file and read the last notice the server publishes about it with `read`.
+    ///
+    /// `read` picks what to take out of a notice, so a caller that wants no prose passes a reader
+    /// that never touches it.
+    fn last_notice<T>(
+        &mut self,
+        path: &str,
+        read: impl Fn(&Value, &str, i64) -> Option<T>,
+    ) -> LspResult<Option<T>> {
+        let uri = path_to_uri(path);
+        // What was already queued predates the bytes about to be sent, so a notice in it describes
+        // a version of the file that is gone.
+        while let Ok(Some(message)) = self.next_message(Duration::ZERO) {
+            self.note_progress(&message);
+        }
+        self.open(path, &uri)?;
+        let sent = self.opened.get(&uri).copied().unwrap_or(1);
+
+        let deadline = Instant::now() + MAX_DIAGNOSTICS_WAIT;
+        let mut latest = None;
+        let mut quiet_from: Option<Instant> = None;
+        loop {
+            let mut remaining = deadline.saturating_duration_since(Instant::now());
+            if let Some(since) = quiet_from {
+                remaining = remaining
+                    .min((since + DIAGNOSTICS_SETTLE).saturating_duration_since(Instant::now()));
+            }
+            if remaining.is_zero() {
+                return Ok(latest);
+            }
+            // A server that closes its output is the one failure here: a timeout is an answer.
+            let Some(message) = self.next_message(remaining)? else {
+                return Ok(latest);
+            };
+            self.note_progress(&message);
+            if let Some(found) = read(&message, &uri, sent) {
+                latest = Some(found);
+                quiet_from = Some(Instant::now());
+            }
+        }
+    }
+
+    /// The `diagnostics` operation: what the server publishes about a file, in two halves.
+    ///
+    /// LSP-13. The severities and lines are structure and travel as [`Diagnostics`]. The messages
+    /// are content, handed back as a bare string for the caller to label. Both are read from the
+    /// same notice, so the lines the planner is told and the messages it may later vet describe the
+    /// same bytes. A server that publishes nothing in time is [`LspError::NoReport`], not a clean
+    /// file.
+    fn report(&mut self, path: &str) -> LspResult<Answer> {
+        let published = self.last_notice(path, |message, uri, sent| {
+            Some((
+                diagnostics_in(message, uri, sent)?,
+                diagnostic_text_in(message, uri, sent)?,
+            ))
+        })?;
+        let Some((found, text)) = published else {
+            return Err(LspError::NoReport {
+                language: self.served.clone(),
+            });
+        };
+        Ok(Answer {
+            locations: Vec::new(),
+            // Whether there is anything to hand back is read from the count, an integer the
+            // notice reported, and never from the length of the words.
+            text: (found.count() > 0).then_some(text),
+            diagnostics: Some(found),
+            partial: !self.indexed,
+        })
     }
 
     /// Notice a server saying it has finished indexing.
@@ -879,6 +1204,44 @@ impl Server {
         if says_indexing_finished(message) {
             self.indexed = true;
         }
+        if matches!(self.served, Served::Declared(_)) {
+            self.told_finished |= says_indexing_finished(message);
+            self.note_declared_progress(message);
+        }
+    }
+
+    /// Settle a declared server from the shape of its progress notifications.
+    ///
+    /// Never from the words in one: a token is compared only to the tokens this server began, and
+    /// `kind` is one of the protocol's own two.
+    fn note_declared_progress(&mut self, message: &Value) {
+        if message.get("method").and_then(Value::as_str) != Some("$/progress") {
+            return;
+        }
+        let Some(params) = message.get("params") else {
+            return;
+        };
+        let token = params
+            .get("token")
+            .map(Value::to_string)
+            .unwrap_or_default();
+        match params
+            .get("value")
+            .and_then(|value| value.get("kind"))
+            .and_then(Value::as_str)
+        {
+            Some("begin") => {
+                self.began_work = true;
+                self.working.insert(token);
+            }
+            Some("end") => {
+                self.working.remove(&token);
+            }
+            _ => {}
+        }
+        // Recomputed at each message rather than latched, so work begun after a quiet moment unsettles
+        // a server that looked settled, and an answer given meanwhile says it may be short.
+        self.indexed = self.told_finished || (self.began_work && self.working.is_empty());
     }
 
     /// Wait for the index to settle, up to [`MAX_INDEX_WAIT`].
@@ -886,10 +1249,15 @@ impl Server {
     /// Reaching the bound is not a failure: the caller answers from what the index has and says the
     /// answer is partial, which is LSP-7.
     fn settle(&mut self) {
-        if self.indexed {
+        self.settle_for(MAX_INDEX_WAIT);
+    }
+
+    fn settle_for(&mut self, bound: Duration) {
+        if self.indexed || self.waited {
             return;
         }
-        let deadline = Instant::now() + MAX_INDEX_WAIT;
+        self.waited = matches!(self.served, Served::Declared(_));
+        let deadline = Instant::now() + bound;
         while !self.indexed {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -916,13 +1284,18 @@ impl Server {
         self.settle();
 
         let operation = question.operation;
+        // Answered from a notice the server publishes, and ahead of the requests below: `method()`
+        // names that notice, which is nothing a client may put as a request.
+        if operation == Operation::Diagnostics {
+            return self.report(question.path);
+        }
         let uri = path_to_uri(question.path);
 
         // The protocol requires a document be opened before it is asked about: a server answers
         // `file not found` otherwise, however plainly the file exists on disk, because its own view
-        // of a document is the one the client told it about. Sent per question rather than tracked,
-        // since re-opening an open document is defined to be harmless and a cache would be a second
-        // account of what the server knows, waiting to disagree with the first.
+        // of a document is the one the client told it about. Sent per question, as a change where the
+        // server already holds the document: opening an open document again is a protocol error
+        // that servers tolerate differently, and the bytes on disk may have moved since it was told.
         //
         // The bytes travel through this function and are never examined. That is the carry the label
         // rules permit and it is worth being exact about: nothing here branches on the contents,
@@ -954,9 +1327,8 @@ impl Server {
                 Value::Array(items) if !items.is_empty() => items[0].clone(),
                 _ => {
                     return Ok(Answer {
-                        locations: Vec::new(),
-                        text: None,
                         partial: !self.indexed,
+                        ..Answer::default()
                     });
                 }
             };
@@ -989,6 +1361,7 @@ impl Server {
             text: (operation == Operation::Hover)
                 .then(|| hover_text(&result))
                 .flatten(),
+            diagnostics: None,
             // LSP-7: an answer given before the index settled is partial, whatever it found.
             partial: !self.indexed,
         })
@@ -1020,14 +1393,15 @@ pub struct Question<'a> {
 /// read it. This is written after a server starts and when the set is dropped, behind a lock held
 /// for the length of a copy.
 ///
-/// It holds the name from the fixed table ([`Language::server`]), which is the program the person
-/// approved at LSP-5, and never anything a server says about itself.
+/// It holds the name from the fixed table ([`Language::server`]) or the command a person's own
+/// declaration gave, which is the program the person approved at LSP-5, and never anything a server
+/// says about itself.
 #[derive(Debug, Clone, Default)]
-pub struct Roster(Arc<Mutex<Vec<&'static str>>>);
+pub struct Roster(Arc<Mutex<Vec<String>>>);
 
 impl Roster {
     /// The programs of the servers running, in name order.
-    pub fn programs(&self) -> Vec<&'static str> {
+    pub fn programs(&self) -> Vec<String> {
         self.0
             .lock()
             .unwrap_or_else(|held| held.into_inner())
@@ -1038,16 +1412,16 @@ impl Roster {
     /// needs in place of a process to start.
     pub fn of(languages: impl IntoIterator<Item = Language>) -> Self {
         let roster = Self::default();
-        let mut programs: Vec<&'static str> = languages
+        let mut programs: Vec<String> = languages
             .into_iter()
-            .map(|language| language.server().0)
+            .map(|language| language.server().0.to_string())
             .collect();
         programs.sort_unstable();
         roster.set(programs);
         roster
     }
 
-    fn set(&self, programs: Vec<&'static str>) {
+    fn set(&self, programs: Vec<String>) {
         *self.0.lock().unwrap_or_else(|held| held.into_inner()) = programs;
     }
 }
@@ -1057,7 +1431,9 @@ impl Roster {
 /// LSP-8: started on the first request for a language, kept for the session, and stopped when this
 /// is dropped.
 pub struct Servers {
-    running: HashMap<Language, Server>,
+    running: HashMap<Key, Server>,
+    /// What the person's own directory declares, in the order a path is tried against them.
+    declared: Vec<Declared>,
     root: PathBuf,
     /// `~/.bravebot` itself, not the home it sits in.
     state: Option<PathBuf>,
@@ -1089,7 +1465,7 @@ pub struct Servers {
 impl std::fmt::Debug for Servers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Servers")
-            .field("languages", &self.running.keys().collect::<Vec<_>>())
+            .field("running", &self.running.len())
             .finish_non_exhaustive()
     }
 }
@@ -1104,6 +1480,7 @@ impl Servers {
     ) -> Self {
         Self {
             running: HashMap::new(),
+            declared: Vec::new(),
             root: root.into(),
             state,
             resolve,
@@ -1121,10 +1498,17 @@ impl Servers {
     }
 
     fn publish(&self) {
-        let mut programs: Vec<&'static str> = self
+        let mut programs: Vec<String> = self
             .running
             .keys()
-            .map(|language| language.server().0)
+            .filter_map(|key| match key {
+                Key::Builtin(language) => Some(language.server().0.to_string()),
+                Key::Declared(digest) => self
+                    .declared
+                    .iter()
+                    .find(|declared| &declared.digest == digest)
+                    .map(|declared| declared.command.clone()),
+            })
             .collect();
         programs.sort_unstable();
         self.roster.set(programs);
@@ -1135,12 +1519,70 @@ impl Servers {
         self.running.len()
     }
 
+    /// Replace what the person's own directory declares.
+    ///
+    /// Called with what was just read, so a declaration edited mid-session is the one the next
+    /// question meets. A running server whose declaration is gone or changed is stopped: its digest
+    /// is not one in the list, and keeping it would answer from a program nobody approved in its
+    /// present form. The one a changed declaration starts is asked about as any other is.
+    pub fn declare(&mut self, declared: Vec<Declared>) {
+        self.declared = declared;
+        let declared = &self.declared;
+        self.running.retain(|key, _| match key {
+            Key::Builtin(_) => true,
+            Key::Declared(digest) => declared.iter().any(|d| &d.digest == digest),
+        });
+        self.publish();
+    }
+
+    /// Which server a file is asked of.
+    ///
+    /// Decided from the path alone (LSP-2). A declaration is the person's own word about a language,
+    /// so where one names the extension it wins over the table, and the first declaration to name
+    /// it wins over a later one.
+    fn target(&self, question: &Question<'_>) -> LspResult<Target> {
+        if let Some(index) = self
+            .declared
+            .iter()
+            .position(|declared| declared.serves(question.path).is_some())
+        {
+            return Ok(Target::Declared(index));
+        }
+        if let Some(language) = Language::for_path(question.path) {
+            return Ok(Target::Builtin(language));
+        }
+        if question.operation.needs_position() {
+            return Err(LspError::NoServerFor {
+                path: question.path.to_string(),
+            });
+        }
+        // `workspaceSymbol` ranges over the tree and names no file, so it goes to whichever server
+        // is already running. That is deliberate rather than a fallback: starting a server on a
+        // query with no file in it would mean guessing at the language from a symbol name.
+        // Of several, the first in a fixed order: a table server, then a declared one by digest, so the
+        // same query goes to the same server however the map happens to be laid out.
+        match self
+            .running
+            .keys()
+            .min()
+            .ok_or(LspError::NoServerForQuery)?
+        {
+            Key::Builtin(language) => Ok(Target::Builtin(*language)),
+            Key::Declared(digest) => self
+                .declared
+                .iter()
+                .position(|declared| &declared.digest == digest)
+                .map(Target::Declared)
+                .ok_or(LspError::NoServerForQuery),
+        }
+    }
+
     /// Ask about a position in a file, starting a server for its language if none is running.
     ///
     /// LSP-9: the capability is checked before anything is launched, so a run that was not granted it
     /// does not get a process started on its behalf.
     ///
-    /// `approve` is asked once per language, and only when a server is not already running. It is a
+    /// `approve` is asked once per server, and only when a server is not already running. It is a
     /// callback rather than a decision passed in because whether to ask depends on what is running,
     /// which is this type's business, while how to ask is the caller's: the prompt belongs where the
     /// person is, and this crate has no way to reach them.
@@ -1154,56 +1596,122 @@ impl Servers {
             .before_capability(Capability::LanguageServer)
             .map_err(LspError::Denied)?;
 
-        // Which server to ask. Every operation but `workspaceSymbol` starts from a file, so the file
-        // decides; `workspaceSymbol` ranges over the tree and names none, so it goes to whichever
-        // server is already running. That is deliberate rather than a fallback: starting a server on
-        // a query with no file in it would mean guessing at the language from a symbol name.
-        let language = match Language::for_path(question.path) {
-            Some(language) => language,
-            None if !question.operation.needs_position() => *self
-                .running
-                .keys()
-                .next()
-                .ok_or(LspError::NoServerForQuery)?,
-            None => {
-                return Err(LspError::NoServerFor {
-                    path: question.path.to_string(),
-                });
+        let target = self.target(question)?;
+        let (key, served, program, args, build_tooling) = match &target {
+            Target::Builtin(language) => {
+                let (program, args) = language.server();
+                (
+                    Key::Builtin(*language),
+                    Served::Builtin(*language),
+                    program.to_string(),
+                    args.iter().map(|a| (*a).to_string()).collect::<Vec<_>>(),
+                    BuildTooling::Runs,
+                )
+            }
+            Target::Declared(index) => {
+                let declared = &self.declared[*index];
+                (
+                    Key::Declared(declared.digest.clone()),
+                    Served::Declared(declared.name.as_str().into()),
+                    declared.command.clone(),
+                    declared.args.clone(),
+                    BuildTooling::Unknown,
+                )
             }
         };
 
-        if !self.running.contains_key(&language) {
-            let (program, _) = language.server();
+        if !self.running.contains_key(&key) {
             // LSP-6: a binary that is not installed is said to be missing here, before anything is
             // launched, rather than surfacing as a process that exited. The two are different facts
             // and must not render alike.
-            let resolved =
-                (self.resolve)(program).ok_or(LspError::NoBinary { language, program })?;
+            let resolved = (self.resolve)(&program).ok_or_else(|| LspError::NoBinary {
+                language: served.clone(),
+                program: program.clone(),
+            })?;
 
             // LSP-5: asked before anything starts, and a refusal is not a failure of the tool. The
             // planner is told it was refused, which is what it needs to know: retrying will not help.
             let starting = Starting {
-                language,
+                language: served.as_str(),
                 resolved: &resolved,
                 workspace: &self.root,
-                runs_build_tooling: language.runs_build_tooling(),
+                args: &args,
+                build_tooling,
+                declared: matches!(target, Target::Declared(_)),
             };
             if !approve(&starting) {
-                return Err(LspError::Refused { language });
+                return Err(LspError::Refused { language: served });
             }
 
-            let cache = self.index_dir(language)?;
-            let server =
-                Server::launch(language, &resolved, &self.root, &cache, &(self.withheld)())?;
-            self.running.insert(language, server);
+            let cache = self.index_dir(&served)?;
+            let withheld = (self.withheld)();
+            let server = match &target {
+                Target::Builtin(language) => {
+                    Server::launch(*language, &resolved, &self.root, &cache, &withheld)?
+                }
+                Target::Declared(index) => Server::launch_declared(
+                    &self.declared[*index],
+                    &resolved,
+                    &self.root,
+                    &cache,
+                    &withheld,
+                )?,
+            };
+            self.running.insert(key.clone(), server);
             self.publish();
         }
 
-        let server = self
-            .running
-            .get_mut(&language)
-            .expect("just inserted if absent");
+        let server = self.running.get_mut(&key).expect("just inserted if absent");
         server.ask(question)
+    }
+
+    /// Whether a server is running for this file, whether from the table or declared.
+    pub fn covers(&self, path: &str) -> bool {
+        self.key_for(path)
+            .is_some_and(|key| self.running.contains_key(&key))
+    }
+
+    /// The key of the server a file is routed to, decided from the path alone as [`Self::target`]
+    /// does and with the same precedence: a declaration naming the extension first, then the table.
+    fn key_for(&self, path: &str) -> Option<Key> {
+        if let Some(declared) = self
+            .declared
+            .iter()
+            .find(|declared| declared.serves(path).is_some())
+        {
+            return Some(Key::Declared(declared.digest.clone()));
+        }
+        Language::for_path(path).map(Key::Builtin)
+    }
+
+    /// What a running server says is wrong with a file just written, or `None` where there is
+    /// nothing to ask.
+    ///
+    /// LSP-12. Never starts a server, and never asks anyone anything: starting one is an approved
+    /// action under [LSP-5](../../../docs/specs/tools/lsp.md), and a write is not that approval.
+    /// So `None` is a run without the capability, a path no server is configured for, and a
+    /// language with no server running, and a caller says nothing about the file in those cases.
+    /// `Some(Err(_))` is a server that was there and failed. The second field is whether the
+    /// index was still building.
+    pub fn diagnostics<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        path: &str,
+    ) -> Option<LspResult<(Option<Diagnostics>, bool)>> {
+        if !policy.holds_capability(Capability::LanguageServer) {
+            return None;
+        }
+        let key = self.key_for(path)?;
+        let server = self.running.get_mut(&key)?;
+        // Recorded as the capability use it is, and only now that a server is there to use.
+        if let Err(denial) = policy.before_capability(Capability::LanguageServer) {
+            return Some(Err(LspError::Denied(denial)));
+        }
+        Some(
+            server
+                .diagnostics(path)
+                .map(|found| (found, !server.is_indexed())),
+        )
     }
 
     /// Where the server about to start keeps its index.
@@ -1215,13 +1723,13 @@ impl Servers {
     ///
     /// A directory the platform will not give this session is reported as a server that did not
     /// start, which is LSP-6 and the same answer the directories below it already give.
-    fn index_dir(&mut self, language: Language) -> LspResult<PathBuf> {
+    fn index_dir(&mut self, language: &Served) -> LspResult<PathBuf> {
         if let Some(kept) = cache_for(self.state.as_deref(), &self.root, self.incognito) {
             return Ok(kept);
         }
         if self.session.is_none() {
             self.session = Some(SessionIndex::create().map_err(|e| LspError::Start {
-                language,
+                language: language.clone(),
                 detail: format!("an index directory for this session could not be created: {e}"),
             })?);
         }
@@ -1253,13 +1761,25 @@ impl Drop for Servers {
 /// assembling one.
 #[derive(Debug, Clone, Copy)]
 pub struct Starting<'a> {
-    pub language: Language,
+    /// What the server is called: a language of the table, or the name a person gave a declaration.
+    pub language: &'a str,
     /// The binary, resolved, so what is approved is what runs.
     pub resolved: &'a Path,
     pub workspace: &'a Path,
-    /// Whether starting it runs code the project or its dependencies carry, which is
-    /// [`Language::runs_build_tooling`].
-    pub runs_build_tooling: bool,
+    /// The arguments it is started with, so a prompt names the whole command and not only the
+    /// program. The table's, or the ones the declaration gave.
+    pub args: &'a [String],
+    /// What the person is told about the code starting it runs.
+    pub build_tooling: BuildTooling,
+    /// Whether a person's own declaration chose this server, rather than the table.
+    pub declared: bool,
+}
+
+/// Which server a question is for, before anything is known about whether it runs.
+enum Target {
+    Builtin(Language),
+    /// An index into the declarations.
+    Declared(usize),
 }
 
 #[cfg(test)]
@@ -1279,7 +1799,7 @@ mod tests {
         let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().expect("a scratch directory");
         let dir = tmp.path().to_path_buf();
-        bravebot_diag::configure(level, Some(dir.join("logs")));
+        bravebot_diag::configure(level, Some(dir.clone()));
         let launched = Server::launch(Language::Rust, program, &dir, &dir.join("cache"), &[]);
         let worked = launched.is_ok();
         drop(launched);
@@ -1410,7 +1930,7 @@ done
     #[test]
     fn a_refused_server_does_not_start() {
         let said = LspError::Refused {
-            language: Language::Rust,
+            language: Language::Rust.into(),
         };
         assert!(said.is_absence_of_a_server());
         let rendered = said.to_string();
@@ -1837,7 +2357,7 @@ done
                     query: None,
                 },
                 &mut |starting| {
-                    told.push((starting.language, starting.runs_build_tooling));
+                    told.push((starting.language.to_string(), starting.build_tooling));
                     false
                 },
             );
@@ -1848,7 +2368,10 @@ done
         }
         assert_eq!(
             told,
-            [(Language::TypeScript, true), (Language::Python, true)]
+            [
+                ("TypeScript".to_string(), BuildTooling::Runs),
+                ("Python".to_string(), BuildTooling::Runs)
+            ]
         );
     }
 
@@ -1876,8 +2399,8 @@ done
     #[test]
     fn a_missing_binary_is_reported_as_missing() {
         let error = LspError::NoBinary {
-            language: Language::Rust,
-            program: "rust-analyzer",
+            language: Language::Rust.into(),
+            program: "rust-analyzer".into(),
         };
         let said = error.to_string();
         assert!(said.contains("rust-analyzer"), "{said}");
@@ -1888,7 +2411,7 @@ done
     #[test]
     fn a_server_that_fails_to_start_is_reported_as_such() {
         let error = LspError::Start {
-            language: Language::Go,
+            language: Language::Go.into(),
             detail: "exited immediately".into(),
         };
         let said = error.to_string();
@@ -1901,13 +2424,160 @@ done
         }
         .to_string();
         let missing = LspError::NoBinary {
-            language: Language::Go,
-            program: "gopls",
+            language: Language::Go.into(),
+            program: "gopls".into(),
         }
         .to_string();
         assert_ne!(said, unconfigured);
         assert_ne!(said, missing);
         assert_ne!(unconfigured, missing);
+    }
+
+    #[cfg(unix)]
+    const CANNOT_BE_RUN: &str = "bravebot-lsp-cannot-be-run";
+
+    #[cfg(unix)]
+    fn a_program_that_cannot_be_run(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(CANNOT_BE_RUN).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn no_program_anywhere(_: &str) -> Option<PathBuf> {
+        None
+    }
+
+    /// LSP-6: a question put to `Servers::ask` fails with the sentence for the case it is in, and
+    /// never with an empty answer or a search over the tree. A planner that read any of the three
+    /// as "nothing calls this" would delete a function that is called.
+    ///
+    /// Through the entry point the tool calls rather than the error values: the three sentences
+    /// are only distinct if `ask` reaches the right one for the right cause. The program that
+    /// cannot be run is a file without the execute bit, so the failure is the launch's and the
+    /// server never reaches the protocol.
+    #[cfg(unix)]
+    #[test]
+    fn asking_with_no_server_says_which_of_the_three_cases_it_is() {
+        let scratch = crate::testutil::Scratch::new(CANNOT_BE_RUN);
+        std::fs::create_dir_all(scratch.join("src")).expect("create the workspace");
+        std::fs::write(scratch.join("src").join("a.rs"), "pub struct Held;\n").expect("write");
+        std::fs::write(scratch.join("notes.txt"), "Held\n").expect("write");
+        std::fs::write(scratch.join("server"), "#!/bin/sh\nexit 0\n").expect("write the server");
+
+        let asked_about = |servers: &mut Servers, path: &str| {
+            let started_asking = std::cell::Cell::new(false);
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut routing = bravebot_core::policy::Routing::new();
+            routing.insert_trusted("task", "look up");
+            let mut policy = Policy::begin(
+                routing,
+                bravebot_core::policy::ReleasePlan::new(),
+                bravebot_core::capability::CapabilitySet::from_iter([Capability::LanguageServer]),
+                &mut sink,
+            )
+            .expect("policy");
+            let result = servers.ask(
+                &mut policy,
+                &Question {
+                    operation: Operation::References,
+                    path,
+                    line: 1,
+                    character: 12,
+                    query: None,
+                },
+                &mut |_| {
+                    started_asking.set(true);
+                    true
+                },
+            );
+            (result, started_asking.get())
+        };
+
+        let mut cannot_run = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            a_program_that_cannot_be_run,
+            false,
+            Vec::new,
+        );
+        let mut absent = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            no_program_anywhere,
+            false,
+            Vec::new,
+        );
+
+        let (unconfigured, asked) = asked_about(&mut absent, "notes.txt");
+        let unconfigured =
+            unconfigured.expect_err("a file no server is configured for is no answer");
+        assert!(
+            matches!(&unconfigured, LspError::NoServerFor { path } if path == "notes.txt"),
+            "{unconfigured:?}"
+        );
+        assert!(
+            !asked,
+            "a person was asked to start a server that cannot exist"
+        );
+
+        let (missing, asked) = asked_about(&mut absent, "src/a.rs");
+        let missing = missing.expect_err("a server that is not installed is no answer");
+        assert!(
+            matches!(&missing, LspError::NoBinary { program, .. } if program == "rust-analyzer"),
+            "{missing:?}"
+        );
+        assert!(
+            !asked,
+            "a person was asked to start a server that is not there"
+        );
+
+        let (failed, asked) = asked_about(&mut cannot_run, "src/a.rs");
+        let failed = failed.expect_err("a server that did not start is no answer");
+        assert!(matches!(&failed, LspError::Start { .. }), "{failed:?}");
+        assert!(
+            asked,
+            "the person was not asked before the launch was tried"
+        );
+
+        let said = [
+            unconfigured.to_string(),
+            missing.to_string(),
+            failed.to_string(),
+        ];
+        assert!(
+            said[0].contains("no language server is configured"),
+            "{}",
+            said[0]
+        );
+        assert!(said[1].contains("is not installed"), "{}", said[1]);
+        assert!(said[2].contains("did not start"), "{}", said[2]);
+        for sentence in &said {
+            assert!(!sentence.contains("no references"), "{sentence}");
+        }
+    }
+
+    /// A server starts under the spawn gate, so it cannot overlap the creation of a control channel.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_start_waits_for_a_channel_being_created() {
+        bravebot_sandbox::process::start_waits_at_the_gate(|| {
+            let (_launching, scratch, _log, declared) =
+                a_workspace_with_a_declared_server(DECLARED_AND_APPROVED);
+            let mut servers = Servers::new(
+                scratch.to_path_buf(),
+                None,
+                the_approved_declared_server,
+                false,
+                Vec::new,
+            );
+            servers.declare(vec![declared]);
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = a_policy_that_holds_the_capability(&mut sink);
+            let file = scratch.join("a.zz");
+            let file = file.to_str().expect("a utf-8 path");
+            servers
+                .ask(&mut policy, &definition_in(file), &mut |_| true)
+                .expect("the declared server answers");
+        });
     }
 
     /// LSP-8: nothing starts until something asks.
@@ -1944,6 +2614,7 @@ done
                 kind: None,
             }],
             text: None,
+            diagnostics: None,
             partial: true,
         };
         assert!(
@@ -2045,22 +2716,29 @@ done
 
     /// LSP-9: the capability is checked before a process is started, so a run that was not granted
     /// one does not get a server launched on its behalf.
+    #[cfg(unix)]
     #[test]
     fn a_request_without_the_capability_is_refused() {
-        use bravebot_core::capability::CapabilitySet;
-
+        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new);
         // The grant a file read gives is not this one, which is the whole clause.
-        let reads_only = CapabilitySet::from_iter([Capability::FileRead]);
-        assert!(
-            reads_only.token_for(&Capability::LanguageServer).is_none(),
-            "file reads must not carry a language server with them"
-        );
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, [Capability::FileRead]);
 
-        // And an empty set carries nothing, so the default is refusal.
+        let mut asked = false;
+        let refused = servers.ask(&mut policy, &definition_in("/workspace/a.rs"), &mut |_| {
+            asked = true;
+            true
+        });
+
+        assert!(matches!(refused, Err(LspError::Denied(_))), "{refused:?}");
         assert!(
-            CapabilitySet::none()
-                .token_for(&Capability::LanguageServer)
-                .is_none()
+            !asked,
+            "a refused request must not reach the approval prompt"
+        );
+        assert_eq!(
+            servers.running(),
+            0,
+            "a refused request must start no server"
         );
     }
 
@@ -2811,5 +3489,885 @@ done
             let (program, _) = language.server();
             assert!(!program.is_empty(), "{} names no binary", language.as_str());
         }
+    }
+
+    /// A server a person declared, which records how it was started and what it was told.
+    ///
+    /// The log is named by a variable the declaration sets, so that a line in it is also evidence of
+    /// the declaration's own environment reaching the process. A file the script is given to write
+    /// beside the workspace, so nothing here touches the workspace itself.
+    #[cfg(unix)]
+    const DECLARED_SERVER: &str = r#"#!/bin/sh
+printf 'args:%s\n' "$*" >> "$FAKE_LSP_LOG"
+printf 'env:%s\n' "$FROM_DECLARATION" >> "$FAKE_LSP_LOG"
+reply() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+while IFS= read -r header; do
+  case "$header" in
+    Content-Length:*) length=$(printf '%s' "$header" | tr -cd '0-9') ;;
+    *) continue ;;
+  esac
+  IFS= read -r _blank
+  body=$(dd bs=1 count="$length" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$body" in
+    *'"initialize"'*)
+      printf 'init:%s\n' "$body" >> "$FAKE_LSP_LOG"
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
+      if [ -z "$REPORTS_NO_PROGRESS" ]; then
+        reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"work","value":{"kind":"begin"}}}'
+        reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"work","value":{"kind":"end"}}}'
+      fi
+      ;;
+    *'"textDocument/didOpen"'*)
+      printf 'open:%s\n' "$body" >> "$FAKE_LSP_LOG"
+      ;;
+    *'"textDocument/definition"'*)
+      if [ -n "$BEGINS_WORK_ON_THE_SECOND_QUESTION" ] && [ -e "$FAKE_LSP_LOG.asked" ]; then
+        reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"later","value":{"kind":"begin"}}}'
+      fi
+      : > "$FAKE_LSP_LOG.asked"
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[{\"uri\":\"file:///elsewhere/a.zz\",\"range\":{\"start\":{\"line\":3,\"character\":2},\"end\":{\"line\":3,\"character\":5}}}]}"
+      ;;
+    *'"shutdown"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+      ;;
+    *'"exit"'*)
+      exit 0
+      ;;
+  esac
+done
+"#;
+
+    /// A server that publishes diagnostics when told about a document: one error on opening it,
+    /// none on a change. `$SILENT` makes it say nothing at all, and `$QUIET_ON_CHANGE` says nothing on
+    /// a change, and `$LATE_NOTICE` publishes an error after answering a definition, which leaves a
+    /// notice queued once the question is over. The answer and that notice go out in one write, so
+    /// the notice has arrived by the time the answer is read rather than whenever the shell is next
+    /// scheduled.
+    ///
+    /// The two differ so that what a test reads says which message the client sent, and whether it
+    /// read a notice from before the file changed.
+    #[cfg(unix)]
+    const DIAGNOSING_SERVER: &str = r#"#!/bin/sh
+reply() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+while IFS= read -r header; do
+  case "$header" in
+    Content-Length:*) length=$(printf '%s' "$header" | tr -cd '0-9') ;;
+    *) continue ;;
+  esac
+  IFS= read -r _blank
+  body=$(dd bs=1 count="$length" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  uri=$(printf '%s' "$body" | sed -n 's/.*"uri":"\([^"]*\)".*/\1/p')
+  case "$body" in
+    *'"initialize"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
+      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"rustAnalyzer/cachePriming","value":{"kind":"end"}}}'
+      ;;
+    *'"textDocument/definition"'*)
+      answer="{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[]}"
+      if [ -z "$LATE_NOTICE" ]; then
+        reply "$answer"
+      else
+        late="{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"$uri\",\"diagnostics\":[{\"severity\":1,\"range\":{\"start\":{\"line\":6,\"character\":0}},\"message\":\"late\"}]}}"
+        printf 'Content-Length: %s\r\n\r\n%sContent-Length: %s\r\n\r\n%s' "${#answer}" "$answer" "${#late}" "$late"
+      fi
+      ;;
+    *'"textDocument/didOpen"'*)
+      [ -n "$SILENT" ] || reply "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"$uri\",\"diagnostics\":[{\"severity\":1,\"range\":{\"start\":{\"line\":6,\"character\":0}},\"message\":\"opened\"}]}}"
+      ;;
+    *'"textDocument/didChange"'*)
+      [ -n "$SILENT" ] || [ -n "$QUIET_ON_CHANGE" ] || reply "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"$uri\",\"diagnostics\":[]}}"
+      ;;
+    *'"shutdown"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+      ;;
+  esac
+done
+"#;
+
+    /// One scratch directory per test, for the reason [`REJECTS_A_POSITION`] gives. nextest runs each
+    /// test in a process of its own, where [`LAUNCHING`] orders nothing, so a shared name lets one
+    /// test replace the server script another test is running.
+    #[cfg(unix)]
+    const DECLARED_AND_APPROVED: &str = "bravebot-lsp-declared-and-approved";
+
+    #[cfg(unix)]
+    const DECLARED_FOR_ANOTHER_EXTENSION: &str = "bravebot-lsp-declared-for-another-extension";
+
+    #[cfg(unix)]
+    const DECLARED_AND_CHANGED: &str = "bravebot-lsp-declared-and-changed";
+
+    #[cfg(unix)]
+    const DECLARED_WITHOUT_PROGRESS: &str = "bravebot-lsp-declared-without-progress";
+
+    #[cfg(unix)]
+    const DECLARED_WORKING_LATER: &str = "bravebot-lsp-declared-working-later";
+
+    #[cfg(unix)]
+    fn the_approved_declared_server(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DECLARED_AND_APPROVED).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_declared_for_another_extension(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DECLARED_FOR_ANOTHER_EXTENSION).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_changed_declared_server(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DECLARED_AND_CHANGED).join("server"))
+    }
+
+    /// A workspace holding one file the declared server serves, with its script and a log path.
+    #[cfg(unix)]
+    fn a_workspace_with_a_declared_server(
+        name: &str,
+    ) -> (
+        std::sync::MutexGuard<'static, ()>,
+        crate::testutil::Scratch,
+        PathBuf,
+        Declared,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
+        let scratch = crate::testutil::Scratch::new(name);
+        std::fs::create_dir_all(&*scratch).expect("create the workspace");
+        std::fs::write(scratch.join("a.zz"), "one\ntwo\n").expect("write the file");
+        std::fs::write(scratch.join("notes.txt"), "text\n").expect("write the file");
+        let program = scratch.join("server");
+        std::fs::write(&program, DECLARED_SERVER).expect("write the server");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let log = scratch.join("log");
+        let declared = Declared {
+            name: "zzls".into(),
+            command: "fakels".into(),
+            args: vec!["--stdio".into(), "--flag".into()],
+            extensions: BTreeMap::from([("zz".to_string(), "zed".to_string())]),
+            env: vec![
+                ("FAKE_LSP_LOG".into(), log.display().to_string()),
+                ("FROM_DECLARATION".into(), "set".into()),
+            ],
+            initialization_options: Some(serde_json::json!({ "indexer": { "threads": 3 } })),
+            digest: "one".into(),
+        };
+        (launching, scratch, log, declared)
+    }
+
+    #[cfg(unix)]
+    fn definition_in<'a>(path: &'a str) -> Question<'a> {
+        Question {
+            operation: Operation::Definition,
+            path,
+            line: 1,
+            character: 1,
+            query: None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn a_policy_that_holds_the_capability<'a>(
+        sink: &'a mut bravebot_core::event::RecordingSink,
+    ) -> Policy<'a, bravebot_core::event::RecordingSink> {
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "look up");
+        Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([Capability::LanguageServer]),
+            sink,
+        )
+        .expect("policy")
+    }
+
+    #[cfg(unix)]
+    const DIAGNOSING_AFTER_THE_CHANGE: &str = "bravebot-lsp-diagnosing-after-the-change";
+
+    #[cfg(unix)]
+    const DIAGNOSING_A_STALE_NOTICE: &str = "bravebot-lsp-diagnosing-a-stale-notice";
+
+    #[cfg(unix)]
+    const DIAGNOSING_SILENTLY: &str = "bravebot-lsp-diagnosing-silently";
+
+    #[cfg(unix)]
+    const DIAGNOSING_WITHOUT_THE_CAPABILITY: &str =
+        "bravebot-lsp-diagnosing-without-the-capability";
+
+    #[cfg(unix)]
+    fn the_server_diagnosing_after_the_change(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_AFTER_THE_CHANGE).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_with_a_stale_notice(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_A_STALE_NOTICE).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_silent_server(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_SILENTLY).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_without_the_capability(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_WITHOUT_THE_CAPABILITY).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn a_policy_holding<'sink>(
+        sink: &'sink mut bravebot_core::event::RecordingSink,
+        capabilities: impl IntoIterator<Item = Capability>,
+    ) -> Policy<'sink, bravebot_core::event::RecordingSink> {
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "check");
+        Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter(capabilities),
+            sink,
+        )
+        .expect("policy")
+    }
+
+    /// LSP-11: a declared extension starts the declared command, with the arguments, variables and
+    /// initialization options the declaration gave, once a person approved it, and the prompt is
+    /// told the command and that what it runs is unknown.
+    #[cfg(unix)]
+    #[test]
+    fn a_declared_extension_starts_the_declared_command_after_approval() {
+        let (_launching, scratch, log, declared) =
+            a_workspace_with_a_declared_server(DECLARED_AND_APPROVED);
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_approved_declared_server,
+            false,
+            Vec::new,
+        );
+        servers.declare(vec![declared]);
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_that_holds_the_capability(&mut sink);
+        let file = scratch.join("a.zz");
+        let file = file.to_str().expect("a utf-8 path");
+
+        // Declined: nothing started, so the script has written nothing.
+        let refused = servers.ask(&mut policy, &definition_in(file), &mut |_| false);
+        assert!(
+            matches!(refused, Err(LspError::Refused { .. })),
+            "{refused:?}"
+        );
+        assert!(!log.exists(), "a declined server must not start");
+
+        let mut told = Vec::new();
+        let answer = servers
+            .ask(&mut policy, &definition_in(file), &mut |starting| {
+                told.push((
+                    starting.language.to_string(),
+                    starting.args.to_vec(),
+                    starting.build_tooling,
+                    starting.declared,
+                    starting.resolved.to_path_buf(),
+                ));
+                true
+            })
+            .expect("the declared server answers");
+
+        assert_eq!(
+            told,
+            [(
+                "zzls".to_string(),
+                vec!["--stdio".to_string(), "--flag".to_string()],
+                BuildTooling::Unknown,
+                true,
+                scratch.join("server"),
+            )]
+        );
+        assert_eq!(answer.locations.len(), 1);
+        assert_eq!(answer.locations[0].path, "/elsewhere/a.zz");
+        assert!(!answer.partial, "its own progress settled it");
+
+        let written = std::fs::read_to_string(&log).expect("the server logged");
+        assert!(written.contains("args:--stdio --flag"), "{written}");
+        assert!(written.contains("env:set"), "{written}");
+        assert!(
+            written.contains(r#""initializationOptions":{"indexer":{"threads":3}}"#),
+            "{written}"
+        );
+        assert!(written.contains(r#""languageId":"zed""#), "{written}");
+        assert_eq!(servers.running(), 1);
+    }
+
+    /// LSP-6: an extension nothing declares is still unconfigured, with a declaration present for
+    /// another one.
+    #[cfg(unix)]
+    #[test]
+    fn an_undeclared_extension_answers_unconfigured() {
+        let (_launching, scratch, log, declared) =
+            a_workspace_with_a_declared_server(DECLARED_FOR_ANOTHER_EXTENSION);
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_declared_for_another_extension,
+            false,
+            Vec::new,
+        );
+        servers.declare(vec![declared]);
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_that_holds_the_capability(&mut sink);
+        let file = scratch.join("notes.txt");
+
+        let answer = servers.ask(
+            &mut policy,
+            &definition_in(file.to_str().expect("a utf-8 path")),
+            &mut |_| panic!("nobody is asked about a server no declaration names"),
+        );
+
+        let error = answer.expect_err("no server is configured for a .txt file");
+        assert!(matches!(error, LspError::NoServerFor { .. }), "{error:?}");
+        assert!(error.is_absence_of_a_server());
+        assert!(!log.exists());
+    }
+
+    /// LSP-11: an approval binds to the declaration as it was, so an edit to it is asked about
+    /// again, and a declaration taken out stops the server it started.
+    #[cfg(unix)]
+    #[test]
+    fn a_changed_declaration_is_asked_about_again() {
+        let (_launching, scratch, _log, declared) =
+            a_workspace_with_a_declared_server(DECLARED_AND_CHANGED);
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_changed_declared_server,
+            false,
+            Vec::new,
+        );
+        servers.declare(vec![declared.clone()]);
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_that_holds_the_capability(&mut sink);
+        let file = scratch.join("a.zz");
+        let file = file.to_str().expect("a utf-8 path");
+
+        let mut asked = 0;
+        for _ in 0..2 {
+            servers
+                .ask(&mut policy, &definition_in(file), &mut |_| {
+                    asked += 1;
+                    true
+                })
+                .expect("answers");
+        }
+        assert_eq!(asked, 1, "the same declaration is asked about once");
+
+        let mut edited = declared.clone();
+        edited.args.push("--other".into());
+        edited.digest = "two".into();
+        servers.declare(vec![edited]);
+        assert_eq!(
+            servers.running(),
+            0,
+            "the server that was approved is stopped"
+        );
+        servers
+            .ask(&mut policy, &definition_in(file), &mut |_| {
+                asked += 1;
+                true
+            })
+            .expect("answers");
+        assert_eq!(asked, 2, "an edited declaration is a new question");
+        assert_eq!(servers.running(), 1);
+
+        servers.declare(Vec::new());
+        assert_eq!(
+            servers.running(),
+            0,
+            "a declaration taken out stops its server"
+        );
+    }
+
+    /// A declared server started on its own, as a set starts one, with `extra` added to what its
+    /// declaration sets in its environment.
+    #[cfg(unix)]
+    fn a_launched_declared_server(
+        scratch: &Path,
+        mut declared: Declared,
+        extra: &[(&str, &str)],
+    ) -> Server {
+        declared
+            .env
+            .extend(extra.iter().map(|(n, v)| (n.to_string(), v.to_string())));
+        Server::launch_declared(
+            &declared,
+            &scratch.join("server"),
+            scratch,
+            &scratch.join("cache"),
+            &[],
+        )
+        .expect("the declared server starts")
+    }
+
+    /// LSP-7: a declared server that reports no progress is waited on for the bound once. Every
+    /// answer is partial, and none after the first waits again.
+    #[cfg(unix)]
+    #[test]
+    fn a_declared_server_that_reports_no_progress_is_waited_on_once() {
+        let (_launching, scratch, _log, declared) =
+            a_workspace_with_a_declared_server(DECLARED_WITHOUT_PROGRESS);
+        let mut server =
+            a_launched_declared_server(&scratch, declared, &[("REPORTS_NO_PROGRESS", "1")]);
+        let file = scratch.join("a.zz");
+        let file = file.to_str().expect("a utf-8 path");
+
+        let bound = Duration::from_millis(500);
+        let waiting = Instant::now();
+        server.settle_for(bound);
+        assert!(
+            waiting.elapsed() >= bound,
+            "the first wait lasts the whole bound"
+        );
+        assert!(!server.is_indexed(), "no progress was ever reported");
+
+        let asking = Instant::now();
+        let answer = server
+            .ask(&definition_in(file))
+            .expect("the declared server answers");
+        assert!(
+            asking.elapsed() < MAX_INDEX_WAIT / 2,
+            "a question after the one wait does not wait the bound again"
+        );
+        assert!(answer.partial, "a server that never settled says so");
+        assert_eq!(answer.locations.len(), 1);
+    }
+
+    /// LSP-7: work a declared server begins after it settled unsettles it, so an answer given
+    /// meanwhile says it may be short.
+    #[cfg(unix)]
+    #[test]
+    fn work_a_declared_server_begins_after_settling_makes_the_next_answer_partial() {
+        let (_launching, scratch, _log, declared) =
+            a_workspace_with_a_declared_server(DECLARED_WORKING_LATER);
+        let mut server = a_launched_declared_server(
+            &scratch,
+            declared,
+            &[("BEGINS_WORK_ON_THE_SECOND_QUESTION", "1")],
+        );
+        let file = scratch.join("a.zz");
+        let file = file.to_str().expect("a utf-8 path");
+
+        let settled = server
+            .ask(&definition_in(file))
+            .expect("the declared server answers");
+        assert!(!settled.partial, "its progress began and ended");
+        assert!(server.is_indexed());
+
+        let unsettled = server
+            .ask(&definition_in(file))
+            .expect("the declared server answers");
+        assert!(
+            unsettled.partial,
+            "work begun after settling makes the answer partial"
+        );
+        assert!(!server.is_indexed());
+    }
+
+    /// LSP-11: a declaration is the person's word about a language, so it wins over the table, and
+    /// the first one to name an extension wins over a later one.
+    #[test]
+    fn a_declared_extension_wins_over_the_table_and_over_a_later_declaration() {
+        let declaring = |name: &str, digest: &str| Declared {
+            name: name.into(),
+            command: name.into(),
+            args: Vec::new(),
+            extensions: BTreeMap::from([("rs".to_string(), "rust".to_string())]),
+            env: Vec::new(),
+            initialization_options: None,
+            digest: digest.into(),
+        };
+        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new);
+        servers.declare(vec![declaring("first", "1"), declaring("second", "2")]);
+        let question = Question {
+            operation: Operation::Definition,
+            path: "/workspace/src/a.rs",
+            line: 1,
+            character: 1,
+            query: None,
+        };
+        let Ok(Target::Declared(index)) = servers.target(&question) else {
+            panic!("the declaration decides, not the table");
+        };
+        assert_eq!(servers.declared[index].name, "first");
+
+        servers.declare(Vec::new());
+        assert!(matches!(
+            servers.target(&question),
+            Ok(Target::Builtin(Language::Rust))
+        ));
+    }
+
+    /// LSP-12: what a running server says about a file is its error lines, read from the notice
+    /// it published after the file was last sent, and a change reaches it as a change.
+    ///
+    /// Two things the script lets this tell apart. The server publishes one error on `didOpen` and
+    /// none on `didChange`, so a client that sent the file as another open reads the first answer
+    /// again. And opening the document for the question already queued a notice carrying that one
+    /// error, so a client that read what was waiting rather than what followed the file reads the
+    /// error a second time.
+    #[cfg(unix)]
+    #[test]
+    fn a_running_server_reports_the_notice_that_follows_the_file_it_was_sent() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING_AFTER_THE_CHANGE);
+        std::fs::write(scratch.join("server"), DIAGNOSING_SERVER).expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_diagnosing_after_the_change,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+        ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Definition,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("the question starts the server");
+
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, [Capability::LanguageServer]);
+        let (found, partial) = servers
+            .diagnostics(&mut policy, path)
+            .expect("a server is running for this file")
+            .expect("the server answered");
+        assert_eq!(
+            found,
+            Some(Diagnostics::default()),
+            "the notice the change produced, which has no errors"
+        );
+        assert!(!partial);
+    }
+
+    /// LSP-12: a notice published before the file changed is not the answer about the file after
+    /// it. A server that publishes on open and says nothing on the change leaves the open's notice
+    /// queued, and reading it would report an error the new bytes may not have.
+    #[cfg(unix)]
+    #[test]
+    fn a_notice_from_before_the_file_changed_is_not_the_answer() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING_A_STALE_NOTICE);
+        std::fs::write(
+            scratch.join("server"),
+            DIAGNOSING_SERVER.replacen(
+                "while IFS=",
+                "QUIET_ON_CHANGE=1\nLATE_NOTICE=1\nwhile IFS=",
+                1,
+            ),
+        )
+        .expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_with_a_stale_notice,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+        ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Definition,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("the question starts the server");
+
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, [Capability::LanguageServer]);
+        let (found, _partial) = servers
+            .diagnostics(&mut policy, path)
+            .expect("a server is running for this file")
+            .expect("the server did not fail");
+        assert_eq!(found, None, "the notice from before the change was read");
+    }
+
+    /// LSP-12: a server that says nothing is reported as having said nothing, which is not a claim
+    /// that the file is clean.
+    #[cfg(unix)]
+    #[test]
+    fn a_silent_server_is_not_reported_as_finding_no_errors() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING_SILENTLY);
+        std::fs::write(
+            scratch.join("server"),
+            DIAGNOSING_SERVER.replacen("while IFS=", "SILENT=1\nwhile IFS=", 1),
+        )
+        .expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_silent_server,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+        ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Definition,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("the question starts the server");
+
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, [Capability::LanguageServer]);
+        let (found, _partial) = servers
+            .diagnostics(&mut policy, path)
+            .expect("a server is running for this file")
+            .expect("a quiet server is not a failed one");
+        assert_eq!(found, None);
+    }
+
+    /// LSP-12: a write is not the approval a server needs. With none running there is nothing to
+    /// ask and nothing is started; with one running, a run that was not granted the capability is
+    /// not answered from it.
+    #[cfg(unix)]
+    #[test]
+    fn diagnostics_start_no_server_and_need_the_capability() {
+        let (_launching, scratch, file) =
+            a_workspace_a_server_rejects(DIAGNOSING_WITHOUT_THE_CAPABILITY);
+        std::fs::write(scratch.join("server"), DIAGNOSING_SERVER).expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_without_the_capability,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, [Capability::LanguageServer]);
+        assert!(servers.diagnostics(&mut policy, path).is_none());
+        assert_eq!(
+            servers.running(),
+            0,
+            "asking for diagnostics started a server"
+        );
+
+        ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Definition,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("the question starts the server");
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, []);
+        assert!(servers.diagnostics(&mut policy, path).is_none());
+        // And a file no server is configured for has nothing to ask.
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, [Capability::LanguageServer]);
+        assert!(
+            servers
+                .diagnostics(&mut policy, &format!("{path}.txt"))
+                .is_none()
+        );
+    }
+    #[cfg(unix)]
+    const DIAGNOSING_ON_REQUEST: &str = "bravebot-lsp-diagnosing-on-request";
+
+    #[cfg(unix)]
+    const DIAGNOSING_NOTHING_ON_REQUEST: &str = "bravebot-lsp-diagnosing-nothing-on-request";
+
+    #[cfg(unix)]
+    const DIAGNOSING_BEFORE_INDEXED: &str = "bravebot-lsp-diagnosing-before-indexed";
+
+    #[cfg(unix)]
+    fn the_server_diagnosing_on_request(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_ON_REQUEST).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_saying_nothing_on_request(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_NOTHING_ON_REQUEST).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_diagnosing_before_it_is_indexed(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_BEFORE_INDEXED).join("server"))
+    }
+
+    /// LSP-13: the `diagnostics` operation answers with the lines the server found and, apart from
+    /// them, the words it wrote, both read from the one notice that followed the file it was sent.
+    /// A second question sends the file again as a change and reads the notice that follows that.
+    ///
+    /// The script publishes one error on `didOpen` and none on `didChange`. Lines and words that
+    /// came from different notices, or a second answer that read the first one's, would not match
+    /// what each answer is asserted to hold.
+    #[cfg(unix)]
+    #[test]
+    fn the_diagnostics_operation_answers_lines_and_words_from_one_notice() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING_ON_REQUEST);
+        std::fs::write(scratch.join("server"), DIAGNOSING_SERVER).expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_diagnosing_on_request,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+        let question = Question {
+            operation: Operation::Diagnostics,
+            path,
+            line: 1,
+            character: 1,
+            query: None,
+        };
+
+        let opened = ask_with_the_server_approved(&mut servers, &question)
+            .expect("the question starts the server and it reports");
+        assert_eq!(
+            opened.diagnostics,
+            Some(Diagnostics {
+                errors: vec![7],
+                warnings: 0,
+                others: 0
+            })
+        );
+        assert_eq!(opened.text.as_deref(), Some("7:1 error: opened"));
+        assert!(
+            opened.locations.is_empty(),
+            "a diagnostic is not a location"
+        );
+        assert!(!opened.partial);
+        assert_eq!(servers.running(), 1);
+
+        let changed = ask_with_the_server_approved(&mut servers, &question)
+            .expect("the running server reports again");
+        assert_eq!(
+            changed.diagnostics,
+            Some(Diagnostics::default()),
+            "the second answer read the notice from before the file was sent again"
+        );
+        assert_eq!(changed.text, None, "a file with nothing wrong has no words");
+    }
+
+    /// LSP-13 and LSP-6: a server that publishes nothing about the file is not a file with no
+    /// errors. The operation reports that it did not report, in words that cannot be read as a clean
+    /// result, and not as a server that is absent.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_that_publishes_nothing_is_no_report_and_not_a_clean_file() {
+        let (_launching, scratch, file) =
+            a_workspace_a_server_rejects(DIAGNOSING_NOTHING_ON_REQUEST);
+        std::fs::write(
+            scratch.join("server"),
+            DIAGNOSING_SERVER.replacen("while IFS=", "SILENT=1\nwhile IFS=", 1),
+        )
+        .expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_saying_nothing_on_request,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+
+        let error = ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Diagnostics,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect_err("a server that said nothing has no answer to give");
+        assert!(matches!(error, LspError::NoReport { .. }), "{error:?}");
+        assert!(
+            !error.is_absence_of_a_server(),
+            "a server that ran and was quiet is not an absent one"
+        );
+        let said = error.to_string();
+        assert!(said.contains("does not mean it has no errors"), "{said}");
+        assert!(!said.contains("no errors reported"), "{said}");
+    }
+
+    /// LSP-13 and LSP-7: a report given while the index is still building says it may be short,
+    /// whatever it found. The question that started the server reported it settled, so the test
+    /// puts it back to unsettled and past its wait, which is where a server that never reports its
+    /// indexing finished stands after the bound.
+    #[cfg(unix)]
+    #[test]
+    fn a_report_given_before_the_index_settled_is_partial() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING_BEFORE_INDEXED);
+        std::fs::write(scratch.join("server"), DIAGNOSING_SERVER).expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_diagnosing_before_it_is_indexed,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+        ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Definition,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("the question starts the server");
+        let server = servers
+            .running
+            .get_mut(&Key::Builtin(Language::Rust))
+            .expect("the question started it");
+        server.indexed = false;
+        server.waited = true;
+
+        let answer = ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Diagnostics,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("an unsettled index still reports what it has");
+        assert!(
+            answer.partial,
+            "the report did not say the index was still building"
+        );
+        assert!(
+            answer.diagnostics.is_some(),
+            "an unsettled index still reports what it has"
+        );
     }
 }

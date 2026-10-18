@@ -93,6 +93,38 @@ impl Emitter {
         Ok(())
     }
 
+    /// Say where a session's view stands to a client that is taking it over, as one step with
+    /// respect to every update.
+    ///
+    /// `hand_over` runs under the lock every update takes, before the snapshot is written. If it
+    /// fails nothing is written and the failure is returned. The client it switches events to
+    /// receives the snapshot first and then each later update, and none from before it. The
+    /// snapshot is the current status, turn and target with no rows: the bridge keeps no
+    /// transcript, so the client is told its history is not there. Returns the snapshot's
+    /// sequence number.
+    pub fn resume_view(
+        &self,
+        session: &str,
+        hand_over: impl FnOnce() -> Result<(), crate::protocol::Failure>,
+    ) -> Result<u64, crate::protocol::Failure> {
+        let mut output = self
+            .0
+            .lock()
+            .map_err(|_| crate::protocol::Failure::bad_request("event stream unavailable"))?;
+        let Some(view) = output.views.get(session) else {
+            return Err(crate::protocol::Failure::bad_request(
+                "the session has no view to take over",
+            ));
+        };
+        let snapshot = view.initial();
+        hand_over()?;
+        let sequence = snapshot.sequence;
+        let mut data = serde_json::json!(snapshot);
+        data["history"] = serde_json::json!("omitted");
+        (output.sink)(Event::new("session.view.snapshot", session, data));
+        Ok(sequence)
+    }
+
     pub fn view_started(&self, session: &str, turn: u64, target: u64, prompt: serde_json::Value) {
         if let Ok(mut output) = self.0.lock()
             && let Some(view) = output.views.get_mut(session)

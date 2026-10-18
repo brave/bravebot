@@ -24,9 +24,10 @@ function forwarding its caller's closure to one, that every workflow step
 names a commit rather than a tag its owner can move, that every container image this tree runs names a
 digest rather than a tag its publisher can move, that no job holding a credential installs or runs a
 dependency beside it, that a checkout of this tree names a kind of ref rather than a bare name a
-branch and a tag can share, and that the contexts a merge is held to are written down, name jobs
-that exist, and cover every job that runs a check. A rule that can be written as one of these
-belongs here rather than in a reviewer's head.
+branch and a tag can share, that the contexts a merge is held to are written down, name jobs
+that exist, and cover every job that runs a check, and that every question and remembered answer has
+a row in the register of kept answers. A rule that can be written as one of these belongs here
+rather than in a reviewer's head.
 """
 
 import argparse
@@ -35,8 +36,10 @@ import json
 import os
 import re
 import shlex
+import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
+from itertools import zip_longest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "check-spec"))
@@ -48,6 +51,12 @@ _spec = importlib.util.spec_from_file_location(
 )
 mechanics = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mechanics)
+
+_shared = importlib.util.spec_from_file_location(
+    "work_dir", Path(__file__).resolve().parents[2] / "work_dir.py"
+)
+workdir = importlib.util.module_from_spec(_shared)
+_shared.loader.exec_module(workdir)
 
 ERROR = "error"
 WARNING = "warning"
@@ -248,19 +257,57 @@ GATES_A_PULL_REQUEST = ("fails a pull request", "fails rather than")
 # a block, an inline map, a quoted value, and `write-all`, which grants this along with the rest.
 GRANT = re.compile(r"""id-token\s*:\s*["']?write\b|\bwrite-all\b""")
 SECRET = re.compile(r"\bsecrets\.[A-Za-z_]")
+# A command is read as the manager, then any options, then the subcommand, because `npm --prefix ui ci`
+# and `pnpm --dir ui install` are the same commands as the ones without the option, and a pattern that
+# needs the subcommand next to the manager misses them.
+PACKAGE_MANAGER = re.compile(r"(?:^|[\s;&|(])(npm|pnpm|yarn)(?=\s|$)([^;&|()#]*)")
+# A bare `pnpm build` runs the script `build`. Only a manager at the start of a command is read that
+# way, so prose such as `pnpm and the cache` in a step name or an echo is not.
+COMMAND_START = re.compile(r"(?:^|[;&|(]\s*|\brun:\s*|\bsudo\s+|\bcorepack\s+)$")
+# Options whose next token is their value, not the subcommand. `-w` is a flag for pnpm (the workspace
+# root) and a value for npm, so it is not listed.
+OPTIONS_WITH_A_VALUE = {"--prefix", "--dir", "-C", "--filter", "-F", "--workspace", "--cwd"}
+INSTALLS = {"ci", "install", "i", "add", "rebuild", "rb", "approve-builds"}
+RUNS = {"run", "run-script", "exec", "x", "dlx", "test", "t", "start"}
+# pnpm subcommands that run no package code. Any other word after pnpm is a script name.
+PNPM_RUNS_NOTHING = {
+    "publish", "pack", "config", "c", "get", "set", "view", "audit", "outdated", "list", "ls", "ll",
+    "why", "root", "bin", "store", "env", "setup", "self-update", "licenses", "deprecate",
+    "unpublish", "patch", "patch-commit", "remove", "rm", "uninstall", "un", "unlink", "prune",
+    "link", "ln", "version", "help", "update", "up", "upgrade", "dedupe", "fetch", "import",
+}
 DEPENDENCY = (
     (
-        re.compile(r"(?:^|[\s;&|(])(?:npm|pnpm|yarn)\s+(?:ci|install|i|add)\b"),
-        "installs a dependency",
-    ),
-    (
         re.compile(
-            r"(?:^|[\s;&|(])(?:(?:npm|pnpm|yarn)\s+(?:run|exec|test|start|dlx)\b|npx\b"
-            r"|\.?/?node_modules/\.bin/)"
+            r"(?:^|[\s;&|(])(?:npx|pnpx)(?=\s|$)|(?:^|[\s;&|(])\.?/?node_modules/\.bin/"
         ),
         "runs a dependency",
     ),
 )
+
+
+def package_manager_verb(tool, rest, at_command_start):
+    """What one `npm`, `pnpm` or `yarn` command does with dependencies, or None if nothing."""
+    tokens = rest.split()
+    index = 0
+    while index < len(tokens) and tokens[index].startswith("-"):
+        index += 2 if tokens[index] in OPTIONS_WITH_A_VALUE else 1
+    if index >= len(tokens):
+        return None
+    word = tokens[index]
+    if word in INSTALLS:
+        return "installs a dependency"
+    if word in RUNS:
+        return "runs a dependency"
+    if (
+        tool == "pnpm"
+        and at_command_start
+        and word not in PNPM_RUNS_NOTHING
+        and re.fullmatch(r"[A-Za-z0-9:_-]+", word)
+    ):
+        return "runs a dependency"
+    return None
+
 
 LANES = (
     "laundering",
@@ -272,11 +319,96 @@ LANES = (
     "unpinned-guarantee",
     "supply-chain",
     "shown-before-answered",
+    "approval-binding",
 )
 
 # The spec whose `governs` list is the terminal's prompts, and the function each of them asks with.
 PROMPT_SPEC = "PROMPT"
 ASKS = re.compile(r"^\s*pub(?:\([^)]*\))?\s+fn (ask(?:_\w+)?)\s*[<(]")
+# A desktop card is the `case` arm of the transcript's entry switch that draws one of these.
+CARD_CASE = re.compile(r"^\s*case '([\w-]+)':")
+CARD_DRAWS = re.compile(r"<(?:DecisionCard|YesOrNo|ThreeAnswers)\b")
+
+# The register of answers kept past the effect they were given for: a table in one clause of the
+# prompting spec, and a front matter list saying which row each question and remembered set lands in.
+REGISTER = "PROMPT-11"
+KEPT_IN = "kept_in"
+KEEPS_NOTHING = "nothing"
+KEPT_ENTRY = re.compile(r"^([A-Za-z_]+)::([a-z_][a-z0-9_]*):\s*(\S.*)$")
+# Each declaration whose members have to be listed, and the shape of a member at its margin. A
+# module's questions have no declaration around them, so the whole file is read.
+REGISTERED = {
+    "Confirmer": (
+        Path("crates/agent/src/confirm.rs"),
+        re.compile(r"^pub trait Confirmer\s*\{"),
+        re.compile(r"^    fn ([a-z_][a-z0-9_]*)\s*[<(]"),
+    ),
+    "Answers": (
+        Path("crates/agent/src/answers.rs"),
+        re.compile(r"^pub struct Answers\b[^{]*\{"),
+        re.compile(r"^    (?:pub(?:\([a-z:]+\))? )?([a-z_][a-z0-9_]*)\s*:"),
+    ),
+    "trust_prompt": (
+        Path("crates/tui/src/trust_prompt.rs"),
+        None,
+        ASKS,
+    ),
+}
+# Where a kept answer is filed, looked up, or carried across `/cd`, `/clear` and a resume, beside the
+# declarations above.
+REMEMBERED_SETS = (
+    "crates/tui/src/app.rs",
+    "crates/tui/src/app/actions.rs",
+    "crates/tui/src/state.rs",
+    "crates/tui/src/sandbox_command.rs",
+    "crates/cli/src/plain.rs",
+    "crates/ui-bridge/src/bridge.rs",
+    "crates/ui-bridge/src/running.rs",
+    "crates/session/src/sessions.rs",
+    "crates/agent/src/tools.rs",
+    "crates/core/src/policy.rs",
+    "crates/core/src/trust.rs",
+    "crates/core/src/programs.rs",
+    "crates/core/src/remembered.rs",
+    "crates/core/src/credentials.rs",
+    "crates/core/src/ask.rs",
+    "crates/agent/src/remembered.rs",
+    "crates/agent/src/granted.rs",
+    "crates/agent/src/trusted.rs",
+    "crates/agent/src/reach.rs",
+    "crates/agent/src/workspace.rs",
+    "crates/agent/src/mcp.rs",
+    "crates/config/src/mcp.rs",
+    "crates/lsp/src/server.rs",
+)
+EVIDENCE = "Evidence"
+CITED_TEST = re.compile(r"verified-by:\s*([^`\s|]+)")
+# Only where the cell says it, at its start or after a `;`, so "not accepted: [...]" admits nothing.
+ACCEPTED = re.compile(r"(?:^|;\s*)accepted: \[[^\]]*\]\(([^)#\s]+)#known-costs\)")
+# A cell that holds a mark rather than a statement.
+PLACEHOLDER = re.compile(r"^(?:[-?.\s]*|n/?a|tbd|todo|none)$", re.IGNORECASE)
+
+# The second table of the register: a row for each row above it and a column for each way the world
+# changes under a yes. Each cell is statements joined by `;`, and a statement opens with what
+# happens and says why.
+CHANGES = (
+    "Moved",
+    "New session",
+    "Subject replaced",
+    "Other directory",
+    "Invocation changed",
+    "Declaration changed",
+    "More than shown",
+)
+CHANGE_LEADERS = ("asked again", "not reached", "by design", "accepted")
+CHANGE_STATEMENT = re.compile(r"^(" + "|".join(CHANGE_LEADERS) + r"):\s*(.*)$", re.DOTALL)
+# A reason shorter than this is a mark, however it is spelled.
+CHANGE_REASON_WORDS = 3
+# The one test that applies a change to an answer for each cell citing it, and the file whose table
+# of cases is read for the row and change each case applies.
+CHANGES_TABLE_TEST = "bravebot_agent::kept_answers::changing_the_world_under_a_yes_asks_again"
+CHANGES_TABLE_FILE = Path("crates/agent/src/kept_answers.rs")
+CHANGES_TABLE_CASE = re.compile(r'Case\s*\{\s*row:\s*"([^"]+)",\s*change:\s*"([^"]+)"', re.DOTALL)
 
 
 REPRODUCE = "python3 agents/skills/security-audit/security-audit.py --mechanical-only"
@@ -419,7 +551,7 @@ def check_exception_counts():
             "exception-count-disagreement",
             "the review pass names fewer admitted exceptions than the spec, so an unnamed one "
             "reads as a violation",
-            f"`{REVIEW_DOC}` says {review[0]} places in the kernel branch on untrusted bytes and "
+            f"`{REVIEW_DOC}` says {review[0]} places branch on untrusted bytes and "
             f"`{LABELS_SPEC}` names {spec[0]}",
             "trust",
             "low",
@@ -657,6 +789,61 @@ def check_network_clients_are_recorded(sources):
                 )
 
 
+BARE_PROGRAM = re.compile(r"""\bCommand::new\(\s*(?:&\s*)?"([^"]*)"\s*[,)]""")
+
+# Production files where a program may be started by a bare name, with who chose the name. A name
+# is looked up through `PATH`, so this list is the whole of the places bravebot trusts that lookup.
+BARE_PROGRAM_ALLOWED = {}
+
+
+def check_programs_are_resolved(sources):
+    """A program bravebot starts itself is named by an absolute path, never by a bare name.
+
+    SANDBOX-30 keeps the programs bravebot starts unconfined from being a file a confined stage
+    wrote into a `PATH` directory. It was applied one report at a time (`aws`, the clipboard tools,
+    hooks, language servers, the editor, the inhibitor's `cat`, `doctor --push-identity`), because
+    nothing asked of a new spawn whether it was resolved first. `Command::new("name")` in
+    production code is that lookup left to the operating system, so every one is an error unless
+    `BARE_PROGRAM_ALLOWED` records it.
+
+    A name held in a variable, a program that looks up a second one through the `PATH` it inherited,
+    and one started through a helper this pattern does not match are not seen here, and
+    `docs/best_practices/security.md` asks for them in review.
+    """
+    for path in sorted(sources):
+        text = str(path)
+        if (
+            "/tests/" in text
+            or "/test-support/" in text
+            or text.endswith(("_tests.rs", "build.rs"))
+        ):
+            continue
+        spans = test_regions(sources[path])
+        for number, raw in enumerate(mechanics.strip_comments(sources[path]), start=1):
+            match = BARE_PROGRAM.search(raw)
+            if not match or match.group(1).startswith("/"):
+                continue
+            if any(low <= number <= high for low, high in spans):
+                continue
+            if text in BARE_PROGRAM_ALLOWED:
+                continue
+            yield finding(
+                ERROR,
+                "program-started-by-bare-name",
+                "production code starts a program by a bare name, so `PATH` decides what runs "
+                "unconfined and a file a stage wrote can be the one",
+                f"`{path}:{number}` starts `{match.group(1)}` with `Command::new` and no "
+                "absolute path",
+                "sandbox",
+                "high",
+                evidence=[f"{path}:{number} {raw.strip()[:160]}"],
+                fix="resolve it first with `bravebot_sandbox::programs` and start the absolute "
+                "path ([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30)), or record the file in "
+                "`BARE_PROGRAM_ALLOWED` with who chose the name",
+                gain="a stage-written program run with the person's access to `~/.ssh` and `~/.aws`",
+            )
+
+
 def paragraphs(lines):
     """Every block between blank lines, joined into one line, with the line it starts at.
 
@@ -690,24 +877,39 @@ def clause_body(lines, clause):
     return body
 
 
-def table_rows(lines):
-    """The data rows of the first table in `lines`, each one its cells.
+def tables(lines):
+    """Every table in `lines`, each one its rows, header first, each row its cells.
 
-    The header and the dashes under it are dropped, so what comes back is what the table asserts
-    rather than how it is drawn.
+    The dashes under a header are dropped, so what comes back is what a table says rather than how
+    it is drawn.
     """
+    found = []
     rows = []
     for raw in lines:
         stripped = raw.strip()
         if not stripped.startswith("|"):
             if rows:
-                break
+                found.append(rows)
+                rows = []
             continue
         cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-        if all(set(cell) <= set("-: ") for cell in cells):
+        if all(set(cell) <= set("-: ") for cell in cells) and any("-" in cell for cell in cells):
             continue
         rows.append(cells)
-    return rows[1:]
+    if rows:
+        found.append(rows)
+    return found
+
+
+def table(lines):
+    """The rows of the first table in `lines`, header first, each one its cells."""
+    found = tables(lines)
+    return found[0] if found else []
+
+
+def table_rows(lines):
+    """The data rows of the first table in `lines`: what the table asserts, without its header."""
+    return table(lines)[1:]
 
 
 def check_prompt_split():
@@ -1208,7 +1410,7 @@ def test_regions(lines):
     counter = 0
     armed = False
     for number, raw in enumerate(lines, start=1):
-        if depth is None and raw.strip().startswith("#[cfg(test)]"):
+        if depth is None and raw.strip().startswith(("#[cfg(test)]", "#[cfg(all(test")):
             armed = True
         opens = raw.count("{")
         closes = raw.count("}")
@@ -1599,10 +1801,17 @@ def dependency_commands(body):
         line = raw.strip()
         if line.startswith("#"):
             continue
-        for pattern, verb in DEPENDENCY:
-            if pattern.search(line):
-                found.append((verb, line[:120]))
-                break
+        verbs = [
+            package_manager_verb(
+                match.group(1), match.group(2), bool(COMMAND_START.search(line[: match.start(1)]))
+            )
+            for match in PACKAGE_MANAGER.finditer(line)
+        ]
+        verbs += [verb for pattern, verb in DEPENDENCY if pattern.search(line)]
+        verbs = [verb for verb in verbs if verb]
+        if verbs:
+            verb = "installs a dependency" if "installs a dependency" in verbs else verbs[0]
+            found.append((verb, line[:120]))
     return found
 
 
@@ -1610,14 +1819,14 @@ def check_privileged_job_runs_only_its_own_code():
     """A job that can mint a credential installs and runs nothing from `node_modules`.
 
     A grant or a secret is readable by every step of the job holding it, so a job is the smallest
-    boundary either has. A step that installs from `package-lock.json` and then runs what it
+    boundary either has. A step that installs from `pnpm-lock.yaml` and then runs what it
     installed executes bytes nobody here wrote, deliberately: that is what a lint is. In a job
     holding `id-token: write` those bytes can exchange the runner's OIDC token for a publishing
     credential at the registry and ship a tarball with this repository's provenance on it, and the
     same two commands in a job holding `contents: read` reach a green check and nothing else. So the
     finding is the pairing rather than either half.
 
-    What it reads is the npm tree, which is the third-party code a workflow here installs and runs by
+    What it reads is the npm and pnpm tree, which is the third-party code a workflow here installs and runs by
     name. A job that compiled the tree would run a crate's build script in the same environment and
     this says nothing about that, which is a widening of this check rather than a second one.
     """
@@ -2163,14 +2372,521 @@ def prompt_spec_files(specs):
 
 
 def prompt_sites(sources, specs):
-    """Every function in the prompting spec's files that puts a question to the person."""
+    """Every function in the prompting spec's files that puts a question to the person, and every
+    desktop card by the `case` arm that draws it.
+
+    The sources are the Rust tree, so a governed file outside it is read from disk.
+    """
     found = []
     for path in prompt_files(specs):
-        for number, line in enumerate(sources.get(Path(path), []), start=1):
+        lines = sources.get(Path(path))
+        if lines is None and Path(path).is_file():
+            lines = Path(path).read_text(encoding="utf-8", errors="replace").split("\n")
+        arm = None
+        for number, line in enumerate(lines or [], start=1):
             match = ASKS.match(line)
+            case = CARD_CASE.match(line)
             if match:
                 found.append({"path": path, "line": number, "function": match.group(1)})
+            elif case:
+                arm = (number, case.group(1))
+            elif arm and CARD_DRAWS.search(line):
+                found.append({"path": path, "line": arm[0], "function": f"case '{arm[1]}'"})
+                arm = None
     return found
+
+
+def declared_members(sources, declaration):
+    """The names declared at the margin of one trait or struct, or `None` where it is not found.
+
+    Read from the source rather than listed here, so a method or a field added later is one this
+    check has to be told about.
+    """
+    path, opening, member = declaration
+    lines = sources.get(path)
+    if lines is None:
+        return None
+    inside = opening is None
+    found = []
+    for raw in lines:
+        if not inside:
+            inside = bool(opening.match(raw))
+            continue
+        if opening is not None and raw.startswith("}"):
+            break
+        named = member.match(raw)
+        if named:
+            found.append(named.group(1))
+    return found if inside else None
+
+
+def register_of(specs):
+    """The prompting spec, the register's header and rows, and its `kept_in` list."""
+    spec = next((one for one in specs if one.id == PROMPT_SPEC), None)
+    if spec is None:
+        return None, [], [], []
+    rows = table(clause_body(spec.lines, REGISTER))
+    entries = [str(one).strip() for one in spec.front.get(KEPT_IN, [])]
+    return spec, rows[:1], rows[1:], entries
+
+
+def check_answers_registered(specs, sources):
+    """A question or a remembered set with no row in the register, and a row that pins nothing.
+
+    A yes is kept under a key, and the defect this repository keeps being sent is a key that later
+    matches something the person was never shown. Each was fixed where it was found, and none left
+    anything that would make the next prompt, or the next set a session keeps, say what its answer
+    is kept under. So every method of the confirmer, every field of the remembered answers and every
+    question the terminal's trust prompts ask is listed against the row it lands in, or as keeping
+    nothing, and every row names the tests that pin it or the Known cost that accepts it.
+    """
+    spec, header, rows, entries = register_of(specs)
+
+    def unreadable(summary, fix):
+        return finding(
+            ERROR,
+            "register-unreadable",
+            "the register of kept answers could not be read, so nothing checks what one is kept under",
+            summary,
+            "trust",
+            "medium",
+            fix=fix,
+            gain="nothing directly. It removes the check that makes a new prompt or a new "
+            "remembered set say what its answer is kept under before it lands",
+        )
+
+    if spec is None:
+        yield unreadable(
+            f"no spec under `docs/specs` has the id `{PROMPT_SPEC}`, which is where the register is",
+            f"restore the id, or update `PROMPT_SPEC` here to the spec the register moved to",
+        )
+        return
+    for other in specs:
+        if other is not spec and KEPT_IN in other.front:
+            yield finding(
+                ERROR,
+                "kept-in-misplaced",
+                f"{other.name} has a `{KEPT_IN}:` list, and only {spec.name}'s is read",
+                f"`{other.rel}` lists where answers are kept, and the check reads that list from "
+                f"`{spec.rel}` alone, so what it was written to account for is accounted for by "
+                "nothing",
+                "trust",
+                "low",
+                evidence=[f"{other.rel}: {KEPT_IN}"],
+                fix=f"move the entries into `{KEPT_IN}:` in `{spec.rel}`",
+            )
+    if not header or not rows:
+        yield unreadable(
+            f"`{spec.rel}` has no table under {REGISTER}",
+            f"restore the table under {REGISTER}, or update `REGISTER` here to the clause it moved to",
+        )
+        return
+    declared = {}
+    for name, declaration in REGISTERED.items():
+        members = declared_members(sources, declaration)
+        if not members:
+            yield unreadable(
+                f"`{declaration[0]}` has no `{name}` member this check can read",
+                f"update `REGISTERED` here to where `{name}` moved to",
+            )
+            return
+        declared[name] = members
+
+    columns = header[0]
+    named_rows = [row[0] for row in rows]
+    for row in rows:
+        unsaid = [
+            column or "(no column)"
+            for column, cell in zip_longest(columns, row)
+            if not cell or PLACEHOLDER.match(cell)
+        ]
+        if unsaid or len(row) > len(columns):
+            yield finding(
+                ERROR,
+                "register-cell-empty",
+                f"the register's row for {row[0] or 'an unnamed answer'} does not fill its columns"
+                + (f": {', '.join(unsaid)} unsaid" if unsaid else ""),
+                f"`{spec.rel}` {REGISTER} has a row whose cells do not fill its {len(columns)} "
+                "columns, so a remembered answer is in the register without saying everything a row "
+                "has to",
+                "trust",
+                "low",
+                evidence=[f"{spec.rel} {REGISTER}: " + " | ".join(row)[:160]],
+                fix="say it in the cell; an empty cell reads as decided when nobody decided it",
+            )
+
+    evidence_at = columns.index(EVIDENCE) if EVIDENCE in columns else None
+    if evidence_at is None:
+        yield unreadable(
+            f"`{spec.rel}` {REGISTER}'s table has no `{EVIDENCE}` column",
+            f"restore the `{EVIDENCE}` column, or update `EVIDENCE` here to what it is called now",
+        )
+        return
+    index = mechanics.TestIndex()
+    crates = mechanics.crate_directories()
+    for row in rows:
+        cell = row[evidence_at] if evidence_at < len(row) else ""
+        cited = CITED_TEST.findall(cell)
+        accepted = ACCEPTED.findall(cell)
+        if not cited and not accepted:
+            yield finding(
+                ERROR,
+                "register-unpinned",
+                f"the register's row for {row[0]} names no test and no Known cost",
+                f"`{spec.rel}` {REGISTER}'s row for {row[0]} says what its answer is kept under and "
+                "cites neither a test showing the key telling cases apart nor a Known cost accepting "
+                "what it does not",
+                "trust",
+                "low",
+                evidence=[f"{spec.rel} {REGISTER}: {row[0]}: {cell[:120]}"],
+                fix="cite the test as `verified-by: crate::module::test_name`, or write "
+                "`accepted` with a link to the Known costs entry that admits it",
+            )
+        for reference in cited:
+            status, detail = index.resolve(reference, crates)
+            if status != "ok":
+                yield finding(
+                    ERROR,
+                    "register-test-missing",
+                    f"the register's row for {row[0]} names `{reference}`, which is not a test there",
+                    f"`{spec.rel}` {REGISTER} cites `{reference}` for {row[0]}, and resolving it "
+                    f"against the tree's tests gives `{status}`"
+                    + (f" ({detail})" if detail else ""),
+                    "trust",
+                    "low",
+                    evidence=[f"{spec.rel} {REGISTER}: {row[0]}"],
+                    fix="correct the name to the test as it is now, or cite the test that replaced it",
+                )
+        for target in accepted:
+            linked = spec.path.parent / target
+            headed = linked.is_file() and any(
+                line.strip() == KNOWN_COSTS
+                for line in linked.read_text(encoding="utf-8").split("\n")
+            )
+            if not headed:
+                yield finding(
+                    ERROR,
+                    "register-cost-missing",
+                    f"the register's row for {row[0]} accepts a cost in `{target}`, which has none",
+                    f"`{spec.rel}` {REGISTER} links `{target}#known-costs` for {row[0]}, and that "
+                    f"file is missing or has no `{KNOWN_COSTS}` section",
+                    "trust",
+                    "low",
+                    evidence=[f"{spec.rel} {REGISTER}: {row[0]}"],
+                    fix="link the spec whose Known costs admit it, or write the entry there",
+                )
+
+    listed = {}
+    for entry in entries:
+        parsed = KEPT_ENTRY.match(entry)
+        if not parsed or parsed.group(1) not in REGISTERED:
+            yield finding(
+                ERROR,
+                "kept-in-malformed",
+                f"`{KEPT_IN}:` in {spec.name} has an entry this check cannot read",
+                f"`{entry}` is not `<{'|'.join(REGISTERED)}>::<member>: <row>; <row>`, so whatever "
+                "it was written to account for is accounted for by nothing",
+                "trust",
+                "low",
+                evidence=[f"{spec.rel}: {KEPT_IN}: {entry}"],
+            )
+            continue
+        name, member, kept = parsed.groups()
+        if (name, member) in listed:
+            yield finding(
+                ERROR,
+                "kept-in-duplicate",
+                f"{spec.name} lists {name}::{member} twice",
+                f"`{listed[(name, member)]}` and `{entry}` are both under `{KEPT_IN}:` in "
+                f"`{spec.rel}`, so the register says two things about where one answer is kept",
+                "trust",
+                "low",
+                evidence=[f"{spec.rel}: {KEPT_IN}: {entry}"],
+                fix="keep one entry naming every row the answer lands in, separated by `;`",
+            )
+        listed[(name, member)] = entry
+        parts = [part.strip() for part in kept.split(";")]
+        if KEEPS_NOTHING in parts and len(parts) > 1:
+            yield finding(
+                ERROR,
+                "kept-in-malformed",
+                f"{spec.name} says {name}::{member} keeps nothing and names rows it is kept in",
+                f"`{entry}` under `{KEPT_IN}:` in `{spec.rel}` both says the answer is kept nowhere "
+                "and names a row it lands in",
+                "trust",
+                "low",
+                evidence=[f"{spec.rel}: {KEPT_IN}: {entry}"],
+                fix=f"name the rows, or write `{KEEPS_NOTHING}` alone",
+            )
+        if member not in declared[name]:
+            yield finding(
+                WARNING,
+                "kept-in-stale",
+                f"{spec.name} lists {name}::{member}, which is no longer declared",
+                f"`{name}::{member}` is under `{KEPT_IN}:` in `{spec.rel}` and `{REGISTERED[name][0]}` "
+                "declares no such member, so the entry will account for whatever is next given that "
+                "name without anybody deciding it",
+                "trust",
+                "low",
+                evidence=[f"{spec.rel}: {KEPT_IN}: {entry}"],
+                fix=f"drop the entry, or correct it to what `{member}` was renamed to",
+            )
+        for one in parts:
+            if one != KEEPS_NOTHING and one not in named_rows:
+                yield finding(
+                    ERROR,
+                    "register-row-unknown",
+                    f"{name}::{member} lands in `{one}`, which is not a row of the register",
+                    f"`{KEPT_IN}:` in `{spec.rel}` says `{name}::{member}` is kept in `{one}`, and "
+                    f"no row of {REGISTER}'s table is called that",
+                    "trust",
+                    "low",
+                    evidence=[f"{spec.rel}: {KEPT_IN}: {entry}"],
+                    fix=f"name a row as its first cell spells it, add the row, or write "
+                    f"`{KEEPS_NOTHING}` if the answer is kept nowhere",
+                )
+
+    for name, members in declared.items():
+        path = REGISTERED[name][0]
+        for member in members:
+            if (name, member) in listed:
+                continue
+            yield finding(
+                ERROR,
+                "answer-unregistered",
+                f"{name}::{member} is in no row of the register, so what its answer is kept under "
+                "is decided nowhere",
+                f"`{path}` declares `{member}` in `{name}`, and `{KEPT_IN}:` in `{spec.rel}` does "
+                "not list it, so a question or a remembered set has landed without anybody saying "
+                "what its answer is kept under, what that does not tell apart, or how long it lasts",
+                "trust",
+                "medium",
+                evidence=[f"{path}: {name}::{member}"],
+                fix=f"add `{name}::{member}: <row>` under `{KEPT_IN}:` in `{spec.rel}`, adding the "
+                f"row to {REGISTER}'s table if the answer is kept somewhere new, or "
+                f"`{KEEPS_NOTHING}` where it covers one effect and is kept nowhere",
+                gain="an answer kept under a key nobody wrote down is how a yes about one thing "
+                "comes to cover another the person was never shown",
+            )
+
+
+def check_changes_under_a_yes(specs, sources):
+    """A kept answer with no statement of what each change to the world does to it, and one whose
+    statement is a mark.
+
+    A yes is kept under a key, and the defect this repository keeps being sent is a key that matches
+    something else after the world changed under it: a second checkout laid out like the first, a
+    file replaced, an argument added. The register says what each answer is kept under; this holds
+    it to saying, for every answer and every such change, that the person is asked again, that the
+    key cannot be reached by it, that the design keeps the answer, or that the cost is accepted.
+    """
+    spec, _, rows, _ = register_of(specs)
+    if spec is None or not rows:
+        return
+    found = tables(clause_body(spec.lines, REGISTER))
+    matrix = found[1] if len(found) > 1 else None
+
+    def unreadable(summary, fix):
+        return finding(
+            ERROR,
+            "changes-unreadable",
+            "the register's table of what changes do to a kept answer could not be read, so nothing "
+            "checks that each answer says what a change to the world does to it",
+            summary,
+            "trust",
+            "medium",
+            fix=fix,
+        )
+
+    if not matrix or len(matrix) < 2:
+        yield unreadable(
+            f"`{spec.rel}` {REGISTER} has no second table after the register",
+            "restore the table, one row for each row of the register",
+        )
+        return
+    header, body = matrix[0], matrix[1:]
+    if tuple(header[1:]) != CHANGES:
+        yield unreadable(
+            f"the columns of that table are {header[1:]}, and the check reads {list(CHANGES)}",
+            "restore the columns, or update `CHANGES` here to the ones the table has now",
+        )
+        return
+
+    named_rows = [row[0] for row in rows]
+    seen = set()
+    for row in body:
+        name = row[0]
+        if name in seen:
+            yield finding(
+                ERROR,
+                "changes-row-duplicate",
+                f"the table of what changes do has two rows for {name}",
+                f"`{spec.rel}` {REGISTER} says twice what a change to the world does to {name}",
+                "trust",
+                "low",
+                evidence=[f"{spec.rel} {REGISTER}: {name}"],
+                fix="keep one row",
+            )
+        seen.add(name)
+        if name not in named_rows:
+            yield finding(
+                ERROR,
+                "changes-row-unknown",
+                f"the table of what changes do has a row for {name}, which is not a row of the register",
+                f"`{spec.rel}` {REGISTER} says what changes do to {name}, and no row of the register "
+                "above it is called that",
+                "trust",
+                "low",
+                evidence=[f"{spec.rel} {REGISTER}: {name}"],
+                fix="name a row as its first cell spells it, or add the row to the register",
+            )
+    for name in named_rows:
+        if name not in seen:
+            yield finding(
+                ERROR,
+                "changes-row-missing",
+                f"the table of what changes do has no row for {name}",
+                f"`{spec.rel}` {REGISTER} puts {name} in the register and says nothing of what a "
+                "change to the world does to it",
+                "trust",
+                "medium",
+                evidence=[f"{spec.rel} {REGISTER}: {name}"],
+                fix="add the row, with a statement in every column",
+                gain="an answer whose key nobody has held against a moved checkout or a replaced file "
+                "is how a yes comes to cover something the person was never shown",
+            )
+
+    index = mechanics.TestIndex()
+    crates = mechanics.crate_directories()
+    cases = set()
+    table_source = sources.get(CHANGES_TABLE_FILE)
+    if table_source is not None:
+        cases = set(CHANGES_TABLE_CASE.findall("\n".join(table_source)))
+    cited_cases = set()
+
+    def cell_finding(kind, name, change, summary, fix, severity=ERROR):
+        return finding(
+            severity,
+            kind,
+            f"the register says nothing usable of {name} when {change.lower()}",
+            f"`{spec.rel}` {REGISTER}, {name} under '{change}': {summary}",
+            "trust",
+            "low",
+            evidence=[f"{spec.rel} {REGISTER}: {name} / {change}"],
+            fix=fix,
+        )
+
+    for row in body:
+        name = row[0]
+        for change, cell in zip_longest(CHANGES, row[1:]):
+            if change is None:
+                yield cell_finding(
+                    "changes-cell-unsaid",
+                    name,
+                    "a column is added",
+                    "the row has a cell past the last column",
+                    "drop the extra cell",
+                )
+                break
+            statements = [one.strip() for one in (cell or "").split(";") if one.strip()]
+            if not statements or PLACEHOLDER.match(cell or ""):
+                yield cell_finding(
+                    "changes-cell-unsaid",
+                    name,
+                    change,
+                    "the cell is empty or a mark",
+                    "say what happens: asked again, not reached, by design or accepted, and why",
+                )
+                continue
+            for statement in statements:
+                led = CHANGE_STATEMENT.match(statement)
+                if not led:
+                    yield cell_finding(
+                        "changes-cell-unsaid",
+                        name,
+                        change,
+                        f"`{statement[:60]}` does not open with one of {', '.join(CHANGE_LEADERS)}",
+                        "open the statement with what happens, then a colon",
+                    )
+                    continue
+                leader, rest = led.groups()
+                cited = CITED_TEST.findall(statement)
+                if leader == "accepted":
+                    for target in ACCEPTED.findall(statement):
+                        linked = spec.path.parent / target
+                        headed = linked.is_file() and any(
+                            line.strip() == KNOWN_COSTS
+                            for line in linked.read_text(encoding="utf-8").split("\n")
+                        )
+                        if not headed:
+                            yield cell_finding(
+                                "changes-cost-missing",
+                                name,
+                                change,
+                                f"it accepts a cost in `{target}`, which has none",
+                                "link the spec whose Known costs admit it, or write the entry there",
+                            )
+                    if not ACCEPTED.findall(statement):
+                        yield cell_finding(
+                            "changes-cost-missing",
+                            name,
+                            change,
+                            "it says accepted without linking the Known costs entry that admits it",
+                            "write `accepted: [spec.md](spec.md#known-costs)`",
+                        )
+                    continue
+                reason = CITED_TEST.sub("", rest)
+                if len(reason.split()) < CHANGE_REASON_WORDS or PLACEHOLDER.match(reason.strip()):
+                    yield cell_finding(
+                        "changes-cell-unsaid",
+                        name,
+                        change,
+                        f"`{leader}` is not followed by a reason",
+                        "say why in the cell",
+                    )
+                if leader == "asked again" and not cited:
+                    yield cell_finding(
+                        "changes-unpinned",
+                        name,
+                        change,
+                        "it says the person is asked again and cites no test",
+                        "cite the test as `verified-by: crate::module::test_name`",
+                    )
+                for reference in cited:
+                    if reference == CHANGES_TABLE_TEST:
+                        cited_cases.add((name, change))
+                        if (name, change) not in cases:
+                            yield cell_finding(
+                                "changes-case-missing",
+                                name,
+                                change,
+                                f"it cites the table test, and `{CHANGES_TABLE_FILE}` has no case "
+                                "for that row and change",
+                                "add the case, or cite the test that pins it",
+                            )
+                    status, detail = index.resolve(reference, crates)
+                    if status != "ok":
+                        yield cell_finding(
+                            "changes-test-missing",
+                            name,
+                            change,
+                            f"it names `{reference}`, which is not a test there ({status}"
+                            + (f": {detail}" if detail else "")
+                            + ")",
+                            "correct the name to the test as it is now",
+                        )
+    for name, change in sorted(cases - cited_cases):
+        yield finding(
+            ERROR,
+            "changes-case-unlisted",
+            f"a case in `{CHANGES_TABLE_FILE}` applies '{change}' to {name}, and no cell cites the table test",
+            f"`{CHANGES_TABLE_FILE}` runs a case for {name} under '{change}', which `{spec.rel}` "
+            f"{REGISTER} does not say is pinned by it",
+            "trust",
+            "low",
+            evidence=[f"{CHANGES_TABLE_FILE}: {name} / {change}"],
+            fix=f"cite `verified-by: {CHANGES_TABLE_TEST}` in that cell, or drop the case",
+        )
 
 
 def surface(sources, specs):
@@ -2244,6 +2960,8 @@ def build_lane(name, found, specs, results_file, surface_file=None):
         if not site["core"] and not site["test_file"]
     ]
     releases = [site for site in found["releases"] if not site["test_file"]]
+    _, header, rows, entries = register_of(specs)
+    drawn = header + [["---"] * len(header[0])] + rows if header else []
     filling = {
         "results_file": results_file,
         # Absolute, because a lane is read by a subagent whose working directory is its own business,
@@ -2278,6 +2996,9 @@ def build_lane(name, found, specs, results_file, surface_file=None):
         "second_client": as_paths(found["second_client"]),
         "prompt_files": as_paths(found["prompt_files"]),
         "prompt_sites": as_list(found["prompts"]),
+        "register_rows": "\n".join("| " + " | ".join(cells) + " |" for cells in drawn)
+        or "- (none)",
+        "kept_in": "\n".join(f"- `{one}`" for one in entries) or "- (none)",
     }
     return read_prompt(name).format(**filling)
 
@@ -2308,7 +3029,115 @@ def changed_lanes(base, specs):
         lanes.add("supply-chain")
     if touched & set(prompt_files(specs) + prompt_spec_files(specs)):
         lanes.add("shown-before-answered")
+    if touches_kept_answers(touched, specs):
+        lanes.add("approval-binding")
     return sorted(lanes) or list(LANES)
+
+
+def touches_kept_answers(touched, specs):
+    """Whether any of these paths is where an answer is kept, asked for or registered."""
+    binding = (
+        set(REMEMBERED_SETS)
+        | {str(one[0]) for one in REGISTERED.values()}
+        | {str(CHANGES_TABLE_FILE)}
+    )
+    return bool(touched & (binding | set(prompt_files(specs) + prompt_spec_files(specs))))
+
+
+def uncommitted_files():
+    """Every path the working tree differs from `HEAD` in: staged, unstaged and untracked.
+
+    A rename names both paths, since the one it left is as much a change as the one it arrived at.
+    """
+    done = subprocess.run(
+        ["git", "status", "--porcelain", "-z", "--untracked-files=all"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    entries = done.stdout.split("\0")
+    paths = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if len(entry) < 4:
+            continue
+        paths.append(entry[3:])
+        if entry[0] in "RC" or entry[1] in "RC":
+            paths.append(entries[index])
+            index += 1
+    return paths
+
+
+def branch_files():
+    """Every path this branch has changed since it left the default branch, committed or not.
+
+    A session that commits before it stops leaves a clean working tree, so the uncommitted files
+    alone would say it touched nothing. The default branch is `upstream/main` where the checkout
+    has one and `origin/main` otherwise, as `make check-affected` measures from.
+    """
+    paths = set(uncommitted_files())
+    for base in ("upstream/main", "origin/main"):
+        done = subprocess.run(
+            ["git", "diff", "--name-only", f"{base}...HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if done.returncode == 0:
+            paths.update(line for line in done.stdout.split("\n") if line)
+            break
+    return paths
+
+
+def stop_response(payload, findings):
+    """What the `Stop` hook tells Claude Code about a tree the mechanical pass found fault with.
+
+    The first stop is blocked and given the findings, so the session fixes them before it ends. A
+    stop that follows a block is let through with the findings shown to the person, because a session
+    that cannot fix one would otherwise never end. CI runs the same pass and is the backstop.
+    """
+    errors = [one for one in findings if one["severity"] == ERROR]
+    if not errors:
+        return None
+    report = render(errors)
+    if payload.get("stop_hook_active"):
+        return {"systemMessage": f"make check-security still fails:\n{report}"}
+    return {
+        "decision": "block",
+        "reason": f"make check-security fails on this working tree. Fix these, then stop again.\n{report}",
+    }
+
+
+def stop_hook():
+    """Run for Claude Code's `Stop` event, from `agents/settings.json`.
+
+    Reads the event on standard input and writes the response on standard output. A branch that
+    touches none of the paths that bind an answer to a key is not checked, so a task that never went
+    near them stops as quickly as it would without the hook. Where git cannot say what changed the
+    hook says so on standard error and lets the stop through, since a hook that fails on every stop
+    in a checkout git will not read teaches its reader to ignore it.
+    """
+    os.chdir(Path(__file__).resolve().parents[3])
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        touched = branch_files()
+    except (OSError, subprocess.CalledProcessError) as problem:
+        print(f"the Stop hook could not ask git what changed: {problem}", file=sys.stderr)
+        return 0
+    specs = load_specs()
+    if not touches_kept_answers(touched, specs):
+        return 0
+    response = stop_response(payload, mechanical_findings(specs, mechanics.load_sources()))
+    if response:
+        print(json.dumps(response))
+    return 0
 
 
 def render(findings):
@@ -2328,25 +3157,12 @@ def render(findings):
     return "\n".join(lines)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("lanes", nargs="*", help=f"default: every lane. One of: {', '.join(LANES)}")
-    parser.add_argument("--work-dir", default=None)
-    parser.add_argument("--mechanical-only", action="store_true", help="no lanes, no model")
-    parser.add_argument("--changed", metavar="BASE", default=None, help="lanes for a branch's diff")
-    parser.add_argument("--json", action="store_true")
-    args = parser.parse_args()
-
-    if not Path("docs/specs").is_dir():
-        print("run this from the repository root", file=sys.stderr)
-        return 2
-
-    specs = load_specs()
-    sources = mechanics.load_sources()
-
+def mechanical_findings(specs, sources):
+    """Everything a tool can decide about the tree, which is what `make check-security` runs."""
     findings = list(check_exception_counts())
     findings += list(check_network_clients_are_recorded(sources))
     findings += list(check_prompt_split())
+    findings += list(check_programs_are_resolved(sources))
     findings += list(check_labelled_impls(sources))
     findings += list(check_exhaustive_reader_docs(sources))
     findings += list(check_construction_pinned(specs, sources))
@@ -2359,6 +3175,36 @@ def main():
     findings += list(check_required_checks_are_the_gates())
     findings += list(check_guarantee_specs_exist())
     findings += list(check_unpinned_guarantee_clauses(specs))
+    findings += list(check_answers_registered(specs, sources))
+    findings += list(check_changes_under_a_yes(specs, sources))
+    return findings
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("lanes", nargs="*", help=f"default: every lane. One of: {', '.join(LANES)}")
+    parser.add_argument("--work-dir", default=None)
+    parser.add_argument("--mechanical-only", action="store_true", help="no lanes, no model")
+    parser.add_argument("--changed", metavar="BASE", default=None, help="lanes for a branch's diff")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--stop-hook",
+        action="store_true",
+        help="answer Claude Code's Stop event: check a branch touching the paths that keep answers",
+    )
+    args = parser.parse_args()
+
+    if args.stop_hook:
+        return stop_hook()
+
+    if not Path("docs/specs").is_dir():
+        print("run this from the repository root", file=sys.stderr)
+        return 2
+
+    specs = load_specs()
+    sources = mechanics.load_sources()
+
+    findings = mechanical_findings(specs, sources)
 
     unknown = [one for one in args.lanes if one not in LANES]
     if unknown:
@@ -2406,8 +3252,7 @@ def main():
             f"{len(found['releases'])} releases, {len(lanes)} lanes",
         ],
     }
-    manifest_path = work_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    manifest_path = workdir.write_manifest(work_dir, manifest)
 
     print(render(findings), file=sys.stderr)
     if args.json:

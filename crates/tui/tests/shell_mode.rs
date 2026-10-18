@@ -206,3 +206,56 @@ fn a_waiting_command_line_is_drawn_behind_the_marker() {
         drawn.join("\n")
     );
 }
+
+/// The private form is told from the plain one on the drawn frame: a doubled marker on the line and
+/// a hint that the output stays on the screen, because pressing Enter on the wrong one either sends
+/// a file to the model service or withholds output the person meant to share.
+#[test]
+fn the_private_form_is_drawn_with_a_doubled_marker_and_says_where_the_output_goes() {
+    let mut session = Session::new("kernel-enforced");
+    session.type_char('!');
+    session.type_char('!');
+    session.type_char('l');
+    session.type_char('s');
+
+    let drawn = rows(&session, 100, 24);
+    assert!(
+        drawn.iter().any(|row| row.contains("!!ls")),
+        "the private marker was not drawn:\n{}",
+        drawn.join("\n")
+    );
+    assert!(
+        drawn
+            .iter()
+            .any(|row| row.contains("not sent to the model")),
+        "nothing said the output stays here:\n{}",
+        drawn.join("\n")
+    );
+
+    let mut plain = Session::new("kernel-enforced");
+    plain.type_char('!');
+    plain.type_char('l');
+    let drawn = rows(&plain, 100, 24).join("\n");
+    assert!(
+        drawn.contains("output goes to the model") && !drawn.contains("!!"),
+        "the plain form was drawn as private:\n{drawn}"
+    );
+}
+
+/// What a private command printed is drawn, followed by a line saying it was not sent.
+#[test]
+fn private_output_is_drawn_and_says_it_went_no_further() {
+    let mut session = Session::new("kernel-enforced");
+    session.transcript.push(Entry::shell("cat .env"));
+    session.printed_privately("SECRET=1");
+
+    let drawn = screen(&session);
+    assert!(
+        drawn.contains("SECRET=1"),
+        "the output was not drawn:\n{drawn}"
+    );
+    assert!(
+        drawn.contains("not sent to the model"),
+        "nothing said it was kept private:\n{drawn}"
+    );
+}

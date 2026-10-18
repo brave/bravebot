@@ -19,7 +19,10 @@ The keys of a definition, by where they sit.
 | `narrow` | terms one of which must be used: by a fetch's own `select`, by an act's own `select`, or by the fetch an act names in `on` unless that fetch names its item |
 | `narrow_when` | stricter `narrow` terms for one option value (`APPROVE`) |
 | `receipt` | a fetch records what it chose, so an act can name it in `on` |
+| `with` | the values a step gives in its `with` field, each by name with its form (`{"start": "datetime"}`) or the list of values it may take (`{"title": ["mr", "ms"]}`); a step that takes `with` gives every one, and the name may not be `place`, `item`, `path`, `base`, `id` or a `bound` name |
 | `bound` | values an act takes from that chosen item, with the words the plan line uses |
+| `records` | on a fetch with a receipt, the receipt fields an act in the run may take, with the words the planner reads (`{"departs": "its departure"}`); each is a field the wire's `receipt` records |
+| `takes` | on an act, the `with` values a plan may take in `take` instead of giving them; none may fill a call's address |
 | `text` | `false` for an act that takes no text and says what it does by its option |
 | `high_impact` | `true` for an act that is named "high-impact write" on its plan line and whose popup opens with a warning (GitHub's `review`, `put_file`, `open_pull`) |
 | `forms`, `values` | override the shared ones for this resource |
@@ -30,17 +33,18 @@ resource, for the planner).
 
 **bravebot's copy** holds `name`, `definition_id`, `authority`, `item` and `surface`, and nothing
 else. `definition_id` is the SHA-256 the install script computed over the canonical definition
-without the client id and secret, 64 lower-case hex characters
+without its client id, 64 lower-case hex characters
 ([Loading a definition](connectors.md#loading-a-definition)).
 
 **Wire, shared** (`wire.*`)
 
 | key | meaning |
 | --- | --- |
-| `base` | the https API origin; every call stays on it |
+| `base` | the https API origin, or an MCP server's; every call stays on it or on a host `also` names |
+| `also` | more https hosts the calls reach, each written whole in an absolute call template, such as a booking host beside a search host; the credential goes to them too, in every flow |
 | `headers` | sent with every call |
-| `auth` | sign-in: `flow` (only `pkce-loopback`), `client_id`, `client_secret`, `authorize`, `token`, `scope`, `params` (not ones the flow sets), `callback`, `on`, `whoami {call, account, fold_case}`, `refresh` (default true), `sign_in_again` (refresh errors that drop the credential, beside `invalid_grant`), `install` |
-| `paging` | `kind` (`link-header` or `token`), `per_page`, `size` (the page-size parameter); `next` and `cursor` for `token` |
+| `auth` | `flow`: `pkce-loopback` (OAuth), `key` (an API key the vault holds), `none` (a public service) or `local` (data the vault holds). For `pkce-loopback`: `client_id`, `authorize`, `token`, `scope`, `params` (not ones the flow sets), `callback` (an http URL on `127.0.0.1` or `localhost`, with a port only where the provider matches the redirect exactly), `tokens_at` (where a nested token answer keeps its fields, as `authed_user`), `on`, `whoami {call, account, fold_case}`, `refresh` (default true), `sign_in_again` (refresh errors that drop the credential, beside `invalid_grant`), `granted_separators` (characters besides whitespace the token answer separates granted scopes with), `granted_prefix` (a prefix the answer writes before each scope), `unechoed` (requested scopes the answer never echoes), `install`. For `key`: `header`, `prefix`. No definition holds a secret: an OAuth client's secret, where it has one, and an API key are held in the vault's sealed store, and a client the vault holds no secret for sends none |
+| `paging` | `kind` (`link-header`, `token` or `next-url`), `per_page`, `size` (the page-size parameter); `next` and `cursor` for `token`; for `next-url`, `next` is the answer's key holding the whole next URL, kept to the base origin |
 | `projection` | per part, the fields kept: a path, or `{as, from, decode, html}` where `html` paths are read as the text they show when `from` finds nothing |
 | `integrity` | `standing {field, approved, unapproved, fallback}`, `default_floor {public, private}`, optional `author_id` and `vetted {when, parts}` ([The standing floor](connectors.md#the-standing-floor)) |
 | `visibility` | `"private"`, `"public"`, or `{call, private}` to ask the service |
@@ -48,16 +52,17 @@ without the client id and secret, 64 lower-case hex characters
 | `popup` | the paths of the target's `title` and `author` |
 | `ok` | `{path, equals}`: a success predicate every 2xx answer is held to, unless a resource names its own |
 
-A definition that fetches needs `paging` and `integrity`.
+A definition that fetches needs `integrity`, and `paging` where a call GETs a list.
 
 **Wire, per resource** (`wire.resources.<r>`), by kind:
 
 | kind | keys |
 | --- | --- |
-| read | `calls`, each with `part`, `call`, `pages`, `items`, `expand {call, item}`, `code`, `budget_words`, `budget_drops`, `max_items`, `excerpt_words`; `receipt`; `select` |
-| resolve (a fetch that chooses) | `candidates`, `pages`, `items`, `expand`, `stop` (`first` or `all`), `max_items`, `exclude {present \| equals [path, value], unless}`, `then` (the read run on the choice), `receipt`, `select` |
+| read | `calls`, each with `part`, `call`, `pages`, `items`, `expand {call, item}`, `code`, `budget_words`, `budget_drops`, `max_items`, `excerpt_words`; `receipt`; `select`; `arguments` and `pin` for a `TOOL` or `POST` call |
+| resolve (a fetch that chooses) | `candidates`, `pages`, `items`, `expand`, `stop` (`first` or `all`), `max_items`, `order_by` (a field the one-piece candidates are chosen in ascending order of), `lookup {in, key, by, as}` (each one-piece candidate gains, under `as`, the element of the answer's list `in` whose `key` equals its `by`, such as the hotel a room is in), `exclude {present \| equals [path, value], unless}`, `then` (the read run on the choice; without one the chosen element is the item), `receipt`, `select` |
+| a call | `GET /path`; `POST /path`, its body the resource's `arguments`, answered in one piece; `TOOL <name>`, an MCP `tools/call` to the server at `base` with `arguments`, its structured answer used, a `pin`, required, holding the tool's input schema to the one written against; `LOCAL <source>`, data the vault holds (`bookmarks`, `reading_list`, `tab_groups`, `open_tabs`), only in a `local` definition. `arguments` are JSON templates; a string that is exactly one `positive-integer` value is sent as a number. A call answered in one piece sends no query, so its selector rules may not name one. A call template names only `place`, `item`, `path`, `base`, `id` or a `with` value its resource declares, which is percent-encoded whole. An `items` path with `[].`, such as `data[].roomTypes`, gathers the lists inside each element, and each gathered object reads its parent's plain fields under `^`, as `^.hotelId` |
 | selector rule | `query` (a parameter, or `[sort, direction]`) with `join` and `template`; or a local predicate (`empty`, `contains`, `equals`, `present`, `absent`); or `max_items` for a limit term. `me` lets the value `me` stand for the signed-in account; `exact_mailbox` keeps, for an address-shaped value, only messages whose parsed `From` mailbox equals it |
-| act | `call`, `text`, `encoding`, `title`, `option`, `options`, `collect`, `message`, `fields`, `bind`, `base`, `branch`, `ensure_branch`, `made_in_run`, `replaces`, `max_bytes`, `refuse_paths`, `link`, `target`, `ok`, and `select` for an act on every match |
+| act | `call`, `text`, `encoding`, `title`, `option`, `options`, `collect`, `message`, `fields`, `bind`, `base`, `ensure`, `made_in_run`, `replaces`, `warnings`, `max_bytes`, `refuse_paths`, `link`, `target`, `ok`, `opens`, `charge`, `before`, and `select` for an act on every match. `text` and `title` may name a dotted place such as `message.body.content`; `fields` are JSON templates merged into the same objects |
 
 The act keys with structure of their own:
 
@@ -66,12 +71,16 @@ The act keys with structure of their own:
 | `bind.<v>` | `from` (a field the receipt recorded), `take` (`mailbox`, `msg-id`, `msg-ids`), `template`, `unless_prefix`, `form`, `optional` |
 | `options.<value>` | `says` (the popup's words), `body` (the fragment it adds), `call`; for a pattern value, `named {list, items, name, id, fold_case, create, create_body}` |
 | `collect` | an act on every match of `select`: `list`, `items`, `id`, `pages`, `max`, the batch `call`, the body `field` for the ids, `expand` (read each match whole, as an exact-sender term needs) and `show` (a template of paths for each target's display line in the popup); each element is held to the target floor; above `none`, an element without the standing field refuses the act (`below-target-floor`) |
-| `ensure_branch` | `sha`, `exists`, `create`, `body`, `new_in_run` |
-| `replaces` | the file a write replaces: `call`, `sha`, `content`, `encoding` |
-| `made_in_run` | the act's `item` must be a branch an earlier act in the run made |
+| `ensure` | makes the act's item where it is missing: `exists` (the read that finds it), `from` (`METHOD /path -> field`, a value to make it from), `from_form` (the form that value must have), `as` (its name in `create` and `body`), `create` (a POST), `body`, `new_in_run` (refuse an item that existed before the run) |
+| `replaces` | what a write replaces: `call`, `version` (the answer's version field, sent back under the same name), `content`, `encoding` |
+| `made_in_run` | the act's `item` must be one an earlier act in the run made |
+| `warnings` | lines the popup opens with, after the authority's own, for what the definition knows the act can set off |
 | `link` | `{template, answer {<name> {from, form}}}`: the https URL of an accepted write, on a fixed host, filled from formed plan fields or answer fields |
-| `target` | the read resource that reads a plan-named `item` again before the popup, to hold it to the target floor and draw the popup's target; required of an act that takes `item` unless its item is a branch this run made |
+| `target` | the read resource that reads a plan-named `item` again before the popup, to hold it to the target floor and draw the popup's target; required of an act that takes `item` unless its item is one this run made |
 | `ok` | `{path, equals}`: a success predicate on a 2xx answer's body; a body that fails it is refused `service-error` |
+| `opens` | `{url, host}`: a page opened in the person's browser once they allow the act, after its call or as its whole effect; the URL, a template over checked and bound values, must be https on exactly `host` |
+| `charge` | `{amount, currency}`: the names of the values the act charges; refused (`no-ceiling`, `over-ceiling`) unless the place's `max_charge` setting holds it in the charge's own currency, and only on a high-impact act |
+| `before` | `{call, body, same, keep}`: a call made while the act is prepared, such as holding a rate; `same` maps answer paths to the values they must still equal (else `moved`), `keep` adds answer fields the body fills. An act on an item no call reads again needs one |
 
 An unknown key anywhere refuses the file. Every plan field a call's path fills needs a declared
 form; `message`, `fields` and body templates are not held to one. The loader refuses a definition
@@ -86,7 +95,7 @@ or path, or both.
 
 A routing value filled into a call's path has a named form from a closed set. The engine requires
 the definition to declare it and checks the value before each call. bravebot checks the same form
-before approval for `place`, `item` and `path`, the only fields the shipped definitions give a form.
+before approval for `place`, `item` and `path`, and for each `with` value.
 Defaults are held to their form too. Every form refuses an empty value, whitespace and control
 characters. A segment is only letters, digits, `.`, `_` and `-`, and not `.` or `..`, so
 `x/../../user` cannot turn `/repos/{place}/issues` into another endpoint.
@@ -96,10 +105,21 @@ characters. A segment is only letters, digits, `.`, `_` and `-`, and not `.` or 
 | `owner/name` | two segments |
 | `positive-integer` | digits, no leading zero, at most 10 |
 | `branch` | segments, at most 100; not starting with `-`, `refs/`, `heads/`, `tags/` or `remotes/`; not ending in `.lock` or `.`; not `HEAD`; no `..`, `@{` or segment starting with `.` |
+| `hex-id` | 7 to 64 hexadecimal digits: a content hash such as a commit id, whole or abbreviated |
 | `relative-path` | segments, at most 255 |
 | `opaque-id` | at most 64 letters, digits, `-` and `_` |
 | `address` | one mailbox, at most 254: a local part of 1 to 64 letters, digits and `. _ % + ' -`, `@`, then two or more labels of 1 to 63 letters, digits and inner hyphens |
 | `addresses` | 1 to 10 different `address` values, compared ignoring case, joined by `,`; at most 900 |
+| `date` | a calendar day that exists, `YYYY-MM-DD` |
+| `service-id` | at most 2048 letters, digits and `. _ = -`, not dots alone: one path segment, for ids such as `1712345678.000100` or a long base64 one |
+| `personal-name` | 1 to 50 letters, hyphens and apostrophes, one word: a given or family name |
+| `e164` | a phone number, `+` then 8 to 15 digits, the first not 0 |
+| `country-code` | an ISO 3166-1 alpha-2 code, two upper-case letters such as `GB` |
+| `iata` | three upper-case letters, an airport or city code such as `LHR` |
+| `date-dmy` | a calendar day that exists, `dd/mm/yyyy`, as some services take one |
+| `local-datetime` | a wall-clock time with no offset, `YYYY-MM-DDThh:mm:ss`, read in a time zone named beside it |
+| `time-zone` | an IANA zone name such as `Europe/London`: segments of letters, digits and `_ + -`, each starting with a letter, at most 64 |
+| `datetime` | an RFC 3339 instant with its offset and no fraction, `YYYY-MM-DDThh:mm:ss` then `Z` or `±hh:mm` |
 
 bravebot (`crates/config/src/connectors/forms.rs`) and the engine (brave-vault's
 `crates/connector/src/forms.rs`) each hold these rules, kept identical by hand; no test compares the
@@ -110,11 +130,13 @@ two. A selector value is a bare word or a double-quoted phrase (`label:"good fir
 The engine's behaviour is fixed in code, and a definition selects it by name.
 
 - **Calls.** Each plan value is held to its form before it fills a method and path template; query
-  values are percent-encoded, and `{id}` is one path segment. A read is a `GET`. A call or next page
-  whose URL leaves the `base` origin (scheme, host and port) is refused.
-- **Paging.** `link-header`, or `token` (read from a reply field and sent back as a query
-  parameter). A read call that stops at its page cap before filling its item cap counts `more-pages`
-  once, and the payload names the part in `truncated`.
+  values are percent-encoded, and `{id}` is one path segment. A read is a `GET`, a `POST` answered
+  in one piece, an MCP `TOOL` call or a `LOCAL` source. A call or next page whose URL leaves the
+  `base` origin, other than to a host `also` names, is refused.
+- **Paging.** `link-header`, `token` (read from a reply field and sent back as a query parameter),
+  or `next-url` (the whole next URL, read from a reply field and kept to the origin). A read call
+  that stops at its page cap before filling its item cap counts `more-pages` once, and the payload
+  names the part in `truncated`.
 - **Lists and expansion.** `expand` reads each listed element whole by one more call; one gone
   before its read is withheld, or skipped in a resolve. Ids the service names are held to the item
   form. In a path, `a.b[key=value].c` picks the element whose field matches, ignoring ASCII case.
@@ -265,8 +287,8 @@ Where GitHub cannot filter (`no:label`, `title:`, `head:`, labels and author on 
   `In-Reply-To`, and `References` carries only its own references, if any. It replies to the `From`
   mailbox, not `Reply-To`, so the sender cannot redirect the reply; for mailing lists, ticket
   systems and aliases that can differ from a mail client's Reply.
-- **Places.** A read's `place` is the mailbox (`opaque-id`, default `me`). `send` takes `addresses`,
-  so a send naming no recipient, the defaulted `me` included, is refused.
+- **Places.** A read's `place` is the mailbox, and `me` is the only one accepted. `send` takes
+  `addresses`, so a send naming no recipient, the defaulted `me` included, is refused.
 
 ## What changes in bravebot
 
@@ -337,11 +359,6 @@ gaps](connectors.md#prototype-status-and-gaps).
   ([SERVERS-3](../specs/mcp-servers.md#SERVERS-3)); one of the two needs another name before this
   ships.
 - Settings are edited by hand, and lists take account ids.
-- Only bravebot checks that the fetch an `on` names narrows. The vault checks `narrow` only for a
-  fetch's own selector and an act on every match, and re-checks forms, the option and selector
-  terms against its own copy.
-- bravebot takes any `*.json` file name as a connector name; the vault refuses a name outside its
-  rule at call time.
 - Both sides follow symlinks; bravebot checks the target file's mode but the mode of the folder the
   link sits in, not the target's folder, and does not check the owner.
 

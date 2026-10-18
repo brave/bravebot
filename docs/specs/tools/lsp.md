@@ -3,11 +3,18 @@ id: LSP
 title: lsp
 status: normative
 governs:
+  - crates/config/src/lsp.rs
   - crates/lsp/src/lib.rs
   - crates/lsp/src/protocol.rs
   - crates/lsp/src/server.rs
   - crates/agent/src/lsp.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
+  - crates/agent/src/turn/setup.rs
+  - crates/agent/src/turn/round_steps.rs
+  - crates/agent/src/turn/prompts.rs
+  - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/tui/src/app.rs
 guards:
   - symbol: Operation::parse
@@ -44,9 +51,10 @@ out of files nobody vouched for, and a path is the one thing routing is made of.
 
 `operation`, `path`, `line`, `character` and `query` are all `(T,pub)`. The operation is one of a
 fixed list this repository knows: a definition, the references to a symbol, hover text, the symbols
-in a document, the symbols in the workspace, implementations of a trait, and the two directions of a
-call hierarchy. A name not on the list is refused rather than forwarded, so what the server is asked
-is decided here and never by whatever a request happened to contain.
+in a document, the symbols in the workspace, implementations of a trait, the two directions of a
+call hierarchy, and what the server makes of a file ([LSP-13](#LSP-13)). A name not on the list is
+refused rather than forwarded, so what the server is asked is decided here and never by whatever a
+request happened to contain.
 
 `workspaceSymbol` names no file, and its `query` is the whole of what the server is asked to look
 for. A field that decides that is routing, so it is promoted and recorded the way a path is. It is
@@ -250,6 +258,9 @@ Before an approved launch, record a language-server coverage gap under
 [SESSION-19](../sessions.md#SESSION-19). Undo remains available and stops tracked servers before
 restoring files. Coverage warnings persist because server children may outlive shutdown.
 A declined launch leaves undo coverage unchanged.
+The question is put in every permission mode, bypass included: bypassing answers a confined line
+and not this, as it does not answer a line that asks to start with no sandbox
+([MODE-4](../permission-modes.md#MODE-4)), and a run with nobody to ask refuses the server.
 
 **Why not confined, when a stdio MCP server is.** [sandboxing.md](../sandboxing.md) says what
 confinement is for: code nobody vouched for. It says in the same breath that "a program the user
@@ -270,7 +281,8 @@ dependency sources, runs the build tooling of its ecosystem, and for Rust that m
 proc macros out of `Cargo.lock` execute. That is code from the dependency tree running with the
 user's access. It is the same thing `cargo test` does and the same thing `run` does after
 [RUN-7](run.md#RUN-7), and it must be asked for in those terms rather than described as a lookup.
-TypeScript and Python are asked about in the same terms. Given no `tsserver.path`,
+TypeScript and Python are asked about in the same terms. A server a person declared is asked about
+as well, and [LSP-11](#LSP-11) says what is different about that question. Given no `tsserver.path`,
 typescript-language-server runs the `tsserver.js` in the nearest `typescript/lib` under
 `node_modules`, `.yarn/sdks`, `.pnpm/sdks` or `.vscode/pnpify`, looking in the workspace and then
 each directory above it, before its own copy, so what starts is the project's TypeScript. pyright
@@ -297,13 +309,15 @@ assigns. The server's sentence is not carried at all.
 `verified-by: bravebot_lsp::server::a_server_failure_reports_a_code_and_not_the_servers_words`
 `verified-by: bravebot_lsp::server::the_prompt_says_which_servers_run_build_tooling`
 `verified-by: bravebot_lsp::server::typescript_and_python_servers_are_put_to_a_person_as_running_the_projects_code`
+`verified-by: bravebot_agent::permission_mode::a_language_server_is_put_to_the_person_in_every_mode_bypass_included`
 
 <a id="LSP-6"></a>
 ### LSP-6: no server means no answer, and says which
 
-Where no server is configured for a file's language, where the binary is absent, and where a server
-was configured but failed to start are three different sentences, and none of them is an empty
-result. Nothing falls back to searching the tree.
+Where no server is configured for a file's language (neither the table nor a declaration under
+[LSP-11](#LSP-11) names its extension), where the binary is absent, and where a server was
+configured but failed to start are three different sentences, and none of them is an empty result.
+Nothing falls back to searching the tree.
 
 **Why.** An absent server reported as "no references found" is a false negative that reads as
 proof, which is the failure [MCP-5](../mcp.md#MCP-5) and
@@ -315,6 +329,7 @@ answers and only one of them was asked.
 `verified-by: bravebot_lsp::server::an_unconfigured_language_is_reported_as_unconfigured`
 `verified-by: bravebot_lsp::server::a_missing_binary_is_reported_as_missing`
 `verified-by: bravebot_lsp::server::a_server_that_fails_to_start_is_reported_as_such`
+`verified-by: bravebot_lsp::server::asking_with_no_server_says_which_of_the_three_cases_it_is`
 `verified-by: bravebot_agent::lsp::nothing_found_is_not_reported_as_no_server`
 `verified-by: bravebot_agent::lsp::no_server_does_not_fall_back_to_a_search`
 
@@ -330,11 +345,20 @@ quarantined, since a notice inside a body nobody may read tells nobody anything.
 A request may wait for indexing to finish, bounded by a limit; reaching the limit answers with what
 the index has and the notice above, rather than failing.
 
+A server a person declared ([LSP-11](#LSP-11)) reports its indexing under a token this repository
+did not fix, so it counts as settled when it has begun some progress and every piece it began has
+ended, read from the protocol's two progress kinds and never from a word in one. Work it begins
+afterwards unsettles it again, and an answer given meanwhile says it may be short. A server that
+reports no progress at all never settles: it is waited on for the bound once, and every answer
+after that is partial and says so, rather than every question waiting the bound again.
+
 **Why bounded.** Indexing a large workspace outlasts a person's patience, and a turn held open with
 nothing to show for it is [RUN-11](run.md#RUN-11)'s problem arriving by another road.
 
 `verified-by: bravebot_lsp::server::an_answer_during_indexing_is_marked_partial`
 `verified-by: bravebot_lsp::server::a_settled_index_makes_no_partial_claim`
+`verified-by: bravebot_lsp::server::a_declared_server_that_reports_no_progress_is_waited_on_once`
+`verified-by: bravebot_lsp::server::work_a_declared_server_begins_after_settling_makes_the_next_answer_partial`
 `verified-by: bravebot_agent::lsp::a_partial_answer_says_so_even_when_quarantined`
 
 <a id="LSP-8"></a>
@@ -466,7 +490,203 @@ incognito has already accepted.
 `verified-by: bravebot_lsp::server::the_cache_is_never_read_by_the_driver`
 `verified-by: bravebot_lsp::server::a_server_whose_index_directory_cannot_be_made_private_does_not_start`
 
+<a id="LSP-11"></a>
+### LSP-11: a person may declare a server, in their own directory and nowhere else
+
+`~/.bravebot/lsp.json` holds `{ "servers": { "<name>": { "command", "args", "extensions", "env",
+"initializationOptions" } } }`. `command` is a bare program name looked up the way a table server's
+is, or an absolute path; a relative path is a problem with the entry, because it would run a program
+out of the workspace. `extensions` maps each extension the server handles to the language id sent
+with `didOpen`. `env` and `initializationOptions` are optional and are handed over as written. An
+entry that cannot be used is left out and the others are kept.
+
+**No file inside a checkout declares a server.** [SERVERS-1](../mcp-servers.md#SERVERS-1) is the
+reason and applies unchanged: a command is what [BACKEND-1](../backends.md#BACKEND-1) keeps out of
+a settings file, and the agent can write in the workspace. Only the state directory is read, so a
+`.github/lsp.json`, a `.lsp.json` or an `lsp.json` in a workspace changes nothing. A checkout that
+requests a declared server by alias is not built.
+
+**The path still decides the language.** A declared extension wins over the table, the first
+declaration (in name order) to name an extension wins over a later one, and nothing reads the file
+to decide any of it ([LSP-2](#LSP-2)). An extension nothing names is unconfigured under
+[LSP-6](#LSP-6).
+
+**Starting one is put to the person under [LSP-5](#LSP-5), in terms that fit what is known.** The
+prompt names the resolved program and every argument, an argument holding a space or a control
+character quoted so that two lists starting different commands never read alike, and the name the
+person gave the declaration.
+What starting it runs is not known for a program this repository did not choose, and the prompt says
+that it is unknown, never that it runs nothing and never that it runs the dependency tree's code.
+The server runs with the person's own access and is not confined.
+
+**The approval binds to a digest of the declaration.** A server is filed under the SHA-256 of its
+name, command, arguments, extensions, variables and initialization options, so one edited to run
+something else is not the one that was approved. The file is read at each question, a running
+server whose digest is no longer declared is stopped, and the edited one is asked about as a new
+server. A file that cannot be read at that moment, one caught half written, changes nothing: the
+declarations stand as they were. The approval lasts the session, as [LSP-8](#LSP-8) has it for every server.
+
+**The label on every answer is unchanged.** [LSP-3](#LSP-3) labels a location by the files it names
+and hover text is quarantined, whichever binary answered, so nothing the declaration says appears
+in either. Its variables are the person's own and may name a credential the agent withholds from a
+table server ([RUN-12](run.md#RUN-12)); a value is never repeated by a log line or the prompt.
+
+`verified-by: bravebot_config::lsp::the_file_is_read_from_the_state_directory`
+`verified-by: bravebot_config::lsp::a_relative_command_is_not_a_declaration`
+`verified-by: bravebot_config::lsp::a_bad_entry_is_listed_and_the_others_are_kept`
+`verified-by: bravebot_config::lsp::an_unknown_key_is_a_problem`
+`verified-by: bravebot_config::lsp::the_digest_covers_everything_that_decides_what_runs`
+`verified-by: bravebot_config::lsp::debug_names_the_server_and_not_its_variables`
+`verified-by: bravebot_lsp::server::a_declared_extension_starts_the_declared_command_after_approval`
+`verified-by: bravebot_lsp::server::an_undeclared_extension_answers_unconfigured`
+`verified-by: bravebot_lsp::server::a_changed_declaration_is_asked_about_again`
+`verified-by: bravebot_lsp::server::a_declared_extension_wins_over_the_table_and_over_a_later_declaration`
+`verified-by: bravebot_agent::declared_lsp::a_declared_extension_starts_the_declared_command_after_approval`
+`verified-by: bravebot_agent::declared_lsp::a_declaration_found_in_the_workspace_is_ignored`
+`verified-by: bravebot_agent::declared_lsp::a_changed_declaration_is_asked_about_again`
+`verified-by: bravebot_agent::declared_lsp::an_undeclared_extension_answers_unconfigured`
+`verified-by: bravebot_agent::declared_lsp::an_unreadable_declaration_file_leaves_the_approved_server_running`
+`verified-by: bravebot_agent::declared_lsp::a_prompt_shows_an_argument_with_a_space_as_one_argument`
+`verified-by: bravebot_config::lsp::an_extension_with_a_dot_inside_it_is_a_problem`
+`verified-by: bravebot_tui::confirm::a_declared_server_is_asked_about_with_its_arguments_and_as_unknown`
+`verified-by: bravebot_ui_bridge::wire::a_server_prompt_carries_what_would_run_and_whether_it_builds`
+
+<a id="LSP-12"></a>
+### LSP-12: a write or an edit is checked by a server that is already running, and reports lines, never prose
+
+After `write_file` or `edit_file` lands a file, a language server for that file's language that is
+**already running** is asked what it makes of the file, and the result says how many errors it found
+and the line each starts on, how many warnings, and how many notes of any other kind. A write or an
+edit never starts a server and never asks anyone about one: starting a server is the approval
+[LSP-5](#LSP-5) describes, and neither is that approval. With no server running for the language, with no
+server configured for it, or in a run that was not granted the capability ([LSP-9](#LSP-9)), the
+result says nothing about the file.
+
+This is not an operation of the `lsp` tool. The planner names no operation here and chooses
+nothing, so there is no routing field to promote. A planner that wants the same check for a file it
+did not just write or edit, or wants a server started for it, asks for it with the `diagnostics`
+operation ([LSP-13](#LSP-13)).
+
+**What is read.** Only the severity of each diagnostic and the line its range starts on. The
+`message`, the `code`, the `source` and the related information are never deserialised, so
+[LSP-5](#LSP-5)'s rule that a server's prose stays out of the planner's context is kept by the type
+that carries the result and not by a caller remembering to drop a field. The sentence the planner
+reads is this repository's own, built from the counts and the line numbers.
+
+**Why counts and lines are reliable enough to report, and prose is not.** A line number is a
+position the server says, which [LSP-3](#LSP-3) already treats as structure, and a count is a
+number of them. They can be wrong, since a server may be out of date or still indexing, so the
+result says what it does not know: a server still indexing is reported as such, and a server that
+published nothing inside the bound is reported as not having reported, in words that cannot be
+read as "no errors" ([LSP-6](#LSP-6)'s reason, applied to a file rather than a symbol). A report
+of no errors is worded "no errors reported yet" and as nothing stronger, since a server that
+publishes a quick pass and refines it later has not said the file is clean. A server that was
+running and failed is reported as having failed, in fixed words, and none of what it said about
+the failure is carried.
+
+**Labelled by the file it describes.** The result is given only for a file the trust map vouches
+for after the write, and a write sets that from the trust of the bytes written
+([TRUST-4](../trust-map.md#TRUST-4)). So a file written from `contents_ref`, whose bytes came out
+of quarantine, is untrusted once written and reports nothing: the server's view of bytes nobody
+vouched for is not put in the planner's context. An edit is made only to a file the trust map
+vouches for ([EDIT-2](edit-file.md#EDIT-2)), and the result is given on the same terms.
+
+**Bounded.** The server is sent the file as it now stands, as a change where it already holds the
+document (a version that only goes up, so a notice that names an older version is passed over, and
+so is one already waiting when the file was sent), and given a few seconds to publish. A first notice is not taken as the last for a short
+time after it, since servers publish a quick pass and then refine it. Type errors that need a
+build may arrive after the bound, and the wording says a report may be short. A set another run
+holds for the length of a question, a prompt included, is not waited for.
+
+**Why a write or an edit is checked without being asked.** The planner's alternative is a build, and
+a build is a `run` a person approves. This gives the common case, a syntax or type error in the file
+just written or edited, in the same turn and at the cost of one notice from a server somebody already approved. It
+does not replace a build, and OpenCode's own documentation says language-server feedback is not
+always a net positive; the cost here is a wait of at most the bound per write.
+
+`verified-by: bravebot_lsp::protocol::a_diagnostic_carries_a_line_and_a_severity_and_no_prose`
+`verified-by: bravebot_lsp::server::a_running_server_reports_the_notice_that_follows_the_file_it_was_sent`
+`verified-by: bravebot_lsp::server::a_silent_server_is_not_reported_as_finding_no_errors`
+`verified-by: bravebot_lsp::server::a_notice_from_before_the_file_changed_is_not_the_answer`
+`verified-by: bravebot_lsp::server::diagnostics_start_no_server_and_need_the_capability`
+`verified-by: bravebot_agent::lsp::a_report_of_no_errors_is_not_a_server_that_said_nothing`
+`verified-by: bravebot_agent::lsp::a_write_reports_the_error_lines_a_running_server_found`
+`verified-by: bravebot_agent::lsp::a_write_starts_no_language_server`
+`verified-by: bravebot_agent::lsp::a_write_of_quarantined_bytes_reports_no_diagnostics`
+`verified-by: bravebot_agent::lsp::an_edit_reports_the_error_lines_a_running_server_found`
+`verified-by: bravebot_agent::lsp::an_edit_starts_no_language_server`
+
+<a id="LSP-13"></a>
+### LSP-13: diagnostics are asked for by file, and come back as lines and one reference
+
+The `diagnostics` operation takes a `path` and no position, and asks what a language server makes of
+that file. The server is sent the file as it now stands, as [LSP-12](#LSP-12) sends it, and the notice
+it publishes in reply is the answer. It is a read and is on the closed list of [LSP-1](#LSP-1). Like
+every operation it starts the server for the file's language when none is running, and that start is
+put to the person under [LSP-5](#LSP-5); a write's or an edit's check never starts one.
+
+The answer has two parts, on two footings.
+
+**The severities and the lines are structure.** The planner is told how many errors the server found
+and the line each starts on, how many warnings, and how many notes of any other kind, in this
+repository's words and capped as [LSP-12](#LSP-12) caps them. A line and a severity are an integer and
+a fixed enumeration the server reports, which [LSP-3](#LSP-3) already reads as structure for a
+location, so the sentence is given for a file in a tree the trust map does not vouch for as it is for
+one it does. It names no path the server reported, so it carries no taint.
+
+**The messages are content.** A diagnostic's `message`, `code` and `source` are bytes the server
+composed out of the files it indexed, and a message can quote a name defined in another file. The
+file that was queried is not the file that wrote them, so its trust-map entry is not borrowed for
+them, which is the laundering [LSP-3](#LSP-3) rules out for hover text. They are unattributed and
+untrusted. They come back as one reference to the diagnostics the notice held, one entry each,
+beside the sentence, and the planner reads them through `vet_content` or a processor like any other
+quarantined content. An entry starts at the beginning of a line and a line break inside a message
+continues it on an indented line, so a message cannot start an entry of its own. At most 200 entries
+are written and the last line says how many were left out. The messages are carried as a string beside
+the type that holds the lines, and [LSP-12](#LSP-12)'s `Diagnostics` still has nowhere to hold one.
+
+The lines and the messages are read from the same notice, chosen by the rule [LSP-12](#LSP-12) uses:
+this document, at the version just sent or later. Where a `deny` rule covers reading any path the
+messages are withheld, as hover text is ([PERM-7](../permissions.md#PERM-7)), because a message can
+quote a file the rule covers and nothing in it says which; the sentence says they were withheld, so
+that withheld messages are not read as a report that had none. A rule covering the queried file
+refuses the question. A file that is not there is reported as such before a server is started, and
+nobody is asked about one.
+
+**An absent answer is never a clean one.** A server that publishes nothing about the file inside the
+bound is reported as not having reported, in words that cannot be read as "no errors"
+([LSP-6](#LSP-6)'s reason, applied to a file). A report of no errors is worded "no errors reported
+yet" and as nothing stronger, since a server that publishes a quick pass and refines it later has not
+said the file is clean. A report given before the index settled says it may be short
+([LSP-7](#LSP-7)).
+
+**Why the messages are not shown when the lines are.** The lines and severities are numbers the
+driver counts and prints, and nothing in them is a sentence anyone wrote. The messages are sentences,
+and a planner entitled to read one is entitled to read a message a hostile file arranged to be
+produced. The cost is that the planner learns where a file is broken and how badly, and reads why
+only through a processor.
+
+`verified-by: bravebot_lsp::protocol::a_diagnostics_notice_supplies_words_only_where_it_supplies_lines`
+`verified-by: bravebot_lsp::protocol::every_severity_is_named_in_the_words`
+`verified-by: bravebot_lsp::server::the_diagnostics_operation_answers_lines_and_words_from_one_notice`
+`verified-by: bravebot_lsp::server::a_server_that_publishes_nothing_is_no_report_and_not_a_clean_file`
+`verified-by: bravebot_lsp::server::a_report_given_before_the_index_settled_is_partial`
+`verified-by: bravebot_agent::lsp::a_diagnostics_answer_is_counts_and_lines_and_not_its_messages`
+`verified-by: bravebot_agent::lsp::a_diagnostics_question_reports_the_lines_and_hands_back_the_messages_as_a_reference`
+`verified-by: bravebot_agent::lsp::diagnostics_for_a_file_nobody_vouched_for_report_lines_and_not_messages`
+`verified-by: bravebot_agent::lsp::the_messages_a_diagnostics_question_returns_are_read_only_by_a_processor`
+`verified-by: bravebot_agent::lsp::diagnostics_messages_are_withheld_while_a_rule_covers_reading_a_path`
+`verified-by: bravebot_agent::lsp::diagnostics_for_a_file_that_is_not_there_start_no_server`
+`verified-by: bravebot_lsp::protocol::a_message_cannot_start_an_entry_of_its_own`
+`verified-by: bravebot_lsp::protocol::a_flood_of_diagnostics_is_capped_in_the_words_and_says_so`
+
 ## Known costs
+
+- **A declared server's own build tooling is unknown, so the prompt cannot say what it runs.**
+  [LSP-11](#LSP-11) says that it is unknown. A person who declares a server wrapping a build tool
+  approves one that may run the dependency tree's code as [LSP-5](#LSP-5) describes for the table,
+  and nothing here can tell them whether it does. A declaration file that cannot be read, or an
+  entry that cannot be used, leaves its extensions unconfigured, and nothing reports it.
 
 - **A location is attention, and attention can be steered.** An
   attacker who owns a file in a tree the user vouched for decides which paths and lines come back from a query about
@@ -507,12 +727,30 @@ incognito has already accepted.
   not, and carrying the sentence under a label instead would put it behind the quarantine hover
   text is behind, where a notice nobody may read tells nobody anything.
 
+- **A server that publishes late, or only when its diagnostics change, can leave a report short or
+  silent.** [LSP-13](#LSP-13) sends the file and reads the notice that follows within a bound. A
+  notice published after the bound waits in the queue, and the next question discards it, because it
+  describes a version of the file that has since been replaced, and then sends the file again as a
+  change that may produce no notice at all. A server that finds the same diagnostics after a change
+  may publish nothing. The answer is then that the server did not report, never that the file is
+  clean, and a planner that retries gets the same answer. A build is the check that does not depend
+  on the server publishing.
+
 - **A server runs the dependency tree's code, and that is the price of the tool working at all.**
   [LSP-5](#LSP-5) grants a server the user's own access, so for Rust `build.rs` and proc macros out of
   `Cargo.lock` execute, for TypeScript the `tsserver.js` the workspace carries, and for Python the
   `.pth` files of the environment on `PATH`. The alternative is not a safer tool but no tool, since a
   server whose index never settles answers only that it is unsure. What bounds this is that the user
   is asked in those words, and that nothing about the label on the output depends on their answer.
+
+- **A confined stage can write what an approved server runs later.** A server is approved once per
+  language for the session, and a stage of `run` may write the workspace: a `build.rs`, a
+  `.cargo/config.toml`, a `tsserver.js` under `node_modules`, a `.pth` file in a virtual environment
+  inside it. A running server reruns its build tooling when such a file changes, so it runs what the
+  stage wrote with the person's access and outside the stage's profile. Asking again after a stage
+  writes would not close this, since rust-analyzer reruns `build.rs` without being restarted; closing
+  it means stopping every server after each run that writes in the workspace, at the cost of a fresh
+  index after every `cargo test` or `npm ci`.
 
 - **An index survives between sessions, and nothing prunes it.** [LSP-10](#LSP-10) keeps a cache per
   workspace under `~/.bravebot`, which is what makes the second session fast. It is not small: this

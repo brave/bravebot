@@ -155,6 +155,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         branch: None,
         issue: None,
         pull_request: None,
+        handed_off_from: None,
         title: found.title.clone(),
         started: if found.started == 0 {
             now
@@ -173,6 +174,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         timing: Default::default(),
         todos: Default::default(),
         trust: None,
+        confined_lines_in: None,
         programs: Vec::new(),
         directories: Vec::new(),
         build: None,
@@ -201,6 +203,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         // Where one turn ended and the next began is not something these files say (SESSION-25).
         history: None,
         asides: Vec::new(),
+        notes: Vec::new(),
         manifest: None,
         rewind: Vec::new(),
         server_children_may_run: false,

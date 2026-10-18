@@ -21,14 +21,12 @@
 //! tags. If a future build filters on something the walk cannot see, it runs out of matches and
 //! this returns `None`, a refusal rather than a cut in the wrong place.
 //!
-//! Two kinds of user-role message are worth knowing about here. One the agent composed **and
-//! tagged**, a context file somebody named or a watch that fired, is drawn as one of the
-//! interface's own rows on both sides, so it is a prompt to neither and shifts no ordinal. One the
-//! agent composed and left untagged is a prompt as far as any transcript is concerned: a turn
-//! nudged for spending its tool budget, a shell line the person ran themselves, a file the kernel
-//! would not show. Those shift the ordinals of everything after them, and a window drawing the
-//! same projection counts them the same way. Which is why the caller checks the prompt's *text*
-//! against the ordinal before cutting anything.
+//! Every user-role message the agent or a front end composed is tagged (LAYER-6), whether a
+//! context file somebody named, a watch that fired, a nudge for spending the tool budget or a shell
+//! line a person ran themselves. A tagged message is drawn as one of the interface's own rows or
+//! plainly, and is a prompt to neither side, so it shifts no ordinal. Only an untagged message is a
+//! place to cut, which includes one of these in a session recorded before the tag existed. Which is why the caller still checks the prompt's *text* against the ordinal before
+//! cutting anything.
 
 use bravebot_agent::conversation::{Composed, Said, Snapshot, Stored};
 use bravebot_aichat::protocol::Role;
@@ -113,7 +111,14 @@ pub fn cut(snapshot: &Snapshot, said: &[Said], ordinal: usize) -> Option<Cut> {
     // for the archive is still at the head of the messages where it was.
     let archived = snapshot.archive.len();
     let (messages, archive) = if cut_at <= archived {
-        (snapshot.archive[..cut_at].to_vec(), Vec::new())
+        // Without the skills a compaction sent again: the results they repeat are in the same
+        // list, and both in one request would put the skill in it twice.
+        let restored = snapshot.archive[..cut_at]
+            .iter()
+            .filter(|stored| !matches!(stored.composed, Some(Composed::SkillKept { .. })))
+            .cloned()
+            .collect();
+        (restored, Vec::new())
     } else {
         (
             snapshot.messages[..cut_at - archived].to_vec(),
@@ -365,6 +370,31 @@ mod tests {
             cut.before.archive.is_empty(),
             "nothing is left standing in for"
         );
+    }
+
+    /// A skill a compaction sent again repeats a result that is in the archive too, and a fork
+    /// that restored both would put the skill in the child's request twice.
+    #[test]
+    fn a_fork_inside_the_archive_leaves_out_the_skills_a_compaction_sent_again() {
+        let mut before = snapshot(Vec::new());
+        before.messages.push(Stored::plain(Message::user("third")));
+        before.archive = plain(vec![Message::user("first"), Message::assistant("one")]);
+        before.archive.push(Stored {
+            message: Message::user("You loaded the skill commit-style earlier. BODY"),
+            composed: Some(Composed::SkillKept {
+                name: "commit-style".into(),
+            }),
+            source: None,
+        });
+        before.archive.extend(plain(vec![
+            Message::user("second"),
+            Message::assistant("two"),
+        ]));
+        let said = drawn(&before);
+        assert_eq!(prompts(&said), vec!["first", "second", "third"]);
+
+        let cut = cut(&before, &said, 1).expect("the archived second prompt");
+        assert_eq!(texts(&cut.before.messages), vec!["first", "one"]);
     }
 
     #[test]

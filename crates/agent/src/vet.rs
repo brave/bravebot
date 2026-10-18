@@ -178,13 +178,7 @@ pub fn run<S: Sink, R: crate::report::Reporter>(
     let model = chat.model.unwrap_or(&chat.config.default_model);
     let request = ChatRequest::new(model, messages).giving_up_its_conversation();
 
-    let mut client = crate::backend::Backend::select(chat.config, chat.egress, model);
-    if let Some(cancel) = chat.cancel {
-        client = client.with_cancel(cancel.clone());
-    }
-    if let Some(subscription) = chat.subscription.as_deref_mut() {
-        client = client.with_subscription(subscription);
-    }
+    let mut client = chat.backend(model);
 
     // Nothing watches the pieces go by: a checker's reply is two fields for a person to read at
     // the prompt, and showing it as it arrived would put the answer on the screen before the

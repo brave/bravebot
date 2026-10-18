@@ -91,6 +91,10 @@ leo-icon { flex: none; }
   border: 0;
 }
 
+/* A loading row takes its place when loading starts and is drawn once it has lasted 150ms
+   (`useDelayedFlag`), so a quick answer shows no ring and nothing moves when a slow one does. */
+[data-delayed] { visibility: hidden; }
+
 /* The one tooltip (TooltipLayer.tsx), laid over the control it names. */
 .tooltip-anchor {
   position: fixed;

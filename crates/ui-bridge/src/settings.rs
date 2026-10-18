@@ -8,6 +8,27 @@ pub fn layers(project: Option<&Path>, selected: Option<&Path>) -> Settings {
     Settings::layered(bravebot_agent::home::directory(), project, selected)
 }
 
+/// Settle, for the life of the process and before a session is assembled, the answers every turn
+/// in it reads: the network its programs keep, the lists of paths a person wrote, the hosts a
+/// stage is held to and the key each owner's repositories are pushed with (SANDBOX-20, SANDBOX-25,
+/// SANDBOX-24, SANDBOX-16). Nothing a window or a client sends sets
+/// them; the person's settings, the file the process was started on and the managed pin decide.
+///
+/// `project` is the directory whose own settings join the person's. A process started in the
+/// directory it works in passes that directory. One that works in several, and is started from
+/// wherever its person happened to be, passes none, so a settings file in the directory it was
+/// launched from does not decide the answer for every session.
+pub fn settle_for_process(project: Option<&Path>, selected: Option<&Path>) {
+    let layers = layers(project, selected);
+    bravebot_config::settle_run_network_in(None, &layers);
+    bravebot_config::settle_sandbox_filesystem_in(
+        &bravebot_sandbox::rules::Lists::default(),
+        &layers,
+    );
+    bravebot_config::sandbox_network::settle(&layers);
+    bravebot_config::git_identities::settle(&layers);
+}
+
 /// Whether a safe verdict releases quarantined content with nobody asked, resolved as the terminal does.
 pub fn auto_vetting(settings: &Settings) -> bool {
     resolve_vetting(settings, bravebot_session::store::load_vetting())
@@ -65,6 +86,7 @@ fn ignored(settings: &Settings) -> Vec<Value> {
     ));
     ignored.extend(named("summaryModel", settings.summary_ignored().collect()));
     ignored.extend(named("agent", settings.agent_ignored().collect()));
+    ignored.extend(named("style", settings.style_ignored().collect()));
     ignored.extend(named("references", settings.references_ignored().collect()));
     ignored
 }
@@ -214,6 +236,20 @@ mod tests {
             vec![json!({ "name": "advisorModel", "path": project })]
         );
         assert_eq!(settings.advisor_model(), Some("home/advisor"));
+    }
+
+    #[test]
+    fn a_project_files_style_is_reported_as_ignored() {
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"style":"concise"}"#),
+            Some(r#"{"style":"project-style"}"#),
+        );
+        let project = directory.path().join("project/.bravebot/settings.json");
+        assert_eq!(
+            ignored(&settings),
+            vec![json!({ "name": "style", "path": project })]
+        );
+        assert_eq!(settings.style(), Some("concise"));
     }
 
     fn vetting_layers(

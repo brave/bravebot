@@ -1,10 +1,10 @@
 //! The MCP servers a session reached, as a turn meets them (SERVERS-7, SERVERS-8, SERVERS-13).
 //!
 //! A server's list of tools is the server's own words, so nothing of it reaches the planner until
-//! a person has read it as it is drawn and said yes, which is road 1 of issue #83. A yes records a
-//! digest of the list beside the server's approval, so the same list asks nothing the next session
-//! and a list that changed asks again. Every call to a tool on a list somebody vouched for is then
-//! put to the person with three answers, the second of which stops asking for that one tool in that
+//! a person has read it as it is drawn and said yes, which is road 1 of issue #83. The question is
+//! asked every session and nothing is recorded, since a comparison with an earlier list would be a
+//! decision taken from the server's bytes. Every call to a tool on a list somebody vouched for is
+//! then put to the person with three answers, the second of which stops asking for that one tool in that
 //! one project.
 //!
 //! The servers themselves were started before the session opened, by whoever assembled it. What
@@ -52,8 +52,8 @@ pub struct Reached {
 }
 
 impl Reached {
-    /// `declaration` is the digest of the declaration the server was started from, which a vouch
-    /// for its list is recorded beside.
+    /// `declaration` is the digest of the declaration the server was started from, which a move
+    /// is recorded over.
     pub fn new(connection: Connection, listing: Listing, declaration: Digest) -> Self {
         Self {
             connection,
@@ -73,6 +73,11 @@ impl Reached {
     /// The alias the person gave the server.
     pub fn alias(&self) -> &str {
         self.listing.alias()
+    }
+
+    /// What the server offered and what was withheld or refused.
+    pub fn listing(&self) -> &Listing {
+        &self.listing
     }
 }
 
@@ -334,12 +339,11 @@ impl Session {
     /// A server the turn holds no grant for is one it is offered nothing of, so its list waits
     /// for a turn that does rather than being put to a person who could not use the answer here.
     ///
-    /// A list that is the one somebody vouched for under this declaration before is offered with
-    /// nobody asked. Every other list is checked, unless every check is being bypassed, and put to
-    /// the person as it is drawn. A yes promotes it, and records its digest where the session may
-    /// write and a person gave the answer; a no offers none of its tools for the rest of the
-    /// session, and a turn stopped at the question leaves it unasked. Settled at the start of a turn a person asked for, since that is where there is
-    /// somebody to put the question to.
+    /// Every list is checked, unless every check is being bypassed, and put to the person as it is
+    /// drawn, every session: the list is a server's bytes, and nothing here decides from them
+    /// whether it was seen before. A yes promotes it; a no offers none of its tools for the rest
+    /// of the session, and a turn stopped at the question leaves it unasked. Settled at the start
+    /// of a turn a person asked for, since that is where there is somebody to put the question to.
     pub fn settle<S: Sink, C: Confirmer, R: Reporter>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -395,22 +399,8 @@ impl Session {
     ) -> (State, Usage) {
         let alias = server.alias.as_str();
         let refused = listing.refused();
-        let recorded = self.0.directory.as_deref().and_then(|directory| {
-            Approvals::read(directory).vouched_list(&held(&server.declaration))
-        });
-
-        let (list, changed) = match recorded {
-            Some(recorded) => match policy.promote_a_recorded_tool_list(
-                alias,
-                listing.list().clone(),
-                &recorded.to_string(),
-                |text| Digest::of_list(text).to_string(),
-            ) {
-                Ok(promoted) => return (offered(promoted), Usage::default()),
-                Err(list) => (list, true),
-            },
-            None => (listing.list().clone(), false),
-        };
+        let withheld = listing.withheld();
+        let list = listing.list().clone();
 
         // Not made where every check is being bypassed, for the reason a vouch makes none there:
         // the mode answers this question yes, so nobody would read the word.
@@ -440,7 +430,7 @@ impl Session {
             alias: alias.to_string(),
             tools,
             refused,
-            changed,
+            withheld,
             verdict,
             reason,
         };
@@ -466,40 +456,7 @@ impl Session {
                 return (State::Declined, usage);
             }
         };
-        // What bypassing answered records nothing, so the next session that asks anybody asks.
-        if by == Endorsed::ByAPerson {
-            self.record_list(said, server, &promoted);
-        }
         (offered(promoted), usage)
-    }
-
-    /// Record a vouch for this list beside the declaration it was listed by, where the session may.
-    fn record_list<R: Reporter>(
-        &self,
-        said: &mut Said<'_, R>,
-        server: &Server,
-        list: &Labelled<String>,
-    ) {
-        let (Some(directory), true) = (&self.0.directory, self.0.writable) else {
-            return;
-        };
-        let Ok(text) = list.clone().into_trusted() else {
-            return;
-        };
-        let written = Approvals::to_change(directory)
-            .map_err(|why| unreadable_record(&why))
-            .and_then(|mut approvals| {
-                approvals.vouch_list(*held(&server.declaration), Digest::of_list(&text));
-                replace(&records::approvals_file(directory), approvals.to_text())
-                    .map_err(|error| error.to_string())
-            });
-        if let Err(error) = written {
-            said.notice(t!(
-                mcp_tools_not_recorded,
-                alias = server.alias.as_str(),
-                error = error
-            ));
-        }
     }
 
     /// The tools this turn may offer: every tool on every list somebody vouched for.
@@ -524,6 +481,8 @@ impl Session {
         Offer {
             session: self.clone(),
             tools,
+            deferred: false,
+            loaded: Vec::new(),
         }
     }
 
@@ -870,6 +829,11 @@ struct Offered {
 pub struct Offer {
     session: Session,
     tools: Vec<Offered>,
+    /// Whether the tools are offered by name only until one is loaded (SERVERS-16).
+    deferred: bool,
+    /// The wire names loaded so far this turn, in the order they were loaded. Always names this
+    /// offer holds, since [`Offer::load`] takes a name only by finding it in `tools`.
+    loaded: Vec<String>,
 }
 
 impl Offer {
@@ -878,9 +842,12 @@ impl Offer {
     /// The description is the server's words, which a person read and let through, so it is sent
     /// behind a margin and after a sentence of this process's own saying whose they are. It is a
     /// function's description and never a line of the system prompt (SERVERS-8).
+    ///
+    /// Where the offer is deferred, only the tools loaded so far (SERVERS-16).
     pub fn functions(&self) -> Vec<Tool> {
         self.tools
             .iter()
+            .filter(|tool| !self.deferred || self.loaded.contains(&tool.wire))
             .map(|tool| {
                 let name = format!("{}:{}", tool.alias, tool.drawn.name);
                 let mut description = format!(
@@ -915,6 +882,74 @@ impl Offer {
                 )
             })
             .collect()
+    }
+
+    /// What offering every tool in full would cost the context, in tokens.
+    ///
+    /// An estimate from the length of the definitions a backend would be sent, at four characters
+    /// a token. It reads text a person vouched for and decides only how much is offered at once.
+    pub fn weight(&self) -> u64 {
+        let all = Offer {
+            deferred: false,
+            ..self.clone()
+        };
+        all.functions()
+            .iter()
+            .map(|tool| serde_json::to_string(tool).map_or(0, |text| text.len() as u64))
+            .sum::<u64>()
+            .div_ceil(4)
+    }
+
+    /// Offer the tools by name only when offering them in full would cost more than `threshold`
+    /// tokens (SERVERS-16).
+    pub fn deferring_above(mut self, threshold: u64) -> Self {
+        self.deferred = self.weight() > threshold;
+        self
+    }
+
+    /// Whether the tools are offered by name only until one is loaded.
+    pub fn is_deferred(&self) -> bool {
+        self.deferred
+    }
+
+    /// The names a deferred offer has not yet loaded, each as `alias:tool`.
+    pub fn unloaded(&self) -> Vec<String> {
+        self.tools
+            .iter()
+            .filter(|tool| !self.loaded.contains(&tool.wire))
+            .map(|tool| format!("{}:{}", tool.alias, tool.drawn.name))
+            .collect()
+    }
+
+    /// The wire name of the tool called `name` as `alias:tool`, compared exactly, and whether it
+    /// is loaded already. Nothing falls back to a prefix, a case-insensitive match or a nearest
+    /// one (SERVERS-16).
+    pub fn named(&self, name: &str) -> Option<(&str, bool)> {
+        self.tools
+            .iter()
+            .find(|tool| format!("{}:{}", tool.alias, tool.drawn.name) == name)
+            .map(|tool| (tool.wire.as_str(), self.loaded.contains(&tool.wire)))
+    }
+
+    /// Whether a deferred offer holds the tool under this wire name without having loaded it.
+    pub fn is_unloaded(&self, wire: &str) -> bool {
+        self.deferred
+            && !self.loaded.iter().any(|loaded| loaded == wire)
+            && self.tools.iter().any(|tool| tool.wire == wire)
+    }
+
+    /// Load the tool under this wire name, so [`Offer::functions`] holds its definition from now on.
+    /// Nothing where this offer holds no such tool.
+    pub fn load(&mut self, wire: &str) -> Option<Tool> {
+        if !self.tools.iter().any(|tool| tool.wire == wire) {
+            return None;
+        }
+        if !self.loaded.iter().any(|loaded| loaded == wire) {
+            self.loaded.push(wire.to_string());
+        }
+        let mut only = self.clone();
+        only.loaded = vec![wire.to_string()];
+        only.functions().into_iter().next()
     }
 
     /// This offer less the tools of every server `held` names no grant for (SERVERS-9).

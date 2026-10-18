@@ -43,10 +43,11 @@ fn take_turn(
             workspace,
             attribution: Default::default(),
             output_cap: None,
+            download_cap: None,
             deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
             auto_vetting: false,
             sandbox: bravebot_sandbox::SandboxMode::default(),
-            permission_mode: bravebot_agent::PermissionMode::Ask,
+            permission_mode: bravebot_agent::PermissionMode::Ask.into(),
             mcp_requested: Vec::new(),
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
@@ -66,6 +67,7 @@ fn take_turn(
             turn: if first { 1 } else { 2 },
             cancel,
             pending: Arc::new(Mutex::new(None)),
+            answerers: Default::default(),
             answers: receiver,
             finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
@@ -203,7 +205,7 @@ fn bridge_ordinary_endings_keep_decisions_live_and_resumed() {
             std::fs::remove_file(root.join("approved.txt")).unwrap();
             {
                 let mut held = state.lock().unwrap();
-                assert_ne!(held.asked_about, AskedAbout::new());
+                assert_ne!(held.answers.asked_about, AskedAbout::new());
                 let record = bravebot_session::sessions::load(
                     workspace.root(),
                     held.handle.as_ref().unwrap().id(),
@@ -223,7 +225,7 @@ fn bridge_ordinary_endings_keep_decisions_live_and_resumed() {
                         &record,
                         record.trust_map(workspace.root()).unwrap(),
                     );
-                    assert_eq!(held.asked_about, AskedAbout::new());
+                    assert_eq!(held.answers.asked_about, AskedAbout::new());
                 }
             }
             let events = take_turn(state.clone(), &workspace, &config, Cancel::new(), false);

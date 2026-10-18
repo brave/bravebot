@@ -1,6 +1,6 @@
 # Local development for the Brave Bot documentation site.
 #
-# The site is plain Docusaurus, so targets here are thin wrappers over npm scripts.
+# The site is plain Docusaurus, so targets here are thin wrappers over pnpm scripts.
 
 .PHONY: help
 help:
@@ -21,19 +21,19 @@ init: install
 
 .PHONY: install
 install:
-	npm install
+	pnpm install
 
 .PHONY: start
 start:
-	npm start
+	pnpm start
 
 .PHONY: build
 build:
-	npm run build
+	pnpm run build
 
 .PHONY: serve
 serve:
-	npm run serve
+	pnpm run serve
 
 # docusaurus.config.js throws on a broken link or anchor, so a clean build is the whole of
 # the site's correctness check. Named separately from `build` because that is what it is
@@ -43,7 +43,7 @@ check: build
 
 .PHONY: clear
 clear:
-	npm run clear
+	pnpm run clear
 
 .PHONY: clean
 clean:

@@ -253,10 +253,24 @@ pub struct RunRequest {
     /// Where an answer that remembers the reach the planner asked for would be written, where one
     /// may be.
     ///
-    /// `Some` exactly where the prompt may offer `m` and `k`: a session that keeps a record of
+    /// `Some` exactly where the prompt may offer `m` and `e`: a session that keeps a record of
     /// reach at all, with a session to key a session-long answer to. The path rather than a flag,
     /// for the reason [`RunRequest::record`] carries one.
     pub reach_record: Option<std::path::PathBuf>,
+    /// Whether the planner asked for this one line to start with no profile (SANDBOX-29).
+    ///
+    /// The prompt says so and offers no answer that lasts past the line: nothing recorded can
+    /// stand for the same line run under a profile, and no answer remembers a request to run
+    /// without one. [`RunRequest::confined`] is `None` for such a line, since its stages start
+    /// with no profile.
+    pub unconfined: bool,
+    /// The keys the prompt may offer the person to choose between for the owner a `git` push of
+    /// this line leaves to ssh, where it may offer them (SANDBOX-16).
+    ///
+    /// `Some` exactly where the digits are bound: a confined line whose one unchosen owner ssh
+    /// could offer two or more keys, in a session that may write the answer down. The acting layer
+    /// reads the answer against this list and not against what was drawn.
+    pub key_choice: Option<Box<KeyChoice>>,
 }
 
 /// What a confined `run` is held to, in the words a prompt needs.
@@ -286,6 +300,27 @@ pub struct Confined {
     pub requested_reaches: Vec<(String, bravebot_sandbox::scope::Reach)>,
     /// What a stage carries beyond them, in step order. A stage that carries nothing is absent.
     pub carried: Vec<Carried>,
+    /// Whether a stage whose program is not git may write a repository's hooks and configuration,
+    /// which is so on a platform whose backend holds no `.git` back for a stage that writes more
+    /// than the temporary directory (SANDBOX-18).
+    pub writes_git_directories: bool,
+}
+
+/// What one ambient authority is, in the words a person reads.
+///
+/// A sentence per authority rather than one with a name substituted in, because what each of them
+/// costs is different: a container daemon is root on this machine, a logged-in tool is an account
+/// elsewhere, the agent is a signature, the metadata service is a role. The word that named it
+/// comes from the table that recognised it, so no part of the command line reaches this sentence.
+pub fn authority_sentence(authority: bravebot_core::ambient::Authority, named: &str) -> String {
+    use bravebot_core::ambient::Authority;
+    match authority {
+        Authority::ContainerDaemon => t!(run_authority_container, named = named),
+        Authority::LoggedInTool => t!(run_authority_logged_in, named = named),
+        Authority::AgentSocket => t!(run_authority_agent, named = named),
+        Authority::MetadataService => t!(run_authority_metadata, named = named),
+    }
+    .to_string()
 }
 
 /// What one stage of a confined plan carries beyond the session's directories.
@@ -300,10 +335,51 @@ pub struct Carried {
     /// What the person's environment moves that scope to, beyond its fixed rows, each named with
     /// the variable it came from.
     pub reaches: Vec<bravebot_sandbox::scope::Reach>,
+    /// What decides the key ssh offers the host for the owner the argv's ssh address names, where
+    /// the person decided it.
+    pub identity: Option<Offered>,
     /// Whether the stage keeps the network a closed session took from the others.
     pub network: bool,
     /// What a person attached to this command with `/reach`, each with the day it was allowed.
     pub remembered: Vec<Remembered>,
+}
+
+/// Who decided which key a `git` stage has ssh offer first (SANDBOX-16).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Offered {
+    /// The public key the person's `git.identities` names for the owner.
+    Configured(std::path::PathBuf),
+    /// What the person chose for the owner at an earlier run prompt: a key, or leaving it to ssh.
+    Chosen(crate::reach::ChosenKey),
+}
+
+/// The keys a run prompt offers the person to choose between for the one owner a line's `git`
+/// push leaves to ssh (SANDBOX-16).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyChoice {
+    /// The host and owner its argv's ssh address names.
+    pub address: bravebot_sandbox::scope::Address,
+    /// The public key files on offer, numbered from 1 in this order.
+    pub candidates: Vec<std::path::PathBuf>,
+    /// Where the answer is written, which the prompt shows for the reason
+    /// [`RunRequest::record`] carries a path.
+    pub record: std::path::PathBuf,
+}
+
+impl KeyChoice {
+    /// The host and owner as a `git.identities` entry names them.
+    pub fn owner(&self) -> String {
+        self.address.entry_name()
+    }
+}
+
+/// Which key the person chose at a run prompt that offered a [`KeyChoice`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyAnswer {
+    /// The candidate at this place in [`KeyChoice::candidates`], counted from 0.
+    Candidate(usize),
+    /// Leave the key to ssh, which offers the agent's keys in order.
+    SshDefault,
 }
 
 /// One reach a person remembered for a command, as the plan that carries it says so.
@@ -330,15 +406,18 @@ impl Confined {
             Scope::Aws => t!(run_carries_aws, program = program),
             Scope::Kubernetes => t!(run_carries_kubernetes, program = program),
             Scope::Docker => t!(run_carries_docker, program = program),
+            Scope::Signing => t!(run_carries_signing, program = program),
         }
         .to_string()
     }
 
     /// The sentence that introduces the directories, for a front end to draw above them.
     pub fn heading(&self) -> String {
-        match self.reads_the_machine {
-            true => t!(run_confined_machine).to_string(),
-            false => t!(run_confined).to_string(),
+        match (self.reads_the_machine, self.writes_git_directories) {
+            (true, false) => t!(run_confined_machine).to_string(),
+            (true, true) => t!(run_confined_machine_git).to_string(),
+            (false, false) => t!(run_confined).to_string(),
+            (false, true) => t!(run_confined_git).to_string(),
         }
     }
 
@@ -363,6 +442,12 @@ impl Confined {
         }
         for (program, request) in &self.requested {
             let sentence = match request {
+                Requested::Loopback => {
+                    t!(run_carries_loopback, program = program.as_str()).to_string()
+                }
+                Requested::SshKey => {
+                    t!(run_carries_ssh_key, program = program.as_str()).to_string()
+                }
                 Requested::Scope(scope) => self.scope_sentence(*scope, program),
                 Requested::Toolchain(toolchain) => t!(
                     run_carries_toolchain,
@@ -413,6 +498,34 @@ impl Confined {
                     .to_string(),
                 );
             }
+            match &stage.identity {
+                Some(Offered::Configured(key)) => sentences.push(
+                    t!(
+                        run_carries_identity,
+                        program = program,
+                        path = key.display().to_string()
+                    )
+                    .to_string(),
+                ),
+                Some(Offered::Chosen(chosen)) => sentences.push(match &chosen.key {
+                    Some(key) => t!(
+                        run_carries_identity_chosen,
+                        program = program,
+                        path = key.display().to_string(),
+                        owner = chosen.owner(),
+                        date = chosen.allowed.as_str()
+                    )
+                    .to_string(),
+                    None => t!(
+                        run_carries_identity_chosen_default,
+                        program = program,
+                        owner = chosen.owner(),
+                        date = chosen.allowed.as_str()
+                    )
+                    .to_string(),
+                }),
+                None => {}
+            }
             for remembered in &stage.remembered {
                 let date = remembered.allowed.as_str();
                 sentences.push(match &remembered.reached {
@@ -444,7 +557,9 @@ impl Confined {
 }
 
 impl RunRequest {
-    /// A request for a pipeline of argv stages, which is a plan with no redirections.
+    /// A request for a plan of argv stages with no redirections, no stdin reference, no
+    /// confinement and no remembered record. It is for tests in this crate and others: shipped
+    /// code builds the request from a compiled plan in `tools.rs`.
     pub fn from_pipeline(pipeline: &Pipeline, resolved: &[String], directory: &str) -> Self {
         let steps = pipeline
             .stages
@@ -463,10 +578,12 @@ impl RunRequest {
             record: None,
             pattern: None,
             // A pipeline holds the label of what would be fed to its first stage and no reference
-            // to name: this constructor is for shell mode, where the bytes are the user's own.
+            // to name.
             stdin: None,
             confined: None,
             reach_record: None,
+            unconfined: false,
+            key_choice: None,
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),
@@ -549,7 +666,7 @@ impl RunRequest {
     /// One question rather than a list of reasons repeated at each place that asks, so a reason
     /// added later cannot reach the drawing and miss the layer that acts on the answer.
     pub fn can_be_remembered(&self) -> bool {
-        self.plan.can_be_remembered() && !self.asks_for_scopes()
+        self.plan.can_be_remembered() && !self.asks_for_scopes() && !self.unconfined
     }
 
     /// Whether the planner asked this line to carry a credential scope or a toolchain list.
@@ -581,7 +698,8 @@ impl RunRequest {
     }
 
     /// The credential scopes the planner asked for, each once, in the menu's order. A toolchain
-    /// list is not among them: a reach is remembered for a scope of the closed table only.
+    /// list and the signing scope are not among them: a reach is remembered for a scope of the
+    /// closed table only, and `/reach` does not name signing.
     pub fn requested_credential_scopes(&self) -> Vec<bravebot_sandbox::scope::Scope> {
         let mut scopes = Vec::new();
         for (_, request) in self
@@ -590,6 +708,7 @@ impl RunRequest {
             .flat_map(|confined| &confined.requested)
         {
             if let bravebot_sandbox::scope::Requested::Scope(scope) = request
+                && *scope != bravebot_sandbox::scope::Scope::Signing
                 && !scopes.contains(scope)
             {
                 scopes.push(*scope);
@@ -598,16 +717,24 @@ impl RunRequest {
         scopes
     }
 
-    /// The toolchain lists the planner asked for, each once, which the remembering answers leave out.
-    pub fn requested_toolchains(&self) -> Vec<&'static str> {
+    /// The toolchain lists, the signing scope and loopback the planner asked for, each once, which
+    /// the remembering answers leave out.
+    pub fn requested_not_remembered(&self) -> Vec<&'static str> {
         let mut names = Vec::new();
         for (_, request) in self
             .confined
             .iter()
             .flat_map(|confined| &confined.requested)
         {
-            if matches!(request, bravebot_sandbox::scope::Requested::Toolchain(_))
-                && !names.contains(&request.name())
+            if matches!(
+                request,
+                bravebot_sandbox::scope::Requested::Toolchain(_)
+                    | bravebot_sandbox::scope::Requested::Scope(
+                        bravebot_sandbox::scope::Scope::Signing
+                    )
+                    | bravebot_sandbox::scope::Requested::Loopback
+                    | bravebot_sandbox::scope::Requested::SshKey
+            ) && !names.contains(&request.name())
             {
                 names.push(request.name());
             }
@@ -615,7 +742,7 @@ impl RunRequest {
         names
     }
 
-    /// The programs, each with its operation word, that `m` and `k` would remember the requested
+    /// The programs, each with its operation word, that `m` and `e` would remember the requested
     /// credential scopes for. Empty where neither is offered.
     ///
     /// Computed from the plan and the closed table the way the acting layer computes what it writes,
@@ -632,9 +759,21 @@ impl RunRequest {
         !self.kept_reach_shapes().is_empty()
     }
 
+    /// The answer a digit pressed at the prompt gives, or `None` for a digit it does not offer:
+    /// `0` leaves the key to ssh, and `1` up to the number of keys on offer chooses that key.
+    pub fn key_answer_for(&self, digit: u32) -> Option<KeyAnswer> {
+        let choice = self.key_choice.as_ref()?;
+        let at = usize::try_from(digit).ok()?;
+        match at {
+            0 => Some(KeyAnswer::SshDefault),
+            _ if at <= choice.candidates.len() => Some(KeyAnswer::Candidate(at - 1)),
+            _ => None,
+        }
+    }
+
     /// Whether the prompt may offer to record this answer past the session.
     pub fn may_record(&self) -> bool {
-        self.record.is_some()
+        self.record.is_some() && !self.unconfined
     }
 
     /// Whether the prompt may also offer to record this line with its number left free: it may
@@ -651,11 +790,6 @@ impl RunRequest {
             return None;
         }
         RememberedLine::family_of(&self.plan).map(|line| line.display())
-    }
-
-    /// Whether the prompt says a pattern in a settings file is what answers this line.
-    pub fn advises_a_pattern(&self) -> bool {
-        self.pattern.is_some()
     }
 
     /// A short description for a prompt line.
@@ -681,7 +815,7 @@ impl RunRequest {
     /// list.
     pub fn would_vouch_for(&self) -> Vec<bravebot_core::programs::Command> {
         let mut named: Vec<bravebot_core::programs::Command> = Vec::new();
-        if self.asks_for_scopes() {
+        if self.asks_for_scopes() || self.unconfined {
             return named;
         }
         for step in self.plan.steps() {
@@ -705,6 +839,8 @@ pub struct OutputRequest {
     pub command: String,
     /// What it printed, in full.
     pub output: String,
+    /// The label it was released under, in the same short form the trail uses (LABEL-10).
+    pub label: String,
     /// How many lines that is, counted before the bytes were released.
     ///
     /// Carried rather than counted here, for the reason [`WriteRequest::diff`] is carried: this
@@ -720,6 +856,9 @@ pub struct OutputRequest {
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
     pub reason: Option<String>,
+    /// The label the check's sentence was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` where there is no sentence.
+    pub reason_label: Option<String>,
 }
 
 impl OutputRequest {
@@ -755,6 +894,10 @@ pub struct VetRequest {
     pub expects: String,
     /// The content, in full. Empty for a picture, which is shown as a file to open instead.
     pub content: String,
+    /// The label the content was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` for a picture, which is opened in the person's own viewer and has no
+    /// text to carry it beside.
+    pub label: Option<String>,
     /// How many lines that is, counted before the bytes were released, as
     /// [`OutputRequest::lines`] is.
     pub lines: usize,
@@ -762,6 +905,9 @@ pub struct VetRequest {
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
     pub reason: Option<String>,
+    /// The label the check's sentence was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` where there is no sentence.
+    pub reason_label: Option<String>,
     /// Where the slot holds a picture or a PDF, the copy of it the person is asked to open.
     ///
     /// `None` for text, and for a picture on a run bypassing permissions, where the mode answers
@@ -857,10 +1003,13 @@ impl FetchRequest {
 /// [LSP-5]: ../../../docs/specs/tools/lsp.md
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerRequest {
-    /// The language this server answers about, in the words a person reads.
-    pub language: &'static str,
+    /// The language this server answers about, in the words a person reads: a name from the table, or
+    /// the name a person gave the declaration.
+    pub language: String,
     /// The binary, resolved to an absolute path, so what is approved is what runs.
     pub program: String,
+    /// The arguments it is started with, so the whole command is what is shown.
+    pub args: Vec<String>,
     /// The workspace it will index.
     pub workspace: String,
     /// Whether starting it runs code the project or its dependencies carry.
@@ -869,10 +1018,36 @@ pub struct ServerRequest {
     /// macros execute, for TypeScript the `tsserver.js` the workspace carries, and for Python the
     /// `.pth` files of the environment on `PATH`. That is the part of LSP-5 that has to be said out
     /// loud rather than left inside the phrase "with your own access".
+    ///
+    /// Meaningless where `declared` is set: what a program a person named runs is not known, and the
+    /// prompt says so rather than saying it runs none.
     pub runs_build_tooling: bool,
+    /// Whether a person's own declaration chose this server rather than the table (LSP-11).
+    pub declared: bool,
 }
 
 impl ServerRequest {
+    /// The arguments as one line a person can read back into the list that was started.
+    ///
+    /// An argument holding a space, a quote or a control character is written quoted and escaped,
+    /// so `--cmd "a b"` and `--cmd a b`, which start different commands, do not read alike.
+    pub fn arguments_line(&self) -> String {
+        let plain = |argument: &str| {
+            !argument.is_empty()
+                && argument
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_.,:/=@%+".contains(c))
+        };
+        self.args
+            .iter()
+            .map(|argument| match plain(argument) {
+                true => argument.clone(),
+                false => format!("{argument:?}"),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     /// A short description for a prompt line.
     pub fn summary(&self) -> String {
         format!("start the {} language server", self.language)
@@ -895,6 +1070,9 @@ pub struct VouchRequest {
     /// whatever it says has to be true of all of them. What a file holds decides how it is
     /// previewed and never whether it is asked about.
     pub preview: String,
+    /// The label the preview was released under, in the same short form the trail uses
+    /// (LABEL-10).
+    pub label: String,
     /// Whether the preview is only part of the file.
     pub truncated: bool,
     /// What a check said about the whole file, or that it did not complete.
@@ -906,6 +1084,9 @@ pub struct VouchRequest {
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
     pub reason: Option<String>,
+    /// The label the check's sentence was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` where there is no sentence.
+    pub reason_label: Option<String>,
 }
 
 /// A file the planner has asked to read that holds something the scan took for a credential.
@@ -982,8 +1163,8 @@ pub struct ToolListRequest {
     pub tools: Vec<ListedTool>,
     /// How many tools the server listed that are not drawn, because this client refused them.
     pub refused: usize,
-    /// Whether a list for this declaration was vouched for before and this one is not it.
-    pub changed: bool,
+    /// How many tools were withheld by the server's allow or deny list.
+    pub withheld: usize,
     /// What a check said about the list, or that none was made.
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
@@ -1043,6 +1224,59 @@ pub struct MoveRequest {
     /// Whether a yes can be written into the declarations, which it cannot where there is no state
     /// directory or the session writes nothing. Without it the move lasts for this session.
     pub may_record: bool,
+}
+
+/// The planner asked for a path the programs it starts cannot reach.
+///
+/// `path` is the spelling the planner gave, and the planner's own bytes: it is what the person
+/// reads and what a yes judges, so what is drawn is exactly what is granted. `why` is content the
+/// planner wrote for the person. A yes lasts for the session and marks nothing trusted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathRequest {
+    /// The path as the sandbox will be told it, after the refusals have been applied.
+    pub path: std::path::PathBuf,
+    /// Whether programs may write it as well as read it.
+    pub write: bool,
+    /// The planner's reason.
+    pub why: String,
+}
+
+/// Programs a line started asked an allowed-hosts proxy for hosts no entry covers (SANDBOX-24).
+///
+/// `hosts` are names or addresses a program chose and the proxy refused. Each is a valid host name
+/// or IP address as [`bravebot_sandbox::hosts::recordable`] allows and nothing else, so what is
+/// drawn is exactly what a yes lists. They are the program's bytes and are not for the planner. A
+/// yes lets later lines of the session reach them, subject to `deniedHosts`, and marks nothing
+/// trusted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostRequest {
+    pub hosts: Vec<String>,
+}
+
+/// A message the planner wants to send to another background session (MSG-3).
+///
+/// The name, the state and the directory are the roster's, read when the call was made. The text is
+/// the planner's whole message, and the label is the one it will be sent under, assigned by the
+/// policy layer from what the planner's context held. A person who answers yes is approving the
+/// session named, and the words as drawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageRequest {
+    pub name: String,
+    pub state: String,
+    pub directory: String,
+    pub text: String,
+    pub label: bravebot_core::label::Label,
+}
+
+/// What the person decided about a message (MSG-3, MSG-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageDecision {
+    /// Send this one.
+    Once,
+    /// Send this one and the later ones to this session until the turn ends.
+    ForTheTurn,
+    /// Send nothing. Also what nobody being there to ask comes to.
+    Decline,
 }
 
 /// What the person decided about a call to a server's tool.
@@ -1110,9 +1344,25 @@ pub struct RunDecision {
     ///
     /// [SANDBOX-27]: ../../../docs/specs/sandboxing.md
     pub remember_reach: Option<crate::reach::Lasting>,
+    /// The key the person chose for the owner the line's push leaves to ssh, from the prompt's
+    /// [`RunRequest::key_choice`] ([SANDBOX-16]). Run with it and remembered for every session.
+    ///
+    /// [SANDBOX-16]: ../../../docs/specs/sandboxing.md
+    pub key: Option<KeyAnswer>,
 }
 
 impl RunDecision {
+    /// Run it with the key `answer` names offered first, and remember that choice for the owner.
+    ///
+    /// Vouches for nothing and records no line: it decides which key a push offers, and the next
+    /// line pushing to that owner is asked about as it would have been.
+    pub fn approve_with_key(answer: KeyAnswer) -> Self {
+        Self {
+            key: Some(answer),
+            ..Self::approve()
+        }
+    }
+
     /// Run it this once.
     pub fn approve() -> Self {
         Self {
@@ -1121,6 +1371,7 @@ impl RunDecision {
             record: false,
             record_family: false,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1132,6 +1383,7 @@ impl RunDecision {
             record: false,
             record_family: false,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1147,6 +1399,7 @@ impl RunDecision {
             record: true,
             record_family: false,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1159,6 +1412,7 @@ impl RunDecision {
             record: false,
             record_family: true,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1176,6 +1430,7 @@ impl RunDecision {
             record: false,
             record_family: false,
             remember_reach: Some(lasting),
+            key: None,
         }
     }
 
@@ -1187,6 +1442,7 @@ impl RunDecision {
             record: false,
             record_family: false,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1404,9 +1660,8 @@ pub trait Confirmer {
     /// Ask whether the tools an MCP server offers may be offered to the planner. Implementations
     /// must default to refusal when they cannot ask.
     ///
-    /// A yes promotes the list as drawn, descriptions and all, and records a digest of it, so an
-    /// unchanged list asks nothing next session. That makes it a standing decision, like the vouch
-    /// offer, and a verdict travels with it on the same footing.
+    /// A yes promotes the list as drawn, descriptions and all, for the rest of the session and
+    /// records nothing, so the next session asks again.
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision;
 
     /// Ask about one call to an MCP server's tool. Implementations must default to refusal, and
@@ -1420,6 +1675,32 @@ pub trait Confirmer {
     /// rewrites what the person declared, so every later call, and every later session, goes to the
     /// new destination with the server's arguments and its session id.
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision;
+
+    /// Ask whether programs the planner starts may reach one more path for the rest of the session.
+    /// Implementations must refuse when they cannot ask.
+    ///
+    /// Separate from [`Confirmer::confirm_run`] because a yes is not about a line: it widens what
+    /// every later line can reach, for the session, and nothing else. It marks no directory
+    /// trusted, which is the difference from opening one by name.
+    fn confirm_path(&mut self, request: &PathRequest) -> Decision;
+
+    /// Ask whether programs the planner starts may reach hosts that the session's allowed-hosts
+    /// list does not cover, for the rest of the session. Implementations must refuse when they
+    /// cannot ask.
+    ///
+    /// Asked after a line has stopped, about hosts its programs already asked for and were refused,
+    /// so nothing waits on the answer. Separate from [`Confirmer::confirm_path`] because the hosts
+    /// were chosen by a program, and a yes widens the network and no directory.
+    fn confirm_host(&mut self, request: &HostRequest) -> Decision;
+
+    /// Ask whether a message the planner wrote may be sent to another background session.
+    /// Implementations must decline when they cannot ask.
+    ///
+    /// Separate from every other question here because what a yes grants is a place for words to go:
+    /// the text becomes part of another planner's context, and the person is the only check on it
+    /// that does not rest on the sender's model. Only a background session sends, so a front end
+    /// that hosts none declines. No mode and no allow rule answers it.
+    fn confirm_message(&mut self, request: &MessageRequest) -> MessageDecision;
 
     /// Put a series of questions to the person, one answer per question in the order they were
     /// asked.
@@ -1465,6 +1746,19 @@ impl Confirmer for Unattended {
     /// Refuses. Nothing about a test double is a person agreeing to start a process.
     fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
         Decision::Reject
+    }
+
+    /// Refuses. Nobody is there to approve reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     /// Refuses. Nobody is there to say a server is where its reply pointed.
@@ -1593,6 +1887,19 @@ impl Confirmer for ApproveWrites {
         CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -1657,6 +1964,19 @@ impl Confirmer for ChoosesFirst {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -1741,6 +2061,19 @@ impl Confirmer for ApproveRuns {
         CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -1807,6 +2140,19 @@ impl Confirmer for RemembersRuns {
         CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -1871,6 +2217,19 @@ impl Confirmer for ReadsOutput {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -1942,6 +2301,19 @@ impl Confirmer for VetsContent {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2018,6 +2390,19 @@ impl Confirmer for ExposesReads {
         CallDecision::reject()
     }
 
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -2081,6 +2466,19 @@ impl Confirmer for ApproveFetches {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2148,6 +2546,19 @@ impl Confirmer for ApprovePlans {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    /// Refuses. This double answers no question about reach.
+    fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2236,6 +2647,18 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
         self.timing(|inner| inner.confirm_mcp_call(request))
+    }
+
+    fn confirm_path(&mut self, request: &PathRequest) -> Decision {
+        self.timing(|inner| inner.confirm_path(request))
+    }
+
+    fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+        self.timing(|inner| inner.confirm_host(request))
+    }
+
+    fn confirm_message(&mut self, request: &MessageRequest) -> MessageDecision {
+        self.timing(|inner| inner.confirm_message(request))
     }
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
@@ -2360,6 +2783,8 @@ mod tests {
             stdin: None,
             confined: None,
             reach_record: None,
+            unconfined: false,
+            key_choice: None,
         };
         let offered = request(
             a_listed_line(),
@@ -2474,6 +2899,8 @@ mod tests {
             reference: "output_1".to_string(),
             verdict: Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 
@@ -2484,6 +2911,8 @@ mod tests {
             truncated: false,
             verdict: Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 
@@ -2537,6 +2966,19 @@ mod tests {
         fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
             std::thread::sleep(self.0);
             CallDecision::reject()
+        }
+
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+            Decision::Reject
+        }
+
+        fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+            Decision::Reject
+        }
+
+        fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+            MessageDecision::Decline
         }
 
         fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2677,6 +3119,7 @@ mod tests {
             toolchain: None,
             scope: Some(scope),
             reaches: Vec::new(),
+            identity: None,
             network: false,
             remembered: Vec::new(),
         };
@@ -2692,25 +3135,29 @@ mod tests {
                 carried("kubectl", Scope::Kubernetes),
                 carried("docker", Scope::Docker),
                 carried("gh", Scope::Remote),
+                carried("git", Scope::Signing),
                 Carried {
                     program: "npm".into(),
                     toolchain: Some(bravebot_sandbox::toolchain::Toolchain::Node),
                     scope: None,
                     reaches: Vec::new(),
+                    identity: None,
                     network: false,
                     remembered: Vec::new(),
                 },
             ],
+            writes_git_directories: false,
         };
 
         let sentences = confined.sentences();
 
-        assert_eq!(sentences.len(), 5);
+        assert_eq!(sentences.len(), 6);
         for (sentence, (program, reached)) in sentences.iter().zip([
             ("aws", "~/.aws"),
             ("kubectl", "~/.kube"),
             ("docker", "~/.docker"),
             ("gh", "never a private key"),
+            ("git", "signs with"),
             ("npm", "node toolchain"),
         ]) {
             assert!(sentence.starts_with(program), "{sentence}");
@@ -2733,11 +3180,13 @@ mod tests {
                 toolchain: None,
                 scope: Some(Scope::Remote),
                 reaches: Vec::new(),
+                identity: None,
                 network: false,
                 remembered: Vec::new(),
             }],
             network: bravebot_sandbox::network::Network::Open,
             filesystem: Default::default(),
+            writes_git_directories: false,
         };
 
         let sentences = confined.sentences();
@@ -2769,6 +3218,7 @@ mod tests {
             toolchain: None,
             scope: None,
             reaches: Vec::new(),
+            identity: None,
             network: true,
             remembered: Vec::new(),
         };
@@ -2780,6 +3230,7 @@ mod tests {
             requested: Vec::new(),
             requested_reaches: Vec::new(),
             carried,
+            writes_git_directories: false,
         };
 
         let closed = confined(Network::Closed, vec![keeping("curl")]).sentences();
@@ -2809,6 +3260,7 @@ mod tests {
             requested: Vec::new(),
             requested_reaches: Vec::new(),
             carried: Vec::new(),
+            writes_git_directories: false,
         };
         let said = confined(Counts {
             allow_read: 1,
@@ -2830,6 +3282,36 @@ mod tests {
             );
         }
         assert!(confined(Counts::default()).sentences().is_empty());
+    }
+
+    /// SANDBOX-18: a hook or a configuration a program writes into a `.git` runs later with no
+    /// sandbox, so where the platform lets a program that is not git write one, the heading the
+    /// person approves under says so, whichever account of the reach it gives, and where it does
+    /// not, the heading is the one it was.
+    #[test]
+    fn a_line_that_can_write_a_repositorys_hooks_says_so_in_its_heading() {
+        let confined = |reads_the_machine, writes_git_directories| Confined {
+            reads_the_machine,
+            directories: Vec::new(),
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: Vec::new(),
+            writes_git_directories,
+        };
+
+        for reads_the_machine in [true, false] {
+            let plain = confined(reads_the_machine, false).heading();
+            let said = confined(reads_the_machine, true).heading();
+            assert!(
+                said.contains("hooks and configuration") && said.contains("no sandbox"),
+                "{said}"
+            );
+            assert!(!plain.contains("hooks"), "{plain}");
+            assert!(said.starts_with(plain.trim_end_matches(':')), "{said}");
+            assert!(confined(reads_the_machine, true).sentences().is_empty());
+        }
     }
 
     fn a_run() -> RunRequest {

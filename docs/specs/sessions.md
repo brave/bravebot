@@ -9,10 +9,18 @@ governs:
   - crates/session/src/search.rs
   - crates/cli/src/session_search.rs
   - crates/tui/src/resume.rs
+  - crates/tui/src/hunks_command.rs
+  - crates/agent/src/hunks.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/accounts.rs
+  - crates/tui/src/state/completion.rs
+  - crates/tui/src/state/watching.rs
   - crates/tui/src/history.rs
   - crates/session/src/store.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/workspace.rs
+  - crates/cli/src/background.rs
   - crates/agent/src/aside.rs
   - crates/ui-bridge/src/store.rs
   - crates/ui-bridge/src/bridge.rs
@@ -137,6 +145,7 @@ disk. A record written before they were kept reads as having none.
 `verified-by: bravebot_tui::resume::a_pull_request_number_leaves_only_the_session_linked_to_that_number`
 `verified-by: bravebot_tui::resume::a_pull_request_address_leaves_only_the_session_linked_to_it`
 `verified-by: bravebot_tui::resume::the_pull_request_opening_ignores_issue_links_and_typing_narrows_it_further`
+`verified-by: bravebot_tui::resume::with_no_sessions_only_from_pr_opens_the_list_and_it_says_nothing_matches`
 `verified-by: bravebot_cli::running::from_pr_without_a_pull_request_is_refused_rather_than_listing_every_session`
 `verified-by: bravebot_tui::sessions::a_record_from_before_checkouts_were_kept_reads_as_having_none`
 
@@ -148,7 +157,10 @@ it still has a title.
 
 `verified-by: bravebot_session::sessions::a_title_is_the_first_line_of_the_prompt`
 `verified-by: bravebot_session::sessions::a_long_title_is_cut_and_says_it_was`
+`verified-by: bravebot_session::sessions::a_title_is_cut_after_sixty_characters_rather_than_bytes`
 `verified-by: bravebot_session::sessions::a_prompt_with_nothing_in_it_still_has_a_title`
+`verified-by: bravebot_session::sessions::a_save_with_nothing_asked_titles_the_record_and_leaves_the_name_to_the_first_prompt`
+`verified-by: bravebot_tui::app::compacting_before_the_first_prompt_writes_nothing_and_the_first_prompt_names_the_session`
 
 <a id="SESSION-5"></a>
 ### SESSION-5: everything here degrades to doing nothing
@@ -177,9 +189,11 @@ Queued submissions keep their entries. Where consecutive duplicates share an ent
 while any submission it represents has not been cancelled. Cancelling a generated turn removes no
 input-recall entry, since that turn did not submit one. A cancellation that removes no entry leaves
 the stored history as it stands, because another session may have added to it since this one read it
-and writing this session's list back would take those prompts away. A line cleared with Escape or
-Ctrl-C is not a sent prompt and is not in this history: it is a draft held for the session alone
-([INPUT-39](terminal-input.md#INPUT-39)).
+and writing this session's list back would take those prompts away. One that does remove an entry
+takes that one stored line and no other: the stored history is read again and rewritten without it,
+never replaced by this session's own list, so prompts other sessions saved since this one started
+stay. A line cleared with Escape or Ctrl-C is not a sent prompt and is not in this history: it is a
+draft held for the session alone ([INPUT-39](terminal-input.md#INPUT-39)).
 
 `verified-by: bravebot_tui::sessions::cancelling_removes_only_the_running_prompt_from_recall`
 `verified-by: bravebot_tui::sessions::quitting_removes_only_the_running_prompt_from_recall`
@@ -187,6 +201,7 @@ Ctrl-C is not a sent prompt and is not in this history: it is a draft held for t
 `verified-by: bravebot_tui::sessions::cancelling_queued_duplicates_keeps_recall_until_the_last_submission`
 `verified-by: bravebot_tui::sessions::cancelling_a_generated_tick_leaves_input_recall_unchanged`
 `verified-by: bravebot_tui::sessions::cancelling_a_generated_tick_keeps_what_another_session_recorded`
+`verified-by: bravebot_tui::sessions::cancelling_a_submitted_prompt_keeps_what_another_session_recorded`
 `verified-by: bravebot_tui::sessions::cancelled_work_survives_resume_but_leaves_input_recall`
 
 Each is stored with when it was sent and which workspace it was sent from, both of which the search
@@ -298,6 +313,7 @@ here would make the session's own advice look broken to the person who followed 
 still refused, since a fork continues a conversation and there is none to continue.
 
 `verified-by: bravebot_tui::sessions::a_manifest_run_is_recorded_and_cannot_be_resumed`
+`verified-by: bravebot_cli::running::naming_a_manifest_run_prints_its_report_and_succeeds`
 `verified-by: bravebot_tui::resume::a_manifest_session_cannot_be_resumed`
 `verified-by: bravebot_tui::resume::a_manifest_run_is_marked_in_the_list`
 
@@ -482,8 +498,15 @@ any local account on multi-user machines and shared hosts.
 is: `..`, a root and a drive prefix are refused, and containment is then tested against the
 canonical path of the deepest directory that exists, so a path leading through a symlink out of
 the tree is refused as well. Anything already at the path is refused rather than replaced, a
-symlink whose target is missing included. Missing parent directories are created. The file is
+symlink whose target is missing included, and the name is created exclusively as well, so one that
+appears after the check, as a turn writing in the directory can make it, is refused the same way.
+Missing parent directories are created. The file is
 written mode 0600, as SESSION-16 writes the record it came from.
+
+`/export` is carried out as it is typed while a turn runs ([CMD-8](commands.md#CMD-8)). The file holds
+the transcript as it stands then, and the prompt the turn is working on carries `**Outcome:** still
+running when exported` where a finished prompt carries its ending. Only the turn in flight is marked:
+a prompt whose record kept no ending is left without one, as below.
 
 Exporting after a resume retains each recorded prompt and safe failure reason, with failed and
 cancelled endings distinct and attached to the turn that produced them. Under each prompt, the
@@ -494,6 +517,9 @@ and how the turn ended rather than in place of any of them.
 
 `verified-by: bravebot_tui::sessions::reopening_keeps_failure_and_cancellation_in_export`
 `verified-by: bravebot_tui::sessions::accepted_corrections_survive_cancellation_storage_export_and_the_next_turn`
+`verified-by: bravebot_tui::sessions::exporting_while_a_turn_runs_marks_the_running_prompt_and_no_other`
+`verified-by: bravebot_tui::sessions::exporting_a_turn_with_no_recorded_ending_does_not_call_it_running`
+`verified-by: bravebot_tui::app::export_at_rest_says_where_it_wrote_and_refuses_a_name_that_is_taken`
 
 **Why.** The transcript belongs to the person who had the conversation, which
 [compaction.md](compaction.md) says in as many words, and without this the only way to exercise
@@ -507,6 +533,7 @@ be a way to write it anywhere.
 `verified-by: bravebot_session::sessions::exporting_refuses_a_path_through_a_symlinked_directory`
 `verified-by: bravebot_session::sessions::exporting_refuses_to_overwrite_an_existing_file`
 `verified-by: bravebot_session::sessions::exporting_refuses_a_path_that_is_a_dangling_symlink`
+`verified-by: bravebot_session::sessions::a_name_taken_after_the_check_is_refused_and_left_as_it_was`
 `verified-by: bravebot_session::sessions::an_exported_transcript_is_readable_only_by_its_owner`
 `verified-by: bravebot_session::sessions::exporting_creates_intermediate_directories`
 
@@ -528,6 +555,7 @@ context already built up without polluting the original session. Refusing manife
 the invariant that finished autonomous runs have a definite end.
 
 `verified-by: bravebot_session::sessions::forking_a_manifest_session_is_refused`
+`verified-by: bravebot_session::sessions::a_fork_is_a_new_record_with_the_conversation_the_spend_and_the_trail`
 `verified-by: bravebot_tui::undo_tests::terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions`
 
 <a id="SESSION-19"></a>
@@ -543,8 +571,20 @@ conversation. Their display prompts, outcomes, and task lists are removed with t
 reopening after rewind must not restore them, and a new turn that reuses a removed turn number
 inherits none of its metadata.
 
+The prompt the session now stands before goes back into the composer, so it can be edited and sent
+again rather than retyped. It is the prompt of the earliest turn gone back past, read off the
+rewind point rather than off the display, since the display prompts of those turns are removed with
+them. It arrives as a prompt and not as a shell-mode command, and it arrives only into an empty
+composer: a line typed since the turn was sent is what the person is looking at, and the returning
+prompt written over it would cost them that line.
+
 `verified-by: bravebot_tui::sessions::reopened_history_stays_rewound_after_another_save_and_new_turn`
 `verified-by: bravebot_tui::app::rewinding_reopened_history_removes_outcomes_plans_and_audit_before_reuse`
+`verified-by: bravebot_tui::app::undoing_a_turn_puts_its_prompt_back_in_the_box`
+`verified-by: bravebot_tui::state::a_returned_prompt_lands_in_the_box_as_a_prompt`
+`verified-by: bravebot_tui::state::a_returned_prompt_does_not_overwrite_a_line_being_typed`
+`verified-by: bravebot_tui::state::a_returned_prompt_is_refused_while_a_turn_is_running`
+`verified-by: bravebot_cli::running::a_continued_task_adds_a_rewind_point_behind_the_ones_its_record_held`
 
 A complete rewind that goes back past the session's first turn removes its record rather than
 leaving one with nothing in it. A rewind with incomplete coverage, failed restorations or changed file decisions saves its state even there, and a name the user gave the session before that turn stays with
@@ -598,6 +638,9 @@ separately from the coverage warning, which names each recorded cause once. Unkn
 be identified as unknown rather than guessed from the available backups.
 
 `verified-by: bravebot_tui::undo_tests::undo_warnings_name_recorded_causes`
+`verified-by: bravebot_cli::running::a_program_a_continued_task_runs_is_a_gap_on_every_point_an_undo_could_reach`
+`verified-by: bravebot_session::sessions::continuing_a_record_keeps_a_server_warning_only_its_replaced_points_carried`
+`verified-by: bravebot_cli::running::a_continued_task_after_a_language_server_warns_on_the_point_it_opens`
 
 Undo runs only after the turn's delegates and background jobs have finished cleanup. It stops and
 reaps the session's tracked language servers before restoring files; later questions may start
@@ -818,6 +861,124 @@ names it on the line that reports the rewind.
 `verified-by: bravebot_session::sessions::required_paths_missing_from_backup_entries_are_unavailable_restorations`
 `verified-by: bravebot_session::sessions::backup_provenance_is_independent_of_coverage`
 
+<a id="SESSION-37"></a>
+### SESSION-37: one hunk of what the last turn wrote can be put back, and the rest of the file left as it is
+
+`/hunks` with nothing after it lists the hunks the last turn wrote, numbered from one across the
+paths in the order the turn first wrote them. A hunk is a run of changed lines between what the path
+held before the turn, as the rewind point kept it ([SESSION-19](#SESSION-19)), and what it holds
+now. A row gives the number, the path, the line the hunk starts at in the file now and how many
+lines it added and removed, and draws the hunk with up to three unchanged lines either side, as a
+write's changes are drawn. A hunk that only removes lines is placed by the line before it. A removed
+line that reads the same as an added line draws the carriage return it ends in, and says so when it
+has no terminator, so a change to how a line ends does not draw as a removal and an addition of the
+same text. No other line draws either, so a CRLF file is not marked on every row. The list holds at
+most 100 hunks and says how many more there were.
+
+A path the turn wrote that has no hunk to list is named with the reason: the turn created it, what
+it held was not kept, it holds what it held before, it is not text, so much of it changed that the
+hunks cannot be lined up, it is gone or is not a file within what a rewind keeps, it does not
+resolve inside the project now, or its contents are not vouched for. Where the way back is `/undo`,
+the line says that it puts back the rest of the turn too. Where the turn changed files in ways a
+rewind does not account for ([SESSION-19](#SESSION-19)), the list names the causes and says it may
+be missing changes.
+
+`/hunks <number>` puts the hunk listed under that number back as it stood before the turn, leaves
+every other line of the file as it is now, and lists what is left. A list is forgotten when another
+turn begins, when turns are undone, when the session is cleared and before the next list is drawn,
+so a number is always read beside a list of the turn it names. Nothing is written, and a line says
+why, when there is no list, when the number is not one of the last list, when the file no longer
+holds that hunk as listed, or when the path now resolves where a rewind may not write. A hunk is
+found again by comparing the file now with what the turn kept, and is the same hunk only when its
+line ranges and its lines, terminators included, are the same, so a hunk that has moved, grown,
+shrunk or gone is not the one that was listed.
+
+The text is written through the confined path `/undo` writes through, after the session's language
+servers have been stopped as before a restoration. The file is opened without waiting for a writer
+and read only if it is a file within what a rewind keeps. It is read once more just before the
+write, through the same gate, and written only if it still holds the bytes the text was worked out
+from; a file that cannot be read then is not that file, and nothing has been written when that is
+found. The file is not held between that read and the write, so a program that writes it in that
+interval is overwritten.
+
+Lines are compared with their terminators. A file turned from LF to CRLF is a change to every line,
+and a final line that had no terminator comes back without one.
+
+Listing a hunk and finding it again are decisions taken from file content, so both are taken only
+where the map vouches for the file now, for the path as the session stood before the turn, and for
+what the rewind point captured ([LABEL-5](labels.md#LABEL-5)). A file the map does not vouch for is
+named as one hunks are not taken from, none of its lines is drawn, and `/undo` is the only way
+back.
+
+The path is distrusted before it is written, as a restoration of it is, and holds the decision it
+held before once the write has succeeded: the file is then made of lines the map vouched for on
+both sides, and no other path's decision moves. A write that fails part way leaves the path
+distrusted and the line says why, and a memory it holds is recorded as one the next session does
+not trust, as a rewind that failed on it records it ([MEMORY-5](definition-memory.md#MEMORY-5)). A
+refusal before anything is written leaves the map as it was, and a map a failed write changed is
+written to the session's record at once, so a resume does not trust the file again. The rewind
+point is not changed, so `/undo` after a hunk went back still puts the whole file back as it stood
+before the turn.
+
+**Why.** `/undo` and `/rewind` act on whole turns, and a person who wants most of a turn's edits
+and not one of them has no other way to say which. The list comes first for the reason a rewind's
+does ([SESSION-21](#SESSION-21)): putting a hunk back writes over a file the person may have
+edited since, so the lines are read before they are chosen. A number names a hunk of the list it
+was read beside and the list is drawn again after a hunk goes back, since the numbers below it move.
+Comparing two texts is a decision, which is why a file nobody vouched for is left to `/undo`, which
+compares nothing.
+
+`verified-by: bravebot_agent::diff::hunks_name_the_lines_each_run_replaces_on_both_sides`
+`verified-by: bravebot_agent::diff::putting_a_hunk_back_leaves_the_other_hunks_as_they_are`
+`verified-by: bravebot_agent::diff::a_final_line_without_a_terminator_is_put_back_without_one`
+`verified-by: bravebot_agent::diff::a_hunk_of_changed_terminators_is_put_back_byte_for_byte`
+`verified-by: bravebot_agent::diff::a_hunk_that_changes_only_how_lines_end_is_drawn_with_the_difference_visible`
+`verified-by: bravebot_agent::diff::a_hunk_of_a_crlf_file_is_drawn_without_a_mark_on_any_row`
+`verified-by: bravebot_agent::diff::only_the_lines_whose_ending_is_the_change_show_it`
+`verified-by: bravebot_agent::hunks::every_hunk_of_a_written_file_is_listed_in_file_order`
+`verified-by: bravebot_agent::hunks::hunks_are_numbered_from_one_across_every_path`
+`verified-by: bravebot_agent::hunks::putting_back_one_hunk_leaves_the_other_as_the_turn_wrote_it`
+`verified-by: bravebot_agent::hunks::putting_a_hunk_back_leaves_the_trust_map_as_it_was`
+`verified-by: bravebot_agent::hunks::a_hunk_the_file_has_since_moved_or_changed_is_refused_and_the_file_left_alone`
+`verified-by: bravebot_agent::hunks::a_file_written_between_the_comparison_and_the_write_is_refused`
+`verified-by: bravebot_agent::hunks::a_write_that_fails_leaves_the_path_distrusted_and_says_why`
+`verified-by: bravebot_agent::hunks::the_path_is_distrusted_before_the_write_is_entered`
+`verified-by: bravebot_agent::hunks::content_the_map_does_not_vouch_for_is_not_compared_and_not_written`
+`verified-by: bravebot_agent::hunks::whether_untrusted_bytes_are_text_is_not_told_apart`
+`verified-by: bravebot_agent::hunks::a_path_with_nothing_to_take_a_hunk_from_is_named_with_the_reason`
+`verified-by: bravebot_agent::hunks::a_path_that_now_leads_out_of_the_project_is_not_read`
+`verified-by: bravebot_agent::hunks::a_file_past_the_rewind_budget_is_not_read`
+`verified-by: bravebot_agent::hunks::a_file_gone_at_the_write_is_refused_and_the_map_left_as_it_was`
+`verified-by: bravebot_agent::hunks::a_failed_write_into_a_memory_is_recorded_and_a_successful_one_is_not`
+`verified-by: bravebot_agent::hunks::a_file_too_different_to_line_up_is_named_and_refused`
+`verified-by: bravebot_agent::hunks::a_path_that_leads_out_of_the_project_at_the_write_is_refused_with_the_map_as_it_was`
+`verified-by: bravebot_agent::hunks::a_write_that_fails_in_a_way_nothing_here_names_leaves_the_path_distrusted`
+`verified-by: bravebot_agent::hunks::bytes_are_handed_over_only_for_a_path_the_map_vouches_for`
+`verified-by: bravebot_agent::hunks::a_list_stops_at_its_limit_and_counts_the_rest`
+`verified-by: bravebot_agent::hunks::a_pipe_where_the_file_was_is_refused_and_not_waited_on`
+`verified-by: bravebot_tui::hunks_command::the_bare_word_lists_and_a_number_names_a_hunk`
+`verified-by: bravebot_tui::hunks_command::anything_but_one_number_is_unreadable`
+`verified-by: bravebot_tui::app::the_hunks_command_carries_the_number_it_was_given`
+`verified-by: bravebot_tui::app::a_longer_word_starting_with_hunks_is_a_prompt`
+`verified-by: bravebot_tui::undo_tests::the_hunks_of_the_last_turn_are_listed_with_their_lines`
+`verified-by: bravebot_tui::undo_tests::a_hunk_is_put_back_by_its_number_and_the_turn_can_still_be_undone`
+`verified-by: bravebot_tui::undo_tests::a_number_from_before_the_list_was_redrawn_names_no_other_hunk`
+`verified-by: bravebot_tui::undo_tests::a_number_with_no_list_to_read_it_beside_writes_nothing`
+`verified-by: bravebot_tui::undo_tests::a_list_from_before_another_turn_is_not_applied_to_it`
+`verified-by: bravebot_tui::undo_tests::a_list_does_not_outlive_the_undo_or_the_clearing_of_its_turn`
+`verified-by: bravebot_tui::undo_tests::a_list_does_not_outlive_the_prompt_that_follows_it`
+`verified-by: bravebot_tui::undo_tests::a_list_says_when_the_turn_changed_more_than_it_can_list`
+`verified-by: bravebot_tui::undo_tests::a_list_longer_than_its_limit_says_how_many_hunks_it_left_out`
+`verified-by: bravebot_tui::undo_tests::a_crlf_file_is_listed_without_a_mark_on_every_row`
+`verified-by: bravebot_tui::undo_tests::a_distrust_left_by_a_failed_write_reaches_the_saved_record`
+`verified-by: bravebot_tui::undo_tests::a_hunks_command_that_passes_no_gate_leaves_no_audit_file`
+`verified-by: bravebot_tui::undo_tests::a_hunk_put_back_stops_the_language_servers_and_a_refused_one_does_not`
+`verified-by: bravebot_tui::undo_tests::a_hunk_that_only_removes_lines_is_placed_by_the_line_before_it`
+`verified-by: bravebot_tui::hunks_command::a_file_name_with_an_escape_in_it_is_drawn_with_the_escape_made_visible`
+`verified-by: bravebot_tui::undo_tests::a_file_edited_since_the_list_is_not_written_over`
+`verified-by: bravebot_tui::undo_tests::a_file_the_map_does_not_vouch_for_is_named_and_its_lines_are_not_drawn`
+`verified-by: bravebot_tui::undo_tests::a_session_with_no_turn_has_no_hunks`
+
 <a id="SESSION-23"></a>
 ### SESSION-23: the record says where each turn began and ended, and what came of it
 
@@ -1010,9 +1171,9 @@ go stale independently: one build ships both surfaces, and every build ships the
 ### SESSION-30: a stored session can be deleted, and nothing else goes with it
 
 The desktop app can delete a session from disk with `session.delete`, which takes the `directory`
-and `id` that `session.list` gave. It removes the record and the trail beside it, and nothing else:
-not another session in the same project, not a session in another project, and not anything a bot
-keeps in its memory. Deleting is keyed on those two strings alone. Nothing read out of a record
+and `id` that `session.list` gave. It removes the record, the trail beside it and the index of what the session said
+([SESSION-33](#SESSION-33)), and nothing else: not another session in the same project, not a
+session in another project, and not anything a bot keeps in its memory. Deleting is keyed on those two strings alone. Nothing read out of a record
 decides whether or what to delete.
 
 The id has to be shaped like a session's name, letters, digits, `-` and `_` in one path segment,
@@ -1043,6 +1204,7 @@ deleted an open session would have the next save write the record back.
 
 `verified-by: bravebot_session::sessions::deleting_a_session_removes_its_record_and_trail_and_only_those`
 `verified-by: bravebot_session::sessions::deleting_in_one_project_leaves_another_projects_session_alone`
+`verified-by: bravebot_session::sessions::deleting_a_session_takes_what_the_search_index_kept_of_it`
 `verified-by: bravebot_session::sessions::a_manifest_run_can_be_deleted`
 `verified-by: bravebot_session::sessions::deleting_refuses_a_name_that_could_leave_the_directory_and_one_that_names_nothing`
 `verified-by: bravebot_session::sessions::deleting_does_not_follow_a_link_out_of_the_state_directory`
@@ -1170,11 +1332,12 @@ second copy a no-op without a field in the record that every earlier build would
 The resume picker narrows its list by what a session's record says as well as by its title, branch
 and links ([SESSION-3](#SESSION-3)). The words searched are the ones a resumed transcript draws: the
 prompts a person typed, the planner's replies, and the line announcing each call the planner made,
-which names the path, command, address or pattern it was about. A tool result, a file a prompt
-attached, a note the agent composed and a reference the quarantine holds are not drawn, so they are
-not searched ([SESSION-2](#SESSION-2)). A line announcing a call is the one the transcript draws,
-so a command the transcript hides is not searchable either. The trail holds no words and is not
-read.
+which names the path, command, address or pattern it was about. A note a person typed on the
+session ([SESSION-36](#SESSION-36)) is searched too, and is shown on a row the same way. A tool
+result, a file a prompt attached, a note the agent composed and a reference the quarantine holds are
+not drawn, so they are not searched ([SESSION-2](#SESSION-2)). A line announcing a call is the one
+the transcript draws, so a command the transcript hides is not searchable either. The trail holds no
+words and is not read.
 
 A record is searched only when it was written by this program's terminal or desktop front end, or
 by a build that did not yet record one. An imported session ([SESSION-32](#SESSION-32)) holds
@@ -1186,6 +1349,16 @@ under its title and age, the first line that holds the text, cut around the matc
 row. Control characters and the characters that reorder or hide text are removed from that line, as
 they are from every line before it is compared. Enter resumes the session as it does for any row.
 The records are read the first time a character is typed, not when the picker opens.
+
+What a record says is kept in an index entry beside it, `<id>.search`, built from the lines above the
+first time the session is searched, so a session saved before the entry existed is found too. An
+entry holds only those lines, so it holds nothing a search does not cover. It is current when the
+record's size and modification time are the ones it was built from, and a current entry answers the
+search without the record being opened or parsed. Any other entry is rebuilt from the record, and so
+is one written by a build whose rules for the lines differed. An entry whose record is gone is
+removed. Nothing is kept where nothing may be written, as in an incognito session, and then the
+record is read as it was. A search with a `since:` word, or whose phrase a session's title already
+holds, does not look at the words of a session that settles it without them.
 
 `since:<n>h`, `since:<n>d` and `since:<n>w` are fixed words the driver parses, not text the model or
 a record can supply. They keep the sessions last written within that many hours, days or weeks, and
@@ -1214,8 +1387,19 @@ same reason: the driver may carry text it did not write but does not decide from
 `verified-by: bravebot_session::search::a_shown_match_is_cut_around_the_words_and_no_wider_than_a_row`
 `verified-by: bravebot_session::search::a_since_word_is_a_window_and_leaves_the_rest_as_the_phrase`
 `verified-by: bravebot_session::search::a_malformed_since_word_is_refused_rather_than_ignored`
+`verified-by: bravebot_session::search::a_note_a_person_typed_is_found_and_a_record_without_notes_is_unchanged`
+`verified-by: bravebot_session::search::a_session_found_by_a_note_and_by_a_prompt_shows_the_prompt_line`
+`verified-by: bravebot_session::search::a_note_is_cleaned_like_any_other_line_before_it_is_compared_or_shown`
+`verified-by: bravebot_session::search::a_note_in_an_imported_session_is_not_searched`
+`verified-by: bravebot_session::search::an_entry_built_before_notes_were_searched_is_rebuilt_to_include_them`
 `verified-by: bravebot_session::search::a_plain_query_keeps_a_since_word_as_text`
 `verified-by: bravebot_session::search::the_corpus_reads_a_projects_records_and_nothing_else_in_its_directory`
+`verified-by: bravebot_session::search::a_session_saved_before_the_index_is_found_and_indexed`
+`verified-by: bravebot_session::search::a_current_entry_answers_without_the_record_being_read`
+`verified-by: bravebot_session::search::a_record_written_since_is_read_again`
+`verified-by: bravebot_session::search::an_entry_built_by_another_rule_is_not_trusted`
+`verified-by: bravebot_session::search::a_session_nobody_asked_for_is_neither_read_nor_indexed`
+`verified-by: bravebot_session::search::the_index_holds_only_what_a_search_covers_and_goes_with_its_record`
 `verified-by: bravebot_tui::resume::typing_words_said_in_a_session_finds_it_and_enter_resumes_it`
 `verified-by: bravebot_tui::resume::a_session_whose_words_do_not_hold_the_phrase_is_left_out`
 `verified-by: bravebot_tui::resume::a_since_word_keeps_only_the_sessions_written_within_it`
@@ -1228,6 +1412,44 @@ same reason: the driver may carry text it did not write but does not decide from
 `verified-by: bravebot_cli::session_search::a_row_is_the_id_and_a_title_with_nothing_a_terminal_would_act_on`
 `verified-by: bravebot_cli::running::sessions_search_prints_the_ids_and_titles_of_the_sessions_that_said_it`
 
+<a id="SESSION-34"></a>
+### SESSION-34: `/handoff` starts a new session from a brief the person has read
+
+`/handoff <next goal>` has one request made from the planner's own context, with the goal on the end
+and no tools, as `/recap` is ([CMD-16](commands.md#CMD-16)). The conversation is not changed by it.
+The brief that comes back is cut to 4000 characters and put in the input box with a sentence the
+driver adds saying that the file decisions and permissions of this session did not come with it,
+and the goal. A line already in the box is kept as the draft Up brings back. The person reads and
+edits it. Enter then starts a new session, as `/clear` does, whose first prompt is what the box held
+then; Escape, or emptying the box, drops it, and a prompt typed afterwards is an ordinary prompt.
+The prompt is sent as a line the person typed, because they read and approved it.
+
+The new record holds the id of the session it came from, which the resume picker shows on the
+row; the source's record is not touched and is still resumable. Only the brief crosses. File
+decisions, standing permissions, the trust map, the directories opened and the quarantine are not
+carried, so the new session asks again as after `/clear`. The command is refused, with a line
+saying why and nothing requested, with no goal, and before a turn has ended, because there is no
+record to link back to. A brief is not offered where the exchange has met something untrusted
+([SESSION-20](#SESSION-20)): the planner could not have held it.
+
+**Why.** A long session is worth leaving for the next piece of work without carrying all of it
+([COMPACT](compaction.md)). Writing the brief from the planner's own context adds nothing the
+planner had not been shown, and the person's reading of it is what makes it a prompt. The permissions
+stay behind because they were given for work that the brief describes only in words.
+
+`verified-by: bravebot_agent::aside::a_handoff_asks_for_a_brief_for_the_goal_over_the_exchange`
+`verified-by: bravebot_agent::aside::the_handed_off_prompt_holds_the_brief_the_notice_and_the_goal_in_that_order`
+`verified-by: bravebot_tui::app::the_handoff_command_carries_its_goal_and_is_not_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::enter_on_a_proposed_brief_starts_a_session_from_the_edited_text`
+`verified-by: bravebot_tui::app::a_prompt_typed_after_the_brief_was_wiped_out_is_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::a_brief_over_a_typed_line_keeps_the_line_and_the_new_session_sends_the_brief`
+`verified-by: bravebot_tui::app::a_handoff_with_no_goal_or_no_ended_turn_is_refused_with_a_line_saying_why`
+`verified-by: bravebot_tui::app::a_brief_from_an_exchange_that_met_something_untrusted_is_not_offered`
+`verified-by: bravebot_tui::app::a_brief_the_planner_could_have_held_is_offered_and_a_failed_request_offers_nothing`
+`verified-by: bravebot_session::sessions::the_list_carries_the_session_a_handoff_came_from_and_only_where_it_is_an_id`
+`verified-by: bravebot_session::sessions::a_handed_off_session_keeps_its_source_across_a_resume`
+`verified-by: bravebot_tui::resume::a_handed_off_session_names_its_source_on_its_row`
+
 ## Known costs
 
 - **The first character typed reads every record.** Each record in the directory is parsed in full
@@ -1239,11 +1461,13 @@ same reason: the driver may carry text it did not write but does not decide from
   an imported session. A phrase is not matched across two lines.
 - **Two working directories can share a session store.** The directory name is derived by mapping
   every character outside a small set to `-`, which is lossy, so `/a/b`, `/a-b` and `/a b` all
-  reduce to the same name. Nothing re-checks afterwards: the listing reads every record in that
-  directory without comparing the path recorded inside it. Since a resume restores standing
+  reduce to the same name. The resume picker does not re-check afterwards: it reads every record in
+  that directory without comparing the path recorded inside it. Since a resume restores standing
   permissions, permissions granted in one of those directories would be offered in another.
 
-  The record does hold the true path, so the fix is to filter on it. `two_directories_do_not_share_a_key`
+  The record does hold the true path, and `bravebot sessions list`
+  ([CLI-32](cli.md#CLI-32)) filters on it, so that listing shows only the sessions of the directory
+  it was run in. The picker still does not. `two_directories_do_not_share_a_key`
   does not cover this: it compares `/a/one` with `/a/two`, which differ before the mapping is
   applied.
 
@@ -1252,7 +1476,10 @@ same reason: the driver may carry text it did not write but does not decide from
   the trust map and the vouched commands under whatever stands at that path now. A person who
   removes a checkout, puts a different one at the same path and resumes an old session there is not
   asked the startup trust question, and a command vouched for in that session runs without asking,
-  its output labelled trusted ([RUN-7](tools/run.md#RUN-7)). A fresh session at that path asks both
+  its output labelled trusted ([RUN-7](tools/run.md#RUN-7)). The same goes for the yes that lets a
+  confined line run without asking ([RUN-5](tools/run.md#RUN-5)): it is kept as the root's path, so
+  it comes back for the checkout at that path now, and such a line there runs unasked with the
+  network closed for it. A fresh session at that path asks both
   ([TRUST-6](trust-map.md#TRUST-6), [RUN-9](tools/run.md#RUN-9)). A resume continues the session as
   it was left, and the permissions it holds were given for the path, so this is accepted.
 
@@ -1290,6 +1517,12 @@ same reason: the driver may carry text it did not write but does not decide from
   but that program's changes stay on disk. Covering them would mean snapshotting the tree around
   every command rather than around every write, which is a different and much larger mechanism.
 
+- **The planner is not told that a hunk went back.** The conversation still describes the file as the
+  turn left it. A later edit of that file that names the lines the hunk held is refused for not
+  finding them, a whole-file write built from the conversation's text writes the hunk back, and a
+  reply that describes the file from memory describes the wrong one. Telling it
+  would put a note in the conversation that follows a person's edit of the tree and not a turn,
+  which is a kind of note nothing writes today, and what it would carry is the owner's decision.
 - **A rewind overwrites edits made since the turn.** What goes back is what the path held before
   the turn wrote to it, so a file the user edited themselves in between loses that edit. Nothing
   compares the file against what the turn left there, and nothing asks first.
@@ -1317,3 +1550,62 @@ same reason: the driver may carry text it did not write but does not decide from
   something it is not.
 - **Only Claude Code is read.** opencode keeps its sessions in a database file and no reader for
   one is built.
+
+<a id="SESSION-35"></a>
+### SESSION-35: a process can keep its records in a directory of its own
+
+A process that owns its sessions, and must keep them apart from the ones a terminal or a window resumes, can be told once to keep every record it reads, lists or writes under a directory of its choosing, in place of the state directory's `sessions`. Only that directory moves. The per-project layout inside it, the modes, and degrading to nothing where there is no state directory or in an incognito session are unchanged. A second choice in the same process is refused, naming the root in force. [HOST-4](local-host.md#HOST-4) is the process that does this.
+
+`verified-by: bravebot_session::sessions::a_chosen_root_replaces_the_sessions_directory_and_only_that`
+`verified-by: bravebot_session::sessions::a_chosen_root_does_not_make_a_session_writable_where_there_is_no_state_directory`
+`verified-by: bravebot_session::keeping_in_a_root::a_second_choice_is_refused_and_names_the_root_in_force`
+
+<a id="SESSION-36"></a>
+### SESSION-36: a note a person types is kept in the record apart from the conversation
+
+`/note <text>` adds a note to the session. It can be typed while a turn runs. The note belongs to the
+turn the session is on: the running turn, or the last finished one when none runs. It is written to
+the record at once, as an entry of its own with the turn, the author and the text. The author is
+`person`: the only way to add a note is the person typing the command, and nothing a tool, a file or
+a model produced is written as one. Text with nothing in it is not a note and records nothing;
+`/note` with nothing after it lists the notes the session holds instead, one line each with its turn,
+and adds none. A session that writes no record, as an incognito one does, holds the note in the
+session only, and says that it reached no record rather than saying it was kept.
+
+A note is not part of the conversation. It is not a prompt, is not queued, is not offered to the
+turn in flight, and is not in the snapshot a resume restores, so adding one changes nothing the
+planner is given. A resume, a continuation save and a fork keep the notes of the session. A record
+written before notes were kept reads as having none. The resume search ([SESSION-33](#SESSION-33))
+finds a session by the text of its notes.
+
+The session-review skill reads the notes of a session it reviews and shows them to its analyzer and
+verifier as data from the person. The analyzer checks a note against the audit trail and the code
+like any other claim and reports it only when the cause is in bravebot. Nothing in a note is run or
+followed as an instruction, and an issue filed from a review carries none of its text. A session is
+reviewed again when it has more notes than the last review considered.
+
+**Why.** A person watching a session sees things the record does not show: the wrong file was
+edited, the answer was slow, the plan was misread. Saying so where the session is, at the turn it
+happened on, is cheaper and more exact than reconstructing it at review time.
+
+**Why not into the conversation.** The text is free-form from a person and may quote anything. In
+the conversation it would be read by the planner as part of the task, which is not what it is for,
+and it would change what a later turn does. Kept apart, it is read only by a review that treats it
+as data.
+
+`verified-by: bravebot_session::sessions::a_note_is_written_at_once_with_its_turn_and_its_author`
+`verified-by: bravebot_session::sessions::empty_text_is_not_a_note`
+`verified-by: bravebot_session::sessions::a_note_typed_before_the_first_save_is_written_with_it`
+`verified-by: bravebot_session::sessions::a_note_leaves_the_conversation_as_it_was`
+`verified-by: bravebot_session::sessions::a_resumed_session_keeps_its_notes_through_a_continuation_save`
+`verified-by: bravebot_session::sessions::a_whole_record_save_writes_the_notes_the_handle_holds`
+`verified-by: bravebot_session::sessions::a_fork_carries_the_notes`
+`verified-by: bravebot_session::sessions::a_record_from_before_notes_reads_as_having_none`
+`verified-by: bravebot_tui::app::the_note_command_carries_the_whole_note`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_note_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::a_note_typed_mid_turn_is_recorded_on_that_turn_and_given_to_no_one`
+`verified-by: bravebot_tui::app::a_note_with_no_text_mid_turn_records_nothing`
+`verified-by: bravebot_tui::app::a_note_typed_at_an_idle_prompt_is_recorded_on_the_last_finished_turn`
+`verified-by: bravebot_tui::app::a_note_with_no_text_lists_the_notes_the_session_holds`
+`verified-by: bravebot_session::sessions::a_note_where_no_record_can_be_written_says_it_reached_none`
+`verified-by: by-construction (the session-review skill reads a record's notes into a file beside the copy of the record, names that file to the analyzer and verifier prompts, and writes the number of notes shown into the marker; make check-scripts runs agents/skills/session-review/selftest.py, whose test_a_session_is_reviewed_once_for_its_notes_and_again_only_when_a_new_one_is_added pins that a session whose notes were all considered is not offered again, that a new note offers it again for the new note alone, and that a session with notes and no problems still gets its marker)`

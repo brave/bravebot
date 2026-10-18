@@ -11,7 +11,6 @@ import re
 # These tests run git with argument lists against temporary repositories.
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -233,10 +232,10 @@ class Work(unittest.TestCase):
         self.assertEqual(pa.outcomes(self.work)[1][A]["fields"]["severity"], "low")
         self.vet(A, verdict="affected", issue=dict(self.issue, security=False))
         self.check(A, verdict="confirmed", security=True, severity="high")
-        self.assertEqual(pa.labels_for(pa.outcomes(self.work)[1][A]["fields"]), ["area/tools", "bug"])
+        self.assertEqual(pa.labels_for(pa.outcomes(self.work)[1][A]["fields"]), ["area/tools", "bug", "release-blocking"])
         self.vet(A, verdict="affected", issue=self.issue)
         self.check(A, verdict="confirmed", security=False)
-        self.assertEqual(pa.labels_for(pa.outcomes(self.work)[1][A]["fields"]), ["area/tools", "bug"])
+        self.assertEqual(pa.labels_for(pa.outcomes(self.work)[1][A]["fields"]), ["area/tools", "bug", "release-blocking"])
 
     def test_a_draft_has_no_em_dash_pings_nobody_and_does_not_name_the_machine(self):
         self.vet(A, verdict="affected", issue=self.issue)
@@ -244,7 +243,7 @@ class Work(unittest.TestCase):
         quiet(pa.draft, self.args())
         drafts = json.loads((self.work / "drafts.json").read_text())
         self.assertEqual(len(drafts), 1)
-        self.assertEqual(drafts[0]["labels"], ["area/tools", "bug", "needs-security-review", "security", "severity/high"])
+        self.assertEqual(drafts[0]["labels"], ["area/tools", "bug", "needs-security-review", "release-blocking", "security", "severity/high"])
         self.assertNotIn("\u2014", drafts[0]["title"])
         self.assertEqual(drafts[0]["key"], "shell")
         body = Path(drafts[0]["body_file"]).read_text()
@@ -302,30 +301,69 @@ class Work(unittest.TestCase):
         advisories = json.loads((self.work / "manifest.json").read_text())["advisories"]
         self.assertEqual(sorted(a["ghsa_id"] for a in pa.select(advisories, entries, [], 10)), [A, B, C])
 
-    def poster(self, cited=(), duplicate=None, labels=None):
+    def gh_calls(self, listed=(), fail_on=None):
+        """A stand-in for pa.gh answering as user `me`; `listed` is [(id, login, body)] on the run-record issue."""
         calls = []
 
-        def gh(args, repo=None):
+        def gh(args):
             calls.append(args)
-            query = args[args.index("--search") + 1]
-            return json.dumps([{"number": 5, "title": "t", "state": "OPEN", "url": "u"}] if any(g in query for g in cited) else [])
+            if fail_on and fail_on in args:
+                raise RuntimeError("HTTP 502")
+            if args[:2] == ["api", "user"]:
+                return "me\n"
+            if "--paginate" in args:
+                return "".join(json.dumps({"id": i, "login": login, "body": body}) + "\n" for i, login, body in listed)
+            return "{}"
 
-        def post(repo, draft, assignee=None):
-            calls.append(["create", draft["id"]])
-            return f"https://github.com/brave/bravebot/issues/{100 + len(calls)}"
+        return calls, gh
 
-        return calls, types.SimpleNamespace(
-            gh=gh,
-            helper=pa.load_poster().helper,
-            post=post,
-            existing_labels=lambda repo: set(labels or ["bug", "security", "needs-security-review", "severity/high", "area/tools"]),
-            assignable=lambda repo, login: True,
-            already_filed=lambda repo, draft: duplicate,
-            JITTER=(0.0, 0.0),
-        )
+    def ran(self, listed=(), fail_on=None, **extra):
+        calls, gh = self.gh_calls(listed, fail_on)
+        with mock.patch.object(pa, "gh", gh):
+            code, _ = quiet(pa.ran, self.args(repo="brave/bravebot", **extra), today="2026-10-09")
+        return code, [c for c in calls if "--method" in c]
 
-    def post_args(self, **extra):
-        return self.args(**dict({"repo": "brave/bravebot", "assignee": None, "max": 12, "pace": 0.0}, **extra))
+    def test_a_run_that_decided_nothing_still_records_its_date_and_commit(self):
+        """The ledger changes only when a verdict is decided, so the date of a run that decided none has to be kept elsewhere."""
+        code, writes = self.ran()
+        self.assertEqual(code, 0)
+        self.assertEqual(writes, [["api", "--method", "POST", f"repos/brave/bravebot/issues/{pa.RUN_ISSUE}/comments",
+                                   "-f", "body=peer-advisories ran 2026-10-09 against 0123456789ab"]])
+        self.assertFalse((self.root / pa.LEDGER).exists())
+
+    def test_a_later_run_edits_its_own_last_run_comment_and_leaves_every_other_comment_alone(self):
+        older = "peer-advisories ran 2026-09-01 against aaaaaaaaaaaa"
+        listed = [
+            (41, "me", older),
+            (50, "me", "peer-advisories ran 2026-09-20 against bbbbbbbbbbbb"),
+            (60, "someone-else", older),
+            (70, "me", "a comment of mine that is not a run"),
+        ]
+        code, writes = self.ran(listed)
+        self.assertEqual(code, 0)
+        self.assertEqual(writes, [["api", "--method", "PATCH", "repos/brave/bravebot/issues/comments/50",
+                                   "-f", "body=peer-advisories ran 2026-10-09 against 0123456789ab"]])
+        self.assertEqual(self.ran([(60, "someone-else", older)])[1][0][2], "POST")
+
+    def test_a_dry_run_records_no_run_and_a_gh_failure_is_reported(self):
+        calls, gh = self.gh_calls()
+        with mock.patch.object(pa, "gh", gh):
+            code, out = quiet(pa.ran, self.args(repo="brave/bravebot", dry_run=True), today="2026-10-09")
+        self.assertEqual((code, calls), (0, []))
+        self.assertIn("would record", out)
+        for failing in ("POST", "PATCH"):
+            listed = [(5, "me", "peer-advisories ran 2026-09-01 against aaaaaaaaaaaa")] if failing == "PATCH" else []
+            code, writes = self.ran(listed, fail_on=failing)
+            self.assertEqual(code, 1, failing)
+
+    def test_the_comment_is_the_line_release_preflight_reads_back(self):
+        preflight_spec = importlib.util.spec_from_file_location("release_preflight", HERE.parents[2] / "contrib" / "release-preflight.py")
+        preflight = importlib.util.module_from_spec(preflight_spec)
+        preflight_spec.loader.exec_module(preflight)
+        self.assertEqual(pa.RUN_ISSUE, preflight.ADVISORY_ISSUE)
+        self.assertEqual(pa.RUN_COMMENT.pattern, preflight.ADVISORY_RUN.pattern)
+        body = next(w for w in self.ran()[1])[-1].removeprefix("body=")
+        self.assertEqual(preflight.ADVISORY_RUN.fullmatch(body).groups(), ("2026-10-09", "0123456789ab"))
 
     def drafted(self, *ids):
         for ghsa in ids:
@@ -333,68 +371,74 @@ class Work(unittest.TestCase):
             self.check(ghsa, verdict="confirmed")
         quiet(pa.draft, self.args())
 
-    def test_post_skips_an_advisory_the_tracker_already_cites_and_records_both(self):
+    def filed_args(self, ghsa, issue, **extra):
+        return self.args(id=ghsa, issue=issue, existing=False, **extra)
+
+    def filed_json(self):
+        return json.loads((self.work / "filed.json").read_text())
+
+    def run_filed(self, ghsa, issue, *flags):
+        return quiet(pa.main, ["filed", "--work-dir", str(self.work), "--id", ghsa, "--issue", issue, *flags])
+
+    def test_filed_merges_into_what_is_already_recorded(self):
         self.drafted(A, B)
-        calls, poster = self.poster(cited=[A])
-        code, _ = quiet(pa.post, self.post_args(), poster=poster)
+        code, out = quiet(pa.filed, self.filed_args(A, "41"))
         self.assertEqual(code, 0)
-        self.assertIn(f'"{A}" in:body', calls[0][calls[0].index("--search") + 1])
-        self.assertEqual([c for c in calls if c[0] == "create"], [["create", B]])
-        filed = json.loads((self.work / "filed.json").read_text())
-        self.assertEqual(filed[A], {"issue": 5, "how": "existing"})
-        self.assertEqual(filed[B]["how"], "filed")
+        self.assertEqual(out.count("\n"), 1)
+        self.assertIn(A, out)
+        self.assertIn("#41", out)
+        quiet(pa.filed, self.filed_args(B, "42"))
+        self.assertEqual(self.filed_json(), {A: {"issue": 41, "how": "filed"}, B: {"issue": 42, "how": "filed"}})
 
-        calls.clear()
-        quiet(pa.post, self.post_args(), poster=poster)
-        self.assertEqual(calls, [])
+    def test_existing_records_how_existing_and_a_later_call_replaces_an_entry(self):
+        self.drafted(A)
+        self.run_filed(A, "7", "--existing")
+        self.assertEqual(self.filed_json(), {A: {"issue": 7, "how": "existing"}})
+        self.run_filed(A, "8")
+        self.assertEqual(self.filed_json(), {A: {"issue": 8, "how": "filed"}})
 
-    def test_a_dry_run_or_a_missing_label_posts_and_records_nothing(self):
-        self.drafted(A, B)
-        calls, poster = self.poster(cited=[B])
-        quiet(pa.post, self.post_args(dry_run=True), poster=poster)
+    def test_filed_refuses_and_writes_nothing_for_an_unknown_id_or_a_bad_issue_number(self):
+        self.drafted(A)
+        for ghsa, issue in ((B, "5"), (A, "0"), (A, "-3"), (A, "x"), (A, "1.5"), (A, ""), (A, "True")):
+            with self.subTest(id=ghsa, issue=issue):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                    code = pa.main(["filed", "--work-dir", str(self.work), "--id", ghsa, "--issue", issue])
+                self.assertEqual(code, 2)
+                self.assertTrue(err.getvalue().startswith("peer-advisories: "))
+                self.assertFalse((self.work / "filed.json").exists())
+
+    def test_filed_refuses_without_a_readable_drafts_file(self):
+        self.assertFalse((self.work / "drafts.json").exists())
+        self.assertEqual(self.run_filed(A, "5")[0], 2)
         self.assertFalse((self.work / "filed.json").exists())
-        self.assertEqual([c for c in calls if c[0] == "create"], [])
+        (self.work / "drafts.json").write_text("not json")
+        self.assertEqual(self.run_filed(A, "5")[0], 2)
+        self.assertFalse((self.work / "filed.json").exists())
 
-        calls, poster = self.poster(labels=["bug"])
-        code, _ = quiet(pa.post, self.post_args(), poster=poster)
-        self.assertEqual(code, 2)
-        self.assertEqual(calls, [])
+    def test_filed_refuses_an_unreadable_filed_json_rather_than_overwrite_it(self):
+        self.drafted(A)
+        (self.work / "filed.json").write_text("not json")
+        self.assertEqual(self.run_filed(A, "5")[0], 2)
+        self.assertEqual((self.work / "filed.json").read_text(), "not json")
 
-    def test_post_files_a_hundred_by_default_and_names_the_drafts_past_the_cap(self):
-        """A confirmed defect left unfiled is vetted again by the next run, and a runaway run must still stop."""
-        drafts = [{"id": f"GHSA-{n:04d}-0000-0000", "title": f"defect {n}", "labels": ["bug"]} for n in range(101)]
-        (self.work / "drafts.json").write_text(json.dumps(drafts))
-        calls, poster = self.poster()
-        with mock.patch.object(pa, "load_poster", lambda: poster):
-            code, out = quiet(pa.main, ["post", "--work-dir", str(self.work), "--pace", "0"])
-        self.assertEqual(code, 0)
-        self.assertEqual([c[1] for c in calls if c[0] == "create"], [d["id"] for d in drafts[:100]])
-        self.assertEqual(out.splitlines()[-1], f"1 not attempted, at the cap of 100: {drafts[100]['id']}")
-        self.assertNotIn(drafts[100]["id"], json.loads((self.work / "filed.json").read_text()))
+    def test_record_ledgers_what_filed_wrote(self):
+        self.drafted(A, B)
+        ledger = self.root / pa.LEDGER
+        self.run_filed(A, "99")
+        quiet(pa.record, self.args(), today="2026-09-30")
+        entries = pa.read_ledger(ledger)
+        self.assertEqual(sorted(entries), [A])
+        self.assertEqual((entries[A]["verdict"], entries[A]["issue"], entries[A]["date"]), ("affected", "#99", "2026-09-30"))
+        self.run_filed(B, "100", "--existing")
+        quiet(pa.record, self.args(), today="2026-10-01")
+        entries = pa.read_ledger(ledger)
+        self.assertEqual((entries[B]["verdict"], entries[B]["issue"]), ("affected", "#100"))
 
-    def test_post_stopped_by_a_gh_failure_files_only_the_rest_when_run_again(self):
-        """Both SKILL.md files tell a run whose post stopped on a gh failure to run it again, which must not file twice."""
-        drafts = [{"id": ghsa, "title": f"defect {ghsa}", "labels": ["bug"]} for ghsa in (A, B, C)]
-        (self.work / "drafts.json").write_text(json.dumps(drafts))
-        _, poster = self.poster()
-        files = poster.post
-
-        def files_b_and_reports_a_failure(repo, draft, assignee=None):
-            url = files(repo, draft, assignee)
-            if draft["id"] == B:
-                raise RuntimeError("HTTP 502")
-            return url
-
-        poster.post = files_b_and_reports_a_failure
-        code, _ = quiet(pa.post, self.post_args(), poster=poster)
-        self.assertEqual(code, 1)
-        self.assertEqual(list(json.loads((self.work / "filed.json").read_text())), [A])
-
-        calls, poster = self.poster(cited=[B])
-        code, _ = quiet(pa.post, self.post_args(), poster=poster)
-        self.assertEqual(code, 0)
-        self.assertEqual([c[1] for c in calls if c[0] == "create"], [C])
-        self.assertEqual(json.loads((self.work / "filed.json").read_text())[B]["issue"], 5)
+    def test_post_is_not_a_command(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            pa.main(["post", "--work-dir", str(self.work)])
+        self.assertFalse(hasattr(pa, "post"))
 
 
 class Tree(unittest.TestCase):
@@ -438,6 +482,23 @@ class Tree(unittest.TestCase):
         self.git("checkout", "-q", "HEAD~1")
         with self.assertRaisesRegex(pa.Problem, "does not contain main"):
             pa.checked_commit(self.root)
+
+    def test_a_refusal_names_a_worktree_inside_the_clone_in_both_places_it_refuses(self):
+        command = "git worktree add --detach .worktrees/advisories main"
+        self.git("checkout", "-q", "-b", "work")
+        (self.root / "code.rs").write_text("fn main() { edited }\n")
+        with self.assertRaises(pa.Problem) as differs:
+            pa.checked_commit(self.root)
+        self.git("checkout", "-q", "--", "code.rs")
+        self.git("checkout", "-q", "main")
+        (self.root / "code.rs").write_text("fn main() { newer }\n")
+        self.git("commit", "-q", "-am", "newer")
+        self.git("checkout", "-q", "HEAD~1")
+        with self.assertRaises(pa.Problem) as behind:
+            pa.checked_commit(self.root)
+        for refusal in (differs, behind):
+            self.assertIn(command, str(refusal.exception))
+            self.assertNotIn("../", str(refusal.exception))
 
 
 if __name__ == "__main__":

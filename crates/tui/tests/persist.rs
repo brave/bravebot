@@ -26,9 +26,40 @@ fn sent(prompt: &str) -> Entry {
 /// once and see each other's HOME.
 static HOME_LOCK: Mutex<()> = Mutex::new(());
 
+/// A listener standing in for the proxy `HTTPS_PROXY` names, so a request this process makes shows
+/// up as a connection without a network.
+///
+/// The transport reads the variable once for the process, so every test that takes the home sets
+/// it first: one that ran earlier without it would fix the transport on the real network.
+/// `127.0.0.1` is spelled out because `localhost` does not resolve on every host these run on.
+fn proxy_listener() -> &'static std::net::TcpListener {
+    static LISTENER: std::sync::OnceLock<std::net::TcpListener> = std::sync::OnceLock::new();
+    LISTENER.get_or_init(|| {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a listener");
+        listener.set_nonblocking(true).expect("a polling listener");
+        let port = listener.local_addr().expect("an address").port();
+        // SAFETY: this runs once, under the lock `with_temp_home` holds, before any request.
+        unsafe { std::env::set_var("HTTPS_PROXY", format!("http://127.0.0.1:{port}")) };
+        listener
+    })
+}
+
+/// Whether a connection reaches the listener within `wait`.
+fn connected_within(listener: &std::net::TcpListener, wait: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + wait;
+    while std::time::Instant::now() < deadline {
+        if listener.accept().is_ok() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
 /// Point HOME at a scratch directory for the duration of the closure.
 fn with_temp_home<T>(name: &str, body: impl FnOnce() -> T) -> T {
     let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    proxy_listener();
 
     let dir = std::env::temp_dir().join(format!("bravebot-home-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -187,17 +218,12 @@ fn a_session_recalls_a_prompt_stored_by_an_earlier_session() {
         store::append_history(&sent("a question from before"));
 
         let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
-        // Up in a session that has sent nothing recalls nothing, and says so.
-        session.recall_older();
-        assert_eq!(session.input(), "");
-        assert!(session.offered_all_prompts);
-
-        // The wide scope is the way to what an earlier session stored.
-        session.widen_history();
+        // Up in a session that has sent nothing walks what earlier sessions stored.
         session.recall_older();
 
         assert_eq!(session.input(), "a question from before");
         assert_eq!(session.history.position(), Some((1, 1)));
+        assert_eq!(session.history.next_scope(), None);
     });
 }
 
@@ -250,7 +276,6 @@ fn a_history_from_an_older_version_is_still_read() {
         .expect("write");
 
         let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
-        session.widen_history();
         session.recall_older();
         assert_eq!(session.input(), "a question from before");
     });
@@ -618,6 +643,50 @@ fn a_pick_the_managed_layer_refuses_is_set_aside_and_names_the_file() {
     });
 }
 
+/// CLI-31. A model and a level the command line named are in force over a recorded pick and both
+/// files, and record nothing: the next session opens on the pick it would have without that line.
+/// A session that went through `choose_model` or `choose_effort` would put the line's choice where
+/// the person's own picks go.
+#[test]
+fn a_model_and_a_level_the_command_line_named_are_recorded_nowhere() {
+    use bravebot_aichat::protocol::Effort;
+    with_temp_home("named-on-the-line", || {
+        store::save_model("picked");
+        store::save_effort(Some(Effort::Low));
+        let settings = settings(r#"{"model": "mine", "effort": "max"}"#, "{}");
+
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.adopt_model(&settings, &a_config(|_| None));
+        session.adopt_effort(&settings);
+        assert_eq!(session.model(), Some("picked"));
+        assert_eq!(session.effort(), Some(Effort::Low));
+
+        session.name_model("named".to_string());
+        session.name_effort(Effort::High);
+        assert_eq!(
+            session.model(),
+            Some("named"),
+            "a recorded pick outranked the line"
+        );
+        assert_eq!(
+            session.effort(),
+            Some(Effort::High),
+            "a recorded pick outranked the line"
+        );
+
+        assert_eq!(
+            store::load_model().as_deref(),
+            Some("picked"),
+            "the line rewrote the pick"
+        );
+        assert_eq!(
+            store::load_effort(),
+            Some(Effort::Low),
+            "the line rewrote the level"
+        );
+    });
+}
+
 /// The effort choice outlives the session that made it, the same way the model choice does.
 #[test]
 fn a_chosen_effort_is_read_back_next_session() {
@@ -692,6 +761,88 @@ fn a_check_turned_off_leaves_the_record_as_it_was() {
             std::fs::read_to_string(&record).expect("the record"),
             seeded,
             "a session with the check off rewrote the record"
+        );
+    });
+}
+
+/// UPDATE-8, the ordinary half: a session that may write asks the registry when the record is old.
+///
+/// The request is seen by a listener standing in for the proxy. This is what makes the silence in
+/// `incognito.rs` mean something: the same call, the same stale record, and here the connection
+/// arrives.
+#[test]
+fn a_session_that_records_asks_for_a_newer_version_when_the_record_is_old() {
+    with_temp_home("update-asks", || {
+        let directory = store::directory().expect("a home");
+        std::fs::create_dir_all(&directory).expect("the directory");
+        let running = std::env::current_exe().expect("the test binary");
+        std::fs::write(
+            directory.join("installed-by"),
+            format!("{}\n", running.display()),
+        )
+        .expect("seed the installation");
+        std::fs::write(
+            directory.join("update-check"),
+            "1700000000\treleases\t99.0.0\n",
+        )
+        .expect("seed the record");
+        let listener = proxy_listener();
+
+        assert!(bravebot_tui::update::at_startup(None).is_some());
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut connected = false;
+        while !connected && std::time::Instant::now() < deadline {
+            connected = listener.accept().is_ok();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            connected,
+            "an ordinary session with an old record did not ask"
+        );
+    });
+}
+
+/// UPDATE-6: a launch whose stamp cannot be written does not ask the registry.
+///
+/// The stamp is what holds the next launch back for the hour, so a request made without one is
+/// made again by every launch after it. A directory holds the record's name, so the rename onto it
+/// fails whoever runs the test, where a read-only directory is made writable again by its owner and
+/// stops nothing run as root. The temporary file left beside it shows the launch reached the write
+/// before the silence is measured, and the same home asks once the name is free, so the silence is
+/// the request held back and not a thread yet to run or a listener nothing reaches.
+#[test]
+fn a_launch_whose_stamp_cannot_be_written_does_not_ask() {
+    with_temp_home("update-unstamped", || {
+        let directory = store::directory().expect("a home");
+        let record = directory.join("update-check");
+        let temporary = directory.join("update-check.tmp");
+        std::fs::create_dir_all(&record).expect("take the record's name");
+        let running = std::env::current_exe().expect("the test binary");
+        std::fs::write(
+            directory.join("installed-by"),
+            format!("{}\n", running.display()),
+        )
+        .expect("seed the installation");
+        let listener = proxy_listener();
+        while listener.accept().is_ok() {}
+
+        bravebot_tui::update::at_startup(None);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !temporary.is_file() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(temporary.is_file(), "the launch never reached the write");
+        assert!(
+            !connected_within(listener, std::time::Duration::from_millis(1500)),
+            "the registry was asked though the stamp could not be written"
+        );
+
+        std::fs::remove_dir(&record).expect("free the record's name");
+        bravebot_tui::update::at_startup(None);
+        assert!(
+            connected_within(listener, std::time::Duration::from_secs(10)),
+            "with the name free the same launch did not ask, so the silence above proves nothing"
         );
     });
 }

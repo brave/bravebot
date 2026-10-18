@@ -212,3 +212,50 @@ fn a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn() {
         "a prompt the app composed was read for names: {composed:?}"
     );
 }
+
+/// REFER-6: the window is offered a reference's alias and the files behind it, and a prompt naming
+/// one of them is accepted. The bridge builds the alias list from the settings itself, so a front
+/// end that passed none would offer the window nothing and refuse the name as not in the project.
+#[test]
+fn the_window_names_a_file_under_a_reference_alias() {
+    let held = tempfile::tempdir().expect("scratch");
+    let library = held.path().join("library");
+    std::fs::create_dir_all(library.join("src")).expect("create");
+    std::fs::write(library.join("src/lexer.rs"), "fn lex() {}\n").expect("write");
+    let settings = held.path().join("settings.json");
+    std::fs::write(
+        &settings,
+        json!({ "references": { "parser": { "path": library.display().to_string() } } })
+            .to_string(),
+    )
+    .expect("settings");
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&events);
+    let mut bridge = Bridge::new(Box::new(move |event| {
+        sink.lock().expect("not poisoned").push(event);
+    }))
+    .with_settings(Some(settings));
+    let project = project(&mut bridge);
+    let offer = |bridge: &mut Bridge, line: &str| {
+        call(
+            bridge,
+            "mentions.offer",
+            json!({ "session": &project.session, "line": line }),
+        )
+        .expect("answered")
+    };
+
+    assert!(offered(&offer(&mut bridge, "@par")).contains(&"parser/"));
+    assert_eq!(
+        offered(&offer(&mut bridge, "@parser/src/")),
+        vec!["parser/src/lexer.rs"]
+    );
+    let named = call(
+        &mut bridge,
+        "mentions.named",
+        json!({ "session": &project.session, "prompt": "read @parser/src/lexer.rs" }),
+    )
+    .expect("a file under a reference is a named file");
+    assert_eq!(named["files"].as_array().expect("files").len(), 1);
+}

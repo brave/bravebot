@@ -10,14 +10,15 @@ import { IconButton } from './IconButton'
 import { MentionList } from './MentionList'
 import { ModelPicker } from './ModelPicker'
 import { PermissionModePicker } from './PermissionModePicker'
-import type { PermissionMode } from '../../shared/protocol'
+import { SandboxModePicker } from './SandboxModePicker'
+import type { PermissionMode, SandboxMode } from '../../shared/protocol'
 
 /** The bridge's offer for `line`, or nothing offered when it cannot answer or answers out of shape. */
 async function askOffer(session: string, line: string, cursor: number): Promise<MentionOffer> {
   const { ok } = await window.bravebot.request<Partial<MentionOffer>>('mentions.offer', { session, line, cursor })
   return typeof ok?.typed === 'string' && Array.isArray(ok.entries)
-    ? { typed: ok.typed, entries: ok.entries, completes: ok.completes === true }
-    : { typed: null, entries: [], completes: false }
+    ? { typed: ok.typed, word: typeof ok.word === 'string' ? ok.word : null, entries: ok.entries, completes: ok.completes === true }
+    : { typed: null, word: null, entries: [], completes: false }
 }
 
 /** How many lines the field grows to before it starts to scroll. */
@@ -50,6 +51,8 @@ export interface ComposerProps {
   /** Absent where no session exists to hold a mode, as on a bot's first page. */
   permissionMode?: PermissionMode
   onMode?: (mode: PermissionMode) => void
+  sandboxMode?: SandboxMode
+  onSandbox?: (mode: SandboxMode) => void
   attachments: FileAttachment[]
   onAttach: () => void
   onRemoveAttachment: (id: string) => void
@@ -157,7 +160,7 @@ export interface ComposerFooterProps {
 export const Composer = memo(function Composer(props: ComposerProps): React.JSX.Element {
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
-    draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
+    draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
     queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, starting = false,
   } = props
@@ -227,16 +230,21 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   /** The offer for exactly this line and row, waiting for it unless the last answer was for it. */
   const freshOffer = async (line: string, at: number): Promise<MentionOffer> =>
     at === 0 && offer?.session === session && offer.line === line ? offer.value : askOffer(session, line, at)
-  const choose = (entry: MentionEntry) => {
+  /** Writes the entry into the draft and says whether the draft changed. */
+  const choose = (entry: MentionEntry, word: string | null): boolean => {
     setCursor(0)
-    latest.current.onDraft(acceptMention(latest.current.draft, entry))
+    const draft = latest.current.draft
+    const completed = acceptMention(draft, entry, word)
+    if (completed === draft) return false
+    latest.current.onDraft(completed)
+    return true
   }
   /** Enter: complete a half-typed name, or send a line whose last name is finished (NAME-7). */
   const enter = async (line: string, at: number) => {
     if (session) {
       const value = await freshOffer(line, at)
       const entry = value.entries[Math.min(at, value.entries.length - 1)]
-      if (value.typed !== null && dismissed !== value.typed && value.completes && entry) return choose(entry)
+      if (value.typed !== null && dismissed !== value.typed && value.completes && entry && choose(entry, value.word)) return
     }
     const props = latest.current
     if (props.askingTrust || props.starting || props.backendReady === false || !props.draft.trim()) return
@@ -358,7 +366,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 const at = list.active
                 void list.freshOffer(now.draft, at).then((value) => {
                   const entry = value.entries[Math.min(at, value.entries.length - 1)]
-                  if (value.typed !== null && entry) mention.current.choose(entry)
+                  if (value.typed !== null && entry) mention.current.choose(entry, value.word)
                 })
                 return
               }
@@ -379,7 +387,8 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
               disabled={!canAttach} tooltip={!canAttach ? 'Send a first message, then attach files' : 'Attach files'} />
             <span className="toolbar-spacer" />
             <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
-            {permissionMode && onMode && <PermissionModePicker key={`mode-${session}`} mode={permissionMode} running={running} onChoose={onMode} />}
+            {permissionMode && onMode && <PermissionModePicker key={`mode-${session}`} mode={permissionMode} onChoose={onMode} />}
+            {sandboxMode && onSandbox && <SandboxModePicker key={`sandbox-${session}`} mode={sandboxMode} onChoose={onSandbox} />}
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
             {onPlan && <ModeMenu mode={planBlocked ? 'agent' : mode} blocked={planBlocked} disabled={running} onMode={setMode} />}
             <IconButton icon={running ? 'stop-circle' : 'arrow-up'} label={running ? 'Stop' : 'Send'}
@@ -392,7 +401,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
         </div>
         {footer && <ComposerFooter {...footer} disabled={running} />}
         </div>
-        {offered.length > 0 && <MentionList entries={offered} active={active} onActive={setCursor} onChoose={choose} />}
+        {offered.length > 0 && <MentionList entries={offered} active={active} onActive={setCursor} onChoose={(entry) => { choose(entry, offer?.value.word ?? null) }} />}
       </div>
     </footer>
   )

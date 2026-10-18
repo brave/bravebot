@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 bravebot-core = { path = "../core" }
 bravebot-diag = { path = "../diag" }
+bravebot-sandbox = { path = "../sandbox" }
 ureq = { workspace = true }
 
 [dev-dependencies]

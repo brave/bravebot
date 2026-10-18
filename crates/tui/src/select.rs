@@ -79,7 +79,7 @@ pub fn text(buffer: &Buffer, selection: &Selection) -> String {
         let mut line = String::new();
         for column in from..to.min(area.right()) {
             if let Some(cell) = buffer.cell((column, row)) {
-                line.push_str(cell.symbol());
+                line.push_str(crate::hyperlink::shown(cell.symbol()));
             }
         }
 
@@ -157,6 +157,17 @@ mod tests {
         let mut selection = Selection::started_at(0, 6);
         selection.extend_to(2, 4);
         assert_eq!(text(&buffer, &selection), "line\nmiddle row\nlast");
+    }
+
+    /// A linked cell holds the escape sequences around its character, and pasting those would put
+    /// invisible bytes into whatever the text is pasted into.
+    #[test]
+    fn a_link_is_copied_as_the_text_it_shows() {
+        let mut buffer = screen(&["see a/b#1 now"]);
+        crate::hyperlink::link(&mut buffer, 4, 0, 5, "https://github.com/a/b/pull/1");
+        let mut selection = Selection::started_at(0, 0);
+        selection.extend_to(0, 13);
+        assert_eq!(text(&buffer, &selection), "see a/b#1 now");
     }
 
     /// The blanks a widget pads its area with are not text anyone wrote, and pasting them turns

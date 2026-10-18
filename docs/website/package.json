@@ -3,6 +3,7 @@
   "homepage": "https://brave.github.io/bravebot/",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@11.28.2+sha512.755ce2fe3c05bfd7bb412b42aff3c5c55cd38c529c6eca810475497ae36746c571e4b6e1814e6e7e4b97d7ee864b8a0e44673c3b297a50e0ac28771c5ce15d27",
   "description": "Documentation for Brave Bot, a general-purpose agent with structural resistance to indirect prompt injection.",
   "scripts": {
     "docusaurus": "docusaurus",
@@ -42,14 +43,6 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
-  },
-  "overrides": {
-    "serialize-javascript": "7.1.1",
-    "uuid": "^14.0.0",
-    "js-yaml": "^5.0.0",
-    "qs": "^6.16.0",
-    "gray-matter": "npm:@11ty/gray-matter@^3.0.0",
-    "image-size": "npm:image-size-next@2.1.1"
   },
   "repository": {
     "type": "git",

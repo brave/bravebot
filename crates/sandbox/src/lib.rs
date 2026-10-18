@@ -14,9 +14,12 @@
 
 #![deny(unsafe_code)]
 
+pub mod address;
+pub mod agent;
 pub mod base;
 pub mod crash;
 pub mod hosts;
+pub mod inspection;
 #[cfg(target_os = "linux")]
 pub mod linux;
 // Compiled under test on any Unix as well as on the platform it confines, so what this
@@ -28,12 +31,16 @@ pub mod linux;
 #[cfg(any(target_os = "macos", all(test, unix)))]
 pub mod macos;
 pub mod mode;
+#[cfg(target_os = "linux")]
+pub(crate) mod netns;
 pub mod network;
 pub mod policy;
 pub mod process;
+pub mod programs;
 pub mod proxy;
 pub mod rules;
 pub mod scope;
+pub mod signing;
 pub mod swap;
 // Compiled under test on every platform as well as on the one it confines, so what this
 // backend decides before a process starts is pinned by every job that runs the suite
@@ -256,9 +263,12 @@ impl Sandbox for Unavailable {
             level: ConfinementLevel::None,
             mechanisms: Vec::new(),
             network_denial_enforced: false,
+            egress_limited_to_a_port: false,
             // Nothing is granted here at all, so claiming a kind of grant it installs
             // would be a claim about a process this backend never starts.
             grants_paths_that_do_not_exist: false,
+            subtracts_from_a_grant: true,
+            governs_sockets_with_a_path: false,
         }
     }
 

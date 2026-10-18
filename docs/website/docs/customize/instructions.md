@@ -21,7 +21,7 @@ happens, rather than to ask the planner for it, see [Hooks](hooks.md). For a who
 planner loads only when the task calls for it, see [Skills](skills.md). For a kind of delegate the
 planner can hand a sub-task to, see [Delegate definitions](agents.md).
 
-## The eight sources
+## The ten sources
 
 | File | Applies to |
 |---|---|
@@ -33,8 +33,10 @@ planner can hand a sub-task to, see [Delegate definitions](agents.md).
 | `<workspace>/.claude/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.agents/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.bravebot/agents/<name>.md` | this project |
+| `<workspace>/<directory>/AGENTS.md` | this project, once a turn has worked in that directory |
+| `<workspace>/<directory>/.bravebot/skills/<name>/SKILL.md` | this project, once a turn has worked in that directory |
 
-And no others. There is **no search of parent directories** and no nested instructions file. A rule
+And no others. There is **no search of parent directories**. A rule
 that walked upwards would pick up instructions from whatever happened to be above a project on this
 machine, which is a different set of instructions on the next machine. A file at any other path is an
 ordinary file, read only when something asks for it by name, or when the source points at it.
@@ -44,6 +46,17 @@ ordinary file, read only when something asks for it by name, or when the source 
 wins a name clash with either of the others. Skills you wrote for another agent work here without
 being copied or symlinked. Your own `~/.claude/skills` and `~/.agents/skills` are not read, because
 `~/.bravebot` is the one user directory tried.
+
+**A directory the session has worked in adds its own.** Once the planner has read a file in
+`packages/api/`, or written one, the `AGENTS.md` in `packages/api/` and in each directory above it
+down from the project root follows the project's, the deeper last so it wins, and so do the skills
+under `.bravebot/skills` there; a skill of the same name replaces the project's. The next turn
+picks it up, not the one that read the file. Each goes through the same trust check as the project's
+own file, and one that fails it is left out with a notice naming the file. A pointer or an `@path`
+import inside a nested file is not followed. Only `.bravebot/skills` is read below the root, not
+`.claude/skills` or `.agents/skills`. A directory is counted when a file is read or written in it,
+not when it is only listed or searched, and a session remembers up to 64 of them until `/cd` moves
+the project.
 
 **The project's file is looked for under three names, and the first that exists is the one.** Not all
 three: a repository holding two of them holds one set of instructions under two names, and reading
@@ -142,6 +155,29 @@ Sources are resolved afresh every turn, so editing `AGENTS.md` mid-session takes
 thing you send. A source that is not there is not an error. No `AGENTS.md`, no skills directory, no
 user directory at all: each is the ordinary case and offers nothing.
 
+### Size
+
+Because every request carries them, a long instructions file costs its length on every turn of the
+session. Two fixed figures apply to sources that have passed the trust gate, and both only ever
+warn: a source is never dropped or cut short for its size.
+
+| Over | What happens |
+|---|---|
+| 16384 bytes in one file | The file loads, and you are told which file it is and how big |
+| 32768 bytes across all sources | You are told the total, once, at the source that crosses it |
+
+```
+AGENTS.md is 41232 bytes, and every request this session sends carries it
+```
+
+However large a file is, it still reaches the prompt. Half a conventions document is worse than a
+whole one that cost a sentence to say so: the rules that happened to be in the second half would be
+gone with no sign of it, and the first half would read as the whole.
+
+Both the figures and the notices concern files that are there. A source that is absent is still
+silent, and the check is a byte count: nothing a file says decides whether it loads or what is said
+about it. `--append-system-prompt` is not measured, since there is no file behind it.
+
 ## Where you are working
 
 The system prompt also states a handful of facts about your machine, so the planner does not have to
@@ -170,7 +206,8 @@ username on its own, no file contents, no directory listing.
 They are labelled as facts about the machine rather than as instructions. One of them asks something
 of the planner as well, and only because a probe found what the request names: the scratch directory
 is stated with what to put in it. Nothing is asked on the account of the rest. What an installed `gh`
-is for is said too, just outside this block, and [below](#the-github-cli) is what it says.
+is for is said too, just outside this block, and [below](#the-github-cli) is what it says. So is
+[what to do when something a program needs is missing](#something-a-program-needs-is-missing).
 
 The date is stated because a model's sense of it comes from its training and is wrong by however long
 ago that was. The rest is stated because discovering any of it otherwise costs a `run`, and a run
@@ -200,6 +237,23 @@ planner never told of it puts an intermediate file in the project instead. Reach
 A file there is read and written by its absolute path, but it prompts exactly when a file in the
 workspace would, and neither `/add-dir` nor `/cd` will take it. See
 [Trusted directories](../security/trust.md).
+
+### Something a program needs is missing
+
+Where the session has a scratch directory, the planner is also told what to do when a program fails
+because something it needs is missing from your machine. It checks whether something installed can
+stand in, with a command that only reads, runs on the program's own interpreter or runtime, and
+answers by its exit status. Where something can, it writes what connects the two in a new directory
+inside the scratch directory, and runs the program again with that directory on a search path the
+program reads from its environment in addition to its own, set in front of it for that one command.
+It tries this before asking you to install anything or to edit the program. The program, your
+machine and your settings are left as they were, and what was written goes with the session. Where
+nothing installed can stand in, the planner says what is missing and what provides it.
+
+The paragraph names no language, package or variable, so the same road is open to any of them. Only
+the new directory goes on the search path, because the scratch directory may hold other files the
+session put there. You approve each of these commands as you would any other. A session with no
+scratch directory is not told any of this, and neither is a delegate.
 
 ### The GitHub CLI
 

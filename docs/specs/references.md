@@ -3,12 +3,18 @@ id: REFER
 title: Reference directories
 status: normative
 governs:
+  - crates/mentions/src/lib.rs
+  - crates/ui-bridge/src/mentions.rs
   - crates/config/src/settings.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/reach.rs
   - crates/agent/src/preamble.rs
   - crates/agent/src/skills.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/workspace.rs
+  - crates/cli/src/doctor.rs
 documented-by: none (proposed with a first slice; the site page follows when the repository half is built)
 ---
 
@@ -38,19 +44,21 @@ apply. A later layer's block replaces an earlier one's.
 silently does nothing is the one a person spends an afternoon looking for.
 
 `verified-by: bravebot_config::settings::the_references_block_reads_each_entry_and_names_the_ones_it_cannot_use`
+`verified-by: bravebot_config::settings::a_later_layers_references_block_replaces_an_earlier_ones`
 
 <a id="REFER-2"></a>
 ### REFER-2: only the person's own settings declare a reference
 
 `references` is read from `~/.bravebot/settings.json` and from a file `--settings` names that sits
-outside the workspace. A checkout's `.bravebot/settings.json` and `settings.local.json` are not
-read for it, and each file that wrote the block is reported by `doctor` and by the desktop
+outside the workspace. A checkout's `.bravebot/settings.json` and `settings.local.json`, and a
+`--settings` file that resolves inside the workspace, are not read for it, and each file that wrote the block is reported by `doctor` and by the desktop
 bridge's list of ignored keys.
 
 **Why.** An entry makes a directory reachable and puts its description in front of the planner. A
 checkout that could write either would choose both for whoever opened it.
 
 `verified-by: bravebot_config::settings::a_project_layer_cannot_declare_references`
+`verified-by: bravebot_config::settings::a_named_file_inside_the_workspace_cannot_declare_references`
 
 <a id="REFER-3"></a>
 ### REFER-3: a reference is reachable exactly as a directory opened with `--add-dir` is, and records no trust
@@ -102,7 +110,24 @@ What it holds is quarantined and read only through a processor. It is refreshed 
 <a id="REFER-6"></a>
 ### REFER-6: `@alias/path` completes in the box and vouches for nothing more than naming a file does
 
-Proposed, not built. The alias list is offered after `@`, and a path under one is named under the
-rules of [naming-files.md](naming-files.md).
+Typing `@` offers each open reference's alias beside the workspace's own entries, and a slash after
+one lists that directory, every name still written under the alias. A name under an alias is the
+file in the reference's directory, and sending reads it as any file named with `@` is read
+([naming-files.md](naming-files.md)): the person's keystroke is the only thing that vouches for it,
+and `..` is refused as everywhere else. A workspace entry of the same name as an alias wins, so a
+reference never hides a file the person could already name. A reference directory whose path is not
+text has no spelling a turn can be handed, so a name under it is refused and never read from another
+directory. The terminal and the desktop window ask
+the same `bravebot-mentions` code. Only references the workspace opened are offered, and the terminal
+says again which they are whenever `/add-dir`, `/add-dir close` or `/cd` changes what is open.
 
-`verified-by: none`
+**Why.** A reference is kept to be consulted, and typing a path to it blind is what the alias is
+there to stop.
+
+`verified-by: bravebot_mentions::lib::an_alias_is_offered_and_a_slash_descends_into_its_directory`
+`verified-by: bravebot_mentions::lib::a_workspace_entry_is_not_shadowed_by_an_alias`
+`verified-by: bravebot_mentions::lib::a_name_under_an_alias_resolves_to_the_file_and_cannot_climb_out`
+`verified-by: bravebot_mentions::lib::a_reference_directory_that_is_not_text_is_refused_not_rewritten`
+`verified-by: bravebot_tui::app::a_name_under_a_reference_alias_names_the_file_in_its_directory`
+`verified-by: bravebot_tui::app::the_alias_offered_follows_add_dir_close_add_dir_and_cd`
+`verified-by: bravebot_ui_bridge::mentions::the_window_names_a_file_under_a_reference_alias`

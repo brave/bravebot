@@ -12,7 +12,10 @@ use gix_object::Kind;
 use gix_object::bstr::ByteSlice;
 use gix_object::tree::EntryKind;
 
-use super::{Declined, Out, Repository, in_scope, join, parse_config, read_if_present};
+use super::config::parse_config;
+use super::out::{Out, in_scope, join};
+use super::survey::{present, read_if_present};
+use super::{Declined, Repository};
 
 const FLAG_ASSUME_VALID: u16 = 0x8000;
 pub(super) const FLAG_EXTENDED: u16 = 0x4000;
@@ -720,7 +723,7 @@ impl Compare<'_> {
     fn still_there(&mut self, path: &str) -> Result<bool, Declined> {
         let full = self.root.join(path);
         Ok(self.leading_dirs_real(path)?
-            && super::present(&full)?
+            && present(&full)?
             && !std::fs::symlink_metadata(&full)
                 .is_ok_and(|meta| meta.is_dir() && !is_repository(&full)))
     }

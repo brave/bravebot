@@ -8,8 +8,9 @@ argument for the label it carries; then a plan naming files, the clause and the 
 
     python3 agents/skills/security-audit/draft-issues.py --work-dir "$WORK_DIR"
 
-This writes files. `post-issues.py` is what files them, and it reads what this wrote, so a body can
-be edited between the two steps and the edit is what gets posted.
+This writes files. Each draft is handed to the `issue-poster` definition (agents/agents/issue-poster.md),
+which files it from the body this wrote, so a body can be edited between the two steps and the edit is
+what gets posted.
 
 The text helpers are `check-spec`'s. Two skills writing issue bodies against the same specs should
 quote a clause and excerpt a line the same way, and a second copy would be a second thing to fix.
@@ -477,9 +478,9 @@ def report(drafts, out):
             )
     lines.append("")
     counted = f"{len(drafts)} draft" + ("" if len(drafts) == 1 else "s")
-    lines.append(f"{counted} in {out}. Post them with:")
+    lines.append(f"{counted} in {out}. Hand each one to the issue-poster definition (agents/agents/issue-poster.md):")
     lines.append("")
-    lines.append(f"  python3 agents/skills/security-audit/post-issues.py --work-dir {out.parent}")
+    lines.append(f"  title, labels and body file of each draft are listed above; bodies are in {out}")
     waiting = sum(1 for one in drafts if one["screen_wanted"] and not one["has_screen"])
     if waiting:
         lines.append(
@@ -502,11 +503,9 @@ def main():
     collect = importlib.util.module_from_spec(collector)
     collector.loader.exec_module(collect)
 
-    manifest_path = Path(args.work_dir) / "manifest.json"
-    if not manifest_path.exists():
-        print(f"no manifest at {manifest_path}", file=sys.stderr)
+    manifest = collect.read_manifest(args.work_dir)
+    if manifest is None:
         return 2
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     findings = list(manifest.get("mechanical_findings", []))
     confirmed, _, _, _ = collect.load_verdicts(manifest)

@@ -75,7 +75,8 @@ project as usual, since that is the work rather than a trace of it. See
 
 ## Reporting a Vulnerability
 
-See [https://hackerone.com/brave](https://hackerone.com/brave) for details.
+See [https://hackerone.com/brave](https://hackerone.com/brave) for details, and
+[SECURITY.md](SECURITY.md) for the versions that are supported.
 
 ## Development
 

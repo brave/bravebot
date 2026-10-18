@@ -20,6 +20,15 @@ Project-file operations use a session handle and a relative path. Main-process
 code resolves the session root and validates the path. Text previews and memory
 operations use the descriptor-based `bravebot-ui-files` helper; directory listing
 and opening files in an external app use separate validation in `src/main/files.ts`.
+Opening hands the system a text, PDF, image, audio or video file that is not marked executable
+at once, judged by the file a symbolic link resolves to. For any other
+file the main process asks first, with Show in folder as the default button, and the renderer has
+no call that answers the question. A program run under the sandbox can write a file the system
+runs when it is opened (`.command` on macOS, `.desktop` on Linux, `.bat` or `.lnk` on Windows),
+and opening it runs it outside the sandbox. Opening the same file from the file manager is not
+asked about; [the sandboxing spec](../../docs/specs/sandboxing.md#programs-a-person-asked-for)
+records that. The check reads the file's name and mode and no other metadata.
+`scripts/open-in-app.test.mjs` holds this.
 See [file access and retention](file-access-security.md) for the helper's guarantees
 and limits. Do not assume every filesystem operation uses the helper.
 
@@ -36,7 +45,7 @@ context in one of four ways, each ending in an explicit send:
   drop event the browser marks trusted is read, the paths go from there to the main process,
   and the page is told an opaque grant id, the file's name and its kind. A page that dispatches
   its own drop event, even with File objects an earlier drop handed it, has nothing granted
-  (DROP-11 in `docs/specs/dropping.md`).
+  (DROP-12 in `docs/specs/dropping.md`).
 - A picture a person pasted into the composer. The preload acts only on a paste event the
   browser marks trusted, inside the composer, and asks the main process to stage what is on the
   clipboard. The main process reads the operating system's clipboard itself, writes the picture
@@ -73,7 +82,7 @@ and edits from the window name a folder from that recorded set and are refused f
 ## Decisions and refusal
 
 The transcript presents write, command, command-output, path-vouch, fetch, language-server,
-plan, credential-exposure and user-question requests. Replies must match both the pending request ID and its kind. Within a turn, an unknown
+plan, credential-exposure, allowed-hosts and user-question requests. Replies must match both the pending request ID and its kind. Within a turn, an unknown
 or consumed ID cannot approve another request. Clients discard pending questions
 when a turn ends because IDs may recur in later turns. Malformed decisions decline;
 question answers are checked against the offered choices.
@@ -111,6 +120,11 @@ found a credential in. The card names the file and each finding, which is a kind
 and a mask. The value is not sent to the window, so it is never drawn. An approval sends the
 file to the model and covers that file until the conversation closes. It is not saved and
 does not change whether the file is trusted. A refusal keeps the file's text from the model.
+
+An allowed-hosts approval is asked when a confined program asked the session proxy for hosts that
+`sandbox.network.allowedHosts` does not list and `onUnlisted` is `ask`. The card lists each host,
+which is checked to be a host name or an IP address before it is sent. A yes lets every later
+command in the conversation reach those hosts unless `deniedHosts` names them. It is not saved.
 
 MCP servers a project requests are started on a session's first turn, after the trust
 question, and only on a yes to a card that shows the whole declaration: what it runs or

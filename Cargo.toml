@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/agent", "crates/bedrock", "crates/browser", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/core", "crates/filetype", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files"]
+members = ["crates/agent", "crates/approval", "crates/bedrock", "crates/browser", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/connector", "crates/core", "crates/filetype", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files"]
 
 [workspace.package]
-version = "0.14.0"
+version = "0.16.0"
 edition = "2024"
 # Matches the pinned cross-build container, so `cargo build` fails on a feature the
 # release build could not compile rather than deferring that to CI.
@@ -44,6 +44,10 @@ sha2 = "0.10"
 # Test fixtures use private directories that are removed even when a test fails.
 # This includes file-helper permission tests and isolated terminal session profiles.
 tempfile = "3"
+# Checks the decomposition tables in bravebot-core against the crate that publishes them. A
+# dev-dependency only: gix-utils already depends on it, so the lock gains the one line saying
+# bravebot-core's tests use it, and bravebot-core itself keeps no dependency at runtime.
+unicode-normalization = "0.1"
 unicode-width = "0.2"
 # The Win32 calls that keep the imported subscription file readable by one account, which is what
 # stands in for a mode on Windows. Microsoft's own generated bindings, one crate deep
@@ -70,3 +74,10 @@ opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
+
+# Dependencies are built optimised in a debug build too. Decoding and scaling a picture and drawing
+# every prompt at every scroll position took tens of seconds a test unoptimised and a few seconds
+# optimised, and the dependencies are rebuilt only when the lockfile moves. The workspace's own
+# crates stay unoptimised, so an edit to them rebuilds as fast as before.
+[profile.dev.package."*"]
+opt-level = 2

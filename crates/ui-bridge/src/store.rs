@@ -18,9 +18,6 @@
 use bravebot_session::sessions::{self, Record, Summary};
 use std::path::{Path, PathBuf};
 
-/// Where the per-project directories live.
-const SESSIONS: &str = "sessions";
-
 /// One session, with enough of its project attached to draw a row.
 #[derive(Debug, Clone)]
 pub struct Listed {
@@ -53,7 +50,7 @@ impl Listed {
 /// turning dashes back into separators would be a guess, and it would be wrong for every
 /// path that legitimately contains one.
 pub fn projects() -> Vec<PathBuf> {
-    let Some(root) = bravebot_session::store::directory().map(|dir| dir.join(SESSIONS)) else {
+    let Some(root) = sessions::sessions_root() else {
         return Vec::new();
     };
     let Ok(entries) = std::fs::read_dir(&root) else {
@@ -109,12 +106,22 @@ pub fn list_all() -> Vec<Listed> {
     all
 }
 
-/// Every session in one project, newest first.
+/// Every session in the project whose store `project` names, newest first.
+///
+/// Each row carries the directory the store's own record names, never the path that was asked
+/// about: the store is keyed by a lossy mangling, so several paths share one, and echoing the
+/// asked-about path would hand a caller's own string back as a directory the agent reported
+/// ([TRUST-20](../../../docs/specs/trust-map.md#TRUST-20)). A store with no readable record
+/// lists nothing, as `list_all` already skips it.
 pub fn list_project(project: &Path) -> Vec<Listed> {
+    let Some(recorded) = sessions::project_directory(project).and_then(|dir| project_of(&dir))
+    else {
+        return Vec::new();
+    };
     sessions::list(project)
         .into_iter()
         .map(|summary| Listed {
-            project: project.to_path_buf(),
+            project: recorded.clone(),
             summary,
         })
         .collect()

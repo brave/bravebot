@@ -76,6 +76,7 @@ describing something that had already failed.
 
 `verified-by: bravebot_core::policy::a_run_that_has_met_something_untrusted_cannot_delegate`
 `verified-by: bravebot_core::policy::a_private_task_cannot_direct_a_delegate`
+`verified-by: bravebot_core::policy::a_private_kind_cannot_direct_a_delegate_beside_a_public_task`
 
 ## What is fixed before it runs
 
@@ -152,6 +153,7 @@ tool list is written out a second time as a refusal.
 `verified-by: bravebot_core::delegate::every_kind_can_reach_the_endpoint_and_nothing_else_remote`
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
 `verified-by: bravebot_agent::turn::a_delegate_naming_fetch_url_reaches_no_host`
+`verified-by: bravebot_agent::turn::a_delegate_naming_download_url_is_answered_as_an_unknown_name_and_writes_nothing`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_reach_the_network`
 `verified-by: bravebot_core::delegate::only_a_worker_holds_the_servers_of_the_run_it_is_carved_from`
 `verified-by: bravebot_core::delegate::a_worker_holds_no_server_its_parent_does_not`
@@ -193,6 +195,7 @@ are asked about separately, and what a delegate is told it can do is what it is 
 `verified-by: bravebot_agent::delegate::each_kind_is_told_what_it_cannot_do`
 `verified-by: bravebot_agent::delegate::every_kind_is_told_the_guidance_the_planner_is_told`
 `verified-by: bravebot_agent::delegate::a_body_cannot_displace_what_a_kind_cannot_do`
+`verified-by: bravebot_agent::delegate::the_guidance_every_planner_gets_comes_before_a_definitions_body`
 `verified-by: bravebot_agent::delegate::a_definition_with_no_body_leaves_the_prompt_as_it_was`
 `verified-by: bravebot_agent::delegate::a_narrowed_delegate_is_told_what_it_holds_rather_than_what_its_kind_holds`
 `verified-by: bravebot_agent::turn::a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for`
@@ -207,8 +210,9 @@ Every kind carries a round limit: 60 for a `reader`, 80 for a `checker` and 120 
 definition may name its own with `rounds:`, a whole number above zero, and its delegate runs to
 that number instead. Each kind also carries a ceiling no definition passes: 120 for a `reader`
 and 160 for a `checker`, twice their own, and 200 for a `worker`, the bound on a turn nobody is
-watching. The call sets no bound at all. On the limiting round the delegate loses its tools rather
-than its run, and answers with what it has.
+watching. The call sets no round bound at all. On the limiting round the delegate loses its tools
+rather than its run, and answers with what it has. [DELEGATE-29](#DELEGATE-29) adds a bound in
+tokens.
 
 A definition asking for more than its kind's ceiling is loaded with the ceiling, and the turn
 says so, naming the definition, the number it asked for and the number it is given. An empty
@@ -290,6 +294,74 @@ untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
 `verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
 `verified-by: bravebot_agent::turn::a_delegate_that_spent_its_bound_and_failed_says_the_bound_was_spent`
 `verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`
+
+<a id="DELEGATE-29"></a>
+### DELEGATE-29: a delegate may also be bounded in tokens, by its definition or its call, and the call can only lower it
+
+A definition may name a token budget with `budget:`, written as `/limit` takes a figure for tokens
+(`500000`, `500k`, `2m`). The `spawn_agent` call may name one as well
+([AGENT-7](tools/spawn-agent.md#AGENT-7)). A delegate carries the least of the figures that
+apply, so a call can lower a definition's budget and cannot raise it. An absent or empty `budget:`
+line names none, as an empty `rounds:` line names no number, and a delegate with no budget is
+bounded by its rounds alone. A value that is not a count of tokens above zero, a count of credits
+included, is a definition that does not load, and the notice names its file, as for `rounds:`
+([DELEGATE-6](#DELEGATE-6)). A later definition of a name meets the budget of the one it replaces
+and keeps the lower, so a project file can lower a person's own budget and cannot remove it.
+
+The budget is spent when the tokens the delegate's backend reported, those of the delegates it
+collected included, reach it. The delegate then loses its tools for its next request and answers
+with what it has, as it does on its limiting round ([DELEGATE-6](#DELEGATE-6)). It is not asked
+the session limit's question ([TURN-8](turns.md#TURN-8)): that question goes to a person, and a
+delegate has none.
+
+The driver says so beside the report, as [DELEGATE-26](#DELEGATE-26) does for rounds. The planner's
+message and the person's note name the budget and say the work may not be finished, and a delegate
+that spent its budget and then did not answer is told of in the same terms as one that spent its
+rounds, with the sentence that the same task will not get further. The trail names the budget a
+delegate carries when it starts, and says at its end whether the token budget, the round limit or
+both ended it.
+
+**A delegate under delegate.** A child is given the least of its own figures and the tokens its
+parent has left under its own budget when the child starts. The delegates of one fan-out divide
+what is left between them, so together they carry no more than the parent had. A parent with
+nothing left starts no delegate, and the refusal takes no number. What a child spends is added to
+its parent's total when the parent collects its report, so a parent cannot spend more than its
+budget by handing work down. A child still running when its parent's budget is reached keeps
+running to its own figure, which is at most what the parent had left.
+
+**Known limits.** Tokens are known only after a request completes, so a delegate may pass its
+budget by one request. A backend that reports no usage is counted from the words of its replies
+([TURN-5](turns.md#TURN-5)), and a budget is compared with that count. Credits are a session-wide
+counter and cannot be attributed to one delegate while its siblings run, so a budget is in tokens
+only.
+
+**Why a call may set it though the call sets no round bound.** [DELEGATE-6](#DELEGATE-6) keeps
+the round bound out of the planner's call because a number that lengthens a bound is authority a
+file somebody vouched for gave. A figure that can only lower a bound gives the planner none: the
+most it can do is stop its own delegate sooner, and the delegate's capabilities and what it may
+reach are exactly what they were.
+
+**What the comparison reads.** Two counts the driver holds, the tokens its backends reported and a
+figure from a vouched definition or a public call field. It reads no reply or tool result, so no
+decision is taken from untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
+
+`verified-by: bravebot_core::delegate::a_later_definition_meets_the_budget_of_the_one_it_replaces`
+`verified-by: bravebot_core::policy::a_call_budget_can_only_lower_the_definitions`
+`verified-by: bravebot_core::policy::a_call_budget_bounds_a_definition_that_names_none`
+`verified-by: bravebot_core::policy::a_private_budget_cannot_direct_a_delegate`
+`verified-by: bravebot_core::policy::each_delegate_of_a_fan_out_carries_the_figure`
+`verified-by: bravebot_core::policy::a_child_is_never_given_more_than_its_parent_has_left`
+`verified-by: bravebot_core::policy::a_run_with_no_budget_left_starts_no_delegate`
+`verified-by: bravebot_agent::turn::a_fan_out_divides_what_its_parent_has_left_between_its_delegates`
+`verified-by: bravebot_core::policy::a_delegates_end_names_the_budget_it_spent`
+`verified-by: bravebot_agent::agents::a_definition_reads_the_token_budget_it_names`
+`verified-by: bravebot_agent::agents::a_budget_line_that_is_not_a_count_of_tokens_is_not_a_definition`
+`verified-by: bravebot_agent::turn::a_delegate_that_spent_its_token_budget_loses_its_tools_and_says_so`
+`verified-by: bravebot_agent::turn::a_delegate_under_its_token_budget_is_unaffected_by_it`
+`verified-by: bravebot_agent::turn::a_backend_reporting_no_usage_does_not_trip_the_token_budget`
+`verified-by: bravebot_agent::turn::a_delegate_that_spent_its_token_budget_and_failed_says_the_budget_was_spent`
+`verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_sentence_about_a_spent_token_budget`
+`verified-by: bravebot_agent::turn::a_child_carries_what_its_parent_has_left_and_its_spend_counts_against_the_parent`
 
 <a id="DELEGATE-7"></a>
 ### DELEGATE-7: a delegate may delegate, to a fixed depth and under one ceiling for the turn
@@ -377,6 +449,10 @@ its own record: where a delegate's checkout is and the commit it holds, or that 
 for a kept one the paths written in it whose names the delegate typed. A write through a reference
 is counted, so the name a reference held stays with the delegate.
 
+The driver's own record of whether a delegate changed a file and whether it ran a program comes
+back too, and a parent whose workspace the delegate worked in counts both as its own for
+[TURN-4](turns.md#TURN-4)'s question and closing line.
+
 The driver's own count of the delegate's rounds and time, and the fixed cause of its end, go to the
 trail and to the person's note and never to the planner ([TRACE-8](trace.md#TRACE-8)).
 
@@ -384,6 +460,7 @@ trail and to the person's note and never to the planner ([TRACE-8](trace.md#TRAC
 its parent's context would have moved the log rather than absorbed it.
 
 `verified-by: bravebot_agent::turn::what_a_delegate_read_never_reaches_the_planner_that_asked`
+`verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own`
 
 <a id="DELEGATE-10"></a>
 ### DELEGATE-10: a delegate's effects are gated on their own
@@ -439,8 +516,9 @@ Nothing else about a delegate's policy survives it.
 <a id="DELEGATE-12"></a>
 ### DELEGATE-12: a delegate puts no question of its own to a person
 
-It is offered no way to ask one and no task list to write to, and a call to either anyway is
-answered the way any other unknown name is. Its task came from a planner rather than from the
+It is offered no way to ask one, no way to ask for reach to a path
+([SANDBOX-28](sandboxing.md#SANDBOX-28)) and no task list to write to, and a call to any of them
+anyway is answered the way any other unknown name is. Its task came from a planner rather than from the
 person, so a question about it asks somebody to arbitrate something they never set up, and the
 list on the screen belongs to the turn they are actually watching.
 
@@ -551,6 +629,14 @@ A turn does not answer while something it started is still working. Where the pl
 first, the reports are waited for, put in front of it, and it answers again knowing what came
 back. A turn that has run out of tool calls waits too, and answers without being asked again.
 
+Answering is how a planner waits when a delegate is all that is left, so the result of
+`spawn_agent` and the refusal `job_output` gives for a delegate's number both say so: end the round
+with one line naming what is outstanding, and the turn waits and asks again. The answer given
+while a delegate works is reported to the interface as text between calls, as the text that comes
+with a tool call is, so it stays in the transcript when the next round starts. Only the answer that
+ends the turn is the reply. While the turn joins a delegate the interface is told which one, and
+the terminal client names it beside the spinner.
+
 [background-sessions.md](background-sessions.md) proposes a session whose process outlives the
 terminal, which nothing yet builds. It changes nothing here: the turn in such a session still does
 not answer while a delegate is working, and what outlives the terminal is the session, not a
@@ -562,6 +648,8 @@ front of them for a turn they were told had finished.
 
 `verified-by: bravebot_agent::turn::a_turn_does_not_answer_while_a_delegate_is_still_working`
 `verified-by: bravebot_agent::turn::two_delegates_work_at_the_same_time`
+`verified-by: bravebot_tui::state::a_turn_waiting_on_a_delegate_names_it_until_its_report_is_in`
+`verified-by: bravebot_tui::state::a_new_round_ends_the_wait_the_indicator_names`
 
 <a id="DELEGATE-18"></a>
 ### DELEGATE-18: inference wait counts elapsed time once
@@ -796,6 +884,7 @@ question and not this one. The name of a definition that keeps a memory also nam
 [MEMORY-3](definition-memory.md#MEMORY-3) holds it to a slug.
 
 `verified-by: bravebot_agent::agents::a_name_that_is_or_folds_to_a_colon_is_refused`
+`verified-by: bravebot_agent::agents::a_refused_name_is_reported_by_the_files_path_and_never_by_the_name`
 
 <a id="DELEGATE-22"></a>
 ### DELEGATE-22: a definition may name the model its delegate runs on
@@ -836,6 +925,7 @@ definition could ask for one model and have every delegate it starts answered by
 `verified-by: bravebot_agent::turn::a_delegate_uses_the_model_its_definition_selected`
 `verified-by: bravebot_agent::turn::a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so`
 `verified-by: bravebot_agent::turn::a_delegate_answered_by_a_model_other_than_its_definitions_says_so`
+`verified-by: bravebot_agent::turn::a_delegate_on_an_alias_the_reply_resolves_reports_no_substitution`
 
 <a id="DELEGATE-23"></a>
 ### DELEGATE-23: a definition may name the skills its delegate is offered
@@ -983,6 +1073,7 @@ a service to send the conversation to.
 `verified-by: bravebot_agent::agents::an_effort_of_inherit_names_the_spawning_turns_level_and_is_not_reported`
 `verified-by: bravebot_core::delegate::a_definition_may_name_an_effort_and_the_spec_carries_it`
 `verified-by: bravebot_agent::turn::a_delegate_asks_for_the_effort_its_definition_named`
+`verified-by: bravebot_core::delegate::a_later_definition_takes_over_the_effort_the_one_it_replaces_named`
 
 <a id="DELEGATE-28"></a>
 ### DELEGATE-28: a definition may limit the files its delegate writes

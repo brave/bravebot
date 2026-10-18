@@ -44,14 +44,58 @@ rather than refused. opencode's `cost`, `modality` and `package` fields do nothi
 
 ### Where the requests go
 
-**A gateway bravebot already knows an endpoint for needs no `baseURL`.** `openrouter` is the name it
-knows today. Any other id needs one written down, and an entry with neither a known name nor a stated
-endpoint configures no service. A stated `baseURL` always wins, so a known name stays usable against a
-proxy or a private deployment.
+**A gateway bravebot already knows an endpoint for needs no `baseURL`.** `openrouter` and `openai` are
+the names it knows today. Any other id needs one written down, and an entry with neither a known name
+nor a stated endpoint configures no service. A stated `baseURL` always wins, so a known name stays
+usable against a proxy or a private deployment. A known name supplies the endpoint and nothing else:
+the block still says where its credential lives, as [below](#the-credential).
 
 The names it knows are compiled in, and nothing is fetched to resolve one. This value is where a
 bearer credential gets sent, so a service that could decide it could redirect your token by answering
 a request.
+
+### OpenAI
+
+An entry keyed `openai` reaches OpenAI with an API key, through its chat-completions endpoint:
+
+```json
+{
+  "provider": {
+    "openai": {
+      "env": ["OPENAI_API_KEY"]
+    }
+  },
+  "model": "openai/<model id>"
+}
+```
+
+The endpoint is `https://api.openai.com/v1`, and a stated `baseURL` wins, so a proxy or another
+deployment speaking the same protocol is reached by writing where it is. Export the key as
+`OPENAI_API_KEY=<your key>`, or store it with `bravebot auth login gateway openai`. The block has to say
+where the key lives: a block naming no `env`, no `options.apiKey` and no stored key sends none, and
+OpenAI refuses the request. `OPENAI_API_KEY` is a name other OpenAI tools read as well, and naming it
+in `env` is what makes bravebot send the key your shell holds. Like any variable a `provider` block
+names, it is [withheld from the programs bravebot runs](../../reference/run-tool.md#what-a-program-is-handed).
+
+With no `models` key, OpenAI is asked what it serves and `/model` offers everything it lists. The
+listing says nothing about what a model can do, so embedding, speech and image models are in it beside
+the chat models, and so are models OpenAI serves only through its Responses API, which bravebot does
+not use. Picking one of those fails. A block that lists `models` is offered those and no others, which
+is how to keep the picker to the models you use:
+
+```json
+{
+  "provider": {
+    "openai": {
+      "env": ["OPENAI_API_KEY"],
+      "models": { "<model id>": {} }
+    }
+  }
+}
+```
+
+A model is named with the id in front, as `openai/<model id>`, in `--model` or the `model` key. Signing
+in with a ChatGPT account instead of a key is not supported.
 
 ### Google Vertex AI
 

@@ -25,7 +25,7 @@ export type Hook = { moment: string; program: string }
 export type Checking = { lines: number } | { file: 'picture' | 'pdf' }
 export type Reach = 'not_the_planner' | 'no_model'
 export type Landing = 'context' | 'quarantined' | 'reserved'
-export type TodoStatus = 'pending' | 'active' | 'done'
+export type TodoStatus = 'pending' | 'active' | 'done' | 'cancelled'
 
 export type Change =
   | { kind: 'kept'; text: string }
@@ -102,6 +102,14 @@ export type Said =
    * agent's own: a reference name and a media type from its table of extensions.
    */
   | { kind: 'vetted'; reference: string; media: string }
+  /**
+   * A message between two background sessions, from this one's record (MSG-11). `direction` is
+   * `from` for one that reached this session's planner and `to` for one its planner sent. `text` is
+   * null where the planner was given a reference and not the words. `heading` and `kept` are the
+   * sentences the terminal draws for the same record, worded once in Rust; `kept` is null where
+   * `text` is not.
+   */
+  | { kind: 'session_message'; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
 
 export interface TodoRow {
   content: string
@@ -206,10 +214,12 @@ export interface OpenedSession {
   context: string
   todos: Record<string, TodoRow[]>
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
-  /** The yes an earlier session here was told to remember, where it and not `trust` settled the question (TRUST-23). */
+  /** The yes that was kept about this directory, where it and not `trust` settled the question (TRUST-23). */
   remembered?: KeptTrust | null
-  /** Where a remembered yes would be written, where the question is asked and remembering is offered. */
+  /** Where a yes would be kept, where the question is asked and the answer may be kept. */
   keeping?: string | null
+  /** What a yes also grants beyond the files, to show on the question (RUN-5); null where the question is not asked. */
+  confinedLines?: string | null
   branchNote: string | null
   buildNote: string | null
   /** Said when the other front end wrote the transcript above: it drew it, and this one will not draw it the same way. */
@@ -231,6 +241,8 @@ export interface OpenedSession {
   autoVetting: boolean
   /** Always `ask`: a mode is not read from the record (MODE-10). */
   permissionMode: PermissionMode
+  /** What the settings give a session before its window has chosen: never `off` (SANDBOX-22). */
+  sandboxMode: SandboxMode
   /** Absent from an older bridge, which read no rules. */
   settingsRules?: SettingsRules | null
 }
@@ -245,6 +257,17 @@ export type PermissionMode = 'ask' | 'acceptEdits' | 'plan'
 
 /** The order the mode shortcut walks, ending back at the first. */
 export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'acceptEdits', 'plan']
+
+/**
+ * What a program the agent runs is held to, as `session.sandbox` names it.
+ *
+ * Three of the agent's four. `off` starts a program with no profile, which a window has no way to
+ * show, so the bridge refuses it from a window (SANDBOX-22).
+ */
+export type SandboxMode = 'workspace-write' | 'read-only' | 'strict'
+
+/** The order the sandbox menu lists them. */
+export const SANDBOX_MODES: readonly SandboxMode[] = ['workspace-write', 'read-only', 'strict']
 
 export function nextPermissionMode(mode: PermissionMode): PermissionMode {
   return PERMISSION_MODES[(PERMISSION_MODES.indexOf(mode) + 1) % PERMISSION_MODES.length]!
@@ -312,10 +335,13 @@ export interface ForkedSession {
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
   remembered?: KeptTrust | null
   keeping?: string | null
+  confinedLines?: string | null
   /** The parent's, as it opened: the child carries on its conversation. */
   autoVetting: boolean
   /** Always `ask`, whatever the parent was in: a fork opens as any session does (MODE-11). */
   permissionMode: PermissionMode
+  /** What the settings give, whatever the parent chose: a fork opens as any session does. */
+  sandboxMode: SandboxMode
   /** Absent from an older bridge, which read no rules. */
   settingsRules?: SettingsRules | null
   parent: {
@@ -328,14 +354,14 @@ export interface ForkedSession {
   }
 }
 
-export interface Vetting { verdict: string; reason?: string | null; detail?: string | null }
+export interface Vetting { verdict: string; reason?: string | null; label?: string | null; detail?: string | null }
 /**
  * A picture or a PDF put to the person as a copy to open, since a transcript row cannot show what
  * the model would be shown. The copy is deleted once the question is answered.
  */
 export interface VetPicture { path: string; media: string; bytes: number }
 
-export interface VetRequest { request: number; origin: string; expects: string; content: string; lines: number; picture?: VetPicture | null; vetting: Vetting }
+export interface VetRequest { request: number; origin: string; summary?: string; expects: string; content: string; label?: string | null; lines: number; picture?: VetPicture | null; vetting: Vetting }
 
 export interface ConfirmRequest {
   remark?: { preview: string[]; lines: number; label: string } | null
@@ -447,6 +473,8 @@ export interface Stage {
   resolved: string | null
   /** The path the program is started by, which is `resolved` unless the name reached it through a link. */
   startedAs?: string
+  /** The file the step runs, which is what the terminal shows under the step. */
+  binary?: string
   args: string[]
   /** The agent's own rendering of the argv, so both front-ends show the same characters. */
   display: string
@@ -489,14 +517,20 @@ export interface FetchRequest {
  * the name from its own table, so nothing a turn read chooses what runs.
  *
  * When `runsBuildTooling` is true, starting the server runs code from the dependency tree with
- * the person's own access, as a build does. The card must say so.
+ * the person's own access, as a build does. The card must say so. When `declared` is true the
+ * person declared the server themselves, so what starting it runs is not known and the card
+ * says that in place of either sentence (LSP-11). `args` are the arguments it is started with.
  */
 export interface ServerRequest {
   request: number
   language: string
   program: string
+  args: string[]
+  /** The arguments as one line, quoted where one holds a space, so it reads back into the list. */
+  argumentsLine: string
   workspace: string
   runsBuildTooling: boolean
+  declared: boolean
   summary: string
 }
 
@@ -554,6 +588,7 @@ export interface ManifestDone {
   notices?: string[]
   attempt: PlanAttempt | null
   record: string | null
+  trust: { rules: { path: string; integrity: string }[] }
 }
 
 /** A manifest run that stopped: declined, stopped by the person, or failed. */
@@ -573,6 +608,7 @@ export interface ManifestError {
   attempt: PlanAttempt | null
   record: string | null
   notices?: string[]
+  trust: { rules: { path: string; integrity: string }[] }
 }
 
 /**
@@ -617,6 +653,8 @@ export interface McpServerRequest {
   requestedBy: string
   changed: boolean
   fetching: string[]
+  /** The question as the agent words it, one string per line. */
+  lines?: string[]
 }
 
 /** One tool on an MCP server's list, as the client drew it. `description` is the server's text. */
@@ -624,15 +662,14 @@ export interface McpTool { name: string; arguments: string[]; description: strin
 
 /**
  * The tools an MCP server lists, put to the person before any is offered to the model
- * (SERVERS-8). `refused` counts tools the client would not draw, and `changed` says a different
- * list was approved under this declaration before. A yes is remembered for this exact list.
+ * (SERVERS-8). `refused` counts tools the client would not draw. A yes holds for the session
+ * and is not remembered.
  */
 export interface McpToolsRequest {
   request: number
   alias: string
   tools: McpTool[]
   refused: number
-  changed: boolean
   vetting: Vetting
 }
 
@@ -665,6 +702,16 @@ export interface McpMoveRequest {
   mayRecord: boolean
 }
 
+/**
+ * Hosts a confined program asked the session proxy for that `sandbox.network.allowedHosts` does
+ * not list (SANDBOX-24). Each is a host name or IP address as the program chose it, so it is drawn
+ * as text. A yes allows them for the rest of the session and writes nothing to disk.
+ */
+export interface HostRequest {
+  request: number
+  hosts: string[]
+}
+
 /** What starting a session's MCP servers came to: the ones started, and why each other was not. */
 export interface McpStarted { servers: string[]; confined: boolean; notes: string[] }
 
@@ -693,6 +740,10 @@ export interface RunRequest {
    * governing.
    */
   releasesPrivate: boolean
+  /** What the stages are confined to, or `null` where the turn does not confine them. */
+  confinement?: { heading: string; directories: string[]; sentences: string[] } | null
+  /** The sentence for `confinement: null`, worded by the bridge in the person's language. */
+  notSandboxed?: string | null
   /**
    * Credential scopes and toolchain lists the planner asked this line to be lent, by name.
    *
@@ -741,6 +792,8 @@ export interface OutputRequest {
   reference: string
   lines: number
   output: string
+  /** The label the output was released under, as the trail writes it. */
+  label: string
   summary: string
 }
 
@@ -750,6 +803,8 @@ export interface VouchRequest {
   request: number
   path: string
   preview: string
+  /** The label the preview was released under, as the trail writes it. */
+  label: string
   /** Whether the preview is only part of the file. Load-bearing: a preview that stops
    *  without saying so reads as the whole thing. */
   truncated: boolean
@@ -801,8 +856,8 @@ export type AskAnswer = { chosen?: number[]; typed?: string }
 /** Every event the bridge emits, keyed by name. */
 export interface EventMap {
   'agent.ready': { build: string; version: string; home: string | null }
-  'trust.request': { directory: string; keeping?: string | null }
-  'turn.started': { turn: number }
+  'trust.request': { directory: string; keeping?: string | null; confinedLines?: string | null }
+  'turn.started': { turn: number; sandbox?: SandboxMode }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
   phase: { phase: Phase }
@@ -833,10 +888,11 @@ export interface EventMap {
   'mcp-tools.request': McpToolsRequest
   'mcp-call.request': McpCallRequest
   'mcp-move.request': McpMoveRequest
+  'host.request': HostRequest
   /** Sent as a session's first turn starts the MCP servers its project requests. */
   'mcp.starting': { servers: string[] }
   'mcp.started': McpStarted
-  'manifest.started': { run: number }
+  'manifest.started': { run: number; sandbox?: SandboxMode }
   'manifest.done': ManifestDone
   'manifest.error': ManifestError
   'ask.request': AskRequest
@@ -864,17 +920,6 @@ export interface BridgeFailure {
 }
 
 // ---------------------------------------------------------------- reading tags
-
-/**
- * Whether content at this landing reached the planner.
- *
- * Anything unrecognised reads as *not* reaching it, which is the safe direction: calling
- * quarantined content "read by the model" understates the confinement, and calling
- * context "quarantined" merely overstates it.
- */
-export function reachedThePlanner(landing: Landing | string): boolean {
-  return landing === 'context'
-}
 
 /** Whether a tag names something the planner was kept away from. */
 export function isConfined(landing: Landing | string): boolean {

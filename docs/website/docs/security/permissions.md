@@ -61,7 +61,11 @@ thing on the screen that is not.
 
 A review stays legible or says it could not: a long body keeps the question on screen and offers the
 rest to scroll to, a small edit in a large file shows only the change, an empty output says so, and a
-diff that cannot be computed says so rather than showing nothing.
+diff that cannot be computed says so rather than showing nothing. In the full-screen interface, and
+on the decision cards of a desktop conversation, no approval is taken until the lines it rests on have
+been on screen:
+until then the question says how many are left to read, a refusal is taken at any time, and a change
+of width starts the count again.
 
 ## One answer is never taken for another
 
@@ -178,11 +182,15 @@ set is empty at the start of every session. What holds is the label on the outpu
 the binary.
 :::
 
-On Linux and macOS a program's files are confined to the directories the session was opened on, its
-scratch directory and the system temporary directory, plus what its own command brings: the credentials a `git push` needs, never a private key,
-or a toolchain's cache. The run prompt lists them. A path outside them is refused by the system, so a
-`cat ~/notes.txt` fails until you add the directory. On Windows programs are not confined and run with
-the access your own shell would give them. The set of programs someone might ask for cannot be listed
+On Linux and macOS a program can read the machine except the places that hold a credential, and
+writes only the directories the session was opened on, its scratch directory, the system temporary
+directory and the toolchain caches, plus what its own command brings: the credentials a `git push`
+needs, never a private key. The run prompt lists them. Under the `strict` sandbox mode it reads only
+those directories, the system files every program needs and what its command brings, and a path
+outside them is refused by the system, so a `cat ~/notes.txt` fails until you add the directory. On
+Windows a program runs in a container that reaches only those directories, what its command brings,
+the system and program directories and git's configuration files, in every mode but `off`. The set
+of programs someone might ask for cannot be listed
 in advance, so the profile follows the command and not a list. A profile bounds files and not the
 environment. The one exception to what a program is handed is bravebot's **own** credentials, which
 are withheld from every program it runs: you approve an argv, never an environment, so a credential
@@ -293,8 +301,8 @@ box. A mode is a standing answer to the questions above, given once instead of o
 
 **Asking is where a session opens**, and it is what holds when nobody has chosen. The key comes round
 to the first again, so no mode is one you cannot press your way out of, and it works while a turn
-runs: the turn in flight keeps the mode it began with, so a diff already on your screen does not have
-the question withdrawn from under you.
+runs: the turn in flight follows it from its next question or tool call, and a diff already on your
+screen does not have its question withdrawn from under you.
 
 **A session started with `--dangerously-skip-permissions` says so when it stops bypassing.** The line
 under the input box and `/status` name asking there, where a session started without the flag draws
@@ -306,7 +314,9 @@ transcript when you press the key.
 and what it prints is what the next round reads. A mode named for edits that also stopped asking
 about programs would be granting the larger thing quietly. It does accept a write to any path the
 workspace reaches, since the prompt was the only thing that would have shown you the path. A rule in
-the settings file is what narrows that.
+the settings file is what narrows that. Under the sandbox mode `read-only`
+([confinement](security.md#confinement)) the agent's file tools write nothing, in this mode or in
+bypassing.
 
 **A write that would create a credential is still put to you.** A file that is one rare value and
 nothing else is how a generated key reaches a tree, so a write the credential scan finds such a value
@@ -385,7 +395,8 @@ this mode, but with no check asked for, `read_output` releases it without showin
 run that sets [`read: true`](../reference/run-tool.md#reading-the-output-in-the-same-result) gets the
 output at once, unless it is longer than one result may hold, and the audit trail records the release
 as the mode's, as it would for `read_output`.
-With `--vet` the check still reads it first, through `read_output`, and `read` changes nothing.
+With `--vet` the check still reads it first, through `read_output`, and `read` changes nothing. The
+result for such a run says so, and says that `read_output` is the way to see the output.
 
 What stays is the structural guarantee, that untrusted content cannot *decide* what happens. What
 goes is the narrower protection of not showing the planner bytes nobody vouched for. **This is a mode
@@ -415,8 +426,8 @@ invented on your behalf is reported to the planner as your own words.
 The control beside the model in the composer offers asking, accepting edits and plan mode, and
 `⇧⌘M` (`Ctrl+Shift+M` on Windows and Linux) walks them in that order. Bypassing is not offered: the
 desktop has no command line for the flag to be given on. The mode belongs to the open session and
-every session opens asking, a resumed one and a fork included. A turn keeps the mode it began with,
-so a change made while one runs applies from the next.
+every session opens asking, a resumed one and a fork included. A change made while a turn
+runs applies to the rest of that turn.
 
 ### A mode belongs to the sitting it was chosen in
 
@@ -456,8 +467,9 @@ spelling you approved.
   other, in every list. On a volume that keeps them apart, or where it cannot be told, a rule about
   `Docs` says nothing about `docs`.
 - **Windows names.** A name that reads as something other than the file it spells, such as a stream, a
-  device, a trailing dot or space, or an 8.3 short name, is refused outright, since no rule can be
-  matched against it. A path on a drive is a full path: `Read(//D:/added/**)` covers `d:\added\secret`.
+  device, a trailing dot or space, or an 8.3 short name, is refused outright, in a call's path or a
+  redirection's target, since no rule can be matched against it. A path on a drive is a full path:
+  `Read(//D:/added/**)` covers `d:\added\secret`.
 - **Hosts.** A host written with a trailing dot, `https://evil.example./`, is the host without it, so
   a `WebFetch(domain:evil.example)` rule covers both.
 - **Commands.** A command rule is matched against the program and each argument as the line was split,

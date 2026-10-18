@@ -103,7 +103,7 @@ impl Picker {
             let Some(project) = &self.reads_from else {
                 return;
             };
-            self.corpus = Some(Corpus::read(project));
+            self.corpus = Some(Corpus::read(project, |_| true));
         }
         let Some(corpus) = &self.corpus else {
             return;
@@ -403,16 +403,9 @@ fn pick<B: Backend>(
     current: Option<&str>,
     from_pr: Option<&str>,
 ) -> Choice {
-    let mut listed = sessions::list(project);
-    listed.retain(|session| Some(session.id.as_str()) != current);
-    let mut picker = Picker::new(listed, project.display().to_string()).reading(project);
-    picker.within_a_session = current.is_some();
-    if let Some(wanted) = from_pr {
-        picker = picker.from_pull_request(wanted);
-    }
-    if picker.is_empty() {
+    let Some(mut picker) = opened(project, current, from_pr) else {
         return Choice::Fresh;
-    }
+    };
 
     loop {
         if terminal.draw(|frame| draw(frame, &picker)).is_err() {
@@ -455,6 +448,21 @@ fn pick<B: Backend>(
             }
         }
     }
+}
+
+/// The list `pick` shows, or `None` where there is nothing to show.
+///
+/// A named pull request is shown even with no session listed at all: that none is linked to it is
+/// the answer, and it has to be seen.
+fn opened(project: &Path, current: Option<&str>, from_pr: Option<&str>) -> Option<Picker> {
+    let mut listed = sessions::list(project);
+    listed.retain(|session| Some(session.id.as_str()) != current);
+    let mut picker = Picker::new(listed, project.display().to_string()).reading(project);
+    picker.within_a_session = current.is_some();
+    if let Some(wanted) = from_pr {
+        picker = picker.from_pull_request(wanted);
+    }
+    (!picker.is_empty() || picker.from_pr.is_some()).then_some(picker)
 }
 
 /// Draw the list.
@@ -587,6 +595,13 @@ fn describe(session: &Summary) -> String {
     if let Some(branch) = &session.branch {
         parts.push(branch.clone());
     }
+    // Shortened to the front of the id, which is what tells one session of a list from another.
+    if let Some(source) = &session.handed_off_from {
+        parts.push(t!(
+            resume_handed_off,
+            id = source.chars().take(8).collect::<String>()
+        ));
+    }
     parts.push(sessions::size(session.bytes));
     parts.join("  ·  ")
 }
@@ -599,9 +614,12 @@ mod tests {
         Summary {
             id: id.to_string(),
             title: title.to_string(),
+            directory: "/w".to_string(),
+            front: Some("terminal".to_string()),
             branch: Some("main".to_string()),
             issue: None,
             pull_request: None,
+            handed_off_from: None,
             updated,
             bytes: 1024,
             manifest: false,
@@ -612,13 +630,30 @@ mod tests {
         Summary {
             id: id.to_string(),
             title: title.to_string(),
+            directory: "/w".to_string(),
+            front: Some("terminal".to_string()),
             branch: Some("main".to_string()),
             issue: None,
             pull_request: None,
+            handed_off_from: None,
             updated,
             bytes: 1024,
             manifest: true,
         }
+    }
+
+    /// A session begun by a handoff says on its row which one it came from, and one that was not
+    /// says nothing of the kind.
+    #[test]
+    fn a_handed_off_session_names_its_source_on_its_row() {
+        let mut handed = summary("a", "Port the parser", 100);
+        handed.handed_off_from = Some("0a1b2c3d-0000-4000-8000-000000000000".to_string());
+        assert!(
+            describe(&handed).contains("from 0a1b2c3d"),
+            "{}",
+            describe(&handed)
+        );
+        assert!(!describe(&summary("b", "Other", 100)).contains("from "));
     }
 
     fn drawn(picker: &Picker) -> String {
@@ -658,6 +693,7 @@ mod tests {
             branch: Some(branch.to_string()),
             issue: issue.map(str::to_string),
             pull_request: pull_request.map(str::to_string),
+            handed_off_from: None,
             ..summary(id, "a title that names none of them", 100)
         }
     }
@@ -1030,5 +1066,35 @@ mod tests {
         let screen = drawn(&by_title);
         assert!(screen.contains("Tidy the docs"), "{screen}");
         assert!(!screen.contains("ledger"), "{screen}");
+    }
+
+    /// A directory with no sessions is where a plain `--resume` has nothing to offer and starts an
+    /// ordinary session, but `--from-pr` there asked whether any session is linked to one pull
+    /// request, and a new session that never mentions it does not answer that.
+    #[test]
+    fn with_no_sessions_only_from_pr_opens_the_list_and_it_says_nothing_matches() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let project = crate::test_profile::project("never-used");
+        std::fs::create_dir_all(&project).expect("a project directory");
+
+        assert!(
+            opened(&project, None, None).is_none(),
+            "--resume drew an empty list"
+        );
+        let picker = opened(&project, None, Some("42")).expect("--from-pr drew no list");
+        // Wide enough that the scratch profile's long path leaves the pull request on its row.
+        let mut terminal =
+            Terminal::new(ratatui::backend::TestBackend::new(400, 12)).expect("a terminal");
+        terminal
+            .draw(|frame| draw(frame, &picker))
+            .expect("a frame");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains(t!(resume_nothing_matches)), "{screen}");
+        assert!(
+            screen.contains(&t!(resume_from_pr, pull_request = "42")),
+            "{screen}"
+        );
     }
 }

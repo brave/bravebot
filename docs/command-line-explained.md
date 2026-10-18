@@ -266,10 +266,10 @@ with `'…'`, `"…"` and `\`; redirection with `>`, `>>`, `<`, `2>`, `2>>`, `2>
 `NAME=literal cmd`.
 
 **Refused**: `$(...)` and backticks, `$VAR` and `${...}`, `$((...))`, `<(...)` and `>(...)`,
-heredocs (`<<` and `<<<`), a bare `&`, an unquoted `!`, `eval`, `source`, `.`, `exec`, `trap`,
-`if`, `while`, `for`, `case`, `function`, a descriptor duplication other than `2>&1`, a numbered
-redirection other than `2>`, a `~` naming somebody else's home, an assignment whose value is not
-literal, and a newline.
+heredocs (`<<` and `<<<`), a bare `&`, an unquoted `!`, a `(` or `)` written onto the end of an
+argument, `eval`, `source`, `.`, `exec`, `trap`, `if`, `while`, `for`, `case`, `function`, a
+descriptor duplication other than `2>&1`, a numbered redirection other than `2>`, a `~` naming
+somebody else's home, an assignment whose value is not literal, and a newline.
 
 The pattern: **anything whose value isn't visible in the line is refused.** Quoting settles every
 one of them. `'$HOME'` is six characters and arrives as one argument, because the refusals are
@@ -282,8 +282,11 @@ substitution makes the prompt a lie, or it's pointless. So: refused.
 
 Globs are different, and worth understanding. We expand them **before** the prompt, against the
 actual working tree. So the human doesn't see `src/**/*.ts`: they see the twelve files it
-matched. If it matches nothing, that's an error rather than bash's behaviour of passing the
-pattern through literally, which is never what anyone meant. And the expansion is capped, because
+matched. If it matches nothing, the pattern is passed to the program as written, as bash does, so
+`find . -name *.md` works when there is no `.md` file where it runs. When there is one, the pattern
+becomes that file, so a pattern meant for the program, as in `find . -name '*.md'`, is quoted. An
+option carrying a value, such as `--include=*.md`, is the program's to match, so it is passed as
+written and never looked up. And the expansion is capped, because
 an approval prompt with a thousand paths in it is a prompt nobody reads: a word may stand for at
 most a hundred arguments, and working out one pattern may read at most four thousand directories.
 Past either, the compile fails and says the count. `**` steps over the same directories a listing
@@ -430,7 +433,8 @@ Smaller, uncontroversial, mostly parity with other agent harnesses:
 | Commands a user vouched for | `crates/core/src/programs.rs` |
 | Name → resolved binary path | `crates/agent/src/programs.rs` |
 | The label lattice and the gates | `crates/core/src/policy.rs` |
-| Tool definitions the model sees | `crates/agent/src/tools.rs` |
+| Tool definitions the model sees | `crates/agent/src/tools/offered.rs` |
+| Tool dispatch and the tool bodies | `crates/agent/src/tools.rs` |
 | The turn loop | `crates/agent/src/turn.rs` |
 
 Specs worth reading, in this order: `labels.md`, `routing.md`, `tools/run.md`, then

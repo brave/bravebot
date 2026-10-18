@@ -4,8 +4,15 @@ title: Slash commands
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
+  - crates/tui/src/app/models.rs
+  - crates/tui/src/app/session_commands.rs
+  - crates/tui/src/app/keys.rs
+  - crates/tui/src/command_table.rs
+  - crates/tui/src/picking.rs
   - crates/tui/src/skills.rs
   - crates/tui/src/caffeinate.rs
+  - crates/tui/src/away.rs
   - crates/tui/src/init_command.rs
   - crates/tui/src/review_command.rs
   - crates/tui/src/prompt_files.rs
@@ -278,15 +285,15 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches only what the session keeps | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/rename`, `/issue` and `/pr`; `/forget-trust`; `/theme <name>` and `/effort <level>`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
-| everything else | every other command, `/theme` and `/effort` alone, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
+| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/model`, `/theme` and `/effort` in every form; `/config`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| everything else | every other command, `/sandbox` in every form, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
 it stays where it was. The exception is a line of the same command already waiting, which it waits
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
-were typed. A command that changes something, `/rename`, `/issue`, `/pr`, `/forget-trust`,
-`/theme <name>`, `/effort <level>`, `/advisor` or `/style`, is carried out as it is typed only when nothing is waiting, and otherwise waits
+were typed. A command that changes something, `/rename`, `/note`, `/issue`, `/pr`, `/forget-trust`,
+`/model`, `/theme`, `/effort`, `/config`, `/advisor` or `/style`, is carried out as it is typed only when nothing is waiting, and otherwise waits
 behind what is, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
 session `/clear` leaves, and `/forget-trust` ahead of a waiting `/cd` would forget the directory
 `/cd` leaves. A command carried out as it is typed comes off the box and is not remembered, as at
@@ -314,8 +321,7 @@ typed is no better. Each acts on the conversation, the workspace, the terminal o
 the turn holds all four, so it would change what the turn is running under. Starting a loop or
 setting a goal is in this kind for the same reason: `/loop 5m check the deploy` sends its first tick
 at once, and a second turn may not begin while one is in flight, while a goal set mid-turn would
-have the turn in flight judged against a condition it was never sent with. `/theme` and `/effort`
-alone open a picker, which takes the terminal the turn draws its own questions on.
+have the turn in flight judged against a condition it was never sent with.
 
 **Why the first kind does not.** A loop, a goal, a watch and the spend so far are the session's own,
 and the turn holds none of them, so reading or ending one changes nothing the turn is using. The
@@ -329,14 +335,35 @@ does not read:
   under whatever name the session has by then. The rename gives up every rewind point
   ([SESSION-19](sessions.md#SESSION-19)), the one the running turn opened among them. `/rename`
   with no name renames nothing and gives up none.
+- **`/note`.** The note is written to the record at once, on the turn that is running, and the turn
+  is handed nothing ([SESSION-36](sessions.md#SESSION-36)). It gives up no rewind point, since no
+  point holds a note. `/note` with no text records nothing: it lists the notes the session holds, or says what it needs when it holds none.
 - **`/issue` and `/pr`.** The record is written after the turn with whatever links the session has
   by then, and no turn reads them ([PANEL-12](info-panel.md#PANEL-12)).
 - **`/forget-trust`.** What it takes back is the answer kept for the next session in the directory
   ([TRUST-24](trust-map.md#TRUST-24)). The turn runs under the map this session opened with, which
   the command leaves alone.
-- **`/theme <name>` and `/effort <level>`.** A theme changes only how the screen is drawn. A turn is
-  sent with the level in force when it begins and does not read it again, so a level set mid-turn
-  is the next turn's.
+- **`/model`.** A turn is sent with the model in force when it begins and does not read the choice
+  again, so a model picked mid-turn is the next turn's. The turn is still compared with the model
+  it was sent with when it ends, and not with the one picked meanwhile. What `/status` and the
+  footer name, and the window the context gauge is read against, are the model picked from the
+  moment it is picked, since the next request is the one that has to fit.
+- **`/theme` and `/effort`.** A theme changes only how the screen is drawn. A turn is sent with the
+  level in force when it begins and does not read it again, so a level set mid-turn is the next
+  turn's.
+- **`/config`.** It picks the style the box edits in. The turn does not read it. The keys that stop
+  the turn do, so with vi's style chosen Escape reaches the turn only once the box has no use for
+  it ([INPUT-24](terminal-input.md#INPUT-24)).
+- **The pickers.** The bare word of `/model`, `/theme`, `/effort` and `/config` opens a list. While a turn
+  runs the list is a mode of the session and not a loop of its own, so the turn goes on being drawn
+  and asked about. The list takes every key the box would have taken, is drawn over the frame with
+  the turn still drawn behind it, and is left with Escape or Ctrl-C, which stop nothing. A question
+  the turn asks takes the screen for as long as it is open, and the list is there again once it is
+  answered. The theme under the cursor is in force while the list is open, and Escape puts back the
+  one that was. A row taken is carried out as a name typed is, and what it says is held under the
+  turn. A list still open when the turn ends stays open and takes the next key. The roster `/model`
+  lists is asked for on the thread that draws the turn, so a slow listing holds the drawing, and
+  any question the turn asks, until it returns.
 - **`/advisor`.** It names the model a later turn's planner may consult
   ([ADVISOR-9](tools/advisor.md#ADVISOR-9)). A turn is offered its advisor, or none, when it
   begins and does not read the choice again, so one named mid-turn is the next turn's. The bare word
@@ -348,6 +375,17 @@ does not read:
 - **`/copy`.** It reads the transcript and writes to the clipboard, which a sweep with the mouse
   may do at any time. Mid-turn the latest reply may be what the running turn said on its way to a
   tool call, since that is in the transcript once it is drawn.
+
+- **`/export`.** It reads the transcript, which the session keeps, and writes a file under the
+  working directory by the rules it has at rest ([SESSION-17](sessions.md#SESSION-17)): a path that
+  leaves the directory or names a file that is already there is refused, and the refusal is said
+  under the turn. The turn works in that directory, but a new file there changes neither the
+  directory it works in nor what it may reach, and a name that is taken is never replaced, so
+  nothing the turn wrote is lost to it. The file holds the transcript as it stands when the line is
+  typed, so a reply the turn is still writing is not in it, and neither is a prompt waiting behind
+  the turn. The prompt the turn is working on is marked as still running. A waiting `/cd` or
+  `/clear` has not happened yet, so the file goes where the turn is working and holds what the
+  transcript holds now, as `/copy` copies the reply it holds now.
 
 - **`/status`.** It reads what the session keeps, the workspace and the configuration the turn was
   started with, none of which it changes. The trust map and the vouched programs are the turn's: it
@@ -391,12 +429,24 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_rename_with_no_name_mid_turn_keeps_the_running_turns_rewind_point`
 `verified-by: bravebot_tui::app::a_link_set_mid_turn_is_set_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_command_that_changes_something_waits_behind_what_was_typed_first`
+`verified-by: bravebot_tui::app::export_typed_mid_turn_writes_the_transcript_as_it_stands`
+`verified-by: bravebot_tui::app::export_typed_mid_turn_refuses_a_path_outside_the_working_directory`
 `verified-by: bravebot_tui::app::every_command_carried_out_mid_turn_answers_under_the_turn`
 `verified-by: bravebot_tui::app::ctrl_enter_on_a_rename_mid_turn_hurries_nothing`
 `verified-by: bravebot_tui::app::trust_forgotten_mid_turn_is_forgotten_as_it_is_typed`
 `verified-by: bravebot_tui::app::an_effort_named_mid_turn_is_set_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_theme_or_an_effort_nobody_has_is_refused_mid_turn`
-`verified-by: bravebot_tui::app::the_bare_theme_and_effort_commands_wait_for_the_turn`
+`verified-by: bravebot_tui::app::a_command_that_opens_a_picker_opens_it_as_it_is_typed_mid_turn`
+`verified-by: bravebot_tui::app::a_level_picked_in_a_picker_opened_mid_turn_is_kept_and_said_under_the_turn`
+`verified-by: bravebot_tui::app::leaving_a_picker_opened_mid_turn_does_not_stop_the_turn`
+`verified-by: bravebot_tui::app::a_picker_still_open_when_the_turn_ends_goes_on_at_rest`
+`verified-by: bravebot_tui::app::a_row_taken_while_another_working_loop_runs_is_carried_out_afterwards`
+`verified-by: bravebot_tui::app::the_model_command_opens_the_model_picker_as_it_is_typed_mid_turn`
+`verified-by: bravebot_tui::app::a_model_picked_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own`
+`verified-by: bravebot_tui::app::a_paste_while_a_picker_is_open_lands_nowhere`
+`verified-by: bravebot_tui::app::a_picker_left_open_takes_the_keys_while_a_command_runs`
+`verified-by: bravebot_tui::render::a_picker_opened_mid_turn_is_drawn_over_the_turn`
+`verified-by: bravebot_tui::theme_prompt::a_key_press_previews_the_row_and_leaving_puts_the_old_theme_back`
 `verified-by: bravebot_tui::render::what_a_command_answered_mid_turn_is_drawn_under_the_turn`
 `verified-by: bravebot_tui::app::no_command_is_sent_as_a_prompt_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_command_with_an_argument_is_not_sent_as_a_prompt_while_a_turn_runs`
@@ -554,7 +604,8 @@ session starts. While it is on, the platform's inhibitor runs whenever the sessi
 and is ended once it has none. Work is pending while a turn is in flight and while a loop has a tick
 to come, which includes the wait a turn asked for with `schedule_next`
 ([tools/schedule-next.md](tools/schedule-next.md#SCHED-1)). A background job is covered by its turn,
-since none outlives it ([tools/run.md](tools/run.md#RUN-15)). A watch waiting on a file holds
+and a job the session keeps past its turn ([tools/run.md](tools/run.md#RUN-15)) holds nothing
+between turns, since the person can see it and stop it there. A watch waiting on a file holds
 nothing, and neither does an idle session.
 
 The first `/caffeinate` in a person's state directory turns nothing on. It says what the command
@@ -569,7 +620,11 @@ The inhibitor is a fixed argument vector, and only idle sleep is held off:
 |---|---|
 | macOS | `/usr/bin/caffeinate -i -w <this process's id>` |
 | Windows | `powershell -NoProfile -NonInteractive -EncodedCommand <script>`, the script calling `SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED)` and then reading its standard input to the end |
-| every other platform | `systemd-inhibit --what=idle --who=bravebot --why=/caffeinate --mode=block cat` |
+| every other platform | `systemd-inhibit --what=idle --who=bravebot --why=/caffeinate --mode=block <cat>`, `<cat>` being the absolute path of `cat` |
+
+`<cat>` is found as [SANDBOX-30](sandboxing.md#SANDBOX-30) says, because `systemd-inhibit` starts it
+and would otherwise look the name up on the `PATH` it inherited. When no `cat` is found that way the
+inhibitor does not start.
 
 Each one's standard input is a pipe this process holds, and each ends the hold when this process
 ends, so a crash leaves no machine held awake. An inhibitor that will not start, and one that exits
@@ -583,8 +638,9 @@ open. The screen still locks, but the machine stays up with whatever credentials
 command is off until a person has read that and asked for it a second time, which is where a person
 working under a device policy finds out whether it is allowed. A hold that could not be kept turns
 the command off, so nobody walks away from a machine they believe is held. Nothing from a model, a
-file or a setting reaches the argument vector, so the inhibitor is not a process running code we did
-not write ([sandboxing.md](sandboxing.md)).
+file or a setting reaches the argument vector, and the one program it names is resolved from
+directories no confined stage could have written, so the inhibitor is not a process running code we
+did not write ([sandboxing.md](sandboxing.md)).
 
 `verified-by: bravebot_tui::state::a_loop_waiting_for_its_next_tick_holds_the_machine_awake`
 `verified-by: bravebot_tui::state::a_turn_holds_the_machine_awake_until_it_ends`
@@ -599,6 +655,9 @@ not write ([sandboxing.md](sandboxing.md)).
 `verified-by: bravebot_tui::caffeinate::starting_a_program_that_does_not_exist_fails`
 `verified-by: bravebot_tui::caffeinate::an_inhibitor_that_ended_by_itself_is_reported`
 `verified-by: bravebot_tui::caffeinate::the_macos_inhibitor_holds_idle_sleep_for_this_process_alone`
+`verified-by: bravebot_tui::caffeinate::the_inhibitor_holds_idle_sleep_and_starts_the_cat_it_was_found_at_byte_for_byte`
+`verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`
+`verified-by: bravebot_tui::caffeinate::an_inhibitor_with_no_cat_but_a_planted_one_is_not_started`
 `verified-by: bravebot_session::store::only_the_confirmed_word_is_an_agreement_to_caffeinate`
 
 ## Drafting the project's instructions
@@ -633,6 +692,7 @@ offering a write over a file somebody wrote, and keeps the check from depending 
 `verified-by: bravebot_tui::init_command::a_file_of_the_name_is_there_whatever_it_holds`
 `verified-by: bravebot_tui::init_command::a_link_with_no_target_is_there`
 `verified-by: bravebot_tui::init_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
+`verified-by: bravebot_tui::init_command::the_prompt_asks_for_the_title_the_length_the_five_areas_and_the_tools`
 `verified-by: bravebot_agent::turn::a_file_the_planner_may_not_see_is_reserved_rather_than_opened`
 
 <a id="CMD-18"></a>
@@ -672,7 +732,7 @@ A `/review` is a command, so a prompt file or skill of that name is shadowed by 
 **Why.** A review exists to read changes the planner may not be allowed to see, and the answer to
 that elsewhere is a processor whose output goes to the person. A typed record of findings that the
 planner could act on would be the driver branching on processor output, which the design reserves for
-the three exceptions in [labels.md](labels.md) and which needs the maintainers' agreement
+the exceptions in [labels.md](labels.md) that read a processor's or a check's answer and which needs the maintainers' agreement
 before it is built. This command is the part that needs none of that.
 
 `verified-by: bravebot_tui::app::the_review_command_starts_a_turn_with_the_drivers_own_prompt`
@@ -727,7 +787,8 @@ decide, so the command only says which one the person meant.
 ### CMD-15: `/request` opens the last request built, and takes no argument
 
 `/request` opens a read-only view of the last request a turn built for the planner, which
-[TRACE-9](trace.md#TRACE-9) states. It takes no argument, so `/request` followed by words is a
+[TRACE-9](trace.md#TRACE-9) states, including which instruction files were loaded into it and how
+many bytes each contributed. It takes no argument, so `/request` followed by words is a
 prompt (CMD-2). It reads what the session already holds in memory, so it is carried out as it is
 typed while a turn runs (CMD-8), and it starts no turn and sends nothing. It is a command, so only a
 line a person typed reaches it (CMD-1).
@@ -843,6 +904,67 @@ a length the driver already holds, so nothing branches on untrusted content.
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::state::a_count_is_apportioned_in_whole_numbers_that_add_up_to_it`
 `verified-by: bravebot_agent::request_view::the_size_of_the_tool_definitions_is_what_was_sent`
+
+<a id="CMD-20"></a>
+### CMD-20: a person who has been away is given a recap, once, without asking
+
+When the terminal has reported being left, at least five minutes have passed since the last turn
+completed (or the number of seconds an `awaySummaryIdleSeconds` setting names), and the session has
+had at least three turns, the interface does what `/recap` does (CMD-16), once, with nothing queued
+behind it. It does not do it again until another turn has completed, and a recap the person asked
+for counts as one. A terminal that reports no focus changes is taken to be in front of the person,
+so it never recaps by itself. An `awaySummaryEnabled` setting of `false` turns it off, and any other
+value, or none, leaves it on. `awaySummaryIdleSeconds` is a whole positive count: zero, or anything
+that is not a whole count, leaves the five minutes in force. It is the terminal interface's alone: a
+`-p` run and the desktop app have no such view and never make one.
+
+Nothing from the conversation reaches the decision. It reads the clock, the focus reports, a count of
+turns and the settings, all of which the interface holds itself.
+
+**Why.** CMD-16 only helps a person who thinks to ask. A person returning to a long session is the one
+least likely to remember what it was doing, and the first thing they would do is ask.
+
+`verified-by: bravebot_tui::away::a_recap_is_due_once_every_condition_holds`
+`verified-by: bravebot_tui::away::a_recap_waits_for_the_idle_time`
+`verified-by: bravebot_tui::away::a_recap_waits_for_the_idle_time_the_setting_names`
+`verified-by: bravebot_tui::away::a_recap_waits_for_the_terminal_to_be_left`
+`verified-by: bravebot_tui::away::a_recap_waits_for_enough_turns`
+`verified-by: bravebot_tui::away::a_recap_is_not_made_twice_in_a_row`
+`verified-by: bravebot_tui::away::a_recap_is_not_made_where_the_setting_turned_it_off`
+`verified-by: bravebot_tui::away::a_session_with_no_completed_turn_owes_nothing`
+`verified-by: bravebot_tui::app::leaving_the_terminal_after_a_completed_turn_makes_a_recap_due`
+`verified-by: bravebot_config::settings::only_a_boolean_turns_the_away_recap_off`
+`verified-by: bravebot_config::settings::the_away_recap_switch_is_among_the_names_reported`
+`verified-by: bravebot_config::settings::a_settings_file_names_how_long_before_the_away_recap`
+
+<a id="CMD-21"></a>
+### CMD-21: `/effort` spells out its levels after the word, and Tab finishes one
+
+Once `/effort ` is typed, the box draws the five levels it takes, `low`, `medium`, `high`, `xhigh`
+and `max`, after the caret in place of `[level]`. The completion list keeps `[level]` in the table,
+because every row's description starts after the longest word in the list and a spelled-out hint
+would push all of them to the right. `--help` prints the spelled-out form. Both are built from the
+set of levels the program accepts, so a level added there appears in both.
+
+Tab after `/effort ` and the start of a level, with the caret at the end of the line, replaces the
+start with the level it fits, so `/effort h` becomes `/effort high`. A start that fits several
+levels is carried as far as they agree and no further, so `m`, which fits `medium` and `max`, is left
+as typed. A finished level, a word that fits none, a bare `/effort `, another command, a prompt that
+only mentions `/effort`, and a line in shell mode are left as typed. Tab never submits the line.
+
+Nothing from the conversation reaches either. They read the typed line and the fixed set of levels.
+
+**Why.** The words a command takes are what a person cannot guess, and `[level]` did not say them.
+Completing a start from the same set the command accepts keeps the hint, the completion and the
+refusal for an unknown word in step.
+
+`verified-by: bravebot_tui::render::the_effort_command_offers_its_levels_after_its_word`
+`verified-by: bravebot_tui::app::the_effort_hint_lists_every_level_and_the_list_stays_short`
+`verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
+`verified-by: bravebot_tui::app::tab_finishes_a_level_started_after_the_effort_command`
+`verified-by: bravebot_tui::app::tab_leaves_alone_a_start_it_cannot_finish`
+`verified-by: bravebot_tui::app::tab_leaves_a_shell_line_alone`
+`verified-by: bravebot_tui::app::tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end`
 
 ## Known costs
 

@@ -4,9 +4,14 @@ title: Background sessions
 status: proposed
 governs:
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
   - crates/session/src/sessions.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
   - crates/agent/src/home.rs
+  - crates/tui/src/command_table.rs
+  - crates/cli/src/supervisor.rs
+  - crates/tui/src/sessions_view.rs
 documented-by:
   - none (gap: a page on starting a session in the background, listing, attaching to and replying to one, owed until the design is built)
 ---
@@ -20,9 +25,11 @@ a person sends it its next prompt, and what it does when it needs an answer.
 The roster, `bravebot sessions`, `bravebot sessions stop`, `bravebot --bg`, `bravebot attach` and
 `bravebot reply` are built, and the session a background process runs is the session in lines. A
 clause that is built whole names its tests. A clause with a part still to build reads
-`verified-by: none` until all of it lands, and the parts not built are: the supervisor and restarts
-([BG-12](#BG-12)), `/bg`, and the checkout ([BG-14](#BG-14)). The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
-no loop and no watch yet, so those two conditions of it hold of every session; `/detach` is built. A question from an
+`verified-by: none` until all of it lands, and the part not built is the checkout ([BG-14](#BG-14)).
+The supervisor and the restart of a process that ends between turns ([BG-11](#BG-11),
+[BG-12](#BG-12)) are built. `/bg` is built. The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
+no loop and no watch yet, so those two conditions of it hold of every session; `/detach` is built.
+`bravebot sessions` on a terminal is a list grouped by state that attaches ([BG-16](#BG-16)). A question from an
 MCP server that has to be started is held like any other, and is drawn as a foreground session
 draws it. A `stopped` or `interrupted` session is started again from `attach` or `reply` by a terminal,
 resuming the record the process wrote after each turn (for `interrupted`, the terminal says first
@@ -32,9 +39,9 @@ that other specs would contradict are named under
 [What this changes in other specs](#what-this-changes-in-other-specs).
 
 A **background session** is an ordinary session, as [sessions.md](sessions.md) describes one, whose
-process a supervisor owns instead of a terminal. The **supervisor** is a small process that starts,
-stops and restarts those processes and records their state. The **roster** is that record. A
-**foreground session** is any session that is not one.
+process a terminal does not own. The **supervisor** is a small process that watches those processes
+and starts one again when it ends between turns ([BG-12](#BG-12)). The **roster** is the record of
+them. A **foreground session** is any session that is not one.
 
 What a session record holds is [sessions.md](sessions.md). What the prompts ask and what an answer
 grants is [prompting.md](prompting.md), and what a mode answers in advance is
@@ -76,10 +83,23 @@ rules to keep in step with the first, and the second set is the one nobody reads
 
 `bravebot --bg "prompt"` starts a background session whose first turn is the prompt as typed.
 `/bg` between two turns of a foreground session hands that conversation to a background session and
-ends the foreground process once the record is written. `/bg` while a turn is running is refused,
-because the process holding that turn cannot be handed over. Both start the session in the working
-directory they ran in, and `/bg` keeps the permission mode the foreground session was in
-([BG-8](#BG-8)).
+ends the foreground process once the record is written. The new process resumes that record and
+opens idle. `/bg` typed while a turn is running waits for the turn to end ([CMD-8](commands.md#CMD-8)),
+since the record is written then. Both start the session in the working directory they ran in, and
+`/bg` keeps the permission mode the foreground session was in ([BG-8](#BG-8)).
+
+`/bg` is refused, and the foreground session carries on, in bypass ([BG-8](#BG-8)), in an incognito
+session or one with no record yet, after an option that `--bg` refuses (such as `--no-shell` or
+`--settings`) was given at the command line, after `/sandbox` moved the session to a sandbox mode
+other than the one start-up chose, and while a loop, a goal or a watch is running, because the
+background session has none of those ([Not decided](#not-decided)). The background process chooses
+its sandbox mode from the settings and the managed file as start-up did
+([SANDBOX-22](sandboxing.md#SANDBOX-22)), so a session moved to `strict` would go on in `workspace-write`
+with nothing said; the refusal names both modes and the `/sandbox` line that moves the session back.
+The background process reads the settings of the directory the session is in when `/bg` is typed,
+and the check compares with the mode start-up chose, so after `/cd` into or out of a checkout whose
+settings choose another mode the session is handed over and goes on in the mode that checkout's
+settings choose, with nothing said.
 
 Nothing else starts one. The planner has no tool for it, a delegate cannot, and neither can a hook,
 a loop tick, a watch or a file the session read. A prompt that arrived on a pipe is untrusted input
@@ -89,17 +109,34 @@ and does not start one either.
 that may start unwatched work, so the only thing that may is a person, and the line they typed is
 the whole of what they asked for.
 
-`verified-by: none`
+`verified-by: bravebot_tui::app::the_background_command_is_never_a_prompt_and_waits_for_the_turn`
+`verified-by: bravebot_tui::app::the_background_command_carries_the_record_and_the_mode`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_in_bypass`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_without_a_record_or_with_work_it_would_drop`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_after_an_option_it_cannot_pass_on`
+`verified-by: bravebot_tui::app::the_background_command_is_refused_after_sandbox_moved_the_mode`
+`verified-by: bravebot_cli::background::the_host_is_started_with_the_mode_it_runs_in`
+`verified-by: bravebot_cli::running::a_handed_over_session_runs_in_the_mode_it_was_given`
+`verified-by: bravebot_cli::running::bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal`
 
 <a id="BG-3"></a>
 ### BG-3: the supervisor moves process state and decides nothing from content
 
-The supervisor starts a session's process, stops it, restarts it ([BG-12](#BG-12)), and writes the
-roster. A process that has been idle ([BG-13](#BG-13)) ends itself, because it is the one that knows
-whether a terminal is attached, and the supervisor sees only that it ended. It reads no conversation, no record, no
-prompt, no reply and no tool result. It makes no model request and holds no credential: a session's
-process reads its own, as a foreground one does. It branches only on process facts (whether the
-process is alive, how it exited, when it last did anything) and on the roster's own fields.
+The supervisor starts a session's process again ([BG-12](#BG-12)) and writes no entry itself: the
+process it starts writes its own. It leaves the empty line a process begins with ([BG-2](#BG-2)) and
+removes the socket of the one that ended. A terminal starts a session's process the first time and
+stops it ([BG-11](#BG-11)), because the process reads its configuration from the environment of
+the terminal that ran `--bg`, and a supervisor that started it would hand it the environment of
+whichever terminal started the supervisor. A process started again has no terminal to take an
+environment from and has the supervisor's. A process that has been idle ([BG-13](#BG-13)) ends
+itself, because it is the one that knows whether a terminal is attached, and the supervisor sees
+only that it ended.
+
+It takes from the roster the state the process last wrote and the directory the session works in,
+and nothing else. It reads no conversation, no record, no prompt, no reply and no tool result. It
+makes no model request and reads no credential: a session's process reads its own, as a foreground
+one does. It branches only on process facts (whether the process is alive, whether a person was
+stopping it, when it was started again) and on those two roster fields.
 
 The attach channel ([BG-9](#BG-9)) is between a terminal and the session's process. The supervisor
 is not on it.
@@ -108,7 +145,9 @@ is not on it.
 Keeping it ignorant of every byte of content is how that holds without an argument about each field:
 a supervisor that can read a conversation can be made to act on one.
 
-`verified-by: none`
+`verified-by: bravebot_session::jobs::the_facts_a_supervisor_reads_are_the_state_the_directory_and_whether_it_is_alive`
+`verified-by: bravebot_cli::supervisor::a_process_that_ends_in_a_turn_or_a_question_is_not_started_again`
+`verified-by: bravebot_cli::supervisor::a_process_is_started_again_in_its_directory_in_the_mode_every_session_opens_in`
 
 <a id="BG-4"></a>
 ### BG-4: the roster is a closed set of fields in the person's own state directory
@@ -142,11 +181,12 @@ was nearest.
 <a id="BG-5"></a>
 ### BG-5: the list shows labels and states, never content
 
-`bravebot sessions` prints one line per background session, across every project: the first eight
-characters of its id, its name, its state, its working directory, how long since its last turn, and the last prompt the person typed,
+`bravebot sessions` prints one line per background session, across every project, wherever it does
+not open the list of [BG-16](#BG-16): the first eight characters of its id, its name, its state, its working directory, how long since its last turn, and the last prompt the person typed,
 cut as a title is cut. `--json` prints the roster fields for each session. Where a prompt is held,
 the line says that the session needs input and names the kind of prompt it is, by one word from a fixed set with
-a word for each kind a foreground session puts, and shows nothing of what the prompt is about.
+a word for each kind a foreground session puts and one for a message the session's planner wants to send
+([MSG-3](session-messages.md#MSG-3)), and shows nothing of what the prompt is about.
 
 Every part of a line is something the person typed, a fact about the process, or one of a fixed set
 of words. No part of it comes from a reply, a tool result, a file's contents, a command's output or
@@ -162,6 +202,7 @@ sentence, which is the reason the info panel draws nothing from either.
 
 `verified-by: bravebot_cli::background::a_control_character_in_what_was_typed_cannot_write_a_row`
 `verified-by: bravebot_cli::background::a_held_prompt_shows_its_kind_and_nothing_else`
+`verified-by: bravebot_cli::background::a_session_holding_a_message_to_send_is_listed_with_that_kind`
 `verified-by: bravebot_cli::background::a_session_with_no_process_is_not_listed_as_working`
 `verified-by: bravebot_cli::running::sessions_lists_an_entry_with_no_process_as_interrupted`
 
@@ -251,7 +292,7 @@ else: a turn that is running keeps running, and a held prompt stays held. The li
 sent to the session.
 
 The channel between the terminal and the process is local to the machine. It is restricted to the
-person's account and carries content with the label it was released under, so the terminal marks
+person's account, and to a program that holds the session's secret ([BG-15](#BG-15)), and carries content with the label it was released under, so the terminal marks
 quarantined bytes as it would in a foreground session. The attached terminal is handed what a
 foreground terminal would be handed, and nothing the session holds beyond that.
 
@@ -290,22 +331,49 @@ the prompt on screen, so it could be taken for an answer to a write or a run it 
 `bravebot sessions stop <id>` stops a turn that is running, then ends the process and sets the state
 to `stopped`. The record is kept and is resumable. No session is without a way to be stopped.
 
-There is one supervisor per account. It is started by the first `--bg` or `/bg` and ends when it
-owns no live process. A supervisor already running is found through a lock in `~/.bravebot/jobs/`,
-and a second one is never started. `bravebot sessions` reads the roster and needs no supervisor.
+There is one supervisor per account. A terminal that starts a session ([BG-2](#BG-2)), for the first
+time or again, starts the supervisor once that session's process is alive, unless one is running.
+It watches every process it finds alive and ends when none is. A supervisor already running is found
+through the lock on `supervisor.lock` in `~/.bravebot/jobs/`, which the kernel releases however the
+supervisor ends, and a second one ends at once. A supervisor about to end lets go of the lock and
+looks at the roster once more, so a process that became alive in that moment is watched by it or by
+the supervisor its terminal started. `bravebot sessions` reads the roster and needs no supervisor.
 
 **Why.** Work nobody is watching has to be stoppable by the person who started it. A supervisor that
 stays after its last session is a standing process the person did not ask for.
 
-`verified-by: none`
+`verified-by: bravebot_session::stopping_a_job::stopping_ends_a_running_process_and_records_it`
+`verified-by: bravebot_cli::running::sessions_stop_marks_a_dead_entry_stopped_and_refuses_an_unknown_id`
+`verified-by: bravebot_cli::running::a_session_a_person_stops_stays_stopped_with_a_supervisor_running`
+`verified-by: bravebot_cli::running::a_second_supervisor_ends_at_once_and_leaves_the_first_running`
+`verified-by: bravebot_cli::running::a_session_started_from_a_terminal_is_watched_by_a_supervisor_that_ends_with_it`
+`verified-by: bravebot_cli::supervisor::a_second_supervisor_finds_the_first`
+`verified-by: bravebot_cli::supervisor::a_claim_made_while_the_lock_is_looked_at_is_tried_again`
+`verified-by: bravebot_cli::supervisor::a_claim_made_while_another_supervisor_runs_is_refused`
+`verified-by: bravebot_cli::supervisor::the_supervisor_is_done_when_nothing_is_alive`
+`verified-by: bravebot_cli::supervisor::a_process_that_comes_alive_is_watched_within_a_few_ticks`
+`verified-by: bravebot_cli::background::the_supervisor_is_started_as_the_hidden_command_from_the_root`
+`verified-by: bravebot_session::jobs::the_supervisors_lock_is_not_an_entry_of_the_roster`
 
 <a id="BG-12"></a>
 ### BG-12: a process that ends between turns is restarted, and one that ends in a turn is not repeated
 
-A process that exits while the state is `idle` is restarted, at most three times in an hour, in the
-mode every session opens in. After that its state is `stopped`. A process that exits while the state
-is `working` or `needs input` is not restarted: its state is `interrupted`, the turn it was running
-is not run again, and the prompt it held is gone.
+A process that ends while the state it last wrote is `idle` is started again by the supervisor, at
+most three times in an hour, in the mode every session opens in. After that it is left, and its state
+reads `stopped` ([BG-6](#BG-6)). A process that ends while that state is `working` or `needs input`
+is not started again: its state reads `interrupted`, the turn it was running is not run again, and
+the prompt it held is gone. A process that a person stopped, or that ended itself and wrote
+`stopped` ([BG-13](#BG-13)), is not started again either.
+
+The supervisor starts only a process it found alive, so a session that ended while no supervisor was
+running, or before it started, stays as it is. A stop marks the entry before it signals the process
+and removes the mark after the entry reads as stopped, so a supervisor that sees a process end finds
+either the mark or the entry saying `stopped`. A process that was started again has a short time to
+become alive before it counts as having ended again.
+
+A start again is not a start in the sense of [BG-2](#BG-2): it carries no prompt, so no turn
+begins, and the record it resumes is one a person started. It opens idle, from that record. The
+process has the environment the supervisor was started with.
 
 The first turn after an `interrupted` session is a reply or an attach. The planner is told, by the
 driver, that the earlier turn ended without finishing, and not what it had done.
@@ -313,7 +381,22 @@ driver, that the earlier turn ended without finishing, and not what it had done.
 **Why.** Running the turn again would repeat its writes and commands, and some of them are not safe
 to repeat. The person who comes back sees the state and decides.
 
-`verified-by: none`
+`verified-by: bravebot_cli::supervisor::a_process_that_ends_idle_is_started_again_and_one_never_seen_alive_is_not`
+`verified-by: bravebot_cli::supervisor::a_process_that_ends_in_a_turn_or_a_question_is_not_started_again`
+`verified-by: bravebot_cli::supervisor::a_process_is_started_again_three_times_in_an_hour`
+`verified-by: bravebot_cli::supervisor::a_process_that_keeps_ending_is_given_up_on_after_three_starts`
+`verified-by: bravebot_cli::supervisor::a_process_started_again_is_given_time_to_come_up`
+`verified-by: bravebot_cli::supervisor::a_process_a_person_stopped_is_not_started_again`
+`verified-by: bravebot_session::stopping_a_job::a_stop_marks_the_entry_from_before_the_process_ends_until_it_reads_as_stopped`
+`verified-by: bravebot_session::stopping_a_job::a_stop_that_cannot_end_the_process_leaves_no_mark`
+`verified-by: bravebot_session::stopping_a_job::a_stop_whose_entry_cannot_be_written_keeps_its_mark`
+`verified-by: bravebot_cli::supervisor::a_restart_does_not_replace_the_line_a_terminal_is_starting_the_process_with`
+`verified-by: bravebot_cli::running::a_session_killed_while_idle_is_started_again_idle_with_its_conversation`
+`verified-by: bravebot_cli::running::a_session_killed_while_it_holds_a_question_is_not_started_again`
+`verified-by: bravebot_cli::running::a_session_killed_while_idle_four_times_is_started_again_three_times_and_then_left`
+`verified-by: bravebot_cli::running::a_process_that_starts_clears_the_mark_of_a_stop_that_never_finished`
+`verified-by: bravebot_cli::running::a_reply_from_a_terminal_starts_an_interrupted_session_and_the_planner_is_told`
+`verified-by: bravebot_cli::running::a_session_started_after_an_interruption_tells_the_planner_and_one_after_a_stop_does_not`
 
 <a id="BG-13"></a>
 ### BG-13: an idle session is stopped after an hour and wakes on the next reply
@@ -343,6 +426,7 @@ loop.
 `verified-by: bravebot_cli::plain::a_hosted_session_idle_for_its_time_ends_and_is_recorded_stopped`
 `verified-by: bravebot_cli::running::a_reply_from_a_terminal_starts_a_stopped_session_with_it`
 `verified-by: bravebot_cli::running::an_attach_from_a_terminal_starts_a_stopped_session`
+`verified-by: bravebot_cli::host::a_hosted_session_waits_an_hour_before_it_ends`
 
 <a id="BG-14"></a>
 ### BG-14: a background session in a git repository works in a checkout of its own
@@ -363,6 +447,95 @@ person has not seen arrive in their tree.
 
 `verified-by: none`
 
+<a id="BG-15"></a>
+### BG-15: the socket answers only a client that holds the session's secret
+
+The process makes a secret of 256 random bits before it binds its socket, and keeps it in a file
+beside the socket that only the person's account can read. The first line a client sends is that
+secret. A connection whose first line is anything else, whole or part of it, longer than it or empty,
+is closed without an answer, before another line is read as a request and before an attach is
+registered for it. The secret is new for every process. It is removed when the process ends of its
+own accord, and one that is killed leaves it until the next process for the session replaces it.
+`bravebot attach` and `bravebot reply` read it and send it. The comparison looks at every byte of
+the secret whatever the first difference is.
+
+The mode of the socket is not what keeps a program out. Where the kernel cannot stop a confined
+program from connecting to a socket by its path (Landlock below ABI 9, [SANDBOX-3](sandboxing.md#SANDBOX-3)),
+a program confined to its working directory could otherwise send `reply` and have a line
+taken as the person's next prompt, or `attach` and answer a held prompt. The state directory is
+denied to every stage on every platform ([SANDBOX-12](sandboxing.md#SANDBOX-12)), so a confined
+program cannot read the secret.
+
+**Why.** A file mode applies to the file, and a program of the same user that is allowed to connect
+passes it. Only a thing the confined program cannot read can tell the person's terminal from it.
+
+`verified-by: bravebot_cli::running::a_connection_without_the_sessions_secret_gets_nothing_from_it`
+`verified-by: bravebot_cli::host::a_client_without_the_secret_is_closed_unanswered_and_unread`
+`verified-by: bravebot_cli::host::a_client_with_the_secret_is_served`
+`verified-by: bravebot_cli::host::a_session_that_has_ended_leaves_no_secret_behind`
+`verified-by: bravebot_session::jobs::the_secret_of_a_process_is_random_private_and_replaced_each_time`
+`verified-by: bravebot_session::jobs::only_the_whole_secret_is_the_secret`
+
+<a id="BG-16"></a>
+### BG-16: on a terminal, `bravebot sessions` is a list grouped by state, and a row attaches
+
+Where standard input, standard output and standard error are all terminals, `bravebot sessions`
+with no other word opens a full-screen list of the roster. It groups sessions under a heading for their state
+([BG-6](#BG-6)), in the order `needs input`, `working`, `idle`, `interrupted`, `stopped`. A heading
+carries the number of sessions under it, and a state no session is in has none. Within a state the
+most recently used session is first. When the roster is empty nothing opens, and the line
+[BG-5](#BG-5) prints is printed. Anywhere else, and with `--json`, `bravebot sessions` prints as
+[BG-5](#BG-5) says. Standard error is among the three because `attach` says on it why a session
+cannot be started.
+
+A row shows the start of the session's id, its name, how long since its last turn, and its state
+with the word for the kind of prompt held where one is. A name of more than 28 columns is cut with an
+ellipsis. On a screen too narrow for the rest of the row the name is cut further, to no fewer than 8 columns, so
+the time and the state after it stay on the screen. Below the list, the working directory and the
+last prompt the person typed are shown for the session under the cursor. These are fields of a
+[BG-5](#BG-5) line and the list draws no others: no reply, tool result, file content, command output
+or question text. Control characters are pictured as they are in a line.
+
+The list reads the roster again once a second, whatever keys arrive in between. A session whose state changed moves under the
+heading for its new state, and the cursor stays on that session. If the cursor's session has left
+the roster, the cursor goes to the row now in its place, or to the last row.
+
+Up and Down, and `k` and `j`, move the cursor and stop at the ends. Enter leaves the list and
+attaches to the session under the cursor as `bravebot attach` does ([BG-9](#BG-9)), starting a
+`stopped` or `interrupted` session again as `attach` does. Escape, `q` and Ctrl-C leave and do
+nothing else. No other key does anything, and a key with a modifier is not the key without it, so no
+key in the list answers a held prompt, sends a reply or stops a process ([BG-7](#BG-7),
+[BG-10](#BG-10), [BG-11](#BG-11)). A terminal that cannot be taken, or fails while the list is open,
+gets a line on standard error saying why, and then the lines of [BG-5](#BG-5).
+
+**Why.** Many sessions are listed at once, and the ones waiting on the person are the ones to find
+first. The state of the process ([BG-6](#BG-6)) is a fact, so grouping by it reads no content. The
+cursor follows the session because the list changes under it, and Enter has to attach to the session
+the person was looking at. The list starts no process and answers nothing: `attach` is the one way
+in, so the mode ([BG-8](#BG-8)) and a held prompt ([BG-7](#BG-7)) are as they are for any attach.
+
+`verified-by: bravebot_tui::sessions_view::sessions_are_drawn_under_a_heading_for_their_state_in_a_fixed_order`
+`verified-by: bravebot_tui::sessions_view::a_state_no_session_is_in_has_no_heading`
+`verified-by: bravebot_tui::sessions_view::the_cursor_and_enter_follow_the_drawn_order_and_not_the_roster_order`
+`verified-by: bravebot_tui::sessions_view::the_directory_and_prompt_shown_are_those_of_the_row_under_the_cursor`
+`verified-by: bravebot_tui::sessions_view::a_refresh_keeps_the_cursor_on_its_session_when_the_session_changes_group`
+`verified-by: bravebot_tui::sessions_view::a_session_gone_from_the_roster_leaves_the_cursor_on_a_row`
+`verified-by: bravebot_tui::sessions_view::only_enter_attaches_and_only_escape_q_and_ctrl_c_leave`
+`verified-by: bravebot_tui::sessions_view::the_arrows_and_j_and_k_each_move_the_cursor_and_stop_at_the_ends`
+`verified-by: bravebot_tui::sessions_view::a_list_longer_than_the_screen_scrolls_to_keep_the_cursor_row_drawn`
+`verified-by: bravebot_tui::sessions_view::moving_up_a_long_list_moves_the_cursor_before_it_scrolls`
+`verified-by: bravebot_tui::sessions_view_theme::a_theme_that_paints_the_frame_paints_the_whole_list`
+`verified-by: bravebot_tui::sessions_view::an_empty_roster_says_there_are_no_sessions`
+`verified-by: bravebot_tui::sessions_view::a_list_that_fits_again_is_drawn_from_its_top`
+`verified-by: bravebot_tui::sessions_view::moving_up_to_the_first_row_of_a_group_shows_its_heading`
+`verified-by: bravebot_tui::sessions_view::a_name_of_more_than_28_columns_is_cut_so_the_columns_after_it_stay_on_the_screen`
+`verified-by: bravebot_tui::sessions_view::a_screen_too_narrow_for_the_row_cuts_the_name_further_and_then_stops_at_8_columns`
+`verified-by: bravebot_cli::background::the_list_opens_only_for_no_other_word_on_three_terminals`
+`verified-by: bravebot_cli::background::a_session_is_grouped_by_the_state_of_its_process_and_not_the_one_it_last_wrote`
+`verified-by: bravebot_cli::background::a_row_holds_the_whole_id_and_the_start_of_it_and_names_the_kind_of_a_held_prompt`
+`verified-by: bravebot_cli::background::a_control_character_in_what_was_typed_cannot_reach_any_field_of_a_row`
+`verified-by: bravebot_cli::running::sessions_lists_an_entry_with_no_process_as_interrupted`
+
 ## What this changes in other specs
 
 None of the following is true of a build that has no background sessions, and each is marked where
@@ -377,8 +550,9 @@ it is stated.
 - **A session ends with its terminal, and no process holds a record.** Both are statements about a
   session that is not a background one. [sessions.md](sessions.md) says so where it describes the
   record, and the state directory lists `jobs/` as proposed.
-- **A message between sessions is proposed apart.** [session-messages.md](session-messages.md) has a
+- **A message between sessions is specified apart.** [session-messages.md](session-messages.md) has a
   session's planner tell another's something, and starts no process and no turn, so BG-2 still holds.
+  The question of whether to send one is held like every other ([BG-7](#BG-7)).
 - **The info panel tells open sessions apart.** The list in [BG-5](#BG-5) tells the background ones
   apart and draws nothing the panel would not.
 - **Where nobody can be asked, the answer is no** ([PROMPT-9](prompting.md#PROMPT-9)). Somebody can
@@ -390,13 +564,17 @@ it is stated.
   started asking stays asking, and a person who wants a session to write unasked has to start it
   from a foreground session already in that mode with `/bg`. Letting a mode change last until
   detach raises the question of what the session runs in after the person leaves.
+- **Whether a loop, a goal or a watch goes with `/bg`.** The session in lines has none of the
+  three, so `/bg` refuses while one is running and the person ends it or waits. Carrying one over
+  means the background process arms it again from the record, and nothing records it yet.
 - **Whether bypass is ever allowed.** Other tools refuse it until an interactive step accepts a
   disclaimer. Bravebot has no such step: the flag is the acceptance. [BG-8](#BG-8) refuses it.
 - **Whether the checkout is made at the first edit rather than at the start.** A checkout at the
   start is made for sessions that never edit. One at the first edit moves the working directory
   during a session.
-- **Whether `bravebot sessions` has an interactive view.** [BG-5](#BG-5) specifies lines. Replying
-  from a row is not specified.
+- **Whether a row can reply, stop or show more.** [BG-16](#BG-16) attaches and does nothing else.
+  Replying from a row and stopping from one are not specified. Showing what a session last wrote
+  would put bytes a session produced in the list, which [BG-5](#BG-5) keeps out.
 
 ## Known costs
 
@@ -406,10 +584,24 @@ it is stated.
 - **Asking is the only mode on the command line.** `--bg` cannot start a session that accepts edits,
   and a session stopped for idleness returns to asking. A person walking away from accept-edits work
   finds it waiting on the first write after a restart.
+- **A process started again has the supervisor's environment.** Nobody is at a terminal when the
+  supervisor starts a process again, so the process takes the environment the supervisor was
+  started with, which is the environment of the terminal that ran the first `--bg` while it ran.
+  A variable exported in a later terminal, or since removed from the first, does not reach it.
+  Settings files and stored keys are read as they are at the time. The supervisor holds that
+  environment without reading it.
+- **A stop typed just after a crash can be undone.** A process that ended idle is started again
+  within about half a second, and a stop typed after the process ended and before the new one is
+  alive finds nothing to signal, writes `stopped`, and is followed by the process being alive and
+  idle. `bravebot sessions` shows it idle and a second stop ends it.
 - **A session outside a repository shares its directory.** [BG-14](#BG-14) separates sessions only
   where git can.
 - **Unix first.** The attach channel is a socket in a directory only its owner can enter. Where that
   cannot be restricted, [BG-1](#BG-1) refuses a background session.
+- **Lines need a pipe on a terminal.** `bravebot sessions` draws the list there, so a person who
+  wants lines passes the output through a pipe, and a script reads `--json`.
+- **The list attaches and does nothing else.** A person who wants to reply or stop leaves it and
+  runs `bravebot reply` or `bravebot sessions stop`.
 - **The list says a prompt is held and not what it is.** A person must attach to see whether it is
   one they would approve. The alternative is drawing the prompt's subject in the list, which is the
   text [BG-5](#BG-5) keeps out.

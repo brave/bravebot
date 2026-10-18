@@ -170,7 +170,7 @@ fn filesystem(
     profile: Option<&Path>,
     workspace: &Path,
 ) -> Vec<FilesystemEntry> {
-    use bravebot_sandbox::rules::{State, resolve};
+    use bravebot_sandbox::rules::resolve;
     let settled = bravebot_config::settled_sandbox_filesystem()
         .cloned()
         .unwrap_or_else(|| {
@@ -180,20 +180,17 @@ fn filesystem(
                 &bravebot_config::Managed::load(),
             )
         });
-    resolve(&settled.lists, profile, workspace)
-        .items()
-        .iter()
-        .map(|item| FilesystemEntry {
+    let rules = resolve(&settled.lists, profile, workspace);
+    let backend = bravebot_sandbox::for_current_platform().ok();
+    let capabilities = backend.as_ref().map(|backend| backend.capabilities());
+    bravebot_agent::permissions::filesystem_standing(&rules, workspace, capabilities.as_ref())
+        .into_iter()
+        .map(|(item, why)| FilesystemEntry {
             key: item.list.key(),
             path: item.entry.path.clone(),
             file: item.entry.by.clone(),
             pinned: item.entry.pinned,
-            refused: match item.state {
-                State::InForce(_) => None,
-                State::Refused(reason) => {
-                    Some(bravebot_agent::permissions::filesystem_reason(reason).to_string())
-                }
-            },
+            refused: why.map(str::to_string),
         })
         .collect()
 }

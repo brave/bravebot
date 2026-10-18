@@ -16,6 +16,10 @@
 #[allow(dead_code)]
 mod repository;
 
+#[allow(dead_code)]
+#[path = "../test-support/turns.rs"]
+mod turns;
+
 use bravebot_agent::remembered::Store;
 use bravebot_core::command::{Plan, Step, Steps};
 use bravebot_core::remembered::RememberedLine;
@@ -391,7 +395,7 @@ fn no_trusted_directory_is_written_down() {
         return;
     };
 
-    assert!(!store.keep(&identity, "a-private-session", 1));
+    assert!(!store.keep(&identity, "a-private-session", 1, false));
     assert!(
         !store.path().exists(),
         "an incognito session kept an answer in the record"
@@ -399,6 +403,34 @@ fn no_trusted_directory_is_written_down() {
     assert!(
         store.forget().is_err(),
         "an incognito session withdrew an answer"
+    );
+}
+
+/// INCOG-5, TRUST-23: the check every front end puts the startup question through offers no record
+/// to keep a yes in, though it would for the same directory in an ordinary session, so none tells a
+/// private session its yes is kept. The control is `record_for`, which finds the record here, and a
+/// yes written to it anyway reports that it was not written. The regression it rejects is the
+/// incognito refusal dropped from `record_to_keep`, which no test of the store's own refusal sees.
+#[test]
+fn a_yes_is_offered_no_record_to_be_kept_in() {
+    let scratch = Scratch::new("offers-no-record");
+    if a_kept_directory(&scratch).is_none() {
+        return;
+    }
+    let found = bravebot_agent::trusted::record_for(Some(&scratch.home), None, &scratch.home)
+        .expect("the control: this directory can be kept about");
+
+    assert!(
+        bravebot_agent::trusted::record_to_keep(Some(&scratch.home), None, &scratch.home).is_none(),
+        "a private session was offered a record to keep its yes in"
+    );
+    assert_eq!(
+        bravebot_agent::trusted::keep_a_yes(Some(&found), true, "a-private-session", false),
+        Some(false)
+    );
+    assert!(
+        !found.0.path().exists(),
+        "an incognito session kept a yes in the record"
     );
 }
 
@@ -446,6 +478,62 @@ fn a_memory_left_untrusted_is_still_recorded() {
     assert_eq!(
         record.paths(),
         vec!["/work/.bravebot/memory/notes.md".to_string()]
+    );
+}
+
+/// MEMORY-5, INCOG-8: a write of model output into a memory, made while incognito is engaged,
+/// records the memory in the state directory before it lands and leaves it untrusted for the
+/// session's own reads. The record is kept there by the write path itself, which is the route a
+/// session takes, and not only by the record's own method.
+#[test]
+fn an_untrusted_write_to_a_memory_in_an_incognito_session_is_recorded() {
+    use bravebot_agent::workspace::{Workspace, key_of};
+    use bravebot_core::capability::{Capability, CapabilitySet};
+    use bravebot_core::event::RecordingSink;
+    use bravebot_core::label::Label;
+    use bravebot_core::policy::{Policy, ReleasePlan, Routing};
+    use bravebot_core::trust::TrustStore;
+    use bravebot_core::value::Labelled;
+
+    let scratch = Scratch::new("writes-untrusted-memory");
+    assert!(
+        bravebot_core::incognito::engaged(),
+        "the fixture is meant to run as an incognito session"
+    );
+    let root = scratch.home.join("work");
+    std::fs::create_dir_all(&root).expect("create the working directory");
+    let workspace = Workspace::new(&root)
+        .expect("workspace")
+        .keeping_memories(Some(scratch.home.clone()));
+
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "edit a file");
+    let mut sink = RecordingSink::new();
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust)
+    .with_root(workspace.root());
+
+    workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted(".bravebot/memory/notes.md".to_string()),
+            &Labelled::new("NOTES".to_string(), Label::untrusted_public()),
+        )
+        .expect("an incognito session was refused a write to a memory");
+
+    let directory = key_of(workspace.root());
+    assert_eq!(
+        bravebot_agent::memory::Record::new(&scratch.home, &directory).paths(),
+        vec![format!("{directory}/.bravebot/memory/notes.md")],
+        "an incognito session's write left a memory untrusted and recorded nothing"
     );
 }
 
@@ -542,7 +630,7 @@ fn a_checkout_is_not_made_under_the_state_directory() {
     let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
     trust.trust(".");
 
-    let outcome = bravebot_agent::turn::run_cancellable(
+    let outcome = turns::run_cancellable(
         &config,
         &bravebot_net::Egress::new(),
         &workspace,

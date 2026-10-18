@@ -36,6 +36,9 @@ Additional tests cover these boundaries:
   same-label writes and partial failures. Scratch writes and a failed backup lock record incomplete
   coverage. The [turn tests](../../crates/agent/tests/turn.rs) check overlapping delegate writes
   in both collection orders.
+- [One-shot continuations](../../crates/cli/tests/running.rs): a task given with `--continue` or
+  `--resume` opens a point behind the record's own, from the record as it stood before the task,
+  keeps what the task wrote over, and records a program it ran as a gap on every point.
 - [Language servers](../../crates/agent/tests/lsp.rs): a real approved server records gaps on old
   and new checkpoints. Undo must stop it before restoration, including its last shutdown write.
   Build-tool children can outlive the server, so later points still warn. A declined

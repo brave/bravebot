@@ -4,12 +4,23 @@ title: The command line
 status: normative
 governs:
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/finish.rs
+  - crates/cli/src/model.rs
+  - crates/cli/src/one_shot.rs
+  - crates/cli/src/usage.rs
+  - crates/cli/src/workspace.rs
+  - crates/cli/src/doctor.rs
   - crates/cli/src/auth.rs
   - crates/cli/src/completion.rs
   - crates/cli/src/continued.rs
   - crates/cli/src/exit.rs
   - crates/cli/src/json.rs
+  - crates/agent/src/output_schema.rs
+  - crates/cli/src/permissions_check.rs
   - crates/cli/src/plain.rs
+  - crates/cli/src/sessions_list.rs
+  - crates/cli/src/update.rs
   - crates/config/src/keys.rs
   - crates/tui/src/hidden.rs
 documented-by:
@@ -21,7 +32,8 @@ documented-by:
 ## Scope
 
 Running bravebot without the interface that draws: a one-shot task, piped input, `doctor`, `auth`,
-a session in lines, and what goes where on the way out. The interface that draws is
+a session in lines, and what goes where on the way out. Also the command line that opens the
+interface that draws on a task (CLI-31). The interface itself is
 [terminal-input.md](terminal-input.md) and [terminal-transcript.md](terminal-transcript.md).
 
 A one-shot run has nobody to ask, and most of what makes it different follows from that. A session
@@ -54,6 +66,13 @@ would say which effects may happen unwatched, and one line in a file in the home
 do what the flag is named and warned about for. A record of command lines somebody asked to be
 remembered past a session ([tools/run.md](tools/run.md)) is not read here either, and for this same
 reason.
+
+A trust answer is not an allow rule, though both are kept in the home directory. It approves no
+effect: it says which files are the person's own, so the planner may read them, and it covers one
+directory the person answered about. A run therefore opens trusting its working directory when the
+person typed `--trust-workspace` or kept an answer that settles a session there
+([TRUST-23](trust-map.md#TRUST-23), [TRUST-26](trust-map.md#TRUST-26)), and says so for the kept
+answer. Writing stays refused without the flag above.
 
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
@@ -128,6 +147,7 @@ exiting successfully with an explanation on stdout, and each of them has a statu
 | 3 | `BB1003` | cannot use the configuration, so nothing ran |
 | 4 | `BB1004` | had an effect refused by a gate |
 | 5 | `BB1005` | never reached the backend |
+| 6 | `BB1006` | finished, and its reply is not what `--output-schema` (CLI-28) asked for |
 
 A status is never renumbered and never given a second meaning. A failure kind nothing here names
 is 1, and one worth telling apart takes the next number.
@@ -158,11 +178,12 @@ over one set of failures is one of them going out of date.
 `verified-by: bravebot_cli::running::a_failure_says_a_stable_identifier_whatever_language_it_explains_itself_in`
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_and_says_its_identifier`
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn`
-`verified-by: bravebot_cli::main::a_report_that_found_a_configuration_error_ends_on_it`
+`verified-by: bravebot_cli::doctor::a_report_that_found_a_configuration_error_ends_on_it`
 `verified-by: bravebot_cli::exit::every_ending_has_a_status_of_its_own`
 `verified-by: bravebot_cli::exit::a_failure_is_identified_and_a_success_is_not`
 `verified-by: bravebot_cli::exit::a_failure_says_its_identifier_in_front_of_the_message`
 `verified-by: bravebot_cli::exit::a_manifest_run_is_classified_by_what_stopped_it`
+`verified-by: bravebot_cli::running::a_reply_off_the_output_schema_ends_on_its_own_status`
 `verified-by: bravebot_agent::backend::a_request_that_never_left_is_told_apart_from_one_that_was_answered`
 `verified-by: bravebot_cli::main::a_turn_something_was_refused_in_does_not_succeed`
 
@@ -216,11 +237,15 @@ reporting configuration ([SANDBOX-21](sandboxing.md#SANDBOX-21)). It takes no ot
 when a workflow failed, and on success when each worked or was skipped for a program that is not
 installed. It also checks that `gh` can read the login it holds in the real home, when it holds one.
 
-`verified-by: bravebot_cli::main::doctor_development_checks_only_apply_to_the_source_tree`
-`verified-by: bravebot_cli::main::doctor_reports_agent_discovery_conflicts_without_changing_them`
-`verified-by: bravebot_cli::main::doctor_accepts_current_windows_copies_and_reports_stale_ones`
-`verified-by: bravebot_cli::main::doctor_checks_resolved_agent_link_targets`
-`verified-by: bravebot_cli::main::doctor_finds_direnv_only_when_path_contains_an_executable`
+`bravebot doctor --push-identity [<host>/<owner>]` reports which GitHub account each of the person's
+ssh keys pushes as ([SANDBOX-16](sandboxing.md#SANDBOX-16)). It takes at most one argument, and one
+that is not `<host>/<owner>` is refused with the status an argument error has.
+
+`verified-by: bravebot_cli::doctor::doctor_development_checks_only_apply_to_the_source_tree`
+`verified-by: bravebot_cli::doctor::doctor_reports_agent_discovery_conflicts_without_changing_them`
+`verified-by: bravebot_cli::doctor::doctor_accepts_current_windows_copies_and_reports_stale_ones`
+`verified-by: bravebot_cli::doctor::doctor_checks_resolved_agent_link_targets`
+`verified-by: bravebot_cli::doctor::doctor_finds_direnv_only_when_path_contains_an_executable`
 
 **Why.** It exists to answer "what will this actually use", so reporting a default when a choice
 is in force would explain the wrong thing, and naming one backend where two are reachable would
@@ -330,22 +355,22 @@ and a report that fixes what it finds leaves them unable to tell what was alread
 read for what it resolves to rather than for whether it exists, because a link to the wrong file is
 the case a directory listing calls healthy, and it is the one the reader cannot otherwise catch.
 
-`verified-by: bravebot_cli::main::a_gateway_credential_is_reported_as_found_and_never_printed`
-`verified-by: bravebot_cli::main::a_gateway_with_no_credential_is_reported_as_having_none`
+`verified-by: bravebot_cli::doctor::a_gateway_credential_is_reported_as_found_and_never_printed`
+`verified-by: bravebot_cli::doctor::a_gateway_with_no_credential_is_reported_as_having_none`
 `verified-by: bravebot_cli::running::doctor_says_whether_each_aws_account_is_signed_in_and_never_the_credential`
 `verified-by: bravebot_cli::running::doctor_names_no_sign_in_for_a_missing_aws_cli_or_an_unknown_profile`
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn`
-`verified-by: bravebot_cli::main::doctor_names_the_state_directory_it_resolved`
-`verified-by: bravebot_cli::main::doctor_says_when_the_files_are_left_unrestricted`
-`verified-by: bravebot_cli::main::a_missing_state_directory_is_reported_with_what_it_costs`
-`verified-by: bravebot_cli::main::a_missing_state_directory_names_every_variable_it_looked_at`
-`verified-by: bravebot_cli::main::the_network_section_names_the_roots_in_force_and_the_proxy`
-`verified-by: bravebot_cli::main::the_network_section_points_at_the_variables_when_nothing_names_a_root_or_a_proxy`
-`verified-by: bravebot_cli::main::a_trust_root_that_cannot_be_read_is_reported_as_the_reason_connections_will_fail`
-`verified-by: bravebot_cli::main::doctor_names_what_the_managed_layer_pinned_and_the_file_it_came_from`
-`verified-by: bravebot_cli::main::doctor_says_nothing_about_a_managed_layer_that_is_not_there`
-`verified-by: bravebot_cli::main::doctor_names_a_managed_file_that_pinned_nothing`
-`verified-by: bravebot_cli::main::doctor_names_the_sandbox_mode_and_where_it_came_from`
+`verified-by: bravebot_cli::doctor::doctor_names_the_state_directory_it_resolved`
+`verified-by: bravebot_cli::doctor::doctor_says_when_the_files_are_left_unrestricted`
+`verified-by: bravebot_cli::doctor::a_missing_state_directory_is_reported_with_what_it_costs`
+`verified-by: bravebot_cli::doctor::a_missing_state_directory_names_every_variable_it_looked_at`
+`verified-by: bravebot_cli::doctor::the_network_section_names_the_roots_in_force_and_the_proxy`
+`verified-by: bravebot_cli::doctor::the_network_section_points_at_the_variables_when_nothing_names_a_root_or_a_proxy`
+`verified-by: bravebot_cli::doctor::a_trust_root_that_cannot_be_read_is_reported_as_the_reason_connections_will_fail`
+`verified-by: bravebot_cli::doctor::doctor_names_what_the_managed_layer_pinned_and_the_file_it_came_from`
+`verified-by: bravebot_cli::doctor::doctor_says_nothing_about_a_managed_layer_that_is_not_there`
+`verified-by: bravebot_cli::doctor::doctor_names_a_managed_file_that_pinned_nothing`
+`verified-by: bravebot_cli::doctor::doctor_names_the_sandbox_mode_and_where_it_came_from`
 
 <a id="CLI-8"></a>
 ### CLI-8: `--mode` chooses how a one-shot is run; the default is the turn loop
@@ -382,6 +407,7 @@ is all that remains of a document nobody can see. The plan never shares stdout w
 `verified-by: bravebot_cli::main::a_plan_is_answered_by_whoever_typed_the_command`
 `verified-by: bravebot_cli::main::the_question_does_not_reprint_the_narrated_plan`
 `verified-by: bravebot_cli::main::a_plan_is_refused_where_nobody_can_be_asked`
+`verified-by: bravebot_cli::main::a_plan_is_put_only_where_stdin_and_stderr_are_both_a_terminal`
 `verified-by: bravebot_cli::main::anything_but_yes_declines_a_plan`
 `verified-by: bravebot_cli::main::a_one_shot_answers_the_plan_and_nothing_else`
 
@@ -475,8 +501,9 @@ against one.
 `--add-dir <path>` opens a directory outside the working one for the length of the run, and may be
 given more than once. An absolute path that exists, is a directory, and is not already inside the
 working one is opened; anything else is refused by name and the run stops before the turn. The
-run's trust map stays empty, so a file read there is read on the same footing as the project's own
-files: nothing vouched for it. A write there is refused as any other write in an unattended run is,
+run's trust map holds nothing for it, so a file read there is read on the same footing as the
+project's own files without an answer about them: nothing vouched for it. `--trust-workspace` covers
+the working directory alone. A write there is refused as any other write in an unattended run is,
 and the flag in CLI-1 lifts that exactly as it does elsewhere.
 
 **Why.** A headless task pointed at one checkout often needs to read another, and an absolute path
@@ -486,9 +513,9 @@ cannot be done at all.
 Vouching is a separate grant, and it is the one an unattended run cannot make. The interactive
 command of the same name records that a person vouched for the directory, which it can do because a
 person typed it in a session whose map already holds their answer about the directory they are
-working in. A run nobody is watching holds no such answer, its own working directory included, so a
-rule trusting the tree named on the command line would leave it more trusted than the tree the run
-works in. Reaching a directory is what the work needs; trusting what is in it is not.
+working in. A run nobody is watching holds no such answer unless the person gave one for its working
+directory (`--trust-workspace`, or a kept answer), so a rule trusting the tree named on the command
+line would leave it more trusted than the tree the run works in. Reaching a directory is what the work needs; trusting what is in it is not.
 
 Stopping rather than carrying on, because the two audiences differ: a session says the path was not
 opened and leaves the person to retype it, and a script that carried on would fail somewhere further
@@ -522,7 +549,9 @@ The object takes the reply's place on stdout and nothing else goes there. Progre
 the trail stay on stderr, exactly as they are without the flag.
 
 It carries a schema number. Within one number a field may be added, and never removed, renamed or
-given a different meaning, so a caller reading the fields it knows keeps working.
+given a different meaning, so a caller reading the fields it knows keeps working. `structured`
+(CLI-28) is such a field: the reply as a JSON value when the run was given `--output-schema`, and
+`null` otherwise.
 
 **Why.** The prose reply is written for a person, and a program can recover almost nothing from it:
 which files changed, what the turn cost, which tools ran and why an effect was refused are either
@@ -622,13 +651,15 @@ Every question is put the same way: what it is about, a line at a time, then the
 to answer it. Only the affirmative approves. Any other line refuses, and so does the end of the
 input. One answer per question and no second key, so the answers that record something, stop asking
 about these programs and remember this line, are not offered, and nothing answered here outlives
-the session. The startup question about the working directory
+the session, with the one exception below. The startup question about the working directory
 ([trust-map.md](trust-map.md)) is put the same way, and the end of the input in place of an answer
-to that one starts no session at all. It is not put where the person told the interface that draws,
-or the desktop, to remember the answer about this directory
-([TRUST-23](trust-map.md#TRUST-23)): that record is read here as it is there, and the session says
-it is trusting the directory for that reason, when, and how to be asked again. Remembering is still
-not offered here, and nothing here writes the record.
+to that one starts no session at all. A yes to it is kept, as it is in the interface that draws
+([TRUST-23](trust-map.md#TRUST-23)): the lines before the question say what a yes keeps and name the
+file it is written to, so all of it is read before the answer is given. Where a yes cannot be kept,
+those lines say so and a yes trusts this session only. A no, any other line and the end of the input
+keep nothing. The question is not put where an answer was kept about this directory: that record is
+read here as it is there, and the session says it is trusting the directory for that reason, when,
+and how to be asked again.
 
 It composes with `--incognito`, `--dangerously-skip-permissions` and the `--settings` file of
 CLI-13, which belong to every way of starting, with the `--agent` of CLI-17, and with nothing else:
@@ -679,7 +710,11 @@ needs the terminal put in a state a session in lines does not put it in.
 `verified-by: bravebot_cli::plain::the_startup_question_is_asked_in_lines_and_answered_the_same_way`
 `verified-by: bravebot_cli::plain::the_mode_that_asks_about_nothing_is_not_asked_about_the_directory`
 `verified-by: bravebot_cli::plain::a_remembered_answer_settles_a_session_in_lines_without_asking`
-`verified-by: bravebot_cli::plain::an_answer_in_lines_is_asked_for_and_never_kept`
+`verified-by: bravebot_cli::plain::a_yes_in_lines_is_kept_and_settles_the_next_session_without_asking`
+`verified-by: bravebot_cli::plain::a_no_or_the_end_of_the_input_in_lines_keeps_nothing`
+`verified-by: bravebot_cli::plain::the_question_in_lines_names_the_file_a_yes_is_kept_in`
+`verified-by: bravebot_cli::plain::a_yes_in_lines_where_nothing_can_be_kept_trusts_the_session_only_and_says_so`
+`verified-by: bravebot_cli::plain::a_yes_in_lines_whose_record_cannot_be_written_trusts_the_session_only_and_says_so`
 `verified-by: bravebot_cli::running::a_session_in_lines_is_refused_where_its_input_is_not_a_terminal`
 `verified-by: bravebot_cli::main::a_named_settings_file_composes_with_the_other_flags_before_dispatch`
 `verified-by: bravebot_cli::main::the_agent_flag_is_taken_out_with_the_name_it_gave`
@@ -1065,7 +1100,7 @@ The flags are refused, with the status for an argument (CLI-6), when no words fo
 words are blank, and when they open with `-` and hold no whitespace, since that is the next flag:
 taken as the words, `--json` would be removed and the run would answer in the other format. A
 sentence that opens with `-` holds a space and is words. If a flag is given twice, the last is used.
-They are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `import-leo-creds`,
+They are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`, `import-leo-creds`,
 `import-providers`, `completion` and `shell-init`, which start neither a session nor a task. A refusal writes the
 result object of CLI-12 if one was asked for, sends nothing, and says why through the catalogue
 ([LOCALE-2](localization.md#LOCALE-2)).
@@ -1082,7 +1117,7 @@ remove it.
 **Known costs.** `--append-system-prompt "$(cat notes.md)"` gives the file's bytes the authority of
 the person who typed the flag, whatever the file holds and whoever wrote it. Content that should not
 have that authority is passed as piped input (CLI-3), which is quarantined. There is no settings
-key, no slash command that takes words (`/style` picks a built-in one, [INSTR-12](instructions.md#INSTR-12)), no tool and no `--system-prompt-file`, so words a checkout always wants are
+key, no slash command that takes words (`/style` picks a built-in one, the person's own file or a project's the trust map vouches for, [INSTR-12](instructions.md#INSTR-12)), no tool and no `--system-prompt-file`, so words a checkout always wants are
 written in its `AGENTS.md`. `auth` is refused as well as the commands that read no words at all,
 because no part of `auth` would use them.
 
@@ -1091,6 +1126,7 @@ because no part of `auth` would use them.
 `verified-by: bravebot_cli::main::a_system_prompt_flag_with_no_words_is_refused`
 `verified-by: bravebot_cli::main::words_that_open_with_a_dash_are_taken_when_they_are_a_sentence`
 `verified-by: bravebot_cli::main::the_system_prompt_flags_are_refused_where_nothing_would_use_them`
+`verified-by: bravebot_cli::running::a_session_in_lines_sends_the_system_prompts_with_a_typed_line`
 `verified-by: bravebot_cli::running::a_run_given_system_prompts_sends_them_and_keeps_the_rest_of_the_system_prompt`
 `verified-by: bravebot_cli::running::a_system_prompt_flag_with_no_words_exits_with_the_argument_status`
 `verified-by: bravebot_cli::running::a_manifest_run_is_refused_the_system_prompt_flags`
@@ -1103,7 +1139,7 @@ because no part of `auth` would use them.
 ### CLI-20: `completion <shell>` prints a completion script and does nothing else
 
 `bravebot completion bash`, `zsh` or `fish` writes a script to stdout that completes the
-subcommands, the words after `auth`, `mcp` and `completion`, and every flag in the usage table.
+subcommands, the words after `auth`, `mcp`, `permissions` and `completion`, and every flag in the usage table.
 Anything else completes as a file path. The script is the whole of stdout and stderr is empty:
 CLI-5 says stdout carries the reply, and for this command the script is the reply.
 
@@ -1290,8 +1326,12 @@ carries the record's id in `session`, and carries `null` where the run wrote non
 
 `--resume <id>` and `--continue` given with a task, in either order (`-p "task" --resume <id>` and
 `--resume <id> -p "task"`), run the task as one more turn over that record's conversation and write
-the record back with the turn added. Everything else in the record stays as it was read. The run is
-a one-shot run in every other respect, so the refusals of CLI-1 hold and nothing is asked. What the
+the record back with the turn added. The turn adds a rewind point behind the ones the record held,
+as a turn in a session does ([SESSION-19](sessions.md#SESSION-19)), so `/undo` in the session
+resumed next takes back this turn alone, on disk and in the conversation. A program the turn runs,
+and a language server the session started, is recorded on each of those points as something a
+rewind cannot put back. Everything else in the record stays as it was read. The run is a one-shot
+run in every other respect, so the refusals of CLI-1 hold and nothing is asked. What the
 session's person vouched for in the trust map comes back, as it does in a session. The commands
 they vouched for do not, and the record keeps them for the session that is next resumed
 interactively.
@@ -1318,6 +1358,10 @@ The conversation comes back through the same restore an interactive resume uses,
 what a planner may be shown is held in one place and a continued one-shot run cannot be shown more
 than an interactive one would.
 
+The record carries the turn's timing under its number ([SESSION-12](sessions.md#SESSION-12)), as a
+turn in a session does, and a continued run adds its own entry beside the earlier ones. The
+session's start is when the run began, not when its record was written.
+
 `--continue` and a failed run: the record of a run that failed is not written, so a continuation
 after a failure carries on the last turn that completed. What the failed turn did to the working
 directory is not in any record, and the result object of a failed run carries `null` for `session`.
@@ -1333,6 +1377,7 @@ process that holds the record is known.
 `verified-by: bravebot_cli::running::a_task_continuing_the_latest_session_adds_a_turn_to_its_record`
 `verified-by: bravebot_cli::running::a_continued_run_is_never_shown_the_bytes_an_earlier_pipe_carried`
 `verified-by: bravebot_cli::running::an_incognito_run_is_not_recorded_and_cannot_be_continued`
+`verified-by: bravebot_cli::running::a_one_shot_run_records_its_timing_and_when_it_began`
 `verified-by: bravebot_cli::running::a_task_that_cannot_carry_on_a_session_is_refused_before_anything_is_sent`
 `verified-by: bravebot_cli::running::a_task_naming_a_manifest_record_is_refused_before_anything_is_sent`
 `verified-by: bravebot_cli::running::a_record_a_running_session_holds_is_not_resumed`
@@ -1342,6 +1387,7 @@ process that holds the record is known.
 `verified-by: bravebot_session::sessions::continuing_a_record_adds_one_turn_and_leaves_what_it_held_as_read`
 `verified-by: bravebot_session::sessions::continuing_a_record_with_no_history_gives_it_none`
 `verified-by: bravebot_session::sessions::a_completed_turn_starts_over_when_the_conversation_got_shorter`
+`verified-by: bravebot_cli::running::a_continued_task_adds_a_rewind_point_behind_the_ones_its_record_held`
 
 <a id="CLI-26"></a>
 ### CLI-26: `--tools` and `--no-shell` offer the planner fewer tools for one run
@@ -1363,7 +1409,7 @@ the status for an argument (CLI-6), when no list follows it, when the list is bl
 in it is not a tool, so a typo is not read as a smaller list than its author meant. If it is given
 twice, the last is used. Both are refused with `--mode manifest`, whose steps are planned and run
 from the plan, with `--bg`, which starts the session in another process that would not carry them,
-and with `doctor`, `auth`, `mcp`, `sessions`, `attach`, `reply`, `import-leo-creds`,
+and with `doctor`, `auth`, `mcp`, `permissions`, `sessions`, `attach`, `reply`, `import-leo-creds`,
 `import-providers`, `completion` and `shell-init`, which start neither a session nor a task.
 
 **Why.** A harness running the agent on a shared machine needs to say what a run may reach without
@@ -1403,3 +1449,267 @@ the managed floor, not a partial read of it.
 `verified-by: bravebot_cli::running::a_locked_run_refuses_the_bypass_flag_and_a_background_start`
 `verified-by: bravebot_cli::running::a_locked_run_loads_none_of_the_customizations_a_safe_one_leaves_out`
 `verified-by: bravebot_config::locked::a_locked_process_makes_the_bypass_mode_unreachable_whatever_the_layers_said`
+
+<a id="CLI-28"></a>
+### CLI-28: `--output-schema` holds a one-shot run's reply to a JSON Schema the caller supplied
+
+`--output-schema <path>` is valid with a one-shot run and names a file holding a JSON Schema. The
+file is the person's, trusted as `--settings` is, and the planner never holds its path. The schema is
+sent with every request the run's own turn makes to the backend as its `response_format`
+(`json_schema`, named `reply`), since the request that produces the final reply cannot be told apart
+beforehand. When the turn finishes, the reply is read as one JSON value, with nothing around it, and
+held to the schema before anything is written.
+
+A reply that conforms is written as it always is (CLI-5), and with `--json` the same value is also in
+the result object's `structured` field (CLI-12), as JSON and not as a string. A reply that does not
+conform ends the run on status 6, `BB1006` (CLI-6): stdout carries nothing, `structured` is `null`,
+and the message names where the reply broke and which constraint, as a position the schema's own
+`properties` and an array index give. It never contains a key or value the reply wrote.
+
+The check covers `type`, `enum`, `const`, `properties`, `required`, `additionalProperties` as a
+boolean, `items` as one schema, `minItems`, `maxItems`, `minLength`, `maxLength`, `minimum` and
+`maximum`. A schema using any other keyword, or a covered one with a value it cannot take, is refused
+when it is loaded, with the status for an argument (CLI-6), because a constraint the run did not hold
+the reply to is the failure the flag exists to remove. `$schema`, `$id`, `title`, `description`,
+`default` and `examples` constrain nothing and are accepted.
+
+The flag is refused, with the status for an argument and before anything is sent, when no path
+follows it, when the file cannot be read or is not a usable schema, with `--mode manifest` (a reply per
+step and none for the run), and when the backend or model cannot honour a schema: Bedrock, and a
+roster row that states its supported parameters without `structured_outputs` or `response_format`. A
+row that states none is not refused, and the check after the turn is what holds there.
+
+**Why.** A script that consumes a reply as data is parsing English with a regular expression. Asking
+the service for the shape lowers how often the reply is wrong, and checking it is what makes a wrong
+one a status a caller can branch on rather than a parse error three steps later.
+
+The check is made on the finished text the driver already holds, and its answer reaches only an exit
+status and one field, so a reply written by an untrusted page cannot choose anything by being
+shaped one way or another. Its message is built from the schema's positions for the same reason.
+
+A subset checked in full beats a larger one checked partly. No JSON Schema crate is a dependency, and
+a regular-expression `pattern` would need one the dependency policy bans.
+
+`verified-by: bravebot_agent::output_schema::a_reply_that_matches_comes_back_as_one_line`
+`verified-by: bravebot_agent::output_schema::prose_is_not_a_value`
+`verified-by: bravebot_agent::output_schema::each_constraint_names_where_it_was_broken`
+`verified-by: bravebot_agent::output_schema::a_mismatch_never_carries_what_the_reply_spelt`
+`verified-by: bravebot_agent::output_schema::a_keyword_outside_the_subset_is_refused_wherever_it_stands`
+`verified-by: bravebot_agent::output_schema::a_delete_character_in_a_string_is_escaped_on_the_way_out`
+`verified-by: bravebot_agent::turn::an_output_schema_is_requested_with_the_planners_request`
+`verified-by: bravebot_agent::turn::without_an_output_schema_no_response_format_is_requested`
+`verified-by: bravebot_aichat::protocol::a_schema_is_sent_as_the_response_format_this_protocol_names`
+`verified-by: bravebot_tui::app::a_schema_is_refused_only_where_the_roster_states_parameters_without_it`
+`verified-by: bravebot_cli::main::an_output_schema_flag_naming_no_file_is_refused`
+`verified-by: bravebot_cli::json::a_structured_reply_is_a_value_and_not_a_string`
+`verified-by: bravebot_cli::running::a_reply_matching_the_output_schema_is_returned_as_a_value`
+`verified-by: bravebot_cli::running::a_reply_off_the_output_schema_writes_nothing_to_stdout`
+`verified-by: bravebot_cli::running::a_run_given_no_output_schema_has_a_null_structured_field`
+`verified-by: bravebot_cli::running::an_output_schema_that_cannot_be_honoured_is_refused_before_the_run`
+
+<a id="CLI-29"></a>
+### CLI-29: `update` says the command that updates this copy, and runs nothing
+
+`bravebot update` prints the command for the way this copy was installed: the npm package's line
+for one the npm launcher started, and the install script's own line for the binary that script
+recorded putting there. A copy neither of those put here, a build from source above all, is told
+there is no update command for it and that a build is updated by building again; that is a success
+rather than a failure, since nothing about the machine is wrong. It takes no argument, and a word
+after it is refused with the status for an argument (CLI-6).
+
+Nothing is fetched, so the command is the same whether or not a newer version has been published,
+and the output never names a version. The command is a literal per installation and no part of it
+comes from a file, an environment variable or a response.
+
+**Why.** How to update is a question with an answer the program already holds and the person does
+not: which of the two installers put this binary here is not something somebody can read off their
+own machine, and the two commands are not interchangeable. The npm line installs a package
+manager's copy, so sent to a script install it leaves the running binary untouched and a second one
+elsewhere; the script's line writes over the path the script recorded, so sent to a build from
+source it would replace a binary this program did not install.
+
+It prints rather than runs for the same reason the startup notice prints: replacing the running
+binary is an effect nobody approved by typing one word, and the line goes to a shell the person
+reads first. A copy nothing here installed gets no command rather than a guess, which is the rule
+the startup notice already follows by saying nothing to such a copy
+([LAYER-1](layering.md#LAYER-1) puts the facts both read in the configuration surface).
+
+`verified-by: bravebot_cli::running::update_says_the_command_for_the_way_this_copy_was_installed`
+`verified-by: bravebot_cli::running::update_says_there_is_no_command_for_a_build_from_source`
+`verified-by: bravebot_cli::running::update_takes_no_argument`
+`verified-by: bravebot_config::install::each_installation_is_updated_the_way_it_was_installed`
+
+<a id="CLI-30"></a>
+### CLI-30: `permissions check` reports which rule decides a call, and starts nothing
+
+`bravebot permissions check <Family> <what>` loads the `permissions` rules the way a session started in
+this directory loads them, and prints which of deny, ask or allow decides the call, the rule that
+decides it as its file spelled it, and the file that wrote it. The family is `Read`, `Edit`, `Bash`,
+`WebFetch` or `Mcp`. `Read` and `Edit` take one path, `Bash` takes a program and its arguments as
+separate words, as a stage is matched ([PERM-5](permissions.md#PERM-5)), `WebFetch` takes a host or a
+URL and is decided on the host alone, and `Mcp` takes `server:tool`. The rule named is the one
+[PERM-2](permissions.md#PERM-2)'s order picks: the first match in deny, then ask, then allow. Where
+no rule matches, the line says so and no rule is named, since the ordinary gates decide. A further
+`reason:` line follows where the deciding rule carries one, which is only where the person's own
+home settings file wrote the rule as an object with a `reason` ([PERM-1](permissions.md#PERM-1)).
+
+It reads the rules and nothing else: nothing is opened, fetched or started, no server is
+contacted, and no file is written. The words are typed by the person and matched on routing alone
+([PERM-1](permissions.md#PERM-1)), so no content decides anything. The exit status is success for
+any call that names one; a command line that names none is refused with the status for an argument
+(CLI-6), says why on stderr and prints nothing on stdout.
+
+An `allow` rule a checkout wrote is not in force until the person grants it at the question
+[PERM-15](permissions.md#PERM-15) puts, so it is never named as the rule that decides. Where one
+would have allowed the call, a further line names it and the file that proposed it and says it is not
+in force; where the person granted it, the file line says it was granted for this workspace. It
+reports the rules of the `permissions` block only: the modes of [permission-modes.md](permission-modes.md),
+`readsStayInWorkspace` and `bypassUnreachable` ([PERM-16](permissions.md#PERM-16),
+[PERM-17](permissions.md#PERM-17)) are not consulted, and a manifest run reads no rule.
+
+**Why.** A person finds out whether a rule works by hitting the prompt or the refusal, and when two
+layers disagree the precedence is the thing they cannot see. Naming the file is what narrows a
+surprising answer to one place to edit, and naming a checkout's ungranted allow rule says why a rule
+that is written down is still asking.
+
+`verified-by: bravebot_core::permissions::the_deciding_rule_is_the_one_the_order_picks`
+`verified-by: bravebot_core::permissions::the_deciding_rule_is_named_for_a_host_and_for_a_tool`
+`verified-by: bravebot_config::settings::a_rule_is_traced_to_the_file_and_list_that_wrote_it`
+`verified-by: bravebot_config::settings::a_checkouts_allow_rule_is_traced_to_no_file`
+`verified-by: bravebot_cli::running::permissions_check_names_the_rule_and_the_file_that_decide`
+`verified-by: bravebot_cli::running::permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names`
+`verified-by: bravebot_cli::running::permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force`
+`verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`
+`verified-by: bravebot_cli::running::permissions_check_prints_a_reason_only_from_the_persons_own_file`
+
+<a id="CLI-31"></a>
+### CLI-31: `-i <prompt>` opens the interface that draws and sends the prompt as its first turn
+
+`bravebot -i "<prompt>"`, or `--interactive`, opens the session a bare `bravebot` opens and sends the
+prompt as its first turn once every question the session opens with is answered: the question about
+the working directory ([trust-map.md](trust-map.md)), a rule a checkout proposes, a directory a
+settings file names, and the match of an `--agent` name (CLI-17). It is sent as a prompt typed into
+the box is sent by Enter, so the transcript, the history and the session record hold it as the
+person's, and the session goes on from it. A line opening with `/` or `!` is sent as words, as a
+one-shot run sends it, rather than carried out as a command. A person who leaves at one of those
+questions, or an `--agent` name that matches nothing, starts no session and sends nothing.
+`bravebot "<task>"` is still the one-shot run.
+
+The prompt is the one argument after the flag. It arrives whole, as a paste does, so the characters
+a terminal draws as nothing are removed from it and counted as they are from a paste
+([pasting.md](pasting.md)), and a carriage return, alone or before a line break, becomes one line
+break. Otherwise its line breaks and indentation are kept, and only the space around it is trimmed,
+as from a typed line. `-i` composes with every flag taken out of the line before anything dispatches
+on it, as a bare `bravebot` does, `--dangerously-skip-permissions` and `--agent` among them. It
+comes first among the rest, and is refused with the status for an argument (CLI-6), before the
+terminal is taken, when no prompt follows it, when the prompt is blank or opens with `-` and holds no
+whitespace, when anything but `--model` and `--effort` follows the prompt, when either has no value,
+when it follows a one-shot run's own options, and when it follows another way of starting a session:
+`--resume`, `--continue`, `--fork`, `--from-pr` or `--bg`. It is refused the same way where stdin or stdout is not a terminal, and the refusal names
+`-p`.
+
+**Why.** A script that hands somebody a task to watch otherwise has the one-shot run, which nobody
+can interrupt or follow up, and a bare session, which waits for the task to be typed. Sending the
+prompt the way Enter sends a line makes the first turn an ordinary one, under the same trust answer
+and the same questions as a turn the person typed. It is the same words a one-shot run would send,
+so a line that is a command in the box is still a prompt here.
+
+The transcript draws the prompt as the person's own line, so it is held to what the box does with
+text that arrives whole: a prompt a script read out of a file can hold an instruction spelled in
+characters nothing draws, and sent unchanged it would reach the planner as words nobody read.
+
+A flag of its own rather than the positional prompt, because scripts call `bravebot "<task>"` as the
+one-shot it is, and opening the interface there would leave them waiting at a screen nobody reads.
+
+`--model <name>` and `--effort <level>` may follow the prompt, in either order. They are read as a
+one-shot run reads them (CLI-9, CLI-16), so a blank name or a word that is no level is refused with
+the status for an argument. The session opens on them over every file and every pick recorded by
+`/model` and `/effort` ([BACKEND-11](backends.md#BACKEND-11), [BACKEND-43](backends.md#BACKEND-43)),
+and they record nothing: the line describes this start, so the next session opens on the pick it
+would have had without it, and the two commands change the model and the level once the session is
+open. A model that nothing serves or that the machine-level layer refuses ends the start before the
+terminal is taken, as it does a one-shot run, and names the file that refused
+([BACKEND-48](backends.md#BACKEND-48)). They follow the prompt rather than precede it because a
+one-shot run takes its first word that is no option as the task, and `-i` behind a task's options is
+refused for that reason.
+
+Anything else after the prompt is refused rather than ignored, for the reason CLI-13 refuses a
+settings path that is not a file. `--file` and the other options for a task describe a one-shot run,
+and a session that dropped them would run without what the line asked for. The prompt is one
+argument because a prompt a script assembled holds line breaks and indentation that are part of it,
+and joining words would flatten them. After another way of starting, `-i` would be dropped by one
+that reads no further than its value, read as the start of a one-shot run's arguments by another, or
+sent as the first word of a background session's prompt, and none of those is the session the line
+asked for.
+
+Refused without a terminal rather than run as a one-shot, because the line asked for somebody to
+watch the task and be able to stop it. A one-shot in its place, with `--dangerously-skip-permissions`,
+would make every change with nobody watching.
+
+**Known cost.** A bare `bravebot` has no way to name a model or a level: those are what `/model` and
+`/effort` recorded or a settings file names. Only `-i` takes them from the line.
+
+`verified-by: bravebot_cli::main::the_prompt_a_session_opens_on_is_the_argument_as_written`
+`verified-by: bravebot_cli::main::a_session_given_no_prompt_is_refused`
+`verified-by: bravebot_cli::main::anything_else_after_the_prompt_is_refused_by_name`
+`verified-by: bravebot_cli::main::a_model_and_a_level_after_the_prompt_reach_the_session`
+`verified-by: bravebot_cli::main::a_blank_model_or_an_unknown_level_after_the_prompt_is_refused`
+`verified-by: bravebot_tui::persist::a_model_and_a_level_the_command_line_named_are_recorded_nowhere`
+`verified-by: bravebot_cli::running::a_model_given_to_a_session_on_a_prompt_that_nothing_serves_ends_the_start`
+`verified-by: bravebot_cli::main::a_session_flag_behind_a_tasks_options_is_refused_rather_than_run_as_the_task`
+`verified-by: bravebot_cli::main::a_session_flag_beside_another_way_of_starting_is_refused`
+`verified-by: bravebot_cli::running::a_session_on_a_prompt_is_refused_where_there_is_no_terminal_and_sends_nothing`
+`verified-by: bravebot_tui::app::a_prompt_from_the_command_line_loses_what_a_paste_loses_and_is_sent_once`
+`verified-by: bravebot_tui::app::a_brief_over_a_typed_line_keeps_the_line_and_the_new_session_sends_the_brief`
+
+<a id="CLI-32"></a>
+### CLI-32: `sessions list` lists the sessions recorded for this directory
+
+`bravebot sessions` lists the background roster, the sessions a host is running under the state
+directory ([BG-5](background-sessions.md#BG-5)). The sessions recorded on disk are a different
+set, so they are listed by a further word: `bravebot sessions list [--json] [--limit <n>]`. The
+bare word keeps its meaning.
+
+It reads and writes nothing. One line per record, newest first: the id, how long ago it was last
+written, the title, the branch, the front end that wrote it ([SESSION-29](sessions.md#SESSION-29))
+and whether it can be continued. A manifest run is listed and says it cannot be continued. A record
+holding none of the branch or the front end says so rather than naming one. The title is the prompt
+a person typed ([SESSION-4](sessions.md#SESSION-4)); the record holds nothing untrusted
+([SESSION-2](sessions.md#SESSION-2)), and every field printed has the characters a terminal would
+act on removed. Only the invoking user's state directory is read
+([SESSION-16](sessions.md#SESSION-16)).
+
+Which records belong to this directory is decided by the path inside each record
+([SESSION-28](sessions.md#SESSION-28)) and never by the name of the directory they sit under, which
+is derived lossily and which two working directories can share. A session recorded in another
+directory that maps to the same store name is not listed.
+
+`--limit <n>` prints at most `n` rows and defaults to 20. Where records were left out, a line
+saying how many goes to stderr, so stdout carries the listing and nothing else (CLI-5). `--json`
+puts one object per line on stdout and nothing else: `id`, `title`, `directory`, `updated`,
+`branch`, `front` and `continuable`, every field on every line, and then not even the no-records
+line (CLI-12). A limit of zero, a limit that is not a number, a repeated flag and any other word
+are refused with the status for an argument (CLI-6).
+
+**Why.** A script that wants to know which sessions exist here has no way to ask: the picker is
+interactive and `sessions search` needs text to find. Filtering on the recorded path is what keeps
+two directories sharing a store from showing each other's sessions, which the picker does not do
+today.
+
+**Known cost.** The path inside a record is itself a lossy rendering of the directory it was
+written in, the same `Path::display` text an ordinary, validly-named directory could be called
+([SESSION-28](sessions.md#SESSION-28)). A directory whose name is not valid UTF-8 is told from one
+with that rendering as its real name only up to the rendering: the first's own exact bytes match no
+record, since no record can hold them, and the second's exact name matches whatever either one
+wrote. Telling the two apart would need a record to hold the exact bytes of a directory that is not
+UTF-8, which nothing here does yet.
+
+`verified-by: bravebot_cli::sessions_list::the_words_say_how_many_rows_and_whether_they_are_json`
+`verified-by: bravebot_cli::sessions_list::a_muddled_request_is_refused_rather_than_guessed_at`
+`verified-by: bravebot_cli::sessions_list::a_session_recorded_in_another_directory_sharing_the_store_is_not_listed`
+`verified-by: bravebot_cli::sessions_list::a_directory_that_is_not_utf8_is_told_from_an_ordinary_one_only_up_to_its_rendering`
+`verified-by: bravebot_cli::sessions_list::a_manifest_run_is_listed_and_says_it_cannot_be_continued`
+`verified-by: bravebot_cli::sessions_list::a_row_says_the_front_end_that_wrote_it_and_the_branch_it_was_on`
+`verified-by: bravebot_cli::sessions_list::a_title_reaches_a_row_with_nothing_a_terminal_would_act_on`
+`verified-by: bravebot_cli::sessions_list::json_is_one_object_per_line_and_nothing_else`
+`verified-by: bravebot_cli::sessions_list::a_typed_title_cannot_break_out_of_the_object_it_is_written_in`

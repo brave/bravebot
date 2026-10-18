@@ -68,7 +68,7 @@ Before you use it:
 
 `make check-agent-client` from the repository root builds `bravebot-rpc`, installs, type-checks
 (the common code with no ambient types), builds and runs the tests. Inside the package,
-`npm run check` does the same once `bravebot-rpc` is built; set `BRAVEBOT_RPC` to use a binary
+`pnpm run check` does the same once `bravebot-rpc` is built; set `BRAVEBOT_RPC` to use a binary
 other than `target/debug/bravebot-rpc`. The tests use an empty home, a scratch project and a model
 service of their own, and read no credentials or settings.
 
