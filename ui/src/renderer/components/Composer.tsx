@@ -2,7 +2,9 @@ import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } fr
 import type { FileAttachment } from '../../shared/files'
 import { projectLabel } from '../../shared/recents'
 import { acceptMention, type MentionEntry, type MentionOffer } from '../../shared/mentions'
-import { useContextWindow } from '../context-window'
+import { useContextWindow, useReadsEffort } from '../context-window'
+import type { Effort } from '../../shared/effort'
+import { EffortPicker } from './EffortPicker'
 import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
@@ -47,6 +49,9 @@ export interface ComposerProps {
   /** Offered only where a plan run can start: a conversation, not a bot. */
   onPlan?: () => void
   onModel: (model: string) => void
+  /** Absent where no session keeps a level, as on a bot's first page. */
+  effort?: Effort | null
+  onEffort?: (effort: Effort | null) => void
   /** Absent where no session exists to hold a mode, as on a bot's first page. */
   permissionMode?: PermissionMode
   onMode?: (mode: PermissionMode) => void
@@ -155,7 +160,7 @@ export interface ComposerFooterProps {
 export const Composer = memo(function Composer(props: ComposerProps): React.JSX.Element {
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
-    draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, onPreview,
+    draft, onDraft, onCancel, onPlan, onModel, effort, onEffort, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, onPreview,
     queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, starting = false,
   } = props
@@ -370,6 +375,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             {permissionMode && onMode && <PermissionModePicker key={`mode-${session}`} mode={permissionMode} onChoose={onMode} />}
             {sandboxMode && onSandbox && <SandboxModePicker key={`sandbox-${session}`} mode={sandboxMode} onChoose={onSandbox} />}
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
+            {onEffort && <ComposerEffort key={`effort-${session}`} session={session} model={model} effort={effort ?? null} running={running} onChoose={onEffort} />}
             {onPlan && <ModeMenu mode={planBlocked ? 'agent' : mode} blocked={planBlocked} disabled={running} onMode={setMode} />}
             <IconButton icon={running ? 'stop-circle' : 'arrow-up'} label={running ? 'Stop' : 'Send'}
               shortcut={running ? '⌘.' : '⌘↩'}
@@ -498,6 +504,17 @@ export function BackendTray({ onSetup, onCheckBackend, onDiagnostics }: {
       </span>
     </div>
   )
+}
+
+function ComposerEffort({ session, model, effort, running, onChoose }: {
+  session: string
+  model: string | null
+  effort: Effort | null
+  running: boolean
+  onChoose: (effort: Effort | null) => void
+}): React.JSX.Element {
+  const readsEffort = useReadsEffort(session, model)
+  return <EffortPicker effort={effort} readsEffort={readsEffort} disabled={running} onChoose={onChoose} />
 }
 
 /**

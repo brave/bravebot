@@ -1,5 +1,6 @@
 import { RequestFailed } from './rewind'
 import * as t from './transcript'
+import type { Effort } from '../shared/effort'
 
 /** Raised for the one failure that needs its own screen rather than a line of text. */
 export class Unconfigurable extends Error {}
@@ -35,6 +36,7 @@ export async function callBot(request: {
   prompt: string
   grounded: boolean
   model: string | null
+  effort: Effort | null
   attachments?: string[]
 }): Promise<void> {
   unwrap(await window.bravebot.sendBotTurn(request))

@@ -12,7 +12,7 @@ export interface ModeChoice { label: string; icon: IconName; says: string }
  * and `testId` prefixes the hooks the drivers find it by (`mode-trigger`, `sandbox-option-strict`).
  * `noun` is what the trigger's accessible name calls the setting.
  */
-export function ModePicker<T extends string>({ name, testId, noun, modes, choices, mode, shortcut, onChoose }: {
+export function ModePicker<T extends string>({ name, testId, noun, modes, choices, mode, shortcut, disabled = false, explanation, onChoose }: {
   name: string
   testId: string
   noun: string
@@ -20,13 +20,16 @@ export function ModePicker<T extends string>({ name, testId, noun, modes, choice
   choices: readonly T[]
   mode: T
   shortcut?: string
+  disabled?: boolean
+  /** Said in place of the mode's description, for a trigger that has to say why it is grey. */
+  explanation?: string
   onChoose: (mode: T) => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const trigger = useRef<HTMLElement>(null)
   const { onClose, restoreFocus } = useFocusReturn(trigger)
   const current = modes[mode]
-  const tooltip = `${current.label}: ${current.says}`
+  const tooltip = explanation ?? `${current.label}: ${current.says}`
 
   // Leo's React wrapper sets these once, when the host is made, so a change of mode would leave
   // the accessible name and the tooltip describing the mode it opened in.
@@ -41,21 +44,23 @@ export function ModePicker<T extends string>({ name, testId, noun, modes, choice
 
   // Leo stamps `role="menuitem"` on every item when the menu opens. These are a radio group.
   useMenuItemRoles(trigger)
+  useEffect(() => { if (disabled) setOpen(false) }, [disabled])
 
   return (
     <ButtonMenu
       className={`${name}-menu`}
-      isOpen={open}
+      isOpen={open && !disabled}
       placement="top-end"
       positionStrategy="fixed"
       onClose={onClose}
       onChange={({ isOpen }) => {
+        if (isOpen && disabled) return
         setOpen(isOpen)
         if (!isOpen) restoreFocus()
       }}
     >
       <Button ref={trigger} slot="anchor-content" kind="plain-faint" size="tiny"
-        className={`${name}-trigger ${name}-${mode}`}
+        className={`${name}-trigger ${name}-${mode}`} isDisabled={disabled}
         aria-label={`${noun}: ${current.label}`} aria-haspopup="menu" aria-expanded={open}
         aria-keyshortcuts={shortcut ? keyshortcuts(shortcut) : undefined}
         data-tooltip={tooltip} data-tooltip-shortcut={shortcut}

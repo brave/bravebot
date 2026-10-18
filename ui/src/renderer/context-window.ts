@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ModelCatalogue } from '../shared/protocol'
+import type { Effort } from '../shared/effort'
 
 /**
  * How many tokens the session's model can hold, for the composer's context meter.
@@ -49,4 +50,29 @@ export function useContextWindow(session: string, model: string | null, measured
     return () => { listeners.delete(update) }
   }, [session, model, measured])
   return size
+}
+
+/** Whether the session's model takes an effort level, or `null` while the catalogue is unknown. */
+export function readsEffort(session: string, model: string | null): boolean | null {
+  const catalogue = catalogues.get(session)
+  const id = model ?? catalogue?.defaultModel
+  return catalogue?.models.find((row) => row.id === id)?.readsEffort ?? null
+}
+
+/** The level a turn should carry: none for a model the catalogue says ignores it, as the terminal does. */
+export function effortToSend(session: string, model: string | null, effort: Effort | null): Effort | null {
+  return readsEffort(session, model) === false ? null : effort
+}
+
+export function useReadsEffort(session: string, model: string | null): boolean | null {
+  const read = () => readsEffort(session, model)
+  const [reads, setReads] = useState(read)
+  useEffect(() => {
+    const update = () => setReads(read())
+    listeners.add(update)
+    update()
+    if (!catalogues.has(session)) void catalogueFor(session)
+    return () => { listeners.delete(update) }
+  }, [session, model])
+  return reads
 }

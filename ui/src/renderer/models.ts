@@ -1,3 +1,5 @@
+import { isEffort, type Effort } from '../shared/effort'
+
 /** Model choices belong to this UI's conversations, not the CLI's global preference. */
 export function modelKey(directory: string, id: string): string {
   return `bravebot.conversation-model:${JSON.stringify([directory, id])}`
@@ -17,5 +19,27 @@ export function rememberModel(directory: string, id: string, model: string | nul
     else localStorage.removeItem(modelKey(directory, id))
   } catch {
     // A full or unavailable preference store must not prevent sending a prompt.
+  }
+}
+
+function effortKey(directory: string, id: string): string {
+  return `bravebot.conversation-effort:${JSON.stringify([directory, id])}`
+}
+
+export function conversationEffort(directory: string, id: string): Effort | null {
+  try {
+    const stored = localStorage.getItem(effortKey(directory, id))
+    return isEffort(stored) ? stored : null
+  } catch {
+    return null
+  }
+}
+
+export function rememberEffort(directory: string, id: string, effort: Effort | null): void {
+  try {
+    if (effort) localStorage.setItem(effortKey(directory, id), effort)
+    else localStorage.removeItem(effortKey(directory, id))
+  } catch {
+    // As for the model: a preference that cannot be kept must not stop a send.
   }
 }
