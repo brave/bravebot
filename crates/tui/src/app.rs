@@ -28492,6 +28492,7 @@ mod tests {
                 bravebot_aichat::ChatError::Egress(bravebot_net::EgressError::Status {
                     url: "https://example.test/PRIVATE_PATH?key=PRIVATE_QUERY".into(),
                     status: 503,
+                    retry_after: None,
                 }),
             )),
         };

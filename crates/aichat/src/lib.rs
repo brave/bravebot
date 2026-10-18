@@ -570,8 +570,9 @@ impl<'a> AichatClient<'a> {
                     probed = true;
                 }
                 Err(error) if worth_another_attempt(attempt, &error) => {
-                    log_retry(attempt + 1, backoff(self.backoff, attempt));
-                    if !self.wait(backoff(self.backoff, attempt)) {
+                    let pause = pause_before_retry(self.backoff, attempt, &error);
+                    log_retry(attempt + 1, pause);
+                    if !self.wait(pause) {
                         return Err(ChatError::Cancelled);
                     }
                     attempt += 1;
@@ -688,7 +689,8 @@ impl<'a> AichatClient<'a> {
                 }
                 Err(error) if worth_another_attempt(attempt, &error) => {
                     attempt += 1;
-                    log_retry(attempt, backoff(self.backoff, attempt - 1));
+                    let pause = pause_before_retry(self.backoff, attempt - 1, &error);
+                    log_retry(attempt, pause);
                     // Announced before the wait rather than after it, so the pause is explained
                     // while it is happening. Reply content and progress start again from nothing;
                     // completed costs remain in the call total.
@@ -699,7 +701,7 @@ impl<'a> AichatClient<'a> {
                         counted_by_server: false,
                         attempt,
                     });
-                    if !self.wait(backoff(self.backoff, attempt - 1)) {
+                    if !self.wait(pause) {
                         return Err(ChatError::Cancelled);
                     }
                 }
@@ -997,6 +999,14 @@ const ATTEMPTS: u32 = 3;
 /// How long to wait after the first failure. Doubled for each attempt after that.
 const BACKOFF: Duration = Duration::from_secs(1);
 
+/// The longest pause taken on a service's say-so before sending a request again.
+///
+/// A wait the service asks for beyond this is not waited out: the request fails at once and the
+/// failure says how long the service asked for, so the person decides when to ask again rather
+/// than a turn sitting unattended for minutes. Lower than `bravebot_net::LONGEST_RETRY_AFTER`,
+/// which only bounds the figure the network layer will carry.
+pub const LONGEST_WAIT: Duration = Duration::from_secs(120);
+
 /// How often a reply that has not started arriving looks up to see whether it should stop.
 ///
 /// The same interval the rest of the system waits on for the same question, and short enough that
@@ -1019,7 +1029,7 @@ fn worth_another_attempt(attempt: u32, error: &ChatError) -> bool {
         return false;
     }
     match error {
-        ChatError::Egress(e) => e.is_transient(),
+        ChatError::Egress(e) => e.is_transient() && asked_wait(e) <= LONGEST_WAIT,
         // A reply that stopped early is a request that did not complete, whatever the socket
         // thought. Sending it again is the same remedy, and the partial is thrown away for the
         // same reason: half a reply cannot be continued by a second stream.
@@ -1030,6 +1040,32 @@ fn worth_another_attempt(attempt: u32, error: &ChatError) -> bool {
 
 fn backoff(base: Duration, failures: u32) -> Duration {
     base * 2u32.pow(failures - 1)
+}
+
+/// The wait a service asked for with a status, or none.
+fn asked_wait(error: &EgressError) -> Duration {
+    match error {
+        EgressError::Status {
+            retry_after: Some(asked),
+            ..
+        } => *asked,
+        _ => Duration::ZERO,
+    }
+}
+
+/// The pause before sending again after `failures` failures: what the service asked for where it
+/// said, and the doubling otherwise. Never less than the doubling, so a `Retry-After: 0` sends the
+/// next request after the pause it would have had anyway rather than at once.
+fn pause_before_retry(base: Duration, failures: u32, error: &ChatError) -> Duration {
+    match error {
+        ChatError::Egress(
+            e @ EgressError::Status {
+                retry_after: Some(_),
+                ..
+            },
+        ) => asked_wait(e).max(backoff(base, failures)),
+        _ => backoff(base, failures),
+    }
 }
 
 /// Writes the decision to send again to the diagnostic log: which attempt, and the wait before it.

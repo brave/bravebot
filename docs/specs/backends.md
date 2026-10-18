@@ -2366,6 +2366,38 @@ as the `model` key is, and the switch is decided by a category the driver derive
 `verified-by: bravebot_agent::turn::a_failure_that_is_not_an_overload_does_not_move_the_turn_to_the_fallback`
 `verified-by: bravebot_agent::turn::a_fallback_another_service_would_answer_is_not_used`
 `verified-by: bravebot_agent::turn::a_turn_moves_to_the_fallback_once`
+
+<a id="BACKEND-54"></a>
+### BACKEND-54: a rate limit is waited out for as long as the service asked, up to a ceiling
+
+A reply that is refused with a status that means not now ([NET-6](network-egress.md#NET-6)) is
+sent again, at most twice, as before. Where the answer carried a `Retry-After` header the wait
+before the next request is the one it asked for instead of the doubling from one second. The
+header is read by the egress layer, as whole seconds or an HTTP date in the IMF-fixdate form, and
+is carried on the failure as a duration of at most one hour. A value that is neither, and a header
+that is absent, leave the doubling in force.
+
+The wait is never shorter than that doubling, so `Retry-After: 0` sends the next request after the
+pause it would have had. A wait of more than two minutes is not taken: the request is not sent
+again and the failure ends the call at once. For the category `rate-limited` the failure line then says the service asked for
+a wait of about that many minutes, rounded up. The figure is a number this program parsed and
+bounded and the sentence around it is the fixed one of [BACKEND-37](#BACKEND-37), so no text the
+service wrote is repeated. The wait only sets a timer and a line a person reads: it is never given
+to the planner, and nothing branches on the header's text. The wait is announced as the retry it
+is, and a stop ends it as it ends any pause between attempts.
+
+**Why.** A limit that lifts in a minute otherwise ends the turn after three seconds, and a limit
+that lifts in an hour gives the person nothing to act on. The status decides whether to wait, the
+parsed number only how long.
+
+`verified-by: bravebot_aichat::client::a_rate_limit_is_waited_out_for_as_long_as_the_service_asked`
+`verified-by: bravebot_aichat::client::a_rate_limit_is_waited_out_before_a_whole_reply_is_asked_for_again`
+`verified-by: bravebot_aichat::client::a_wait_past_the_ceiling_fails_at_once_and_carries_the_figure`
+`verified-by: bravebot_aichat::client::a_retry_after_that_does_not_parse_falls_back_to_the_backoff`
+`verified-by: bravebot_aichat::client::a_retry_after_of_zero_still_takes_the_backoff`
+`verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_a_service_asked_for`
+`verified-by: bravebot_agent::backend::a_rate_limit_keeps_the_wait_the_service_asked_for`
+`verified-by: bravebot_session::sessions::a_rate_limit_says_how_long_the_service_asked_for`
 `verified-by: bravebot_agent::turn::a_delegate_does_not_fall_back`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_fallback_model`
 `verified-by: bravebot_config::lib::a_fallback_the_managed_layer_refuses_is_not_used`

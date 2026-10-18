@@ -2975,6 +2975,11 @@ shell-kept-private = typed with !!, so this output was not sent to the model
 # Fixed descriptions keep raw backend error text out of the interface.
 failure-unauthorized = the service would not accept the credentials
 failure-rate-limited = the service asked for fewer requests
+failure-rate-limited-for =
+    { $minutes ->
+        [one] the service asked for fewer requests, and for a wait of about 1 minute
+       *[other] the service asked for fewer requests, and for a wait of about { $minutes } minutes
+    }
 failure-unavailable = the service could not answer
 failure-refused = the service rejected the request
 failure-transport = the request did not get through

@@ -2467,6 +2467,11 @@ shell-kept-private = saisie avec !!, cette sortie n'a pas été envoyée au mod�
 
 failure-unauthorized = le service a refusé les identifiants
 failure-rate-limited = le service a demandé moins de requêtes
+failure-rate-limited-for =
+    { $minutes ->
+        [one] le service a demandé moins de requêtes, et une attente d'environ 1 minute
+       *[other] le service a demandé moins de requêtes, et une attente d'environ { $minutes } minutes
+    }
 failure-unavailable = le service n'a pas pu répondre
 failure-refused = le service a rejeté la requête
 failure-transport = la requête n'est pas passée
