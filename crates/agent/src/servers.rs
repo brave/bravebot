@@ -16,6 +16,7 @@
 //! terminal is one, and a front end with its own screen is another.
 
 use crate::SessionScratch;
+use crate::confine::developer_directory;
 use crate::confirm::MoveRequest;
 use crate::mcp::{Connection, Session, Unmoved, managed_refusal, shown, unreadable};
 use bravebot_config::mcp::{
@@ -1970,6 +1971,7 @@ fn confinement_here(
         own,
         &temporary_directory(),
         crate::home::profile().as_deref(),
+        developer_directory().as_deref(),
     )
 }
 
@@ -2032,8 +2034,9 @@ fn confinement(
     own: &Path,
     temporary: &Path,
     home: Option<&Path>,
+    developer: Option<&Path>,
 ) -> Option<SandboxPolicy> {
-    let mut policy = base(prelude?, temporary, None, None);
+    let mut policy = base(prelude?, temporary, developer, None);
     let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let own = canonical(own);
     policy = policy.allow_read(&own).allow_write(&own);
@@ -3047,6 +3050,7 @@ mod tests {
             &kept,
             &temporary,
             Some(&home),
+            None,
         )
         .expect("a policy");
 
@@ -3085,6 +3089,7 @@ mod tests {
             &kept,
             &temporary,
             Some(&home),
+            None,
         )
         .expect("a policy");
         assert_eq!(undirected.starting_in.as_deref(), Some(temporary.as_path()));
@@ -3097,7 +3102,8 @@ mod tests {
                 None,
                 &kept,
                 &temporary,
-                Some(&home)
+                Some(&home),
+                None,
             )
             .is_none()
         );
@@ -3124,6 +3130,7 @@ mod tests {
             &root.join("kept"),
             &root.join("tmp"),
             Some(&linked),
+            None,
         )
         .expect("a policy");
 
@@ -3183,6 +3190,7 @@ mod tests {
             &root.join("kept"),
             &root.join("tmp"),
             Some(&home),
+            None,
         )
         .expect("a policy");
 
@@ -3235,6 +3243,7 @@ mod tests {
             &root.join("kept"),
             &root.join("tmp"),
             Some(&home),
+            None,
         )
         .expect("a policy");
 

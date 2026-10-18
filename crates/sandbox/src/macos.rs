@@ -314,6 +314,36 @@ pub fn user_cache_directory() -> Option<std::path::PathBuf> {
         .ok()
 }
 
+/// The active developer directory `xcode-select -p` names, with its links followed, which is
+/// what [`crate::base::base`] takes as its developer directory. `None` where there is none or the
+/// tool does not answer.
+///
+/// Asked once for the life of the process, as the first session opens. `DEVELOPER_DIR` is removed
+/// from the question's environment: `xcode-select` answers with it where it is set, and a value
+/// this process holds, or a stage's own assignment, must not decide which directory the base
+/// reads.
+#[cfg(target_os = "macos")]
+pub fn developer_directory() -> Option<std::path::PathBuf> {
+    static DIRECTORY: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    DIRECTORY
+        .get_or_init(|| {
+            let selected = std::process::Command::new("/usr/bin/xcode-select")
+                .arg("-p")
+                .env_remove("DEVELOPER_DIR")
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()
+                .filter(|output| output.status.success())?;
+            let line = selected
+                .stdout
+                .strip_suffix(b"\n")
+                .unwrap_or(&selected.stdout);
+            Path::new(OsStr::from_bytes(line)).canonicalize().ok()
+        })
+        .clone()
+}
+
 /// How many names a path has, which is how far down the filesystem it is.
 fn depth(path: &Path) -> usize {
     path.components()

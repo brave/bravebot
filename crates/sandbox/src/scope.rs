@@ -14,6 +14,7 @@
 
 use crate::base::{STATE_DIRECTORY, every_credential_directory, under};
 use crate::policy::SandboxPolicy;
+use crate::programs::program_name;
 use crate::signing::Place;
 use crate::toolchain::Toolchain;
 use std::path::{Component, Path, PathBuf};
@@ -130,8 +131,8 @@ impl Scope {
         if !environment.is_empty() {
             return None;
         }
-        let name = resolved.file_name()?.to_str()?;
-        match name {
+        let name = program_name(resolved)?;
+        match name.as_str() {
             "git" if a_remote_operation(args) => Some(Self::Remote),
             "git" if a_signing_operation(args) => Some(Self::Signing),
             "gh" if a_command_of_ghs_own(args) => Some(Self::Remote),
@@ -1312,6 +1313,34 @@ mod tests {
     /// A scope is reach a plan's stage is lent because its operation needs it, so a program
     /// that merely sits beside one, or talks to a remote through `git` without being it, is lent
     /// nothing.
+    #[test]
+    fn a_scope_is_keyed_on_the_file_without_a_windows_executable_extension() {
+        for (resolved, line, scope) in [
+            (
+                "C:/Program Files/Git/cmd/git.exe",
+                "push origin main",
+                Scope::Remote,
+            ),
+            (
+                "C:/Program Files/GitHub CLI/GH.EXE",
+                "pr create",
+                Scope::Remote,
+            ),
+            ("C:/bin/aws.exe", "s3 ls", Scope::Aws),
+            ("C:/bin/kubectl.exe", "get pods", Scope::Kubernetes),
+            ("C:/bin/docker.exe", "ps", Scope::Docker),
+        ] {
+            assert_eq!(of(resolved, line), Some(scope), "{resolved}");
+        }
+        for resolved in [
+            "C:/bin/git-lfs.exe",
+            "C:/bin/docker-compose.exe",
+            "C:/bin/git.exe.bak",
+        ] {
+            assert_eq!(of(resolved, "push"), None, "{resolved}");
+        }
+    }
+
     #[test]
     fn a_program_no_scope_knows_carries_none() {
         for resolved in [

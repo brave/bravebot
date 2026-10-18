@@ -858,6 +858,8 @@ runs. Cargo's configuration is read at all because cargo fails every invocation 
 file it cannot open, which a machine with a `~/.cargo/config.toml` otherwise meets on every build.
 
 `verified-by: bravebot_sandbox::toolchain::a_list_is_keyed_on_the_file_a_program_resolved_to`
+`verified-by: bravebot_sandbox::toolchain::a_list_is_keyed_on_the_file_without_a_windows_executable_extension`
+`verified-by: bravebot_sandbox::programs::a_windows_executable_extension_is_not_part_of_a_programs_name`
 `verified-by: bravebot_sandbox::toolchain::a_program_no_list_knows_brings_none`
 `verified-by: bravebot_sandbox::toolchain::a_list_names_a_cache_and_never_the_directory_holding_it`
 `verified-by: bravebot_sandbox::toolchain::an_install_is_read_and_never_written`
@@ -1178,6 +1180,7 @@ and under the default `ask` a person at a terminal is asked again on every push.
 `verified-by: bravebot_sandbox::scope::an_option_that_runs_nothing_keeps_the_scope`
 `verified-by: bravebot_sandbox::scope::a_tool_pointed_at_another_configuration_file_carries_none`
 `verified-by: bravebot_sandbox::scope::a_program_no_scope_knows_carries_none`
+`verified-by: bravebot_sandbox::scope::a_scope_is_keyed_on_the_file_without_a_windows_executable_extension`
 `verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_carries_no_scope_by_its_name`
 `verified-by: bravebot_sandbox::scope::a_stage_reaches_its_own_scope_and_no_other`
 `verified-by: bravebot_sandbox::scope::no_scope_reaches_a_private_key_or_the_directory_holding_one`
@@ -1539,6 +1542,9 @@ makes. A Windows container refuses a policy that carries a refusal at all.
 `verified-by: bravebot_agent::confine::a_stage_writes_only_the_session_the_temporary_directory_and_the_caches`
 `verified-by: bravebot_agent::confine::where_the_machine_is_read_every_stage_writes_every_toolchains_cache`
 `verified-by: bravebot_agent::confine::a_session_with_no_home_is_not_granted_the_machine`
+`verified-by: bravebot_agent::confine::a_windows_program_keeps_its_list_and_scope_with_its_extension`
+`verified-by: bravebot_agent::confine::the_keyed_base_reads_the_developer_directory_the_session_resolved`
+`verified-by: bravebot_agent::confine::a_macos_session_with_no_home_is_refused_a_directory_in_the_system_keychains`
 `verified-by: bravebot_agent::confine::a_push_reaches_the_remote_scope_and_a_status_does_not`
 `verified-by: bravebot_agent::confine::the_agent_socket_goes_to_a_remote_step_and_to_no_other`
 `verified-by: bravebot_agent::confine::an_assignment_in_front_of_a_push_removes_its_scope`

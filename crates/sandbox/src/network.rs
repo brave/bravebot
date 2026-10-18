@@ -6,6 +6,7 @@
 //! credential scope, or a program whose only use is to talk to
 //! one. `docs/specs/sandboxing.md` decides which, and this is that table in code.
 
+use crate::programs::program_name;
 use std::path::Path;
 
 /// What a session decided about the network for the programs it starts.
@@ -48,10 +49,7 @@ impl Network {
 /// plan resolved and a person read. `git` and `gh` are not here, since the operation their argv
 /// names decides it and is read as the remote scope.
 pub fn program_talks_to_a_remote(resolved: &Path) -> bool {
-    resolved
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| matches!(name, "curl" | "ssh"))
+    program_name(resolved).is_some_and(|name| matches!(name.as_str(), "curl" | "ssh"))
 }
 
 #[cfg(test)]
@@ -69,6 +67,19 @@ mod tests {
             assert_eq!(Network::parse(network.name()), Some(network));
         }
         assert_eq!(Network::default(), Network::Open);
+    }
+
+    #[test]
+    fn a_windows_executable_extension_does_not_hide_curl_or_ssh() {
+        for path in [
+            "C:/Windows/System32/curl.exe",
+            "C:/Windows/System32/OpenSSH/SSH.EXE",
+        ] {
+            assert!(program_talks_to_a_remote(Path::new(path)), "{path}");
+        }
+        assert!(!program_talks_to_a_remote(Path::new(
+            "C:/bin/ssh-keygen.exe"
+        )));
     }
 
     #[test]
