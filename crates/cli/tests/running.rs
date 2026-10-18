@@ -728,6 +728,33 @@ fn doctor_names_each_filesystem_rule_with_where_it_came_from() {
     );
 }
 
+/// `doctor --sandbox strict` names the flag as the sandbox choice in force rather than calling it
+/// the default (SANDBOX-22).
+///
+/// A property of the process: `main` reads the flag and records it, and `doctor` reads it back from
+/// there. The in-crate tests hand the flag to the report directly, so none of them fails if `main`
+/// stops recording it.
+#[test]
+fn doctor_names_a_sandbox_flag_as_the_choice_in_force() {
+    let scratch = Scratch::new("cli-running-doctor-sandbox-flag");
+
+    let output = bravebot(
+        &scratch.path,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["doctor", "--sandbox", "strict"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("sandbox mode"))
+        .unwrap_or_else(|| panic!("the report did not name the mode: {stdout}{stderr}"));
+    assert!(
+        line.contains("strict") && line.contains("--sandbox"),
+        "the flag was not named as the source: {stdout}"
+    );
+}
+
 /// `doctor` says a checkout's `sandbox.network.allowedHosts` is not obeyed and that a misshapen
 /// `deniedHosts` is read as absent, each naming the file, rather than leaving both unreported.
 ///
