@@ -21,6 +21,7 @@ use crate::mcp::{Connection, Session, Unmoved, managed_refusal, shown, unreadabl
 use bravebot_config::mcp::{
     self, Approvals, Declaration, Declarations, Digest, Problem, Projects, Timeouts,
 };
+use bravebot_config::sandbox_network::Hosts;
 use bravebot_config::{Managed, Server};
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::RecordingSink;
@@ -1559,7 +1560,17 @@ fn start(
     notes: &mut Vec<String>,
     hops: &mut Vec<Hop>,
 ) -> Vec<crate::mcp::Reached> {
-    start_under(None, plans, home, diagnostics, notes, hops)
+    let network = bravebot_config::run_network();
+    let hosts = bravebot_config::sandbox_network::settled().map(|settled| &settled.hosts);
+    start_under(
+        None,
+        (network, hosts),
+        plans,
+        home,
+        diagnostics,
+        notes,
+        hops,
+    )
 }
 
 /// [`start`], resolving each policy against `granting` rather than against what this machine's
@@ -1574,8 +1585,12 @@ fn start(
 /// The backend still spawns. Only the capabilities the policy is resolved against are the
 /// caller's, so a narrower policy than this machine demanded is installed by the real sandbox,
 /// which every backend can do: a profile naming fewer paths is one any of them accepts.
+///
+/// `session` is the network setting and host list the session settled, which each local server is
+/// held to as a stage is (SANDBOX-20, SANDBOX-24).
 fn start_under(
     granting: Option<Capabilities>,
+    session: (bravebot_sandbox::network::Network, Option<&Hosts>),
     plans: Vec<(String, Plan)>,
     home: &Home,
     diagnostics: Stream,
@@ -1651,13 +1666,29 @@ fn start_under(
                     continue;
                 };
                 let granted = granting.clone().unwrap_or_else(|| sandbox.capabilities());
+                let (policy, proxied) = match crate::confine::held_to_the_session_network(
+                    policy, &program, session.0, session.1, &granted,
+                ) {
+                    Ok(held) => held,
+                    Err(reason) => {
+                        notes.push(
+                            t!(servers_not_confined, alias = alias, reason = reason).to_string(),
+                        );
+                        continue;
+                    }
+                };
                 let (policy, left_out) = nameable(&alias, policy, &granted);
                 notes.extend(left_out);
+                let variables = proxied
+                    .into_iter()
+                    .fold(at_home(variables, &own), |held, (name, value)| {
+                        held.with(name, value)
+                    });
                 let launched = StdioServer::launch(
                     alias.as_str(),
                     program.to_str().unwrap_or_default(),
                     &arguments,
-                    at_home(variables, &own),
+                    variables,
                     sandbox.as_ref(),
                     &policy,
                     diagnostics,
@@ -2034,6 +2065,7 @@ mod tests {
     use super::*;
     use crate::mcp::entry;
     use bravebot_config::Rule;
+    use bravebot_sandbox::network::Network;
     use bravebot_sandbox::policy::ConfinementLevel;
 
     /// A state directory of its own under the build directory, emptied first.
@@ -3998,6 +4030,7 @@ done
 
         let started = start_under(
             Some(a_backend_naming_an_absent_path(false)),
+            (Network::Open, None),
             vec![("weather".to_string(), plan)],
             &home,
             Stream::Null,
@@ -4424,5 +4457,242 @@ done
         assert_eq!(started[0].listing().offered(), 1);
         assert_eq!(started[0].listing().refused(), 0);
         assert_eq!(started[0].listing().withheld(), 2);
+    }
+
+    fn limited_to_a_port(enforced: bool) -> Capabilities {
+        Capabilities {
+            network_denial_enforced: enforced,
+            egress_limited_to_a_port: enforced,
+            ..a_backend_naming_an_absent_path(false)
+        }
+    }
+
+    fn listing(allowed: Option<&[&str]>, denied: &[&str]) -> Hosts {
+        let entry = |name: &&str| bravebot_config::sandbox_network::HostEntry {
+            entry: name.to_string(),
+            by: None,
+        };
+        Hosts {
+            allowed: allowed.map(|names| names.iter().map(entry).collect()),
+            denied: denied.iter().map(entry).collect(),
+            on_unlisted: None,
+        }
+    }
+
+    fn a_servers_policy() -> SandboxPolicy {
+        let own = scratch("servers-egress-own");
+        confinement(
+            Some(Prelude::MacOs),
+            Path::new("/usr/bin/weather-mcp"),
+            &[],
+            &[],
+            None,
+            &own,
+            Path::new("/tmp"),
+            None,
+        )
+        .expect("a policy on macOS's base")
+    }
+
+    /// SANDBOX-20: a closed session leaves a local server no network, where the base gives it
+    /// egress, and a platform that cannot deny it refuses to start the server.
+    #[test]
+    fn a_closed_session_takes_the_network_from_a_local_server_or_refuses_it() {
+        let policy = a_servers_policy();
+        assert!(policy.allow_network, "the base gives a server egress");
+        let program = Path::new("/usr/bin/weather-mcp");
+
+        let (held, proxied) = crate::confine::held_to_the_session_network(
+            policy.clone(),
+            program,
+            Network::Closed,
+            None,
+            &limited_to_a_port(true),
+        )
+        .expect("a platform that denies the network holds the server");
+        assert!(!held.allow_network);
+        assert!(proxied.is_empty());
+
+        let refused = crate::confine::held_to_the_session_network(
+            policy,
+            program,
+            Network::Closed,
+            None,
+            &limited_to_a_port(false),
+        )
+        .expect_err("a platform that cannot deny the network does not start the server");
+        assert!(refused.contains("run.network"), "{refused}");
+    }
+
+    /// SANDBOX-24: a server under a host list reaches the proxy's port alone and is given its
+    /// variables, an empty list is still a list, and a list of refusals alone filters nothing.
+    #[test]
+    fn a_host_list_holds_a_local_server_to_the_proxy_or_refuses_it() {
+        let program = Path::new("/usr/bin/weather-mcp");
+        for allowed in [&["mine.example"][..], &[][..]] {
+            let hosts = listing(Some(allowed), &[]);
+            let (held, proxied) = crate::confine::held_to_the_session_network(
+                a_servers_policy(),
+                program,
+                Network::Open,
+                Some(&hosts),
+                &limited_to_a_port(true),
+            )
+            .expect("held to the proxy");
+            let port = held.egress_only_to.expect("egress is limited to one port");
+            assert!(
+                proxied
+                    .iter()
+                    .any(|(name, value)| name == "HTTPS_PROXY"
+                        && value.ends_with(&format!(":{port}"))),
+                "{proxied:?}"
+            );
+        }
+
+        let hosts = listing(Some(&["mine.example"]), &[]);
+        let refused = crate::confine::held_to_the_session_network(
+            a_servers_policy(),
+            program,
+            Network::Open,
+            Some(&hosts),
+            &limited_to_a_port(false),
+        )
+        .expect_err("a platform that cannot hold a program to the proxy refuses the server");
+        assert!(refused.contains("allowedHosts"), "{refused}");
+
+        for hosts in [None, Some(&listing(None, &["bad.example"]))] {
+            let (held, proxied) = crate::confine::held_to_the_session_network(
+                a_servers_policy(),
+                program,
+                Network::Open,
+                hosts,
+                &limited_to_a_port(false),
+            )
+            .expect("no list is no proxy");
+            assert!(held.allow_network && held.egress_only_to.is_none());
+            assert!(proxied.is_empty());
+        }
+    }
+
+    /// SANDBOX-20: the launch applies the setting. Where the platform cannot deny the network, a
+    /// closed session starts no server and the note names the setting, and the same plan under an
+    /// open session starts.
+    #[cfg(unix)]
+    #[test]
+    fn a_closed_session_starts_no_local_server_where_the_network_cannot_be_denied() {
+        let root = scratch("cli-servers-closed")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let program = installed(&root.join("server"), "weather-mcp");
+        std::fs::write(&program, HOME_WRITING_SERVER).expect("write the server");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let home = Home {
+            directory: None,
+            writable: false,
+        };
+        let plan = || {
+            vec![(
+                "weather".to_string(),
+                Plan::Stdio {
+                    program: program.clone(),
+                    arguments: Vec::new(),
+                    variables: Variables::new(),
+                    searched: Vec::new(),
+                    reads: Vec::new(),
+                    directory: Some(work.clone()),
+                    declared: digested(&["weather-mcp"]),
+                    timeouts: Timeouts::default(),
+                    tools: Vec::new(),
+                    exclude_tools: Vec::new(),
+                },
+            )]
+        };
+        for (network, started) in [(Network::Closed, 0), (Network::Open, 1)] {
+            let mut notes = Vec::new();
+            let reached = start_under(
+                Some(limited_to_a_port(false)),
+                (network, None),
+                plan(),
+                &home,
+                Stream::Null,
+                &mut notes,
+                &mut Vec::new(),
+            );
+            assert_eq!(reached.len(), started, "{network:?}: {notes:?}");
+            if started == 0 {
+                assert!(
+                    notes.iter().any(|note| note.contains("run.network")),
+                    "{notes:?}"
+                );
+            }
+        }
+    }
+
+    /// SANDBOX-24: a server held to the proxy is started with the variables that name it, set after
+    /// the declaration's, so a declared `HTTPS_PROXY` cannot point it elsewhere.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_held_to_the_proxy_is_started_with_the_proxys_variables() {
+        let root = scratch("cli-servers-proxied")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        let held = bravebot_sandbox::for_current_platform()
+            .map(|sandbox| sandbox.capabilities().egress_limited_to_a_port)
+            .unwrap_or(false);
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() || !held {
+            eprintln!("SKIPPED (no confinement that holds a program to a port here)");
+            return;
+        }
+        let program = installed(&root.join("server"), "weather-mcp");
+        let (_, answering) = HOME_WRITING_SERVER
+            .split_once("while ")
+            .expect("the server answers in a loop");
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\nprintf '%s' \"$HTTPS_PROXY\" > proxy-was\nwhile {answering}"),
+        )
+        .expect("write the server");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let home = Home {
+            directory: None,
+            writable: false,
+        };
+        let plan = Plan::Stdio {
+            program,
+            arguments: Vec::new(),
+            variables: Variables::new().with("HTTPS_PROXY", "http://elsewhere.example:1"),
+            searched: Vec::new(),
+            reads: Vec::new(),
+            directory: Some(work.clone()),
+            declared: digested(&["weather-mcp"]),
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+        };
+        let hosts = listing(Some(&["mine.example"]), &[]);
+        let mut notes = Vec::new();
+
+        let started = start_under(
+            None,
+            (Network::Open, Some(&hosts)),
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(started.len(), 1, "{notes:?}");
+        let seen = std::fs::read_to_string(work.join("proxy-was")).expect("the server wrote it");
+        assert!(
+            seen.starts_with("http://127.0.0.1:"),
+            "the server was given {seen}"
+        );
     }
 }

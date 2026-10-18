@@ -1721,6 +1721,10 @@ account installed, rustup's `cargo` and a Homebrew `git` among them. Under bypas
 therefore still write a file the account owns, name it `curl`, and have a later stage keep the
 network by running it.
 
+A local MCP server is not a stage and carries none of these reasons, so a closed session starts it with
+no egress, a runner's fetch included, and a platform that cannot deny the network does not start it
+([SERVERS-10](mcp-servers.md#SERVERS-10)).
+
 A person's trust of a directory lets a line run there without asking only where no stage of the line keeps the
 network for one of the three reasons above ([RUN-5](tools/run.md#RUN-5)). The line is then started with the
 network closed for that line alone: under `open` its stages are built as `closed` builds them, which is the
@@ -2283,6 +2287,10 @@ a person said. A managed `allowedHosts` also drops the person's `onUnlisted: ask
 file sets `onUnlisted` itself, since a yes to the prompt below adds to the allowed set, which is the
 widening the pin exists to prevent. A managed value that is not a list of strings, or an
 `onUnlisted` that is neither word, pins nothing and `doctor` names it.
+
+A local MCP server is held to the same list ([SERVERS-10](mcp-servers.md#SERVERS-10)): it is started
+with those variables, its policy reaches the proxy's port alone, the registry hosts of its program's
+toolchain are added to the list, and a platform that cannot hold it to the proxy does not start it.
 
 A stage with egress under a set list is started with those variables, and a stage with no egress
 is not, because it reaches nothing. A stage's list is the person's allowed set and the defaults its

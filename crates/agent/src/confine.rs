@@ -2294,6 +2294,56 @@ fn cannot_keep_strict_from_sockets(
     })
 }
 
+/// What a local server's policy becomes under the session's decision about the network
+/// (SANDBOX-20, SANDBOX-24), and the variables that point it at the proxy, where there is one.
+///
+/// A server is not a stage and carries none of a stage's reasons to keep the network, so a closed
+/// session gives it none, a runner's fetch included. Under a host list it is held to the proxy
+/// that applies the list, with the registry hosts of the toolchain its program is. The error says
+/// why the platform cannot hold it, and the server is not started, as a stage is not.
+pub fn held_to_the_session_network(
+    policy: SandboxPolicy,
+    program: &Path,
+    network: Network,
+    hosts: Option<&Hosts>,
+    capabilities: &bravebot_sandbox::policy::Capabilities,
+) -> Result<(SandboxPolicy, Vec<(String, String)>), String> {
+    if network.is_closed() {
+        let closed = policy.without_network_egress();
+        return match cannot_close_the_network(&closed, capabilities) {
+            Some(detail) => Err(detail),
+            None => Ok((closed, Vec::new())),
+        };
+    }
+    let Some(hosts) = hosts.filter(|hosts| hosts.allowed.is_some()) else {
+        return Ok((policy, Vec::new()));
+    };
+    let spelled = |entries: &[bravebot_config::sandbox_network::HostEntry]| {
+        entries
+            .iter()
+            .map(|host| host.entry.clone())
+            .collect::<Vec<_>>()
+    };
+    let toolchains: Vec<Toolchain> = Toolchain::of(&canonical(program)).into_iter().collect();
+    let list = crate::host_proxy::list_for(
+        &spelled(hosts.allowed.as_deref().unwrap_or_default()),
+        &spelled(&hosts.denied),
+        false,
+        &toolchains,
+    )?;
+    let proxy = crate::host_proxy::proxy_for(&list)
+        .map_err(|error| format!("the allowed-hosts proxy could not start: {error}"))?;
+    let mut held = policy.allow_network_egress_only_to(proxy.addr().port());
+    #[cfg(target_os = "linux")]
+    if let Some(socket) = proxy.socket_path() {
+        held = held.with_egress_through(socket);
+    }
+    match cannot_hold_to_the_proxy(&held, capabilities) {
+        Some(detail) => Err(detail),
+        None => Ok((held, proxy.environment())),
+    }
+}
+
 /// Why a backend cannot apply `policy`, where the policy withholds the network and the backend does
 /// not enforce that, or `None`.
 ///
