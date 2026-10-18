@@ -1306,8 +1306,14 @@ impl Confinement {
         };
         let commit = commit_sentence(self.mode);
         let git = match self.prelude {
-            Prelude::MacOs => macos_git_sentence(self.mode),
-            Prelude::Linux | Prelude::Windows => "",
+            Prelude::MacOs if unconfined_offered => {
+                format!(
+                    "{}{MACOS_GIT_UNCONFINED_SENTENCE}",
+                    macos_git_sentence(self.mode)
+                )
+            }
+            Prelude::MacOs => macos_git_sentence(self.mode).to_string(),
+            Prelude::Linux | Prelude::Windows => String::new(),
         };
         format!(
             "{}{source}{refusal}{}{commit}{git}{}",
@@ -1925,6 +1931,13 @@ const MACOS_LISTENING_SENTENCE: &str = " On macOS a program cannot listen on a p
 const MACOS_GIT_SENTENCE: &str = " On macOS a step whose program is not `git` cannot write any \
      `.git`: a script, `make`, `npm`, `gh` or any other program that runs git to commit, check out \
      or clone is refused that write, so run git as a step of its own.";
+
+/// Said after a failed step on macOS where the session accepts an `unconfined` request
+/// (SANDBOX-29), for the script the sentence above cannot help: one whose own child process runs
+/// git. Never said where the session would refuse the request.
+const MACOS_GIT_UNCONFINED_SENTENCE: &str = " A script that has to run git itself can be started \
+     with `'unconfined': true`: the person is asked to approve that one line, which runs with no \
+     sandbox.";
 
 /// [`MACOS_GIT_SENTENCE`] under `read-only`, where a git step cannot write the session's `.git`
 /// either, so running git on its own helps only in a place the mode writes.
@@ -4137,6 +4150,32 @@ mod tests {
                     "{elsewhere:?} {mode:?}"
                 );
             }
+        }
+    }
+
+    /// SANDBOX-14, SANDBOX-29: after a failed step on macOS the planner is pointed at `'unconfined':
+    /// true` for a script that runs git, only where the session accepts the request, and never on
+    /// another platform, where nothing holds a `.git` back. The fault it rejects is the sentence
+    /// said whatever the session accepts, or left out where it does.
+    #[test]
+    fn a_failed_step_on_macos_names_the_unconfined_line_for_git_only_where_it_is_accepted() {
+        let failed = |prelude, offered| {
+            reading_confinement(prelude, &["/work/project"])
+                .with_mode(SandboxMode::WorkspaceWrite)
+                .profile_offering(&[&step("/usr/bin/make", &["release"])], offered)
+        };
+        let accepted = failed(Prelude::MacOs, true);
+        assert!(accepted.contains(MACOS_GIT_SENTENCE), "{accepted}");
+        assert!(
+            accepted.contains(MACOS_GIT_UNCONFINED_SENTENCE),
+            "{accepted}"
+        );
+        let refused = failed(Prelude::MacOs, false);
+        assert!(refused.contains(MACOS_GIT_SENTENCE), "{refused}");
+        assert!(!refused.contains("unconfined"), "{refused}");
+        for elsewhere in [Prelude::Linux, Prelude::Windows] {
+            let said = failed(elsewhere, true);
+            assert!(!said.contains("unconfined"), "{elsewhere:?}: {said}");
         }
     }
 

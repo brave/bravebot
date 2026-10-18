@@ -12478,6 +12478,15 @@ mod tests {
         assert_eq!(properties["directory"]["type"], "string");
         assert_eq!(properties["read"]["type"], "boolean");
         assert_eq!(properties["unconfined"]["type"], "boolean");
+        let said = properties["unconfined"]["description"].as_str().unwrap();
+        for told in [
+            "Ask for it whenever a line needs it",
+            "asked about the line every time",
+            "A session that does not accept it refuses the call",
+        ] {
+            assert!(said.contains(told), "{told} missing from {said}");
+        }
+        assert!(!said.contains("Only where the session is told"), "{said}");
         assert_eq!(properties["stdin_ref"]["type"], "string");
         assert_eq!(
             tool.function.parameters["required"]

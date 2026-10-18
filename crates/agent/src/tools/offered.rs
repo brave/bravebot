@@ -996,11 +996,15 @@ fn table(
                                         such as a login that stores a credential in its own \
                                         directory, or for a line that redirects its output to \
                                         a file outside the workspace, which a sandboxed line \
-                                        cannot do. Only where the session is told it accepts \
-                                        it. The user is asked about the line every time, shown \
-                                        the files it writes and told that it runs with no \
-                                        sandbox, and no answer to it is remembered. What it \
-                                        prints is not trusted. Do not combine it with \
+                                        cannot do, or a script that runs git as a child \
+                                        process, which a sandboxed line on macOS cannot write a \
+                                        .git for. Ask for it whenever a line needs it: the \
+                                        user is asked about the line every time, shown the \
+                                        files it writes and told that it runs with no \
+                                        sandbox, and no answer to it is remembered. A session \
+                                        that does not accept it refuses the call with a \
+                                        sentence saying so, so you need not guess beforehand. \
+                                        What it prints is not trusted. Do not combine it with \
                                         'scopes'."
                     },
                     "directory": {
