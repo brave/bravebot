@@ -7,6 +7,19 @@ governs:
   - crates/agent/src/delegate.rs
   - crates/agent/src/git.rs
   - crates/agent/src/git/checkout.rs
+  - crates/agent/src/git/config.rs
+  - crates/agent/src/git/dates.rs
+  - crates/agent/src/git/declined.rs
+  - crates/agent/src/git/diff.rs
+  - crates/agent/src/git/log.rs
+  - crates/agent/src/git/objects.rs
+  - crates/agent/src/git/out.rs
+  - crates/agent/src/git/resolve.rs
+  - crates/agent/src/git/revision.rs
+  - crates/agent/src/git/search.rs
+  - crates/agent/src/git/show.rs
+  - crates/agent/src/git/survey.rs
+  - crates/agent/src/git/tags.rs
   - crates/agent/src/scratch.rs
   - crates/agent/src/tools.rs
   - crates/agent/src/tools/offered.rs
