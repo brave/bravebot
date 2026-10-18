@@ -368,6 +368,17 @@ pub(crate) fn hand_over(
     Ok(())
 }
 
+/// The sentence that says the mode a background session runs in, to the person attached to it
+/// (BG-8). The session says it in its opening lines and `attach` says it again on joining.
+pub(crate) fn mode_line(mode: Mode) -> String {
+    let words = match mode {
+        Mode::Ask => t!(mode_ask),
+        Mode::AcceptEdits => t!(mode_accept_edits),
+        Mode::Plan => t!(mode_plan),
+    };
+    t!(bg_mode, mode = words).to_string()
+}
+
 /// Whether a background session is running under `id`, the id of a session record (BG-9).
 pub(crate) fn is_running(id: &str) -> bool {
     bravebot_session::jobs::is_running(id)
@@ -515,6 +526,7 @@ fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
         _ => return fail(Ending::Failed, t!(attach_not_running, name = name)),
     }
     eprintln!("{}", t!(attach_joined, name = name.clone()));
+    eprintln!("{}", mode_line(seen.job.mode));
 
     let sending = stream;
     let detached = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -722,6 +734,21 @@ fn state_in_words(seen: &Seen) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// BG-8: the person attached is told the mode in words, one for each mode a background
+    /// session can run in, and never the mode a session cannot be in.
+    #[test]
+    fn the_mode_line_names_each_mode_a_background_session_runs_in() {
+        for (mode, words) in [
+            (Mode::Ask, "asking before it acts"),
+            (Mode::AcceptEdits, "accept edits on"),
+            (Mode::Plan, "plan mode on"),
+        ] {
+            let line = mode_line(mode);
+            assert!(line.contains(words), "{line}");
+            assert!(!line.contains("bypass"), "{line}");
+        }
+    }
 
     /// BG-8: the process is started with the word for the mode it runs in, in the directory the
     /// session worked in, and a start that names no mode asks.

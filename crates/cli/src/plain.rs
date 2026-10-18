@@ -97,6 +97,18 @@ fn mode_of(hosting: Option<&crate::host::Hosting>, skip_permissions: bool) -> Pe
     }
 }
 
+/// Whether the vetting prompts are answered from a safe verdict. Never in a background session,
+/// where only the mode the person chose answers in their absence (BG-8): the flag is refused there
+/// and the other two routes are standing answers somebody gave earlier.
+fn standing_vetting(
+    hosted: bool,
+    asked: bool,
+    chosen: Option<bool>,
+    configured: Option<bool>,
+) -> bool {
+    !hosted && bravebot_core::vetting::auto(asked, chosen, configured)
+}
+
 /// The prompt line, the answers, what is said beside the work, and where a background session's
 /// turns are kept.
 type Streams = (
@@ -113,6 +125,7 @@ fn run(
     hosting: Option<crate::host::Hosting>,
 ) -> ExitCode {
     let hosted_as = hosting.as_ref().map(|hosting| hosting.id.clone());
+    let hosted_in = hosting.as_ref().map(|hosting| hosting.mode);
     let inbox = hosting
         .as_ref()
         .map(|hosting| std::sync::Arc::clone(&hosting.inbox));
@@ -234,6 +247,9 @@ fn run(
             .clone()
             .unwrap_or_else(|| config.default_model.clone())
     ));
+    if let Some(mode) = hosted_in {
+        asking.say(&crate::background::mode_line(mode));
+    }
     if let Some((recorded, refused)) = set_aside {
         asking.say(&match refused {
             Some(reason) => t!(
@@ -483,7 +499,10 @@ fn run(
         beside: beside_turns,
         inbox,
         courier,
-        auto_vetting: bravebot_core::vetting::auto(
+        // Not a standing answer in a session nobody is watching: only the mode the person chose
+        // answers there, so the prompts a safe verdict would have answered are held (BG-8).
+        auto_vetting: standing_vetting(
+            hosted,
             bravebot_core::vetting::asked_for(),
             bravebot_session::store::load_vetting(),
             settings.auto_vetting(),
@@ -1608,6 +1627,17 @@ mod tests {
                 false => self.said.remove(0),
             }
         }
+    }
+
+    /// BG-8: a recorded choice or a settings key for automatic vetting answers a foreground session's
+    /// prompts and none of a background session's.
+    #[test]
+    fn a_standing_vetting_answer_does_not_reach_a_hosted_session() {
+        assert!(standing_vetting(false, false, Some(true), None));
+        assert!(standing_vetting(false, false, None, Some(true)));
+        assert!(!standing_vetting(true, false, Some(true), None));
+        assert!(!standing_vetting(true, false, None, Some(true)));
+        assert!(!standing_vetting(true, true, Some(true), Some(true)));
     }
 
     /// BG-8: a hosted session's turns run in the mode its process was started in, whatever the

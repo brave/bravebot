@@ -3080,7 +3080,9 @@ sessions-view-failed = Impossible d'afficher la liste des sessions en arrière-p
 bg-needs-a-prompt = --bg exige l'invite par laquelle commencer
 bg-needs-a-terminal = --bg démarre une session depuis un terminal, et ceci n'en est pas un
 bg-takes-nothing-else = --bg accepte une invite et aucune autre option, et { $flag } ne peut pas atteindre la session qu'il démarre
-bg-bypass-refused = --dangerously-skip-permissions est refusé pour une session en arrière-plan, car personne n'est là pour remarquer ce qu'elle fait
+bg-bypass-refused = --dangerously-skip-permissions est refusé pour une session en arrière-plan, car une session que personne ne surveille ne tourne pas dans un mode qui répond à toutes les questions. Utilisez une exécution unique (-p) pour le demander.
+# Dit à qui est attaché, le mode étant fixé tant que le processus tourne (BG-8).
+bg-mode = Mode : { $mode }. Il le reste tant que la session tourne ; s'attacher ne peut pas le changer.
 bg-not-started = La session en arrière-plan n'a pas démarré.
 bg-started = { $id } est démarrée. Rejoignez-la avec : bravebot attach { $id }
 bg-spawn-failed = Impossible de démarrer la session en arrière-plan : { $problem }
