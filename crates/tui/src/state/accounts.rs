@@ -171,10 +171,14 @@ impl Session {
         let spent = std::mem::take(&mut self.progress);
         self.charge(spent.tokens);
         self.spent_time(spent.timing);
-        self.served_from_cache(
-            spent.cached,
-            spent.tokens.saturating_sub(spent.output_tokens),
-        );
+        // A turn stopped before any request completed reports nothing, and nothing must not zero the
+        // figures of the turn before it.
+        if spent.tokens > 0 {
+            self.served_from_cache(
+                spent.cached,
+                spent.tokens.saturating_sub(spent.output_tokens),
+            );
+        }
         spent.tokens
     }
 

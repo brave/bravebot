@@ -7,6 +7,7 @@
 
 use crate::state::Session;
 use crate::theme;
+use bravebot_aichat::protocol::Cached;
 use bravebot_i18n::t;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -399,23 +400,28 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>) {
     if let Some(rate) = crate::render::cache_hit_rate(session) {
         context.push(row(rate, dim()));
     }
-    if let Some(cached) = session.cached() {
-        context.push(row(
-            t!(
-                panel_cache_read,
-                tokens = crate::status::tokens(cached.read_tokens)
-            )
-            .to_string(),
-            dim(),
-        ));
-        context.push(row(
-            t!(
-                panel_cache_written,
-                tokens = crate::status::tokens(cached.written_tokens)
-            )
-            .to_string(),
-            dim(),
-        ));
+    // A zero is a service that reported nothing as much as a cache that missed, so it draws nothing.
+    if let Some(cached) = session.cached().filter(Cached::any) {
+        if cached.read_tokens > 0 {
+            context.push(row(
+                t!(
+                    panel_cache_read,
+                    tokens = crate::status::tokens(cached.read_tokens)
+                )
+                .to_string(),
+                dim(),
+            ));
+        }
+        if cached.written_tokens > 0 {
+            context.push(row(
+                t!(
+                    panel_cache_written,
+                    tokens = crate::status::tokens(cached.written_tokens)
+                )
+                .to_string(),
+                dim(),
+            ));
+        }
     }
     section(&mut body, t!(panel_context).to_string(), context);
     (body, links)
@@ -903,6 +909,67 @@ mod tests {
                 .any(|row| row.contains(&t!(panel_cache_read, tokens = "").to_string())),
             "a cache figure was drawn before any turn reported one: {none:#?}"
         );
+    }
+
+    fn cache_row_count(session: &Session) -> usize {
+        texts(&lines(session, WIDTH, 30))
+            .iter()
+            .filter(|row| {
+                row.contains(&t!(panel_cache_read, tokens = "").to_string())
+                    || row.contains(&t!(panel_cache_written, tokens = "").to_string())
+            })
+            .count()
+    }
+
+    /// A zero says a service that reported nothing exactly as much as it says a missed cache, so
+    /// it draws nothing, and a write-only turn draws the write alone.
+    #[test]
+    fn a_zero_cache_figure_is_not_drawn() {
+        let mut session = Session::new("none");
+        session.served_from_cache(Cached::default(), 20_000);
+        assert_eq!(cache_row_count(&session), 0);
+
+        session.served_from_cache(
+            Cached {
+                read_tokens: 0,
+                written_tokens: 3_000,
+            },
+            20_000,
+        );
+        let rows = texts(&lines(&session, WIDTH, 30));
+        let written = t!(panel_cache_written, tokens = crate::status::tokens(3_000)).to_string();
+        assert!(rows.iter().any(|row| row.contains(&written)), "{rows:#?}");
+        assert_eq!(cache_row_count(&session), 1, "{rows:#?}");
+    }
+
+    /// A turn stopped or failed before any request completed has reported nothing, so it neither
+    /// draws figures in a session that has none nor zeroes the ones an earlier turn left.
+    #[test]
+    fn a_turn_ended_before_any_request_leaves_the_cache_figures_alone() {
+        let figures = Cached {
+            read_tokens: 12_000,
+            written_tokens: 3_000,
+        };
+        let ending = || bravebot_agent::Ending::Stopped { attempts: None };
+        for fail in [false, true] {
+            let end = |session: &mut Session| {
+                if fail {
+                    session.fail("boom", ending());
+                } else {
+                    session.stopped(None);
+                }
+            };
+            let mut fresh = Session::new("none");
+            end(&mut fresh);
+            assert_eq!(fresh.cached(), None, "fail: {fail}");
+            assert_eq!(fresh.cached_prompt_tokens(), None, "fail: {fail}");
+
+            let mut earlier = Session::new("none");
+            earlier.served_from_cache(figures, 20_000);
+            end(&mut earlier);
+            assert_eq!(earlier.cached(), Some(figures), "fail: {fail}");
+            assert_eq!(earlier.cached_prompt_tokens(), Some(20_000), "fail: {fail}");
+        }
     }
 
     /// A loop spends while nobody is watching, and the panel can be closed or the terminal too
