@@ -19,6 +19,7 @@ checks is a bug against this directory rather than an entry in it.
 | [best-practices/shared-implementation.md](best-practices/shared-implementation.md) | where shared client behavior lives and how callers reuse it |
 | [best-practices/paths.md](best-practices/paths.md) | carrying paths, programs and arguments as bytes so a lossy rendering never decides what is approved, granted or started, and a fix for a spelling that got past a rule covering the file's other names |
 | [best-practices/compatibility.md](best-practices/compatibility.md) | persisted data that earlier versions wrote still reading, or being migrated |
+| [best-practices/carried-grants.md](best-practices/carried-grants.md) | a trust answer, vouch or permission kept for a resume or a later session being restored only for the checkout it was given for, with identity recorded or the cost named in the sessions spec |
 | [best-practices/ui.md](best-practices/ui.md) | what a change to the desktop UI is held to before it lands, and where its logic lives |
 | [best-practices/portability.md](best-practices/portability.md) | a fix or addition making sense for other people on other computers, with no workaround for one setup |
 | [best-practices/usability.md](best-practices/usability.md) | a change asking the person for no command, answer or setup that the feature does not need and no spec clause requires |
