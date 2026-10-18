@@ -33,6 +33,7 @@ use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
 use bravebot_agent::servers::Question;
 use bravebot_aichat::CutOff;
+use bravebot_aichat::protocol::Effort;
 use bravebot_config::mcp::Declaration;
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::todo::{Row, Status};
@@ -414,6 +415,20 @@ pub fn composed(value: Option<&Value>) -> Result<Option<Composed>, Failure> {
         Some(other) => Err(Failure::bad_request(format!(
             "`composed` may only say `consolidation`, not {other}"
         ))),
+    }
+}
+
+/// The effort level a `turn.send` picked: absent keeps the session's pick, `null` clears it.
+///
+/// An unknown word is refused rather than read as no pick, so a misspelt level is not sent as none.
+pub fn effort(value: Option<&Value>) -> Result<Option<Option<Effort>>, Failure> {
+    match value {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(word)) if Effort::named(word).is_some() => Ok(Some(Effort::named(word))),
+        Some(_) => Err(Failure::bad_request(
+            "`effort` must be one of low, medium, high, xhigh or max, or null",
+        )),
     }
 }
 

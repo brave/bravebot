@@ -476,6 +476,53 @@ fn a_run_leaves_the_conversation_as_it_was() {
     assert_eq!(recorded, expected);
 }
 
+#[test]
+fn a_run_sends_the_picked_level_and_the_session_keeps_it() {
+    let scratch = Scratch::new("bridge-manifest-effort");
+    let (endpoint, rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    let started = front.call(
+        "manifest.run",
+        json!({"session": session, "task": TASK, "effort": "high"}),
+    );
+    assert_eq!(started["run"], 1, "{started}");
+    let question = front.question_or_the_end();
+    assert_eq!(question["event"], "manifest.request", "{question}");
+    front.reply("manifest.reply", &session, &question, "decline");
+    front.question_or_the_end();
+
+    let levels = |bodies: &[String]| -> Vec<Value> {
+        bodies
+            .iter()
+            .filter_map(|body| serde_json::from_str::<Value>(body).ok())
+            .filter(|body| body.get("messages").is_some())
+            .map(|body| body["reasoning_effort"].clone())
+            .collect()
+    };
+    let planned: Vec<String> = rounds.try_iter().collect();
+    let planned = levels(&planned);
+    assert!(!planned.is_empty(), "the run asked the planner nothing");
+    assert!(
+        planned.iter().all(|level| level == "high"),
+        "a planning request went without the picked level: {planned:?}"
+    );
+
+    front.send(
+        "turn.send",
+        json!({"session": session, "prompt": "say done"}),
+    );
+    let turn = front.question_or_the_end();
+    assert_eq!(turn["event"], "turn.done", "{turn}");
+    let after: Vec<String> = rounds.try_iter().collect();
+    assert_eq!(
+        levels(&after).last(),
+        Some(&json!("high")),
+        "the turn after the run did not keep its level"
+    );
+}
+
 /// A no runs nothing. What was declined comes back with the error and is recorded, so the plan
 /// can still be read (MANIFEST-10).
 #[test]

@@ -39,6 +39,7 @@ pub(crate) struct Walk {
     pub deadlines: bravebot_agent::exec::Deadlines,
     pub sandbox: bravebot_sandbox::SandboxMode,
     pub model: Option<String>,
+    pub effort: Option<bravebot_aichat::protocol::Effort>,
     /// The session's own handle. Plan mode refuses a plan that writes (MODE-3), and a change made
     /// while the run walks applies to the rest of it (MODE-8).
     pub permission_mode: LiveMode,
@@ -78,6 +79,7 @@ pub(crate) fn walk(walk: Walk) {
         deadlines,
         sandbox,
         model,
+        effort,
         permission_mode,
         workspace,
         task: asked,
@@ -102,6 +104,7 @@ pub(crate) fn walk(walk: Walk) {
         .with_home(bravebot_agent::home::directory())
         .with_cache(bravebot_agent::home::cache())
         .with_model(model)
+        .with_effort(effort)
         .with_attribution(attribution)
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)

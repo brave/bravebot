@@ -208,9 +208,12 @@ fn catalogue(config: &Config, rows: Vec<Model>, warnings: Vec<String>) -> Value 
         .into_iter()
         .filter(|row| seen.insert(row.key.clone()))
         .map(|row| {
+            let reads_effort =
+                row.reads_effort && !bravebot_agent::backend::refused_a_level(config, &row.key);
             json!({ "id": row.key, "name": row.display_name,
             "provider": row.provider.unwrap_or_else(|| "Brave".into()),
             "premium": row.premium, "contextWindow": row.conversation_tokens,
+            "readsEffort": reads_effort,
             "capabilities": badges(&row.advertised) })
         })
         .collect();

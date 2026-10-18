@@ -51,6 +51,7 @@ fn take_turn(
             mcp_requested: Vec::new(),
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
+            effort: None,
             addressing: None,
             prompt: if first {
                 "copy and run"
