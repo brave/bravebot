@@ -618,7 +618,16 @@ pub fn failure_reason(
     use bravebot_aichat::OpenCall;
     let what: std::borrow::Cow<'_, str> = match diagnosis.category {
         Category::Unauthorized => t!(failure_unauthorized).into(),
-        Category::RateLimited => t!(failure_rate_limited).into(),
+        // The wait is a bounded number the network layer parsed, said in minutes rounded up so a
+        // limit that lifts in seconds is not read as one that has already lifted.
+        Category::RateLimited => match diagnosis.retry_after {
+            Some(wait) => t!(
+                failure_rate_limited_for,
+                minutes = wait.as_secs().div_ceil(60).max(1)
+            )
+            .into(),
+            None => t!(failure_rate_limited).into(),
+        },
         Category::Unavailable => t!(failure_unavailable).into(),
         Category::Refused => t!(failure_refused).into(),
         Category::Transport => t!(failure_transport).into(),
@@ -2975,6 +2984,30 @@ mod tests {
                 "the setting that raises it is not in {said}"
             );
         }
+    }
+
+    /// A limit that lifts later says when, in this program's own words and rounded up so a wait of
+    /// seconds is not read as one that has lifted. Without a figure the sentence is the old one.
+    #[test]
+    fn a_rate_limit_says_how_long_the_service_asked_for() {
+        use bravebot_agent::{Category, Diagnosis};
+        use std::time::Duration;
+
+        let said = |wait: Option<Duration>| {
+            let mut diagnosis = Diagnosis::of(Category::RateLimited).with_status(429);
+            if let Some(wait) = wait {
+                diagnosis = diagnosis.asking_for_a_wait_of(wait);
+            }
+            failure_reason(diagnosis, None)
+        };
+
+        assert!(said(None).contains("fewer requests"));
+        assert!(!said(None).contains("wait of about"), "{}", said(None));
+        assert!(said(Some(Duration::from_secs(600))).contains("about 10 minutes"));
+        assert!(said(Some(Duration::from_secs(601))).contains("about 11 minutes"));
+        assert!(said(Some(Duration::from_secs(121))).contains("about 3 minutes"));
+        assert!(said(Some(Duration::from_secs(5))).contains("about 1 minute"));
+        assert!(said(Some(Duration::from_secs(5))).contains("(HTTP 429)"));
     }
 
     /// A reply stopped part way through a call and one stopped while it was thinking want

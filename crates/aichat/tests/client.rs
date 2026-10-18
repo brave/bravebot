@@ -239,6 +239,8 @@ enum Attempt {
     Dropped,
     /// Answer with a status and nothing else.
     Status(u16),
+    /// Answer with a status and a `Retry-After` header of this text.
+    StatusAfter(u16, &'static str),
     /// Answer 200 with this body as JSON.
     Json(String),
     /// Answer properly, with these SSE frames.
@@ -304,6 +306,13 @@ fn serve_attempts(attempts: Vec<Attempt>) -> (String, mpsc::Receiver<Captured>) 
                 Attempt::Status(status) => {
                     let _ = stream.write_all(
                         format!("HTTP/1.1 {status} Nope\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                            .as_bytes(),
+                    );
+                    let _ = stream.flush();
+                }
+                Attempt::StatusAfter(status, after) => {
+                    let _ = stream.write_all(
+                        format!("HTTP/1.1 {status} Nope\r\nRetry-After: {after}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                             .as_bytes(),
                     );
                     let _ = stream.flush();
@@ -2821,5 +2830,253 @@ fn a_whole_reply_gives_up_a_lifetime_a_gateway_refuses_before_the_breakpoints() 
         mark(&second.body),
         Some(serde_json::json!({"type": "ephemeral"})),
         "the retry gave up the breakpoints with the lifetime, or kept the lifetime"
+    );
+}
+
+fn a_reply() -> Attempt {
+    Attempt::Frames(vec![
+        frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hello"}}]}"#),
+        frame("[DONE]"),
+    ])
+}
+
+/// What a person at the keyboard sees of a rate limit that lifts in seconds: the request is held
+/// for as long as the service asked and then goes through, instead of being sent again after the
+/// fixed second and given up on after three of them.
+#[test]
+fn a_rate_limit_is_waited_out_for_as_long_as_the_service_asked() {
+    let (endpoint, received) = serve_attempts(vec![Attempt::StatusAfter(429, "2"), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let completion = client.complete_streaming(&mut policy, &request, |_| {});
+    let waited = started.elapsed();
+
+    assert!(completion.is_ok(), "{completion:?}");
+    assert_eq!(client.attempts(), 2);
+    assert!(
+        waited >= Duration::from_secs(2),
+        "it asked again after {waited:?}, before the two seconds the service asked for"
+    );
+    assert_eq!(received.try_iter().count(), 2);
+}
+
+/// The same wait on the whole-reply path, which has its own loop.
+#[test]
+fn a_rate_limit_is_waited_out_before_a_whole_reply_is_asked_for_again() {
+    let (endpoint, _received) = serve_attempts(vec![
+        Attempt::StatusAfter(429, "2"),
+        Attempt::Json(
+            r#"{"model":"served-model","choices":[{"message":{"content":"hello"}}]}"#.into(),
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let completion = client.complete(&mut policy, &request);
+
+    assert!(completion.is_ok(), "{completion:?}");
+    assert!(started.elapsed() >= Duration::from_secs(2));
+}
+
+/// A wait past the ceiling is not sat through. The failure comes at once, with the figure on it
+/// for the line that tells the person when to ask again.
+#[test]
+fn a_wait_past_the_ceiling_fails_at_once_and_carries_the_figure() {
+    let (endpoint, received) = serve_attempts(vec![Attempt::StatusAfter(429, "600"), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    // A client that did sit through ten minutes is stopped after five seconds, so the failure is an
+    // assertion below and not a test that never ends.
+    let cancel = Cancel::new();
+    let watchdog = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(5));
+        watchdog.cancel();
+    });
+    let mut client = AichatClient::new(&config, &egress).with_cancel(cancel);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let error = client
+        .complete_streaming(&mut policy, &request, |_| {})
+        .expect_err("a ten minute wait was sat through");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(client.attempts(), 1);
+    assert_eq!(received.try_iter().count(), 1, "the request was sent again");
+    match error {
+        ChatError::Egress(bravebot_net::EgressError::Status {
+            status: 429,
+            retry_after: Some(asked),
+            ..
+        }) => assert_eq!(asked, Duration::from_secs(600)),
+        other => panic!("expected the 429 with its wait, got {other:?}"),
+    }
+}
+
+/// A value that is not a figure leaves the doubling from the client's own backoff in force.
+#[test]
+fn a_retry_after_that_does_not_parse_falls_back_to_the_backoff() {
+    let (endpoint, _received) = serve_attempts(vec![
+        Attempt::StatusAfter(429, "when it suits"),
+        Attempt::StatusAfter(503, "-1"),
+        a_reply(),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress).with_backoff(Duration::from_millis(100));
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let completion = client.complete_streaming(&mut policy, &request, |_| {});
+
+    assert!(completion.is_ok(), "{completion:?}");
+    assert_eq!(client.attempts(), 3);
+    let waited = started.elapsed();
+    assert!(
+        waited >= Duration::from_millis(300),
+        "the 100ms then 200ms backoff was skipped: {waited:?}"
+    );
+    assert!(
+        waited < Duration::from_secs(5),
+        "an unread header was waited on: {waited:?}"
+    );
+}
+
+/// Only a 429's header is read as a rate limit's: another status keeps the doubling, and a long
+/// figure on it neither is waited out nor ends the call.
+#[test]
+fn a_retry_after_on_another_status_is_not_waited_for_or_refused() {
+    let (endpoint, _received) = serve_attempts(vec![Attempt::StatusAfter(503, "600"), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress).with_backoff(Duration::from_millis(100));
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let completion = client.complete_streaming(&mut policy, &request, |_| {});
+
+    assert!(completion.is_ok(), "{completion:?}");
+    assert_eq!(client.attempts(), 2);
+    let waited = started.elapsed();
+    assert!(
+        waited < Duration::from_secs(5),
+        "a 503's header was waited on: {waited:?}"
+    );
+}
+
+/// Stopping while the service's wait is running ends it, however long it was asked to be.
+#[test]
+fn a_stop_does_not_wait_out_the_pause_a_service_asked_for() {
+    let (endpoint, _received) = serve_attempts(vec![Attempt::StatusAfter(429, "100"), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let cancel = Cancel::new();
+    let mut client = AichatClient::new(&config, &egress).with_cancel(cancel.clone());
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let error = client
+        .complete_streaming(&mut policy, &request, |progress| {
+            if progress.attempt > 1 {
+                cancel.cancel();
+            }
+        })
+        .expect_err("a stopped request produced a completion");
+
+    assert!(matches!(error, ChatError::Cancelled), "{error}");
+    assert_eq!(client.attempts(), 1);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// A service that says no wait is needed is still given the pause the client would have taken, so a
+/// header of zero cannot turn the retries into a burst.
+#[test]
+fn a_retry_after_of_zero_still_takes_the_backoff() {
+    let (endpoint, _received) = serve_attempts(vec![Attempt::StatusAfter(429, "0"), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress).with_backoff(Duration::from_millis(400));
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let completion = client.complete_streaming(&mut policy, &request, |_| {});
+
+    assert!(completion.is_ok(), "{completion:?}");
+    assert!(
+        started.elapsed() >= Duration::from_millis(400),
+        "a zero wait was taken at its word: {:?}",
+        started.elapsed()
     );
 }

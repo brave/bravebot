@@ -5617,6 +5617,7 @@ mod tests {
                 BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
                     url: "https://example.invalid/".into(),
                     status,
+                    retry_after: None,
                 }))
                 .counted(3, None, None),
             )

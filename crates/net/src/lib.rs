@@ -39,7 +39,7 @@ use bravebot_core::label::Label;
 use bravebot_core::policy::{Denial, Policy};
 use bravebot_core::value::Labelled;
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Response bodies are truncated past this size.
 pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -137,7 +137,17 @@ pub enum EgressError {
     /// from which of the transport's bounds ended the read, never from anything a server sent.
     OutOfTime { url: String },
     /// The server returned a non-success status.
-    Status { url: String, status: u16 },
+    Status {
+        url: String,
+        status: u16,
+        /// How long the server asked for the next request to wait, where its `Retry-After` header
+        /// parsed.
+        ///
+        /// A number of seconds read out of the header and clamped to [`LONGEST_RETRY_AFTER`],
+        /// never the header's text. It only ever sets a timer, so a server that writes nonsense
+        /// there gets the caller's own backoff and one that writes a huge figure gets an hour.
+        retry_after: Option<Duration>,
+    },
     /// The caller asked to stop while the request was still being waited on.
     Stopped { url: String },
 }
@@ -168,7 +178,7 @@ impl fmt::Display for EgressError {
             Self::OutOfTime { url } => {
                 write!(f, "the reply from {url} ran past the time it was given")
             }
-            Self::Status { url, status } => write!(f, "{url} returned HTTP {status}"),
+            Self::Status { url, status, .. } => write!(f, "{url} returned HTTP {status}"),
             Self::Stopped { url } => write!(f, "the request to {url} was stopped"),
         }
     }
@@ -219,7 +229,15 @@ impl EgressError {
             Self::MissingLocation { .. } => Self::MissingLocation { url },
             Self::Stopped { .. } => Self::Stopped { url },
             Self::OutOfTime { .. } => Self::OutOfTime { url },
-            Self::Status { status, .. } => Self::Status { url, status },
+            Self::Status {
+                status,
+                retry_after,
+                ..
+            } => Self::Status {
+                url,
+                status,
+                retry_after,
+            },
             // The detail here is this crate's own sentence about a shape, so it survives.
             Self::InvalidUrl { detail, .. } => Self::InvalidUrl { url, detail },
             Self::InsecureRedirect { .. } => Self::InsecureRedirect { url },
@@ -237,6 +255,70 @@ impl EgressError {
             },
         }
     }
+}
+
+/// The longest wait a `Retry-After` header is taken to ask for.
+///
+/// Whatever a server writes is clamped to this, so the number a caller sets a timer from is bounded
+/// by this program rather than by the server. The caller decides how much of it to wait out.
+pub const LONGEST_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
+
+/// The wait a `Retry-After` value asks for, as of `now`.
+///
+/// Either whole seconds or an HTTP date in the IMF-fixdate form (`Sun, 06 Nov 1994 08:49:37 GMT`),
+/// the two forms RFC 9110 gives it. A date already past asks for no wait. Anything else, including
+/// a sign, a fraction, or one of the obsolete date forms, is not a figure and reads as absent.
+fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
+    let value = value.trim();
+    let asked = if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) {
+        // A figure too large for a u64 is still a long wait, so it clamps rather than vanishes.
+        Duration::from_secs(value.parse().unwrap_or(u64::MAX))
+    } else {
+        let at = UNIX_EPOCH + Duration::from_secs(http_date_seconds(value)?);
+        at.duration_since(now).unwrap_or(Duration::ZERO)
+    };
+    Some(asked.min(LONGEST_RETRY_AFTER))
+}
+
+/// Seconds since the epoch of an IMF-fixdate, or `None` where `value` is not one.
+fn http_date_seconds(value: &str) -> Option<u64> {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let parts: Vec<&str> = value.split(' ').collect();
+    let [day_name, day, month, year, time, zone] = parts[..] else {
+        return None;
+    };
+    if !DAYS.iter().any(|d| day_name.strip_suffix(',') == Some(d)) || zone != "GMT" {
+        return None;
+    }
+    let day: u64 = day.parse().ok().filter(|d| (1..=31).contains(d))?;
+    let month = MONTHS.iter().position(|m| *m == month)? as u64 + 1;
+    let year: u64 = year.parse().ok().filter(|y| (1970..=9999).contains(y))?;
+    let clock: Vec<u64> = time
+        .split(':')
+        .map(|n| n.parse().ok())
+        .collect::<Option<_>>()?;
+    let [hour, minute, second] = clock[..] else {
+        return None;
+    };
+    if hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    // Days from the epoch to the civil date, counting March as the first month so the leap day
+    // is the last day of the year.
+    let (y, m) = if month <= 2 {
+        (year - 1, month + 9)
+    } else {
+        (year, month - 3)
+    };
+    let era = y / 400;
+    let year_of_era = y % 400;
+    let day_of_year = (153 * m + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
 /// Statuses a server uses to say "not now" rather than "no".
@@ -769,7 +851,11 @@ impl Egress {
             }
 
             if !(200..300).contains(&status) {
-                return Err(EgressError::Status { url, status });
+                return Err(EgressError::Status {
+                    url,
+                    status,
+                    retry_after: response.4,
+                });
             }
 
             return Ok((status, response.2, response.3));
@@ -831,12 +917,14 @@ impl Egress {
     }
 }
 
-/// What one hop answers with: status, location, content-type, and the body reader.
+/// What one hop answers with: status, location, content-type, the body reader, and the wait the
+/// server asked for.
 type Sent = (
     u16,
     Option<String>,
     Option<String>,
     Box<dyn std::io::Read + Send>,
+    Option<Duration>,
 );
 
 /// One hop, on whichever thread calls it.
@@ -921,12 +1009,15 @@ fn send(
     };
     let location = header("location");
     let content_type = header("content-type");
+    let retry_after =
+        header("retry-after").and_then(|value| retry_after(&value, SystemTime::now()));
 
     Ok((
         status,
         location,
         content_type,
         Box::new(response.into_body().into_reader()),
+        retry_after,
     ))
 }
 
@@ -1439,6 +1530,78 @@ mod tests {
         );
     }
 
+    /// `Retry-After` is whole seconds or an HTTP date, bounded, and a figure only: a value that
+    /// is neither is absent, so the caller's own backoff applies rather than a guess.
+    #[test]
+    fn a_retry_after_is_read_as_seconds_or_a_date_and_bounded() {
+        let now = UNIX_EPOCH + Duration::from_secs(784_111_777); // Sun, 06 Nov 1994 08:49:37 GMT
+        let read = |value: &str| retry_after(value, now);
+
+        assert_eq!(read("2"), Some(Duration::from_secs(2)));
+        assert_eq!(read(" 120 "), Some(Duration::from_secs(120)));
+        assert_eq!(read("0"), Some(Duration::ZERO));
+        assert_eq!(
+            read("Sun, 06 Nov 1994 08:50:37 GMT"),
+            Some(Duration::from_secs(60)),
+            "a date is the wait until it"
+        );
+        assert_eq!(
+            read("Sun, 06 Nov 1994 08:49:00 GMT"),
+            Some(Duration::ZERO),
+            "a date already past asks for no wait"
+        );
+        // Larger than anything a caller should set a timer from, including one too large to parse.
+        assert_eq!(read("86400"), Some(LONGEST_RETRY_AFTER));
+        assert_eq!(read("99999999999999999999999"), Some(LONGEST_RETRY_AFTER));
+
+        for not_a_figure in [
+            "",
+            "soon",
+            "-5",
+            "+5",
+            "1.5",
+            "2 seconds",
+            "Sunday, 06-Nov-94 08:50:37 GMT",
+            "Sun Nov  6 08:50:37 1994",
+            "Sun, 06 Nov 1994 08:50:37 PST",
+            "Sun, 31 Foo 1994 08:50:37 GMT",
+            "Sun, 06 Nov 1994 25:50:37 GMT",
+        ] {
+            assert_eq!(
+                read(not_a_figure),
+                None,
+                "{not_a_figure:?} was taken as a wait"
+            );
+        }
+    }
+
+    /// The header reaches the failure as a number, from the answer to the request that was sent.
+    #[test]
+    fn a_status_carries_the_wait_the_server_asked_for_and_nothing_it_wrote() {
+        let status = |header: &str| {
+            let (port, _) = serve_counting(vec![format!(
+                "HTTP/1.1 429 Too Many Requests\r\n{header}Content-Length: 0\r\nConnection: close\r\n\r\n"
+            )]);
+            let outcome = fetched(
+                &Egress::new(),
+                Request::get(format!("http://127.0.0.1:{port}/")),
+            );
+            match outcome {
+                Err(EgressError::Status {
+                    status: 429,
+                    retry_after,
+                    ..
+                }) => retry_after,
+                other => panic!("expected a 429, got {other:?}"),
+            }
+        };
+
+        assert_eq!(status("Retry-After: 7\r\n"), Some(Duration::from_secs(7)));
+        assert_eq!(status("Retry-After: 999999\r\n"), Some(LONGEST_RETRY_AFTER));
+        assert_eq!(status("Retry-After: later\r\n"), None);
+        assert_eq!(status(""), None);
+    }
+
     /// A server saying "not now" is temporary; a server saying "no" is not.
     #[test]
     fn only_the_statuses_that_mean_not_now_are_worth_another_attempt() {
@@ -1446,6 +1609,7 @@ mod tests {
             EgressError::Status {
                 url: "https://example.com".into(),
                 status,
+                retry_after: None,
             }
             .is_transient()
         };
@@ -1468,6 +1632,7 @@ mod tests {
         let refused = EgressError::Status {
             url: "https://example.com/".to_string(),
             status: 503,
+            retry_after: None,
         };
         assert!(failure_fields("https://example.com/", &refused, Duration::ZERO).is_some());
     }

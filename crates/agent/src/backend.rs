@@ -327,13 +327,27 @@ fn of_egress(error: &bravebot_net::EgressError) -> Diagnosis {
         | EgressError::Stopped { .. } => Diagnosis::of(Category::Transport),
         // The service answered and was still writing: nothing about the connection to check.
         EgressError::OutOfTime { .. } => Diagnosis::of(Category::Incomplete),
-        EgressError::Status { status, .. } => Diagnosis::of(match status {
-            401 | 403 => Category::Unauthorized,
-            429 => Category::RateLimited,
-            408 | 500..=599 => Category::Unavailable,
-            _ => Category::Refused,
-        })
-        .with_status(*status),
+        EgressError::Status {
+            status,
+            retry_after,
+            ..
+        } => {
+            let diagnosis = Diagnosis::of(match status {
+                401 | 403 => Category::Unauthorized,
+                429 => Category::RateLimited,
+                408 | 500..=599 => Category::Unavailable,
+                _ => Category::Refused,
+            })
+            .with_status(*status);
+            match retry_after {
+                // Only a wait the client would not sit through: one it did sit through is over by
+                // the time the failure is told, and saying it would overstate how long to wait.
+                Some(wait) if *status == 429 && *wait > bravebot_aichat::LONGEST_WAIT => {
+                    diagnosis.asking_for_a_wait_of(*wait)
+                }
+                _ => diagnosis,
+            }
+        }
     }
 }
 
@@ -1750,6 +1764,7 @@ mod tests {
         let refused_credential = bravebot_net::EgressError::Status {
             url: "https://ai-chat.example/v1".to_string(),
             status: 401,
+            retry_after: None,
         };
         assert!(!BackendError::from(ChatError::Egress(refused_credential)).is_unreachable());
         assert!(!BackendError::from(ChatError::NoContent).is_unreachable());
@@ -1872,6 +1887,7 @@ mod tests {
         let refused = BackendError::from(BedrockError::Egress(bravebot_net::EgressError::Status {
             url: "https://bedrock-runtime.example/model/invoke".into(),
             status: 403,
+            retry_after: None,
         }));
         let why = refused.diagnosis();
         assert_eq!(why.category, Category::Unauthorized, "{why:?}");
@@ -1898,6 +1914,7 @@ mod tests {
             BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
                 url: "https://service.example/v1/chat/completions".into(),
                 status,
+                retry_after: None,
             }))
             .diagnosis()
         };
@@ -1906,6 +1923,33 @@ mod tests {
         assert_eq!(of_status(503).category, Category::Unavailable);
         assert_eq!(of_status(400).category, Category::Refused);
         assert_eq!(of_status(503).status, Some(503));
+    }
+
+    /// The wait a service asked for on a rate limit is kept as a number on the diagnosis when it
+    /// is longer than the client waits, and on no other status: a 503's header is a timer for a retry, not a limit to tell a person about.
+    #[test]
+    fn a_rate_limit_keeps_the_wait_the_service_asked_for() {
+        let of = |status: u16, retry_after: Option<std::time::Duration>| {
+            BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
+                url: "https://service.example/v1/chat/completions".into(),
+                status,
+                retry_after,
+            }))
+            .diagnosis()
+            .retry_after
+        };
+        let wait = std::time::Duration::from_secs(600);
+        assert_eq!(of(429, Some(wait)), Some(wait));
+        assert_eq!(of(429, None), None);
+        assert_eq!(of(429, Some(std::time::Duration::ZERO)), None);
+        assert_eq!(of(503, Some(wait)), None);
+        // A wait the client sat through is not told as one still to come.
+        let ceiling = bravebot_aichat::LONGEST_WAIT;
+        assert_eq!(of(429, Some(ceiling)), None);
+        assert_eq!(
+            of(429, Some(ceiling + std::time::Duration::from_secs(1))),
+            Some(ceiling + std::time::Duration::from_secs(1))
+        );
     }
 
     /// A hop refused for dropping TLS is this process declining to send, not a request that did
@@ -1992,6 +2036,7 @@ mod tests {
         let status = |status: u16| bravebot_net::EgressError::Status {
             url: "https://service.example/v1".to_string(),
             status,
+            retry_after: None,
         };
         for refused in [400, 422] {
             assert!(

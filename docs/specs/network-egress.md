@@ -142,10 +142,18 @@ however long its reply was going to be.
 A connection that gave out is worth another attempt. A refusal is not, and only the statuses that
 mean the server is temporarily unable are treated as retryable.
 
+A `Retry-After` header on such an answer is read as whole seconds or an IMF-fixdate HTTP date and
+carried on the failure as a duration of at most one hour. A value that is neither, a date already
+past aside, is absent. It is a number that only sets a timer ([BACKEND-54](backends.md#BACKEND-54)):
+the header's text is never kept or shown, and the retryable set above is decided from the status
+alone.
+
 **Why.** Retrying a refusal turns one denied request into several.
 
 `verified-by: bravebot_net::lib::a_connection_that_gave_out_is_worth_another_attempt_and_a_refusal_is_not`
 `verified-by: bravebot_net::lib::only_the_statuses_that_mean_not_now_are_worth_another_attempt`
+`verified-by: bravebot_net::lib::a_retry_after_is_read_as_seconds_or_a_date_and_bounded`
+`verified-by: bravebot_net::lib::a_status_carries_the_wait_the_server_asked_for_and_nothing_it_wrote`
 `verified-by: bravebot_net::egress::a_non_success_status_is_an_error`
 
 <a id="NET-7"></a>
