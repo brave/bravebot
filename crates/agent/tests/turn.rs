@@ -15241,7 +15241,8 @@ fn a_line_that_failed_before_its_program_started_leaves_the_change_reported_as_n
     assert!(
         bodies
             .iter()
-            .any(|body| body.contains("did not run") && body.contains("could not be opened")),
+            .any(|body| body.contains("may have run in part")
+                && body.contains("could not be opened")),
         "the line did not fail on its redirection, so this is not the case under test"
     );
     assert!(
@@ -37375,7 +37376,9 @@ fn a_checkout_is_kept_when_a_line_in_it_failed_after_a_stage_started() {
         None,
     );
     assert!(
-        asked.iter().any(|body| body.contains("did not run")),
+        asked
+            .iter()
+            .any(|body| body.contains("may have run in part")),
         "the line did not fail after starting, so this is not the case under test"
     );
     assert_eq!(
