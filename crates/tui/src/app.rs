@@ -7475,6 +7475,29 @@ mod tests {
         );
     }
 
+    /// BACKEND-7: where the listing for the addressed model cannot be read, the turn takes the
+    /// default budget and not the session model's window, which describes a different model. The
+    /// regression it rejects is `config_for_turn` returning early with the session's window.
+    #[test]
+    fn a_turn_addressed_to_a_model_whose_listing_fails_does_not_keep_the_session_window() {
+        use bravebot_config::env_var;
+        let (endpoint, _asked) = a_listing_server("this is not a roster");
+        let mut config = Config::from_lookup(|name| match name {
+            env_var::ENDPOINT => Some(endpoint.clone()),
+            env_var::KEY_ID => Some("a-key-id".into()),
+            env_var::SIGNING_KEY => Some("a-signing-key".into()),
+            _ => None,
+        })
+        .expect("a configuration");
+        assert!(config.adopt_window(Some(131_072)));
+        assert!(list_models(&config, Some("other-model")).is_err());
+
+        let turn = config_for_turn(&config, Some("other-model"));
+
+        assert_eq!(turn.context_budget, bravebot_config::DEFAULT_CONTEXT_BUDGET);
+        assert_eq!(config.context_budget, 131_072);
+    }
+
     /// A name no roster describes: a model withdrawn since it was chosen, or one a settings file
     /// names and no listing offers. The default stands rather than the window of whichever entry
     /// happened to be first, and the run says nothing about having looked.

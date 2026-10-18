@@ -21,13 +21,12 @@ pub fn list(config: &Config) -> Value {
 /// budget is the default until this says otherwise. A model whose row states no window, or that no
 /// row describes, or a listing that could not be fetched, leaves the default in place.
 pub fn adopt_window(config: &mut Config, model: Option<&str>) {
-    let in_force = model.unwrap_or(&config.default_model).to_string();
-    let advertised = roster(config)
-        .0
-        .iter()
-        .find(|row| row.key == in_force)
-        .and_then(|row| row.conversation_tokens);
-    config.adopt_window(advertised);
+    let rows = roster(config).0;
+    config.adopt_window_of_model_in_force(model, |in_force| {
+        rows.iter()
+            .find(|row| row.key == in_force)
+            .and_then(|row| row.conversation_tokens)
+    });
 }
 
 /// The rows every service this window reaches offers, and what could not be asked of the ones that
