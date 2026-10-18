@@ -237,10 +237,12 @@ fn anchors(profile: Option<&std::path::Path>, folds_case: bool) -> Anchors {
 ///
 /// The links are followed as the rules are read, so a link made or repointed later in the session
 /// is not followed until they are read again (PERM-12). Where `workspace` cannot be resolved, a
-/// rule about the workspace is left as written. So is a rule whose spelling passes through no link:
-/// a full path to a project file names it in the other namespace, which PERM-3 keeps apart.
+/// rule about the workspace is left as written. A rule about a full path that passes through no
+/// link is also given the workspace-relative spelling where the path is inside the workspace, since
+/// the file tools ask about a project file by that name.
 fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
     let root = workspace.canonicalize().ok();
+    let folds_case = crate::workspace::volume_folds_case(workspace);
     permissions.follow_links(|prefix| {
         let named = match bravebot_core::trust::is_absolute_key(prefix) {
             true => std::path::PathBuf::from(
@@ -254,7 +256,13 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
                 .is_ok_and(|entry| entry.is_symlink())
         });
         if !through_a_link {
-            return None;
+            // A full path to a place inside the project is also that place under the name the
+            // file tools ask by, so a rule about `~/.ssh` covers `.ssh` in a session opened in
+            // the home directory.
+            return match (&root, bravebot_core::trust::is_absolute_key(prefix)) {
+                (Some(root), true) => beneath(&named, root, folds_case),
+                _ => None,
+            };
         }
         let reached = crate::workspace::destination(&named)?;
         // Named as a gate holds it: relative to the root for a file in the project, in full for one
@@ -265,6 +273,28 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
         };
         Some(held.to_string_lossy().into_owned())
     });
+}
+
+/// `path` relative to `root` where it lies at or under it, comparing names folded where the volume
+/// folds case, since the key a rule's prefix arrives in was folded the same way.
+fn beneath(path: &std::path::Path, root: &std::path::Path, folds_case: bool) -> Option<String> {
+    let fold = |name: &std::ffi::OsStr| {
+        let name = name.to_string_lossy();
+        match folds_case {
+            true => bravebot_core::trust::fold_case(&name),
+            false => name.into_owned(),
+        }
+    };
+    let mut names = path.components();
+    for held in root.components() {
+        if fold(names.next()?.as_os_str()) != fold(held.as_os_str()) {
+            return None;
+        }
+    }
+    let relative: Vec<_> = names
+        .map(|name| name.as_os_str().to_string_lossy())
+        .collect();
+    Some(relative.join("/"))
 }
 
 /// A full path keyed from `/` spelled as the host opens it: `/C:/x` is `C:/x` where a backslash
@@ -1265,23 +1295,25 @@ mod tests {
         );
     }
 
-    /// PERM-3: a full path with no link in it names a project file in the other namespace, so it is
-    /// not added under the name the project holds the file by.
+    /// PERM-7: a full path with no link in it covers a project file under the name the file tools
+    /// ask by as well, and a place outside the project only by its full path.
     #[cfg(unix)]
     #[test]
-    fn a_full_path_rule_with_no_link_in_it_says_nothing_about_a_project_file() {
+    fn a_full_path_rule_with_no_link_in_it_covers_a_project_file_by_its_relative_name() {
         let root = project_with_a_linked_directory("permissions-full-path-without-a-link");
+        let outside = root.parent().unwrap().join("outside");
         let settings = Settings::parse(&format!(
-            r#"{{"permissions": {{"deny": ["Read(/{}/real/**)"]}}}}"#,
-            root.display()
+            r#"{{"permissions": {{"deny": ["Read(/{}/real/**)"], "ask": ["Edit(/{}/**)"]}}}}"#,
+            root.display(),
+            outside.display()
         ));
         let (permissions, rejected) = from_settings(&settings, None, &root);
         assert!(rejected.is_empty(), "{rejected:?}");
 
         assert_eq!(
             permissions.for_path(Subject::Read, "real/secret.txt"),
-            Decision::Unmatched,
-            "a full path with no link in it reached into the project's namespace"
+            Decision::Ruled(Ruling::Deny),
+            "a full path to a project file did not cover the name the file tools ask by"
         );
         assert_eq!(
             permissions.for_path(
@@ -1289,6 +1321,37 @@ mod tests {
                 &root.join("real").join("secret.txt").display().to_string()
             ),
             Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "vendor/real/secret.txt"),
+            Decision::Unmatched,
+            "the relative spelling floated to every directory of that name"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "outside/notes.md"),
+            Decision::Unmatched,
+            "a rule about a place outside the project covered a project name"
+        );
+        assert_eq!(permissions.len(), 2);
+    }
+
+    /// PERM-7: in a session opened in the home directory, a `~/` rule covers the file as `.ssh/key`.
+    #[cfg(unix)]
+    #[test]
+    fn a_home_rule_covers_the_relative_name_in_a_session_opened_in_the_home_directory() {
+        let root = project_with_a_linked_directory("permissions-home-is-the-workspace");
+        let settings = Settings::parse(r#"{"permissions": {"deny": ["Read(~/real/**)"]}}"#);
+        let (permissions, rejected) = from_settings(&settings, Some(&root), &root);
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        assert_eq!(
+            permissions.for_path(Subject::Read, "real/secret.txt"),
+            Decision::Ruled(Ruling::Deny),
+            "a home rule missed the file when the session was opened in the home directory"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "notes.md"),
+            Decision::Unmatched
         );
     }
 

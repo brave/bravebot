@@ -17070,6 +17070,43 @@ mod tests {
             assert_eq!(refusal, denied_by_rule("~/secret.txt", None));
         }
 
+        /// PERM-7: a `~/` rule in the person's settings refuses the file tools' call for the same
+        /// file by its workspace-relative name when the session is opened in the home directory.
+        #[test]
+        fn a_home_rule_refuses_the_relative_name_in_a_session_opened_in_the_home_directory() {
+            let scratch = Scratch::new("deny-home-relative-name");
+            let home = scratch.path.join("home");
+            std::fs::create_dir_all(home.join("secrets")).unwrap();
+            std::fs::write(home.join("secrets").join("canary.txt"), "CANARY\n").unwrap();
+            let home = home.canonicalize().unwrap();
+            let workspace = Workspace::new(&home)
+                .expect("workspace")
+                .with_home(Some(home.clone()));
+            let settings = bravebot_config::Settings::parse(
+                "{\"permissions\": {\"deny\": [\"Read(~/secrets/**)\"]}}",
+            );
+            let (permissions, rejected) =
+                crate::permissions::from_settings(&settings, Some(&home), &home);
+            assert!(rejected.is_empty(), "{rejected:?}");
+
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "read a file");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_permissions(permissions);
+
+            let refusal =
+                refuse_denied_path(&mut policy, &workspace, Purpose::Read, "secrets/canary.txt")
+                    .expect_err("the rule covers the file");
+            assert_eq!(refusal, denied_by_rule("secrets/canary.txt", None));
+        }
+
         /// PERM-7: a hard link has no name a rule spells, so where the walk for the file's other
         /// names cannot finish, a call is refused while any rule about a path is in force. The
         /// rule here is an `Edit` rule, which the refusal of a write has to honour as well as a
