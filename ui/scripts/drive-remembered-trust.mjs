@@ -4,7 +4,7 @@
 // remember. Real Electron and bridge, across two launches with one home; only the file picker is
 // substituted.
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inheritedEnv, launchWorld } from './drive-world.mjs'
@@ -44,11 +44,18 @@ try {
     assert.equal(await asked.locator('[data-test="trust-remember"]').count(), 0, 'there is no separate answer to remember')
     record = (await asked.locator('.aside code').innerText()).trim()
     assert.ok(record.startsWith(join(home, '.bravebot', 'trusted')), `the question names the record: ${record}`)
+    // RUN-5: the question says what a yes also grants, in the words the terminal draws.
+    assert.match(
+      await asked.locator('[data-test="trust-confined-lines"]').innerText(),
+      /without asking when the sandbox confines it/,
+      'the question says that confined lines run without asking',
+    )
     await page.screenshot({ path: `${shots}/remembered-1-offered.png` })
     await yes.click()
     await asked.waitFor({ state: 'hidden' })
     await banner(page).waitFor()
     assert.ok(existsSync(record), 'a yes wrote the record it named')
+    assert.match(readFileSync(record, 'utf8'), /"confined_lines":true/, 'the entry says the question said so')
     await page.screenshot({ path: `${shots}/remembered-2-kept.png` })
   })
 

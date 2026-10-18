@@ -5,6 +5,8 @@ interface Props {
   directory: string
   /** The file a yes would be kept in, or null where the answer cannot be kept (TRUST-23). */
   keeping: string | null
+  /** What a yes also grants beyond the files (RUN-5), in the bridge's words, or null where the question says nothing of it. */
+  confinedLines: string | null
   onAnswer: (trusted: boolean) => void
 }
 
@@ -19,7 +21,7 @@ interface Props {
  * that covers and where it is written, since nobody can endorse a record they were not shown. A no
  * is never kept.
  */
-export function TrustPrompt({ directory, keeping, onAnswer }: Props): React.JSX.Element {
+export function TrustPrompt({ directory, keeping, confinedLines, onAnswer }: Props): React.JSX.Element {
   return (
     <Modal title="Project trust" size="sm" className="trust" subtitle="Do you trust this directory?" subtitleId="trust-title" actions={<>
       <Button kind="plain-faint" className="modal-leading" onClick={() => onAnswer(false)} data-test="trust-decline">
@@ -36,6 +38,12 @@ export function TrustPrompt({ directory, keeping, onAnswer }: Props): React.JSX.
           <p><strong>Trust it</strong> and files here are read normally, so ordinary work
             proceeds without a prompt for every edit.</p>
         </li>
+        {confinedLines && (
+          <li data-test="trust-confined-lines">
+            <Icon name="shield-done" />
+            <p>{confinedLines}</p>
+          </li>
+        )}
         <li>
           <Icon name="eye-off" />
           <p><strong>Decline</strong> and nothing here is trusted. The agent can still work on

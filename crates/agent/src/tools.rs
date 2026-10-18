@@ -7668,8 +7668,17 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     let names: Vec<&'static str> = requested.iter().map(|request| request.name()).collect();
     // How the sandbox holds the line, said from the compiled steps and the session's own settings:
     // the person's trust of the directory answers only for a line it holds (RUN-5).
-    let containment = confinement
+    //
+    // Under an open network no stage is held as the session stands, so the line is judged as it
+    // would run with the network closed for this line only. It runs that way only if the person's
+    // trust of the directory is what lets it through, below.
+    let closed_for_the_line = confinement
         .as_ref()
+        .filter(|confinement| !confinement.network_is_closed())
+        .map(crate::confine::Confinement::closed_for_the_line);
+    let containment = closed_for_the_line
+        .as_ref()
+        .or(confinement.as_ref())
         .map_or(Containment::Unknown, |confinement| {
             confinement.holds(&plan.steps(), &plan.directory)
         });
@@ -7677,6 +7686,16 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         true => policy.plan_needs_approval_unconfined(),
         false => policy.plan_needs_approval_held(&plan, &names, containment),
     };
+    // A line the person's trust of the directory let through runs as it was judged: with the
+    // network closed for this line, where the session's is open. A line any other road answered
+    // keeps the network it was approved with.
+    if !asking
+        && !unconfined
+        && policy.answered_by_directory_trust()
+        && let Some(closed) = closed_for_the_line
+    {
+        confinement = Some(closed);
+    }
     // Whether the record is what stopped the question. Read where the result is quarantined: the
     // advice about vouching is advice about a prompt, and no prompt will return here for this line
     // until somebody deletes the entry.

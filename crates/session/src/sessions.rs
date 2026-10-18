@@ -339,6 +339,16 @@ pub struct Record {
     /// as an empty map: nothing recorded is not the same as nothing trusted.
     #[serde(default)]
     pub trust: Option<Vec<StoredRule>>,
+    /// The directory the yes behind [`Record::trust`] said confined `run` lines may start in
+    /// without being asked ([RUN-5]), as the map names it, or `None` where no yes did.
+    ///
+    /// Kept with the rules because it is the same answer from the same person, and read back under
+    /// the same condition: only by a resume in that directory ([`TrustStore::restore_confined_lines`]).
+    /// A record from before the question said so has none, which is what makes it ask.
+    ///
+    /// [RUN-5]: ../../../docs/specs/tools/run.md
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confined_lines_in: Option<String>,
     /// Which commands this session's user vouched for: resolved path and exact arguments.
     ///
     /// Belongs to the session for the same reason the trust map does: vouching for a command is a
@@ -689,6 +699,10 @@ pub struct StoredRewind {
     /// rewind that put back the live map instead would keep a permission the turn granted.
     #[serde(default)]
     pub trust: Option<Vec<StoredRule>>,
+    /// The directory the yes said confined lines run without asking in before the turn, written
+    /// the way [`Record::confined_lines_in`] is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confined_lines_in: Option<String>,
     /// The programs vouched for before the turn.
     #[serde(default)]
     pub programs: Vec<StoredCommand>,
@@ -834,6 +848,7 @@ impl StoredRewind {
             spend: snapshot.spend.clone(),
             timing: snapshot.timing.clone(),
             trust: Some(stored_rules(&snapshot.trust)),
+            confined_lines_in: snapshot.trust.confined_lines_root().map(str::to_string),
             programs: stored_programs(&snapshot.programs, project),
             title: snapshot.title.clone(),
             wrote: snapshot.was_wrote,
@@ -918,7 +933,8 @@ impl StoredRewind {
                 }
             }
         }
-        let trust = restored_rules(root, self.trust.as_deref().unwrap_or_default());
+        let mut trust = restored_rules(root, self.trust.as_deref().unwrap_or_default());
+        trust.restore_confined_lines(self.confined_lines_in.as_deref());
 
         RewindPoint {
             coverage: bravebot_agent::rewind::RewindCoverage::restored(gaps),
@@ -1428,7 +1444,9 @@ impl Record {
     /// full and comes back as it was written.
     pub fn trust_map(&self, root: impl AsRef<std::path::Path>) -> Option<TrustStore> {
         let rules = self.trust.as_ref()?;
-        Some(restored_rules(root.as_ref(), rules))
+        let mut trust = restored_rules(root.as_ref(), rules);
+        trust.restore_confined_lines(self.confined_lines_in.as_deref());
+        Some(trust)
     }
 
     /// The programs this session's user vouched for.
@@ -2077,6 +2095,7 @@ impl Handle {
                 .map(|(turn, rows)| (*turn, rows.iter().map(StoredTask::of).collect()))
                 .collect(),
             trust: Some(stored_rules(standing.trust)),
+            confined_lines_in: standing.trust.confined_lines_root().map(str::to_string),
             programs: stored_programs(standing.programs, &self.project),
             directories: standing
                 .directories
@@ -2165,6 +2184,7 @@ impl Handle {
         record.model = Some(next.model.to_string());
         record.conversation = next.conversation.clone();
         record.trust = Some(stored_rules(next.trust));
+        record.confined_lines_in = next.trust.confined_lines_root().map(str::to_string);
         // Read before the points are replaced: an older record carries the warning only in them.
         let warned = record.server_children_may_run();
         record.rewind = next
@@ -4467,6 +4487,7 @@ mod tests {
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
             trust: None,
+            confined_lines_in: None,
             programs: Vec::new(),
             title: "a session".to_string(),
             wrote: true,
@@ -4495,6 +4516,7 @@ mod tests {
             timing: BTreeMap::new(),
             todos: BTreeMap::new(),
             trust: None,
+            confined_lines_in: None,
             programs: Vec::new(),
             directories: Vec::new(),
             build: None,

@@ -461,6 +461,10 @@ impl Bridge {
             json!({
                 "directory": open.project.display().to_string(),
                 "keeping": open.keeping.as_ref().map(|(store, _)| store.path().display().to_string()),
+                // What a yes grants beyond the files (RUN-5), in the words every front end shows.
+                // A window that shows it answers with `confinedLines`, and a client that does not
+                // is not taken to have said it.
+                "confinedLines": trusted::confined_lines_notice(),
             }),
         ));
     }
@@ -1658,6 +1662,16 @@ impl Bridge {
             .and_then(Value::as_bool)
             .ok_or_else(|| Failure::bad_request("`trusted` must be a boolean"))?;
 
+        // Whether the question the person answered said that confined lines run without asking
+        // (RUN-5). Said by the client that drew it, which is the only one that knows: an absent
+        // field is a question that did not, so a client that never learned of the sentence keeps
+        // asking about every line.
+        let said_confined_lines = request
+            .params
+            .get("confinedLines")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
         let open = self
             .open
             .get_mut(&handle)
@@ -1673,10 +1687,7 @@ impl Bridge {
         // Trusting records the workspace root, which covers everything beneath it.
         // Declining records nothing, leaving a map in which no path is trusted. The same
         // outcomes the terminal offers, so an answer means the same in both.
-        let mut trust = bravebot_agent::workspace::trust_store(&open.project);
-        if trusted {
-            trust.trust(".");
-        }
+        let trust = map_for_an_answer(&open.project, trusted, said_confined_lines);
         // A session that has not had a turn has no name yet, and the name a line carries decides
         // nothing, so such a line names none.
         let mut named = String::new();
@@ -1691,9 +1702,9 @@ impl Bridge {
         // The question is answered, so what it offered is spent. Offered only where the answer may
         // be written and later honoured, so a directory it may not be kept about writes nothing.
         let keeping = open.keeping.take();
-        // The window's question does not say that confined lines run without asking, so its yes does
-        // not either, kept or not (RUN-5).
-        let kept = trusted::keep_a_yes(keeping.as_ref(), trusted, &named, false);
+        // The entry says what the question said (RUN-5): a yes to a window that did not show the
+        // sentence is kept without it.
+        let kept = trusted::keep_a_yes(keeping.as_ref(), trusted, &named, said_confined_lines);
 
         Ok(json!({ "trusted": trusted, "kept": kept }))
     }
@@ -2827,6 +2838,17 @@ struct Opening {
     keeping: Option<(trusted::Store, trusted::Identity)>,
 }
 
+/// The map the window's answer starts a session with: the rule a yes writes, and the answer about
+/// confined lines only for a yes to a question that said so (RUN-5). A no is a map with nothing
+/// trusted, whatever the client said it showed.
+fn map_for_an_answer(project: &Path, trusted: bool, said_confined_lines: bool) -> TrustStore {
+    match (trusted, said_confined_lines) {
+        (false, _) => bravebot_agent::workspace::trust_store(project),
+        (true, false) => trusted::trusting_the_workspace(project),
+        (true, true) => trusted::trusting_the_workspace_and_confined_lines(project),
+    }
+}
+
 impl Opening {
     /// A session in `project` carrying `carried`, the map its own record kept or its parent held,
     /// or `None` where it carries none.
@@ -2844,12 +2866,20 @@ impl Opening {
                 keeping: None,
             };
         }
-        let kept =
-            honoured(project).map(|honoured| (honoured.kept, honoured.store.path().to_path_buf()));
+        Self::settled_by(
+            project,
+            honoured(project).map(|honoured| (honoured.kept, honoured.store.path().to_path_buf())),
+        )
+    }
+
+    /// [`Opening::of`] for a session carrying no map, given the kept answer that settles it, if any.
+    fn settled_by(project: &Path, kept: Option<(trusted::Kept, PathBuf)>) -> Self {
         let mut trust = bravebot_agent::workspace::trust_store(project);
         match kept {
             Some(remembered) => {
-                trust.trust(".");
+                // The answer about confined lines comes with the entry only where it says so, and
+                // for the root it was given for, as in every front end (RUN-5).
+                trust = trusted::trusting_as_kept(project, &remembered.0);
                 Self {
                     trust,
                     answered: true,
@@ -2872,6 +2902,7 @@ impl Opening {
         json!({
             "remembered": self.remembered.as_ref().map(|(kept, path)| kept_json(kept, path)),
             "keeping": self.keeping.as_ref().map(|(store, _)| store.path().display().to_string()),
+            "confinedLines": (!self.answered).then(trusted::confined_lines_notice),
         })
     }
 }
@@ -3661,3 +3692,7 @@ mod retention_tests;
 #[cfg(test)]
 #[path = "control_tests.rs"]
 mod control_tests;
+
+#[cfg(test)]
+#[path = "opening_tests.rs"]
+mod opening_tests;

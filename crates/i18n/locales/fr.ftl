@@ -1286,8 +1286,8 @@ trust-directory-regardless =
     montré avant d'être écrit.
 trust-directory-confined-lines =
     Un oui permet aussi d'exécuter ici une commande sans la demander quand le bac à sable la
-    confine et que le réseau est fermé, ce qui n'est le cas que sur macOS pour l'instant. Tout ce
-    qui demande davantage est toujours demandé.
+    confine, avec le réseau fermé pour cette commande, ce qui n'est le cas que sur macOS pour
+    l'instant. Tout ce qui demande davantage est toujours demandé.
 trust-directory-yes = lui faire confiance
 trust-directory-no = me demander à chaque écriture
 trust-directory-remember = faire confiance et retenir

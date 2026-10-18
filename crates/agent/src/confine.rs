@@ -172,6 +172,23 @@ impl Confinement {
         self
     }
 
+    /// Whether the session's network is closed, as opposed to a line's.
+    pub fn network_is_closed(&self) -> bool {
+        self.network.is_closed()
+    }
+
+    /// This confinement with the network closed, for one line that the person's trust of its
+    /// directory let through under an open session (RUN-5, SANDBOX-20).
+    ///
+    /// The answer was given about a line the sandbox holds, and a line is held only where no stage
+    /// keeps the network, so the stages of that line are started the way [`Confinement::holds`]
+    /// judged them: with egress only for a reason a stage carries, which none does. The session's
+    /// own setting is not changed and the next line is built from it again. Decided from the
+    /// session's setting and nothing a program printed.
+    pub fn closed_for_the_line(&self) -> Self {
+        self.clone().with_network(Network::Closed)
+    }
+
     /// This confinement with the session's host list. A list that is set, even an empty one,
     /// filters every stage that has egress through a proxy; no `allowedHosts` leaves the stages
     /// as they were (SANDBOX-24).
@@ -1938,6 +1955,16 @@ fn macos_git_sentence(mode: SandboxMode) -> &'static str {
     }
 }
 
+/// Said on macOS where the session's network is open: a plain line in a directory the person trusted
+/// at the startup question may start without a prompt, and then with no network access (RUN-5,
+/// SANDBOX-20). Fixed text, whatever the settings say about which directory that is.
+const TRUSTED_DIRECTORY_LINE_SENTENCE: &str = " In a directory the person trusted at the startup \
+     question, a plain line may start without a prompt, and then it has no network access: a \
+     connection refused or a host that does not resolve for a program that is not a package \
+     manager's fetch, `git` or `gh` with a remote operation, `curl`, `ssh` or a command that names \
+     a remote credential scope was stopped by the sandbox, and a line that needs the network is \
+     put to the person when it runs with no sandbox.";
+
 /// Said after the closed network on macOS, where loopback is also how a line connects to a port of
 /// this machine.
 const MACOS_CLOSED_LOOPBACK_SENTENCE: &str =
@@ -2196,6 +2223,8 @@ fn stated(
         if prelude == Some(Prelude::MacOs) {
             said.push_str(MACOS_CLOSED_LOOPBACK_SENTENCE);
         }
+    } else if prelude == Some(Prelude::MacOs) {
+        said.push_str(TRUSTED_DIRECTORY_LINE_SENTENCE);
     }
     Some(said)
 }
@@ -4342,7 +4371,9 @@ mod tests {
                 Network::Open,
                 SandboxMode::WorkspaceWrite
             )
-            .map(|linux| format!("{linux}{MACOS_LISTENING_SENTENCE}{MACOS_GIT_SENTENCE}")),
+            .map(|linux| format!(
+                "{linux}{MACOS_LISTENING_SENTENCE}{MACOS_GIT_SENTENCE}{TRUSTED_DIRECTORY_LINE_SENTENCE}"
+            )),
             stated(
                 true,
                 Some(Prelude::MacOs),
@@ -5348,9 +5379,27 @@ mod tests {
             SandboxMode::WorkspaceWrite,
         )
         .expect("says something");
-        assert!(!open.contains("network"), "{open}");
-        assert!(closed.starts_with(open.as_str()), "{closed}");
+        assert!(!open.contains("The network is closed"), "{open}");
+        let base = open
+            .strip_suffix(TRUSTED_DIRECTORY_LINE_SENTENCE)
+            .expect("an open network on macOS says what a trusted directory's line has");
+        assert!(closed.starts_with(base), "{closed}");
         assert!(closed.contains("The network is closed"), "{closed}");
+        assert!(
+            !closed.contains(TRUSTED_DIRECTORY_LINE_SENTENCE),
+            "{closed}"
+        );
+        let linux = stated(
+            true,
+            Some(Prelude::Linux),
+            Network::Open,
+            SandboxMode::WorkspaceWrite,
+        )
+        .expect("says something");
+        assert!(
+            !linux.contains(TRUSTED_DIRECTORY_LINE_SENTENCE),
+            "no line is held on a platform that holds no .git back: {linux}"
+        );
         assert_eq!(
             stated(
                 false,

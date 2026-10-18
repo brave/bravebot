@@ -230,18 +230,19 @@ rule you wrote down. Private input still asks.
 
 ## A confined line in a directory you trusted does not ask
 
-Saying yes to the startup question ([trusted directories](../security/trust.md)) also lets a plain
+Saying yes to the startup question ([trusted directories](../security/trust.md)), in the terminal or in the
+desktop app, also lets a plain
 line the sandbox holds run in that directory without asking. The question says so before you answer.
 It does not apply to a directory you trusted before the question said it, and a session resumed from
-such a record, `--trust-workspace` and the desktop app do not grant it either: those keep
-asking until you answer a question that says so.
+such a record, `--trust-workspace` and a client that does not show the sentence do not grant it either: those keep asking until you answer a question
+that says so.
 
 A line runs unasked only where all of these hold:
 
 - it starts in the directory you trusted, not below it and not in another worktree, each of which has an
   answer of its own;
-- every stage runs confined, the network is closed for the session (`--run-network closed` or
-  `run.network` in settings) and no stage keeps it, and the platform holds a repository's `.git` back
+- every stage runs confined, no stage keeps the network (a package manager's fetch, `git` or `gh` with a remote
+  operation, `curl`, `ssh` or a credential scope), and the platform holds a repository's `.git` back
   from every stage, which today is macOS;
 - no stage is `git`, and the line asks for no scope, toolchain list or `unconfined`, reads no private
   input, redirects nothing and starts with no `NAME=value`;
@@ -249,9 +250,13 @@ A line runs unasked only where all of these hold:
   argument where it is executable or the stage is a shell or interpreter (`sh`, `python3`, `node`, `env`
   and the like), including inside a `sh -c` string or an option's value.
 
-Its output is untrusted and private, as for any line nobody vouched for. With the network open, which is
-the default, no line qualifies and nothing changes. A program that finds its own files, such as `make` or
+Its output is untrusted and private, as for any line nobody vouched for. Such a line runs with the network
+closed for that line, even where the session's network is open, which is the default: a plain command that needs
+the network fails, and you are asked when it runs with `unconfined`. A program that finds its own files, such as `make` or
 `cargo`, still runs whatever a stage wrote, held to the same sandbox.
+
+A resumed session keeps the answer its own record holds, in the directory it was given in and no other: a record
+resumed in a directory the project has moved to asks again.
 
 To be asked about every line again, add `Bash(*)` to `permissions.ask` in a settings file. Any layer may
 write it, and a checkout's file may too, since it only asks for more.

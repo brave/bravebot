@@ -557,10 +557,10 @@ fn a_yes_is_written_once_and_an_unreadable_answer_answers_nothing() {
     );
 }
 
-/// RUN-5: the window's question does not say that confined lines run without asking, so its yes is
-/// kept without that field and a directory it answered about is read as not saying so.
+/// RUN-5: a client that did not show the sentence about confined lines is not taken to have, so its
+/// yes is kept without that field and a directory it answered about is read as not saying so.
 #[test]
-fn a_desktop_yes_is_kept_without_saying_confined_lines_run_unasked() {
+fn a_yes_from_a_client_that_did_not_show_the_sentence_is_kept_without_it() {
     let scratch = Scratch::new("bridge-trust-confined-lines");
     if !scratch.tells_directories_apart() {
         return;
@@ -585,6 +585,38 @@ fn a_desktop_yes_is_kept_without_saying_confined_lines_run_unasked() {
     assert_eq!(question, None, "a kept answer was asked again");
     let listed = front.call("permissions.list", json!({"session": handle(&opened)}));
     assert_eq!(listed["paths"], the_yes_rule(), "{listed}");
+}
+
+/// RUN-5: the question carries the sentence, in the words the terminal draws, and a yes from the
+/// window that showed it is kept saying so. Both halves: the sentence is on the question, so a client
+/// has something to show, and the answer follows what the client said it showed, so one that said
+/// nothing is not turned into one that did.
+#[test]
+fn a_yes_from_a_window_that_showed_the_sentence_is_kept_saying_so() {
+    let scratch = Scratch::new("bridge-trust-confined-lines-shown");
+    if !scratch.tells_directories_apart() {
+        return;
+    }
+    let mut front = FrontEnd::start(&scratch.home());
+    let (opened, question) = front.begin(&scratch.project());
+    let question = question.expect("the question was put");
+    let sentence = bravebot_agent::trusted::confined_lines_notice();
+    assert_eq!(question["data"]["confinedLines"], sentence, "{question}");
+    assert_eq!(opened["confinedLines"], sentence, "{opened}");
+    assert!(sentence.contains("without asking"), "{sentence}");
+    assert_eq!(
+        front.call(
+            "trust.reply",
+            json!({"session": handle(&opened), "trusted": true, "confinedLines": true})
+        ),
+        json!({"trusted": true, "kept": true})
+    );
+    let store = Store::new(&scratch.home().join(".bravebot"), &scratch.project());
+    let identity = Identity::of(&scratch.project()).expect("an identity");
+    assert!(
+        store.kept(&identity).expect("kept").confined_lines,
+        "a yes to a question that showed the sentence was kept without it"
+    );
 }
 
 /// A line that cannot be written leaves the answer a yes for this session, and says so, and the next

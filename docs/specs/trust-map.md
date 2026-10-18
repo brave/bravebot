@@ -410,6 +410,11 @@ who has already decided to vouch for the tree, on a screen that names what a yes
 `verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_yes_settles_the_next_session_started_there`
 `verified-by: bravebot_tui::app::a_resume_starts_with_the_map_its_own_record_kept`
 `verified-by: bravebot_ui_bridge::remembered_trust::a_resume_takes_its_own_map_before_a_kept_answer`
+`verified-by: bravebot_tui::sessions::a_resume_keeps_the_answer_about_confined_lines_for_its_own_directory_only`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_yes_from_a_window_that_showed_the_sentence_is_kept_saying_so`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_yes_from_a_client_that_did_not_show_the_sentence_is_kept_without_it`
+`verified-by: bravebot_ui_bridge::opening_tests::a_kept_answer_settles_a_window_with_what_its_entry_says`
+`verified-by: bravebot_ui_bridge::opening_tests::an_answer_allows_confined_lines_only_for_a_yes_to_a_question_that_said_so`
 `verified-by: bravebot_tui::app::a_record_from_before_maps_were_kept_is_asked_about`
 `verified-by: bravebot_session::sessions::a_record_that_predates_the_map_has_none_rather_than_an_empty_one`
 `verified-by: bravebot_session::sessions::a_distrusted_path_inside_a_trusted_tree_survives_the_record`
@@ -423,8 +428,12 @@ At startup the user is asked whether they trust the working directory. Yes write
 the tree and, where the answer may be kept ([TRUST-23](#TRUST-23)), keeps it for later sessions.
 The question also says that a command the sandbox confines then runs in the directory without asking
 ([RUN-5](tools/run.md#RUN-5)), and a yes to it records that beside the rule, for the directory it was given
-in. A map made any other way (a kept answer written before the question said so, a resumed session whose record
-has none, `--trust-workspace`, the desktop's yes) does not record it. Declining writes nothing, so every write is shown, and keeps nothing, so the next session asks
+in. The session record keeps it beside the rules (TRUST-6) and a resume in that directory brings it back, from
+the same file and on the same footing as the rules: a resume in a directory the checkout has moved to, or
+under another spelling, gets none and asks. A map made any other way (a kept answer written before the question
+said so, a resumed session whose record has none, `--trust-workspace`, a bridge client's yes whose reply did
+not say it showed the sentence) does not record it. The desktop window shows the sentence, which the bridge hands
+it in the words the terminal draws, and its yes says so with `confinedLines`. Declining writes nothing, so every write is shown, and keeps nothing, so the next session asks
 again. Leaving at the question starts no session. There is no third key: `r` answers nothing. Where
 the yes may not be kept the question says so, and yes trusts this session only. A key is held to
 the rule the others are, so a `y` or `n` arriving with other bytes answers nothing. The desktop

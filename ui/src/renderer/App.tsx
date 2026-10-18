@@ -300,6 +300,7 @@ export function App(): React.JSX.Element {
         // map the record carries is this session's own and comes first.
         askingTrust: opened.trust.known ? null : opened.record.directory,
         keepingTrust: opened.keeping ?? null,
+        confinedLinesNotice: opened.confinedLines ?? null,
         trustRemembered: opened.remembered ?? null,
         // Looked up rather than carried: this session may have been forked in another launch
         // entirely, and the file the main process keeps is where that is written down.
@@ -345,6 +346,7 @@ export function App(): React.JSX.Element {
         settingsRules?: SettingsRules | null
         remembered?: KeptTrust | null
         keeping?: string | null
+        confinedLines?: string | null
       }>('session.new', {
         directory: chosen,
       })
@@ -365,6 +367,7 @@ export function App(): React.JSX.Element {
         contextTokens: 0,
         askingTrust: made.remembered ? null : chosen,
         keepingTrust: made.keeping ?? null,
+        confinedLinesNotice: made.confinedLines ?? null,
         trustRemembered: made.remembered ?? null,
         forkedFrom: null,
         focus: null,
@@ -389,13 +392,17 @@ export function App(): React.JSX.Element {
     if (!handle || answeringTrust.current) return
     answeringTrust.current = true
     const path = openedLives.current.get(handle)?.keepingTrust ?? null
+    // Said back to the bridge only for a question that showed the sentence: the bridge takes the
+    // answer to cover confined lines (RUN-5) from this and from nothing else.
+    const confinedLines = !!openedLives.current.get(handle)?.confinedLinesNotice
     try {
-      const { kept } = await call<{ trusted: boolean; kept: boolean | null }>('trust.reply', { session: handle, trusted })
+      const { kept } = await call<{ trusted: boolean; kept: boolean | null }>('trust.reply', { session: handle, trusted, confinedLines })
       const remembered = kept === true && path ? { at: Math.floor(Date.now() / 1000), path } : null
       updateSession(handle, (old) => (old ? {
         ...old,
         askingTrust: null,
         keepingTrust: null,
+        confinedLinesNotice: null,
         trustRemembered: remembered ?? old.trustRemembered,
       } : old))
       // Still a yes, for this session. Said, because the next session here will ask after all.
@@ -912,6 +919,7 @@ export function App(): React.JSX.Element {
           contextTokens: forked.contextTokens,
           askingTrust: forked.trust.known ? null : forked.directory,
           keepingTrust: forked.keeping ?? null,
+          confinedLinesNotice: forked.confinedLines ?? null,
           trustRemembered: forked.remembered ?? null,
           // A fork is a session and not a bot, even when it was cut out of a bot's. A bot is one
           // conversation resumed forever; a second one carrying its name would be a second bot
@@ -1299,7 +1307,7 @@ export function App(): React.JSX.Element {
           onCancel={cancelRewind} onConfirm={() => void confirmRewind()} />
       })()}
       {live?.askingTrust && (
-        <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} onAnswer={answerTrust} />
+        <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} confinedLines={live.confinedLinesNotice} onAnswer={answerTrust} />
       )}
       <TooltipLayer />
     </div>
