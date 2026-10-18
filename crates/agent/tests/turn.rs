@@ -15241,7 +15241,8 @@ fn a_line_that_failed_before_its_program_started_leaves_the_change_reported_as_n
     assert!(
         bodies
             .iter()
-            .any(|body| body.contains("did not run") && body.contains("could not be opened")),
+            .any(|body| body.contains("may have run in part")
+                && body.contains("could not be opened")),
         "the line did not fail on its redirection, so this is not the case under test"
     );
     assert!(
@@ -15309,12 +15310,13 @@ fn a_line_stopped_with_the_turn_counts_as_run() {
         notes: Vec::new(),
     };
 
+    let mut conversation = bravebot_agent::Conversation::new();
     let error = turn::resume(
         &config,
         &egress,
         &workspace,
         &Task::new("add a toggle"),
-        &mut bravebot_agent::Conversation::new(),
+        &mut conversation,
         &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
         &mut reporter,
         &mut sink,
@@ -15337,6 +15339,20 @@ fn a_line_stopped_with_the_turn_counts_as_run() {
             .any(|note| note.contains("stopped because the turn was cancelled")),
         "the line was not stopped part way, so this is not the case under test: {:?}",
         reporter.notes
+    );
+    let told_the_model: Vec<String> = conversation
+        .messages()
+        .iter()
+        .map(|stored| stored.message.content.text())
+        .filter(|text| text.contains("sleep 30"))
+        .collect();
+    assert!(
+        told_the_model
+            .iter()
+            .any(|text| text.contains("was started")
+                && text.contains("may have run in part")
+                && !text.contains("did not run")),
+        "the model was not told the stopped line had been started: {told_the_model:?}"
     );
     assert!(
         !reporter
@@ -37409,7 +37425,9 @@ fn a_checkout_is_kept_when_a_line_in_it_failed_after_a_stage_started() {
         None,
     );
     assert!(
-        asked.iter().any(|body| body.contains("did not run")),
+        asked
+            .iter()
+            .any(|body| body.contains("may have run in part")),
         "the line did not fail after starting, so this is not the case under test"
     );
     assert_eq!(
