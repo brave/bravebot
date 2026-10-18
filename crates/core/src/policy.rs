@@ -7537,7 +7537,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 Principle::IntegrityGate,
                 format!(
                     "'{tool}.{field}' requires a single-use endorsement for this exact \
-                     value, and none matched"
+                     value, and none matched: the value differs from the one a person \
+                     approved, or that approval was already used"
                 ),
             )),
         }
@@ -14211,6 +14212,31 @@ five
             .expect_err("a private destination must be refused");
         assert_eq!(err.principle, Principle::Confinement);
         assert!(!policy.finish());
+    }
+
+    /// A destination that differs from the approved one is refused with a reason that says the
+    /// value is what differs, so the planner is not left to guess that a spelling is the cause.
+    #[test]
+    fn a_refused_endorsement_says_the_value_differs_from_the_approved_one() {
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing_with("task", "write a file"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .unwrap();
+
+        policy.issue_grant("file_write", "path", "/work/other/a.txt".to_string());
+        let spelled = Labelled::new("../other/a.txt".to_string(), Label::trusted_public());
+        let err = policy
+            .before_endorsed_destination("file_write", "path", &spelled)
+            .expect_err("a different spelling matches no endorsement");
+        assert!(
+            err.to_string()
+                .contains("the value differs from the one a person approved"),
+            "{err}"
+        );
     }
 
     /// An endorsement is spent by the effect it authorised. A destination a person approved once

@@ -2192,6 +2192,52 @@ fn a_search_climbing_into_an_opened_sibling_directory_searches_it_and_names_the_
     );
 }
 
+/// An approved write is endorsed for the path it is made on, so the `..` spelling of a file in an
+/// opened sibling directory is written as the absolute one is, for an edit and for a whole-file
+/// write (TRUST-10, WRITE-3).
+#[cfg(unix)]
+#[test]
+fn an_edit_and_a_write_climbing_into_an_opened_sibling_directory_are_endorsed_for_the_path_they_land_on()
+ {
+    let sibling = Scratch::new("climb-write-sibling");
+    std::fs::write(sibling.path.join("policy.rs"), "fn policy() {}").unwrap();
+    let name = sibling.path.file_name().unwrap().to_str().unwrap();
+
+    let scratch = Scratch::new("climb-write");
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(sibling.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut trust = trusting_the_workspace();
+    trust.trust(&added.display().to_string());
+
+    let edit =
+        format!(r#"{{"path":"../{name}/policy.rs","old_text":"policy","new_text":"edited"}}"#);
+    let write = format!(r#"{{"path":"../{name}/fresh.rs","contents":"fn fresh() {{}}"}}"#);
+    let bodies = run_calls_under(
+        &workspace,
+        rules(&[], &[], &[]),
+        trust,
+        &[("edit_file", &edit), ("write_file", &write)],
+    );
+
+    let last = bodies.last().expect("the last request");
+    assert!(
+        !last.contains("single-use endorsement"),
+        "a write into the opened directory was refused for its endorsement: {last}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(sibling.path.join("policy.rs")).unwrap(),
+        "fn edited() {}",
+        "the edit through the `..` spelling did not land"
+    );
+    assert_eq!(
+        std::fs::read_to_string(sibling.path.join("fresh.rs")).unwrap(),
+        "fn fresh() {}",
+        "the write through the `..` spelling did not land"
+    );
+}
+
 /// A rule is about the file, so the `..` spelling of a file that a `deny` rule names by its
 /// absolute path is refused as the absolute spelling is, for a read and for a listing.
 #[cfg(unix)]
