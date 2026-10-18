@@ -2430,6 +2430,7 @@ fn work(work: Work) {
     // in a verdict read the same answer.
     let mut confirmer = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
     open_rewind_point(&mut state, &workspace, &prompt);
+    let began_at = std::time::Instant::now();
     let completed = agent_turn::resume(
         &config,
         &egress,
@@ -2481,6 +2482,11 @@ fn work(work: Work) {
     );
     if state.first_prompt.is_none() && recall {
         state.first_prompt = Some(prompt.clone());
+    }
+    // Whichever way the turn ended: a plan a stopped or failed turn had written is still what it
+    // set out to do (SESSION-23).
+    if !reporter.task_list().is_empty() {
+        state.todos.insert(turn, reporter.task_list().to_vec());
     }
 
     let event = match outcome {
@@ -2554,6 +2560,7 @@ fn work(work: Work) {
             )
         }
         Err(error) => {
+            charge_failed_turn(&mut state, turn, reporter.spent(), began_at.elapsed());
             let _ = save(&project, &mut state, turn, sink.trail());
 
             let chosen = task.model.as_deref().unwrap_or(&config.default_model);
@@ -2583,6 +2590,26 @@ fn work(work: Work) {
     }
     drop(state);
     emitter.finish(event, &finished);
+}
+
+/// Charge a turn that failed or was stopped for the work it had completed (SESSION-11, SESSION-12).
+///
+/// `spent` is the latest cumulative report the turn made, which replaces the ones before it, so it
+/// is added once. The wall time is this side's own clock, as the terminal's is, and the report's
+/// own wall figure is left out.
+fn charge_failed_turn(
+    state: &mut State,
+    turn: usize,
+    spent: Option<bravebot_agent::Spent>,
+    took: std::time::Duration,
+) {
+    let timing = state.timing.entry(turn).or_default();
+    timing.wall_ms += u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
+    if let Some(spent) = spent {
+        state.tokens += spent.tokens;
+        *state.spend.entry(turn).or_insert(0) += spent.tokens;
+        timing.add_measured(spent.timing);
+    }
 }
 
 /// Start the MCP servers `requested` names, putting the questions about them to the window.

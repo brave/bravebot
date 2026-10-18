@@ -200,6 +200,8 @@ pub struct BridgeReporter {
     reporting_for: Option<DelegateId>,
     /// Where the submitted prompt entered the recounted conversation (SESSION-23).
     prompt_at: Option<usize>,
+    /// The task list as the turn last wrote it, kept for the record (SESSION-23).
+    task_list: Vec<Row>,
 }
 
 impl BridgeReporter {
@@ -212,12 +214,18 @@ impl BridgeReporter {
             notices: Vec::new(),
             reporting_for: None,
             prompt_at: None,
+            task_list: Vec::new(),
         }
     }
 
     /// The latest cumulative measurements, retained for manifest storage on failure.
     pub fn spent(&self) -> Option<bravebot_agent::Spent> {
         self.spent
+    }
+
+    /// The task list the turn last wrote, whichever way it ended. Empty where it wrote none.
+    pub fn task_list(&self) -> &[Row] {
+        &self.task_list
     }
 
     /// Where the turn's prompt landed in the recounted conversation, if it got that far.
@@ -249,8 +257,9 @@ impl Reporter for BridgeReporter {
     }
 
     fn todos(&mut self, rows: Vec<Row>) {
-        let rows: Vec<_> = rows.iter().map(wire::row).collect();
-        self.say("todos", json!({ "rows": rows }));
+        let wired: Vec<_> = rows.iter().map(wire::row).collect();
+        self.task_list = rows;
+        self.say("todos", json!({ "rows": wired }));
     }
 
     /// How much the model has written, when it changes and not before.
