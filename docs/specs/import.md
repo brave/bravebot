@@ -268,6 +268,14 @@ API key would otherwise see the three routes and no sign that their setup was lo
 **What counts as an answer.** Only the affirmative approves. Any other line declines, and so does
 the end of input.
 
+**The window a running Ollama holds.** Under the model line of an Ollama question, where
+[IMPORT-10](#IMPORT-10) read a figure for that model, the question gives the context window the
+server has it loaded with. Where the figure is below the window a conversation is otherwise
+budgeted against (131,072 tokens), it also says the server drops the earliest turns beyond it and
+names `OLLAMA_CONTEXT_LENGTH`. A model with no figure has no line, and no figure is guessed. The
+figure is shown and never written: a `provider` block that lists no models has nowhere to keep a
+limit, and one that lists models is taken at its word.
+
 **Names already set.** A name already set in the file, including one the first answer just wrote,
 is shown as left as it is ([IMPORT-7](#IMPORT-7)). A source left with nothing to add is not asked
 about.
@@ -289,6 +297,7 @@ listing only such models reaches nothing.
 `verified-by: bravebot_cli::import::only_the_affirmative_writes_and_the_end_of_input_declines`
 `verified-by: bravebot_cli::import::a_name_the_first_answer_wrote_is_left_by_the_second`
 `verified-by: bravebot_cli::import::a_setup_found_only_in_the_environment_says_so`
+`verified-by: bravebot_cli::import::a_window_below_the_assumed_one_is_shown_with_what_the_server_drops`
 `verified-by: bravebot_cli::import::a_model_a_tier_names_is_not_added_to_an_aws_entry_again`
 `verified-by: bravebot_cli::import::an_exported_tier_names_a_model_as_a_written_one_does`
 
@@ -447,6 +456,13 @@ before the start has said anything:
 
 Only each model's `name`, `modified_at` and `capabilities` are read.
 
+**The window.** Once a listing is read, one `GET <address>/api/ps` is made under the same bounds
+and carries no credential, and each loaded model's `context_length` is read by `name`. A model that
+is not loaded, a zero figure, and a reply that fails or does not decode leave that model with no
+figure, and nothing is said. A server that answers the listing and then holds this request
+holds the start for those bounds a second time. The figure only decides what [IMPORT-5](#IMPORT-5) shows beside the
+model, before any session exists, and the reply is read by no model.
+
 **A failure says nothing.** A refused connection, a timeout, an error status, a redirect
 elsewhere, a listing over the bound, or one that does not decode means there is no Ollama source, and nothing is said
 about it, because nothing on the machine said an Ollama was meant to be there.
@@ -474,6 +490,9 @@ list every model twice in the model picker.
 `verified-by: bravebot_config::import::an_ollama_reporting_no_capabilities_defaults_to_its_newest_model`
 `verified-by: bravebot_config::import::an_ollama_that_does_not_answer_is_no_source`
 `verified-by: bravebot_aichat::ollama::a_listing_is_read_as_ollama_writes_it`
+`verified-by: bravebot_aichat::ollama::a_loaded_model_carries_the_window_it_runs_with`
+`verified-by: bravebot_aichat::ollama::a_failed_question_about_what_is_loaded_leaves_the_listing_without_windows`
+`verified-by: bravebot_config::import::the_window_is_the_one_of_the_model_chosen`
 `verified-by: bravebot_aichat::ollama::an_oversized_listing_is_not_read`
 `verified-by: bravebot_aichat::ollama::a_listener_that_never_answers_does_not_hold_the_start`
 `verified-by: bravebot_aichat::ollama::anything_but_a_listing_is_no_source`

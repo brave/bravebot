@@ -324,7 +324,7 @@ const BRAVE_HOSTS: [(&str, &str); 4] = [
 ];
 
 /// IMPORT-10, the ordinary half: a start with no service configured asks the Ollama on this
-/// machine once.
+/// machine once: the listing, then the one request naming what is loaded.
 ///
 /// This is what gives the two silences below their meaning: the same run, the same address, and
 /// here the request arrives.
@@ -341,7 +341,7 @@ fn a_start_with_no_service_asks_the_ollama_on_this_machine_once() {
 
     let (_, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{stderr}");
-    assert_eq!(connections_to(&ollama), 1, "{stderr}");
+    assert_eq!(connections_to(&ollama), 2, "{stderr}");
 }
 
 /// IMPORT-10: an incognito start opens no connection to Ollama.

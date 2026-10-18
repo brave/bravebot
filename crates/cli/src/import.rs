@@ -456,6 +456,8 @@ struct Plan {
     source: Source,
     read: Vec<PathBuf>,
     running_at: Option<String>,
+    /// The window the running server holds the model loaded with.
+    window: Option<u64>,
     env: Vec<(String, String)>,
     model: Option<String>,
     gateways: Vec<Gateway>,
@@ -486,6 +488,7 @@ fn plan(
         source: found.source,
         read: found.read,
         running_at: found.running_at,
+        window: found.window,
         env: Vec::new(),
         model: None,
         gateways: Vec::new(),
@@ -604,6 +607,7 @@ fn shown(plan: &Plan, destination: &Path, managed: &Managed) -> Vec<String> {
     }
     if let Some(model) = &plan.model {
         lines.push(printable(&format!("  model: {}", import::quoted(model))));
+        lines.extend(window_lines(plan.window));
     }
     for gateway in &plan.gateways {
         lines.push(format!(
@@ -635,6 +639,32 @@ fn shown(plan: &Plan, destination: &Path, managed: &Managed) -> Vec<String> {
     lines.extend(named_lines(plan));
     lines.extend(pinned_lines(plan, managed));
     lines.extend(left_lines(plan.source, &plan.left));
+    lines
+}
+
+/// The window the server holds the chosen model loaded with, and where that is below what bravebot
+/// budgets a conversation against, that the server drops what does not fit.
+///
+/// Said only where the server stated a figure: a model that is not loaded has none, and guessing
+/// one would be worse than saying nothing. Shown only, since a `provider` block that lists no
+/// models has nowhere to keep a limit.
+fn window_lines(window: Option<u64>) -> Vec<String> {
+    let Some(window) = window else {
+        return Vec::new();
+    };
+    let mut lines = vec![format!(
+        "  {}",
+        t!(import_ollama_window, window = window as i64)
+    )];
+    if window < bravebot_config::provider::CONTEXT_WINDOW {
+        lines.push(format!(
+            "  {}",
+            t!(
+                import_ollama_window_small,
+                assumed = bravebot_config::provider::CONTEXT_WINDOW as i64
+            )
+        ));
+    }
     lines
 }
 
@@ -1439,8 +1469,53 @@ mod tests {
                 name: "qwen3-coder:30b".to_string(),
                 modified_at: "2026-09-18T14:07:58-04:00".to_string(),
                 capabilities: Some(vec!["completion".to_string(), "tools".to_string()]),
+                window: None,
             }],
         )
+    }
+
+    /// What a running Ollama serves when its one model that can call tools is loaded with `window`.
+    fn ollama_loaded_with(window: Option<u64>) -> Found {
+        import::running(
+            "http://localhost:11434",
+            vec![import::Installed {
+                name: "qwen3-coder:30b".to_string(),
+                modified_at: "2026-09-18T14:07:58-04:00".to_string(),
+                capabilities: Some(vec!["completion".to_string(), "tools".to_string()]),
+                window,
+            }],
+        )
+    }
+
+    /// IMPORT-5: the question for a server whose model is loaded below the window a conversation is
+    /// budgeted against shows the figure and says the server drops earlier turns; a window at or
+    /// above that, or none stated, shows no warning, and none stated shows no figure either.
+    #[test]
+    fn a_window_below_the_assumed_one_is_shown_with_what_the_server_drops() {
+        let scratch = Scratch::new("cli-import-ollama-window");
+        let asked = |window| {
+            asked_about(
+                &scratch,
+                vec![ollama_loaded_with(window)],
+                "n\n",
+                &Managed::default(),
+                &|_| None,
+            )
+            .0
+        };
+
+        let small = asked(Some(4096));
+        assert!(small.contains("context window of 4096 tokens"), "{small}");
+        assert!(small.contains("drops the earliest turns"), "{small}");
+        assert!(small.contains("OLLAMA_CONTEXT_LENGTH"), "{small}");
+
+        let large = asked(Some(131_072));
+        assert!(large.contains("context window of 131072 tokens"), "{large}");
+        assert!(!large.contains("drops the earliest turns"), "{large}");
+
+        let unstated = asked(None);
+        assert!(!unstated.contains("context window"), "{unstated}");
+        assert!(!unstated.contains("OLLAMA_CONTEXT_LENGTH"), "{unstated}");
     }
 
     /// IMPORT-10: an entry for the same server under an id of its own already lists every model it

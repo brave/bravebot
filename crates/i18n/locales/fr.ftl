@@ -743,6 +743,8 @@ import-found = { $source } configure un service de modèle que bravebot peut uti
 import-found-exported =
     { $source } configure un service de modèle que bravebot peut utiliser, dans l'environnement de ce processus.
 import-found-running = { $source } tourne à { $url } et sert des modèles que bravebot peut utiliser.
+import-ollama-window = le serveur l'a chargé avec une fenêtre de contexte de { $window } jetons
+import-ollama-window-small = Ollama abandonne les premiers tours au-delà de cette fenêtre, alors qu'une conversation est sinon gardée sous { $assumed } jetons. Définissez OLLAMA_CONTEXT_LENGTH plus haut avant de démarrer Ollama pour en garder davantage.
 import-adds = L'import ajoute ceci à { $file } :
 import-adds-gateway = provider.{ $id }, joignable à { $endpoint } : { $entry }
 import-key-held = provider.{ $id } : une clé est détenue pour cette entrée ; elle fait l'objet d'une question à part
