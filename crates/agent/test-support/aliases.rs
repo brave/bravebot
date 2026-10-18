@@ -57,8 +57,6 @@ pub struct Alias {
     pub unhandled: &'static [(Consumer, &'static str)],
 }
 
-const UNMATCHED_DENY_RULE: &[(Consumer, &str)] = &[(Consumer::DenyRule, "#2337")];
-
 const LINK: &[(Consumer, &str)] = &[
     (Consumer::TrustRead, "#2328"),
     (Consumer::TrustWrite, "#2328"),
@@ -142,7 +140,7 @@ pub const ALIASES: &[Alias] = &[
         alias: "cafe\u{301}.md",
         made: Made::StoredAsTheAlias,
         skippable: true,
-        unhandled: UNMATCHED_DENY_RULE,
+        unhandled: &[],
     },
     Alias {
         kind: "NFC and NFD, NFD name, file stored as NFC",
@@ -150,7 +148,7 @@ pub const ALIASES: &[Alias] = &[
         alias: "caf\u{e9}.md",
         made: Made::StoredAsTheAlias,
         skippable: true,
-        unhandled: UNMATCHED_DENY_RULE,
+        unhandled: &[],
     },
     Alias {
         kind: "symbolic link to the file",
