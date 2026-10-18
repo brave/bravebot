@@ -434,7 +434,7 @@ impl Confinement {
                 }
             }
         }
-        self.filesystem.apply(self.reach_in_force().apply(policy))
+        self.filesystem.apply(self.path_reach.apply(policy))
     }
 
     /// Whether every stage of `steps`, started in `directory`, is held to a sandbox that leaves a
@@ -4682,6 +4682,22 @@ mod tests {
             writes(&after, "/data/out"),
             "the grant was dropped, not held"
         );
+    }
+
+    /// SANDBOX-22, SANDBOX-20: a file under a held write grant is one the plan could have written
+    /// in every mode, since a file written before a move to `read-only` outlives it.
+    #[test]
+    fn a_held_write_grant_still_marks_its_files_as_the_plans_under_read_only() {
+        let granted = [crate::workspace::PathReach {
+            path: PathBuf::from("/data/out"),
+            write: true,
+            why: "the build needs it".to_string(),
+        }];
+        let read_only = reading_confinement(Prelude::Linux, &["/work/project"])
+            .with_path_reach(&granted)
+            .with_mode(SandboxMode::ReadOnly);
+
+        assert!(read_only.writable_by_the_plan(Path::new("/data/out/tool")));
     }
 
     /// SANDBOX-28: a yes to a path puts that path in the profile and no other. Its parent, a
