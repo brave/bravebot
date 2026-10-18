@@ -164,3 +164,38 @@ pub fn as_markdown(session: &Session, title: &str) -> String {
 pub fn as_last_drawn(session: &Session) -> Laid {
     lay_out(session, session.laid.width, session.laid.height).1
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::Entry;
+
+    /// MSG-11: an exported message between sessions is a heading with the quoted words under it,
+    /// and one whose words were kept from the planner is a heading followed by the sentence saying
+    /// so.
+    #[test]
+    fn a_message_between_sessions_is_exported_under_its_heading_with_the_words_quoted() {
+        let mut session = Session::new("kernel-enforced");
+        session.transcript.push(Entry::session_message(
+            "message from session 11111111 (x) \u{b7} (T,pub)".to_string(),
+            Some("first\nsecond"),
+        ));
+        session.transcript.push(Entry::session_message(
+            "message to session 22222222 (y) \u{b7} (T,pub)".to_string(),
+            None,
+        ));
+        let markdown = as_markdown(&session, "t");
+        assert!(
+            markdown.contains(
+                "## message from session 11111111 (x) \u{b7} (T,pub)\n\n> first\n> second\n\n"
+            ),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains(
+                "## message to session 22222222 (y) \u{b7} (T,pub)\n\nits words were kept from the planner"
+            ),
+            "{markdown}"
+        );
+    }
+}

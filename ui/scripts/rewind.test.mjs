@@ -101,3 +101,20 @@ test('a rewind refused because a turn is running says nothing was undone, and an
     'the code decides, not a substring of the message',
   )
 })
+
+// MSG-11: a resumed transcript draws a message between sessions from the tagged fields, and the
+// words it carries are searchable; a message whose words were kept from the planner has none.
+test('a session message is drawn from its fields, and a withheld one has no words to search', () => {
+  const shown = t.fromSaid([
+    { kind: 'session_message', direction: 'from', session: '11111111-aaaa', name: 'planner', label: '(T,pub)', text: 'run the suite' },
+    { kind: 'session_message', direction: 'to', session: '22222222-bbbb', name: 'worker', label: '(T,pub)', text: null },
+  ])
+  assert.equal(shown.length, 2)
+  assert.equal(shown[0].kind, 'session-message')
+  assert.equal(shown[0].direction, 'from')
+  assert.equal(shown[0].text, 'run the suite')
+  assert.equal(shown[1].kind, 'session-message')
+  assert.equal(shown[1].text, null)
+  assert.equal(t.searchableText(shown[0]), 'planner run the suite')
+  assert.equal(t.searchableText(shown[1]), 'worker ')
+})
