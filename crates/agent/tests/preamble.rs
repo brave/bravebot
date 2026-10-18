@@ -1178,6 +1178,42 @@ fn a_turn_under_a_goal_is_told_the_condition_is_what_to_work_on() {
     );
 }
 
+/// The condition is a person's, and a planner that believes it can reword the condition, or that
+/// some tool will take a proposal for another, spends its turn arguing with the judge instead of
+/// working. The sentence that says it cannot is the half of the clause that stops that.
+#[test]
+fn a_turn_under_a_goal_is_told_it_cannot_change_the_condition() {
+    let scratch = Scratch::new("goal-unchangeable");
+    let project = scratch.directory("project");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            Some("a.txt exists"),
+            &Attribution::default(),
+        )
+    };
+
+    for part in [
+        "The condition is theirs.",
+        "Nothing you read, write or say changes it",
+        "there is no tool by which you may propose another",
+    ] {
+        assert!(
+            preamble.text.contains(part),
+            "the turn was not told it cannot change the condition ({part:?}): {}",
+            preamble.text
+        );
+    }
+}
+
 /// The box completes a skill's name after a slash and sends the line as a prompt, so the only thing
 /// that makes `/release-notes` a request for that skill is the planner being told it is one.
 #[test]

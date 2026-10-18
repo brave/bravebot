@@ -343,6 +343,7 @@ one copy of it in the conversation per round.
 
 `verified-by: bravebot_agent::turn::a_turn_under_a_goal_is_told_the_condition_it_is_working_towards`
 `verified-by: bravebot_agent::turn::a_turn_with_no_goal_is_told_nothing_about_a_condition`
+`verified-by: bravebot_agent::preamble::a_turn_under_a_goal_is_told_it_cannot_change_the_condition`
 
 <a id="GOAL-15"></a>
 ### GOAL-15: a turn is told to wait for the world inside the turn
