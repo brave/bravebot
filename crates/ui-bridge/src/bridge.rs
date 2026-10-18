@@ -375,6 +375,15 @@ impl Bridge {
             )));
         }
 
+        // A running background session holds its record, and a second process writing it forks
+        // the conversation (BG-9). The terminal refuses it the same way.
+        if bravebot_session::jobs::is_running(&id) {
+            return Err(Failure::bad_request(format!(
+                "`{id}` is held by a running background session. Join it with: bravebot attach {}",
+                id.chars().take(8).collect::<String>()
+            )));
+        }
+
         // A record that recorded a trust map was answered for by the person now resuming
         // it, and inherits it. One that did not is asked again: nothing recorded is not
         // the same as nothing trusted, and reading an absent map as an empty one would
