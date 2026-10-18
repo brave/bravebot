@@ -2569,6 +2569,9 @@ goal-quarantined =
 goal-spent =
     l'objectif a renvoyé le travail { $rounds } fois sans être atteint, et s'est arrêté plutôt que
     de continuer
+goal-stalled =
+    l'objectif a renvoyé le travail sans qu'un tour appelle un outil, et a cessé de le renvoyer ;
+    il reste défini, et votre prochain message sera jugé par rapport à lui
 goal-failed = l'objectif n'a pas pu être vérifié ({ $problem }), il est donc retiré
 goal-ended-unexpectedly = la vérification de l'objectif s'est terminée de façon inattendue
 goal-replaces-loop =

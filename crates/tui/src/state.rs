@@ -3867,24 +3867,43 @@ impl Session {
 
     /// Record that the goal was not met, and give back the prompt that sends the work back.
     ///
-    /// `None` where the goal has spent its rounds, which ends it. The reason is kept either way,
-    /// so a goal that has just given up can still say what it kept hearing.
+    /// `None` where the goal has spent its rounds, which ends it, or where consecutive rounds made
+    /// no tool call, which leaves it set. The reason is kept either way, so a goal that has just
+    /// given up can still say what it kept hearing.
     pub fn goal_not_met(&mut self, reason: String) -> Option<String> {
+        // Counted off the turn that was just judged, before the next one moves the mark.
+        let tool_calls = self.transcript
+            [self.turn_start.transcript_len.min(self.transcript.len())..]
+            .iter()
+            .filter(|entry| entry.speaker == Speaker::Tool)
+            .count();
         let goal = self.goal.as_mut()?;
         let condition = goal.condition().to_string();
-        if !goal.not_met(reason.clone()) {
-            let rounds = goal.rounds();
-            let usage = self.goal_usage();
-            self.goal = None;
-            self.note(t!(goal_spent, rounds = rounds));
-            self.note_usage(usage);
-            // The sentence `/goal` answers with, said here because there is no goal left to ask:
-            // the round that spent the budget is the one whose reason a person wants, and this is
-            // the only place it is ever reported.
-            if !reason.is_empty() {
-                self.note(t!(goal_last_check, reason = &reason));
+        match goal.not_met(reason.clone(), tool_calls) {
+            crate::goals::Next::SendBack => {}
+            crate::goals::Next::Spent => {
+                let rounds = goal.rounds();
+                let usage = self.goal_usage();
+                self.goal = None;
+                self.note(t!(goal_spent, rounds = rounds));
+                self.note_usage(usage);
+                // The sentence `/goal` answers with, said here because there is no goal left to
+                // ask: the round that spent the budget is the one whose reason a person wants,
+                // and this is the only place it is ever reported.
+                if !reason.is_empty() {
+                    self.note(t!(goal_last_check, reason = &reason));
+                }
+                return None;
             }
-            return None;
+            crate::goals::Next::Stalled => {
+                // The goal stays set, as it does for a turn somebody stopped (GOAL-10): the next
+                // prompt is judged against it again.
+                self.note(t!(goal_stalled));
+                if !reason.is_empty() {
+                    self.note(t!(goal_last_check, reason = &reason));
+                }
+                return None;
+            }
         }
         if reason.is_empty() {
             self.note(t!(goal_not_met_unsaid));
@@ -10249,10 +10268,55 @@ mod tests {
         let mut sent = 0;
         while s.goal_not_met(reason.to_string()).is_some() {
             sent += 1;
+            // A round that did something, so it is the round limit and not a stall that ends it.
+            s.start_activity(Activity::running("Run", "cargo test"));
             s.complete("still going", Vec::new(), 0);
             assert!(sent < 1_000, "the goal never gave up");
         }
         sent
+    }
+
+    /// A turn that only talks is sent back a few times and then not again, and the goal stays set
+    /// for the next prompt, unlike running out of rounds, which ends it (GOAL-20).
+    #[test]
+    fn rounds_that_make_no_tool_call_stop_the_goal_and_leave_it_set() {
+        let mut s = session();
+        s.start_goal("cargo test exits 0".to_string());
+        let mut sent = 0;
+        while s.goal_not_met("nothing ran them".to_string()).is_some() {
+            sent += 1;
+            s.complete("it passes, trust me", Vec::new(), 0);
+            assert!(sent < 1_000, "the goal never stopped");
+        }
+        assert!(
+            sent >= 1,
+            "the goal stopped before sending the work back once"
+        );
+        assert!(
+            sent < 10,
+            "the goal ran to its round limit with no call made"
+        );
+        assert!(s.goal().is_some(), "the goal was cleared by a stall");
+        assert_eq!(s.status, Status::Idle);
+        assert_eq!(
+            s.transcript
+                .iter()
+                .filter(|e| e.text == t!(goal_stalled))
+                .count(),
+            1
+        );
+    }
+
+    /// Rounds that call a tool are not a stall, however many there are, up to the round limit.
+    #[test]
+    fn rounds_that_make_a_call_are_not_a_stall() {
+        let mut s = session();
+        s.start_goal("cargo test exits 0".to_string());
+        spend(&mut s, "still failing");
+        assert!(
+            s.transcript.iter().all(|e| e.text != t!(goal_stalled)),
+            "a goal whose turns ran tools was called stalled"
+        );
     }
 
     /// A verdict about a goal nobody set is a verdict about nothing, and acting on one would send

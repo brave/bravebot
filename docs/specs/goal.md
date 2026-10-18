@@ -197,6 +197,26 @@ pays for it.
 `verified-by: bravebot_tui::state::a_goal_that_runs_out_of_rounds_stops_rather_than_sending_the_work_back_again`
 `verified-by: bravebot_tui::state::a_goal_that_gives_up_says_what_the_last_check_said`
 
+<a id="GOAL-20"></a>
+### GOAL-20: three rounds in a row with no tool call stop the work going back, and leave the goal set
+
+A round that made no tool call is one the turn answered without running anything. After three of
+those in a row the goal sends nothing back, says so and keeps its condition, so the next prompt the
+person sends is judged against it as a stopped turn is ([GOAL-10](#GOAL-10)). A round that made a
+call starts the count again, and so does the stop.
+
+**Why.** A turn that answers the judge in prose is sent the same request with a longer
+conversation, and nothing about the next round makes it likelier to run something. Ten of those is
+the whole budget ([GOAL-9](#GOAL-9)) spent on a turn that is not working.
+
+**Why the count of calls.** The branch is on how many calls the driver recorded for the turn, never
+on what a reply or a result said, so no untrusted byte decides it.
+
+`verified-by: bravebot_tui::goals::rounds_with_no_tool_call_in_a_row_stop_the_goal_without_clearing_it`
+`verified-by: bravebot_tui::goals::a_round_that_made_a_call_starts_the_count_again`
+`verified-by: bravebot_tui::state::rounds_that_make_no_tool_call_stop_the_goal_and_leave_it_set`
+`verified-by: bravebot_tui::state::rounds_that_make_a_call_are_not_a_stall`
+
 <a id="GOAL-10"></a>
 ### GOAL-10: four things end a goal besides a verdict, and each of them says so
 
@@ -206,6 +226,9 @@ pays for it.
 | the person interrupts | Ctrl-C, read against the goal after a mode open over the session, the turn in flight and the line in the box, and before leaving; during a check Escape reaches the goal as well, where it would stop a turn ([INPUT-24](terminal-input.md#INPUT-24)), and neither key reaches it while a mode is open |
 | the session moves on | `/clear`, and leaving |
 | the rounds run out | [GOAL-9](#GOAL-9) |
+
+A goal also stops being sent back, and stays set, when rounds make no tool call
+([GOAL-20](#GOAL-20)).
 
 Pausing is not one of them: [GOAL-18](#GOAL-18) holds a goal still without ending it. A turn that
 failed is not one of them either, and neither is a turn somebody stopped. Both are recorded
