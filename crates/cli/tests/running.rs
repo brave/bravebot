@@ -6601,7 +6601,7 @@ fn auth_status_bedrock_asks_the_aws_cli_without_signing_in() {
         stdout.starts_with("bedrock work: not signed in: "),
         "{stdout}"
     );
-    assert!(stdout.contains("aws sso login"), "{stdout}");
+    assert!(stdout.contains("bravebot auth login bedrock"), "{stdout}");
     assert!(
         !scratch.path.join("aws-work").exists(),
         "asking started a sign-in"

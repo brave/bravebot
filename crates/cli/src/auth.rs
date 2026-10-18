@@ -969,12 +969,22 @@ fn bedrock_standings(
 /// An AWS session as a standing: a lapsed one is signed in again, and a missing CLI or a profile it
 /// does not have is not fixed by signing in.
 fn bedrock_standing(session: Result<(), CredentialError>) -> Standing {
+    // Fixed sentences only: the AWS CLI's own text names accounts and roles, and the profiles it
+    // lists can embed an account id, so neither is copied onto a line.
     match session {
         Ok(()) => Standing::SignedIn(t!(auth_status_bedrock_good).into()),
-        Err(lapsed @ CredentialError::Refused { .. }) => {
-            Standing::NotSignedIn(printable(&lapsed.to_string()))
+        Err(CredentialError::Refused { .. }) => {
+            Standing::NotSignedIn(t!(auth_status_bedrock_lapsed).into())
         }
-        Err(other) => Standing::Unusable(printable(&other.to_string())),
+        Err(CredentialError::NoSuchProfile { .. }) => {
+            Standing::Unusable(t!(auth_status_bedrock_no_profile).into())
+        }
+        Err(CredentialError::NotInstalled) => {
+            Standing::Unusable(t!(auth_status_bedrock_no_cli).into())
+        }
+        Err(CredentialError::Undecodable { .. }) => {
+            Standing::Unusable(t!(auth_status_bedrock_undecodable).into())
+        }
     }
 }
 
@@ -1779,6 +1789,32 @@ mod tests {
                 matches!(bedrock_standing(Err(other)), Standing::Unusable(_)),
                 "a fault signing in cannot fix was reported as one it can"
             );
+        }
+    }
+
+    /// CLI-23: a line carries none of the text the AWS CLI chose, which names accounts and roles and
+    /// lists profiles that embed an account id.
+    #[test]
+    fn a_bedrock_line_carries_nothing_the_aws_cli_wrote() {
+        let account = "1234".repeat(3);
+        let account = account.as_str();
+        for failure in [
+            CredentialError::Refused {
+                detail: format!("AccessDenied: arn:aws:sts::{account}:assumed-role/x"),
+            },
+            CredentialError::NoSuchProfile {
+                profile: "work".into(),
+                available: vec![format!("AdministratorAccess-{account}")],
+            },
+            CredentialError::Undecodable {
+                detail: account.into(),
+            },
+        ] {
+            let line = match bedrock_standing(Err(failure)) {
+                Standing::NotSignedIn(text) | Standing::Unusable(text) => text,
+                _ => panic!("a failure was reported as usable"),
+            };
+            assert!(!line.contains(account), "{line}");
         }
     }
 
