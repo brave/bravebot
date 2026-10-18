@@ -244,6 +244,22 @@ pub fn engage(choice: Choice) {
     let _ = IN_FORCE.set(choice);
 }
 
+/// The `--sandbox` this process was started with, whether or not the managed file let it stand.
+///
+/// Kept apart from [`IN_FORCE`] because a refused flag leaves the pin in force, and `doctor`, which
+/// runs past a refusal, needs the flag to name what was refused (SANDBOX-22).
+static FLAG_GIVEN: OnceLock<SandboxMode> = OnceLock::new();
+
+/// Record the mode `--sandbox` named. The first call wins.
+pub fn note_flag(mode: SandboxMode) {
+    let _ = FLAG_GIVEN.set(mode);
+}
+
+/// The mode `--sandbox` named, or `None` where the run was given none.
+pub fn flag_given() -> Option<SandboxMode> {
+    FLAG_GIVEN.get().copied()
+}
+
 /// The mode the entry point settled on, or the default where it settled none (a test, or a front
 /// end started by something other than the command line).
 pub fn in_force() -> Choice {

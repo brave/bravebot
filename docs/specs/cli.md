@@ -371,6 +371,10 @@ the case a directory listing calls healthy, and it is the one the reader cannot 
 `verified-by: bravebot_cli::doctor::doctor_says_nothing_about_a_managed_layer_that_is_not_there`
 `verified-by: bravebot_cli::doctor::doctor_names_a_managed_file_that_pinned_nothing`
 `verified-by: bravebot_cli::doctor::doctor_names_the_sandbox_mode_and_where_it_came_from`
+`verified-by: bravebot_cli::doctor::doctor_names_a_sandbox_flag_as_the_choice_in_force`
+`verified-by: bravebot_cli::doctor::doctor_reports_a_sandbox_flag_the_managed_file_refuses`
+`verified-by: bravebot_cli::doctor::doctor_reports_a_gateway_endpoint_without_the_userinfo_in_its_base_url`
+`verified-by: bravebot_cli::doctor::doctor_reports_the_backend_endpoints_without_userinfo`
 
 <a id="CLI-8"></a>
 ### CLI-8: `--mode` chooses how a one-shot is run; the default is the turn loop

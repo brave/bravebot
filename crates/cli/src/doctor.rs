@@ -20,19 +20,24 @@ use std::process::ExitCode;
 /// The line `doctor` gives the sandbox mode: which it is and where it was chosen, or what the
 /// managed file refuses.
 ///
-/// Resolved from the files alone. A flag on `doctor` is not part of what the machine is set to, and
-/// the report is of that.
+/// Resolved as a session would be, `flag` being the `--sandbox` this run was given, so a flag is
+/// named as the choice in force and one the managed floor refuses is reported as the refusal it
+/// is, which is what lets a person holding it read what the machine pins.
 pub(crate) fn sandbox_mode_line(
     settings: &bravebot_config::Settings,
     managed: &Managed,
+    flag: Option<bravebot_sandbox::SandboxMode>,
 ) -> Result<String, String> {
     use bravebot_config::sandbox::{Source, resolve};
     let label = t!(doctor_sandbox_mode);
-    match resolve(None, settings, managed) {
+    match resolve(flag, settings, managed) {
         Ok(choice) => {
             let detail = match choice.source {
-                Source::Default | Source::Flag => {
+                Source::Default => {
                     t!(doctor_sandbox_default, mode = choice.mode.name()).to_string()
+                }
+                Source::Flag => {
+                    t!(session_sandbox_from_flag, mode = choice.mode.name()).to_string()
                 }
                 Source::File(path) | Source::Managed(path) => t!(
                     doctor_sandbox_from,
@@ -987,7 +992,7 @@ pub(crate) fn doctor() -> ExitCode {
     // Beside the confinement the platform offers, since the two answers are read together: what
     // can be enforced here, and how much of the machine a program is held out of. A mode the managed
     // file refuses is a configuration error, as a file the session could not use is.
-    match sandbox_mode_line(&settings, &managed) {
+    match sandbox_mode_line(&settings, &managed, bravebot_config::sandbox::flag_given()) {
         Ok(line) => println!("{line}"),
         Err(problem) => doctor_found(&mut ending, Ending::Configuration, problem),
     }
@@ -1163,6 +1168,22 @@ fn report_aws_session(profile: Option<&str>) {
     );
 }
 
+/// The URL `doctor` gives for a gateway's chat endpoint, without the userinfo a `baseURL` may state.
+fn gateway_endpoint(provider: &bravebot_config::provider::Provider) -> String {
+    bravebot_config::provider::without_userinfo(&provider.chat_completions_url())
+}
+
+/// The URLs `doctor` gives for the Brave backend's free and premium endpoints, without the userinfo
+/// the variable that names one may state.
+fn aichat_endpoints(config: &Config) -> (String, Option<String>) {
+    (
+        bravebot_config::provider::without_userinfo(&config.chat_completions_url()),
+        config
+            .premium_chat_completions_url()
+            .map(|url| bravebot_config::provider::without_userinfo(&url)),
+    )
+}
+
 /// What `doctor` says about one configured gateway.
 ///
 /// Whether a credential can be found rather than what it is, because on this path the value is a
@@ -1174,7 +1195,7 @@ fn report_gateway(provider: &bravebot_config::provider::Provider) {
         t!(doctor_backend),
         t!(doctor_backend_gateway, gateway = provider.display_name()),
     );
-    fact(t!(doctor_endpoint), provider.chat_completions_url());
+    fact(t!(doctor_endpoint), gateway_endpoint(provider));
     fact(
         t!(doctor_key_name),
         gateway_credential(provider, |name| std::env::var(name).ok()),
@@ -1499,8 +1520,9 @@ pub(crate) fn what_outlives_revoking(held: bravebot_config::Held<'_>) -> Option<
 /// What `doctor` says about a build pointed at the Brave backend.
 fn report_aichat(config: &Config) {
     fact(t!(doctor_backend), t!(doctor_backend_aichat));
-    fact(t!(doctor_endpoint), config.chat_completions_url());
-    match config.premium_chat_completions_url() {
+    let (endpoint, premium) = aichat_endpoints(config);
+    fact(t!(doctor_endpoint), endpoint);
+    match premium {
         Some(url) => fact(t!(doctor_premium), &url),
         None => fact(t!(doctor_premium), t!(doctor_premium_absent)),
     }
@@ -3023,13 +3045,17 @@ mod tests {
     /// that says `workspace-write` where a machine pins `strict`.
     #[test]
     fn doctor_names_the_sandbox_mode_and_where_it_came_from() {
-        let unset = sandbox_mode_line(&bravebot_config::Settings::default(), &Managed::default())
-            .expect("nothing to refuse");
+        let unset = sandbox_mode_line(
+            &bravebot_config::Settings::default(),
+            &Managed::default(),
+            None,
+        )
+        .expect("nothing to refuse");
         assert!(unset.contains("workspace-write"), "{unset}");
         assert!(unset.contains("default"), "{unset}");
 
         let pin = pin_file("pinned", r#"{"sandbox": {"mode": "strict"}}"#);
-        let pinned = sandbox_mode_line(&bravebot_config::Settings::default(), &pin)
+        let pinned = sandbox_mode_line(&bravebot_config::Settings::default(), &pin, None)
             .expect("the pin alone is not a refusal");
         assert!(pinned.contains("strict"), "{pinned}");
         assert!(
@@ -3049,8 +3075,86 @@ mod tests {
         let settings = bravebot_config::Settings::layered(Some(home), None, None);
         let pin = pin_file("floor", r#"{"sandbox": {"mode": "strict"}}"#);
 
-        let refused = sandbox_mode_line(&settings, &pin).expect_err("under the floor");
+        let refused = sandbox_mode_line(&settings, &pin, None).expect_err("under the floor");
         assert!(refused.contains(&file.display().to_string()), "{refused}");
+        assert!(
+            refused.contains(&pin.path().expect("a pin").display().to_string()),
+            "{refused}"
+        );
+        assert!(
+            refused.contains("strict") && refused.contains("off"),
+            "{refused}"
+        );
+    }
+
+    /// CLI-7: a gateway's endpoint is reported without the credential its `baseURL` states. The
+    /// regression it rejects is the endpoint line printing `user:token@host` while the `ends` line
+    /// beside it drops it.
+    #[test]
+    fn doctor_reports_a_gateway_endpoint_without_the_userinfo_in_its_base_url() {
+        let serde_json::Value::Object(root) = serde_json::json!({"provider": {"gw": {"options": {
+            "baseURL": "https://user:sk-live-secret@gateway.invalid/v1"
+        }}}}) else {
+            unreachable!()
+        };
+        let provider = bravebot_config::provider::Provider::all(&root)
+            .into_iter()
+            .next()
+            .expect("one gateway");
+        assert_eq!(
+            gateway_endpoint(&provider),
+            "https://gateway.invalid/v1/chat/completions"
+        );
+    }
+
+    /// CLI-7: the Brave backend's endpoints are reported without userinfo, for the premium host
+    /// too. The regression it rejects is stripping only the free one.
+    #[test]
+    fn doctor_reports_the_backend_endpoints_without_userinfo() {
+        let config = Config::from_lookup(|name| match name {
+            bravebot_config::env_var::SIGNING_KEY => Some("test-signing-key".to_string()),
+            bravebot_config::env_var::KEY_ID => Some("test-key-id".to_string()),
+            bravebot_config::env_var::ENDPOINT => Some("https://a:b@free.invalid".to_string()),
+            bravebot_config::env_var::PREMIUM_ENDPOINT => {
+                Some("https://c:d@premium.invalid".to_string())
+            }
+            _ => None,
+        })
+        .expect("complete");
+        let (free, premium) = aichat_endpoints(&config);
+        assert_eq!(free, "https://free.invalid/v1/chat/completions");
+        assert_eq!(
+            premium.as_deref(),
+            Some("https://premium.invalid/v1/chat/completions")
+        );
+    }
+
+    /// SANDBOX-22: a `--sandbox` flag is the choice in force and is named as the source. The
+    /// regression it rejects is `doctor` resolving from the files alone and calling it the default.
+    #[test]
+    fn doctor_names_a_sandbox_flag_as_the_choice_in_force() {
+        let line = sandbox_mode_line(
+            &bravebot_config::Settings::default(),
+            &Managed::default(),
+            Some(bravebot_sandbox::SandboxMode::Strict),
+        )
+        .expect("nothing to refuse");
+        assert!(line.contains("strict"), "{line}");
+        assert!(line.contains("--sandbox"), "{line}");
+        assert!(!line.contains("default"), "{line}");
+    }
+
+    /// SANDBOX-22: a flag the managed floor refuses is reported as a refusal that names the pin
+    /// rather than passing silently. The regression it rejects is the pin being reported alone.
+    #[test]
+    fn doctor_reports_a_sandbox_flag_the_managed_file_refuses() {
+        let pin = pin_file("flag-floor", r#"{"sandbox": {"mode": "strict"}}"#);
+        let refused = sandbox_mode_line(
+            &bravebot_config::Settings::default(),
+            &pin,
+            Some(bravebot_sandbox::SandboxMode::Off),
+        )
+        .expect_err("under the floor");
         assert!(
             refused.contains(&pin.path().expect("a pin").display().to_string()),
             "{refused}"

@@ -13,6 +13,23 @@
 use crate::Secret;
 use std::fmt;
 
+/// `url` as a report may print it: the userinfo of its authority dropped.
+///
+/// A `baseURL`, or an endpoint a variable or a settings `env` block names, may state credentials
+/// (`https://user:token@host/v1`), and a report is pasted into issues. Only the authority is read
+/// for an `@`, so one in a path or a query is kept.
+pub fn without_userinfo(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    format!("{scheme}://{host}{tail}")
+}
+
 /// The endpoints known by the name a provider block gives them.
 ///
 /// Here because the other tool resolves this from a registry it fetches, and a block copied out of it
@@ -617,6 +634,23 @@ fn ceiling(limit: Option<&serde_json::Value>) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CLI-7: only the authority's userinfo goes. The regression it rejects is cutting at the last
+    /// `@` of the whole string, which would eat a path or query that holds one.
+    #[test]
+    fn userinfo_is_dropped_from_the_authority_alone() {
+        for (stated, shown) in [
+            ("https://u:p@host.invalid/v1", "https://host.invalid/v1"),
+            ("https://u:p@host.invalid:8443", "https://host.invalid:8443"),
+            ("https://u:p@w@host.invalid/v1", "https://host.invalid/v1"),
+            ("https://host.invalid/v1/@x", "https://host.invalid/v1/@x"),
+            ("https://host.invalid?a=b@c", "https://host.invalid?a=b@c"),
+            ("https://u@host.invalid#f", "https://host.invalid#f"),
+            ("host.invalid/v1", "host.invalid/v1"),
+        ] {
+            assert_eq!(without_userinfo(stated), shown, "{stated}");
+        }
+    }
 
     fn parsed(text: &str) -> Vec<Provider> {
         let serde_json::Value::Object(root) = serde_json::from_str(text).expect("json") else {

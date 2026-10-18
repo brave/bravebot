@@ -353,6 +353,9 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
             ));
         }
     };
+    if let Some(mode) = sandbox_flag {
+        bravebot_config::sandbox::note_flag(mode);
+    }
     match bravebot_config::sandbox::resolve(
         sandbox_flag,
         &bravebot_config::Settings::load(),

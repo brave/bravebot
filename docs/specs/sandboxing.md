@@ -2064,6 +2064,8 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_cli::main::the_sandbox_flag_takes_one_of_four_words_and_the_last_wins`
 `verified-by: bravebot_cli::main::the_sandbox_flag_refuses_a_word_that_is_not_a_mode`
 `verified-by: bravebot_cli::doctor::doctor_names_the_sandbox_mode_and_where_it_came_from`
+`verified-by: bravebot_cli::doctor::doctor_names_a_sandbox_flag_as_the_choice_in_force`
+`verified-by: bravebot_cli::doctor::doctor_reports_a_sandbox_flag_the_managed_file_refuses`
 `verified-by: bravebot_cli::doctor::doctor_reports_a_mode_the_managed_file_refuses`
 `verified-by: bravebot_cli::main::a_refused_mode_says_what_it_does_more_of_and_suggests_a_mode_the_pin_keeps`
 `verified-by: bravebot_cli::running::the_sandbox_flag_is_read_before_the_run_starts`
