@@ -235,14 +235,15 @@ pub fn lines(
 }
 
 /// The network the opening screen reports: open under `off`, which confines nothing for a closed
-/// network to bind, so the screen does not claim a boundary the session does not have.
+/// network to bind, so the screen does not claim a boundary the session does not have, and closed
+/// under `read-only`, which closes it whatever the setting says (SANDBOX-22).
 fn network_shown(
     network: bravebot_sandbox::network::Network,
     mode: bravebot_sandbox::SandboxMode,
 ) -> bravebot_sandbox::network::Network {
     match mode {
         bravebot_sandbox::SandboxMode::Off => bravebot_sandbox::network::Network::Open,
-        _ => network,
+        _ => mode.network_in_force(network),
     }
 }
 
@@ -472,8 +473,20 @@ mod tests {
     fn a_closed_network_is_not_claimed_for_programs_nothing_confines() {
         use bravebot_sandbox::SandboxMode;
         use bravebot_sandbox::network::Network;
-        for mode in [SandboxMode::WorkspaceWrite, SandboxMode::Strict] {
+        for mode in [
+            SandboxMode::WorkspaceWrite,
+            SandboxMode::Strict,
+            SandboxMode::ReadOnly,
+        ] {
             assert_eq!(network_shown(Network::Closed, mode), Network::Closed);
+        }
+        // `read-only` closes the network whatever the setting says; the others follow it.
+        assert_eq!(
+            network_shown(Network::Open, SandboxMode::ReadOnly),
+            Network::Closed
+        );
+        for mode in [SandboxMode::WorkspaceWrite, SandboxMode::Strict] {
+            assert_eq!(network_shown(Network::Open, mode), Network::Open);
         }
         assert_eq!(
             network_shown(Network::Closed, SandboxMode::Off),
