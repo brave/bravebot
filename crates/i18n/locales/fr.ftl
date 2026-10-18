@@ -183,7 +183,7 @@ cli-option-safe =
 cli-option-locked =
     Comme --safe, et ne lire aucun fichier de réglages du projet ou local, et refuser --dangerously-skip-permissions
 cli-locked-refuses-bypass =
-    --dangerously-skip-permissions est refusé avec --locked : une exécution verrouillée n'ouvre jamais le mode bypass
+    { $flag } est refusé avec --locked : une exécution verrouillée n'ouvre jamais le mode bypass
 cli-option-vet =
     Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
     promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
@@ -192,6 +192,11 @@ cli-option-sandbox =
 cli-option-dangerously-skip-permissions =
     Contourner toutes les vérifications de permission. Recommandé uniquement pour des bacs à sable
     sans accès à Internet
+cli-option-dangerously-bypass-approvals-and-sandbox =
+    Contourner toutes les vérifications de permission et ne confiner aucun programme, comme
+    --dangerously-skip-permissions avec --sandbox off. Recommandé uniquement pour des machines que vous pouvez perdre
+cli-bypass-and-sandbox-disagree =
+    --dangerously-bypass-approvals-and-sandbox désactive le bac à sable, et --sandbox { $mode } le demande actif. Donnez l'un des deux
 cli-option-help = Afficher ce message
 cli-option-version = Afficher la version
 
@@ -250,7 +255,7 @@ cli-agent-setting-gone =
     le réglage agent désigne { $definition }, qui n'a pas été résolue : poursuite sans définition
 cli-plain-working-under-model = chaque demande est adressée à { $definition }, qui demande { $model }
 cli-bypass-unreachable =
-    --dangerously-skip-permissions est refusé : permissions.bypassUnreachable dans { $path } rend
+    { $flag } est refusé : permissions.bypassUnreachable dans { $path } rend
     ce mode inaccessible ici. Retirez-le de ce fichier, ou lancez sans l'option.
 cli-sandbox-needs-a-mode = --sandbox demande l'un de : { $names }
 cli-sandbox-refused-flag =

@@ -106,10 +106,11 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
 | `--tools <a,b,c>` | offer the agent only the named tools; a tool a setting removed stays removed, and no MCP server's tools are offered ([below](#--tools-abc-and---no-shell)) |
 | `--no-shell` | offer no tool that runs a program or reads what one printed: `run`, `read_output` and `job_output` ([below](#--tools-abc-and---no-shell)) |
-| `--locked` | as `--safe`, and read no project or local settings file; refuse `--dangerously-skip-permissions` and make the bypass mode unreachable ([below](#--locked)) |
+| `--locked` | as `--safe`, and read no project or local settings file; refuse `--dangerously-skip-permissions` and `--dangerously-bypass-approvals-and-sandbox` and make the bypass mode unreachable ([below](#--locked)) |
 | `--safe` | load none of your hooks, skills, definitions, MCP server requests or `AGENTS.md`, and say so once; sign-in, model and permissions still apply |
 | `--incognito` | write nothing to `~/.bravebot`: no history, no session record, no preference |
 | `--dangerously-skip-permissions` | bypass every permission check; recommended only for a sandbox with no internet access |
+| `--dangerously-bypass-approvals-and-sandbox` | as `--dangerously-skip-permissions` with `--sandbox off`: nothing is asked and no program is confined; refused where that flag is, and beside a `--sandbox` other than `off` |
 | `-h`, `--help` | show the help |
 | `-V`, `--version` | show the version |
 
@@ -139,7 +140,7 @@ sign-in, the model, permission rules and trust. `--bg` refuses it.
 For a run on a shared machine, or one whose checkout you do not trust. It does what `--safe` does,
 and reads settings from only your own file under `~/.bravebot`, the managed file and the one
 `--settings` names: the checkout's `.bravebot/settings.json` and `settings.local.json` are not read.
-It refuses `--dangerously-skip-permissions`, and the bypass mode cannot be reached from the keyboard
+It refuses `--dangerously-skip-permissions` and `--dangerously-bypass-approvals-and-sandbox`, and the bypass mode cannot be reached from the keyboard
 either. A permission question nobody can answer is declined, as it is in any unattended run. `--bg`
 refuses it.
 

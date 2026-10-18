@@ -261,6 +261,8 @@ shown to the person attached.
 `--dangerously-skip-permissions` with `--bg` is refused, and so is `/bg` from a session in bypass.
 The refusal says that a session nobody is watching does not run in a mode that answers every
 question, and names a one-shot run as the way to ask for that.
+`--dangerously-bypass-approvals-and-sandbox` with `--bg` is refused too, naming the flag as one the
+background session does not receive.
 
 An allow rule from the settings and a command line remembered from an earlier session do not
 answer a prompt in a background session. A prompt either would have answered is held, as every
