@@ -351,7 +351,9 @@ function createWindow(): void {
 
   bridge = new Bridge((message) => {
     if (message.session && message.event === 'turn.started') runningHandles.add(message.session)
-    if (message.session && (message.event === 'turn.done' || message.event === 'turn.error')) runningHandles.delete(message.session)
+    // A compaction asked for outside a turn has no `turn.started`; its first word is this phase.
+    if (message.session && message.event === 'phase' && message.data.phase === 'compacting') runningHandles.add(message.session)
+    if (message.session && (message.event === 'turn.done' || message.event === 'turn.error' || message.event === 'compact.done' || message.event === 'compact.error')) runningHandles.delete(message.session)
     // What this app has to say about the event, held until the event itself has been sent. See
     // the note where it is called.
     let after: (() => void) | null = null
@@ -396,6 +398,19 @@ function createWindow(): void {
         else if (owedCarryOver.delete(handle)) {
           message.data.consolidating = true
           after = () => void consolidate(handle, slug, carryOverPrompt)
+        }
+      }
+    }
+    // A compaction somebody asked for owes the bot the same consolidation as one a turn made.
+    if (message.event === 'compact.done' && message.data.compacted && typeof message.session === 'string') {
+      const handle = message.session
+      const slug = botHandles.get(handle)
+      if (slug && rootForSession(handle) && message.data.archived !== undefined) {
+        const before = bot(slug)?.archived ?? 0
+        noteBotArchived(slug, message.data.archived)
+        if (message.data.archived > before) {
+          message.data.consolidating = true
+          after = () => void consolidate(handle, slug)
         }
       }
     }
@@ -471,6 +486,7 @@ const ALLOWED = new Set([
   'session.mode',
   'session.sandbox',
   'session.rewind',
+  'session.compact',
   'turn.send',
   'turn.cancel',
   'mentions.offer',

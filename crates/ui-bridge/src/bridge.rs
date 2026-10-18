@@ -208,6 +208,7 @@ impl Bridge {
             "session.mode" => self.set_permission_mode(request),
             "session.sandbox" => self.set_sandbox_mode(request),
             "session.rewind" => self.rewind_session(request),
+            "session.compact" => self.compact_session(request),
             "turn.send" => self.send_turn(request),
             "mentions.offer" => {
                 let open = self
@@ -1379,6 +1380,65 @@ impl Bridge {
         });
 
         Ok(json!({ "run": run, "target": target }))
+    }
+
+    /// Summarise the session's earlier conversation, as the terminal's `/compact` does, and return
+    /// before the summary comes back.
+    ///
+    /// The session is busy until `compact.done` or `compact.error`, and `turn.cancel` stops it.
+    fn compact_session(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        if self.emitter.has_view(&handle) {
+            return Err(Failure::bad_request(
+                "session view version 1 does not support compaction",
+            ));
+        }
+        let requested_model = crate::models::selection(request.params.get("model"))?;
+
+        self.reap(&handle);
+
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        open.ready_for_work()?;
+
+        let model = requested_model.or_else(|| open.model.clone());
+        let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
+        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
+            return Err(Failure::bad_request(refused));
+        }
+        let project = open.project.clone();
+        let state = Arc::clone(&open.state);
+
+        let crate::running::Started {
+            running,
+            cancel,
+            finished,
+            target,
+            ..
+        } = Running::start();
+
+        if let Some(open) = self.open.get_mut(&handle) {
+            open.running = Some(running);
+            open.model = model.clone();
+        }
+        let emitter = self.emitter.clone();
+        let session = handle.clone();
+        self.workers_of(&handle).spawn(move || {
+            crate::compact::shorten(crate::compact::Shorten {
+                emitter,
+                session,
+                project,
+                state,
+                config,
+                model,
+                cancel,
+                finished,
+            });
+        });
+
+        Ok(json!({ "target": target }))
     }
 
     /// Put the session back to where it stood `steps` turns ago, on disk and in the conversation

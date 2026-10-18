@@ -557,6 +557,35 @@ than patching what it drew.
 
 `rewind` is the list `turn.done` carries (§8.2), after the rewind.
 
+#### `session.compact`
+
+```json
+{ "id": 6, "method": "session.compact", "params": { "session": "s1", "model": "anthropic/claude-sonnet-4" } }
+```
+
+Summarises what the conversation holds before its last exchanges, as the terminal's `/compact`
+does. `model` is optional and is chosen as `turn.send`'s is. It is not a turn: no tool runs and
+no question is asked, and the turn count does not move. It holds the session as a turn does, so
+it is refused with `turn_in_flight` while a turn runs, and `turn.send` is refused while it runs.
+`turn.cancel` stops it. Returns `{ "target": "…" }` at once, and ends with one of these events:
+
+```json
+{ "event": "compact.done", "session": "s1", "data": {
+    "compacted": true, "summarised": 14, "kept": 6, "model": "…", "tokens": 1830,
+    "wonBack": 41200, "archived": 1, "rewind": [] } }
+{ "event": "compact.error", "session": "s1", "data": { "category": "network", "stopped": false } }
+```
+
+`compacted: false` means nothing was old enough to summarise; nothing was sent and the session
+is as it was, and the fields after `wonBack` are absent. Otherwise `summarised` and `kept` count
+the messages summarised and kept word for word, `tokens` is what the summary cost (charged to
+the current turn's spend), `wonBack` is what was sent less what came back in its place, and
+`archived` is `session.open`'s. Every rewind point describes the conversation from before the
+summary, so `rewind` is always empty after one.
+
+`compact.error` leaves the conversation as it was. `category` is a failure category as
+`turn.error` names one (§8.3), or `cancelled` with `stopped: true` after `turn.cancel`.
+
 ### 7.2 Turns
 
 #### `turn.send`
@@ -905,6 +934,8 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `trust.request` | `{ directory, keeping }` | initial project trust; `keeping` as §9 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
 | `turn.error` | see §8.3 | `Err(TurnError)` |
+| `compact.done` | `{ compacted, summarised, kept, tokens, wonBack, model, archived, rewind }`, see §7.1 | `session.compact` finished |
+| `compact.error` | `{ category, stopped }` | `session.compact` failed or was stopped |
 
 `Activity` serialises as:
 

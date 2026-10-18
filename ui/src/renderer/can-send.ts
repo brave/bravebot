@@ -14,3 +14,11 @@ export interface SendState {
 export function canSend(live: SendState | null | undefined, backendReady: boolean | null | undefined, draft: string): boolean {
   return !!live && !live.running && !live.askingTrust && backendReady !== false && draft.trim().length > 0
 }
+
+/**
+ * Whether the conversation may be summarised now: the session is idle, trusted, and somebody has
+ * said something in it. The agent decides whether enough of it is old enough, and says so.
+ */
+export function canCompact(live: (SendState & { entries: readonly { kind: string }[] }) | null | undefined): boolean {
+  return !!live && !live.running && !live.askingTrust && live.entries.some((entry) => entry.kind === 'user')
+}

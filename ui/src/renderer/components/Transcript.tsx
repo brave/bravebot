@@ -121,6 +121,10 @@ interface Props {
   /** Start a manifest run from the draft. Absent where the window cannot start one. */
   onPlan?: () => void
   onCancel: () => void
+  /** Summarise the earlier conversation now. */
+  onCompact: () => void
+  /** Whether the conversation can be summarised now. */
+  canCompact: boolean
   onDecide: Answer
   onAnswer: AnswerQuestions
   /** Begin a session from what was said before a named prompt. */
@@ -290,6 +294,8 @@ export function Transcript({
   onSandbox,
   onSubmit,
   onPlan,
+  onCompact,
+  canCompact,
   reading,
   onCancel,
   onDecide,
@@ -432,6 +438,7 @@ export function Transcript({
   const send = useEvent(() => { latest(); onSubmit(); toComposer() })
   const queue = useEvent(onQueue)
   const cancel = useEvent(onCancel)
+  const compact = useEvent(onCompact)
   const plan = useEvent(() => { latest(); onPlan?.() })
   const draftChanged = useEvent(onDraft)
   const chooseModelFor = useEvent(onModel)
@@ -750,6 +757,8 @@ export function Transcript({
           compacting={live.phase === 'compacting'}
           contextTokens={live.contextTokens}
           archived={live.archived}
+          onCompact={compact}
+          canCompact={canCompact}
           pending={!!pending}
           scope={bot ? 'bot' : 'conversation'}
           draft={draft}

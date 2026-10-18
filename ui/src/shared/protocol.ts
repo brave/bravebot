@@ -898,6 +898,25 @@ export interface EventMap {
   'ask.request': AskRequest
   'turn.done': TurnDone
   'turn.error': TurnError
+  'compact.done': CompactDone
+  'compact.error': { category: string; stopped: boolean }
+}
+
+/** How a compaction asked for outside a turn went. Without `compacted`, nothing was old enough. */
+export interface CompactDone {
+  compacted: boolean
+  /** Messages summarised, and messages kept word for word. */
+  summarised: number
+  kept: number
+  /** What the summary cost, and what was sent less what came back in its place. */
+  tokens: number
+  wonBack: number
+  model?: string
+  /** As on `OpenedSession`; absent when nothing was compacted. */
+  archived?: number
+  rewind?: RewindPoint[]
+  /** Set by the main process when it answers the compaction with a bot's consolidation turn. */
+  consolidating?: boolean
 }
 
 export type EventName = keyof EventMap

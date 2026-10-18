@@ -1,5 +1,6 @@
 import type { BridgeEvent } from '../shared/protocol'
 import * as t from './transcript'
+import { failureSummary } from './failure'
 import { receiveTurn } from './turn-details'
 import type { Live } from './live'
 
@@ -152,6 +153,37 @@ export function apply(
           rewind: message.data.rewind ?? [],
         }
       }
+      // A compaction somebody asked for is not a turn: no turn marker, and the queue is left as it
+      // was. The context reading stays the last request's until the next turn measures it.
+      case 'compact.done': {
+        if (!message.data.compacted) {
+          return { ...old, running: false, phase: null,
+            entries: [...old.entries, t.narrated('Nothing old enough to summarise yet.')] }
+        }
+        refresh()
+        const archived = message.data.archived ?? old.archived
+        const { summarised, kept } = message.data
+        return {
+          ...old,
+          running: message.data.consolidating === true,
+          phase: null,
+          archived,
+          rewind: message.data.rewind ?? [],
+          entries: [...old.entries, t.narrated(`Summarised ${summarised} earlier ${summarised === 1 ? 'message' : 'messages'}; ${kept} kept word for word.`)],
+          bot: old.bot && archived > old.archived ? { ...old.bot, grounded: false } : old.bot,
+        }
+      }
+      case 'compact.error':
+        return {
+          ...old,
+          running: false,
+          phase: null,
+          entries: [...old.entries, t.narrated(message.data.stopped
+            ? 'Compaction stopped. The conversation is as it was.'
+            : message.data.category === 'internal'
+              ? 'Compaction failed. The conversation is as it was.'
+              : `Compaction failed: ${failureSummary(message.data.category).title}. The conversation is as it was.`)],
+        }
       default:
         return old
     }
