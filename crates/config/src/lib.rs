@@ -1796,9 +1796,6 @@ mod tests {
         assert_eq!(config.context_budget, 102_400);
     }
 
-    /// A cramped window is taken at its word. Raising it to something more comfortable would put
-    /// the budget above the window, and a budget above the window does not delay compaction, it
-    /// removes it: the failure this whole figure exists to prevent.
     /// The model in force is the one named, or the configured default where none is: the roster is
     /// asked about that name. Asking about the pick alone, or about the first row, is the fault.
     #[test]
@@ -1818,6 +1815,9 @@ mod tests {
         assert_eq!(config.context_budget, DEFAULT_CONTEXT_BUDGET);
     }
 
+    /// A cramped window is taken at its word. Raising it to something more comfortable would put
+    /// the budget above the window, and a budget above the window does not delay compaction, it
+    /// removes it: the failure this whole figure exists to prevent.
     #[test]
     fn a_small_advertised_window_is_believed_rather_than_raised() {
         let mut config = Config::from_lookup(complete_env).unwrap();
