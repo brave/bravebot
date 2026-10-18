@@ -8,7 +8,7 @@
 // Note that a planner shown untrusted content may not ask at all — that gate is upstream
 // and deliberate — so this drives a session with nothing quarantined in it.
 import { mkdirSync } from 'node:fs'
-import { checker, launchLive } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -30,7 +30,7 @@ if (await page.locator('.trust').isVisible().catch(() => false)) {
   await page.waitForTimeout(600)
 }
 
-await page.locator('.composer textarea').fill(
+await page.locator(COMPOSER_INPUT).fill(
   'I want to add a --json flag to this project. Do not write anything. First, in ONE ask_user ' +
     'call, ask me two questions together: which approach, and what to name the flag. After I ' +
     'answer, make a SECOND ask_user call with one further question. Then just summarise my ' +
@@ -75,7 +75,7 @@ check(
   await page.getByRole('button', { name: 'Stop', exact: true }).isEnabled(),
   'the send control is Stop while the questions stand',
 )
-const placeholder = await page.locator('.composer textarea').getAttribute('placeholder')
+const placeholder = await page.locator(COMPOSER_INPUT).getAttribute('placeholder')
 check(
   (placeholder ?? '').includes('questions'),
   `and the composer says what is waiting (${placeholder})`,
@@ -159,7 +159,7 @@ if (again) {
 }
 
 const done = await page
-  .locator('.composer textarea:not([disabled])')
+  .locator(COMPOSER_IDLE)
   .waitFor({ state: 'visible', timeout: 150000 })
   .then(() => true)
   .catch(() => false)

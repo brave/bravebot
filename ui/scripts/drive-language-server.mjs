@@ -12,6 +12,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync }
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { COMPOSER_INPUT } from './drive-support.mjs'
 
 /** A language server that answers what a session asks of one, and says when it came up. */
 const SERVER = `#!/bin/sh
@@ -74,7 +75,7 @@ try {
   ;({ app, page, errors } = await launchWorld({ profile, env }))
   await openProject(page, app, project)
 
-  const composer = page.locator('.composer textarea')
+  const composer = page.locator(COMPOSER_INPUT)
   const stop = page.locator('.composer .stop')
   const cards = page.locator('.confirm.server')
   const ask = async (prompt) => {

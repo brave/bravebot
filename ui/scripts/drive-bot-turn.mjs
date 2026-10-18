@@ -9,7 +9,7 @@
 // Run it the way `drive-turn.mjs` is run. Like the other drivers it perturbs `bravebot-ui.json`,
 // and it puts its own keys back.
 
-import { checker, launch } from './drive-support.mjs'
+import { checker, launch, COMPOSER_INPUT, SIDEBAR_TAB } from './drive-support.mjs'
 import { appState, forgetCheckoutSessions, locateProfile, openBot, scratchCheckout, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -55,7 +55,7 @@ await openBot(app, page, {
 await page.locator('[data-test="project-trigger"]').click()
 await page.locator('[data-test="project-pick"]').click()
 await page.waitForTimeout(400)
-await page.locator('.composer textarea').fill('Hello.')
+await page.locator(COMPOSER_INPUT).fill('Hello.')
 await page.locator('.send').click()
 await page.waitForTimeout(1500)
 
@@ -131,7 +131,7 @@ check(
 )
 // A bot's conversation is a chat like any other, so it is in the Chats list too, marked with the
 // bot's face and named for the project it ran in.
-await page2.locator('.sidebar-tabs [role="option"]').nth(0).click()
+await page2.locator(SIDEBAR_TAB).nth(0).click()
 await page2.waitForTimeout(400)
 const listed = page2.locator('.session').filter({ has: page2.locator('.bot-face') })
   .filter({ has: page2.locator('.session-project', { hasText: checkout.split('/').at(-1) }) })

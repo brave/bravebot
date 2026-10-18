@@ -22,6 +22,7 @@
 // checkout as it was, and is a better shot than an approval nobody meant to give.
 
 import { join } from 'node:path'
+import { COMPOSER_IDLE, COMPOSER_INPUT } from '../../drive-support.mjs'
 
 /** How each of the five reads on screen, in the order somebody meets them. */
 const QUESTIONS = {
@@ -221,7 +222,7 @@ export default {
     // conversation acquires some. Filmed the other way round, this card never appears.
     await s.say('Ask it something', 'A real turn, against a real model.')
     await s.slowType(
-      '.composer textarea',
+      COMPOSER_INPUT,
       // Verbatim from `drive-ask.mjs`, which this borrows rather than re-invents: it is the
       // wording already known to make this agent reach for the question instead of simulating
       // one in its reply, and the second call gives the loop above a repeat to prove itself on.
@@ -240,12 +241,12 @@ export default {
     await s.say('The answers are in the record', 'Beside the questions they answer.', 2.4)
 
     // --- a command, and then permission to read what it printed ------------------------------
-    if (!(await page.locator('.composer textarea:not([disabled])').isVisible().catch(() => false))) {
+    if (!(await page.locator(COMPOSER_IDLE).isVisible().catch(() => false))) {
       s.skip('the first turn never finished, so there is no composer to use')
     }
     await s.say('The other direction', 'Before it acts, it asks.')
     await s.slowType(
-      '.composer textarea',
+      COMPOSER_INPUT,
       'Run `wc -l src/lib/tides.ts` here and tell me how many lines it printed.',
     )
     await s.click('.composer .send')

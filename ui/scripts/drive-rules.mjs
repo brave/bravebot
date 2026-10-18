@@ -12,6 +12,7 @@ import { createServer } from 'node:http'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, listening, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { COMPOSER_INPUT } from './drive-support.mjs'
 
 // The website, under two names. The person's file allows one and refuses the other.
 const reached = []
@@ -58,7 +59,7 @@ try {
   ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
   await openProject(page, app, project)
 
-  const composer = page.locator('.composer textarea')
+  const composer = page.locator(COMPOSER_INPUT)
   const stop = page.locator('.composer .stop')
   const replies = page.locator('.bubble.assistant')
   // A turn the fixture answers at once can show and hide Stop between two polls, so a turn is

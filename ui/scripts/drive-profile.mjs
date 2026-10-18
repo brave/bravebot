@@ -11,7 +11,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { launch } from './drive-support.mjs'
+import { launch, SIDEBAR_TAB } from './drive-support.mjs'
 
 /**
  * Where the app keeps what it remembers, asked of the app rather than composed here: `userData`
@@ -93,7 +93,7 @@ export async function openBot(app, page, { name, row, purpose, checkout, check }
   await page.evaluate(([name, purpose]) => window.bravebot.writeBot({ name, purpose }), [name, purpose])
   await page.reload()
   await page.waitForTimeout(2000)
-  await page.locator('.sidebar-tabs [role="option"]').nth(1).click()
+  await page.locator(SIDEBAR_TAB).nth(1).click()
   await page.waitForTimeout(400)
 
   const mine = page.locator('.bot').filter({ has: page.locator('.bot-name', { hasText: row }) })

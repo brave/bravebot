@@ -5,7 +5,10 @@
 // launching Electron.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { checker, launchLive, showSessions } from './drive-support.mjs'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { COMPOSER_IDLE, COMPOSER_INPUT, SIDEBAR_TAB, checker, launchLive, showSessions } from './drive-support.mjs'
 
 // A page that records what it was asked, in order, and answers every wait and click with the
 // outcome the test gives it.
@@ -116,4 +119,14 @@ test('launchLive returns the app and its first window with the list shown and er
   )
   assert.deepEqual(page.calls[0], ['waitForLoadState', 'domcontentloaded'])
   assert.deepEqual(lines, ['PAGE ERROR: boom', 'CONSOLE ERROR: bad'])
+})
+
+test('the selector constants name the classes the renderer owns', () => {
+  const read = (file) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer', 'components', file), 'utf8')
+  assert.match(read('Composer.tsx'), /<footer className="composer">/)
+  assert.match(read('Composer.tsx'), /querySelector\('textarea'\)/)
+  assert.match(read('Sidebar.tsx'), /className="sidebar-tabs"/)
+  assert.equal(COMPOSER_INPUT, '.composer textarea')
+  assert.equal(COMPOSER_IDLE, `${COMPOSER_INPUT}:not([disabled])`)
+  assert.equal(SIDEBAR_TAB, '.sidebar-tabs [role="option"]')
 })

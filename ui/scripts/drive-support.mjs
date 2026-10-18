@@ -8,6 +8,12 @@
 // `playwright-core` is loaded when a launch happens, so the helpers that only take a page can be
 // tested without a browser driver installed.
 
+/** The composer's text box, and the same while it accepts input (no turn is running). */
+export const COMPOSER_INPUT = '.composer textarea'
+export const COMPOSER_IDLE = '.composer textarea:not([disabled])'
+/** The left column's tabs: Chats first, Bots second. */
+export const SIDEBAR_TAB = '.sidebar-tabs [role="option"]'
+
 /** The `check` helper every driver prints with, and the list of what failed. */
 export function checker() {
   const problems = []
@@ -34,12 +40,12 @@ export const launch = async () => {
 // it was left that way.
 export async function showSessions(page) {
   await page
-    .locator('.sidebar-tabs [role="option"]')
+    .locator(SIDEBAR_TAB)
     .first()
     .waitFor({ state: 'visible', timeout: 15000 })
     .catch(() => undefined)
   await page
-    .locator('.sidebar-tabs [role="option"]')
+    .locator(SIDEBAR_TAB)
     .first()
     .click({ timeout: 3000 })
     .catch(() => undefined)

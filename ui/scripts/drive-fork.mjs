@@ -15,7 +15,7 @@
 // with the click added, because here the item is the thing being tested.
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { checker, launchLive } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_INPUT } from './drive-support.mjs'
 
 const OUT = '/tmp/bravebot-ui'
 mkdirSync(OUT, { recursive: true })
@@ -194,7 +194,7 @@ await page.locator('.bubble.user').nth(1).locator('.fork-here').click()
 await page.waitForTimeout(1200)
 
 check(
-  (await page.locator('.composer textarea').inputValue()) === prompts[1].text,
+  (await page.locator(COMPOSER_INPUT).inputValue()) === prompts[1].text,
   'the prompt that was cut is waiting in the composer, to be asked differently',
 )
 check(await page.locator('.fork-banner').isVisible(), 'the fork says where it came from')

@@ -12,6 +12,7 @@ import { createServer } from 'node:http'
 import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, listening, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { COMPOSER_INPUT } from './drive-support.mjs'
 
 const WIRE = 'mcp__weather__get_forecast'
 
@@ -54,7 +55,7 @@ try {
   await openProject(page, app, project)
   assert.equal(methods.length, 0, 'opening a session starts no server')
 
-  const composer = page.locator('.composer textarea')
+  const composer = page.locator(COMPOSER_INPUT)
   const stop = page.locator('.composer .stop')
   const ask = async (prompt) => {
     await composer.fill(prompt)

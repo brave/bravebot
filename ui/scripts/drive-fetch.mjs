@@ -12,6 +12,7 @@ import { createServer } from 'node:http'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, listening, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { COMPOSER_IDLE, COMPOSER_INPUT } from './drive-support.mjs'
 
 /** A line of the page the website serves, which is to reach no planner and no unmarked row. */
 const SENTINEL = 'SENTINEL-FETCHED-BYTES'
@@ -40,12 +41,12 @@ try {
   ;({ app, page, errors } = await launchWorld({ profile, env }))
   await openProject(page, app, project)
 
-  const composer = page.locator('.composer textarea')
+  const composer = page.locator(COMPOSER_INPUT)
   const ask = async (prompt) => {
     await composer.fill(prompt)
     await page.locator('.composer .send').click()
   }
-  const idle = () => page.locator('.composer textarea:not([disabled])').waitFor({ state: 'visible' })
+  const idle = () => page.locator(COMPOSER_IDLE).waitFor({ state: 'visible' })
 
   // ---- a fetch that is approved -------------------------------------------------------------
   await ask('Read the docs page.')
