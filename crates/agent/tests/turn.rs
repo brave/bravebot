@@ -14614,6 +14614,90 @@ fn a_file_a_delegate_changed_in_the_workspace_is_reported_by_the_turn_as_never_b
     );
 }
 
+/// TURN-3: a turn whose worker delegate wrote in the workspace is not told nothing is written, since
+/// the files are on disk and the delegate's report says so.
+///
+/// The turn runs past ROUNDS_BEFORE_WRITING after the report is in, so the line would be said if
+/// the driver counted only the planner's own write calls.
+#[test]
+fn a_turn_whose_worker_delegate_wrote_is_not_told_nothing_is_written() {
+    let scratch = Scratch::new("delegate-wrote-not-told-to-write");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut parent = vec![
+        tool_request("list_files", r#"{"directory":"."}"#),
+        tool_request(
+            "spawn_agent",
+            r#"{"kind":"worker","task":"WRITE-THE-SLICE"}"#,
+        ),
+        reply_with("waiting on the delegate"),
+    ];
+    parent.extend(
+        (0..ROUNDS_BEFORE_WRITING + 1).map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    parent.push(reply_with("done"));
+
+    let (endpoint, received, held) = serve_a_turn_and_its_delegate(
+        ("HAND-OFF-THE-SLICE", parent),
+        (
+            "WRITE-THE-SLICE",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"notes.txt","contents":"first slice"}"#,
+                ),
+                reply_with("wrote it"),
+            ],
+        ),
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAND-OFF-THE-SLICE"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was answered before its parent waited for it, so the rounds this test counts on may not have happened"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.txt")).ok(),
+        Some("first slice".to_string()),
+        "the worker's write did not land, so nothing here was tested"
+    );
+    let asked = every_request(&received);
+    let parent_requests: Vec<&String> = asked
+        .iter()
+        .filter(|body| body.contains("HAND-OFF-THE-SLICE"))
+        .collect();
+    assert!(
+        parent_requests.len() > ROUNDS_BEFORE_WRITING,
+        "the turn ended before the round the line would be said in"
+    );
+    assert!(
+        !parent_requests
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn whose worker wrote was told nothing is written"
+    );
+}
+
 /// A delegate that fails after writing has still left the file changed, so its write counts for
 /// the turn as one from a delegate that answered does.
 ///

@@ -106,6 +106,11 @@ it has ended. The sandbox mode `read-only` is the same kind of turn: the file to
 write in it ([SANDBOX-22](sandboxing.md#SANDBOX-22)), so the line is not said. The sandbox mode
 does not change during a turn.
 
+**A delegate's write counts.** A worker delegate that changed a file in the turn's workspace has
+written: the files are on disk and its report says which, so the line is not said once the delegate
+is taken back. Saying it would contradict the work just done and could send the planner to write the
+same change twice. It is the same record [TURN-4](#TURN-4) reads.
+
 **Counted since the last answer, not since the turn began.** A stop is usually not the end of a
 task: the next prompt is `continue`, and a change the stopped turn asked to write is the change
 being continued. An answer usually is the end of one, so the turn after it starts from nothing
@@ -116,6 +121,7 @@ at most a nudge the kept turns did not need, where starting set could withhold o
 
 `verified-by: bravebot_agent::turn::a_turn_that_writes_nothing_for_long_enough_is_told_so`
 `verified-by: bravebot_agent::turn::a_turn_that_has_written_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_whose_worker_delegate_wrote_is_not_told_nothing_is_written`
 `verified-by: bravebot_agent::turn::a_turn_in_plan_mode_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_under_read_only_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_moved_into_plan_mode_is_not_told_to_write`
