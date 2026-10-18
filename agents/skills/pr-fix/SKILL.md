@@ -115,6 +115,17 @@ signed commits are replaced that way is labelled `unverified-commits`.
 `pr-fix.py push` refuses when the pull request has signed commits and the push would leave more
 of its commits unsigned than it has now.
 
+0. Where the `run` tool is confined and `BRAVEBOT_PR_WORKTREES` puts worktrees outside the main
+   clone (`../` is the usual value), call `request_path` with `write: true` on the directory that
+   `BRAVEBOT_PR_WORKTREES` names, resolved against the main clone (that is the clone's parent only
+   when the value is `../`), before step 1. `pr-fix.py` creates and rebases worktrees there, and a
+   program may write nothing outside the workspace until a path is granted, so without it `start`
+   fails with `Operation not permitted` on the first call. Take the path from the working directory
+   and `BRAVEBOT_PR_WORKTREES`, never from the output of a failed run, which is untrusted: granting
+   a path because a program was refused it lets the program choose what it can reach. Where
+   permission prompts are off the grant is made without a question and also opens the worktrees to
+   the file tools; where they are on, the person answers once for the session. With the default
+   `.worktrees/` inside the main clone, skip this step.
 1. `python3 agents/skills/pr-fix/pr-fix.py start <pr>`
    Below, `...` stands for `python3 agents/skills/pr-fix/pr-fix.py`.
 2. For each `path:start-end` it prints, Read only that range of the worktree's file and Edit it so
