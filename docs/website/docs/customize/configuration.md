@@ -1397,8 +1397,23 @@ working directory or putting the mode that asks about nothing out of reach is so
 have a legitimate say in. Neither is pinned in the sense the variables are. A name in the list above is
 answered by this file and nothing else is consulted for it; these two take the strictest answer any
 file gave, so somebody may ask for either where this file did not, and no file of theirs can lift it
-where it did. The rules themselves are not read here: a rule names a path, a program or a host, which
-is deciding what a session may work on rather than whether it may leave the tree at all.
+where it did.
+
+`"permissions": { "deny": [...], "ask": [...] }` are rules, written as they are in any settings file, and
+they are added to the rules every other file wrote. A deny rule here refuses on every session on the
+machine in every mode, and nothing in a checkout or in a person's own file removes it:
+
+```json
+{
+  "permissions": {
+    "deny": ["Read(.env)", "Bash(git push *)"],
+    "ask": ["WebFetch"]
+  }
+}
+```
+
+A refusal names this file. A line that is not a rule is reported by `doctor` and in the session, and the
+rest of the list still applies. `allow` is never read from here, because a grant is the person's own.
 
 A layer that can pin a preference is a layer somebody uses to pin one. What two parties have a
 legitimate say in is where a request goes, whose account pays for it, and what a session on the machine

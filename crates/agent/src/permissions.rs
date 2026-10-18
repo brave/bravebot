@@ -1086,6 +1086,43 @@ mod tests {
         bravebot_config::Settings::layered(Some(home_dir), Some(&cwd), None)
     }
 
+    /// PERM-19 end to end: an administrator's deny rule refuses what the person's own `allow` rule
+    /// permits and what a checkout's layer says nothing against, and its ask rule is a question.
+    /// The failure this rejects is a managed rule that a lower layer's entry outranks.
+    #[test]
+    fn a_managed_deny_holds_against_the_persons_allow_and_a_checkouts_layer() {
+        let dir = crate::testutil::scratch_dir("bravebot-managed-deny");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let file = dir.join("managed.json");
+        std::fs::write(
+            &file,
+            r#"{"permissions": {"deny": ["Bash(git push *)"], "ask": ["Bash(make *)"]}}"#,
+        )
+        .expect("managed file");
+        let settings = layered_settings(
+            "managed-deny",
+            Some(r#"{"permissions": {"deny": ["Bash(ls)"]}}"#),
+            Some(r#"{"permissions": {"allow": ["Bash(git push *)", "Bash(make *)"]}}"#),
+        )
+        .under(&bravebot_config::Managed::at(&file));
+        let (permissions, rejected) = from_settings(&settings, None, Path::new("/nonexistent"));
+        assert!(rejected.is_empty(), "{rejected:?}");
+        assert_eq!(
+            permissions.for_command(&["git", "push", "origin"]),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_command(&["make", "all"]),
+            Decision::Ruled(Ruling::Ask)
+        );
+        assert_eq!(
+            permissions.for_command(&["ls"]),
+            Decision::Ruled(Ruling::Deny),
+            "the checkout's own rule stopped holding"
+        );
+    }
+
     /// A single leading slash is anchored at the settings file's own directory, which is the
     /// documented behaviour and the one somebody is most likely to get wrong.
     #[test]

@@ -961,8 +961,38 @@ have made each of those three depend on nobody else having spoken.
 `verified-by: bravebot_config::settings::saying_no_to_a_refusing_key_is_an_answer_rather_than_absence`
 `verified-by: bravebot_config::managed::the_two_keys_that_only_refuse_are_pinnable`
 `verified-by: bravebot_config::managed::a_pinned_refusal_that_is_not_a_boolean_is_absence_and_is_named`
-`verified-by: bravebot_config::managed::a_pinned_permission_rule_is_not_read`
 `verified-by: bravebot_cli::running::doctor_names_a_refusing_key_that_is_not_a_boolean`
+
+<a id="PERM-19"></a>
+### PERM-19: an administrator's `deny` and `ask` rules are added to every layer's, and `allow` is never read from the file
+
+The file an administrator pinned ([backends.md](backends.md)) may write `permissions.deny` and
+`permissions.ask`, in the spellings every other file uses. They are added to the rules every other
+layer wrote, ahead of them, so a refusal that both a person's rule and the administrator's would have
+made names the administrator's file. No other layer removes or overrides one: the lists only grow, and
+`deny` holds in every mode and over every `allow` rule, as it does for any layer ([PERM-2](#PERM-2)).
+A `/x` path rule in that file starts at the directory the file is in, and a `reason` is not read from
+it ([PERM-1](#PERM-1)). `allow` is not read from that file, and an entry of it is not reported.
+
+A line that is not a rule, an entry that is not a line, and a `permissions` block, `deny` or `ask`
+that is not the shape rules are read from are reported as they are for any layer
+([PERM-11](#PERM-11)), the last with the managed file named. `doctor` names `permissions.deny` and
+`permissions.ask` among what the file pinned.
+
+**Why.** A team that wants `Read(.env)` or `Bash(git push *)` refused on every machine otherwise has
+to ask each person to write it in a file they can edit. A rule that only narrows is one two parties
+may both have a say in, on the reasoning [PERM-18](#PERM-18) gives for its two keys and
+[BACKEND-38](backends.md#BACKEND-38) gives for the server and model lists. A grant is the person's own
+([PERM-14](#PERM-14)), so `allow` stays out: an administrator can take capability away and never add
+it. A rule matches routing only ([PERM-1](#PERM-1)), so the rule is kept as written.
+
+`verified-by: bravebot_config::managed::a_pinned_deny_or_ask_rule_is_read_and_named_as_pinned`
+`verified-by: bravebot_config::managed::a_pinned_allow_rule_is_not_read_or_reported`
+`verified-by: bravebot_config::managed::a_pinned_rule_list_that_is_not_readable_is_carried_out_to_be_reported`
+`verified-by: bravebot_config::settings::a_managed_rule_is_added_to_every_layers_and_names_the_managed_file`
+`verified-by: bravebot_config::settings::a_managed_slash_rule_starts_at_the_managed_directory`
+`verified-by: bravebot_config::settings::a_machine_with_only_pinned_rules_has_no_settings_of_its_own`
+`verified-by: bravebot_agent::permissions::a_managed_deny_holds_against_the_persons_allow_and_a_checkouts_layer`
 
 ## Known costs
 

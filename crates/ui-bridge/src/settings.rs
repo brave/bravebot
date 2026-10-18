@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 
 pub fn layers(project: Option<&Path>, selected: Option<&Path>) -> Settings {
-    Settings::layered(bravebot_agent::home::directory(), project, selected)
+    Settings::layered(bravebot_agent::home::directory(), project, selected).under(&Managed::load())
 }
 
 /// Settle, for the life of the process and before a session is assembled, the answers every turn

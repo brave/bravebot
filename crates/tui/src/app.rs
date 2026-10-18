@@ -3489,6 +3489,7 @@ impl RuleSources {
             self.named.as_deref(),
             Some(&self.started),
         )
+        .under(&bravebot_config::Managed::load())
     }
 
     /// The record of what was granted in `root`.
