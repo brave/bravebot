@@ -1138,6 +1138,8 @@ delegate-model-refused =
 
 delegate-stopped-narration = vous avez arrete ce delegue, il doit donc conclure avec ce qu'il a
 
+delegate-budget-narration = ce delegue a depense son budget de { $budget } jetons, il doit donc conclure avec ce qu'il a
+
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
 mcp-tools-title = proposer ces outils au modèle ?
@@ -2877,6 +2879,8 @@ delegate-servers-not-found =
 delegate-servers-declared = { $definition } déclare un serveur MCP dans sa ligne mcpServers, ce que seul ~/.bravebot/mcp.json peut faire, si bien que son délégué n'appelle aucun serveur MCP
 delegate-rounds-not-a-count =
     { $definition } a été ignoré : son nombre de cycles (rounds) doit être un entier supérieur à zéro
+delegate-budget-not-a-count =
+    { $definition } a été ignoré : son budget (budget) doit être un nombre de jetons supérieur à zéro, comme 500k ou 2m
 delegate-rounds-held =
     { $definition } demande { $asked } cycles, plus que les { $most } permis à un { $kind } : son délégué en reçoit { $most }
 delegate-memory-not-kept =

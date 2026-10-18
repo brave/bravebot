@@ -73,6 +73,7 @@ does not ask whether to trust the checkout, so it reads only the definitions in
 | `skills` | no | the [skills](skills.md) this delegate is offered, out of the ones the turn found; absent means all of them, and an empty line none |
 | `mcpServers` | no | the [MCP servers](mcp-servers.md) a `worker` calls, by alias, out of the ones the turn may; absent means all of them unless `tools` is written, and an empty line none |
 | `rounds` | no | how many rounds of tools this delegate may take before it has to answer, up to its kind's ceiling; absent or empty means the kind's own |
+| `budget` | no | the most tokens this delegate may spend before it has to answer, as `500000`, `500k` or `2m`; absent or empty means none, and only its rounds bound it |
 | `memory` | no | `project` or `local` keeps [a memory](#memory), a file its runs read and write themselves; absent or empty means none |
 | `isolation` | no | `checkout` or `worktree` gives each of its delegates [a checkout of its own](#a-checkout-of-its-own) to work in; absent or empty means none |
 | body | no | the standing instruction |
@@ -163,7 +164,15 @@ the delegate the ceiling, and the turn says so:
 
 The value is a whole number above zero. An empty line is the same as none. Anything else, `0` or
 `lots` or `1.5`, means the file does not load, and the turn names it. The planner cannot set a
-bound when it starts a delegate: only the definition can.
+number of rounds when it starts a delegate: only the definition can.
+
+**`budget` stops a delegate at a spend.** Rounds are a poor measure of cost, since one round can
+send a large context. `budget` is a number of tokens, and a delegate that has spent it loses its
+tools and answers with what it has. The planner and you are told the budget was spent and the work
+may not be finished. The planner can lower a definition's budget for one call with the `budget`
+field of [`spawn_agent`](../reference/tools.md#spawn_agent) and cannot raise it. The value is a count
+of tokens above zero, so `0`, `lots` or `3 credits` means the file does not load and the turn names
+it. A project definition of a name you defined keeps the lower of the two budgets.
 
 `rounds` bounds the definition only when the planner starts it as a delegate. A turn you run
 yourself with `/agent` is yours, and carries no bound, as any turn you are watching does.

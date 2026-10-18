@@ -3568,6 +3568,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         task: &Labelled<String>,
         keeping: Option<&Labelled<Vec<String>>>,
     ) -> Gated<crate::delegate::DelegateSpec> {
+        self.before_delegate_within(kind, task, keeping, None, None)
+    }
+
+    /// [`Policy::before_delegate`] for a call that may also name a token budget, and from a run
+    /// that may itself be held to one (DELEGATE-29).
+    ///
+    /// `budget` is the call's figure and is read as `keeping` is: it must be public. It can only
+    /// lower the bound, so the delegate carries the least of its definition's figure, the call's
+    /// and `parent_left`, the tokens the run starting it has left under its own budget. A run with
+    /// none left starts no delegate. A figure
+    /// from a context that has met something untrusted is refused with the rest of the call, by
+    /// the integrity gate.
+    pub fn before_delegate_within(
+        &mut self,
+        kind: &Labelled<String>,
+        task: &Labelled<String>,
+        keeping: Option<&Labelled<Vec<String>>>,
+        budget: Option<&Labelled<u64>>,
+        parent_left: Option<u64>,
+    ) -> Gated<crate::delegate::DelegateSpec> {
         let next = self.spawned + 1;
         let Some(id) = self.number(next) else {
             let at = self.at.map(|at| at.to_string()).unwrap_or_default();
@@ -3588,6 +3608,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 Principle::Capability,
                 "this run's definition names the tools it may use and spawn_agent is not one of \
                  them; do the work yourself or say in the report what is left"
+                    .to_string(),
+            ));
+        }
+
+        if parent_left == Some(0) {
+            return Err(self.deny(
+                "delegate",
+                Principle::Capability,
+                "this run has spent its token budget, so it may not start a delegate; answer \
+                 with what you have and say in the report what is left"
                     .to_string(),
             ));
         }
@@ -3624,6 +3654,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 format!(
                     "mcp_servers is {label}, and private content must not decide what a \
                      delegate holds; name the servers rather than pasting what was read"
+                ),
+            ));
+        }
+
+        if let Some(label) = budget
+            .map(Labelled::label)
+            .filter(|label| !label.is_public())
+        {
+            return Err(self.deny(
+                "delegate",
+                Principle::Confinement,
+                format!(
+                    "budget is {label}, and private content must not decide how much a \
+                     delegate may spend; name a figure rather than pasting what was read"
                 ),
             ));
         }
@@ -3808,6 +3852,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let proof = Declassification::authorise("a delegate's prompt, carried not read");
         let task = task.clone().declassify(&proof);
         let rounds = selected.rounds();
+        // A figure and nothing else, which can only take away from what the definition set, as
+        // the call's server list can (DELEGATE-29).
+        let asked = budget.map(|figure| {
+            let proof = Declassification::authorise("a delegate's token budget");
+            figure.clone().declassify(&proof)
+        });
+        let asked = match (asked, parent_left) {
+            (Some(asked), Some(left)) => Some(asked.min(left)),
+            (asked, left) => asked.or(left),
+        };
 
         // The limits this run is under come first and stay, so a delegate cannot write where the
         // run that started it may not. The definition's own are read here because reading one
@@ -3848,7 +3902,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             self.tree.clone(),
         )
         .holding(self.holds)
-        .limited_to(limits);
+        .limited_to(limits)
+        .budgeted_to(asked);
 
         let beneath = if spec.may_delegate() {
             "and a place in this turn's tree of delegates"
@@ -3930,8 +3985,37 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         bound: usize,
         finish: crate::delegate::Finish,
     ) {
+        self.record_delegate_end_within(id, bound, None, finish);
+    }
+
+    /// [`Policy::record_delegate_end`] for a delegate that also carried a token budget.
+    ///
+    /// `spent` is that budget and the tokens the run reported, both counts the driver holds. A
+    /// run that reached it says so, beside the round limit where it reached that too, so the
+    /// trail names which bound ended the run (DELEGATE-29).
+    pub fn record_delegate_end_within(
+        &mut self,
+        id: crate::delegate::DelegateId,
+        bound: usize,
+        spent: Option<(u64, u64)>,
+        finish: crate::delegate::Finish,
+    ) {
         use crate::delegate::Finish;
+        let out_of_tokens = spent.filter(|(budget, tokens)| tokens >= budget);
         let (took, rounds, cause) = match finish {
+            Finish::Answered { took, rounds } if let Some((budget, _)) = out_of_tokens => {
+                let also = match rounds >= bound {
+                    true => " and its round limit",
+                    false => "",
+                };
+                (
+                    took,
+                    rounds,
+                    format!(
+                        "it spent its token budget of {budget}{also} and answered with what it had"
+                    ),
+                )
+            }
             Finish::Answered { took, rounds } if rounds >= bound => (
                 took,
                 rounds,
@@ -3944,7 +4028,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "it was stopped before it answered".to_string(),
             ),
             Finish::Failed { took, rounds, why } => {
-                (took, rounds, format!("it did not finish ({why})"))
+                let spent_up = match out_of_tokens {
+                    Some((budget, _)) => format!(", having spent its token budget of {budget}"),
+                    None => String::new(),
+                };
+                (took, rounds, format!("it did not finish ({why}){spent_up}"))
             }
             Finish::Lost => {
                 self.allow(
@@ -16643,6 +16731,265 @@ five
                 .expect_err("a private list must not steer a delegate");
             assert_eq!(err.principle, Principle::Confinement);
             assert!(format!("{err}").contains("mcp_servers"), "{err}");
+        }
+
+        fn a_definition_budgeted_at(tokens: Option<u64>) -> crate::delegate::Definitions {
+            let mut definitions = crate::delegate::Definitions::default();
+            let definition = crate::delegate::Definition::from_file(
+                "migrator",
+                "a staged refactor",
+                Kind::Worker,
+                None,
+                "",
+                ".bravebot/agents/migrator.md",
+            );
+            definitions.insert(match tokens {
+                Some(tokens) => definition.with_budget(tokens),
+                None => definition,
+            });
+            definitions
+        }
+
+        fn a_public_figure(tokens: u64) -> Labelled<u64> {
+            Labelled::new(tokens, Label::untrusted_public())
+        }
+
+        /// DELEGATE-29. The call's figure can only lower what the definition set: a call asking
+        /// for more than the definition allows is held to the definition's, and one asking for
+        /// less lowers it.
+        #[test]
+        fn a_call_budget_can_only_lower_the_definitions() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            policy.install_delegates(a_definition_budgeted_at(Some(1_000_000)));
+
+            let budget_of = |policy: &mut Policy<'_, RecordingSink>, call: Option<u64>| {
+                let call = call.map(a_public_figure);
+                policy
+                    .before_delegate_within(
+                        &argument("migrator"),
+                        &argument("migrate it"),
+                        None,
+                        call.as_ref(),
+                        None,
+                    )
+                    .expect("a resolved definition may be selected")
+                    .budget()
+            };
+
+            assert_eq!(budget_of(&mut policy, None), Some(1_000_000));
+            assert_eq!(budget_of(&mut policy, Some(250_000)), Some(250_000));
+            assert_eq!(budget_of(&mut policy, Some(9_000_000)), Some(1_000_000));
+        }
+
+        /// DELEGATE-29. A definition naming no budget leaves its delegate with none, and a call
+        /// supplies one, so the figure is a way to bound a task the definition left open.
+        #[test]
+        fn a_call_budget_bounds_a_definition_that_names_none() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            policy.install_delegates(a_definition_budgeted_at(None));
+
+            let unbounded = policy
+                .before_delegate(&argument("migrator"), &argument("migrate it"), None)
+                .expect("a resolved definition may be selected");
+            assert_eq!(unbounded.budget(), None);
+
+            let call = a_public_figure(40_000);
+            let bounded = policy
+                .before_delegate_within(
+                    &argument("migrator"),
+                    &argument("migrate it"),
+                    None,
+                    Some(&call),
+                    None,
+                )
+                .expect("a call may bound a definition that names none");
+            assert_eq!(bounded.budget(), Some(40_000));
+            let trail = format!("{:?}", sink.events());
+            assert!(
+                trail.contains("for at most 120 rounds and 40000 tokens"),
+                "the trail does not state the budget the delegate carries: {trail}"
+            );
+        }
+
+        /// DELEGATE-29. A figure the planner wrote from private content is refused, as a private
+        /// server list is, and nothing starts.
+        #[test]
+        fn a_private_budget_cannot_direct_a_delegate() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+
+            let private = Labelled::new(5_000, Label::untrusted_private());
+            let err = policy
+                .before_delegate_within(
+                    &argument("worker"),
+                    &argument("fix it"),
+                    None,
+                    Some(&private),
+                    None,
+                )
+                .expect_err("a private figure must not steer a delegate");
+            assert_eq!(err.principle, Principle::Confinement);
+            assert!(format!("{err}").contains("budget"), "{err}");
+            assert_eq!(
+                policy.delegates_started().count(),
+                0,
+                "a refused figure took a number"
+            );
+        }
+
+        /// DELEGATE-29. A fan-out gates each delegate on its own, so each carries the figure and a
+        /// sibling's spend is nobody else's.
+        #[test]
+        fn each_delegate_of_a_fan_out_carries_the_figure() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let call = a_public_figure(30_000);
+
+            let budgets: Vec<Option<u64>> = (0..3)
+                .map(|_| {
+                    policy
+                        .before_delegate_within(
+                            &argument("reader"),
+                            &argument("read it"),
+                            None,
+                            Some(&call),
+                            None,
+                        )
+                        .expect("a reader may be started")
+                        .budget()
+                })
+                .collect();
+            assert_eq!(budgets, [Some(30_000); 3]);
+        }
+
+        /// DELEGATE-29. A child is held to what its parent has left, so a parent cannot exceed its
+        /// budget by delegating, and a parent with nothing left still starts a child that may make
+        /// one request.
+        #[test]
+        fn a_child_is_never_given_more_than_its_parent_has_left() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            policy.install_delegates(a_definition_budgeted_at(Some(900_000)));
+
+            let child = |policy: &mut Policy<'_, RecordingSink>, call: Option<u64>, left| {
+                let call = call.map(a_public_figure);
+                policy
+                    .before_delegate_within(
+                        &argument("migrator"),
+                        &argument("migrate it"),
+                        None,
+                        call.as_ref(),
+                        left,
+                    )
+                    .expect("a resolved definition may be selected")
+                    .budget()
+            };
+
+            assert_eq!(child(&mut policy, None, Some(200_000)), Some(200_000));
+            assert_eq!(
+                child(&mut policy, Some(50_000), Some(200_000)),
+                Some(50_000)
+            );
+            assert_eq!(child(&mut policy, None, Some(2_000_000)), Some(900_000));
+            let bare = policy
+                .before_delegate_within(
+                    &argument("reader"),
+                    &argument("read it"),
+                    None,
+                    None,
+                    Some(70_000),
+                )
+                .expect("a reader may be started");
+            assert_eq!(
+                bare.budget(),
+                Some(70_000),
+                "a child with no figure of its own"
+            );
+        }
+
+        /// DELEGATE-29. A run with nothing left under its own budget starts no delegate, and the
+        /// refusal takes no number, so the next delegate it could start is numbered as the first.
+        #[test]
+        fn a_run_with_no_budget_left_starts_no_delegate() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+
+            let err = policy
+                .before_delegate_within(
+                    &argument("reader"),
+                    &argument("read it"),
+                    None,
+                    None,
+                    Some(0),
+                )
+                .expect_err("an exhausted run must not delegate");
+            assert_eq!(err.principle, Principle::Capability);
+            assert!(format!("{err}").contains("spent its token budget"), "{err}");
+            assert_eq!(policy.delegates_started().count(), 0);
+
+            let spec = policy
+                .before_delegate_within(
+                    &argument("reader"),
+                    &argument("read it"),
+                    None,
+                    None,
+                    Some(1),
+                )
+                .expect("one token left is still a figure");
+            assert_eq!(spec.budget(), Some(1));
+            assert_eq!(spec.id().to_string(), "d1");
+        }
+
+        /// DELEGATE-29. The trail names which bound ended the run: the token budget, the round
+        /// limit, or both, and a run under both says it did not finish.
+        #[test]
+        fn a_delegates_end_names_the_budget_it_spent() {
+            use crate::delegate::Finish;
+            let took = std::time::Duration::from_secs(3);
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            let id = DelegateId::nth(1);
+            let answered = |rounds| Finish::Answered { took, rounds };
+            turn.record_delegate_end_within(id, 120, Some((5_000, 5_100)), answered(7));
+            turn.record_delegate_end_within(id, 120, Some((5_000, 5_100)), answered(120));
+            turn.record_delegate_end_within(id, 120, Some((5_000, 4_999)), answered(7));
+            turn.record_delegate_end_within(id, 120, Some((5_000, 4_999)), answered(120));
+            turn.record_delegate_end_within(
+                id,
+                120,
+                Some((5_000, 5_000)),
+                Finish::Failed {
+                    took,
+                    rounds: 9,
+                    why: "unavailable",
+                },
+            );
+            let said: Vec<String> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GatePassed { detail, .. } if detail.contains(": ended ") => {
+                        Some(detail.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                said,
+                [
+                    "d1: ended after 3.0s and 7 of 120 rounds: it spent its token budget of 5000 \
+                     and answered with what it had",
+                    "d1: ended after 3.0s and 120 of 120 rounds: it spent its token budget of \
+                     5000 and its round limit and answered with what it had",
+                    "d1: ended after 3.0s and 7 of 120 rounds: it answered",
+                    "d1: ended after 3.0s and 120 of 120 rounds: it reached its round limit and \
+                     answered with what it had",
+                    "d1: ended after 3.0s and 9 of 120 rounds: it did not finish (unavailable), \
+                     having spent its token budget of 5000",
+                ]
+            );
         }
 
         /// The bound belongs to the definition, so nothing about a call can lengthen it. A

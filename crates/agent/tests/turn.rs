@@ -35103,6 +35103,302 @@ fn a_delegate_that_answered_early_says_nothing_about_a_limit() {
     );
 }
 
+/// What one run of a budgeted delegate left behind.
+struct BudgetRun {
+    /// Whether each request the delegate made carried tools, in order.
+    delegate_offered_tools: Vec<bool>,
+    /// The message that put the delegate's report (or its failure) in front of the planner.
+    told: String,
+    /// What the person was told when it finished, and whether as a failure.
+    note: String,
+    failed: bool,
+    trail: Vec<String>,
+}
+
+/// A turn that starts one `definition` delegate with `call` as its arguments, whose delegate is
+/// answered by `script` and then refused if it asks again.
+///
+/// The turn's own requests carry `BUDGET-TURN` and the delegate's carry only `BUDGET-TASK`, so the
+/// two scripts do not mix.
+fn run_budgeted_delegate(
+    name: &str,
+    definition: Option<&str>,
+    call: &str,
+    script: Vec<String>,
+    report_marker: &str,
+) -> BudgetRun {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("notes.txt"), "a line\n").expect("write the file");
+    let home = Scratch::new(&format!("{name}-home"));
+    if let Some(definition) = definition {
+        std::fs::create_dir_all(home.path.join("agents"))
+            .expect("create the definitions directory");
+        std::fs::write(home.path.join("agents").join("budgeted.md"), definition)
+            .expect("write the definition");
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut turn_script = vec![
+        tool_request("spawn_agent", call),
+        reply_with("waiting"),
+        reply_with("relayed"),
+    ]
+    .into_iter();
+    let mut delegate_script = script.into_iter();
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
+        match (body.contains("BUDGET-TURN"), body.contains("BUDGET-TASK")) {
+            (true, _) => turn_script.next().map(Some),
+            (false, true) => Some(delegate_script.next()),
+            (false, false) => None,
+        }
+    });
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("BUDGET-TURN").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn survives its delegate");
+
+    let asked = every_request(&received);
+    let delegate_offered_tools = asked
+        .iter()
+        .filter(|body| !body.contains("BUDGET-TURN"))
+        .map(|body| {
+            let request: serde_json::Value = serde_json::from_str(body).expect("a request");
+            request["tools"]
+                .as_array()
+                .is_some_and(|tools| !tools.is_empty())
+        })
+        .collect();
+    let told = asked
+        .iter()
+        .filter(|body| body.contains("BUDGET-TURN"))
+        .find(|body| body.contains(report_marker))
+        .unwrap_or_else(|| panic!("the planner was never told '{report_marker}'"))
+        .clone();
+    let (_, note, failed) = reporter
+        .delegates_finished
+        .first()
+        .expect("no delegate was reported as finishing")
+        .clone();
+    let trail = delegate_ends(&sink)
+        .into_iter()
+        .map(|(_, detail)| detail)
+        .collect();
+    BudgetRun {
+        delegate_offered_tools,
+        told,
+        note,
+        failed,
+        trail,
+    }
+}
+
+const BUDGET_DEFINITION: &str =
+    "---\nname: budgeted\ndescription: Reads.\nkind: reader\nbudget: 1000\n---\n\nRead.\n";
+
+/// DELEGATE-29: a delegate whose backend reports it has spent its budget loses its tools for the
+/// next request and answers with what it has, and the planner, the person and the trail are told
+/// the budget was spent. Nothing here is read from the report: the figure is the backend's count
+/// against the one the spec fixed.
+#[test]
+fn a_delegate_that_spent_its_token_budget_loses_its_tools_and_says_so() {
+    let run = run_budgeted_delegate(
+        "delegate-budget-spent",
+        Some(BUDGET_DEFINITION),
+        r#"{"kind":"budgeted","task":"BUDGET-TASK"}"#,
+        vec![
+            tool_request_with_usage("read_file", r#"{"path":"notes.txt"}"#, 800, 300),
+            reply_with("WHAT-THE-BUDGET-BOUGHT"),
+        ],
+        "WHAT-THE-BUDGET-BOUGHT",
+    );
+
+    assert_eq!(
+        run.delegate_offered_tools,
+        [true, false],
+        "the request after the budget was spent still carried tools"
+    );
+    assert!(
+        run.told
+            .contains("It spent its budget of 1000 tokens and may not be finished."),
+        "the planner was not told the budget was spent: {}",
+        run.told
+    );
+    assert!(
+        !run.failed,
+        "a delegate that answered was drawn as a failure"
+    );
+    assert!(
+        run.note
+            .contains("it spent its budget of 1000 tokens, so it may not be finished"),
+        "the person's note does not say the budget was spent: {}",
+        run.note
+    );
+    let [detail] = run.trail.as_slice() else {
+        panic!("the trail did not record one end: {:?}", run.trail);
+    };
+    assert!(
+        detail.ends_with("it spent its token budget of 1000 and answered with what it had"),
+        "the trail does not say the token budget ended the run: {detail}"
+    );
+}
+
+/// DELEGATE-29: a delegate that stays beneath its budget is not touched by it. A budget that
+/// stopped a run early would show here as a request without tools, or as the sentence beside an
+/// ordinary report.
+#[test]
+fn a_delegate_under_its_token_budget_is_unaffected_by_it() {
+    let run = run_budgeted_delegate(
+        "delegate-budget-under",
+        Some(BUDGET_DEFINITION),
+        r#"{"kind":"budgeted","task":"BUDGET-TASK"}"#,
+        vec![
+            tool_request_with_usage("read_file", r#"{"path":"notes.txt"}"#, 300, 100),
+            reply_with_usage("PLENTY-LEFT", 400, 100),
+        ],
+        "PLENTY-LEFT",
+    );
+
+    assert_eq!(run.delegate_offered_tools, [true, true]);
+    assert!(
+        !run.told.contains("spent its budget"),
+        "a delegate under its budget was reported as having spent it: {}",
+        run.told
+    );
+    assert!(!run.note.contains("spent its budget"), "{}", run.note);
+    assert!(
+        run.trail[0].ends_with("it answered"),
+        "the trail says something else ended the run: {:?}",
+        run.trail
+    );
+}
+
+/// DELEGATE-29: a backend that reports no usage does not stop a delegate. Its replies are counted
+/// from their words, which are far beneath a budget of a thousand tokens, so the delegate keeps
+/// its tools until its rounds end it.
+#[test]
+fn a_backend_reporting_no_usage_does_not_trip_the_token_budget() {
+    let run = run_budgeted_delegate(
+        "delegate-budget-no-usage",
+        Some(BUDGET_DEFINITION),
+        r#"{"kind":"budgeted","task":"BUDGET-TASK"}"#,
+        vec![
+            tool_request("read_file", r#"{"path":"notes.txt"}"#),
+            reply_with("NO-FIGURE-REPORTED"),
+        ],
+        "NO-FIGURE-REPORTED",
+    );
+
+    assert_eq!(run.delegate_offered_tools, [true, true]);
+    assert!(!run.told.contains("spent its budget"), "{}", run.told);
+}
+
+/// DELEGATE-29: the call's figure bounds a definition that names none, and a figure above the
+/// definition's does not raise it. Both would pass if the call's figure replaced the definition's
+/// whatever it was, which the second case rejects.
+#[test]
+fn a_call_budget_stops_a_delegate_and_cannot_raise_the_definitions() {
+    let spends = || {
+        vec![
+            tool_request_with_usage("read_file", r#"{"path":"notes.txt"}"#, 800, 300),
+            reply_with("CALL-BOUNDED"),
+        ]
+    };
+
+    let lowered = run_budgeted_delegate(
+        "delegate-budget-call-lowers",
+        Some(
+            "---\nname: budgeted\ndescription: Reads.\nkind: reader\nbudget: 5000\n---\n\nRead.\n",
+        ),
+        r#"{"kind":"budgeted","task":"BUDGET-TASK","budget":"1k"}"#,
+        spends(),
+        "CALL-BOUNDED",
+    );
+    assert_eq!(lowered.delegate_offered_tools, [true, false]);
+    assert!(
+        lowered.told.contains("spent its budget of 1000 tokens"),
+        "{}",
+        lowered.told
+    );
+
+    let unnamed = run_budgeted_delegate(
+        "delegate-budget-call-alone",
+        None,
+        r#"{"kind":"reader","task":"BUDGET-TASK","budget":1000}"#,
+        spends(),
+        "CALL-BOUNDED",
+    );
+    assert_eq!(unnamed.delegate_offered_tools, [true, false]);
+
+    let raised = run_budgeted_delegate(
+        "delegate-budget-call-raises",
+        Some(BUDGET_DEFINITION),
+        r#"{"kind":"budgeted","task":"BUDGET-TASK","budget":"2m"}"#,
+        spends(),
+        "CALL-BOUNDED",
+    );
+    assert_eq!(
+        raised.delegate_offered_tools,
+        [true, false],
+        "a call's larger figure lifted the definition's budget"
+    );
+    assert!(
+        raised.told.contains("spent its budget of 1000 tokens"),
+        "{}",
+        raised.told
+    );
+}
+
+/// DELEGATE-29 where the delegate spent its budget and then did not answer: the planner is told
+/// the same task will not get further, as DELEGATE-26 does for rounds, and the cause stays the
+/// fixed category.
+#[test]
+fn a_delegate_that_spent_its_token_budget_and_failed_says_the_budget_was_spent() {
+    let run = run_budgeted_delegate(
+        "delegate-budget-failed",
+        Some(BUDGET_DEFINITION),
+        r#"{"kind":"budgeted","task":"BUDGET-TASK"}"#,
+        vec![tool_request_with_usage(
+            "read_file",
+            r#"{"path":"notes.txt"}"#,
+            800,
+            300,
+        )],
+        "The delegate d1 did not finish.",
+    );
+
+    assert!(run.failed, "the failed delegate was drawn as an answer");
+    assert!(
+        run.told.contains(
+            "It had spent its budget of 1000 tokens, so the same task will not get further."
+        ),
+        "the planner was not told the budget was spent: {}",
+        run.told
+    );
+    assert!(
+        run.note.contains("having spent its budget of 1000 tokens"),
+        "{}",
+        run.note
+    );
+    assert!(
+        run.trail[0].ends_with("having spent its token budget of 1000"),
+        "{:?}",
+        run.trail
+    );
+}
+
 /// Asks the delegate whose task names `stopping` to stop the moment it starts, as a person pressing
 /// the key in its view would, and keeps what the turn was told about each delegate when it ended.
 struct StopsOneDelegate {
@@ -35701,6 +35997,173 @@ fn a_delegate_can_spawn_its_own_delegate_and_the_trail_names_it() {
         !whose.iter().any(|id| id == "d2"),
         "the nested delegate was numbered as the turn's second: {whose:?}"
     );
+}
+
+/// DELEGATE-29 for a delegate that delegates: its child is given no more than the parent has left,
+/// and what the child spends counts against the parent when its report is collected, so a parent
+/// cannot exceed its budget by handing work down.
+///
+/// The parent has a budget of 5000 and has reported 4000 when it starts the child, so the child
+/// carries 1000. The child spends 1500, which takes the parent past 5000 and removes the parent's
+/// tools from its next request. A child given the parent's whole figure would carry 5000, and a
+/// parent that did not count the child's spend would still be offered its tools.
+#[test]
+fn a_child_carries_what_its_parent_has_left_and_its_spend_counts_against_the_parent() {
+    let scratch = Scratch::new("delegate-budget-nested");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"DO-THE-WORK","budget":5000}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![
+                tool_request_with_usage(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"READ-DEEPER"}"#,
+                    3000,
+                    1000,
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "READ-DEEPER",
+            vec![reply_with_usage("DEEPER-REPORT", 1000, 500)],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let approved: Vec<String> = sink
+        .events()
+        .iter()
+        .filter_map(|e| match e {
+            Event::GatePassed { gate, detail } if *gate == "delegate" => Some(detail.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        approved
+            .iter()
+            .any(|d| d.starts_with("d1 ") && d.contains("rounds and 5000 tokens")),
+        "the parent did not carry the call's figure: {approved:?}"
+    );
+    assert!(
+        approved
+            .iter()
+            .any(|d| d.starts_with("d1.1 ") && d.contains("rounds and 1000 tokens")),
+        "the child was not held to what its parent had left: {approved:?}"
+    );
+
+    let parent_offered_tools: Vec<bool> = every_request(&received)
+        .iter()
+        .filter(|body| body.contains("DO-THE-WORK") && !body.contains("DELEGATE-THE-WORK"))
+        .map(|body| {
+            let request: serde_json::Value = serde_json::from_str(body).expect("a request");
+            request["tools"]
+                .as_array()
+                .is_some_and(|tools| !tools.is_empty())
+        })
+        .collect();
+    assert_eq!(
+        parent_offered_tools,
+        [true, true, false],
+        "the child's spend was not counted against the parent's budget"
+    );
+}
+
+/// DELEGATE-29: the delegates one fan-out starts divide what their parent has left between them.
+/// Each given the whole of it, three of them could spend three times what the parent had.
+///
+/// The parent carries 5000 and has reported 4000 when it starts two, so each carries 500.
+#[test]
+fn a_fan_out_divides_what_its_parent_has_left_between_its_delegates() {
+    let scratch = Scratch::new("delegate-budget-fan-out");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"DO-THE-WORK","budget":5000}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![
+                tool_request_with_usage(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"READ-DEEPER","each":["ONE","TWO"]}"#,
+                    3000,
+                    1000,
+                ),
+                reply_with("waiting"),
+                reply_with("still waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "READ-DEEPER",
+            vec![reply_with("FIRST-REPORT"), reply_with("SECOND-REPORT")],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let approved: Vec<String> = sink
+        .events()
+        .iter()
+        .filter_map(|e| match e {
+            Event::GatePassed { gate, detail } if *gate == "delegate" => Some(detail.clone()),
+            _ => None,
+        })
+        .collect();
+    for id in ["d1.1 ", "d1.2 "] {
+        assert!(
+            approved
+                .iter()
+                .any(|d| d.starts_with(id) && d.contains("rounds and 500 tokens")),
+            "{id}was not given half of what its parent had left: {approved:?}"
+        );
+    }
 }
 
 /// Records every task list it is handed, so a test can assert it was handed none.

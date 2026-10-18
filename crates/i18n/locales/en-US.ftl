@@ -1323,6 +1323,10 @@ delegate-model-refused =
 # Said among a delegate's own lines when a person stopped it from the delegate view: the turn goes on.
 delegate-stopped-narration = you stopped this delegate, so it has to finish with what it has
 
+# Said among a delegate's own lines when it has spent the token budget its definition or the call
+# set: it loses its tools and answers with what it has. The figure is a count of tokens.
+delegate-budget-narration = this delegate has spent its budget of { $budget } tokens, so it has to finish with what it has
+
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
 mcp-tools-title = offer these tools to the model?
@@ -3431,6 +3435,9 @@ delegate-servers-declared = { $definition } declares an MCP server in its mcpSer
 # A definition's rounds line is not a whole number above zero, so the file did not load. The
 # definition is its file's path.
 delegate-rounds-not-a-count = { $definition } was skipped: its rounds must be a whole number above zero
+# A definition's budget line is not a count of tokens above zero, so the file did not load. The
+# definition is its file's path. "budget" is the key and stays as it is.
+delegate-budget-not-a-count = { $definition } was skipped: its budget must be a count of tokens above zero, such as 500k or 2m
 # A definition asked for more rounds than its kind may make. The kind is its key's value (reader,
 # checker or worker), left as written because it is typed.
 delegate-rounds-held = { $definition } asks for { $asked } rounds, more than the { $most } a { $kind } may make, so its delegate is given { $most }

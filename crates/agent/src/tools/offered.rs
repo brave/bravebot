@@ -1254,6 +1254,15 @@ fn table(
                                         Give it only the servers its task needs. A \"reader\" \
                                         and a \"checker\" keep none either way.",
                         "items": {"type": "string"}
+                    },
+                    "budget": {
+                        "type": "string",
+                        "description": "Optional. The most tokens each delegate may spend, \
+                                        written as \"500000\", \"500k\" or \"2m\". A delegate that has spent it \
+                                        loses its tools and answers with what it has, and you \
+                                        are told so beside its report. It can only lower the \
+                                        bound the delegate's definition sets. Leave it out to \
+                                        set none."
                     }
                 },
                 "required": ["kind", "task"]
