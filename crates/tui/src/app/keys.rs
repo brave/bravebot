@@ -1586,6 +1586,14 @@ pub(super) fn took_input(session: &mut Session, taken: &TermEvent) {
 
     session.key_arrived_alone = input::the_last_event_arrived_alone();
 
+    // Every loop that reads an event comes through here, so a terminal left or returned to while a
+    // turn, a command or a picker is running is recorded as it is while at rest (CMD-20).
+    match taken {
+        TermEvent::FocusLost => session.away.focus(false),
+        TermEvent::FocusGained => session.away.focus(true),
+        _ => {}
+    }
+
     let asks_to_leave = input::key_of(taken).is_some_and(|key| {
         holds_ctrl_without_alt(key.modifiers)
             && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
