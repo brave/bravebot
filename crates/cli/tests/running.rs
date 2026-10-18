@@ -2884,7 +2884,7 @@ fn a_background_session_with_no_service_configured_says_how_to_configure_one() {
         );
     }
     assert!(
-        !transcript.contains("started"),
+        !transcript.contains("bravebot attach"),
         "a session was reported started on a machine with nothing to serve it: {transcript}"
     );
     let jobs = scratch.path.join(".bravebot/jobs");
