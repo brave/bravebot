@@ -2986,6 +2986,36 @@ fn a_retry_after_that_does_not_parse_falls_back_to_the_backoff() {
     );
 }
 
+/// Only a 429's header is read as a rate limit's: another status keeps the doubling, and a long
+/// figure on it neither is waited out nor ends the call.
+#[test]
+fn a_retry_after_on_another_status_is_not_waited_for_or_refused() {
+    let (endpoint, _received) = serve_attempts(vec![Attempt::StatusAfter(503, "600"), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress).with_backoff(Duration::from_millis(100));
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let completion = client.complete_streaming(&mut policy, &request, |_| {});
+
+    assert!(completion.is_ok(), "{completion:?}");
+    assert_eq!(client.attempts(), 2);
+    let waited = started.elapsed();
+    assert!(
+        waited < Duration::from_secs(5),
+        "a 503's header was waited on: {waited:?}"
+    );
+}
+
 /// Stopping while the service's wait is running ends it, however long it was asked to be.
 #[test]
 fn a_stop_does_not_wait_out_the_pause_a_service_asked_for() {

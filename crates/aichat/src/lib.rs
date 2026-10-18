@@ -1042,10 +1042,12 @@ fn backoff(base: Duration, failures: u32) -> Duration {
     base * 2u32.pow(failures - 1)
 }
 
-/// The wait a service asked for with a status, or none.
+/// The wait a service asked for with a 429, or none. Another status keeps the doubling whatever
+/// header it carried: the header is read as a rate limit's only.
 fn asked_wait(error: &EgressError) -> Duration {
     match error {
         EgressError::Status {
+            status: 429,
             retry_after: Some(asked),
             ..
         } => *asked,
@@ -1060,6 +1062,7 @@ fn pause_before_retry(base: Duration, failures: u32, error: &ChatError) -> Durat
     match error {
         ChatError::Egress(
             e @ EgressError::Status {
+                status: 429,
                 retry_after: Some(_),
                 ..
             },
