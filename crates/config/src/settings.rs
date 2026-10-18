@@ -2058,12 +2058,24 @@ impl Drop for Settings {
 /// the layers under it in force, because the alternative is a mistake in a checkout deciding that a
 /// person's own profile no longer applies.
 pub(crate) fn read(path: &Path) -> Option<Document> {
-    match std::fs::metadata(path) {
-        Ok(found) if found.len() > MAX_BYTES => return None,
-        Ok(_) => {}
-        Err(_) => return None,
+    use std::io::Read;
+    // Only a regular file is a settings file. A device or a pipe reports length 0, and a pipe
+    // blocks the open, so this is asked before the open and again of the handle that was opened.
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
     }
-    let mut text = std::fs::read_to_string(path).ok()?;
+    let file = std::fs::File::open(path).ok()?;
+    let found = file.metadata().ok()?;
+    if !found.is_file() || found.len() > MAX_BYTES {
+        return None;
+    }
+    // The stat length is not the bound: a file can grow after it, so the read carries its own.
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > MAX_BYTES {
+        return None;
+    }
+    let mut text = String::from_utf8(bytes).ok()?;
     Document::parse(&mut text).ok()
 }
 
@@ -5170,6 +5182,21 @@ mod tests {
             ))
             .read();
         assert_eq!(settings.get("AWS_PROFILE"), Some("personal"));
+    }
+
+    /// A checkout can carry a layer that is a symlink to a device, which reports length 0 and never
+    /// ends. It is skipped like any other unreadable layer, so the session starts and the layers
+    /// under it stay in force.
+    #[cfg(unix)]
+    #[test]
+    fn a_project_layer_that_is_a_device_is_skipped() {
+        let layers =
+            Layers::new("device-project").global(r#"{"env": {"AWS_PROFILE": "personal"}}"#);
+        let link = layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE);
+        std::os::unix::fs::symlink("/dev/zero", &link).expect("symlink to a device");
+        let settings = layers.read();
+        assert_eq!(settings.get("AWS_PROFILE"), Some("personal"));
+        assert!(read(&link).is_none());
     }
 
     /// A layer that spelled a name at all is the layer that answered for it, so a value that is not
