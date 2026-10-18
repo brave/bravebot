@@ -495,6 +495,7 @@ const ALLOWED = new Set([
   'session.sandbox',
   'session.rewind',
   'session.compact',
+  'session.usage',
   'turn.send',
   'turn.cancel',
   'mentions.offer',

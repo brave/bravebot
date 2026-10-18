@@ -51,6 +51,9 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
   if (method === 'session.compact') {
     return { session: held.session, model: held.model }
   }
+  if (method === 'session.usage') {
+    return { session: held.session }
+  }
   // A list is the one thing the window asks for that the agent answers with directories, and the
   // main process offers those as folders a session may be opened in (TRUST-20). A `directory`
   // here would let the window choose which store is read, so the list is always the whole one.

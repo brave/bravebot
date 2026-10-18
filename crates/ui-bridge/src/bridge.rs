@@ -209,6 +209,7 @@ impl Bridge {
             "session.sandbox" => self.set_sandbox_mode(request),
             "session.rewind" => self.rewind_session(request),
             "session.compact" => self.compact_session(request),
+            "session.usage" => self.session_usage(request),
             "turn.send" => self.send_turn(request),
             "mentions.offer" => {
                 let open = self
@@ -1384,6 +1385,25 @@ impl Bridge {
         Ok(json!({ "run": run, "target": target }))
     }
 
+    /// What the session has spent, in tokens and time, as the terminal's `/cost` reports it.
+    ///
+    /// Read between turns: a worker holds the session for the whole of one, and the dispatch thread
+    /// must not wait on it.
+    fn session_usage(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let Ok(state) = open.state.try_lock() else {
+            return Err(Failure::new(
+                ErrorCode::TurnInFlight,
+                "a turn is running in this session",
+            ));
+        };
+        Ok(crate::usage::report(&state))
+    }
+
     /// Summarise the session's earlier conversation, as the terminal's `/compact` does, and return
     /// before the summary comes back.
     ///
@@ -1512,6 +1532,8 @@ impl Bridge {
         state.tokens = snapshot.tokens;
         state.spend = snapshot.spend;
         state.timing = snapshot.timing;
+        // The figure was the undone turn's, and the snapshot keeps none for the one before it.
+        state.cached = None;
         // The snapshot's approvals that are still held. The terminal takes the snapshot's whole,
         // which is the same set there, since its approvals only grow; here one can be revoked
         // after the turn that is being undone, and a rewind must not hand it back.
@@ -2551,6 +2573,7 @@ fn work(work: Work) {
             // that cost here under the same number, and the breakdown has to add up to the total.
             *state.spend.entry(turn).or_insert(0) += outcome.tokens;
             state.timing.entry(turn).or_default().add(outcome.timing);
+            state.cached = Some(outcome.cached);
             // Left as it was when a turn never reached a server, so a record keeps the last model
             // that actually answered rather than forgetting it to a turn that failed early.
             if !outcome.model.is_empty() {
