@@ -92,6 +92,9 @@ pub(super) fn nudges(
         && !task.permission_mode.get().refuses_writes()
         && !tools::sandbox_refuses_writes(task.confine_runs, task.sandbox)
         && !conversation.asked_to_write()
+        // A delegate that wrote in this workspace has delivered: its changes are on disk, and
+        // the planner's own write calls are not the only way a turn writes (TURN-3).
+        && worked.changed_at.is_none()
         && !reminded.nothing_written
         && steps >= ROUNDS_BEFORE_WRITING
     {
