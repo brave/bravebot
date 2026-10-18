@@ -327,12 +327,16 @@ pub fn developer_directory() -> Option<std::path::PathBuf> {
     static DIRECTORY: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     DIRECTORY
         .get_or_init(|| {
-            let selected = std::process::Command::new("/usr/bin/xcode-select")
+            let mut command = std::process::Command::new("/usr/bin/xcode-select");
+            command
                 .arg("-p")
                 .env_remove("DEVELOPER_DIR")
                 .stdin(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .output()
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null());
+            let selected = crate::process::starting_a_program(|| command.spawn())
+                .ok()?
+                .wait_with_output()
                 .ok()
                 .filter(|output| output.status.success())?;
             let line = selected
