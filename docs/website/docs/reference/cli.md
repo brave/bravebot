@@ -109,6 +109,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--locked` | as `--safe`, and read no project or local settings file; refuse `--dangerously-skip-permissions` and `--dangerously-bypass-approvals-and-sandbox` and make the bypass mode unreachable ([below](#--locked)) |
 | `--safe` | load none of your hooks, skills, definitions, MCP server requests or `AGENTS.md`, and say so once; sign-in, model and permissions still apply |
 | `--incognito` | write nothing to `~/.bravebot`: no history, no session record, no preference |
+| `--accept-edits` | for a one-shot run, write files without asking; commands, fetches and a write that would create a credential are still refused ([below](#--accept-edits)) |
 | `--dangerously-skip-permissions` | bypass every permission check; recommended only for a sandbox with no internet access |
 | `--dangerously-bypass-approvals-and-sandbox` | as `--dangerously-skip-permissions` with `--sandbox off`: nothing is asked and no program is confined; refused where that flag is, and beside a `--sandbox` other than `off` |
 | `-h`, `--help` | show the help |
@@ -116,9 +117,9 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 
 `-p` may lead, as it does for other agents: `bravebot -p "task"`.
 
-Eight flags are taken out of the line before anything dispatches on it, so each may go anywhere and
+Nine flags are taken out of the line before anything dispatches on it, so each may go anywhere and
 each combines with every way of starting, one another included: `--incognito`, `--safe`, `--locked`,
-`--dangerously-skip-permissions`, `--settings`, `--vet`, `--tools` and `--no-shell`. `--agent` is taken out there too, and
+`--dangerously-skip-permissions`, `--accept-edits`, `--settings`, `--vet`, `--tools` and `--no-shell`. `--agent` is taken out there too, and
 combines with a session, `--plain` and a one-shot run, but not with `--resume`, `--continue`,
 `--fork` or `--mode manifest`, a task carrying on a session included.
 `--issue` and `--pr` are taken out there too, and combine with a session opened by no command,
@@ -159,8 +160,22 @@ unknown name even with `--dangerously-skip-permissions`. `--tools` offers no MCP
 `--mode manifest`, `--bg` and the commands that start no session refuse them.
 
 `--dangerously-skip-permissions` is the only way to reach the mode that answers every permission
-question, including the ones that decide trust, and the only way a run nobody is watching may write.
-See [modes](../security/permissions.md#answering-in-advance-modes) for what it costs.
+question, including the ones that decide trust. See
+[modes](../security/permissions.md#answering-in-advance-modes) for what it costs.
+
+### `--accept-edits`
+
+Opens a one-shot run in the accepting-edits mode, so a script that only needs to change files does
+not have to take the larger grant. Writes go through unasked. A command, a fetch, vouching for a
+directory and a write the credential scan found a value in are refused, because nobody can be asked.
+A `deny` rule still holds, and an allow rule still decides nothing in a one-shot run.
+
+```sh
+bravebot --accept-edits -p "apply the lint fixes"
+```
+
+It is refused together with `--dangerously-skip-permissions`, and refused where the line starts no
+one-shot run: a session has the mode key.
 
 ## `--mode <turn|manifest>`
 

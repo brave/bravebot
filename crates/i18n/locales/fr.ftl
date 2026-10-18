@@ -184,6 +184,10 @@ cli-option-locked =
     Comme --safe, et ne lire aucun fichier de réglages du projet ou local, et refuser --dangerously-skip-permissions
 cli-locked-refuses-bypass =
     { $flag } est refusé avec --locked : une exécution verrouillée n'ouvre jamais le mode bypass
+cli-accept-edits-not-with-bypass =
+    --accept-edits est refusé avec { $flag } : le second répond à toutes les questions du premier et à d'autres, précisez donc lequel vous voulez
+cli-accept-edits-needs-a-run =
+    --accept-edits s'applique à une exécution ponctuelle, comme -p "tâche". Une session a la touche de mode
 cli-option-vet =
     Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
     promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
@@ -197,6 +201,9 @@ cli-option-dangerously-bypass-approvals-and-sandbox =
     --dangerously-skip-permissions avec --sandbox off. Recommandé uniquement pour des machines que vous pouvez perdre
 cli-bypass-and-sandbox-disagree =
     --dangerously-bypass-approvals-and-sandbox désactive le bac à sable, et --sandbox { $mode } le demande actif. Donnez l'un des deux
+cli-option-accept-edits =
+    Pour une exécution ponctuelle, écrire les fichiers sans demander. Les commandes, les
+    récupérations et une écriture qui créerait un identifiant restent refusées
 cli-option-help = Afficher ce message
 cli-option-version = Afficher la version
 

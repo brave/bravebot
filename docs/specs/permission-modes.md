@@ -85,6 +85,11 @@ afterwards, and `git diff` shows them all of it; a program runs with everything 
 leaves no diff, and its output is what the next stage reads. A mode named for edits that also
 stopped asking about programs would be granting the larger thing quietly.
 
+A one-shot run can open in this mode with `--accept-edits` ([MODE-5](#MODE-5)). Nobody is there to
+be shown a credential write, so it is refused and the planner is told nothing was created; a run, a
+fetch and a vouched-for file are refused as they are in any run nobody can ask
+([CLI-1](cli.md#CLI-1)).
+
 A credential is the exception on the write side. The diff shows the person the value, and by then it
 is in the tree, which is the one place [credential-protection.md](credential-protection.md#CRED-13)
 says it must not reach unasked. The question has to come before the write, and a mode chosen to
@@ -92,6 +97,8 @@ stop reviewing diffs one at a time is not somebody saying they will not look at 
 mode cannot be what answers it. Bypassing is that statement (MODE-4).
 
 `verified-by: bravebot_agent::permission_mode::accepting_edits_lets_writes_through_but_not_commands`
+`verified-by: bravebot_cli::running::an_accept_edits_run_refuses_a_write_that_would_create_a_credential`
+`verified-by: bravebot_cli::running::an_accept_edits_run_refuses_a_command`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_agent::turn::only_bypassing_answers_a_credential_write`
@@ -287,6 +294,15 @@ The flag is taken out of the arguments before anything dispatches on it, so it c
 bare invocation, `-p`, `--resume`, `--continue`, `--mode` and `--incognito` alike, and repeating it
 asks for the same thing once. A one-shot run has no key to press, so the flag is the whole of what
 can say.
+
+**`--accept-edits`** opens a one-shot run in accepting edits ([MODE-2](#MODE-2)), the narrower of
+the two flags: writes go through unasked, and everything else is refused as in
+[CLI-1](cli.md#CLI-1). It is taken out of the arguments before dispatch on the same footing, so it
+composes with `-p`, `--json` and `--settings`. It is refused together with
+`--dangerously-skip-permissions`, since a line holding both does not say which was meant, and it is
+refused where the line starts no one-shot run, since a session has the key. A `deny` rule still
+holds ([MODE-6](#MODE-6)) and an allow rule still decides nothing in a one-shot run. It is not
+bypassing, so `permissions.bypassUnreachable` does not refuse it.
 
 **Unless a layer made the mode unreachable.** Where a settings layer in force wrote
 `permissions.bypassUnreachable` ([PERM-17](permissions.md#PERM-17)), the mode is not on the ladder and

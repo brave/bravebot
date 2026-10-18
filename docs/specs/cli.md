@@ -50,15 +50,19 @@ rather than answered on the user's behalf. A rule written in advance that refuse
 an ask, holds here as it does in a session; one that allows does not, since what it answers is a
 prompt and there is nobody to prompt.
 
-`--dangerously-skip-permissions` is the one way a run nobody is watching may write, and it is the
-person's own instruction rather than a default: what it selects, and what it costs, is
-[permission-modes.md](permission-modes.md). The planner's questions are declined in that mode too,
-because they are not permissions.
+`--dangerously-skip-permissions` and `--accept-edits` are the two ways a run nobody is watching may
+write, and each is the person's own instruction rather than a default: what they select, and what
+they cost, is [permission-modes.md](permission-modes.md). The first answers every question; the
+second answers the write prompt and no other, so a run, a fetch and a write the credential scan
+found a value in are still refused, because nobody can be asked. The two are refused together, and
+`--accept-edits` is refused where the line starts no one-shot run, since a session has the mode key
+for the same thing. The planner's questions are declined in both modes, because they are not
+permissions.
 
 **Why.** The alternative to a person is not a default, it is a guess made in their name. The
 planner is told a reply came from a person, so inventing one would be worse than not asking. A flag
-somebody typed is not a guess, which is what makes it the only thing that may lift the first half of
-this and nothing that may lift the second.
+somebody typed is not a guess, which is what makes it the only kind of thing that may lift the first
+half of this and nothing that may lift the second.
 
 An allow rule is not a guess either, and that is not what disqualifies it. It says which prompts to
 stop raising, which is a decision about a session somebody is sitting in front of; read here it
@@ -78,6 +82,9 @@ answer. Writing stays refused without the flag above.
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
 `verified-by: bravebot_agent::turn::a_turn_with_nobody_to_ask_reads_no_record`
 `verified-by: bravebot_cli::main::permissions_are_enforced_unless_the_flag_is_given`
+`verified-by: bravebot_cli::running::an_accept_edits_run_writes_and_a_plain_run_does_not`
+`verified-by: bravebot_cli::running::accept_edits_is_refused_with_the_bypass_flag_and_outside_a_one_shot_run`
+`verified-by: bravebot_cli::main::the_accept_edits_flag_is_taken_out_and_belongs_to_a_one_shot_run`
 `verified-by: bravebot_cli::main::an_allow_rule_decides_nothing_for_a_run_nobody_is_watching`
 `verified-by: bravebot_cli::main::the_flag_is_what_lets_an_allow_rule_decide_again`
 

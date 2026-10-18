@@ -13,6 +13,27 @@ pub(crate) const SKIP_PERMISSIONS: &str = "--dangerously-skip-permissions";
 /// `--dangerously-bypass-approvals-and-sandbox`, which is `--dangerously-skip-permissions` with
 /// `--sandbox off`.
 pub(crate) const BYPASS_APPROVALS_AND_SANDBOX: &str = "--dangerously-bypass-approvals-and-sandbox";
+/// `--accept-edits`, which answers the write prompt of a one-shot run and no other (CLI-1).
+pub(crate) const ACCEPT_EDITS: &str = "--accept-edits";
+
+/// The flags that begin a one-shot run when one leads the line, so that `main` dispatches on this
+/// list and [`is_a_one_shot`] reads the same one.
+pub(crate) const TASK_FLAGS: [&str; 14] = [
+    "-p",
+    "--print",
+    "--mode",
+    "--model",
+    "--advisor",
+    "--effort",
+    "--file",
+    "--session-ref",
+    "--add-dir",
+    "--trust-workspace",
+    "--trace",
+    "--json",
+    "--json-stream",
+    "--output-schema",
+];
 
 /// The commands that start neither a session nor a task, so a flag that shapes one is refused
 /// beside them rather than taken and ignored, for the reason CLI-13 gives about a settings file.
@@ -38,6 +59,24 @@ pub(crate) fn starts_neither_a_session_nor_a_task(first: &str) -> Option<&'stati
         .iter()
         .copied()
         .find(|command| *command == first)
+}
+
+/// Whether the arguments left after the flags are taken start a one-shot run, which is what
+/// [`ACCEPT_EDITS`] is for: a session has a mode key to say the same thing with, and the commands
+/// that start no run have no write to answer.
+///
+/// `continues_with_a_task` is whether a leading `--resume` or `--continue` carries a task.
+pub(crate) fn is_a_one_shot(args: &[String], continues_with_a_task: bool) -> bool {
+    match args.first().map(String::as_str) {
+        None => false,
+        Some(first) if TASK_FLAGS.contains(&first) => true,
+        Some("--resume" | "-r" | "--continue" | "-c") => continues_with_a_task,
+        Some(first) if first.starts_with('-') => false,
+        Some(first) => {
+            starts_neither_a_session_nor_a_task(first).is_none()
+                && !matches!(first, "__bg-host" | "__bg-supervisor")
+        }
+    }
 }
 
 /// Take the flag `name` out of the arguments, reporting whether it was there.
