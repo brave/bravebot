@@ -8,57 +8,26 @@
 //
 // Needs `bravebot-rpc` built (`npm run bridge`) and the app built (`electron-vite build`).
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, truncateSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync, truncateSync } from 'node:fs'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
+import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
 
-// The model service. Every request body is kept; each answer waits a moment, so a message can be
-// queued behind a turn that is still running.
-const requests = []
-const service = createServer(async (request, response) => {
-  let body = ''
-  for await (const chunk of request) body += chunk
-  if (request.method !== 'POST') {
-    response.writeHead(200, { 'Content-Type': 'application/json' })
-    return response.end(JSON.stringify({ data: [{ id: 'test' }] }))
-  }
-  requests.push(body)
+// Each answer waits a moment, so a message can be queued behind a turn that is still running.
+const { service, rounds: requests } = await startModelService(async () => {
   await new Promise((resolve) => setTimeout(resolve, 2500))
-  const chunk = { id: 'c1', object: 'chat.completion.chunk', model: 'test', choices: [{ index: 0, delta: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } }
-  response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-  response.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)
+  return { content: 'done' }
 })
-await new Promise((resolve) => service.listen(0, '127.0.0.1', resolve))
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-drop-')))
-const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
-// Outside the project, which is where a drop usually comes from (DROP-3).
+// The desktop is outside the project, which is where a drop usually comes from (DROP-3).
+const { root, project, profile, env } = makeWorld('bravebot-drop-', { service, dirs: ['desktop/a folder'] })
 const desktop = join(root, 'desktop')
-for (const path of [join(home, '.bravebot'), project, profile, join(desktop, 'a folder')]) mkdirSync(path, { recursive: true })
 writeFileSync(join(project, 'README.md'), '# scratch\n')
-writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({
-  provider: { local: { options: { baseURL: `http://127.0.0.1:${service.address().port}/v1` }, models: { test: {} } } },
-  model: 'local/test',
-}))
-const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter((key) => process.env[key]).map((key) => [key, process.env[key]]))
-Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost', BRAVEBOT_LOCALE: 'en-US' })
 
 const output = process.env.BRAVEBOT_DRIVE_OUTPUT ?? '/tmp/bravebot-ui'
 mkdirSync(output, { recursive: true })
-const app = await electron.launch({
-  args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), `--user-data-dir=${profile}`],
-  env,
-  timeout: 40000,
-})
-let page
+let app, page, errors
 try {
-  page = await app.firstWindow()
-  page.setDefaultTimeout(30000)
-  await page.setViewportSize({ width: 1400, height: 1000 })
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
+  ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
 
   // A real picture, so the thumbnail has something to draw.
   const pictureBytes = await app.evaluate(({ nativeImage }) => {
@@ -78,13 +47,7 @@ try {
   truncateSync(huge, 9 * 1024 * 1024)
   const folder = join(desktop, 'a folder')
 
-  await app.evaluate(({ dialog }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
-  }, project)
-  const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
-  await page.getByRole('button', { name: 'Open project', exact: true }).click()
-  await trust.getByRole('button', { name: 'Trust this directory' }).click()
-  await trust.waitFor({ state: 'hidden' })
+  await openProject(page, app, project)
 
   const composer = page.getByRole('textbox', { name: 'Message the agent' })
   const chips = page.locator('[data-test="dropped-chip"]')
@@ -248,7 +211,7 @@ try {
   if (page) await page.screenshot({ path: join(output, 'drop-failure.png') }).catch(() => undefined)
   throw error
 } finally {
-  await app.close()
+  await app?.close()
   await new Promise((resolve) => service.close(resolve))
   rmSync(root, { recursive: true, force: true })
 }

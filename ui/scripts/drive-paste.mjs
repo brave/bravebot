@@ -12,61 +12,32 @@
 //
 // Needs `bravebot-rpc` built (`npm run bridge`) and the app built (`electron-vite build`).
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
+import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
 
-const requests = []
-const service = createServer(async (request, response) => {
-  let body = ''
-  for await (const chunk of request) body += chunk
-  if (request.method !== 'POST') {
-    response.writeHead(200, { 'Content-Type': 'application/json' })
-    return response.end(JSON.stringify({ data: [{ id: 'test' }] }))
-  }
-  requests.push(body)
+// Each answer waits a moment, so a message can be queued behind a turn that is still running.
+const { service, rounds: requests } = await startModelService(async () => {
   await new Promise((resolve) => setTimeout(resolve, 2500))
-  const chunk = { id: 'c1', object: 'chat.completion.chunk', model: 'test', choices: [{ index: 0, delta: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } }
-  response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-  response.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)
+  return { content: 'done' }
 })
-await new Promise((resolve) => service.listen(0, '127.0.0.1', resolve))
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-paste-')))
-const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile'), desktop = join(root, 'desktop')
-for (const path of [join(home, '.bravebot'), project, profile, desktop]) mkdirSync(path, { recursive: true })
+const { root, project, profile, env } = makeWorld('bravebot-paste-', { service, dirs: ['desktop'] })
+const desktop = join(root, 'desktop')
 writeFileSync(join(project, 'README.md'), '# scratch\n')
-writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({
-  provider: { local: { options: { baseURL: `http://127.0.0.1:${service.address().port}/v1` }, models: { test: {} } } },
-  model: 'local/test',
-}))
-const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter((key) => process.env[key]).map((key) => [key, process.env[key]]))
-Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost', BRAVEBOT_LOCALE: 'en-US' })
 
 const output = process.env.BRAVEBOT_DRIVE_OUTPUT ?? '/tmp/bravebot-ui'
 mkdirSync(output, { recursive: true })
-const launch = () => electron.launch({
-  args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), `--user-data-dir=${profile}`],
-  env,
-  timeout: 40000,
-})
+const viewport = { width: 1400, height: 1000 }
 
-let app = await launch()
+let { app, page, errors } = await launchWorld({ profile, env, viewport })
 // What the clipboard held before, so the person running this gets it back.
 await app.evaluate(async ({ clipboard }) => { globalThis.keptClipboard = await clipboard.read().catch(() => []) })
 const restoreClipboard = (on) => on.evaluate(async ({ clipboard }, text) => {
   if (globalThis.keptClipboard?.length) await clipboard.write(globalThis.keptClipboard).catch(() => clipboard.writeText(text))
   else await clipboard.writeText(text)
 }, '')
-let page
 try {
-  page = await app.firstWindow()
-  page.setDefaultTimeout(30000)
-  await page.setViewportSize({ width: 1400, height: 1000 })
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
 
   /** A solid picture of `size` pixels, or noise, which no PNG encoder can shrink, as base64 PNG. */
   const picture = (size, colour, noise = false) => app.evaluate(({ nativeImage }, [size, colour, noise]) => {
@@ -91,13 +62,7 @@ try {
   const dropped = join(desktop, 'shot.png')
   writeFileSync(dropped, Buffer.from(await picture(48, [0xd0, 0x60, 0x20, 0xff]), 'base64'))
 
-  await app.evaluate(({ dialog }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
-  }, project)
-  const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
-  await page.getByRole('button', { name: 'Open project', exact: true }).click()
-  await trust.getByRole('button', { name: 'Trust this directory' }).click()
-  await trust.waitFor({ state: 'hidden' })
+  await openProject(page, app, project)
 
   const composer = page.getByRole('textbox', { name: 'Message the agent' })
   const pastedChips = page.locator('[data-test="pasted-chip"]')
@@ -242,11 +207,8 @@ try {
   // ---- reopened, the prompt shows its words and the picture still goes to the model -----------
   await restoreClipboard(app)
   await app.close()
-  app = await launch()
+  ;({ app, page, errors } = await launchWorld({ profile, env, viewport }))
   await app.evaluate(async ({ clipboard }) => { globalThis.keptClipboard = await clipboard.read().catch(() => []) })
-  page = await app.firstWindow()
-  page.setDefaultTimeout(30000)
-  await page.setViewportSize({ width: 1400, height: 1000 })
   await page.locator('.session-row .session').filter({ hasText: 'Compare [Image #1]' }).first().click()
   const again = page.getByRole('dialog', { name: 'Project trust', exact: true })
   if (await again.isVisible().catch(() => false)) {
@@ -264,6 +226,7 @@ try {
   assert.ok(resumed, 'the follow-up reached the model')
   assert.equal(urls(userPart(resumed, 'Compare [Image #1] [Image #2]')).length, 2, 'the reopened conversation still carries both pictures')
   await page.screenshot({ path: join(output, 'paste-reopened.png') })
+  assert.deepEqual(errors, [])
 
   console.log(`PASS: a trusted paste stages a marker and a chip numbered with drops, a forged paste does nothing, an oversized one is refused with the bridge's note, and the send carries the picture as PNG data. Screenshots in ${output}/paste-*.png`)
 } catch (error) {
