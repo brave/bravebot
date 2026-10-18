@@ -9,6 +9,7 @@ governs:
   - crates/config/src/managed.rs
   - crates/agent/src/permissions.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/reach.rs
   - crates/tui/src/trust_prompt.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/actions.rs
