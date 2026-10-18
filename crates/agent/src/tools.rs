@@ -7388,6 +7388,25 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     Ok(())
 }
 
+/// What the planner is told when a run line failed before it finished.
+///
+/// A line is not known to have done nothing: a later pipeline stage fails after an earlier one was
+/// spawned, a redirection's open fails after its program started (`true | cat > missing/out`), and
+/// the right side of `a && b` fails after `a` has finished. So every failure says the line may have
+/// run in part and the planner is asked to check before repeating it.
+fn failed_line_text(said: &str, error: &crate::exec::ExecError) -> String {
+    match error {
+        crate::exec::ExecError::Cancelled => format!(
+            "error: `{said}` was started and then {error}; it may have run in part, so check \
+             what it did before running it again"
+        ),
+        _ => format!(
+            "error: `{said}` may have run in part: {error}; check what it did before running it \
+             again"
+        ),
+    }
+}
+
 /// Run a program, after a person approves the exact arguments.
 ///
 /// The order is the whole of the safety argument, and it is the same order a write goes through:
@@ -8210,20 +8229,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         // stopped only once its stages have been spawned, so one the turn stopped has run (TURN-4).
         Err(error) => {
             let stopped = matches!(error, crate::exec::ExecError::Cancelled);
-            // Only a line that was never spawned did not run. A stopped line was started and
-            // killed part way, and a plumbing failure can land after an earlier stage started, so
-            // the planner is told to check the effects before repeating either.
-            let text = match &error {
-                crate::exec::ExecError::Cancelled => format!(
-                    "error: `{said}` was started and then {error}; it may have run in part, so \
-                     check what it did before running it again"
-                ),
-                crate::exec::ExecError::Io(_) => format!(
-                    "error: `{said}` may have run in part: {error}; check what it did before \
-                     running it again"
-                ),
-                _ => format!("error: `{said}` did not run: {error}"),
-            };
+            let text = failed_line_text(&said, &error);
             let produced = Produced::problem(text);
             match stopped {
                 true => produced.having_run_a_program(),
@@ -10893,6 +10899,33 @@ fn read_git<S: Sink, C: Confirmer>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_failed_line_is_never_reported_as_not_run() {
+        use crate::exec::ExecError;
+        let errors = [
+            ExecError::Cancelled,
+            ExecError::Io("broken pipe".into()),
+            ExecError::NotStarted {
+                program: "missing-tool".into(),
+                detail: "not found".into(),
+            },
+            ExecError::NotConfined {
+                program: "make".into(),
+                detail: "no profile".into(),
+            },
+            ExecError::Redirection {
+                path: "missing/out.txt".into(),
+                detail: "no such directory".into(),
+            },
+        ];
+        for error in &errors {
+            let text = failed_line_text("make && missing-tool", error);
+            assert!(text.contains("may have run in part"), "{error:?}: {text}");
+            assert!(!text.contains("did not run"), "{error:?}: {text}");
+        }
+        assert!(failed_line_text("sleep 30", &errors[0]).contains("was started"));
+    }
+
     use crate::exec::Deadlines;
     use crate::watch::Arming;
     /// Where a gate shows up in the trail, so a test can say which of two reads happened first.
