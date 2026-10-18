@@ -254,9 +254,9 @@ nothing looser, so a checkout cannot unconfine whoever opens it. Its `strict` is
 settings or the managed file chose `read-only`, since `strict` writes the session's directories. A managed file that pins a mode is a
 floor: a flag or a setting looser than it stops the session from starting, and `bravebot doctor`
 says which files disagree. A pin of `strict` also refuses `read-only`, and a pin of `read-only` also
-refuses `strict`, since `strict` writes the session's directories. `read-only` stops writes on this
-machine only: the network stays as `run.network` sets it, and `git push` or `gh pr create` still
-reaches the remote with your credentials. Under it the agent's file tools write nothing either,
+refuses `strict`, since `strict` writes the session's directories. `read-only` also closes the network
+for every program whatever `run.network` says, and lends none the remote credentials, so `git push`
+and `gh pr create` fail. Under it the agent's file tools write nothing either,
 a manifest run that writes a file is refused, a delegate is not given a checkout of its own, a
 command line that redirects output into a file is refused, and a request from the agent to write a
 path is refused, all of these even in accept-edits mode and with `--dangerously-skip-permissions`.
