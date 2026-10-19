@@ -3574,7 +3574,11 @@ fn a_note_beside_an_edit_answer_is_told_to_the_planner() {
 
 /// What the planner was told after one `run` call, with `confirmer` asked about it.
 fn told_after_a_run(name: &str, command: &str, confirmer: &mut AskedAboutRuns) -> String {
-    let scratch = Scratch::new(name);
+    told_after_a_run_in(&Scratch::new(name), command, confirmer)
+}
+
+/// As [`told_after_a_run`], in a directory the test has already put files in.
+fn told_after_a_run_in(scratch: &Scratch, command: &str, confirmer: &mut AskedAboutRuns) -> String {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
         tool_request(
@@ -3647,6 +3651,27 @@ fn a_note_beside_a_run_answer_is_told_to_the_planner() {
     );
     assert!(standing.contains("It exited 0"), "{standing}");
     assert!(!standing.contains("standing words"), "{standing}");
+}
+
+/// PROMPT-12: a result held back as a reference is still followed by the note typed beside the
+/// approval, and what the program printed stays out of the planner's context.
+#[test]
+fn a_note_follows_a_result_held_back_as_a_reference() {
+    let scratch = Scratch::new("run-note-after-a-reference");
+    std::fs::write(scratch.path.join("secret.txt"), "SENTINEL-XYZZY\n").unwrap();
+    let told = told_after_a_run_in(
+        &scratch,
+        "sed -n p secret.txt",
+        &mut AskedAboutRuns::answering(
+            bravebot_agent::RunDecision::approve().with_note("that is the file I meant"),
+        ),
+    );
+    assert!(!told.contains("SENTINEL-XYZZY"), "{told}");
+    let held = told.find("could not be shown to you").expect("a reference");
+    let note = told
+        .find("The user approved this and wrote: that is the file I meant")
+        .unwrap_or_else(|| panic!("the note was dropped with the result: {told}"));
+    assert!(held < note, "the note came before the result: {told}");
 }
 
 /// An existing file must not be overwritten when the write is refused.
@@ -38019,6 +38044,26 @@ fn apply_between_working_directory_writes(
     applies: Vec<&'static str>,
     confirmer: RecordingConfirmer,
 ) -> (Vec<String>, RecordingConfirmer, Scratch, RecordingSink) {
+    apply_after_a_worker_wrote_files(
+        tag,
+        &[("out.txt", "from the delegate")],
+        writes_before,
+        writes_after,
+        applies,
+        confirmer,
+    )
+}
+
+/// As [`apply_between_working_directory_writes`], with the files the worker writes in its checkout
+/// given as path and contents.
+fn apply_after_a_worker_wrote_files(
+    tag: &str,
+    worker_writes: &[(&str, &str)],
+    writes_before: Vec<&'static str>,
+    writes_after: Vec<&'static str>,
+    applies: Vec<&'static str>,
+    confirmer: RecordingConfirmer,
+) -> (Vec<String>, RecordingConfirmer, Scratch, RecordingSink) {
     let scratch = Scratch::new(tag);
     let home = Scratch::new(&format!("{tag}-home"));
     repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
@@ -38047,13 +38092,16 @@ fn apply_between_working_directory_writes(
         ("HAVE-A-DELEGATE-WRITE-TO-APPLY", planner),
         (
             "WRITE-OUT-TO-APPLY",
-            vec![
-                tool_request(
-                    "write_file",
-                    r#"{"path":"out.txt","contents":"from the delegate"}"#,
-                ),
-                reply_with("wrote it"),
-            ],
+            worker_writes
+                .iter()
+                .map(|(path, contents)| {
+                    tool_request(
+                        "write_file",
+                        &format!(r#"{{"path":"{path}","contents":"{contents}"}}"#),
+                    )
+                })
+                .chain([reply_with("wrote it")])
+                .collect(),
         ),
     ]);
     let (asked, confirmer, sink) = run_in_a_repository_answering(
@@ -38065,6 +38113,38 @@ fn apply_between_working_directory_writes(
         confirmer,
     );
     (asked, confirmer, scratch, sink)
+}
+
+/// CHECKOUT-14, PROMPT-12. Each file of an apply is its own question, and the note typed at one is
+/// told beside that file's line, whether or not another file's answer came after it.
+#[test]
+fn a_note_typed_at_one_file_of_an_apply_is_told_beside_that_file() {
+    let mut person = RecordingConfirmer::rejecting();
+    person.decision = person.decision.clone().with_note("only the first");
+    person.later = Some(bravebot_agent::WriteDecision::reject().with_note("only the second"));
+    let (asked, confirmer, scratch, _sink) = apply_after_a_worker_wrote_files(
+        "checkout-apply-notes",
+        &[("a.txt", "one"), ("b.txt", "two")],
+        vec![],
+        vec![],
+        vec![r#"{"checkout":"c1"}"#],
+        person,
+    );
+    assert_eq!(confirmer.seen.len(), 2, "{:#?}", confirmer.seen);
+    assert!(!scratch.path.join("a.txt").exists());
+    assert!(!scratch.path.join("b.txt").exists());
+    let told = asked.last().expect("the last request");
+    for note in ["only the first", "only the second"] {
+        assert_eq!(
+            told.matches(&format!("The user declined this and wrote: {note}"))
+                .count(),
+            1,
+            "the note {note:?} was lost: {told}"
+        );
+    }
+    let first = told.find("only the first").unwrap();
+    let second = told.find("only the second").unwrap();
+    assert!(first < second, "the notes are out of order: {told}");
 }
 
 /// CHECKOUT-14. The question says so where the session wrote the same path in the working

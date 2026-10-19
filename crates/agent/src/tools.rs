@@ -4879,6 +4879,11 @@ fn bring_back<S: Sink, C: Confirmer>(
                 .into_trusted()
                 .unwrap_or_else(|_| format!("{relative}: see the note beside this call")),
         );
+        // What the person typed at this file's question is kept for the call's result, which holds
+        // one note, so each goes beside the line of the file it was typed at (PROMPT-12).
+        if let Some(Ok(told)) = policy.take_note().map(Labelled::into_trusted) {
+            said.push(told);
+        }
         notes.push(produced.note.clone());
         if produced.changed_a_file {
             applied += 1;
