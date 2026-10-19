@@ -78,6 +78,7 @@ help:
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
 	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer [REPO=owner/name REVIEWER=login]"
+	@echo "  make clean-worktrees       Remove every linked git worktree, wherever it is, including ones with uncommitted changes"
 	@echo "  make fmt                   Apply formatting"
 	@echo "  make aws-logout            End every cached AWS SSO session, to test signing in again"
 	@echo
@@ -380,6 +381,18 @@ review-ready:
 	@gh pr list --repo $(or $(REPO),$(REVIEW_REPO)) --limit $(or $(LIMIT),$(REVIEW_LIMIT)) \
 	  --json number,title,url,mergeable,latestReviews,isDraft,statusCheckRollup \
 	  --jq '.[] | select(.mergeable == "MERGEABLE" and .isDraft == false and any(.latestReviews[]; .author.login == "$(or $(REVIEWER),$(REVIEW_REVIEWER))" and .state == "APPROVED") and all(.statusCheckRollup[]; (.conclusion // .state) | IN("SUCCESS", "NEUTRAL", "SKIPPED"))) | "\(.url)  \(.title)"'
+
+# Removes every linked worktree git knows about, wherever it lives, unlocking locked ones first.
+# The first entry `git worktree list` prints is the main working tree and is never touched.
+# A worktree with uncommitted or untracked files is removed too, and that work is lost. Branches are kept. Removals run CLEAN_WORKTREES_JOBS at a time.
+.PHONY: clean-worktrees
+CLEAN_WORKTREES_JOBS ?= 16
+clean-worktrees:
+	@git worktree list --porcelain | sed -n 's/^worktree //p' | tail -n +2 | tr '\n' '\0' \
+	  | xargs -0 -n 1 -P $(CLEAN_WORKTREES_JOBS) sh -c \
+	    'git worktree unlock "$$0" 2>/dev/null; \
+	     if git worktree remove --force "$$0"; then echo "removed $$0"; else echo "kept $$0"; fi'
+	@git worktree prune
 
 # All local checks before pushing, including the UI and Linux code paths.
 # Requires Docker and the desktop runtime dependencies described in checks.md.
