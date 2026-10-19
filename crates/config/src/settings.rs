@@ -363,6 +363,12 @@ pub struct Settings {
     /// Kept because the merged lists cannot say which file an entry came from, and a report of
     /// which rule decided a call has to name the file to edit (CLI-30).
     rule_sources: Vec<RuleSource>,
+    /// Whether the layers said nothing about permissions before [`Settings::under`] added the
+    /// administrator's rules, or `None` where it added none.
+    ///
+    /// Kept so that a machine whose only permission rules are pinned reads as having no settings
+    /// of its own, which is what `doctor` says about the files it names.
+    layers_said_no_permissions: Option<bool>,
     /// The layers that named a `provider` block and were not obeyed, weakest first, for `doctor`.
     ///
     /// Kept for the reason `vetting_ignored` is kept: a provider block decides where a request is
@@ -695,13 +701,80 @@ pub fn local_settings_file(checkout: &Path) -> PathBuf {
 
 impl Settings {
     /// Read every settings layer in force for this user, in this directory, plus the file the
-    /// command line named.
+    /// command line named, and the `deny` and `ask` rules the administrator pinned.
     pub fn load() -> Self {
         Self::layered(
             home(),
             std::env::current_dir().ok().as_deref(),
             named_settings_file(),
         )
+        .under(&crate::Managed::load())
+    }
+
+    /// These settings with the `deny` and `ask` rules the managed file wrote added to every
+    /// layer's own (PERM-19).
+    ///
+    /// Put ahead of the layers' entries, so a refusal both a person's rule and the administrator's
+    /// would have made names the administrator's file. Nothing is removed and `allow` is not
+    /// touched: a rule that only narrows is the one thing this layer may add, so a lower layer
+    /// cannot lift it. A `/x` path rule starts at the directory the managed file is in, as a rule
+    /// in any file outside the checkout does, and a `reason` is not read from it.
+    #[must_use]
+    pub fn under(mut self, managed: &crate::Managed) -> Self {
+        let (Some(path), rules) = (managed.path(), managed.rules()) else {
+            return self;
+        };
+        // Added once: a second call would hold every rule twice and read the first call's as the
+        // layers' own.
+        if rules.is_empty() || self.layers_said_no_permissions.is_some() {
+            return self;
+        }
+        self.layers_said_no_permissions = Some(self.permissions.is_empty());
+        let anchor = slash_anchor(path, false, None);
+        for (list, written, held, reasons) in [
+            (
+                "deny",
+                &rules.deny,
+                &mut self.permissions.deny,
+                &mut self.permissions.reasons.deny,
+            ),
+            (
+                "ask",
+                &rules.ask,
+                &mut self.permissions.ask,
+                &mut self.permissions.reasons.ask,
+            ),
+        ] {
+            let anchored: Vec<String> = written
+                .iter()
+                .map(|rule| anchor_slash_rule(rule, &anchor))
+                .collect();
+            self.rule_sources.splice(
+                0..0,
+                written
+                    .iter()
+                    .zip(&anchored)
+                    .map(|(written, anchored)| RuleSource {
+                        list,
+                        anchored: anchored.clone(),
+                        written: written.clone(),
+                        file: path.to_path_buf(),
+                        reason: None,
+                    }),
+            );
+            reasons.splice(0..0, anchored.iter().map(|_| None));
+            held.splice(0..0, anchored);
+        }
+        self.permissions
+            .unreadable
+            .extend(rules.unreadable.iter().cloned());
+        self.misshapen.extend(
+            rules
+                .misshapen
+                .iter()
+                .map(|value| (path.to_path_buf(), value.clone())),
+        );
+        self
     }
 
     /// As [`Settings::load`], for a named home, working directory and command line, so a test needs
@@ -990,7 +1063,7 @@ impl Settings {
                     false => allow_ignored.push((path.clone(), rule)),
                 }
             }
-            for value in misshapen_rule_lists(&root) {
+            for value in misshapen_rule_lists(&root, &["deny", "ask", "allow"]) {
                 misshapen.push((path.clone(), value));
             }
             for name in env_names(&root) {
@@ -1205,6 +1278,7 @@ impl Settings {
             // an `allow` entry in it grants anything.
             allow_ignored: Vec::new(),
             rule_sources: Vec::new(),
+            layers_said_no_permissions: None,
             // Filled by [`Settings::layered`], which knows which file each key was written in.
             misshapen: Vec::new(),
             mcp_declared: Vec::new(),
@@ -1792,7 +1866,9 @@ impl Settings {
     pub fn is_empty(&self) -> bool {
         self.env.is_empty()
             && self.scrub.is_empty()
-            && self.permissions.is_empty()
+            && self
+                .layers_said_no_permissions
+                .unwrap_or_else(|| self.permissions.is_empty())
             && self.model.is_none()
             && self.effort.is_none()
             && self.prompt_cache_ttl.is_none()
@@ -3119,6 +3195,48 @@ fn anchor_slash_rule(rule: &str, anchor: &str) -> String {
     format!("{name}({anchor}/{below})")
 }
 
+/// What the managed file wrote of `permissions.deny` and `permissions.ask` (PERM-19).
+///
+/// `allow` is not read, so an entry of it is neither a rule here nor reported as unreadable: a
+/// list this layer may not write is nothing to tell an administrator is malformed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ManagedRules {
+    pub(crate) deny: Vec<String>,
+    pub(crate) ask: Vec<String>,
+    /// Entries of either list that are not rule text at all, as the file spelled them (PERM-11).
+    pub(crate) unreadable: Vec<String>,
+    /// A `permissions` block, `deny` or `ask` that is not the shape rules are read from.
+    pub(crate) misshapen: Vec<String>,
+}
+
+impl ManagedRules {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.deny.is_empty()
+            && self.ask.is_empty()
+            && self.unreadable.is_empty()
+            && self.misshapen.is_empty()
+    }
+}
+
+pub(crate) fn managed_rules(root: &serde_json::Map<String, serde_json::Value>) -> ManagedRules {
+    let misshapen = misshapen_rule_lists(root, &["deny", "ask"]);
+    let Some(serde_json::Value::Object(block)) = root.get(PERMISSIONS_BLOCK) else {
+        return ManagedRules {
+            misshapen,
+            ..ManagedRules::default()
+        };
+    };
+    let mut unreadable = Vec::new();
+    let (deny, _) = rule_texts(block, "deny", &mut unreadable);
+    let (ask, _) = rule_texts(block, "ask", &mut unreadable);
+    ManagedRules {
+        deny,
+        ask,
+        unreadable,
+        misshapen,
+    }
+}
+
 /// The `permissions` block: three lists of rule text, and the directories to open.
 ///
 /// A malformed entry is dropped rather than refused, on the same footing as everything else here:
@@ -3162,15 +3280,18 @@ fn permission_lists(root: &serde_json::Map<String, serde_json::Value>) -> Permis
 ///
 /// Written out from the parsed value rather than through a new one, which would be a copy of it that
 /// is dropped uncleared (CRED-23).
-fn misshapen_rule_lists(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+fn misshapen_rule_lists(
+    root: &serde_json::Map<String, serde_json::Value>,
+    lists: &[&str],
+) -> Vec<String> {
     let block = match root.get("permissions") {
         None => return Vec::new(),
         Some(serde_json::Value::Object(block)) => block,
         Some(other) => return vec![format!(r#"{{"permissions":{other}}}"#)],
     };
-    ["deny", "ask", "allow"]
-        .into_iter()
-        .filter_map(|name| match block.get(name) {
+    lists
+        .iter()
+        .filter_map(|&name| match block.get(name) {
             None | Some(serde_json::Value::Array(_)) => None,
             Some(other) => Some(format!(r#"{{"permissions":{{"{name}":{other}}}}}"#)),
         })
@@ -6066,6 +6187,84 @@ mod tests {
         assert_eq!(settings.permissions().deny, ["Read(./.env)"]);
         assert_eq!(settings.permissions().ask, ["Bash(git push *)"]);
         assert!(settings.permissions().allow.is_empty());
+    }
+
+    /// PERM-19: the administrator's rules are added to every layer's and a refusal they make names
+    /// the managed file. The failures this rejects are a managed rule replacing the layers' own, a
+    /// layer's rule replacing it, and a rule that is held with no file to name.
+    #[test]
+    fn a_managed_rule_is_added_to_every_layers_and_names_the_managed_file() {
+        let managed = pinned(
+            "rules-added",
+            r#"{"permissions": {"deny": ["Read(//etc/secret)"], "ask": ["Bash(git push *)"]}}"#,
+        );
+        let settings = Layers::new("managed-rules-added")
+            .global(r#"{"permissions": {"deny": ["Bash(rm *)"]}}"#)
+            .project(
+                r#"{"permissions": {"deny": ["Read(//etc/secret)"], "ask": ["Bash(make *)"]}}"#,
+            )
+            .read()
+            .under(&managed);
+        assert_eq!(
+            settings.permissions().deny,
+            ["Read(//etc/secret)", "Bash(rm *)", "Read(//etc/secret)"]
+        );
+        assert_eq!(
+            settings.permissions().ask,
+            ["Bash(git push *)", "Bash(make *)"]
+        );
+        assert_eq!(settings.permissions().reasons.deny.len(), 3);
+        let held = |list, rule| settings.rule_source(list, rule).map(|(file, _)| file);
+        assert_eq!(held("ask", "Bash(git push *)"), managed.path());
+        assert_eq!(held("deny", "Read(//etc/secret)"), managed.path());
+        assert!(settings.permissions().allow.is_empty());
+    }
+
+    /// PERM-19: a `/x` rule written in the managed file starts at the directory it is in, not at the
+    /// person's `~/.bravebot` where the same text in their own file would. The failure this rejects
+    /// is anchoring an administrator's rule in a directory they did not write it for.
+    #[test]
+    fn a_managed_slash_rule_starts_at_the_managed_directory() {
+        let managed = pinned(
+            "rules-slash",
+            r#"{"permissions": {"deny": ["Read(/secrets/**)"]}}"#,
+        );
+        let directory = managed.path().and_then(Path::parent).expect("a directory");
+        let settings = Layers::new("managed-rules-slash").read().under(&managed);
+        let [rule] = settings.permissions().deny.as_slice() else {
+            panic!("one rule was expected");
+        };
+        assert_eq!(
+            *rule,
+            format!(
+                "Read(//{}/secrets/**)",
+                directory.display().to_string().trim_matches('/')
+            )
+        );
+    }
+
+    /// PERM-19: where the only permission rules are the administrator's, the person's files said
+    /// nothing, which is what `doctor` reports about them. A file holding no rules changes nothing.
+    #[test]
+    fn a_machine_with_only_pinned_rules_has_no_settings_of_its_own() {
+        let managed = pinned("rules-only", r#"{"permissions": {"deny": ["Bash(ls)"]}}"#);
+        let settings = Layers::new("managed-rules-only").read().under(&managed);
+        assert_eq!(settings.permissions().deny, ["Bash(ls)"]);
+        assert!(settings.is_empty());
+        let own = Layers::new("managed-rules-and-own")
+            .global(r#"{"permissions": {"ask": ["Bash(ls)"]}}"#)
+            .read()
+            .under(&managed);
+        assert!(!own.is_empty());
+        let twice = Layers::new("managed-rules-twice")
+            .read()
+            .under(&managed)
+            .under(&managed);
+        assert_eq!(twice.permissions().deny, ["Bash(ls)"]);
+        assert!(twice.is_empty());
+        let none = pinned("rules-none", r#"{"env": {}}"#);
+        let untouched = Layers::new("managed-no-rules").read().under(&none);
+        assert!(untouched.permissions().is_empty());
     }
 
     /// `additionalDirectories` is untouched by this, because it is already a request rather than a

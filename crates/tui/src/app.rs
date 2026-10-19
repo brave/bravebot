@@ -3467,6 +3467,8 @@ struct RuleSources {
     state: Option<std::path::PathBuf>,
     named: Option<std::path::PathBuf>,
     started: std::path::PathBuf,
+    /// The administrator's file, whose `deny` and `ask` rules join every layer's own (PERM-19).
+    managed: bravebot_config::Managed,
 }
 
 impl RuleSources {
@@ -3476,6 +3478,7 @@ impl RuleSources {
             state: bravebot_agent::home::directory(),
             named: bravebot_config::named_settings_file().map(std::path::Path::to_path_buf),
             started: started.to_path_buf(),
+            managed: bravebot_config::Managed::load(),
         }
     }
 
@@ -3489,6 +3492,7 @@ impl RuleSources {
             self.named.as_deref(),
             Some(&self.started),
         )
+        .under(&self.managed)
     }
 
     /// The record of what was granted in `root`.
@@ -26847,6 +26851,7 @@ mod tests {
             state: Some(state.to_path_buf()),
             named: named.map(std::path::Path::to_path_buf),
             started: root.to_path_buf(),
+            managed: bravebot_config::Managed::default(),
         };
         let settings = sources.settings(root);
         let permissions = rules_from(
@@ -26878,6 +26883,29 @@ mod tests {
     }
 
     const CHECK: &str = r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#;
+
+    /// PERM-19: the rules read again after `/cd` carry the administrator's `deny`, not only the
+    /// checkout's layers. A reload that left the managed file out would let the move lift it.
+    #[test]
+    fn a_reload_after_moving_carries_the_managed_deny_rules() {
+        let root = crate::testutil::scratch_dir("bravebot-cd-managed-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let file = root.join("managed.json");
+        std::fs::write(&file, r#"{"permissions": {"deny": ["Bash(ls)"]}}"#).expect("managed file");
+        let sources = RuleSources {
+            state: Some(root.join("state")),
+            named: None,
+            started: root.clone(),
+            managed: bravebot_config::Managed::at(&file),
+        };
+        let elsewhere = root.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).expect("scratch");
+        assert_eq!(
+            sources.settings(&elsewhere).permissions().deny,
+            ["Bash(ls)"]
+        );
+    }
 
     /// PERM-15 and TRUST-13: a rule granted for one checkout's file answers nothing in the checkout
     /// `/cd` moves to. Kept, it runs that checkout's `scripts/check.sh` with no prompt, on an answer
