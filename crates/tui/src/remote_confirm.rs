@@ -719,15 +719,15 @@ mod tests {
         let (answer_tx, answer_rx) = channel();
 
         let responder = thread::spawn(move || {
-            for _ in 0..3 {
-                inbound.recv().expect("a message arrived");
-            }
+            inbound.recv().expect("a write question arrived");
             answer_tx
                 .send(Reply::Write(WriteDecision::reject().with_note("use b.txt")))
                 .expect("answered");
+            inbound.recv().expect("a run question arrived");
             answer_tx
                 .send(Reply::Run(RunDecision::approve().with_note("go on")))
                 .expect("answered");
+            inbound.recv().expect("a call question arrived");
             answer_tx
                 .send(Reply::McpCall(
                     CallDecision::reject().with_note("ask Paris"),
