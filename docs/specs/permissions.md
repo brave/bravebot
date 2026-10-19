@@ -556,6 +556,9 @@ the planner's routing path, as a deny rule does.
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_protected_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later`
 `verified-by: bravebot_agent::turn::a_write_through_a_hard_link_to_a_hook_is_put_to_the_person`
+`verified-by: bravebot_agent::turn::accepting_edits_puts_an_edit_of_a_hook_to_the_person`
+`verified-by: bravebot_agent::turn::accepting_edits_puts_a_download_into_a_hook_to_the_person`
+`verified-by: bravebot_agent::manifest::accepting_edits_puts_a_planned_write_to_a_hook_to_the_person`
 `verified-by: bravebot_agent::mcp::a_call_after_a_servers_answer_was_vetted_asks_though_a_rule_allows_it`
 `verified-by: bravebot_agent::mcp::reading_workspace_files_leaves_a_call_a_rule_allows_unasked`
 

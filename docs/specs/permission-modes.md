@@ -111,6 +111,9 @@ mode cannot be what answers it. Bypassing is that statement (MODE-4).
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_protected_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later`
 `verified-by: bravebot_agent::turn::a_write_through_a_hard_link_to_a_hook_is_put_to_the_person`
+`verified-by: bravebot_agent::turn::accepting_edits_puts_an_edit_of_a_hook_to_the_person`
+`verified-by: bravebot_agent::turn::accepting_edits_puts_a_download_into_a_hook_to_the_person`
+`verified-by: bravebot_agent::manifest::accepting_edits_puts_a_planned_write_to_a_hook_to_the_person`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_agent::turn::only_bypassing_answers_a_credential_write`
