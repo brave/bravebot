@@ -2968,9 +2968,9 @@ none to add to.
   again with the argument, in the same sessions.
 - **Accepted after a failure.** The driver accepts the request only while a line has run with the
   sandbox in this turn and exited non-zero, and each such failure earns one request: accepting one
-  spends it. The failed line need not be the line the request names. A request with none earned is
-  refused before anybody is asked, with a sentence that says to run the line with the sandbox
-  first, and the trail records the refusal under `sandbox` naming that cause. The count comes from
+  spends it, so a request the person declines, or a plan the policy then refuses, leaves it. The
+  failed line need not be the line the request names. A request with none earned is refused before
+  anybody is asked, with a sentence that says to run the line with the sandbox first, and the trail records the refusal under `sandbox` naming that cause. The count comes from
   exit codes and whether the deadline stopped the line, and nothing a program printed is read. A line
   stopped at its deadline or by the person, a line that ran with no sandbox and a line moved to the
   background earn nothing. A line whose own redirection leaves the workspace is accepted without one, since the
@@ -2995,6 +2995,7 @@ refuse the path.
 `verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
 `verified-by: bravebot_agent::tools::a_request_for_no_sandbox_is_accepted_only_after_a_confined_line_failed`
 `verified-by: bravebot_agent::tools::each_confined_failure_earns_one_request_for_no_sandbox`
+`verified-by: bravebot_agent::tools::a_request_for_no_sandbox_the_person_did_not_accept_leaves_the_earned_one`
 `verified-by: bravebot_agent::tools::a_redirection_out_of_the_workspace_is_accepted_with_no_failure_counted`
 `verified-by: bravebot_agent::turn::a_line_stopped_at_its_deadline_earns_no_request_for_no_sandbox`
 `verified-by: bravebot_agent::turn::a_request_for_no_sandbox_before_a_confined_line_failed_is_refused_unasked`

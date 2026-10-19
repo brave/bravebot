@@ -579,6 +579,10 @@ impl ConfinedFailures {
         self.0 = self.0.saturating_add(1);
     }
 
+    fn has_one(&self) -> bool {
+        self.0 > 0
+    }
+
     fn spend(&mut self) -> bool {
         match self.0 {
             0 => false,
@@ -7771,16 +7775,19 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     }
     // Accepted after a line has failed with the sandbox on, or for a line whose own redirection
     // the sandbox refuses before anything runs, which no run can fail at. Decided from exit codes
-    // and the compiled plan, never from what a program printed.
+    // and the compiled plan, never from what a program printed. The request is spent once the
+    // person has approved it and the policy has passed the plan, so a refusal on the way leaves it.
+    let mut spends_a_request = false;
     if unconfined {
         let leaves_the_workspace = plan
             .writes
             .iter()
             .any(|path| tools.workspace.confines(path).is_err());
-        if !leaves_the_workspace && !tools.confined_failures.spend() {
+        if !leaves_the_workspace && !tools.confined_failures.has_one() {
             policy.refuse_run_request("unconfined", &[RunRequestCause::NoConfinedAttempt]);
             return Produced::problem(UNCONFINED_BEFORE_A_FAILURE);
         }
+        spends_a_request = !leaves_the_workspace;
         policy.record_sandbox_mode("unconfined");
     } else if tools.confine_runs {
         policy.record_sandbox_mode(tools.sandbox.name());
@@ -7854,6 +7861,9 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         Ok(label) => label,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
+    if spends_a_request {
+        tools.confined_failures.spend();
+    }
     // A vouch was for the programs as they ran without the credential, so what a line lent one
     // prints is not trusted on its account.
     let label = match bravebot_core::capability::Capability::ShellExec.output_label() {
@@ -17852,6 +17862,60 @@ mod tests {
                 session_under(WorkspaceWrite),
             );
             assert_eq!(said, UNCONFINED_BEFORE_A_FAILURE);
+        }
+
+        /// SANDBOX-29: the request a failed line earned is spent when the person accepts the one
+        /// for no sandbox, and a prompt the person did not accept leaves it. The regression it
+        /// rejects is a request spent before the person is asked, which makes the planner's next
+        /// ask refuse as if no line had failed.
+        #[test]
+        fn a_request_for_no_sandbox_the_person_did_not_accept_leaves_the_earned_one() {
+            use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+            let scratch = Scratch::new("run-unconfined-declined");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut trust = bravebot_core::trust::TrustStore::new("/work");
+            trust.trust(".");
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "run a command");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::ShellExec]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_trust(trust);
+
+            let produced = with_tools(&workspace, |tools| {
+                tools.confine_runs = true;
+                tools.sandbox = WorkspaceWrite;
+                tools.profile = Some(std::path::Path::new("/profile"));
+                tools.confined_failures.note();
+                let asks = json!({"command": "echo hi", "unconfined": true});
+                let mut said = Vec::new();
+                for _ in 0..2 {
+                    let produced = run(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::Unattended,
+                        &mut crate::report::IgnoreReports,
+                        &asks,
+                    );
+                    said.push(produced.text);
+                }
+                said
+            });
+            let said: Vec<String> = produced
+                .iter()
+                .map(|text| told(&mut policy, text))
+                .collect();
+            for text in &said {
+                assert!(
+                    !text.contains("run the line with the sandbox first"),
+                    "a declined prompt spent the earned request: {said:?}"
+                );
+            }
         }
 
         #[test]
