@@ -43533,6 +43533,117 @@ fn a_running_job_nobody_has_looked_at_gives_the_screen_its_lines_and_the_look_ke
     );
 }
 
+/// Runs `./serve` in the background, waits two rounds for it to be ready, then stops it, and
+/// returns what the screen was told and what reached the planner.
+#[cfg(unix)]
+fn live_lines_turn(
+    name: &str,
+    serve: &str,
+    decision: bravebot_agent::RunDecision,
+) -> (bravebot_agent::report::RecordingReporter, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new(name);
+    let write = |name: &str, body: &str| {
+        let path = scratch.path.join(name);
+        std::fs::write(&path, body).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    write("serve", serve);
+    write(
+        "await-ready",
+        "#!/bin/sh\nwhile [ ! -e ready ]; do sleep 0.05; done\n",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./serve","background":true}"#),
+        tool_request("run", r#"{"command":"./await-ready"}"#),
+        tool_request("run", r#"{"command":"./await-ready"}"#),
+        tool_request("job_output", r#"{"job":"job:1","kill":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut confirmer = AskedAboutRuns::answering(decision);
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start the server and wait for it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    let bodies = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    (reporter, bodies)
+}
+
+/// WATCH-24: the screen is given a running job's lines through the release gate, so output nobody
+/// vouched for is drawn while the planner is still kept from it.
+#[cfg(unix)]
+#[test]
+fn an_unvouched_running_jobs_lines_are_drawn_and_never_reach_the_planner() {
+    let (reporter, bodies) = live_lines_turn(
+        "background-live-untrusted",
+        "#!/bin/sh\necho SENTINEL-LIVE-UNVOUCHED\ntouch ready\nsleep 30\n",
+        bravebot_agent::RunDecision::approve(),
+    );
+
+    use bravebot_agent::report::JobEvent;
+    let drawn: Vec<&Vec<String>> = reporter
+        .jobs
+        .iter()
+        .filter_map(|event| match event {
+            JobEvent::Printed { lines, .. } => Some(lines),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(drawn, [&vec!["SENTINEL-LIVE-UNVOUCHED".to_string()]]);
+    assert!(
+        bodies
+            .iter()
+            .all(|body| !body.contains("SENTINEL-LIVE-UNVOUCHED")),
+        "drawing a running job's lines put them in front of the planner"
+    );
+}
+
+/// WATCH-24: a program can print without end, so the screen keeps the newest `LIVE_LINES` of what
+/// is unread and says how many there were.
+#[cfg(unix)]
+#[test]
+fn a_running_job_that_printed_past_the_bound_gives_the_screen_only_the_newest_lines() {
+    let (reporter, _bodies) = live_lines_turn(
+        "background-live-bound",
+        "#!/bin/sh\ni=0\nwhile [ $i -lt 250 ]; do echo \"row $i\"; i=$((i+1)); done\ntouch ready\nsleep 30\n",
+        bravebot_agent::RunDecision::approve_always(),
+    );
+
+    use bravebot_agent::report::JobEvent;
+    let drawn: Vec<(&Vec<String>, usize)> = reporter
+        .jobs
+        .iter()
+        .filter_map(|event| match event {
+            JobEvent::Printed { lines, total, .. } => Some((lines, *total)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(drawn.len(), 1, "{:?}", reporter.jobs);
+    let (lines, total) = drawn[0];
+    assert_eq!(total, 250);
+    assert_eq!(lines.len(), 200);
+    assert_eq!(lines.first().map(String::as_str), Some("row 50"));
+    assert_eq!(lines.last().map(String::as_str), Some("row 249"));
+}
+
 /// Records, when told the turn is stopping a job, whether the job's process is still alive.
 #[cfg(unix)]
 struct NotesWhetherAStoppedJobStillRan {
