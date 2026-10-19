@@ -78,7 +78,7 @@ help:
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
 	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer [REPO=owner/name REVIEWER=login]"
-	@echo "  make clean-worktrees       Remove every linked git worktree, wherever it is, including ones with uncommitted changes"
+	@echo "  make clean-worktrees       Remove every linked git worktree but the one this runs in, including ones with uncommitted changes; exits 1 if any is kept"
 	@echo "  make fmt                   Apply formatting"
 	@echo "  make aws-logout            End every cached AWS SSO session, to test signing in again"
 	@echo
@@ -388,11 +388,12 @@ review-ready:
 .PHONY: clean-worktrees
 CLEAN_WORKTREES_JOBS ?= 16
 clean-worktrees:
-	@git worktree list --porcelain | sed -n 's/^worktree //p' | tail -n +2 | tr '\n' '\0' \
+	@here=$$(git rev-parse --show-toplevel) && \
+	git worktree list --porcelain | sed -n 's/^worktree //p' | tail -n +2 | grep -vxF "$$here" | tr '\n' '\0' \
 	  | xargs -0 -n 1 -P $(CLEAN_WORKTREES_JOBS) sh -c \
 	    'git worktree unlock "$$0" 2>/dev/null; \
-	     if git worktree remove --force "$$0"; then echo "removed $$0"; else echo "kept $$0"; fi'
-	@git worktree prune
+	     if git worktree remove --force "$$0"; then echo "removed $$0"; else echo "kept $$0"; exit 1; fi'; \
+	status=$$?; git worktree prune; exit $$status
 
 # All local checks before pushing, including the UI and Linux code paths.
 # Requires Docker and the desktop runtime dependencies described in checks.md.
