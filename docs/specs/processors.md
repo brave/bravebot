@@ -48,6 +48,7 @@ which is the thing this design refuses. A loop would give a reply something to s
 
 `verified-by: bravebot_core::policy::only_the_slots_it_was_given_reach_a_processor`
 `verified-by: bravebot_agent::turn::a_tool_call_from_a_processor_does_nothing`
+`verified-by: bravebot_agent::turn::a_processors_request_has_no_tool_list_no_history_and_no_second_round`
 `verified-by: bravebot_core::policy::a_reference_to_nothing_is_refused`
 `verified-by: bravebot_core::policy::a_processor_with_nothing_to_read_is_refused`
 `verified-by: bravebot_core::policy::naming_the_same_reference_twice_is_refused`
