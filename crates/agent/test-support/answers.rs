@@ -18,7 +18,7 @@ impl Answers {
 impl Confirmer for Answers {
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
         self.runs.push(request.clone());
-        self.run
+        self.run.clone()
     }
     fn confirm_exposing_read(&mut self, _: &ExposureRequest) -> Decision {
         self.exposures += 1;

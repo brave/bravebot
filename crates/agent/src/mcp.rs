@@ -1045,11 +1045,26 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
             description: offer.description(alias, tool),
             may_stand: session.may_stand(),
         };
-        let CallDecision { decision, stand } = confirmer.confirm_mcp_call(&request);
+        let answer = confirmer.confirm_mcp_call(&request);
+        crate::tools::keep_the_note(
+            policy,
+            "call_server_tool",
+            answer.decision == Decision::Approve,
+            answer.note(),
+        );
+        let told = answer.note().is_some();
+        let CallDecision {
+            decision, stand, ..
+        } = answer;
         if decision == Decision::Reject {
             return Called::Problem(format!(
-                "refused: the user did not approve calling {name}. Do not retry the same call; ask \
-                 what they would prefer."
+                "refused: the user did not approve calling {name}. Do not retry the same \
+                 call{}",
+                if told {
+                    "."
+                } else {
+                    "; ask what they would prefer."
+                }
             ));
         }
         if stand && request.may_stand {

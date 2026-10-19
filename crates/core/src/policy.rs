@@ -484,6 +484,11 @@ pub struct Policy<'sink, S: Sink> {
     /// Where the hop the egress gate last refused off a declared server was bound, until
     /// [`Policy::take_server_hop`] hands it to whoever asks the person. A server's own bytes.
     server_hop: Option<String>,
+    /// What a person typed beside their answer to the question now being acted on, until
+    /// [`Policy::take_note`] hands it to the result of the call that asked ([PROMPT-12]).
+    ///
+    /// [PROMPT-12]: ../../../docs/specs/prompting.md
+    told: Option<Labelled<String>>,
     /// The integrity of every observation this turn has made, met together.
     ///
     /// Starts trusted, since the task is the user's own words, and drops to untrusted the moment
@@ -607,6 +612,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             calling_server: None,
             calling_socket: None,
             server_hop: None,
+            told: None,
             context: Integrity::Trusted,
             holds: Confidentiality::Public,
         })
@@ -1265,6 +1271,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             calling_server: self.calling_server.clone(),
             calling_socket: self.calling_socket.clone(),
             server_hop: self.server_hop.clone(),
+            // A note belongs to the one answer it was typed at, so a branch starts with none.
+            told: None,
             context: self.context,
             holds: self.holds,
         }
@@ -6824,6 +6832,33 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "the programs were given every path a request_path with write set would be granted"
                 .to_string(),
         );
+    }
+
+    /// Record the words a person typed beside their answer to a write, a run or a call, and keep
+    /// them for the result of that call ([PROMPT-12]).
+    ///
+    /// The note is the person's own: bytes typed at the keyboard of the user who owns the session,
+    /// the same source as [`Policy::record_answers`] and as a prompt, so it is `(T,pub)` and the
+    /// first label it ever carries. `lead` is the driver's sentence that introduces it, written by
+    /// the caller from the answer alone. Nothing here reads the words: they are kept, put in the
+    /// trail as the person's and handed on.
+    ///
+    /// Keeps the latest note only. A call asks one question, so a second note before the first was
+    /// taken replaces it rather than joining it.
+    ///
+    /// [PROMPT-12]: ../../../docs/specs/prompting.md
+    pub fn record_note(&mut self, tool: &str, lead: &str, note: &str) {
+        let label = Label::new(Integrity::Trusted, Confidentiality::Public);
+        self.allow(
+            "answer",
+            format!("{tool}: the user added a note to their answer, recorded {label}: {note}"),
+        );
+        self.told = Some(Labelled::new(format!("{lead}{note}"), label));
+    }
+
+    /// The note [`Policy::record_note`] kept, once.
+    pub fn take_note(&mut self) -> Option<Labelled<String>> {
+        self.told.take()
     }
 
     /// Record who answered a prompt the policy had decided to put.
@@ -18593,6 +18628,41 @@ five
                 .record_answers("ask_user", &series, &[Answer::Typed("still no".into())])
                 .expect_err("the context has fallen, so no question may be asked");
             assert_eq!(policy.context_integrity(), Integrity::Untrusted);
+        }
+
+        /// PROMPT-12: a note a person typed beside an answer is theirs. It is `(T,pub)` and in the
+        /// trail with the word it was recorded as, and it is handed on once, so it cannot trail the next call's result.
+        #[test]
+        fn a_note_is_the_persons_own_and_is_handed_on_once() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            assert!(policy.take_note().is_none(), "a note nobody typed");
+
+            policy.record_note(
+                "write_file",
+                "The user declined this and wrote: ",
+                "use b.txt",
+            );
+            let told = policy.take_note().expect("the note");
+            assert_eq!(told.label(), Label::trusted_public());
+            assert!(policy.take_note().is_none(), "the note was handed on twice");
+
+            policy.record_note("run", "The user approved this and wrote: ", "go on");
+            let mut record = RecordingSink::new();
+            assert!(
+                policy.branch(&mut record).take_note().is_none(),
+                "a branch handed on a note that was typed at another answer"
+            );
+            assert!(policy.take_note().is_some(), "the branch took the note");
+            assert!(
+                sink.events().iter().any(|e| matches!(
+                    e,
+                    Event::GatePassed { gate: "answer", detail }
+                        if detail.contains("use b.txt") && detail.contains("write_file")
+                )),
+                "the note is not in the trail: {:?}",
+                sink.events()
+            );
         }
 
         /// A decline is an answer, not a failure: the turn has to be able to continue without one.

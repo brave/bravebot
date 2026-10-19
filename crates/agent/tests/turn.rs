@@ -3392,6 +3392,288 @@ fn a_refused_write_does_not_happen() {
     assert!(second.contains("did not approve"), "got: {second}");
 }
 
+/// What the planner was told after a turn that made `calls` and asked `confirmer` about each write.
+fn told_after_writes(
+    name: &str,
+    existing: &[(&str, &str)],
+    calls: Vec<String>,
+    confirmer: &mut RecordingConfirmer,
+) -> (Scratch, String) {
+    let scratch = Scratch::new(name);
+    for (file, contents) in existing {
+        std::fs::write(scratch.path.join(file), contents).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = calls;
+    replies.push(reply_with("understood"));
+    let (endpoint, received) = serve_sequence(replies);
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        // Asked about every file, so a trusted workspace still puts each write to the person.
+        &Task::new("write out.txt").with_permissions(rules(&[], &["Edit(**)"], &[])),
+        confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    let told = every_request(&received)
+        .last()
+        .map(|last| tool_results(last))
+        .unwrap_or_default();
+    (scratch, told)
+}
+
+/// PROMPT-12: words a person typed beside a refusal reach the planner with it, in place of the
+/// question the refusal otherwise ends on, and the refused write still does not happen.
+#[test]
+fn a_note_beside_a_refused_write_is_told_to_the_planner() {
+    let mut person = RecordingConfirmer::rejecting();
+    person.decision = person
+        .decision
+        .clone()
+        .with_note("put it in config.toml instead");
+    let (scratch, told) = told_after_writes(
+        "write-refused-with-a-note",
+        &[],
+        vec![writing("out.txt", "should not exist")],
+        &mut person,
+    );
+    assert!(!scratch.path.join("out.txt").exists());
+    assert!(told.contains("did not approve writing out.txt"), "{told}");
+    assert!(
+        told.contains("The user declined this and wrote: put it in config.toml instead"),
+        "the planner was not given the note: {told}"
+    );
+    assert!(
+        !told.contains("ask what they would prefer"),
+        "the planner was told to ask what the person had already written: {told}"
+    );
+}
+
+/// PROMPT-12: a refusal with no note is the refusal it was, ending on the question, and says
+/// nothing of a note.
+#[test]
+fn a_refused_write_without_a_note_still_ends_on_the_question() {
+    let mut person = RecordingConfirmer::rejecting();
+    let (_scratch, told) = told_after_writes(
+        "write-refused-without-a-note",
+        &[],
+        vec![writing("out.txt", "should not exist")],
+        &mut person,
+    );
+    assert!(told.contains("ask what they would prefer"), "{told}");
+    assert!(!told.contains("wrote:"), "{told}");
+}
+
+/// PROMPT-12: the words of an approval come after the result of the write they were typed for.
+#[test]
+fn a_note_beside_an_approved_write_follows_its_result() {
+    let mut person = RecordingConfirmer::approving();
+    person.decision = person.decision.clone().with_note("keep the header comment");
+    let (scratch, told) = told_after_writes(
+        "write-approved-with-a-note",
+        &[],
+        vec![writing("out.txt", "written")],
+        &mut person,
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("out.txt")).unwrap(),
+        "written"
+    );
+    let result = told.find("created out.txt").expect("the result");
+    let note = told
+        .find("The user approved this and wrote: keep the header comment")
+        .unwrap_or_else(|| panic!("the planner was not given the note: {told}"));
+    assert!(result < note, "the note came before the result: {told}");
+}
+
+/// PROMPT-12, PROMPT-5: a note is bound to the one answer it was typed at. The second write's
+/// answer has none, and the planner is told nothing of the first one's beside it.
+#[test]
+fn a_note_is_told_only_beside_the_answer_it_was_typed_at() {
+    let mut person = RecordingConfirmer::rejecting();
+    person.decision = person.decision.clone().with_note("only the first");
+    person.later = Some(bravebot_agent::WriteDecision::reject());
+    let (_scratch, told) = told_after_writes(
+        "write-note-is-for-one-answer",
+        &[],
+        vec![writing("one.txt", "1"), writing("two.txt", "2")],
+        &mut person,
+    );
+    assert_eq!(told.matches("only the first").count(), 1, "{told}");
+    assert_eq!(
+        told.matches("ask what they would prefer").count(),
+        1,
+        "the second refusal did not end on the question: {told}"
+    );
+}
+
+/// PROMPT-6: words arriving on a standing answer are not told to the planner, whatever the front
+/// end that sent them did.
+#[test]
+fn a_note_on_a_standing_answer_is_not_told_to_the_planner() {
+    let mut person = RecordingConfirmer::approving();
+    person.decision = bravebot_agent::WriteDecision::approve_always().with_note("standing words");
+    let (_scratch, told) = told_after_writes(
+        "write-standing-with-a-note",
+        &[],
+        vec![writing("out.txt", "written")],
+        &mut person,
+    );
+    assert!(told.contains("created out.txt"), "{told}");
+    assert!(!told.contains("standing words"), "{told}");
+}
+
+/// PROMPT-12: an edit takes a note as a write does, in the refusal and after the result.
+#[test]
+fn a_note_beside_an_edit_answer_is_told_to_the_planner() {
+    let edit = || {
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"notes.md","old_text":"old","new_text":"new"}"#,
+        )
+    };
+    let mut refusing = RecordingConfirmer::rejecting();
+    refusing.decision = refusing.decision.clone().with_note("leave that line alone");
+    let (scratch, told) = told_after_writes(
+        "edit-refused-with-a-note",
+        &[("notes.md", "old")],
+        vec![edit()],
+        &mut refusing,
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        "old"
+    );
+    assert!(
+        told.contains("The user declined this and wrote: leave that line alone"),
+        "{told}"
+    );
+    assert!(!told.contains("ask what they would prefer"), "{told}");
+
+    let mut approving = RecordingConfirmer::approving();
+    approving.decision = approving.decision.clone().with_note("and the next one too");
+    let (scratch, told) = told_after_writes(
+        "edit-approved-with-a-note",
+        &[("notes.md", "old")],
+        vec![edit()],
+        &mut approving,
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        "new"
+    );
+    assert!(
+        told.contains("The user approved this and wrote: and the next one too"),
+        "{told}"
+    );
+}
+
+/// What the planner was told after one `run` call, with `confirmer` asked about it.
+fn told_after_a_run(name: &str, command: &str, confirmer: &mut AskedAboutRuns) -> String {
+    told_after_a_run_in(&Scratch::new(name), command, confirmer)
+}
+
+/// As [`told_after_a_run`], in a directory the test has already put files in.
+fn told_after_a_run_in(scratch: &Scratch, command: &str, confirmer: &mut AskedAboutRuns) -> String {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            &serde_json::json!({ "command": command }).to_string(),
+        ),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("run it"),
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+    let _first = received.recv().expect("first request");
+    received.recv().expect("second request")
+}
+
+/// PROMPT-12: a refused run carries the person's words and runs nothing; an approved one carries
+/// them after what the run printed; a standing answer carries none.
+#[test]
+fn a_note_beside_a_run_answer_is_told_to_the_planner() {
+    let refused = told_after_a_run(
+        "run-refused-with-a-note",
+        "touch ran.txt",
+        &mut AskedAboutRuns::answering(
+            bravebot_agent::RunDecision::reject().with_note("use make instead"),
+        ),
+    );
+    assert!(
+        refused.contains("did not approve running this"),
+        "{refused}"
+    );
+    assert!(
+        refused.contains("The user declined this and wrote: use make instead"),
+        "{refused}"
+    );
+    assert!(!refused.contains("ask what they would prefer"), "{refused}");
+
+    let approved = told_after_a_run(
+        "run-approved-with-a-note",
+        "echo hello",
+        &mut AskedAboutRuns::answering(
+            bravebot_agent::RunDecision::approve().with_note("this was the right line"),
+        ),
+    );
+    let ended = approved.find("It exited 0").expect("the result");
+    let note = approved
+        .find("The user approved this and wrote: this was the right line")
+        .unwrap_or_else(|| panic!("{approved}"));
+    assert!(ended < note, "{approved}");
+
+    let standing = told_after_a_run(
+        "run-standing-with-a-note",
+        "echo hello",
+        &mut AskedAboutRuns::answering(
+            bravebot_agent::RunDecision::approve_always().with_note("standing words"),
+        ),
+    );
+    assert!(standing.contains("It exited 0"), "{standing}");
+    assert!(!standing.contains("standing words"), "{standing}");
+}
+
+/// PROMPT-12: a result held back as a reference is still followed by the note typed beside the
+/// approval, and what the program printed stays out of the planner's context.
+#[test]
+fn a_note_follows_a_result_held_back_as_a_reference() {
+    let scratch = Scratch::new("run-note-after-a-reference");
+    std::fs::write(scratch.path.join("secret.txt"), "SENTINEL-XYZZY\n").unwrap();
+    let told = told_after_a_run_in(
+        &scratch,
+        "sed -n p secret.txt",
+        &mut AskedAboutRuns::answering(
+            bravebot_agent::RunDecision::approve().with_note("that is the file I meant"),
+        ),
+    );
+    assert!(!told.contains("SENTINEL-XYZZY"), "{told}");
+    let held = told.find("could not be shown to you").expect("a reference");
+    let note = told
+        .find("The user approved this and wrote: that is the file I meant")
+        .unwrap_or_else(|| panic!("the note was dropped with the result: {told}"));
+    assert!(held < note, "the note came before the result: {told}");
+}
+
 /// An existing file must not be overwritten when the write is refused.
 #[test]
 fn a_refused_overwrite_leaves_the_original() {
@@ -3623,9 +3905,9 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         &mut self,
         request: &bravebot_agent::WriteRequest,
     ) -> bravebot_agent::WriteDecision {
-        let answer = match self.later {
-            Some(later) if !self.seen.is_empty() => later,
-            _ => self.decision,
+        let answer = match &self.later {
+            Some(later) if !self.seen.is_empty() => later.clone(),
+            _ => self.decision.clone(),
         };
         self.seen.push(request.clone());
         if let Some((live, to)) = &self.switching {
@@ -18400,12 +18682,12 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
         &mut self,
         _request: &bravebot_agent::WriteRequest,
     ) -> bravebot_agent::WriteDecision {
-        self.writes
+        self.writes.clone()
     }
 
     fn confirm_run(&mut self, request: &bravebot_agent::RunRequest) -> bravebot_agent::RunDecision {
         self.seen.lock().unwrap().push(request.clone());
-        self.answers.pop_front().unwrap_or(self.answer)
+        self.answers.pop_front().unwrap_or(self.answer.clone())
     }
 
     fn confirm_read_output(
@@ -21968,6 +22250,7 @@ fn a_standing_answer_to_a_request_remembers_nothing() {
         record_family: false,
         remember_reach: None,
         key: None,
+        note: None,
     });
     let seen = person.seen.clone();
     let control = scoped_run_remembering(
@@ -22344,7 +22627,7 @@ fn keeping_a_request_leaves_a_toolchain_out() {
     let (only, seen) = keeping_a_request(
         "scopes-keep-toolchain-only",
         serde_json::json!(["cargo"]),
-        keep,
+        keep.clone(),
         Some(&state.path),
     );
     assert!(!seen[0].offers_to_keep_reach());
@@ -22355,7 +22638,7 @@ fn keeping_a_request_leaves_a_toolchain_out() {
     let (both, _) = keeping_a_request(
         "scopes-keep-both",
         serde_json::json!(["cargo", "aws"]),
-        keep,
+        keep.clone(),
         Some(&state.path),
     );
     assert_eq!(both.reach.len(), 1, "{:?}", both.reach);
@@ -22381,7 +22664,7 @@ fn a_request_for_signing_is_asked_about_and_never_remembered() {
     let (only, seen) = keeping_a_request(
         "scopes-keep-signing-only",
         serde_json::json!(["signing"]),
-        keep,
+        keep.clone(),
         Some(&state.path),
     );
     assert_eq!(seen.len(), 1, "the line was not asked about");
@@ -22394,7 +22677,7 @@ fn a_request_for_signing_is_asked_about_and_never_remembered() {
     let (both, _) = keeping_a_request(
         "scopes-keep-signing-remote",
         serde_json::json!(["remote", "signing"]),
-        keep,
+        keep.clone(),
         Some(&state.path),
     );
     assert_eq!(both.reach.len(), 1, "{:?}", both.reach);
@@ -22417,7 +22700,7 @@ fn keeping_a_request_writes_nothing_where_it_was_not_offered_or_was_refused() {
     let (result, seen) = keeping_a_request(
         "scopes-keep-no-state",
         serde_json::json!(["aws"]),
-        keep,
+        keep.clone(),
         None,
     );
     assert!(seen[0].reach_record.is_none());
@@ -22427,7 +22710,7 @@ fn keeping_a_request_writes_nothing_where_it_was_not_offered_or_was_refused() {
     let state = Scratch::new("scopes-keep-refused-state");
     let refused = bravebot_agent::RunDecision {
         decision: bravebot_agent::Decision::Reject,
-        ..keep
+        ..keep.clone()
     };
     let (result, seen) = keeping_a_request(
         "scopes-keep-refused",
@@ -37761,6 +38044,26 @@ fn apply_between_working_directory_writes(
     applies: Vec<&'static str>,
     confirmer: RecordingConfirmer,
 ) -> (Vec<String>, RecordingConfirmer, Scratch, RecordingSink) {
+    apply_after_a_worker_wrote_files(
+        tag,
+        &[("out.txt", "from the delegate")],
+        writes_before,
+        writes_after,
+        applies,
+        confirmer,
+    )
+}
+
+/// As [`apply_between_working_directory_writes`], with the files the worker writes in its checkout
+/// given as path and contents.
+fn apply_after_a_worker_wrote_files(
+    tag: &str,
+    worker_writes: &[(&str, &str)],
+    writes_before: Vec<&'static str>,
+    writes_after: Vec<&'static str>,
+    applies: Vec<&'static str>,
+    confirmer: RecordingConfirmer,
+) -> (Vec<String>, RecordingConfirmer, Scratch, RecordingSink) {
     let scratch = Scratch::new(tag);
     let home = Scratch::new(&format!("{tag}-home"));
     repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
@@ -37789,13 +38092,16 @@ fn apply_between_working_directory_writes(
         ("HAVE-A-DELEGATE-WRITE-TO-APPLY", planner),
         (
             "WRITE-OUT-TO-APPLY",
-            vec![
-                tool_request(
-                    "write_file",
-                    r#"{"path":"out.txt","contents":"from the delegate"}"#,
-                ),
-                reply_with("wrote it"),
-            ],
+            worker_writes
+                .iter()
+                .map(|(path, contents)| {
+                    tool_request(
+                        "write_file",
+                        &format!(r#"{{"path":"{path}","contents":"{contents}"}}"#),
+                    )
+                })
+                .chain([reply_with("wrote it")])
+                .collect(),
         ),
     ]);
     let (asked, confirmer, sink) = run_in_a_repository_answering(
@@ -37807,6 +38113,38 @@ fn apply_between_working_directory_writes(
         confirmer,
     );
     (asked, confirmer, scratch, sink)
+}
+
+/// CHECKOUT-14, PROMPT-12. Each file of an apply is its own question, and the note typed at one is
+/// told beside that file's line, whether or not another file's answer came after it.
+#[test]
+fn a_note_typed_at_one_file_of_an_apply_is_told_beside_that_file() {
+    let mut person = RecordingConfirmer::rejecting();
+    person.decision = person.decision.clone().with_note("only the first");
+    person.later = Some(bravebot_agent::WriteDecision::reject().with_note("only the second"));
+    let (asked, confirmer, scratch, _sink) = apply_after_a_worker_wrote_files(
+        "checkout-apply-notes",
+        &[("a.txt", "one"), ("b.txt", "two")],
+        vec![],
+        vec![],
+        vec![r#"{"checkout":"c1"}"#],
+        person,
+    );
+    assert_eq!(confirmer.seen.len(), 2, "{:#?}", confirmer.seen);
+    assert!(!scratch.path.join("a.txt").exists());
+    assert!(!scratch.path.join("b.txt").exists());
+    let told = asked.last().expect("the last request");
+    for note in ["only the first", "only the second"] {
+        assert_eq!(
+            told.matches(&format!("The user declined this and wrote: {note}"))
+                .count(),
+            1,
+            "the note {note:?} was lost: {told}"
+        );
+    }
+    let first = told.find("only the first").unwrap();
+    let second = told.find("only the second").unwrap();
+    assert!(first < second, "the notes are out of order: {told}");
 }
 
 /// CHECKOUT-14. The question says so where the session wrote the same path in the working
@@ -42204,6 +42542,8 @@ struct ApprovesFetchesAndWrites {
     writes: Vec<bravebot_agent::WriteRequest>,
     /// Declines every write instead of approving it.
     declines_writes: bool,
+    /// Words sent with each answer to a write.
+    note: Option<&'static str>,
 }
 
 impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
@@ -42221,10 +42561,14 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         request: &bravebot_agent::WriteRequest,
     ) -> bravebot_agent::WriteDecision {
         self.writes.push(request.clone());
-        if self.declines_writes {
+        let decision = if self.declines_writes {
             bravebot_agent::WriteDecision::reject()
         } else {
             bravebot_agent::WriteDecision::approve()
+        };
+        match self.note {
+            Some(note) => decision.with_note(note),
+            None => decision,
         }
     }
 
@@ -49564,7 +49908,7 @@ impl bravebot_agent::confirm::Confirmer for RemembersWrites {
             .pressing
             .get(self.asked.len() - 1)
             .or(self.pressing.last())
-            .copied();
+            .cloned();
         answer.unwrap_or_else(bravebot_agent::confirm::WriteDecision::approve)
     }
 
@@ -50169,6 +50513,7 @@ fn a_standing_answer_the_prompt_did_not_offer_grants_nothing() {
             decision: bravebot_agent::Decision::Approve,
             remember: true,
             record: true,
+            note: None,
         },
         bravebot_agent::confirm::WriteDecision::reject(),
     ]);
@@ -60572,6 +60917,59 @@ fn a_declined_destination_sends_no_request_and_leaves_the_file() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(second.contains("did not approve"), "{second}");
+}
+
+/// PROMPT-12: words a person typed beside a refused download reach the planner in place of the
+/// question the refusal ends on, and nothing is fetched.
+#[test]
+fn a_note_beside_a_refused_download_is_told_to_the_planner() {
+    let scratch = Scratch::new("download-refused-with-a-note");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, count) = serve_raw(raw_reply("application/octet-stream", b"never"));
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/data","path":"data.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ApprovesFetchesAndWrites {
+        declines_writes: true,
+        note: Some("save it under vendor/ instead"),
+        ..Default::default()
+    };
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("save the data"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        0,
+        "a refused download was fetched"
+    );
+    assert!(!scratch.path.join("data.bin").exists());
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("The user declined this and wrote: save it under vendor/ instead"),
+        "the planner was not given the note: {second}"
+    );
+    assert!(
+        !second.contains("ask what they would prefer"),
+        "the planner was told to ask what the person had already written: {second}"
+    );
 }
 
 /// DOWNLOAD-2: a host the person rejects sends nothing and saves nothing, and the planner is told

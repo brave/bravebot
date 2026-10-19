@@ -1571,6 +1571,8 @@ struct RecordsEveryQuestion {
     writes: Vec<bravebot_agent::confirm::WriteRequest>,
     /// Answers a write with `a` where it is offered, rather than a plain yes.
     always: bool,
+    /// Words typed beside a write's answer, where a test needs the front end to have sent some.
+    note: Option<&'static str>,
 }
 
 impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
@@ -1586,10 +1588,14 @@ impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
         request: &bravebot_agent::confirm::WriteRequest,
     ) -> bravebot_agent::WriteDecision {
         self.writes.push(request.clone());
-        if self.always && request.may_always {
+        let answer = if self.always && request.may_always {
             bravebot_agent::WriteDecision::approve_always()
         } else {
             bravebot_agent::WriteDecision::approve()
+        };
+        match self.note {
+            Some(note) => answer.with_note(note),
+            None => answer,
         }
     }
 
@@ -1697,6 +1703,54 @@ impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
     fn interjection(&mut self) -> Option<String> {
         None
     }
+}
+
+/// PROMPT-12, MANIFEST-10: no planner is in the control path of a manifest run, so a note typed at
+/// a step's write prompt is told to nobody: the write still lands as approved and neither the
+/// outcome nor the trail holds the words.
+#[test]
+fn a_note_typed_at_a_planned_write_is_dropped() {
+    let scratch = Scratch::new("planned-write-note");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": "# Notes\n"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordsEveryQuestion {
+        note: Some("NOTE-SENTINEL-QQ"),
+        ..RecordsEveryQuestion::default()
+    };
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("start a notes file"),
+        &mut confirmer,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+
+    assert_eq!(
+        confirmer.writes.len(),
+        1,
+        "the step was not put to the person"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        "# Notes\n"
+    );
+    assert!(
+        !format!("{:?}", sink.events()).contains("NOTE-SENTINEL-QQ"),
+        "a note nobody was told was recorded as if it had been"
+    );
 }
 
 /// A planned run puts no remark in a transcript at all, so the write prompt is the only place it

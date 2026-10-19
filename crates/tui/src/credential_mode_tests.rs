@@ -123,7 +123,9 @@ fn a_turn_the_session_sends(
         match message {
             ToMain::Write(request) => {
                 asked.push(request);
-                answer_tx.send(Reply::Write(answer)).expect("answered");
+                answer_tx
+                    .send(Reply::Write(answer.clone()))
+                    .expect("answered");
             }
             ToMain::Run(_)
             | ToMain::ReadOutput(_)

@@ -667,7 +667,8 @@ fn refusing_an_mcp_question_is_a_no_in_its_own_shape() {
         Kind::McpCall.refusal(),
         Reply::McpCall(CallDecision {
             decision: Decision::Reject,
-            stand: false
+            stand: false,
+            note: None
         })
     ));
     assert!(matches!(

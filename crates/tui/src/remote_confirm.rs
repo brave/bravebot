@@ -710,6 +710,44 @@ mod tests {
         responder.join().expect("responder finished");
     }
 
+    /// PROMPT-12: the words a person typed at the terminal beside an answer cross back to the worker
+    /// with it, for a write, a run and a call alike, since the worker is where the turn that tells
+    /// the planner runs.
+    #[test]
+    fn a_note_travels_back_to_the_worker_with_its_answer() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let (answer_tx, answer_rx) = channel();
+
+        let responder = thread::spawn(move || {
+            inbound.recv().expect("a write question arrived");
+            answer_tx
+                .send(Reply::Write(WriteDecision::reject().with_note("use b.txt")))
+                .expect("answered");
+            inbound.recv().expect("a run question arrived");
+            answer_tx
+                .send(Reply::Run(RunDecision::approve().with_note("go on")))
+                .expect("answered");
+            inbound.recv().expect("a call question arrived");
+            answer_tx
+                .send(Reply::McpCall(
+                    CallDecision::reject().with_note("ask Paris"),
+                ))
+                .expect("answered");
+        });
+
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        let write = confirmer.confirm_write(&request());
+        assert!(!write.approved());
+        assert_eq!(write.note(), Some("use b.txt"));
+        let run = confirmer.confirm_run(&a_run());
+        assert!(run.approved());
+        assert_eq!(run.note(), Some("go on"));
+        let call = confirmer.confirm_mcp_call(&a_call());
+        assert_eq!(call.decision, Decision::Reject);
+        assert_eq!(call.note(), Some("ask Paris"));
+        responder.join().expect("responder finished");
+    }
+
     /// A yes to a server's list is not a yes to a call of one of its tools, nor the other way round:
     /// one promotes the server's words and the other sends the planner's to it.
     #[test]

@@ -147,6 +147,12 @@ pub struct Output {
     pub whole: Option<Labelled<String>>,
     /// Content that travels beside `text` under a label of its own.
     pub apart: Option<Apart>,
+    /// What the person typed beside their answer to the question this call asked, with the
+    /// driver's sentence that introduces it ([PROMPT-12]). Trusted and public: the person's own
+    /// words, so the turn puts it after the result as it would a prompt they typed.
+    ///
+    /// [PROMPT-12]: ../../../docs/specs/prompting.md
+    pub told: Option<Labelled<String>>,
     /// Which document a processor's answer is about, where it produced one.
     pub answers_for: Option<Option<SlotId>>,
     /// What an isolated processor said about what it did. For the person watching only.
@@ -1082,6 +1088,8 @@ struct Produced {
     whole: Option<Labelled<String>>,
     /// Content that travels beside `text` under a label of its own.
     apart: Option<Apart>,
+    /// What the person typed beside their answer, as [`Output::told`].
+    told: Option<Labelled<String>>,
     /// The change a write made, for showing under the line it belongs to.
     changes: Vec<crate::diff::Change>,
     /// Whether those lines are content nobody vouched for.
@@ -1193,6 +1201,7 @@ impl Produced {
             paging: None,
             whole: None,
             apart: None,
+            told: None,
             changes: Vec::new(),
             untrusted: false,
             changed_a_file: false,
@@ -2272,6 +2281,10 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         },
     };
 
+    // The words the person typed beside their answer, where this call asked one. Taken whether the
+    // call went on to succeed or fail, since either way they were said about this call.
+    produced.told = policy.take_note();
+
     // The wait the call already measured, on the line the call already draws. The turn's totals
     // have it too, as part of what the turn spent at the model, but a total cannot answer which
     // call was the slow one or whether a model or this machine was what took the time.
@@ -2309,6 +2322,7 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
         paging: produced.paging,
         whole: produced.whole,
         apart: produced.apart,
+        told: produced.told,
         answers_for: produced.answers_for,
         said: produced.said,
         glimpsed: produced.glimpsed,
@@ -2428,11 +2442,11 @@ fn describe_all(findings: &[&bravebot_core::credentials::Finding]) -> Vec<String
 /// simply did not want the change. Where the scan raised something, the planner is told that much
 /// and no more: enough to write a reference instead of asking again, and nothing about what was
 /// found, because a finding still may not enter a model's context.
-fn credential_aware_rejection(path: &str, scanned: &Scanned) -> Produced {
+fn credential_aware_rejection(path: &str, scanned: &Scanned, told: bool) -> Produced {
     if scanned.to_approve().is_empty() {
         return Produced::problem(format!(
-            "refused: the user did not approve writing {path}. Do not retry \
-             the same write; ask what they would prefer."
+            "refused: the user did not approve writing {path}. Do not retry the same write{}",
+            what_next(told)
         ));
     }
     Produced::refused_with_a_note(
@@ -2568,6 +2582,39 @@ pub(crate) fn carried_note(note: String, scanned: &Scanned) -> String {
         "{note}; carries a credential that was already there: {}",
         found.join("; ")
     )
+}
+
+/// How a refusal ends: with the question for the person, unless they wrote what they want instead
+/// ([PROMPT-12]).
+///
+/// [PROMPT-12]: ../../../docs/specs/prompting.md
+fn what_next(told: bool) -> &'static str {
+    if told {
+        "."
+    } else {
+        "; ask what they would prefer."
+    }
+}
+
+/// Keep what the person typed beside their answer for this call's result, where they typed any
+/// ([PROMPT-12]). `approved` only chooses the driver's introduction; the words are not read.
+///
+/// [PROMPT-12]: ../../../docs/specs/prompting.md
+pub(crate) fn keep_the_note<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tool: &str,
+    approved: bool,
+    note: Option<&str>,
+) {
+    let Some(note) = note else {
+        return;
+    };
+    let lead = if approved {
+        "The user approved this and wrote: "
+    } else {
+        "The user declined this and wrote: "
+    };
+    policy.record_note(tool, lead, note);
 }
 
 /// A tool's own words about something that did happen, with what to show for it.
@@ -4424,8 +4471,9 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
             mode.answers_a_write_unasked(!request.credentials.is_empty())
                 .then(|| mode.name()),
         );
+        keep_the_note(policy, "write_file", answer.approved(), answer.note());
         if !answer.approved() {
-            return credential_aware_rejection(&shown_path, &scanned);
+            return credential_aware_rejection(&shown_path, &scanned, answer.note().is_some());
         }
         standing.keep(policy, answer);
     }
@@ -4870,6 +4918,11 @@ fn bring_back<S: Sink, C: Confirmer>(
                 .into_trusted()
                 .unwrap_or_else(|_| format!("{relative}: see the note beside this call")),
         );
+        // What the person typed at this file's question is kept for the call's result, which holds
+        // one note, so each goes beside the line of the file it was typed at (PROMPT-12).
+        if let Some(Ok(told)) = policy.take_note().map(Labelled::into_trusted) {
+            said.push(told);
+        }
         notes.push(produced.note.clone());
         if produced.changed_a_file {
             applied += 1;
@@ -5148,15 +5201,18 @@ fn edit_file<S: Sink, C: Confirmer>(
             mode.answers_a_write_unasked(!request.credentials.is_empty())
                 .then(|| mode.name()),
         );
+        keep_the_note(policy, "edit_file", answer.approved(), answer.note());
         if answer.approved() {
             standing.keep(policy, answer);
         } else {
+            let told = answer.note().is_some();
             if !scanned.to_approve().is_empty() {
-                return credential_aware_rejection(&shown_path, &scanned);
+                return credential_aware_rejection(&shown_path, &scanned, told);
             }
             return Produced::problem(format!(
                 "refused: the user did not approve editing {shown_path}. Do not retry the \
-                 same edit; ask what they would prefer."
+                 same edit{}",
+                what_next(told)
             ));
         }
     }
@@ -7359,12 +7415,12 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     let mode = tools.permission_mode.get();
     let answer = confirmer.confirm_run(&request);
     policy.record_answer(mode.answers_this_run_unasked(&request).then(|| mode.name()));
+    keep_the_note(policy, "run", answer.approved(), answer.note());
     if !answer.approved() {
-        return Err(Box::new(Produced::problem(
-            "refused: the user did not approve running this. Do not retry the same \
-             line; ask what they would prefer."
-                .to_string(),
-        )));
+        return Err(Box::new(Produced::problem(format!(
+            "refused: the user did not approve running this. Do not retry the same line{}",
+            what_next(answer.note().is_some())
+        ))));
     }
     // Recorded before the run, so a repeat of the same command later in this turn is not
     // asked about again. The policy carries it out of the turn and the session records it.
@@ -8644,12 +8700,13 @@ fn download_url<S: Sink, C: Confirmer>(
     let mode = tools.permission_mode.get();
     let answer = confirmer.confirm_write(&request);
     policy.record_answer(mode.answers_a_write_unasked(false).then(|| mode.name()));
+    keep_the_note(policy, "download_url", answer.approved(), answer.note());
     if !answer.approved() {
-        return Produced::problem(
+        return Produced::problem(format!(
             "refused: the user did not approve saving this there. Do not retry the same \
-             download; ask what they would prefer."
-                .to_string(),
-        );
+             download{}",
+            what_next(answer.note().is_some())
+        ));
     }
 
     // Bound to this exact URL, so an approval cannot be spent on another.
