@@ -6962,7 +6962,30 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// it was given: a vouched-for `sed` over a fetched page prints the page. So neither an
     /// assertion about a program nor a proof about its option surface reaches `(T,priv)` for a line
     /// fed content nobody vouched for, and the untrusted road is the only way out of that case.
+    ///
+    /// A line the planner asked to lend scopes or to start with no sandbox is labelled by
+    /// [`Policy::before_plan_requesting`] instead.
     pub fn before_plan(&mut self, plan: &crate::command::Plan) -> Gated<Label> {
+        self.label_a_run(plan, false)
+    }
+
+    /// [`Policy::before_plan`] for a line the planner asked to lend credential scopes
+    /// ([SANDBOX-26]) or to start with no sandbox ([SANDBOX-29]).
+    ///
+    /// The output is `(U,priv)` and the `provenance` entry says so, whatever else covers the line.
+    /// A vouched entry and a proof from the audited table are about the programs as they run without
+    /// what the request adds, a credential in reach or no profile at all, so neither says anything
+    /// about what they print with it. Neither road is taken, and the entry names the label the
+    /// planner is given ([TRACE-1]).
+    ///
+    /// [SANDBOX-26]: ../../../docs/specs/sandboxing.md
+    /// [SANDBOX-29]: ../../../docs/specs/sandboxing.md
+    /// [TRACE-1]: ../../../docs/specs/trace.md
+    pub fn before_plan_requesting(&mut self, plan: &crate::command::Plan) -> Gated<Label> {
+        self.label_a_run(plan, true)
+    }
+
+    fn label_a_run(&mut self, plan: &crate::command::Plan, requesting: bool) -> Gated<Label> {
         self.before_capability(Capability::ShellExec)?;
 
         if plan.steps().is_empty() {
@@ -6983,11 +7006,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         // The proof road first, and only where it reaches a trusted answer: an audited call that
         // read an untrusted path proves its output untrusted, and a person who vouched for that
         // same command asserted something stronger about it.
-        let proven = self
-            .read_proven_label(plan)
-            .filter(|label| label.is_trusted());
+        let proven = match requesting {
+            true => None,
+            false => self
+                .read_proven_label(plan)
+                .filter(|label| label.is_trusted()),
+        };
 
-        let (label, why) = if let Some(label) = proven {
+        let (label, why) = if requesting {
+            (
+                opaque,
+                "the line asked for `scopes` or `unconfined`, and neither a vouch nor an audited \
+                 call makes what it prints trusted",
+            )
+        } else if let Some(label) = proven {
             (
                 label,
                 "every step is an audited call whose output is a function of paths the user \
@@ -10602,6 +10634,72 @@ five
         let label = policy.before_plan(&line).expect("endorsed");
         assert!(label.is_trusted());
         assert!(!label.is_public(), "trusting output is not releasing it");
+    }
+
+    /// The label each `run` line's `provenance` entry says its output was given, in the order the
+    /// lines were gated.
+    fn labels_stated_for_runs(events: &[Event]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "provenance",
+                    detail,
+                } => detail
+                    .strip_prefix("run: output labelled ")?
+                    .split_once(", ")
+                    .map(|(label, _)| label.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// TRACE-1, SANDBOX-26, SANDBOX-29: a line that asked for scopes or for no sandbox has its
+    /// output labelled `(U,priv)`, and the `provenance` entry says so, by each road that would
+    /// have trusted it without the request: a vouched entry, and the audited table. Neither was
+    /// made for the programs with a credential in reach or with no profile, and an entry stating
+    /// `(T,priv)` for a line whose output the planner is given as `(U,priv)` contradicts the label.
+    ///
+    /// The same line is gated first without the request and states `(T,priv)`, so the label the
+    /// second entry states is the request's doing and not a road that was never open.
+    #[test]
+    fn a_line_that_asked_for_a_request_is_untrusted_by_every_road_and_the_trail_says_so() {
+        for (road, line, vouching) in [
+            (
+                "a vouched entry",
+                plan_of(vec![step_named("git", &["apply"])]),
+                true,
+            ),
+            (
+                "the audited table",
+                plan_of(vec![step_named("wc", &["-l", "Cargo.toml"])]),
+                false,
+            ),
+        ] {
+            let mut sink = RecordingSink::new();
+            {
+                let mut policy = in_a_project(&mut sink, &[]);
+                if vouching {
+                    policy.remember_command(vouched("/usr/bin/git", &["apply"]));
+                }
+                assert_eq!(
+                    label_of(&mut policy, &line),
+                    Label::trusted_private(),
+                    "{road}: the line without the request was not trusted, so the request below proves nothing"
+                );
+                policy.endorse_plan(&line);
+                let label = policy.before_plan_requesting(&line).expect("endorsed");
+                assert_eq!(label, Label::untrusted_private(), "{road}");
+            }
+            assert_eq!(
+                labels_stated_for_runs(sink.events()),
+                [
+                    Label::trusted_private().to_string(),
+                    Label::untrusted_private().to_string(),
+                ],
+                "{road}"
+            );
+        }
     }
 
     /// RUN-3's route meets RUN-4's first row: a vouched-for filter over a fetched page prints what

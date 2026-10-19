@@ -2742,6 +2742,8 @@ for a different line.
 `verified-by: bravebot_agent::confine::a_request_for_signing_over_a_key_no_scope_reads_is_explained`
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`
+`verified-by: bravebot_agent::turn::a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so`
+`verified-by: bravebot_core::policy::a_line_that_asked_for_a_request_is_untrusted_by_every_road_and_the_trail_says_so`
 `verified-by: bravebot_agent::turn::a_standing_answer_to_a_request_remembers_nothing`
 `verified-by: bravebot_agent::turn::scopes_are_refused_under_off`
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_and_run_under_workspace_write`
@@ -3027,6 +3029,8 @@ refuse the path.
 `verified-by: bravebot_agent::turn::a_refused_path_request_says_why_and_points_a_write_at_the_unconfined_line`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confined_again`
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`
+`verified-by: bravebot_agent::turn::a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so`
+`verified-by: bravebot_core::policy::a_line_that_asked_for_a_request_is_untrusted_by_every_road_and_the_trail_says_so`
 `verified-by: bravebot_agent::confine::each_failed_step_sentence_naming_unconfined_makes_it_the_second_attempt`
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::the_mode_that_asks_nothing_does_not_approve_an_unconfined_line`

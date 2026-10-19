@@ -7987,8 +7987,17 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     policy.endorse_plan(&plan);
 
     let authority = policy.file_authority();
-    let (started_revision, checked) =
-        policy.capture_files(|policy, capture| (capture.revision(), policy.before_plan(&plan)));
+    // A vouch was for the programs as they ran under their profile with nothing added, so what a
+    // line prints that was lent a credential, or run with no sandbox, is not trusted on its account.
+    let requesting = !requested.is_empty() || unconfined;
+    let (started_revision, checked) = policy.capture_files(|policy, capture| {
+        let revision = capture.revision();
+        let checked = match requesting {
+            true => policy.before_plan_requesting(&plan),
+            false => policy.before_plan(&plan),
+        };
+        (revision, checked)
+    });
     let label = match checked {
         Ok(label) => label,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
@@ -7996,12 +8005,6 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     if spends_a_request {
         tools.confined_failures.spend();
     }
-    // A vouch was for the programs as they ran without the credential, so what a line lent one
-    // prints is not trusted on its account.
-    let label = match bravebot_core::capability::Capability::ShellExec.output_label() {
-        Some(opaque) if !requested.is_empty() || unconfined => opaque,
-        _ => label,
-    };
 
     // The tree comes with the line wherever the line is said, and only where it is not the root.
     // The directory persists across calls, so a planner whose earlier call has been summarised away
