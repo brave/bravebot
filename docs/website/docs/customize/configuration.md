@@ -487,6 +487,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
 | `awaySummaryEnabled` | whether a session is recapped by itself after you have been away ([below](#awaysummaryenabled)) |
 | `awaySummaryIdleSeconds` | how long after a turn finishes the automatic recap waits ([below](#awaysummaryidleseconds)) |
+| `notificationMethod`, `notificationCondition` | how and when the terminal is told a turn ended or a question is waiting ([below](#notificationmethod-and-notificationcondition)) |
 | `suggestions` | whether the empty box offers a suggested next prompt ([below](#suggestions)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
 | `tui.mouse` | `false` stops the interface capturing the mouse, so the terminal's own selection works ([below](#tuimouse)) |
@@ -887,6 +888,27 @@ How many seconds the terminal has to have been unfocused since the last turn fin
 [`awaySummaryEnabled`](#awaysummaryenabled)'s automatic recap is made. Without this key it is 300.
 A whole number above zero; zero, a negative or fractional number, or a number in quotes leaves it at
 300. It changes nothing else about the recap, and `/recap` is not delayed by it.
+
+### `notificationMethod` and `notificationCondition`
+
+```json
+{ "notificationMethod": "osc9", "notificationCondition": "unfocused" }
+```
+
+When a turn ends, or an approval or a question from the agent opens, the terminal
+interface writes one notice to the terminal, so you learn it without looking at the window. The text
+is fixed (`bravebot: turn finished` or `bravebot: waiting for an answer`) and never carries a command,
+a path or any part of a reply.
+
+`notificationMethod` is `osc9` (a desktop notification in terminals that read OSC 9), `bel` (the terminal
+bell), `off`, or `auto`. `auto` is the default, and so is any other value: it writes OSC 9 where
+`TERM_PROGRAM` is iTerm.app, WezTerm or ghostty, and the bell elsewhere. Inside tmux or over ssh
+`TERM_PROGRAM` often does not name your terminal, so `auto` writes the bell there; set `osc9` to ask for
+the notification instead.
+
+`notificationCondition` is `unfocused` or `always`. `unfocused` is the default, and so is any other
+value: the notice is written only after the terminal reported being left, so a terminal that reports no
+focus changes is never written to. `always` writes it whether or not the terminal is in front.
 
 ### `suggestions`
 

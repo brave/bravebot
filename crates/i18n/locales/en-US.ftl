@@ -2438,6 +2438,10 @@ tokens-millions = { $millions }M
 # disappearing, and an announcement made by something vanishing is one nobody reads.
 turn-done = turn { $turn } done
 turn-failed = turn { $turn } failed
+# The text of the terminal notice written when a turn ended or a question is waiting while the
+# terminal was left. Fixed: it never carries a command, a path or any part of a reply.
+notice-turn-finished = bravebot: turn finished
+notice-waiting = bravebot: waiting for an answer
 # Said of a turn the person stopped themselves, which is neither of the above.
 turn-cancelled = turn { $turn } cancelled
 

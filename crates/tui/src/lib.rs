@@ -52,6 +52,7 @@ pub mod manifest_run;
 pub mod markdown;
 pub mod mcp_command;
 pub mod model_prompt;
+mod notify;
 pub mod panel;
 pub mod picking;
 mod pointer;

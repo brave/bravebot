@@ -1157,6 +1157,9 @@ fn redraw(
     crate::title::mark(terminal.backend_mut(), run_state(session.status))?;
     // And the pointer's, because the border can move under a pointer at rest without a report of it.
     crate::pointer::show(terminal.backend_mut(), session.pointer_shape())?;
+    // The notice has its own settings: `terminalTitle` and an incognito session do not reach it,
+    // since its text is fixed and holds nothing of the session.
+    let _ = crate::notify::state(terminal.backend_mut(), run_state(session.status));
     Ok(())
 }
 
@@ -1213,6 +1216,7 @@ fn end_manifest_step(asks: bool, mark: impl FnOnce(crate::title::State)) {
 /// stop a turn or leave a question unasked.
 fn mark_title(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, state: crate::title::State) {
     let _ = crate::title::mark(terminal.backend_mut(), state);
+    let _ = crate::notify::state(terminal.backend_mut(), state);
 }
 
 /// Take what the selection covers and put it on the clipboard.
@@ -2365,6 +2369,11 @@ fn begin_session(
     crate::title::adopt(
         settings.terminal_title(),
         bravebot_core::incognito::engaged(),
+    );
+    crate::notify::adopt(
+        settings.notification_method(),
+        settings.notification_condition(),
+        std::env::var("TERM_PROGRAM").ok().as_deref(),
     );
     let sources = RuleSources::ambient(workspace.root());
     let Some(permissions) = rules_from(
