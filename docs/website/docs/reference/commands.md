@@ -391,8 +391,10 @@ same file and decides later `git` commands that reach that owner.
 
 Bare, it says the sandbox mode programs `run` starts are held to and what chose it: the default, a
 settings file, the managed file, `--sandbox`, or an earlier `/sandbox`. With a word it sets the mode
-for the rest of the session, starting with the next turn. Typed while a turn runs it waits for the
-turn to end, so one turn's `run` description, refusals and profile all come from one mode. The mode is
+for the rest of the session, starting with the next turn. Typed while a turn runs with nothing
+waiting, a mode is set at once and the turn running keeps the mode it began with, so one turn's `run`
+description, refusals and profile all come from one mode. `/sandbox off` waits for the turn to end and
+says why, since it asks first and the turn has the screen until then. The mode is
 not written to the session, so a resumed session takes the mode the process started with, and `/resume`
 inside a session keeps the one you set.
 

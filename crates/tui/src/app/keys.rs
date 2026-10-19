@@ -1,7 +1,9 @@
 //! What a key press or a mouse event does: to the input box, to the modes that stand over it, and
 //! to a turn or a command in flight.
 
-use crate::command_table::{command_typed, runs_while_working, waits_behind_the_queue};
+use crate::command_table::{
+    command_typed, runs_while_working, waits_behind_the_queue, why_it_waits,
+};
 use crate::state::{Session, Status};
 use crate::{input, render};
 use bravebot_core::cancel::Cancel;
@@ -1462,12 +1464,14 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     //
     // Not in shell mode, where the line is a command line and `/status` is a path to a program, for
     // the reason the arm above answers that mode first.
-    if key.code == KeyCode::Enter
-        && !session.shell
-        && command_typed(session.input()).is_some()
-        && session.queue_command()
-    {
-        return queued(session, key);
+    if key.code == KeyCode::Enter && !session.shell && command_typed(session.input()).is_some() {
+        let why = why_it_waits(session, session.input());
+        if session.queue_command() {
+            if let Some(why) = why {
+                session.answer_while_working(|session| session.note(why));
+            }
+            return queued(session, key);
+        }
     }
 
     // A prompt file expands mid-turn as it does at rest, into the box, so the text is read before it

@@ -285,15 +285,15 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/model`, `/theme` and `/effort` in every form; `/config`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
-| everything else | every other command, `/sandbox` in every form, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
+| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| everything else | every other command, `/sandbox off`, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something goes ahead of every line already waiting, and a line behind
 it stays where it was. The exception is a line of the same command already waiting, which it waits
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
 were typed. A command that changes something, `/rename`, `/note`, `/issue`, `/pr`, `/forget-trust`,
-`/model`, `/theme`, `/effort`, `/config`, `/advisor` or `/style`, is carried out as it is typed only when nothing is waiting, and otherwise waits
+`/sandbox`, `/model`, `/theme`, `/effort`, `/config`, `/advisor` or `/style`, is carried out as it is typed only when nothing is waiting, and otherwise waits
 behind what is, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
 session `/clear` leaves, and `/forget-trust` ahead of a waiting `/cd` would forget the directory
 `/cd` leaves. A command carried out as it is typed comes off the box and is not remembered, as at
@@ -303,7 +303,9 @@ and stopping the turn would send the prompts waiting behind it, which nobody ask
 
 A command that waits is taken off the box and joins the lines waiting for the turn to end, exactly
 as a prompt does: the box clears, the history remembers it, and it is drawn under the box marked as
-waiting. What it waits for is different. It is never offered to the turn in flight, so nothing about
+waiting. It says why it waits, in a line held under the turn as a command's answer is: it acts on
+what the turn holds or starts a turn of its own, or it waits behind the lines typed before it so that it lands where
+it was typed, or, for `/sandbox off`, it asks first and the turn has the screen until it ends. What it waits for is different. It is never offered to the turn in flight, so nothing about
 it reaches the planner, and when the queue reaches it, it is carried out rather than sent. The queue
 is drained in the order the lines were typed, so a command behind a prompt waits for that prompt's
 turn.
@@ -312,6 +314,13 @@ Neither kind is offered to the turn in flight. Which lines are commands is CMD-2
 narrower, so a sentence mentioning a command is a prompt mid-turn as it is at rest, and a word the
 table gives no argument is a prompt with anything after it. A compaction, an aside and the other
 loops that share the working status are not a turn, and every command typed during one waits.
+
+**The commands that rewrite the conversation or the workspace wait.** `/clear`, `/compact`,
+`/undo`, `/rewind`, `/cd`, `/add-dir` and `/exit` are not carried out while the turn runs, and do
+not stop it: stopping a turn costs the work it has done, and a person who typed a command did not
+ask for that. Each says why it waits, and Ctrl-Enter on one stops the turn and carries the command
+out, as it does for a waiting prompt, since that press is the person asking for it to be hurried. A
+turn stopped that way gives its prompt back to the box when it recorded nothing.
 
 **Why the second kind waits.** Enter mid-turn already means the line waits, and that is what a
 person pressing it expects of a line they type. What the queue must not do is send a command: a line
@@ -364,6 +373,14 @@ does not read:
   turn. A list still open when the turn ends stays open and takes the next key. The roster `/model`
   lists is asked for on the thread that draws the turn, so a slow listing holds the drawing, and
   any question the turn asks, until it returns.
+- **`/sandbox`.** It sets the mode the programs `run` starts are held to
+  ([SANDBOX-22](sandboxing.md#SANDBOX-22)). A turn is built with the mode in force when it begins and
+  does not read it again, so every stage of the running turn, those already started and those yet
+  to start, keeps that mode, and a mode set mid-turn is the next turn's. The reply says so. The bare word reports the mode and says nothing of the turn.
+  `/sandbox off` waits: it asks before programs start with no profile, and a question put while the
+  turn has the screen would be answered over the turn's own. A managed floor refuses a looser mode
+  as at rest, so the refusal is said under the turn. `/status` mid-turn names the mode set
+  meanwhile, which is the one the next request is built with.
 - **`/advisor`.** It names the model a later turn's planner may consult
   ([ADVISOR-9](tools/advisor.md#ADVISOR-9)). A turn is offered its advisor, or none, when it
   begins and does not read the choice again, so one named mid-turn is the next turn's. The bare word
@@ -435,6 +452,12 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::ctrl_enter_on_a_rename_mid_turn_hurries_nothing`
 `verified-by: bravebot_tui::app::trust_forgotten_mid_turn_is_forgotten_as_it_is_typed`
 `verified-by: bravebot_tui::app::an_effort_named_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_keeps_its_own`
+`verified-by: bravebot_tui::app::the_sandbox_report_is_given_mid_turn`
+`verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_waits_and_says_why`
+`verified-by: bravebot_tui::app::a_sandbox_mode_named_behind_a_waiting_line_waits_behind_it`
+`verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_sandbox_mode_set_mid_turn`
+`verified-by: bravebot_tui::app::a_command_that_waits_for_the_turn_says_why`
 `verified-by: bravebot_tui::app::a_theme_or_an_effort_nobody_has_is_refused_mid_turn`
 `verified-by: bravebot_tui::app::a_command_that_opens_a_picker_opens_it_as_it_is_typed_mid_turn`
 `verified-by: bravebot_tui::app::a_level_picked_in_a_picker_opened_mid_turn_is_kept_and_said_under_the_turn`

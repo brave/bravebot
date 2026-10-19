@@ -52,6 +52,9 @@ pub(crate) const FORGET_TRUST_COMMAND: &str = "/forget-trust";
 pub(crate) const REACH_COMMAND: &str = "/reach";
 
 /// The line that reports the sandbox mode, or sets it from the next turn (SANDBOX-22).
+///
+/// Typed while a turn runs, every word but `off` is carried out as typed, and the turn keeps the mode
+/// it began with (CMD-8).
 pub(crate) const SANDBOX_COMMAND: &str = "/sandbox";
 
 /// The line that reports what this session is and what it may touch.
@@ -273,6 +276,13 @@ pub enum MidTurn {
     /// Where the bare word opens a picker, the picker is held as a mode of the session while the
     /// turn runs, so the turn's own questions are still drawn over it.
     Changes,
+    /// Carried out as it is typed under the rule [`MidTurn::Changes`] gives, except where the form
+    /// typed would ask the person a question, which waits: the screen is the turn's while it runs,
+    /// and a yes given to a question drawn under another one is not one anybody read.
+    ///
+    /// `/sandbox`: a mode moves what the next turn is built with and nothing the turn in flight
+    /// holds, and the move to `off` asks first (SANDBOX-22).
+    ChangesUnlessItAsks,
     /// Waits for the turn to end, because it acts on the conversation, the workspace, the
     /// terminal or the network, and the turn holds all four.
     Waits,
@@ -433,7 +443,7 @@ pub fn commands() -> [Command; 47] {
             name: SANDBOX_COMMAND,
             argument: "[<mode>]",
             description: t!(command_sandbox),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::ChangesUnlessItAsks,
         },
         Command {
             name: LOOP_COMMAND,
@@ -680,6 +690,11 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
     match command.mid_turn {
         MidTurn::Runs | MidTurn::Changes => true,
         MidTurn::Waits => false,
+        MidTurn::ChangesUnlessItAsks => {
+            let argument = argument_to(line, command.name).unwrap_or_default();
+            bravebot_sandbox::SandboxMode::parse(argument)
+                != Some(bravebot_sandbox::SandboxMode::Off)
+        }
         MidTurn::RunsUnlessItStarts => {
             let argument = argument_to(line, command.name).unwrap_or_default();
             match command.name {
@@ -702,9 +717,32 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
 /// command that changes something waits behind any line at all, so it lands where it was typed:
 /// `/rename` ahead of a waiting `/clear` would name the session being left.
 pub(crate) fn waits_behind_the_queue(session: &Session, line: &str) -> bool {
-    let changes = row_typed(line).is_some_and(|command| command.mid_turn == MidTurn::Changes);
+    let changes = row_typed(line).is_some_and(|command| {
+        matches!(
+            command.mid_turn,
+            MidTurn::Changes | MidTurn::ChangesUnlessItAsks
+        )
+    });
     (changes && !session.queued.is_empty())
         || session
             .commands_waiting()
             .any(|waiting| command_typed(waiting) == command_typed(line))
+}
+
+/// What is said under the turn when a command typed while it runs is queued, so the line does not
+/// wait without a reason (CMD-8). Read before the line is taken off the box, and from the same
+/// facts [`runs_while_working`] and [`waits_behind_the_queue`] decided it with.
+pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
+    let command = row_typed(line)?;
+    let word = command.name;
+    Some(if runs_while_working(line) {
+        if !waits_behind_the_queue(session, line) {
+            return None;
+        }
+        t!(command_waits_behind_the_queue, command = word).to_string()
+    } else if command.mid_turn == MidTurn::ChangesUnlessItAsks {
+        t!(command_waits_to_ask, command = word).to_string()
+    } else {
+        t!(command_waits_for_the_turn, command = word).to_string()
+    })
 }
