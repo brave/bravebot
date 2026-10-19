@@ -19146,6 +19146,11 @@ mod tests {
             "what the command said about waiting is not the last entry: {:?}",
             last.text
         );
+        let said = said_under_the_turn(&session);
+        assert!(
+            said.len() == 1 && said[0].contains("waits for the turn to end"),
+            "the notice is not counted as said under the turn: {said:?}"
+        );
     }
 
     /// What queueing promises, and the whole of what was deferred: the word runs when the queue is
