@@ -7528,6 +7528,26 @@ mod tests {
         assert_eq!(config.context_budget, 131_072);
     }
 
+    /// IMPORT-5: a block that states a window for the provider and none for its model gives that
+    /// model the provider's window. Read through the model alone, the run would keep the default.
+    #[test]
+    fn a_run_adopts_the_window_a_provider_block_states_for_its_models() {
+        let mut config = a_config_with_a_named_roster();
+        config.providers = bravebot_config::Settings::parse(
+            r#"{"provider": {"ollama": {
+                "options": {"baseURL": "http://localhost:11434/v1", "contextWindow": 65536},
+                "models": {"tiny": {}}}}}"#,
+        )
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 1, "the block configured no service");
+
+        adopt_listing_for_model(&mut config, "ollama/tiny");
+
+        assert_eq!(config.context_budget, 65_536);
+        assert!(!config.budget_is_guessed());
+    }
+
     /// A name no roster describes: a model withdrawn since it was chosen, or one a settings file
     /// names and no listing offers. The default stands rather than the window of whichever entry
     /// happened to be first, and the run says nothing about having looked.

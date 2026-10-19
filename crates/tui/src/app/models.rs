@@ -199,7 +199,7 @@ pub(super) fn provider_models(
             provider: Some(provider.display_name().to_string()),
             // Stated or assumed, never absent: a window is what the budget is taken from, and
             // reporting nothing would leave the session on a default chosen for a different service.
-            conversation_tokens: Some(model.window()),
+            conversation_tokens: Some(provider.window_of(model)),
             // A block names models and never their parameters, so the level goes out to be judged
             // at the far end and the judgment is the only description there is: read one where
             // this service has already refused the field for this model.

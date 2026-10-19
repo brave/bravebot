@@ -494,6 +494,14 @@ pub fn running(host: &str, listed: Vec<Installed>) -> Found {
     let endpoint = format!("{host}/v1");
     let mut options = Map::new();
     options.insert("baseURL".to_string(), Value::from(endpoint.as_str()));
+    // A window above the assumed one is left unwritten: the assumed one is deliberately low, and
+    // a figure read once from a loaded model goes stale when the person reloads it larger.
+    if let Some(window) = chosen
+        .window
+        .filter(|window| *window < crate::provider::CONTEXT_WINDOW)
+    {
+        options.insert("contextWindow".to_string(), Value::from(window));
+    }
     let mut entry = Map::new();
     entry.insert("name".to_string(), Value::from("Ollama (local)"));
     entry.insert("options".to_string(), Value::Object(options));
@@ -2437,6 +2445,31 @@ mod tests {
 
         assert_eq!(found.model.as_deref(), Some("ollama/qwen3-coder-oc:latest"));
         assert_eq!(found.window, Some(4096));
+    }
+
+    /// IMPORT-3: a window below the assumed one is written as the entry's `contextWindow`, because
+    /// the entry lists no models to carry it. A window at or above the assumed one, and none at all,
+    /// write the documented block alone, so a figure that later grows is not held down. The
+    /// regressions rejected are writing nothing, and writing every figure.
+    #[test]
+    fn a_window_below_the_assumed_one_is_written_into_the_entry() {
+        let options = |window: Option<u64>| {
+            let mut listed = three_pulled();
+            listed[0].window = window;
+            let found = running("http://localhost:11434", listed);
+            let chosen = found.model.clone();
+            assert_eq!(chosen.as_deref(), Some("ollama/qwen3-coder-oc:latest"));
+            found.gateways[0].entry["options"].clone()
+        };
+
+        assert_eq!(
+            options(Some(4096)),
+            serde_json::json!({"baseURL": "http://localhost:11434/v1", "contextWindow": 4096})
+        );
+        let plain = serde_json::json!({"baseURL": "http://localhost:11434/v1"});
+        assert_eq!(options(Some(crate::provider::CONTEXT_WINDOW)), plain);
+        assert_eq!(options(Some(1_000_000)), plain);
+        assert_eq!(options(None), plain);
     }
 
     /// IMPORT-10: nothing configured and Ollama running is the case the configuration guide

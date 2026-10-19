@@ -133,7 +133,7 @@ A proxy the environment names carries this request as it carries every other
 | opencode | a `provider` entry bravebot's own reading keeps, whose `npm` is absent, `@ai-sdk/openai-compatible`, `@openrouter/ai-sdk-provider` for `openrouter`, or `@ai-sdk/amazon-bedrock` for `amazon-bedrock`, or `@ai-sdk/google-vertex` for `google-vertex` | that entry under `provider`, holding only the fields bravebot reads: `name`, `env`, `models`, `options.baseURL`, `options.region`, `options.profile`, `options.project`, `options.location`, and the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | an `auth.json` entry of `type: "api"` for an id whose endpoint is compiled in, with no config entry for that id | a `provider` entry for that id, with the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | a top-level `model` of the form `provider/model`, where the import writes that provider's entry | `model`, in the form that names the gateway; for `amazon-bedrock`, the model's own id, added to that entry's `models` |
-| Ollama | a server answering [IMPORT-10](#IMPORT-10)'s request with a model it can serve | `provider.ollama`: `{"name": "Ollama (local)", "options": {"baseURL": "<address>/v1"}}`, and `model: "ollama/<name>"` for the model [IMPORT-10](#IMPORT-10) chooses |
+| Ollama | a server answering [IMPORT-10](#IMPORT-10)'s request with a model it can serve | `provider.ollama`: `{"name": "Ollama (local)", "options": {"baseURL": "<address>/v1"}}`, with `"contextWindow": <tokens>` added to `options` where [IMPORT-5](#IMPORT-5) says, and `model: "ollama/<name>"` for the model [IMPORT-10](#IMPORT-10) chooses |
 
 **A host must name somewhere.** An entry whose host is not an `http` or `https` URL, or still holds
 one of opencode's `{env:...}` substitutions, is not offered, because this program makes no
@@ -272,9 +272,14 @@ the end of input.
 [IMPORT-10](#IMPORT-10) read a figure for that model, the question gives the context window the
 server has it loaded with. Where the figure is below the window a conversation is otherwise
 budgeted against (131,072 tokens), it also says the server drops the earliest turns beyond it and
-names `OLLAMA_CONTEXT_LENGTH`. A model with no figure has no line, and no figure is guessed. The
-figure is shown and never written: a `provider` block that lists no models has nowhere to keep a
-limit, and one that lists models is taken at its word.
+names `OLLAMA_CONTEXT_LENGTH`. A model with no figure has no line, and no figure is guessed.
+
+**Where the window is kept.** A figure below that window is written as `options.contextWindow` of
+the entry, shown in the entry the question lists, and a session budgets the entry's models against
+it ([backends.md](backends.md)). It is a field of the provider because the entry lists no models to
+hold a `limit`, and a block that lists models is taken at its word. A figure at or above the window
+is not written, since the window a conversation is otherwise budgeted against is the safe
+assumption and a model reloaded larger would stay held down by a stale figure.
 
 **Names already set.** A name already set in the file, including one the first answer just wrote,
 is shown as left as it is ([IMPORT-7](#IMPORT-7)). A source left with nothing to add is not asked
@@ -298,6 +303,10 @@ listing only such models reaches nothing.
 `verified-by: bravebot_cli::import::a_name_the_first_answer_wrote_is_left_by_the_second`
 `verified-by: bravebot_cli::import::a_setup_found_only_in_the_environment_says_so`
 `verified-by: bravebot_cli::import::a_window_below_the_assumed_one_is_shown_with_what_the_server_drops`
+`verified-by: bravebot_cli::import::approving_a_small_window_writes_it_into_the_file`
+`verified-by: bravebot_config::import::a_window_below_the_assumed_one_is_written_into_the_entry`
+`verified-by: bravebot_config::provider::a_provider_window_is_the_default_for_models_that_state_none`
+`verified-by: bravebot_aichat::models::a_provider_window_is_taken_for_fetched_models`
 `verified-by: bravebot_cli::import::a_model_a_tier_names_is_not_added_to_an_aws_entry_again`
 `verified-by: bravebot_cli::import::an_exported_tier_names_a_model_as_a_written_one_does`
 

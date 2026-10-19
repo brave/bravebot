@@ -144,13 +144,6 @@ pub struct Model {
     pub options: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-impl Model {
-    /// The window to budget against, stated or assumed.
-    pub fn window(&self) -> u64 {
-        self.context_window.unwrap_or(CONTEXT_WINDOW)
-    }
-}
-
 /// One gateway, and the models it was configured to offer.
 ///
 /// Not comparable, because one field is a credential and `Secret` refuses equality: an operator
@@ -190,6 +183,13 @@ pub struct Provider {
     /// enumerate, so the gateway is asked. A service with no listing to ask is offered
     /// [`Self::compiled_roster`] instead, which is never copied in here.
     pub models: Vec<Model>,
+    /// The window every model of this provider is assumed to have, where `options.contextWindow`
+    /// states one.
+    ///
+    /// For a server whose window is one setting for all its models, such as a local Ollama, and the
+    /// only place to keep a figure where the block lists no models, since a block that lists models
+    /// turns off the roster. A model's own `limit.context` outranks it.
+    pub context_window: Option<u64>,
     /// The AWS account this entry reaches, where it names Bedrock rather than a gateway.
     ///
     /// Resolved here rather than by the caller because a request to Bedrock needs a region to sign
@@ -256,6 +256,7 @@ impl Provider {
                 .map(Secret::new),
             stored_key: None,
             models: models(entry.get("models")),
+            context_window: options.and_then(|options| positive(options.get("contextWindow"))),
             bedrock: None,
         })
     }
@@ -284,6 +285,7 @@ impl Provider {
             api_key: Some(token),
             stored_key: None,
             models: Vec::new(),
+            context_window: None,
             bedrock: None,
         })
     }
@@ -312,6 +314,7 @@ impl Provider {
             api_key: None,
             stored_key: None,
             models,
+            context_window: None,
             bedrock: Some(crate::bedrock::Bedrock::from_provider(
                 region, profile, entries,
             )),
@@ -412,6 +415,14 @@ impl Provider {
     /// budget is taken from.
     pub fn model(&self, id: &str) -> Option<&Model> {
         self.models.iter().find(|model| model.id == id)
+    }
+
+    /// The window to budget `model` against: its own, else this provider's, else the assumed one.
+    pub fn window_of(&self, model: &Model) -> u64 {
+        model
+            .context_window
+            .or(self.context_window)
+            .unwrap_or(CONTEXT_WINDOW)
     }
 
     /// Whether a name is one of this provider's models.
@@ -546,6 +557,13 @@ fn string(value: Option<&serde_json::Value>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+/// A whole number above zero, where the value is one.
+fn positive(value: Option<&serde_json::Value>) -> Option<u64> {
+    value
+        .and_then(serde_json::Value::as_u64)
+        .filter(|figure| *figure > 0)
 }
 
 /// The `env` array: variable names that may hold the token.
@@ -961,9 +979,41 @@ mod tests {
                 "models": {"some/model": {}}
             }}}"#);
         assert_eq!(
-            provider.model("some/model").expect("offered").window(),
+            provider.window_of(provider.model("some/model").expect("offered")),
             CONTEXT_WINDOW
         );
+    }
+
+    /// IMPORT-5: a window the block states for the provider is every model's, where the model
+    /// states none, and a model's own `limit` outranks it. The regressions rejected are ignoring
+    /// the provider figure, and letting it override a model that pinned its own.
+    #[test]
+    fn a_provider_window_is_the_default_for_models_that_state_none() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://example.invalid/v1", "contextWindow": 4096},
+                "models": {"plain": {}, "pinned": {"limit": {"context": 8192, "output": 1024}}}
+            }}}"#);
+        assert_eq!(provider.context_window, Some(4096));
+        assert_eq!(
+            provider.window_of(provider.model("plain").expect("offered")),
+            4096
+        );
+        assert_eq!(
+            provider.window_of(provider.model("pinned").expect("offered")),
+            8192
+        );
+    }
+
+    /// A provider window that is not a whole number above zero says nothing, as an unusable model
+    /// `limit` does.
+    #[test]
+    fn an_unusable_provider_window_is_not_read() {
+        for stated in ["0", "-5", "\"4096\"", "40.5", "null"] {
+            let provider = one(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://e.invalid/v1", "contextWindow": {stated}}}}}}}}}"#
+            ));
+            assert_eq!(provider.context_window, None, "{stated}");
+        }
     }
 
     /// The case `limit` exists for: an upstream pinned to a smaller window than the model's own.
@@ -978,7 +1028,7 @@ mod tests {
             .model("anthropic/claude-sonnet-4.5")
             .expect("offered");
         assert_eq!(model.context_window, Some(200_000));
-        assert_eq!(model.window(), 200_000);
+        assert_eq!(provider.window_of(model), 200_000);
     }
 
     /// opencode requires `context` and `output` together once `limit` is present. A block naming

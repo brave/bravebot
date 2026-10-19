@@ -34,6 +34,7 @@ was, and the conversation budget stays where it was too.
 | | `env` | variable names that may hold the bearer token, tried in order |
 | | `models` | the models to offer, keyed by the name the gateway knows each by |
 | `options` | `baseURL` | where requests go |
+| | `contextWindow` | the context window of every model that states none, in prompt tokens (bravebot's own field) |
 | | `apiKey` | a token written into the file directly |
 | a model | `limit.context` | that model's context window, in prompt tokens |
 | | `options` | anything extra to put in the request body |
@@ -227,7 +228,11 @@ keeps working.
 `limit.context` is optional. A model that states none is assumed to have 131,072 prompt tokens, the
 same deliberately low figure a Bedrock tier gets and for the same reason: a budget above the real
 window does not compact a conversation late, it stops compacting it at all. A window a gateway reports
-is taken where the file stated none; a figure in the file outranks it. Following opencode, `limit`
+is taken where the file stated none; a figure in the file outranks it. `options.contextWindow` is the
+figure for every model of the provider that states none, and is the place to keep one for a block
+that lists no models, such as a local Ollama, whose window is one server setting. A model's own
+`limit.context` outranks it, and a gateway's report does not. The Ollama import writes it where the
+server holds the model with fewer than 131,072 tokens. Following opencode, `limit`
 needs `output` alongside `context` or it is not a `limit` and its figure is not read. `output` states
 [how far a reply may run](../configuration.md#how-long-a-reply-may-run).
 
