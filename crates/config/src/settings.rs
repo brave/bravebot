@@ -749,19 +749,19 @@ impl Settings {
                 .iter()
                 .map(|rule| anchor_slash_rule(rule, &anchor))
                 .collect();
-            self.rule_sources
-                .extend(
-                    written
-                        .iter()
-                        .zip(&anchored)
-                        .map(|(written, anchored)| RuleSource {
-                            list,
-                            anchored: anchored.clone(),
-                            written: written.clone(),
-                            file: path.to_path_buf(),
-                            reason: None,
-                        }),
-                );
+            self.rule_sources.splice(
+                0..0,
+                written
+                    .iter()
+                    .zip(&anchored)
+                    .map(|(written, anchored)| RuleSource {
+                        list,
+                        anchored: anchored.clone(),
+                        written: written.clone(),
+                        file: path.to_path_buf(),
+                        reason: None,
+                    }),
+            );
             reasons.splice(0..0, anchored.iter().map(|_| None));
             held.splice(0..0, anchored);
         }
@@ -6216,7 +6216,7 @@ mod tests {
         assert_eq!(settings.permissions().reasons.deny.len(), 3);
         let held = |list, rule| settings.rule_source(list, rule).map(|(file, _)| file);
         assert_eq!(held("ask", "Bash(git push *)"), managed.path());
-        assert!(held("deny", "Read(//etc/secret)").is_some());
+        assert_eq!(held("deny", "Read(//etc/secret)"), managed.path());
         assert!(settings.permissions().allow.is_empty());
     }
 
