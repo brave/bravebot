@@ -1860,5 +1860,8 @@ callable that the person turned off.
 `verified-by: bravebot_tui::mcp_command::a_word_it_does_not_know_and_a_missing_alias_change_nothing`
 `verified-by: bravebot_tui::mcp_command::a_server_nothing_requests_is_neither_started_nor_turned_off`
 `verified-by: bravebot_tui::mcp_command::a_server_turned_off_stays_off_until_it_is_named`
+`verified-by: bravebot_tui::mcp_command::a_start_the_person_refuses_joins_nothing_and_clears_the_turn_off`
+`verified-by: bravebot_tui::mcp_command::reconnecting_a_running_server_says_so_and_changes_nothing`
+`verified-by: bravebot_tui::mcp_command::turning_off_a_running_server_removes_it_and_the_last_leaves_none`
 `verified-by: bravebot_tui::app::the_mcp_command_carries_its_words_unparsed`
 `verified-by: bravebot_tui::app::the_mcp_command_waits_for_the_turn_in_flight`
