@@ -7491,6 +7491,98 @@ fn a_continued_run_given_the_workspace_flag_reads_a_project_file_as_trusted() {
     );
 }
 
+/// A project whose model answers `change the notes` with one call to `tool`, and then says it is
+/// done, so the file on disk is the only thing that says whether the call was applied.
+fn a_project_whose_notes_the_model_changes(
+    name: &str,
+    tool: &'static str,
+    arguments: serde_json::Value,
+) -> (Gateway, Scratch, PathBuf) {
+    let gateway = a_gateway(r#"["tools"]"#, move |body| {
+        if !body.contains("change the notes") {
+            return answered("hello")(body);
+        }
+        let frame = match body.contains(r#""role":"tool""#) {
+            true => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
+            false => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":tool,"arguments":arguments.to_string()}}]},
+                "finish_reason":"tool_calls"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    });
+    let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+    let cwd = scratch.path.join("project");
+    std::fs::create_dir_all(&cwd).expect("create the project");
+    std::fs::write(cwd.join("notes.md"), "THE-WORDS-IN-THE-PROJECT-NOTES").expect("write notes");
+    (gateway, scratch, cwd)
+}
+
+/// CLI-1. Trusting the working directory opens reads and nothing else: a run nobody is watching
+/// that was given `--trust-workspace` still has a write the planner composed refused, for a whole
+/// file and for an edit alike, and the one flag that lifts the refusal, the person's own
+/// instruction to skip permissions, makes both land.
+///
+/// A property of the process: the trust map is built in `main` from the flag and the confirmer is
+/// wrapped there, and the gate that answers silently for a trusted path is two crates away. The
+/// wrong implementation this rejects is the one that leaves the trust map to answer, where the
+/// refusing confirmer is never reached and the file is written with nothing typed but a trust flag.
+#[test]
+fn a_one_shot_run_that_trusts_its_workspace_still_refuses_a_write_without_the_skip_flag() {
+    let changes: [(&str, &'static str, serde_json::Value, &str); 2] = [
+        (
+            "write",
+            "write_file",
+            serde_json::json!({"path": "notes.md", "contents": "THE-PLANNERS-WORDS"}),
+            "THE-PLANNERS-WORDS",
+        ),
+        (
+            "edit",
+            "edit_file",
+            serde_json::json!({
+                "path": "notes.md",
+                "old_text": "THE-WORDS-IN-THE-PROJECT-NOTES",
+                "new_text": "THE-PLANNERS-WORDS",
+            }),
+            "THE-PLANNERS-WORDS",
+        ),
+    ];
+    for (kind, tool, arguments, written) in changes {
+        let run = |flags: &[&str]| {
+            let (gateway, scratch, cwd) = a_project_whose_notes_the_model_changes(
+                &format!("cli-running-trust-writes-{kind}-{}", flags.len()),
+                tool,
+                arguments.clone(),
+            );
+            let mut line = flags.to_vec();
+            line.extend(["-p", "change the notes"]);
+            let output = bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &line);
+            let (_, stderr) = said(&output);
+            assert!(output.status.success(), "{kind} {flags:?}: {stderr}");
+            let _ = requests(&gateway);
+            std::fs::read_to_string(cwd.join("notes.md")).expect("the notes")
+        };
+
+        assert_eq!(
+            run(&["--trust-workspace"]),
+            "THE-WORDS-IN-THE-PROJECT-NOTES",
+            "{kind}: a trust flag alone applied a write nobody was asked about"
+        );
+        assert_eq!(
+            run(&["--trust-workspace", "--dangerously-skip-permissions"]),
+            written,
+            "{kind}: the skip flag did not apply the write, so the refusal above says nothing"
+        );
+    }
+}
+
 /// TRUST-26, the control: the same run without the flag is the quarantine the issue describes.
 #[test]
 fn a_run_without_the_workspace_flag_reads_a_project_file_quarantined() {

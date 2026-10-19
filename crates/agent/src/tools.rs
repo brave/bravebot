@@ -2153,6 +2153,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
             tools.slots,
             tools.recording(),
             tools.permission_mode.get(),
+            tools.permission_mode.writes_are_always_asked(),
             tools.servers.as_deref_mut(),
             confirmer,
             &arguments,
@@ -4338,6 +4339,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
 
     if write_needs_approval(policy, workspace, &proposed_path, body_label, destination)
         || always_ask
+        || tools.permission_mode.writes_are_always_asked()
         || !to_approve.is_empty()
     {
         // Released for display only, and inside the branch because there is no screen on the
@@ -4921,6 +4923,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     slots: &SlotStore,
     recording: crate::findings::Recording<'_>,
     mode: crate::PermissionMode,
+    nobody_to_ask: bool,
     servers: Option<&mut LanguageServers>,
     confirmer: &mut C,
     arguments: &Value,
@@ -5076,6 +5079,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     let reviewed = review_a_write(policy, "edit_file", Intent::Edit, &source, &body, None);
 
     if write_needs_approval(policy, workspace, &proposed_path, body_label, destination)
+        || nobody_to_ask
         || !to_approve.is_empty()
     {
         // Released for display only, and inside the branch for the reason a whole-file write
@@ -16407,6 +16411,7 @@ mod tests {
                 // them; the question here is about the arguments.
                 crate::findings::Recording::default(),
                 crate::PermissionMode::Ask,
+                false,
                 None,
                 &mut crate::confirm::ApproveWrites,
                 &json!({"path": "a.txt", "old_text": "old", "new_text": "new"}),
@@ -16563,6 +16568,7 @@ mod tests {
                 &slots,
                 crate::findings::Recording::default(),
                 crate::PermissionMode::Ask,
+                false,
                 None,
                 &mut crate::confirm::ApproveWrites,
                 &json!({"path_ref": "ref:1", "old_text": "old", "new_text": "new"}),
@@ -16718,6 +16724,7 @@ mod tests {
                 &slots,
                 crate::findings::Recording::default(),
                 crate::PermissionMode::Ask,
+                false,
                 None,
                 &mut crate::confirm::ApproveWrites,
                 &json!({"path_ref": "ref:1", "old_text": "old", "new_text": "new"}),

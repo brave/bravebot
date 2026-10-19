@@ -1819,7 +1819,7 @@ fn prepare_the_run(
         .with_advisor(advisor)
         .with_output_schema(output_schema)
         .with_permissions(permissions)
-        .with_permission_mode(permission_mode)
+        .with_permission_mode(bravebot_agent::LiveMode::unattended(permission_mode))
         // The words the command line put in the planner's system prompt (CLI-19). A manifest run
         // was refused above, so this task is a turn's.
         .with_system_prompts(prompts)
