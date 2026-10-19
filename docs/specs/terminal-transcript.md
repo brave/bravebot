@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/blocks.rs
   - crates/tui/src/indicator.rs
   - crates/tui/src/logo.rs
+  - crates/tui/src/preview.rs
   - crates/tui/src/reasoning.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/watching.rs
@@ -801,3 +802,18 @@ drawn in the terminal's own ink.
 `verified-by: bravebot_tui::logo::a_mark_drawn_from_backgrounds_is_the_same_picture`
 `verified-by: bravebot_tui::lib::only_the_name_apple_terminal_sets_is_apple_terminal`
 
+
+<a id="VIEW-29"></a>
+### VIEW-29: Apple's Terminal is not sent the Kitty graphics query
+
+At start-up the interface asks the terminal which graphics protocol it draws
+([VET-4](tools/vet-content.md#VET-4)). Where `TERM_PROGRAM` is `Apple_Terminal`, the question for the
+Kitty protocol is left out of that exchange and the rest of it is sent. Every other terminal is asked
+as before.
+
+**Why.** The Kitty question is an application program command. Apple's Terminal does not understand
+it and prints its text, `Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA`, at the top of the screen. That terminal
+draws no protocol the question could find, so leaving it out loses no picture.
+
+`verified-by: bravebot_tui::preview::apple_terminal_is_not_sent_the_kitty_query_and_other_terminals_are`
+`verified-by: bravebot_tui::lib::only_the_name_apple_terminal_sets_is_apple_terminal`

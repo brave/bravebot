@@ -201,8 +201,9 @@ nothing in it would be indistinguishable from a program that had hung.
 
 Apple's Terminal draws the block characters the wordmark and the face are made of from the font, and
 leaves a gap between rows. Where `TERM_PROGRAM` is `Apple_Terminal`, the opening screen draws them from
-cell backgrounds instead, so the letters and the face are solid. Inside tmux the variable names tmux, so
-that does not apply there.
+cell backgrounds instead, so the letters and the face are solid. The terminal is also not asked about
+Kitty graphics, which it would print as text at the top of the screen. Inside tmux the variable names
+tmux, so neither applies there.
 
 ## Scrolling at rest
 
