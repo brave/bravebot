@@ -1617,9 +1617,16 @@ person's own `allowWrite` entries and remembered write grants name as what the p
 and says they could write nothing else of the directories the session was opened on or the toolchain
 caches. Where it lists the directories reachable, because the machine is not read, it names the
 session's directories and the scratch directory as read. It also says what the description says of a
-build, a formatter and `git commit`. Under the modes `strict`, `read-only` and `workspace-write`, where the session has a profile directory, the description
-and this sentence also name the menu a `run` call may ask from ([SANDBOX-26](#SANDBOX-26)); under
-`off` they name none, since none is accepted. The sentence is the same words for exit 1 and exit 2.
+build, a formatter and `git commit`. Under the modes `strict`, `read-only` and `workspace-write`, where the session has a profile directory
+and would accept a request, the description and this sentence also name the menu a `run` call may ask
+from ([SANDBOX-26](#SANDBOX-26)); under `off` they name none, since none is accepted. A session
+accepts a request only in a workspace the person has trusted ([TRUST-7](trust-map.md#TRUST-7),
+[PATHREQ-5](tools/request-path.md#PATHREQ-5)), so in any other the description and this sentence
+name neither the menu nor `request_path`. They say instead that `run` accepts no `scopes` argument
+and `request_path` is refused, that nobody is asked, and that the person can trust the workspace or
+add a directory with `/add-dir` or `--add-dir`, a directory to read under `read-only`. The description
+reads that fact as each turn starts and this sentence reads it when the result is composed. The
+sentence is the same words for exit 1 and exit 2.
 A result whose steps all
 exited zero carries no such sentence. The sentence is composed from the same two decisions the policy is
 ([SANDBOX-18](#SANDBOX-18)), so the two cannot name different lists.
@@ -1634,7 +1641,10 @@ is refused in that mode before anyone is asked ([SANDBOX-22](#SANDBOX-22)). A pl
 that meets a refusal on such a location otherwise has no other account of it, and asks the person
 for an `/add-dir` that does nothing. The text is the same for every failure and for exit 1 and
 exit 2. The menu sentence ends the same way, and the `run` description's
-confinement statement names the tool.
+confinement statement names the tool. Where the session would accept no request, the fixed text
+says that a credential location cannot be added with `/add-dir` or `--add-dir` and then says what
+the description says of the routes the person has, in place of the credential scope and
+`request_path` clauses.
 
 Where a step of the line is `git` carrying the remote scope by its argv, the sentence also says,
 before that fixed text, which key such a step offered over ssh ([SANDBOX-16](#SANDBOX-16)): first
@@ -1697,6 +1707,10 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::confine::the_planner_is_told_a_read_only_stage_cannot_write_the_project`
 `verified-by: bravebot_agent::confine::under_read_only_the_description_offers_no_remedy_that_cannot_write`
 `verified-by: bravebot_agent::confine::under_read_only_the_failure_sentence_claims_no_write_and_offers_no_remedy_that_cannot_write`
+`verified-by: bravebot_agent::confine::a_session_that_accepts_no_request_is_told_of_no_menu_and_no_request_path_after_a_failure`
+`verified-by: bravebot_agent::confine::a_session_that_accepts_no_request_is_told_of_no_menu_and_no_request_path_in_the_description`
+`verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
+`verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_failed_job_names_no_request_path`
 `verified-by: bravebot_agent::turn::a_run_under_read_only_reads_the_machine_and_cannot_write_the_session`
 `verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_only_git_writes_a_git_directory`
 `verified-by: bravebot_agent::turn::the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu`

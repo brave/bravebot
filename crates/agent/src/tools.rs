@@ -6922,7 +6922,29 @@ const LONGEST_PATH_REASON: usize = 300;
 /// A file tool's refusal reads this too, so that it names `request_path` only where the call is
 /// not refused outright (PATHREQ-7).
 fn path_requests_accepted<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> bool {
-    tools.confines_programs() && policy.trusts_path(&tools.workspace.trust_key("."))
+    requests_are_accepted(
+        tools.confine_runs,
+        tools.sandbox,
+        workspace_is_trusted(policy, tools.workspace),
+    )
+}
+
+/// Whether the person has trusted the working directory, which is what a request for a credential
+/// scope, a path or a line with no sandbox is accepted on (TRUST-7).
+pub(crate) fn workspace_is_trusted<S: Sink>(policy: &Policy<'_, S>, workspace: &Workspace) -> bool {
+    policy.trusts_path(&workspace.trust_key("."))
+}
+
+/// Whether a turn with these facts accepts a `scopes` argument on `run` and a `request_path` call,
+/// which are refused for the same causes ([`requests_refusals`]). The facts are read where the turn
+/// starts as well, so the description and the failure sentence name the two only where a call
+/// would be accepted (SANDBOX-19).
+pub(crate) fn requests_are_accepted(
+    confine_runs: bool,
+    mode: bravebot_sandbox::SandboxMode,
+    workspace_trusted: bool,
+) -> bool {
+    requests_refusals(confine_runs, mode, workspace_trusted).is_empty()
 }
 
 /// Ask the person to let programs reach one more path for the session (SANDBOX-28).
@@ -7152,7 +7174,7 @@ fn unconfined_accepted<S: Sink>(
     let causes = unconfined_refusals(
         tools.confine_runs,
         tools.sandbox,
-        policy.trusts_path(&tools.workspace.trust_key(".")),
+        workspace_is_trusted(policy, tools.workspace),
         network_pinned_closed(bravebot_config::settled_run_network()),
         tools.delegated,
     );
@@ -7298,7 +7320,7 @@ fn requests_accepted<S: Sink>(
     let causes = requests_refusals(
         tools.confine_runs,
         tools.sandbox,
-        policy.trusts_path(&tools.workspace.trust_key(".")),
+        workspace_is_trusted(policy, tools.workspace),
     );
     match causes.is_empty() {
         true => Ok(()),
@@ -7942,7 +7964,11 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     let mut confinement = tools
         .confinement()
         .filter(|_| !unconfined)
-        .map(|confinement| confinement.with_requested(&requested));
+        .map(|confinement| {
+            confinement
+                .with_requested(&requested)
+                .with_requests_offered(requests_accepted(policy, tools).is_ok())
+        });
     if !requested.is_empty() && !confinement.as_ref().is_some_and(|c| c.accepts_requests()) {
         let cause = match confinement {
             Some(_) => RunRequestCause::NoProfileDirectory,
@@ -19293,12 +19319,14 @@ mod tests {
                 &mut not_confining,
                 false,
                 bravebot_sandbox::SandboxMode::WorkspaceWrite,
+                true,
             );
             let mut confining = table();
             state_confinement(
                 &mut confining,
                 true,
                 bravebot_sandbox::SandboxMode::WorkspaceWrite,
+                true,
             );
 
             assert_eq!(described(&not_confining), plain);
@@ -19336,7 +19364,7 @@ mod tests {
                     .find(|tool| tool.function.name == "run")
                     .map(|tool| tool.function.description.clone())
                     .expect("run is offered");
-                state_confinement(&mut table, true, mode);
+                state_confinement(&mut table, true, mode, true);
                 let after = table
                     .iter()
                     .find(|tool| tool.function.name == "run")

@@ -90,10 +90,13 @@ Under the sandbox mode `off` there is no profile to add to, and a workspace that
 `read-only` a request to write is refused and a request to read is accepted
 ([SANDBOX-22](../sandboxing.md#SANDBOX-22)), so the mode that answers every question does not hand
 back the writes the mode withholds. The result says the request is not accepted, and nobody is
-asked.
+asked. A session that accepts no request does not point the planner at the route: the `run`
+description and the sentence after a failed step name neither `request_path` nor `run`'s `scopes`
+argument there ([SANDBOX-19](../sandboxing.md#SANDBOX-19)).
 
 `verified-by: bravebot_agent::turn::a_path_is_not_asked_for_under_off_or_in_an_untrusted_workspace`
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
+`verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
 
 <a id="PATHREQ-6"></a>
 ### PATHREQ-6: a delegate has no such tool
