@@ -43,8 +43,9 @@ pub use run_network::{
     settle_run_network_in, settled_run_network,
 };
 pub use sandbox_filesystem::{
-    Filesystem, resolve as resolve_sandbox_filesystem, sandbox_filesystem,
-    settle_sandbox_filesystem, settle_sandbox_filesystem_in, settled_sandbox_filesystem,
+    Filesystem, holds_back_temporary_directory, resolve as resolve_sandbox_filesystem,
+    sandbox_filesystem, settle_sandbox_filesystem, settle_sandbox_filesystem_in,
+    settled_sandbox_filesystem,
 };
 pub use settings::{
     Attribution, Narrowing, NotADocument, PermissionLists, Reference, ReferenceFault, RunDeadlines,

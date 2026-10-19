@@ -1889,8 +1889,8 @@ nothing else on the machine. On a Linux kernel below Landlock ABI 9, where a sta
 unix socket that has a path, a `strict` stage is refused ([SANDBOX-3](#SANDBOX-3)). `read-only`
 starts a stage with the reads of `workspace-write` and without its writes to the session: the
 directories the session was opened on, the scratch directory and the toolchain caches can be read and
-cannot be written, and the temporary directory and the null device stay writable, since compilers,
-test runners and shells write scratch files there. A toolchain a stage carries or asks for brings
+cannot be written, and the temporary directory and the null device stay writable unless the person
+holds the temporary directory back, since compilers, test runners and shells write scratch files there. A toolchain a stage carries or asks for brings
 its list and writes no cache, and a request for a path to write ([SANDBOX-28](#SANDBOX-28)) is
 refused before anyone is asked, so the mode that answers every question cannot hand the session's
 directories back. A person's own `allowWrite` entries ([SANDBOX-25](#SANDBOX-25)) and the write
@@ -1943,8 +1943,19 @@ choice or than the managed file's pin, which it is only of `read-only`. Such a `
 nothing, and `doctor` names its file and the file that chose `read-only`. A value that is not exactly one of the four words chooses
 nothing and is reported with its file, except `standard`, the earlier name of `workspace-write`: it
 names `workspace-write` in `--sandbox`, `/sandbox`, a settings file and the managed file, and every
-report spells it `workspace-write`. Only `mode` is read from the `sandbox` block, and a key
-beside it is reported as unread, so a block written for another tool does not look configured.
+report spells it `workspace-write`. Only `mode`, `holdBackTemporaryDirectory` and the two blocks named below are read from the `sandbox` block, and a key
+beside them is reported as unread, so a block written for another tool does not look configured.
+
+A person who wants no stage to leave a file in the temporary directory for a later program to read or
+run sets `sandbox.holdBackTemporaryDirectory` to `true`, as Codex's `workspace-write` can exclude `$TMPDIR` and
+`/tmp` from its writable roots. The directory is then read as before and written by no stage, in every
+mode that confines, and under bypass, whose stages write every path the account can, it is a refusal of
+the directory: the scratch directory and a person's own `allowWrite` entries are rows of their own and stay. A program that makes a scratch file there is refused, which is a shell heredoc,
+`mktemp` and a compiler's intermediate files, and the `run` description says so. Only the person's own
+settings file and a `--settings` file outside the workspace are read for the key, as for `sandbox.mode`:
+a checkout's project or local file that sets it is not obeyed and is reported as an unread key. Any
+value but `true` asks for nothing. A `denyWrite` entry naming the temporary directory refuses it as well,
+and is the way to hold back one path of it.
 
 The managed file's `sandbox.mode` is a floor and not a default. A flag or a settings file that names
 a mode looser than it refuses the session before it starts, naming both files, saying which of
@@ -2043,7 +2054,7 @@ session writes every path outside the refusals [SANDBOX-28](#SANDBOX-28) lists, 
 shell start-up files and other repositories on the machine. Under `read-only`, a program that writes
 a session directory is refused with `Operation not permitted`. Builds, formatters and `git commit`
 fail there, and the `run` description says so. A workspace inside the temporary directory stays
-writable, since that directory is writable in every mode. A person who wants them to run chooses
+writable, since that directory is writable in every mode unless the person holds it back. A person who wants them to run chooses
 `workspace-write`. The file tools refuse a write to that workspace as well, and a delegate defined
 with `isolation: checkout` does not start. A line that redirects output into a file is refused
 there too, so `make > build.log` is. A program the stage runs opens its own redirections under the
@@ -2070,6 +2081,13 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_tui::sandbox_command::the_earlier_word_for_workspace_write_still_moves_the_mode`
 `verified-by: bravebot_config::settings::the_home_layer_and_a_named_file_outside_the_workspace_choose_the_mode`
 `verified-by: bravebot_config::settings::a_checkout_may_only_tighten_the_sandbox`
+`verified-by: bravebot_config::sandbox::the_temporary_directory_is_held_back_only_by_a_true`
+`verified-by: bravebot_config::settings::only_the_persons_own_files_hold_the_temporary_directory_back`
+`verified-by: bravebot_agent::confine::holding_the_temporary_directory_back_drops_its_write_row_alone`
+`verified-by: bravebot_agent::confine::a_bypass_stage_is_refused_the_temporary_directory_a_person_held_back`
+`verified-by: bravebot_agent::confine::the_planner_is_told_the_temporary_directory_a_person_held_back`
+`verified-by: bravebot_agent::confine::holding_the_temporary_directory_back_refuses_a_write_there_and_nothing_else`
+`verified-by: bravebot_agent::held_back_temporary_directory::the_settled_setting_holds_the_temporary_directory_back_from_run_and_is_told_to_the_planner`
 `verified-by: bravebot_config::settings::a_checkouts_strict_does_not_lift_the_persons_read_only`
 `verified-by: bravebot_config::settings::a_checkouts_strict_under_a_read_only_pin_starts_at_the_pin`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_strict_does_not_lift_the_persons_read_only`

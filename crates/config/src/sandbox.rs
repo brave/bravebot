@@ -23,6 +23,23 @@ pub(crate) const SANDBOX_BLOCK: &str = "sandbox";
 /// The key inside it that names the mode.
 pub const MODE_KEY: &str = "mode";
 
+/// The key beside it that holds the temporary directory back from every stage (SANDBOX-22).
+pub const HOLD_BACK_KEY: &str = "holdBackTemporaryDirectory";
+
+/// Whether a settings root asks for the temporary directory to be held back.
+///
+/// Only `true` asks. Anything else, a word or a number included, asks for nothing, which is the
+/// profile every stage had before the key existed.
+pub(crate) fn holds_back_temporary_directory(
+    root: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    root.get(SANDBOX_BLOCK)
+        .and_then(serde_json::Value::as_object)
+        .and_then(|block| block.get(HOLD_BACK_KEY))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
 /// What one file said about the mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Stated {
@@ -273,6 +290,26 @@ mod tests {
 
     fn root(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
         value.as_object().cloned().expect("an object")
+    }
+
+    #[test]
+    fn the_temporary_directory_is_held_back_only_by_a_true() {
+        assert!(holds_back_temporary_directory(&root(
+            json!({"sandbox": {"holdBackTemporaryDirectory": true}})
+        )));
+        for other in [
+            json!({}),
+            json!({"sandbox": {}}),
+            json!({"sandbox": {"holdBackTemporaryDirectory": false}}),
+            json!({"sandbox": {"holdBackTemporaryDirectory": "true"}}),
+            json!({"sandbox": {"holdBackTemporaryDirectory": 1}}),
+            json!({"sandbox": true}),
+        ] {
+            assert!(
+                !holds_back_temporary_directory(&root(other.clone())),
+                "{other}"
+            );
+        }
     }
 
     #[test]
