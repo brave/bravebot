@@ -270,6 +270,13 @@ fn a_hook_that_outstays_the_bound_is_stopped() {
     );
 }
 
+/// HOOK-7: the bound a hook that states no `timeout` is held to is the thirty seconds the clause
+/// gives, a number the other tests do not state because they pass a short one in its place.
+#[test]
+fn the_default_bound_is_thirty_seconds() {
+    assert_eq!(hooks::LIMIT, Duration::from_secs(30));
+}
+
 /// A hooks file declaring one entry that runs `run` with a `timeout`.
 fn declaring_with_timeout(moment: &str, run: &[&str], timeout: u64) -> Hooks {
     let arguments: Vec<String> = run.iter().map(|word| format!("{word:?}")).collect();

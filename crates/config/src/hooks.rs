@@ -737,4 +737,26 @@ mod tests {
 
         assert!(hooks.is_empty());
     }
+
+    /// HOOK-7: the limit is 64 KB to the byte, written here as the number the clause states so a
+    /// limit moved in either direction is caught. A file of exactly 65536 bytes still applies and
+    /// one byte more does not.
+    #[test]
+    fn a_hooks_file_is_read_up_to_64_kb_and_not_a_byte_past_it() {
+        let entry = r#"{"hooks": [{"on": "turn-started", "run": ["x"]}]}"#;
+        let loaded = |size: usize| {
+            let home = scratch_dir("hooks-limit");
+            let _ = std::fs::remove_dir_all(&home);
+            std::fs::create_dir_all(&home).expect("a scratch state directory");
+            let text = format!("{entry}{}", " ".repeat(size - entry.len()));
+            assert_eq!(text.len(), size);
+            std::fs::write(hooks_file(&home), text).expect("write a hooks file");
+            let hooks = Hooks::load(Some(&home));
+            std::fs::remove_dir_all(&home).ok();
+            hooks.is_empty()
+        };
+
+        assert!(!loaded(65536), "a file of exactly 64 KB was passed over");
+        assert!(loaded(65537), "a file a byte past 64 KB was read");
+    }
 }

@@ -246,6 +246,8 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_config::hooks::an_unusable_entry_leaves_the_others_firing`
 `verified-by: bravebot_config::hooks::an_unparseable_file_declares_no_hooks`
 `verified-by: bravebot_config::hooks::an_oversized_file_declares_no_hooks`
+`verified-by: bravebot_config::hooks::a_hooks_file_is_read_up_to_64_kb_and_not_a_byte_past_it`
+`verified-by: bravebot_agent::hooks::the_default_bound_is_thirty_seconds`
 
 <a id="HOOK-8"></a>
 ### HOOK-8: one reader decides what a hook is, and what it read is what is shown
