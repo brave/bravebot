@@ -10616,7 +10616,7 @@ mod tests {
         let panel = session.laid.panes.last().expect("panel").1;
         swept(
             &mut session,
-            (panel.top(), panel.left()),
+            (panel.top(), panel.left() + 1),
             (panel.top() + 1, panel.left() + 5),
         );
         assert!(session.selection.is_some());

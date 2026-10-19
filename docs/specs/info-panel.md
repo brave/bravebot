@@ -80,7 +80,9 @@ moves it ([INPUT-32](terminal-input.md#INPUT-32)), and a moved panel leaves `ctr
 panel is open to `~/.bravebot/panel`, and the next start reads it, as the theme is
 ([SESSION-9](sessions.md#SESSION-9)). No file, or a file that says neither `open` nor `closed`,
 leaves the panel closed. The choice is not in the session record, so a resume opens with the panel
-as the last press left it.
+as the last press left it. The width the panel was last dragged to ([PANEL-6](#PANEL-6)) is kept
+the same way in `~/.bravebot/panel-width`, a single whole number of columns; no file, or one that
+holds anything else, leaves the panel at 36.
 
 **Why `ctrl-x`.** Ctrl-I is Tab to a terminal, Ctrl-H, Ctrl-M and Ctrl-[ are Backspace, Enter and
 Escape, Ctrl-Z suspends, Ctrl-Q is flow control, and the box answers the other Ctrl letters. A
@@ -94,11 +96,13 @@ is back on its default until the file moves the panel too.
 `verified-by: bravebot_tui::persist::whether_the_panel_was_left_open_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::a_press_opens_the_next_session_too_and_a_corrupt_choice_leaves_it_closed`
 `verified-by: bravebot_session::store::only_the_two_panel_words_are_a_choice`
+`verified-by: bravebot_session::store::only_a_positive_whole_number_is_a_panel_width`
+`verified-by: bravebot_tui::persist::the_dragged_width_is_read_back_next_session_and_a_corrupt_one_leaves_36`
 
 <a id="PANEL-6"></a>
 ### PANEL-6: the panel takes its columns from the transcript, and only where the rest still fits
 
-The panel is 36 columns on the right of the screen, its left edge a border, and runs from the top
+The panel is 36 columns on the right of the screen unless it has been dragged to another width, its left edge a border, and runs from the top
 row to the row above the hint line, which keeps the full width. The transcript and the input box
 take the columns to its left and wrap to them. It is drawn only on a terminal at least 100 columns
 wide, which leaves the transcript 64. A press to open it on a narrower terminal changes nothing and
@@ -108,9 +112,21 @@ it closes it on a terminal of any width, so a panel closed while narrowed out of
 when the terminal is widened. Whether the panel is drawn and whether it is open are separate facts,
 and the clauses below are about the first.
 
+Dragging the border moves it: a left-button press on the border column starts a drag, the drag sets
+the panel to the columns right of the pointer, and the release ends it and keeps the width
+([PANEL-5](#PANEL-5)). The width is held between 24 columns and what leaves the transcript 64, so
+the 100-column threshold holds at the default width. A terminal resized while the panel is open
+draws it at the stored width clamped to the new size, and the stored width is left as it was. A
+press on the border starts no selection in either pane ([MOUSE-2](mouse.md#MOUSE-2)), and the
+release of a drag that began there copies nothing.
+
 `verified-by: bravebot_tui::panel::the_panel_is_drawn_from_a_hundred_columns_and_not_below`
 `verified-by: bravebot_tui::panel::a_press_on_a_narrow_terminal_does_not_open_the_panel_and_does_close_it`
 `verified-by: bravebot_tui::panel::the_transcript_and_the_input_wrap_to_the_columns_the_panel_leaves`
+`verified-by: bravebot_tui::panel::a_drag_on_the_border_moves_it_and_the_transcript_rewraps`
+`verified-by: bravebot_tui::panel::the_width_is_clamped_at_both_ends`
+`verified-by: bravebot_tui::panel::a_narrowed_terminal_reclamps_without_forgetting_the_choice`
+`verified-by: bravebot_tui::panel::a_drag_from_the_border_never_selects_or_copies`
 
 <a id="PANEL-7"></a>
 ### PANEL-7: the panel ends with the key that hides it

@@ -739,6 +739,11 @@ pub struct Session {
     pub show_trail: bool,
     /// Whether the person has the info panel open, which the frame then draws only where it fits.
     panel: bool,
+    /// The width the person has dragged the info panel to, which the frame clamps to the terminal
+    /// it is drawn on without changing this.
+    panel_width: u16,
+    /// Whether a drag that began on the panel's border is still held (PANEL-6).
+    panel_drag: bool,
     /// Whether `/caffeinate` is on, and the hold it keeps while work is pending.
     pub(crate) caffeinate: crate::caffeinate::KeepAwake,
     /// When a recap is owed to a person who has been away (CMD-20).
@@ -1377,6 +1382,8 @@ impl Session {
             status: Status::Idle,
             show_trail: false,
             panel: false,
+            panel_width: crate::panel::WIDTH,
+            panel_drag: false,
             caffeinate: Default::default(),
             away: Default::default(),
             prompt_files: None,

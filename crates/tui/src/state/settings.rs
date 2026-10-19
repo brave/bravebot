@@ -503,6 +503,57 @@ impl Session {
             .then(bravebot_session::store::load_panel)
             .flatten()
             .unwrap_or(false);
+        self.panel_width = self
+            .persist
+            .then(bravebot_session::store::load_panel_width)
+            .flatten()
+            .unwrap_or(crate::panel::WIDTH);
+    }
+
+    /// The columns the info panel takes on a frame `columns` wide, border included: the width the
+    /// person dragged it to, held between its minimum and what leaves the transcript its own.
+    pub fn panel_columns(&self, columns: u16) -> u16 {
+        crate::panel::clamped(self.panel_width, columns)
+    }
+
+    /// Whether a press here is on the panel's border, the column a drag resizes it by.
+    fn on_panel_border(&self, row: u16, column: u16) -> bool {
+        self.laid.panes.iter().any(|(pane, rect)| {
+            *pane == crate::select::Pane::Panel
+                && rect.x == column
+                && rect.y <= row
+                && row < rect.bottom()
+        })
+    }
+
+    /// Begin dragging the panel's border where the button went down, and say whether it was
+    /// there. A press that is not leaves the session untouched.
+    pub fn begin_panel_drag(&mut self, row: u16, column: u16) -> bool {
+        if !self.on_panel_border(row, column) {
+            return false;
+        }
+        self.panel_drag = true;
+        self.clear_selection();
+        true
+    }
+
+    /// Whether a drag that began on the panel's border is still held.
+    pub fn dragging_panel(&self) -> bool {
+        self.panel_drag
+    }
+
+    /// Move the border to `column`: the panel is whatever is to its right.
+    pub fn drag_panel_to(&mut self, column: u16) {
+        let columns = self.laid.columns;
+        self.panel_width = crate::panel::clamped(columns.saturating_sub(column), columns);
+    }
+
+    /// End the drag and keep the width it reached for the next session.
+    pub fn end_panel_drag(&mut self) {
+        self.panel_drag = false;
+        if self.persist {
+            bravebot_session::store::save_panel_width(self.panel_width);
+        }
     }
 
     /// Take the answer an earlier session gave to `/caffeinate`'s explanation.
