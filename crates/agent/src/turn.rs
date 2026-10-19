@@ -4800,6 +4800,43 @@ mod tests {
         assert_eq!(setup::arming_for(&plain(Task::new("x"))), allowed);
     }
 
+    /// ARM-6: a run limited by `--tools` to a list without `watch_file` is not told by the
+    /// read's description that a watch is the better answer, since none can be armed.
+    #[test]
+    fn a_read_does_not_name_a_watch_the_command_line_took_away() {
+        let limit = bravebot_core::tool_set::Limit {
+            only: Some(vec!["read_file".into(), "list_files".into()]),
+            no_shell: false,
+        };
+        let kept = bravebot_core::tool_set::Limit::default();
+        let task = Task::new("x").arming(crate::watch::Arming::Allowed { free: 8 });
+        let read_described = |arming| {
+            tools::for_planner(
+                tools::Scheduling::ArrangingALook,
+                arming,
+                &bravebot_core::delegate::Definitions::default(),
+                crate::exec::Deadlines::BUILT_IN,
+                tools::Running::Offered,
+            )
+            .into_iter()
+            .find(|tool| tool.function.name == "read_file")
+            .expect("read_file is offered")
+            .function
+            .description
+        };
+
+        let limited = read_described(setup::arming_under(&task, limit.allows("watch_file")));
+        assert!(
+            !limited.contains("watch_file"),
+            "a read names a watch the run cannot arm: {limited}"
+        );
+        let unlimited = read_described(setup::arming_under(&task, kept.allows("watch_file")));
+        assert!(
+            unlimited.contains("watch_file is the better answer"),
+            "a run with watches is not sent to them: {unlimited}"
+        );
+    }
+
     /// ADVISOR-8: a setting alone names the advisor, and the flag, which is a person's choice for
     /// this run, outranks it. With neither there is none.
     #[test]

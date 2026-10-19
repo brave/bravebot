@@ -61,10 +61,19 @@ pub(super) fn scheduling_for(task: &Task) -> tools::Scheduling {
     }
 }
 
-/// Whether the turn may arm a watch. A definition's addressed turn may not (ADDRESS-8).
+/// Whether the turn may arm a watch. A definition's addressed turn may not (ADDRESS-8), and
+/// neither may a run the command line took `watch_file` away from, since the read's description
+/// would otherwise send the planner to a tool that is not beside it (ARM-6).
 pub(super) fn arming_for(task: &Task) -> crate::watch::Arming {
+    arming_under(task, bravebot_core::tool_set::allows("watch_file"))
+}
+
+/// [`arming_for`] with the command line's answer about `watch_file` given, so it can be tried
+/// without settling the process-wide limit.
+pub(super) fn arming_under(task: &Task, watch_file_allowed: bool) -> crate::watch::Arming {
     match task.addressing {
         Some(_) => crate::watch::Arming::Unavailable,
+        None if !watch_file_allowed => crate::watch::Arming::Unavailable,
         None => task.arming,
     }
 }
