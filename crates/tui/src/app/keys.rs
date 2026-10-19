@@ -127,6 +127,10 @@ pub enum Action {
     /// List, add or remove the reach remembered for commands. Carries the argument unparsed, since
     /// what it says back goes in the transcript, and needs the session's id and working directory.
     Reach(String),
+    /// Show the MCP servers, start one that is not running, or turn one off for the session.
+    /// Carries the argument unparsed, since what it says back goes in the transcript, and needs the
+    /// servers the session holds and the terminal to ask on, which the loop owns.
+    Mcp(String),
     /// Report the sandbox mode, or move it from the next turn. Carries the word unparsed, since the
     /// answer depends on the managed file and may need the screen to ask.
     Sandbox(String),

@@ -1412,6 +1412,21 @@ mcp-record-not-read = it could not be read as text, so it was left as it is
 ## A remote MCP server whose reply pointed somewhere it is not declared
 
 mcp-move-title = declare this server where its reply points?
+mcp-start-title = start { $alias }?
+command-mcp = List MCP servers, start one again, or turn one off
+mcp-command-usage = /mcp takes list, reconnect [alias] or disable <alias>
+mcp-command-none = No MCP server is requested here, and none is running
+mcp-command-running = MCP servers running:
+mcp-command-not-running = MCP servers requested here and not running:
+mcp-command-not-connected = { $alias }: not connected. /mcp reconnect { $alias } tries it again
+mcp-command-off = { $alias }: turned off for this session. /mcp reconnect { $alias } starts it again
+mcp-command-already-running = { $alias } is already running
+mcp-command-not-requested = { $alias } is not requested by this session's settings
+mcp-command-nothing-to-reconnect = Every requested MCP server is running or turned off. /mcp reconnect <alias> starts one that is off.
+mcp-command-reconnected = { $alias } is running. Its tools are put to you before the next turn plans.
+mcp-command-disabled = { $alias } is turned off for this session. Nothing was written.
+mcp-command-already-off = { $alias } is already turned off
+mcp-command-needs-an-alias = /mcp { $command } needs the alias of a server
 mcp-move-declared = { $alias } is declared at { $url }
 mcp-move-destination = and its reply points to { $url }
 mcp-move-reaching = reaching { $authority }

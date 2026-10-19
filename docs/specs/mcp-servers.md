@@ -25,6 +25,7 @@ governs:
   - crates/tui/src/confirm/mcp.rs
   - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/status.rs
+  - crates/tui/src/mcp_command.rs
   - crates/ui-bridge/src/connectors.rs
   - crates/ui-bridge/src/turn.rs
 documented-by:
@@ -1822,3 +1823,42 @@ This spec cannot land without these. Each is named by what the clause says rathe
   its own, since what a session started is not written to its record. A server's stderr is
   discarded, as the full-screen interface discards it, and a plan-first run is offered no server's
   tools.
+
+<a id="SERVERS-19"></a>
+### SERVERS-19: `/mcp` shows the servers, starts one that is not running, and turns one off for the session
+
+The full-screen interface has `/mcp`. Bare or as `list`, it names each server the session runs with
+how its tools stand, as `/status` does ([SERVERS-14](#SERVERS-14)), and each server the settings
+request that is not running, saying whether it was turned off. `reconnect` starts every requested
+server that is not running and was not turned off here, and `reconnect <alias>` starts that one,
+including one turned off. Each start takes the road a session takes as it opens: the declaration is
+read again, a server approved before starts unasked, one whose digest changed or that nobody
+approved is put to the person with the same three answers, and the managed layer refuses what it
+refuses ([SERVERS-4](#SERVERS-4), [SERVERS-5](#SERVERS-5), [SERVERS-12](#SERVERS-12),
+[SERVERS-13](#SERVERS-13)). A server started this way has a list nobody has read, so it is put to
+the person before the next turn plans ([SERVERS-8](#SERVERS-8)). A server the session already runs
+keeps its process and what was answered about its list. `disable <alias>` stops the server's
+process, drops the grant naming it ([SERVERS-9](#SERVERS-9)) and offers none of its tools. It writes
+nothing, so the next session starts the server as before.
+
+An alias the settings do not request is not started and not turned off by being named. Nothing a
+server sent decides what `/mcp` does: the person names the alias. Typed during a turn, `/mcp` waits
+for the turn to end, as the other commands that touch the network or the terminal do
+([CMD-8](commands.md#CMD-8)).
+
+**Why.** A server that failed its handshake or timed out is otherwise absent until the session
+ends, and a person who has fixed its install or sign-in would have to lose the conversation to try
+it. Starting through the road a session opens with keeps every question that road asks, so the
+command adds no way to start a server unasked. A grant that outlived `disable` would leave a server
+callable that the person turned off.
+
+`verified-by: bravebot_agent::mcp::a_session_joined_by_a_reconnect_keeps_the_first_servers_and_what_they_were_told`
+`verified-by: bravebot_agent::mcp::a_session_without_a_server_holds_no_grant_for_it_and_offers_none_of_its_tools`
+`verified-by: bravebot_agent::servers::a_reconnect_asks_about_the_named_servers_and_no_others`
+`verified-by: bravebot_tui::mcp_command::the_list_names_each_requested_server_and_how_to_start_the_one_that_is_not_running`
+`verified-by: bravebot_tui::mcp_command::the_list_says_so_where_nothing_is_requested_or_running`
+`verified-by: bravebot_tui::mcp_command::a_word_it_does_not_know_and_a_missing_alias_change_nothing`
+`verified-by: bravebot_tui::mcp_command::a_server_nothing_requests_is_neither_started_nor_turned_off`
+`verified-by: bravebot_tui::mcp_command::a_server_turned_off_stays_off_until_it_is_named`
+`verified-by: bravebot_tui::app::the_mcp_command_carries_its_words_unparsed`
+`verified-by: bravebot_tui::app::the_mcp_command_waits_for_the_turn_in_flight`

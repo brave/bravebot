@@ -1331,6 +1331,9 @@ pub struct Servers {
     pub notes: Vec<String>,
     /// The servers themselves, with their lists, for each turn to settle and call.
     pub session: Option<bravebot_agent::mcp::Session>,
+    /// The aliases `/mcp disable` turned off for this session. `/mcp reconnect` with no alias
+    /// leaves them off, and one named starts it again (SERVERS-19).
+    pub disabled: Vec<String>,
 }
 
 impl Session {

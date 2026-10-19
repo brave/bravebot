@@ -1198,7 +1198,7 @@ pub(crate) fn tokens(count: u64) -> String {
 }
 
 /// How each server's tools stand, one clause for each.
-fn offering(servers: &[(String, bravebot_agent::mcp::Offering)]) -> String {
+pub(crate) fn offering(servers: &[(String, bravebot_agent::mcp::Offering)]) -> String {
     servers
         .iter()
         .map(|(alias, offering)| match offering {
@@ -1240,6 +1240,7 @@ mod tests {
         confined: false,
         notes: Vec::new(),
         session: None,
+        disabled: Vec::new(),
     };
 
     fn trusting() -> TrustStore {
@@ -3117,6 +3118,7 @@ mod tests {
             confined: true,
             notes: Vec::new(),
             session: None,
+            disabled: Vec::new(),
         };
         let some = report(&Facts {
             servers: &started,
@@ -3136,6 +3138,7 @@ mod tests {
             confined: false,
             notes: Vec::new(),
             session: None,
+            disabled: Vec::new(),
         };
         let unconfined = report(&Facts {
             servers: &remote,

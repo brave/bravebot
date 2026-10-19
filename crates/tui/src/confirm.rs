@@ -35,7 +35,7 @@ use grants::{
     draw_exposure, draw_fetch, draw_host, draw_manifest, draw_path, draw_remove_checkout,
     manifest_answer_for,
 };
-pub use mcp::{CallAnswer, ask_mcp_call, ask_move, ask_server, ask_tool_list};
+pub use mcp::{CallAnswer, ask_mcp_call, ask_move, ask_server, ask_to_start, ask_tool_list};
 #[cfg(test)]
 use mcp::{
     CallResponse, call_answer_for, draw_mcp_call, draw_move, draw_server, draw_tool_list,

@@ -322,6 +322,20 @@ impl Held<'_> {
         });
     }
 
+    pub(super) fn mcp(&mut self, terminal: &mut Tty, argument: &str, skip_permissions: bool) {
+        crate::mcp_command::run(
+            self.session,
+            self.settings,
+            self.workspace.root(),
+            argument,
+            match skip_permissions {
+                true => bravebot_agent::servers::Asking::Bypass,
+                false => bravebot_agent::servers::Asking::Person,
+            },
+            &mut crate::mcp_command::TerminalAsker { terminal },
+        );
+    }
+
     pub(super) fn list_checkouts(&mut self) {
         let mut branches = std::collections::BTreeMap::new();
         self.session
