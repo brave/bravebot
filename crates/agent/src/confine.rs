@@ -24,6 +24,7 @@ use bravebot_sandbox::base::{Prelude, base, credential_locations, run_base, with
 use bravebot_sandbox::hosts::{HostRule, Refusal, Verdict};
 use bravebot_sandbox::network::{Network, program_talks_to_a_remote};
 use bravebot_sandbox::policy::SandboxPolicy;
+use bravebot_sandbox::programs::program_name;
 use bravebot_sandbox::proxy::Proxy;
 use bravebot_sandbox::rules::{
     Lists, Rules, persistence_locations, without_verbatim_prefix, writable_without_a_request,
@@ -67,6 +68,9 @@ pub struct Confinement {
     /// The per-user cache directory the platform names, resolved by the host on macOS, where the
     /// keychain lookup of `gh` and `git` writes under it.
     user_cache: Option<PathBuf>,
+    /// The developer directory `xcode-select -p` names, resolved as the session opened, which the
+    /// keyed base reads on macOS because the `/usr/bin` developer shims run out of it.
+    developer: Option<PathBuf>,
     /// What the session decided about the network for the stages it starts.
     network: Network,
     /// The host list the session's stages with egress are held to, or none for no filtering and
@@ -123,6 +127,7 @@ impl Confinement {
         #[cfg(target_os = "macos")]
         let confinement = Self {
             user_cache: bravebot_sandbox::macos::user_cache_directory(),
+            developer: developer_directory(),
             ..confinement
         };
         Some(confinement)
@@ -151,6 +156,7 @@ impl Confinement {
             roots,
             scratch,
             user_cache: None,
+            developer: None,
             network: Network::Open,
             hosts: None,
             mode: SandboxMode::WorkspaceWrite,
@@ -509,11 +515,8 @@ impl Confinement {
     /// whether it is executable, never what is in it, and a stage that creates or removes it can
     /// only change whether this asks about the line that names it.
     fn hands_over_a_file_the_plan_could_write(&self, step: &Step, directory: &Path) -> bool {
-        let interpreter = step
-            .resolved
-            .file_name()
-            .and_then(OsStr::to_str)
-            .is_some_and(runs_what_it_is_given);
+        let interpreter =
+            program_name(&step.resolved).is_some_and(|name| runs_what_it_is_given(&name));
         step.args
             .iter()
             .flat_map(|arg| arg.split(|c: char| c.is_whitespace() || ";&|()<>\"'`$=".contains(c)))
@@ -716,7 +719,7 @@ impl Confinement {
     /// the owner unchosen, and the prompt asks again.
     fn identified(&self, step: &Step) -> Option<Identified> {
         let home = self.home.as_deref()?;
-        let is_git = step.resolved.file_name() == Some(OsStr::new("git"));
+        let is_git = program_name(&step.resolved).as_deref() == Some("git");
         if !is_git || self.carries(step).1 != Some(Scope::Remote) {
             return None;
         }
@@ -1115,7 +1118,12 @@ impl Confinement {
         let mut policy = if self.reads_the_machine() {
             run_base(self.prelude, &self.temporary, self.home.as_deref())
         } else {
-            base(self.prelude, &self.temporary, None, self.home.as_deref())
+            base(
+                self.prelude,
+                &self.temporary,
+                self.developer.as_deref(),
+                self.home.as_deref(),
+            )
         };
         if self.prelude == Prelude::MacOs
             && self.reads_the_machine()
@@ -1694,8 +1702,12 @@ impl Confinement {
     /// refused path lifts the refusal. Names are compared without regard to case on Windows and
     /// macOS, whose file systems fold it, and exactly on Linux.
     fn root_reaching_credentials(&self) -> Option<(&Path, PathBuf)> {
-        let home = self.home.as_deref()?;
-        let mut locations = credential_locations(self.prelude, home);
+        // The locations under the home need one to name them; `/Library/Keychains` does not.
+        let mut locations = self
+            .home
+            .as_deref()
+            .map(|home| credential_locations(self.prelude, home))
+            .unwrap_or_default();
         if self.prelude == Prelude::MacOs {
             locations.push(PathBuf::from(
                 bravebot_sandbox::base::MACOS_SYSTEM_KEYCHAINS,
@@ -2501,6 +2513,19 @@ fn same_variable(left: &std::ffi::OsStr, right: &std::ffi::OsStr, fold_case: boo
     }
 }
 
+/// The macOS developer directory the keyed base reads, resolved once per process, and `None`
+/// where the platform has none.
+pub(crate) fn developer_directory() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        bravebot_sandbox::macos::developer_directory()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 /// Where `environment` moves what the scope of the step that resolved to `resolved` reads.
 fn reaches(
     resolved: &Path,
@@ -2508,11 +2533,8 @@ fn reaches(
     home: &Path,
     environment: &[(String, String)],
 ) -> Vec<Reach> {
-    let program = resolved
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-    environment_reach(scope, program, home, environment)
+    let program = program_name(resolved).unwrap_or_default();
+    environment_reach(scope, &program, home, environment)
 }
 
 /// This process's variables, those whose name and value are text.
@@ -4118,6 +4140,90 @@ mod tests {
             .filter(|line| line.contains("/elsewhere/docker"))
             .count();
         assert_eq!(said, 1, "{:?}", both.sentences());
+    }
+
+    /// SANDBOX-15, SANDBOX-16, SANDBOX-18: on Windows the file a program resolved to keeps its
+    /// `.exe`, and the list, the scope and the network reason are still the program's. The
+    /// regression it rejects: keying on the whole file name, which gives `cargo.exe` no list and
+    /// `git.exe` no scope. The controls are the same stages with the extensions of a file that is
+    /// not the program.
+    #[test]
+    fn a_windows_program_keeps_its_list_and_scope_with_its_extension() {
+        let work = Path::new("/work/project");
+        let registry = format!("{HOME}/.cargo/registry");
+        let known_hosts = format!("{HOME}/.ssh/known_hosts");
+        let confined = confinement(&["/work/project"]).with_network(Network::Closed);
+        let cargo = step("/c/.cargo/bin/cargo.exe", &["build"]);
+        let git = step("/c/Git/cmd/git.exe", &["push", "origin", "main"]);
+        assert!(writes(&confined.policy(&cargo, work, &[]), &registry));
+        assert!(
+            reads(&confined.policy(&git, work, &[]), &known_hosts)
+                || writes(&confined.policy(&git, work, &[]), &known_hosts)
+        );
+        assert_eq!(
+            confined.egress_reason(&cargo),
+            Some("a toolchain that fetches")
+        );
+        assert_eq!(confined.egress_reason(&git), Some("a credential scope"));
+        for other in ["/c/.cargo/bin/cargo.exe.bak", "/c/Git/cmd/git.exe.bak"] {
+            let stage = step(other, &["push"]);
+            let policy = confined.policy(&stage, work, &[]);
+            assert!(!writes(&policy, &registry), "{other}");
+            assert!(
+                !reads(&policy, &known_hosts) && !writes(&policy, &known_hosts),
+                "{other}"
+            );
+        }
+    }
+
+    /// SANDBOX-12, SANDBOX-18: the keyed base a strict stage starts from reads the developer
+    /// directory the session resolved, on macOS, and only the stage's own session decides it. The
+    /// regression it rejects: the keyed branch passing no developer directory, which refuses the
+    /// `/usr/bin` shims their read of it.
+    #[test]
+    fn the_keyed_base_reads_the_developer_directory_the_session_resolved() {
+        let directory = PathBuf::from("/Library/Developer/CommandLineTools");
+        let mut confined =
+            reading_confinement(Prelude::MacOs, &["/work/project"]).with_mode(SandboxMode::Strict);
+        let stage = step("/usr/bin/git", &["status"]);
+        let work = Path::new("/work/project");
+        let without = confined.policy(&stage, work, &[]);
+        assert!(!reads(&without, "/Library/Developer/CommandLineTools"));
+        confined.developer = Some(directory);
+        let with = confined.policy(&stage, work, &[]);
+        assert!(reads(&with, "/Library/Developer/CommandLineTools"));
+    }
+
+    /// SANDBOX-18: `/Library/Keychains` is a refused location that needs no home to name, so a
+    /// macOS session with no home directory is refused a session directory in it too. The
+    /// regression it rejects: returning early when the session names no home.
+    #[test]
+    fn a_macos_session_with_no_home_is_refused_a_directory_in_the_system_keychains() {
+        let without_home = |root: &str| {
+            Confinement::new(
+                Prelude::MacOs,
+                PathBuf::from("/tmp"),
+                None,
+                vec![PathBuf::from(root)],
+                None,
+            )
+        };
+        for root in ["/Library/Keychains", "/Library/Keychains/System.keychain"] {
+            assert!(
+                without_home(root).root_reaching_credentials().is_some(),
+                "{root}"
+            );
+        }
+        assert!(
+            without_home("/Library")
+                .root_reaching_credentials()
+                .is_none()
+        );
+        assert!(
+            without_home("/work/project")
+                .root_reaching_credentials()
+                .is_none()
+        );
     }
 
     /// SANDBOX-26: a requested toolchain brings its caches, written, which the stage did not have.

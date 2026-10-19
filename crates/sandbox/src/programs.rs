@@ -15,6 +15,30 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
+/// The name a program is known by, from the file it resolved to: the file's name with a Windows
+/// executable extension (`.exe` or `.com`) removed and the rest folded to lower case, so
+/// `cargo.exe` and `CARGO.EXE` are `cargo`. A name with no such extension is returned as it is,
+/// since a file system that keeps case keeps it apart.
+///
+/// Every lookup that keys on a resolved file (a toolchain list, a credential scope, a program that
+/// talks to a remote) goes through this, since the file `PATHEXT` finds on Windows keeps its
+/// extension and a bare name never matches it. `None` for a path with no name or one that is not
+/// text.
+pub fn program_name(resolved: &Path) -> Option<String> {
+    let name = resolved.file_name()?.to_str()?;
+    let stem = name
+        .len()
+        .checked_sub(4)
+        .and_then(|start| Some((name.get(..start)?, name.get(start..)?)))
+        .filter(|(stem, extension)| {
+            !stem.is_empty()
+                && (extension.eq_ignore_ascii_case(".exe")
+                    || extension.eq_ignore_ascii_case(".com"))
+        })
+        .map(|(stem, _)| stem.to_ascii_lowercase());
+    Some(stem.unwrap_or_else(|| name.to_string()))
+}
+
 /// Directories a confined stage may write, for the life of the process.
 ///
 /// Only ever added to. Closing a directory does not remove a file already written into it, and
@@ -317,7 +341,48 @@ fn usable(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A Windows executable extension is not part of the name a program is known by, in any case,
+    /// and nothing else is removed. The regression it rejects: comparing the file's whole name, which
+    /// never matches `cargo` on Windows, or stripping any extension, which makes `git.bak` `git`.
+    #[test]
+    fn a_windows_executable_extension_is_not_part_of_a_programs_name() {
+        for (resolved, name) in [
+            ("C:/Users/p/.cargo/bin/cargo.exe", Some("cargo")),
+            ("/x/CARGO.EXE", Some("cargo")),
+            ("/x/git.Com", Some("git")),
+            ("/x/GIT", Some("GIT")),
+            ("/x/git", Some("git")),
+            ("/x/python3.12.exe", Some("python3.12")),
+            ("/x/git.exe.bak", Some("git.exe.bak")),
+            ("/x/git.bat", Some("git.bat")),
+            ("/x/.exe", Some(".exe")),
+            ("/x/\u{e9}.exe", Some("\u{e9}")),
+            ("/", None),
+        ] {
+            assert_eq!(
+                program_name(Path::new(resolved)).as_deref(),
+                name,
+                "{resolved}"
+            );
+        }
+    }
+
     use super::*;
+
+    /// A name that is not text has no program name, and is not read as its lossy lookalike. The
+    /// regression it rejects: `to_string_lossy`, which makes `git\xff.exe` into `git\u{FFFD}` and
+    /// so gives a file that is not `git` a name some lookup could match.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_that_is_not_text_has_no_program_name() {
+        use std::os::unix::ffi::OsStrExt;
+        let not_text = std::ffi::OsStr::from_bytes(b"/x/git\xff.exe");
+        assert_eq!(program_name(Path::new(not_text)), None);
+        assert_eq!(
+            program_name(Path::new("/x/git\u{FFFD}.exe")).as_deref(),
+            Some("git\u{FFFD}")
+        );
+    }
 
     /// A directory with nothing in it, so a file left by an earlier run is not found.
     fn scratch_dir(name: &str) -> PathBuf {
