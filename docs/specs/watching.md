@@ -642,6 +642,8 @@ never draws a line twice, and nothing has to be reconciled between a look and th
 
 `verified-by: bravebot_agent::tools::unread_output_leaves_the_planners_cursor_where_it_was`
 `verified-by: bravebot_agent::turn::a_running_job_nobody_has_looked_at_gives_the_screen_its_lines_and_the_look_keeps_them`
+`verified-by: bravebot_agent::turn::an_unvouched_running_jobs_lines_are_drawn_and_never_reach_the_planner`
+`verified-by: bravebot_agent::turn::a_running_job_that_printed_past_the_bound_gives_the_screen_only_the_newest_lines`
 `verified-by: bravebot_tui::state::a_jobs_live_lines_replace_each_other_and_the_next_look_takes_them`
 `verified-by: bravebot_tui::state::a_job_printing_status_shaped_live_lines_changes_no_row_mark_or_count`
 `verified-by: bravebot_tui::state::a_delegates_live_lines_go_to_its_job_and_not_the_turns_of_the_same_name`

@@ -43607,7 +43607,10 @@ fn an_unvouched_running_jobs_lines_are_drawn_and_never_reach_the_planner() {
             _ => None,
         })
         .collect();
-    assert_eq!(drawn, [&vec!["SENTINEL-LIVE-UNVOUCHED".to_string()]]);
+    assert_eq!(
+        drawn.last().copied(),
+        Some(&vec!["SENTINEL-LIVE-UNVOUCHED".to_string()])
+    );
     assert!(
         bodies
             .iter()
@@ -43636,9 +43639,10 @@ fn a_running_job_that_printed_past_the_bound_gives_the_screen_only_the_newest_li
             _ => None,
         })
         .collect();
-    assert_eq!(drawn.len(), 1, "{:?}", reporter.jobs);
-    let (lines, total) = drawn[0];
-    assert_eq!(total, 250);
+    // Each release replaces the one before it, and the screen may be given an earlier, partial one
+    // while the script is still printing, so the newest release is the one that holds everything.
+    let (lines, total) = *drawn.last().expect("the screen was given the job's lines");
+    assert_eq!(total, 250, "{:?}", reporter.jobs);
     assert_eq!(lines.len(), 200);
     assert_eq!(lines.first().map(String::as_str), Some("row 50"));
     assert_eq!(lines.last().map(String::as_str), Some("row 249"));
