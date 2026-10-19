@@ -321,7 +321,11 @@ mod tests {
     fn the_credentials_told_to_the_planner_are_the_fixed_ones() {
         assert_eq!(
             builtin_credentials(),
-            ["SERVICES_KEY_AICHAT", "BRAVE_SERVICES_KEY_ID"]
+            [
+                "SERVICES_KEY_AICHAT",
+                "BRAVE_SERVICES_KEY_ID",
+                "BRAVE_AI_CHAT_API_KEY"
+            ]
         );
     }
 
