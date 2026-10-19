@@ -17,16 +17,18 @@ const FILES: [&str; 3] = [".gitmodules", ".gitconfig", ".pre-commit-config.yaml"
 /// Whether a write to `path` is one that nothing but a person answers.
 ///
 /// Segments split on `/` and `\`, since a host that separates with the second hands a name back
-/// spelled that way, and a name read too widely only costs a question. Case is folded and a
-/// trailing dot or space is dropped, because a volume that folds or a Windows host reads
-/// `.GIT` and `.git.` as `.git`.
+/// spelled that way, and a name read too widely only costs a question. A trailing dot or space is
+/// dropped, because a Windows host reads `.git.` as `.git`. A name is compared the way a volume
+/// that folds case and normalizes opens it, whether or not this one does: `.GIT`, `.huſky` and
+/// `.husky` spelled with the Kelvin sign for the k are each a protected name there.
 pub fn is_protected(path: &str) -> bool {
     path.split(['/', '\\']).any(|segment| {
         let segment = segment.trim_end_matches(['.', ' ']);
+        let form = crate::trust::canonical_form(segment, true);
         DIRECTORIES
             .iter()
             .chain(FILES.iter())
-            .any(|name| segment.eq_ignore_ascii_case(name))
+            .any(|name| form == *name)
     })
 }
 
@@ -44,6 +46,9 @@ mod tests {
             "/work/.git/config",
             ".GIT/config",
             ".git./config",
+            ".hu\u{17f}ky/pre-commit",
+            ".hus\u{212a}y/pre-commit",
+            ".GITMODULES",
             ".git \\config",
             "a\\.git\\config",
             ".bravebot/settings.json",

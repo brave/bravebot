@@ -529,8 +529,8 @@ whatever a standing answer says ([SERVERS-7](mcp-servers.md#SERVERS-7)). A write
 is a protected path asks whatever the rules say, an `Edit` allow rule and the trust map included, and
 whatever the mode says short of bypassing ([MODE-2](permission-modes.md#MODE-2)). The paths are any
 `.git`, `.bravebot` or `.husky` component and the files `.gitmodules`, `.gitconfig` and
-`.pre-commit-config.yaml`, compared without regard to case and with a trailing dot or space
-dropped. The destination is read as named and as it lands after links are followed (PERM-7).
+`.pre-commit-config.yaml`, compared as a volume that folds case and normalizes opens them (`.GIT`,
+`.huſky`) and with a trailing dot or space dropped. The destination is read as named and as it lands after links are followed (PERM-7).
 
 **Why.** None of them is the question a rule answers. The first and the fourth are about
 confidentiality: a rule saying which commands may run or which tools may be called is not consent
