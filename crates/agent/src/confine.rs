@@ -2010,12 +2010,24 @@ pub fn stated_to_the_planner(confine_runs: bool, mode: SandboxMode) -> Option<St
         bravebot_config::run_network(),
         mode,
     )?;
-    Some(
-        match Prelude::current().is_some() && bravebot_config::holds_back_temporary_directory() {
-            true => format!("{said}{TEMPORARY_DIRECTORY_HELD_BACK_SENTENCE}"),
-            false => said,
-        },
-    )
+    Some(with_temporary_held_back_said(
+        said,
+        Prelude::current(),
+        bravebot_config::holds_back_temporary_directory(),
+    ))
+}
+
+/// `said` with the sentence that the person holds the temporary directory back, where a platform
+/// confines and the person did.
+fn with_temporary_held_back_said(
+    said: String,
+    prelude: Option<Prelude>,
+    held_back: bool,
+) -> String {
+    match prelude.is_some() && held_back {
+        true => format!("{said}{TEMPORARY_DIRECTORY_HELD_BACK_SENTENCE}"),
+        false => said,
+    }
 }
 
 /// Said after the description where the person holds the temporary directory back, which makes
@@ -7906,6 +7918,37 @@ mod tests {
         );
     }
 
+    /// SANDBOX-22: the description of `run` says the person held the temporary directory back,
+    /// on every platform that confines, and says nothing where they did not or nothing confines.
+    /// The regression it rejects is a description that still tells the planner the temporary
+    /// directory is written, which sends it to `mktemp` and heredocs that are then refused.
+    #[test]
+    fn the_planner_is_told_the_temporary_directory_a_person_held_back() {
+        for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
+            let said = stated(
+                true,
+                Some(prelude),
+                Network::Open,
+                SandboxMode::WorkspaceWrite,
+            )
+            .expect("a statement");
+            let held = with_temporary_held_back_said(said.clone(), Some(prelude), true);
+            assert!(
+                held.contains("holds the temporary directory back"),
+                "{held}"
+            );
+            assert!(held.starts_with(&said), "{held}");
+            assert_eq!(
+                with_temporary_held_back_said(said.clone(), Some(prelude), false),
+                said
+            );
+        }
+        assert_eq!(
+            with_temporary_held_back_said(String::from("said"), None, true),
+            "said"
+        );
+    }
+
     /// SANDBOX-22: the rows bypass gives without a request are every path the account can write,
     /// so holding the temporary directory back there is a refusal of it. The regression it rejects
     /// is a setting that drops the base's row and leaves bypass's rows covering the directory. The
@@ -7916,13 +7959,21 @@ mod tests {
         let root = beside.join("project");
         let step = step("/bin/cat", &["f"]);
 
-        let open = bypass_confinement(Prelude::Linux, &home, &root).policy(&step, &root, &[]);
-        let held = bypass_confinement(Prelude::Linux, &home, &root)
-            .with_temporary_held_back(true)
-            .policy(&step, &root, &[]);
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let open = bypass_confinement(prelude, &home, &root).policy(&step, &root, &[]);
+            let held = bypass_confinement(prelude, &home, &root)
+                .with_temporary_held_back(true)
+                .policy(&step, &root, &[]);
 
-        assert!(!open.unwritable.contains(&PathBuf::from("/tmp")));
-        assert!(held.unwritable.contains(&PathBuf::from("/tmp")));
+            assert!(
+                !open.unwritable.contains(&PathBuf::from("/tmp")),
+                "{prelude:?}"
+            );
+            assert!(
+                held.unwritable.contains(&PathBuf::from("/tmp")),
+                "{prelude:?}"
+            );
+        }
     }
 
     /// A home holding the public halves of two keys and the private half of one, and a session
