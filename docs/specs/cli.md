@@ -76,7 +76,7 @@ effect: it says which files are the person's own, so the planner may read them, 
 directory the person answered about. A run therefore opens trusting its working directory when the
 person typed `--trust-workspace` or kept an answer that settles a session there
 ([TRUST-23](trust-map.md#TRUST-23), [TRUST-26](trust-map.md#TRUST-26)), and says so for the kept
-answer. Writing stays refused without the flag above.
+answer. Writing stays refused without one of the flags above.
 
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
