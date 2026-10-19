@@ -2203,3 +2203,37 @@ fn a_curated_catalogues_search_does_not_reach_a_skill_outside_its_list() {
         "curation excluded the one skill it was supposed to keep"
     );
 }
+
+/// SKILL-18: `other_skill_names` names every skill the default listing leaves out, and none at
+/// all once a definition's own `skills:` line has curated the catalogue, since a curated listing
+/// already shows everything there is and a session told about it again would be told of skills
+/// it can neither search for nor load.
+#[test]
+fn other_skill_names_is_empty_for_a_curated_catalogue() {
+    let scratch = Scratch::new("other-skill-names-curated");
+    let project = scratch.workspace();
+    for name in ["aaa-skill", "zzz-skill"] {
+        write_skill(
+            &project.join(".bravebot"),
+            name,
+            name,
+            "when to use it",
+            "body",
+        );
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None).0
+    };
+
+    assert_eq!(catalogue.other_skill_names(), ["aaa-skill", "zzz-skill"]);
+
+    let curated = catalogue.only(&["aaa-skill".to_string()]);
+    assert!(
+        curated.other_skill_names().is_empty(),
+        "a curated catalogue still named a skill to search for: {:?}",
+        curated.other_skill_names()
+    );
+}

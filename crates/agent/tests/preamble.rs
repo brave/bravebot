@@ -1353,69 +1353,6 @@ fn the_skills_section_points_at_search_skills_only_where_more_could_be_found() {
     );
 }
 
-/// SKILL-17: asked for an overview, the default listing gives the count and the names of the
-/// skills it does not list, since the count says whether searching could find anything and a
-/// name is a hint for when it might be worth asking. Without the overview, neither reaches the
-/// planner: the count and the names are what a session says once, not on every turn.
-#[test]
-fn an_overview_gives_the_count_and_names_a_default_listing_otherwise_leaves_out() {
-    let scratch = Scratch::new("skills-overview-wording");
-    let project = scratch.directory("project");
-    for name in ["aaa-skill", "zzz-skill"] {
-        let at = project.join(".bravebot/skills").join(name);
-        std::fs::create_dir_all(&at).expect("create skill directory");
-        std::fs::write(
-            at.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: when to use it\n---\n\nbody\n"),
-        )
-        .expect("write skill");
-    }
-    let workspace = Workspace::new(&project).expect("workspace");
-
-    let mut sink = RecordingSink::new();
-    let mut policy = policy(&mut sink, &["."]);
-    let (catalogue, _) = bravebot_agent::skills::discover(&mut policy, &workspace, None);
-
-    let without_overview = preamble::compose(
-        &mut policy,
-        &workspace,
-        None,
-        &catalogue,
-        None,
-        None,
-        &Attribution::default(),
-    )
-    .text;
-    assert!(
-        !without_overview.contains("aaa-skill") && !without_overview.contains("zzz-skill"),
-        "a listing nobody asked an overview of named a skill anyway: {without_overview}"
-    );
-
-    let with_overview = preamble::compose(
-        &mut policy,
-        &workspace,
-        None,
-        &catalogue.with_overview(),
-        None,
-        None,
-        &Attribution::default(),
-    )
-    .text;
-    assert!(
-        with_overview.contains("2 skills"),
-        "the overview did not give a count of two: {with_overview}"
-    );
-    assert!(
-        with_overview.contains("aaa-skill") && with_overview.contains("zzz-skill"),
-        "the overview did not name both skills: {with_overview}"
-    );
-    assert!(
-        !with_overview.contains("when to use it"),
-        "the overview carried a description, which costs what listing them outright did: \
-         {with_overview}"
-    );
-}
-
 /// Empty is the value the block exists to carry, so a planner that is told nothing when a person
 /// wrote `""` has had the one thing they configured discarded on the way to the only context it
 /// could have acted in. The other half matters as much: `pr` was left unwritten, and saying

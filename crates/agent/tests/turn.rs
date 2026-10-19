@@ -19706,9 +19706,10 @@ fn a_skill_body_stays_out_of_the_context_until_search_finds_it_and_load_skill_is
     );
 }
 
-/// SKILL-17: the count and names of what the default listing leaves out are said on the first
-/// turn of a session and not again: a second turn of the same conversation gets the plain
-/// pointer to search_skills, the names costing nothing more after the first one paid for them.
+/// SKILL-18: the count and names of what the default listing leaves out are put in the
+/// conversation on the first turn of a session and not said again: a second turn carries the
+/// same message forward in its history, same as any other earlier exchange, rather than being
+/// told the names a second time.
 #[test]
 fn the_skills_overview_is_said_once_per_session_not_once_per_turn() {
     let scratch = Scratch::new("skills-overview-once-per-session");
@@ -19759,15 +19760,22 @@ fn the_skills_overview_is_said_once_per_session_not_once_per_turn() {
     .expect("the second turn finishes");
 
     let first = received.recv().expect("first request");
-    assert!(
-        first.contains("aardvark-polish"),
-        "the first turn of the session did not name the one project skill there is: {first}"
+    assert_eq!(
+        first.matches("aardvark-polish").count(),
+        1,
+        "the first turn of the session did not name the one project skill there is, exactly \
+         once: {first}"
     );
 
+    // The message from the first turn is still in the conversation's history on the second, the
+    // same as any earlier exchange would be, so the name is still in the request. What must not
+    // happen is a second copy of the sentence: that would be the session saying it again.
     let second = received.recv().expect("second request");
-    assert!(
-        !second.contains("aardvark-polish"),
-        "the second turn of the same session named the skill again: {second}"
+    assert_eq!(
+        second.matches("aardvark-polish").count(),
+        1,
+        "the second turn of the same session either lost the first turn's message or said it \
+         again: {second}"
     );
 }
 
@@ -36981,6 +36989,11 @@ fn an_addressed_turn_is_offered_only_the_skills_its_definition_names() {
         listed(&styled[0]),
         ["review-style"],
         "the addressed turn was not listed only the skills its definition named"
+    );
+    assert!(
+        !styled[0].contains("not listed above"),
+        "a curated turn was given an overview of skills it cannot search for: {}",
+        styled[0]
     );
     let last = styled.last().expect("asked at least once");
     assert!(

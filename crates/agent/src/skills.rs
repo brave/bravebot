@@ -580,10 +580,6 @@ pub struct Catalogue {
     /// crowding [SKILL-17](SKILL-17) exists for, so the whole of a curated catalogue is listed
     /// directly rather than held back to built-ins and left for `search_skills` to find.
     curated: bool,
-    /// Whether the default listing should also give the count and names of the skills it does
-    /// not list (SKILL-17), set by the caller for the first turn of a session that has not
-    /// already been told.
-    overview_due: bool,
 }
 
 impl Catalogue {
@@ -598,23 +594,6 @@ impl Catalogue {
     /// Whether [`Catalogue::only`] narrowed this to a definition's own `skills:` line.
     pub fn is_curated(&self) -> bool {
         self.curated
-    }
-
-    /// Ask the default listing to also give the count and names of the skills it leaves out
-    /// (SKILL-17), for the one turn this builds the prompt for.
-    ///
-    /// The caller's to ask for, and only where it has not already: the count tells the planner
-    /// whether searching could find anything at all, and the names are a hint for when it might
-    /// be worth the call, but saying so on every turn of a long session would cost as much as
-    /// listing them outright did.
-    pub fn with_overview(mut self) -> Self {
-        self.overview_due = true;
-        self
-    }
-
-    /// Whether [`Catalogue::with_overview`] was asked for.
-    pub fn overview_due(&self) -> bool {
-        self.overview_due
     }
 
     /// The names of every skill the default listing leaves out (SKILL-17): every skill but a

@@ -2872,17 +2872,33 @@ where
         ));
     }
 
-    // The count and names of what the default listing leaves out, said once per session rather
-    // than every turn (SKILL-17): the count tells the planner whether searching could find
-    // anything at all, and the names are a hint for when it might be worth the call. Marked
-    // only where something was actually said, so a session that started with nothing to report
-    // still gets told if a skill appears later in it.
-    let show_overview = !conversation.skills_overview_said();
-    let catalogue = if show_overview {
-        catalogue.with_overview()
-    } else {
-        catalogue
-    };
+    // The count and names of what the default listing leaves out, put in the conversation once
+    // per session rather than said again every turn (SKILL-18): the count tells the planner
+    // whether searching could find anything at all, and the names are a hint for when it might
+    // be worth the call. A message rather than a line in the system prompt, because the system
+    // prompt is rebuilt fresh every turn and nothing of it is kept (see `compose_in` below): a
+    // planner told only there would have the count and the names for one turn and then lose
+    // them, with nothing in its own conversation to have remembered either by. Marked only where
+    // something was actually said, so a session that started with nothing to report still gets
+    // told if a skill appears later in it.
+    if !conversation.skills_overview_said() {
+        let others = catalogue.other_skill_names();
+        if !others.is_empty() {
+            let count = tools::tally(others.len(), "skill", "skills");
+            let is_are = if others.len() == 1 { "is" } else { "are" };
+            conversation.push_composed_from(
+                Message::user(format!(
+                    "{count}, of your own or the project's, {is_are} not listed above: {}. \
+                     Call search_skills with a word or phrase if one of these, or something \
+                     else, might apply to this task.",
+                    others.join(", ")
+                )),
+                Composed::Notice,
+                Provenance::Driver,
+            );
+            conversation.skill_overview_was_said();
+        }
+    }
 
     // Nothing is started here: LSP-8 starts a server on the first question that needs one, and
     // LSP-5 asks the person before it does, so a session that never asks about a symbol never
@@ -2935,9 +2951,6 @@ where
         &preamble.added,
     ));
     note_rules_added(workspace, &preamble.added);
-    if show_overview && !catalogue.other_skill_names().is_empty() {
-        conversation.skill_overview_was_said();
-    }
 
     // Said here rather than only on the outcome. These describe what the turn is about to work
     // with, and an interface that waits for the turn to end draws them after every tool line, so
