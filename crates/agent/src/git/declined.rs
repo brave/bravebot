@@ -40,6 +40,7 @@ pub enum Declined {
     PatternIsForSearch(Query),
     TagsTakeNoPath,
     PairIsForDiff(String),
+    NoMergeBase(String),
     UntrustedTree,
     StatusTakesNoRevision,
     SplitIndex,
@@ -157,6 +158,10 @@ impl Declined {
                 "{revision} names two revisions, which only diff takes; for a range of commits \
                  write A..B."
             ),
+            Declined::NoMergeBase(revision) => format!(
+                "{revision} names two histories with no commit in common, so there is no merge \
+                 base to measure from; use A..B to compare their ends."
+            ),
             Declined::UntrustedTree => format!(
                 "{named} is not a working tree this session trusts in full, so read_git does not \
                  read its status: status compares every file there with the index."
@@ -232,6 +237,7 @@ impl Declined {
             | Declined::PatternIsForSearch(_)
             | Declined::TagsTakeNoPath
             | Declined::PairIsForDiff(_)
+            | Declined::NoMergeBase(_)
             | Declined::StatusTakesNoRevision => None,
         }
     }

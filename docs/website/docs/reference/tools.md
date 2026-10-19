@@ -286,7 +286,7 @@ working tree, **without starting git**.
 |---|---|
 | `query` | `log`, `show`, `diff`, `status`, `tags` or `search` |
 | `repository` | workspace-relative directory holding `.git`, defaults to `.` |
-| `revision` | in git's syntax: a branch, a tag, `HEAD`, an id or its prefix, then `~N`, `^N` or `^{commit}`. `log` takes one or a range `A..B`; `show` takes one, or `<revision>:<path>` for a file or directory as it was; `diff` takes two, as `A..B` or `A B`; `tags` takes none, or one to list only the tags it reaches; `search` takes one and defaults to `HEAD` |
+| `revision` | in git's syntax: a branch, a tag, `HEAD`, an id or its prefix, then `~N`, `^N` or `^{commit}`. `log` takes one or a range `A..B`, or `A...B` for what either side has that the other lacks; `show` takes one, or `<revision>:<path>` for a file or directory as it was; `diff` takes two, as `A..B` or `A B`, or `A...B` to compare the merge base with B; `tags` takes none, or one to list only the tags it reaches; `search` takes one and defaults to `HEAD` |
 | `path` | relative to the repository's root. Limits `log` to commits that changed it, `show`, `diff` and `status` to changes under it, and `search` to files under it |
 | `pattern` | `search` only, and required there: the regular expression to look for, matched against each line |
 | `count` | commits a `log` lists, tags a `tags` lists or lines a `search` prints: 20 unless given, at most 200 |

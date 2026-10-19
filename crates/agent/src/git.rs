@@ -833,7 +833,8 @@ mod tests {
     #[test]
     fn revision_syntax_read_git_does_not_implement_is_refused_by_name() {
         for revision in [
-            "main...topic",
+            "main....topic",
+            "a...b..c",
             "@{-1}",
             "main@{upstream}",
             "HEAD^{/fix}",
@@ -865,6 +866,9 @@ mod tests {
         assert_eq!(spec("..b"), Ok(Spec::Range("HEAD", "b")));
         assert_eq!(spec("a.."), Ok(Spec::Range("a", "HEAD")));
         assert_eq!(spec("  a   b "), Ok(Spec::Pair("a", "b")));
+        assert_eq!(spec("a...b"), Ok(Spec::Symmetric("a", "b")));
+        assert_eq!(spec("...b"), Ok(Spec::Symmetric("HEAD", "b")));
+        assert_eq!(spec("a..."), Ok(Spec::Symmetric("a", "HEAD")));
         assert_eq!(
             spec("HEAD~2:src/lib.rs"),
             Ok(Spec::One("HEAD~2:src/lib.rs"))
@@ -1099,6 +1103,117 @@ mod tests {
                 .collect();
             assert_eq!(listed, [short(end, 10)], "{range}");
         }
+    }
+
+    /// `main...topic` is what the branch changed since it left main, which is how a planner asks
+    /// for a branch's own changes: `main..topic` compares the two tips, so it also shows main's
+    /// later work undone.
+    #[test]
+    fn a_symmetric_range_measures_from_the_merge_base() {
+        let h = history("symmetric");
+        let topic_file = h.repo.blob("topic\n");
+        let topic = h.repo.commit(
+            h.repo.tree(&[
+                ("100644", "README", h.readme),
+                ("100644", "topic.txt", topic_file),
+                ("40000", "src", h.src),
+            ]),
+            &[h.second],
+            T1 + DAY + 3600,
+            "topic",
+        );
+        h.repo.point("refs/heads/topic", topic);
+        let diff = h.repo.text(Query::Diff, "main...topic");
+        assert!(diff.contains("topic.txt"), "{diff}");
+        assert!(
+            !diff.contains("README"),
+            "main's own change was shown: {diff}"
+        );
+        let tips = h.repo.text(Query::Diff, "main..topic");
+        assert!(tips.contains("README"), "{tips}");
+        let listed: Vec<String> = h
+            .repo
+            .text(Query::Log, "main...topic")
+            .lines()
+            .map(|line| line[..10].to_owned())
+            .collect();
+        assert_eq!(listed, [h.third, topic].map(|id| short(id, 10)));
+        assert_eq!(
+            h.repo.text(Query::Diff, "main...main"),
+            "(no differences)\n"
+        );
+        assert_eq!(
+            h.repo.text(Query::Log, "main...main"),
+            "(no commits match)\n"
+        );
+    }
+
+    /// Two merge bases leave `git diff A...B` measuring from the first, the more recent one, and
+    /// `git log A...B` hiding both.
+    #[test]
+    fn a_symmetric_range_over_a_criss_cross_history_is_read_as_git_reads_it() {
+        let repo = Repo::new("criss-cross");
+        let file = |text: &str| repo.blob(text);
+        let (x, y, z, w) = (file("x\n"), file("y\n"), file("z\n"), file("w\n"));
+        let root = repo.commit(repo.tree(&[("100644", "r", x)]), &[], T1, "root");
+        let one = repo.commit(
+            repo.tree(&[("100644", "r", x), ("100644", "a", y)]),
+            &[root],
+            T1 + 2 * DAY,
+            "one",
+        );
+        let two = repo.commit(
+            repo.tree(&[("100644", "r", x), ("100644", "b", z)]),
+            &[root],
+            T1 + DAY,
+            "two",
+        );
+        let both = |extra: &str, id| {
+            repo.tree(&[
+                ("100644", "r", x),
+                ("100644", "a", y),
+                ("100644", "b", z),
+                ("100644", extra, id),
+            ])
+        };
+        let left = repo.commit(both("left", w), &[one, two], T1 + 3 * DAY, "left");
+        let right = repo.commit(both("right", w), &[two, one], T1 + 4 * DAY, "right");
+        repo.point("refs/heads/main", right);
+        repo.point("refs/heads/left", left);
+        let listed: Vec<String> = repo
+            .text(Query::Log, "left...main")
+            .lines()
+            .map(|line| line[..10].to_owned())
+            .collect();
+        assert_eq!(listed, [right, left].map(|id| short(id, 10)));
+        let diff = repo.text(Query::Diff, "left...main");
+        assert!(diff.contains("diff --git a/b b/b"), "{diff}");
+        assert!(diff.contains("diff --git a/right b/right"), "{diff}");
+        assert!(!diff.contains("a/a b/a"), "{diff}");
+    }
+
+    /// With no commit in common there is nothing to measure from, and falling back to either tip
+    /// would answer a different question.
+    #[test]
+    fn a_symmetric_range_with_no_common_ancestor_is_refused_by_name() {
+        let repo = Repo::new("unrelated");
+        let tree = repo.tree(&[("100644", "README", repo.blob("hello\n"))]);
+        let main = repo.commit(tree, &[], T1, "main");
+        let other = repo.commit(tree, &[], T1 + DAY, "other");
+        repo.point("refs/heads/main", main);
+        repo.point("refs/heads/other", other);
+        for query in [Query::Log, Query::Diff] {
+            assert_eq!(
+                repo.ask(query, Some("main...other"), None).map(|a| a.text),
+                Err(Declined::NoMergeBase("main...other".to_owned())),
+                "{query:?}"
+            );
+        }
+        assert_eq!(
+            repo.ask(Query::Show, Some("main...other"), None)
+                .map(|a| a.text),
+            Err(Declined::TakesOne(Query::Show, "main...other".to_owned()))
+        );
     }
 
     /// The bounds are whole days in UTC, both ends included, which is what a planner asking for

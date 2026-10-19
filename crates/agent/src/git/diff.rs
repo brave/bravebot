@@ -21,12 +21,20 @@ impl Repository {
         filter: Option<&str>,
     ) -> Result<(), Declined> {
         let text = request.revision.ok_or(Declined::DiffNeedsTwo)?;
-        let (a, b) = match spec(text)? {
-            Spec::Pair(a, b) | Spec::Range(a, b) => (a, b),
+        let (old, new) = match spec(text)? {
+            Spec::Pair(a, b) | Spec::Range(a, b) => {
+                (self.commit_of(a, out)?, self.commit_of(b, out)?)
+            }
+            Spec::Symmetric(a, b) => {
+                let (a, b) = (self.commit_of(a, out)?, self.commit_of(b, out)?);
+                let bases = self.merge_bases(out, a, b)?;
+                let base = bases
+                    .first()
+                    .ok_or_else(|| Declined::NoMergeBase(text.trim().to_owned()))?;
+                (*base, b)
+            }
             Spec::One(_) => return Err(Declined::DiffNeedsTwo),
         };
-        let old = self.commit_of(a, out)?;
-        let new = self.commit_of(b, out)?;
         let old_tree = self.info(&old)?.tree;
         let new_tree = self.info(&new)?.tree;
         self.diff_trees(out, Some(old_tree), Some(new_tree), "", filter, 0)?;
