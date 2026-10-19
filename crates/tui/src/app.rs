@@ -19124,14 +19124,27 @@ mod tests {
             None,
             "the running turn was handed the command"
         );
+        let prompts: Vec<&str> = session
+            .transcript
+            .iter()
+            .filter(|e| matches!(e.speaker, crate::state::Speaker::User))
+            .map(|e| e.text.as_str())
+            .collect();
         assert_eq!(
-            session
-                .transcript
-                .last()
-                .expect("the first prompt is in the transcript")
-                .text,
-            "first",
+            prompts,
+            ["first"],
             "the command joined the conversation while it waited"
+        );
+        let last = session
+            .transcript
+            .last()
+            .expect("the notice is in the transcript");
+        assert!(
+            matches!(last.speaker, crate::state::Speaker::System)
+                && last.text.starts_with(CLEAR_COMMAND)
+                && last.text.contains("waits for the turn to end"),
+            "what the command said about waiting is not the last entry: {:?}",
+            last.text
         );
     }
 
