@@ -42542,6 +42542,8 @@ struct ApprovesFetchesAndWrites {
     writes: Vec<bravebot_agent::WriteRequest>,
     /// Declines every write instead of approving it.
     declines_writes: bool,
+    /// Words sent with each answer to a write.
+    note: Option<&'static str>,
 }
 
 impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
@@ -42559,10 +42561,14 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         request: &bravebot_agent::WriteRequest,
     ) -> bravebot_agent::WriteDecision {
         self.writes.push(request.clone());
-        if self.declines_writes {
+        let decision = if self.declines_writes {
             bravebot_agent::WriteDecision::reject()
         } else {
             bravebot_agent::WriteDecision::approve()
+        };
+        match self.note {
+            Some(note) => decision.with_note(note),
+            None => decision,
         }
     }
 
@@ -60491,6 +60497,59 @@ fn a_declined_destination_sends_no_request_and_leaves_the_file() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(second.contains("did not approve"), "{second}");
+}
+
+/// PROMPT-12: words a person typed beside a refused download reach the planner in place of the
+/// question the refusal ends on, and nothing is fetched.
+#[test]
+fn a_note_beside_a_refused_download_is_told_to_the_planner() {
+    let scratch = Scratch::new("download-refused-with-a-note");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, count) = serve_raw(raw_reply("application/octet-stream", b"never"));
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/data","path":"data.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ApprovesFetchesAndWrites {
+        declines_writes: true,
+        note: Some("save it under vendor/ instead"),
+        ..Default::default()
+    };
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("save the data"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        0,
+        "a refused download was fetched"
+    );
+    assert!(!scratch.path.join("data.bin").exists());
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("The user declined this and wrote: save it under vendor/ instead"),
+        "the planner was not given the note: {second}"
+    );
+    assert!(
+        !second.contains("ask what they would prefer"),
+        "the planner was told to ask what the person had already written: {second}"
+    );
 }
 
 /// DOWNLOAD-2: a host the person rejects sends nothing and saves nothing, and the planner is told

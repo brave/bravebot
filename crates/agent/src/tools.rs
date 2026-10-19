@@ -8661,12 +8661,13 @@ fn download_url<S: Sink, C: Confirmer>(
     let mode = tools.permission_mode.get();
     let answer = confirmer.confirm_write(&request);
     policy.record_answer(mode.answers_a_write_unasked(false).then(|| mode.name()));
+    keep_the_note(policy, "download_url", answer.approved(), answer.note());
     if !answer.approved() {
-        return Produced::problem(
+        return Produced::problem(format!(
             "refused: the user did not approve saving this there. Do not retry the same \
-             download; ask what they would prefer."
-                .to_string(),
-        );
+             download{}",
+            what_next(answer.note().is_some())
+        ));
     }
 
     // Bound to this exact URL, so an approval cannot be spent on another.

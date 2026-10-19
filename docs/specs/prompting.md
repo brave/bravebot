@@ -611,7 +611,7 @@ which under a light theme in a dark terminal is the path to unreadable.
 <a id="PROMPT-12"></a>
 ### PROMPT-12: an answer to a write, a run or a call may carry a note
 
-At the write prompt (a whole-file write and an edit), the run prompt and the prompt for a call to a
+At the write prompt (a whole-file write, an edit and a download), the run prompt and the prompt for a call to a
 server's tool, **Tab opens a one-line field** and **Enter sends the answer with what was typed**.
 Esc closes the field and answers nothing, so the question is still there. The field sends the
 plain no until the person switches it with Tab to the plain yes, so it approves nothing by default
@@ -642,7 +642,7 @@ others does nothing, so text another program writes into the terminal can neithe
 send one. Typing into an open field is taken however it arrived, since filling it decides nothing
 and the person reads it before sending.
 
-The prompts that offer no field give a refusal the sentence they always did: the trust question, the
+The prompts that offer no field give a refusal that ends on the question what the person would prefer: the trust question, the
 other questions a session opens with, and every other prompt here; the desktop window; a
 session in lines; and a one-shot run, which declines every question ([PROMPT-9](#PROMPT-9)). A step of a
 manifest run is put with the same write prompt and draws the field, but no planner is in that run's
@@ -668,6 +668,7 @@ message that arrives as a separate turn.
 `verified-by: bravebot_agent::turn::a_note_on_a_standing_answer_is_not_told_to_the_planner`
 `verified-by: bravebot_agent::turn::a_note_beside_an_edit_answer_is_told_to_the_planner`
 `verified-by: bravebot_agent::turn::a_note_beside_a_run_answer_is_told_to_the_planner`
+`verified-by: bravebot_agent::turn::a_note_beside_a_refused_download_is_told_to_the_planner`
 `verified-by: bravebot_agent::turn::a_note_follows_a_result_held_back_as_a_reference`
 `verified-by: bravebot_agent::turn::a_note_typed_at_one_file_of_an_apply_is_told_beside_that_file`
 `verified-by: bravebot_agent::mcp::a_note_beside_a_call_answer_is_told_to_the_planner`

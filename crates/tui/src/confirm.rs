@@ -6333,7 +6333,6 @@ mod tests {
         )
     }
 
-    /// A key that arrived on its own.
     fn lone(code: KeyCode) -> (KeyEvent, bool) {
         (press(code), true)
     }
