@@ -188,12 +188,22 @@ impl History {
     }
 
     /// Count the prompt a resumed record holds as this session's: the newest stored entry with
-    /// these words that is not already counted.
-    pub fn adopt(&mut self, prompt: &str) {
-        if let Some(at) = (0..self.entries.len())
-            .rev()
-            .find(|at| !self.mine[*at] && self.entries[*at].prompt == prompt)
-        {
+    /// these words that is not already counted and was not sent before the session began.
+    ///
+    /// The words alone do not say whose an entry is, and a prompt such as `continue` is stored
+    /// many times by many sessions. `since` is when the session began, and an entry stamped
+    /// earlier is another session's. An entry with no stamp is still a candidate, since a session
+    /// recorded before times were kept has nothing else to tell its prompts by.
+    pub fn adopt(&mut self, prompt: &str, since: Option<u64>) {
+        if let Some(at) = (0..self.entries.len()).rev().find(|at| {
+            let entry = &self.entries[*at];
+            !self.mine[*at]
+                && entry.prompt == prompt
+                && match (entry.at, since) {
+                    (Some(sent), Some(since)) => sent >= since,
+                    _ => true,
+                }
+        }) {
             self.mine[at] = true;
         }
     }
@@ -635,7 +645,7 @@ mod tests {
     #[test]
     fn a_resumed_prompt_is_this_sessions_until_the_conversation_is_cleared() {
         let mut history = stored(&["a", "b", "c"]);
-        history.adopt("b");
+        history.adopt("b", None);
         assert_eq!(history.older("").as_deref(), Some("c"));
         assert_eq!(history.next_scope(), Some(Scope::Session));
         assert_eq!(history.cycle().as_deref(), Some("b"));
@@ -651,8 +661,8 @@ mod tests {
     #[test]
     fn narrowing_from_a_prompt_of_another_session_lands_on_the_one_before_it() {
         let mut history = stored(&["a", "b", "c", "d"]);
-        history.adopt("b");
-        history.adopt("d");
+        history.adopt("b", None);
+        history.adopt("d", None);
         assert_eq!(history.older("").as_deref(), Some("d"));
         assert_eq!(history.position(), Some((4, 4)));
         assert_eq!(history.cycle().as_deref(), Some("d"));
@@ -667,7 +677,7 @@ mod tests {
         assert_eq!(history.position(), Some((1, 2)));
 
         let mut history = stored(&["a", "b", "c"]);
-        history.adopt("b");
+        history.adopt("b", None);
         history.older("");
         assert_eq!(history.cycle().as_deref(), Some("b"));
         history.cycle();
@@ -704,7 +714,7 @@ mod tests {
     fn narrowing_picks_the_nearest_earlier_prompt_not_the_oldest() {
         let mut history = stored(&["a", "b", "c", "d", "e", "f"]);
         for prompt in ["b", "d", "f"] {
-            history.adopt(prompt);
+            history.adopt(prompt, None);
         }
         history.older("");
         history.older("");
@@ -733,8 +743,8 @@ mod tests {
             sent("e", Some("/work/elsewhere")),
         ]);
         history.set_project(Some(HERE.to_string()));
-        history.adopt("b");
-        history.adopt("e");
+        history.adopt("b", None);
+        history.adopt("e", None);
         history
     }
 
@@ -872,5 +882,40 @@ mod tests {
 
         assert_eq!(history.scope(), Scope::All);
         assert_eq!(history.older("").as_deref(), Some("old"));
+    }
+
+    /// A prompt such as `continue` is stored by many sessions, so the words do not say whose entry
+    /// is whose. A resumed session counts the ones sent since it began and leaves the older ones,
+    /// which would otherwise fill its scope with prompts from days before.
+    #[test]
+    fn a_resumed_prompt_is_not_matched_to_an_entry_sent_before_the_session_began() {
+        let stamped = |at| Entry {
+            prompt: "continue".to_string(),
+            at: Some(at),
+            project: None,
+        };
+        let mut history = History::from_entries(vec![stamped(100), stamped(1_000), stamped(1_010)]);
+        history.adopt("continue", Some(500));
+        history.adopt("continue", Some(500));
+        history.adopt("continue", Some(500));
+
+        let mine: Vec<bool> = (0..3)
+            .map(|at| history.contains(at, Scope::Session))
+            .collect();
+        assert_eq!(
+            mine,
+            [false, true, true],
+            "an entry from before the session began was counted as its own"
+        );
+    }
+
+    /// A session recorded before times were kept has stored entries with no stamp, and they are
+    /// still found by their words.
+    #[test]
+    fn an_entry_with_no_stamp_is_still_matched_to_a_resumed_prompt() {
+        let mut history = stored(&["a"]);
+        history.entries[0].at = None;
+        history.adopt("a", Some(500));
+        assert!(history.contains(0, Scope::Session));
     }
 }

@@ -2029,7 +2029,10 @@ stays where the person put it: ending the walk, editing the line and sending do 
 it. `/clear` starts a new session's own prompts and puts the scope back on every stored prompt,
 and a prompt queued during a turn counts as sent from the moment it is queued (INPUT-10). The
 stored file is unchanged: which prompts are this session's is known from what this process sent
-and from the turns of a resumed record.
+and from the turns of a resumed record. A turn of a resumed record is matched to a stored prompt
+with the same words that was sent since the session began, since a prompt such as `continue` is
+stored by many sessions, and a cancelled turn is matched to none, since its prompt left the
+history when it was cancelled ([sessions.md](sessions.md#SESSION-6)).
 
 A scope that holds nothing is skipped by the cycle: where this session has sent nothing the
 session scope is skipped, and where no stored prompt belongs to this workspace the project scope
@@ -2080,6 +2083,9 @@ one carries to the other.
 `verified-by: bravebot_tui::render::the_border_names_the_scope_and_offers_the_switch_only_where_it_works`
 `verified-by: bravebot_tui::render::the_border_names_the_scope_chord_a_settings_file_moved`
 `verified-by: bravebot_tui::state::a_resumed_sessions_own_prompts_are_in_its_session_scope`
+`verified-by: bravebot_tui::state::a_cancelled_turn_of_a_resumed_record_is_given_no_entry`
+`verified-by: bravebot_tui::history::a_resumed_prompt_is_not_matched_to_an_entry_sent_before_the_session_began`
+`verified-by: bravebot_tui::history::an_entry_with_no_stamp_is_still_matched_to_a_resumed_prompt`
 `verified-by: bravebot_tui::history::up_walks_every_stored_prompt_by_default`
 `verified-by: bravebot_tui::history::this_sessions_scope_is_offered_only_from_a_prompt_when_the_session_has_sent_one`
 `verified-by: bravebot_tui::history::the_scope_stays_where_it_was_put_when_the_walk_ends`
