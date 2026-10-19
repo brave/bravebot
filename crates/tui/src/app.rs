@@ -21376,7 +21376,11 @@ mod tests {
             )
         });
 
-        assert!(said_under_the_turn(&session).is_empty());
+        let said = said_under_the_turn(&session);
+        assert!(
+            said.len() == 1 && said[0].contains("waits for the turn to end"),
+            "/mcp was carried out mid-turn: {said:?}"
+        );
         assert_eq!(waiting_prompts(&session), vec!["/mcp reconnect weather"]);
     }
 
