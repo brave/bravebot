@@ -171,6 +171,7 @@ pub(crate) fn print_help() {
         ("--safe", t!(cli_option_safe)),
         ("--locked", t!(cli_option_locked)),
         ("--vet", t!(cli_option_vet)),
+        ("--accept-edits", t!(cli_option_accept_edits)),
         (
             "--dangerously-skip-permissions",
             t!(cli_option_dangerously_skip_permissions),

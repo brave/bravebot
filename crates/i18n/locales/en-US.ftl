@@ -182,6 +182,10 @@ cli-option-locked =
     Like --safe, and also read no project or local settings file, and refuse --dangerously-skip-permissions
 cli-locked-refuses-bypass =
     { $flag } is refused with --locked: a locked run never opens the bypass mode
+cli-accept-edits-not-with-bypass =
+    --accept-edits is refused with { $flag }: the second answers every question the first answers and more, so say which you mean
+cli-accept-edits-needs-a-run =
+    --accept-edits is for a one-shot run, such as -p "task". A session has the mode key
 cli-option-vet =
     For this run, let a check answer: content it finds nothing in is promoted without asking you,
     and where nobody can be asked, anything else is kept back
@@ -195,6 +199,9 @@ cli-option-dangerously-bypass-approvals-and-sandbox =
     Recommended only for machines you can lose
 cli-bypass-and-sandbox-disagree =
     --dangerously-bypass-approvals-and-sandbox turns the sandbox off, and --sandbox { $mode } asks for it on. Give one of them
+cli-option-accept-edits =
+    For a one-shot run, write files without asking. Commands, fetches and a write that would
+    create a credential are still refused
 cli-option-help = Show this message
 cli-option-version = Show the version
 
