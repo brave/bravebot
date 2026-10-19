@@ -7722,7 +7722,7 @@ fn a_project_whose_notes_the_model_changes(
 
 /// CLI-1. Trusting the working directory opens reads and nothing else: a run nobody is watching
 /// that was given `--trust-workspace` still has a write the planner composed refused, for a whole
-/// file and for an edit alike, and the one flag that lifts the refusal, the person's own
+/// file and for an edit alike (ending on the refused status, CLI-6), and the one flag that lifts the refusal, the person's own
 /// instruction to skip permissions, makes both land.
 ///
 /// A property of the process: the trust map is built in `main` from the flag and the confirmer is
@@ -7750,7 +7750,7 @@ fn a_one_shot_run_that_trusts_its_workspace_still_refuses_a_write_without_the_sk
         ),
     ];
     for (kind, tool, arguments, written) in changes {
-        let run = |flags: &[&str]| {
+        let run = |flags: &[&str], status: i32| {
             let (gateway, scratch, cwd) = a_project_whose_notes_the_model_changes(
                 &format!("cli-running-trust-writes-{kind}-{}", flags.len()),
                 tool,
@@ -7760,18 +7760,22 @@ fn a_one_shot_run_that_trusts_its_workspace_still_refuses_a_write_without_the_sk
             line.extend(["-p", "change the notes"]);
             let output = bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &line);
             let (_, stderr) = said(&output);
-            assert!(output.status.success(), "{kind} {flags:?}: {stderr}");
+            assert_eq!(
+                output.status.code(),
+                Some(status),
+                "{kind} {flags:?}: {stderr}"
+            );
             let _ = requests(&gateway);
             std::fs::read_to_string(cwd.join("notes.md")).expect("the notes")
         };
 
         assert_eq!(
-            run(&["--trust-workspace"]),
+            run(&["--trust-workspace"], 4),
             "THE-WORDS-IN-THE-PROJECT-NOTES",
             "{kind}: a trust flag alone applied a write nobody was asked about"
         );
         assert_eq!(
-            run(&["--trust-workspace", "--dangerously-skip-permissions"]),
+            run(&["--trust-workspace", "--dangerously-skip-permissions"], 0),
             written,
             "{kind}: the skip flag did not apply the write, so the refusal above says nothing"
         );
