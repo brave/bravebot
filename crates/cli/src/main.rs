@@ -43,8 +43,8 @@ use crate::finish::{
     stopped_before_the_turn, what_ran,
 };
 use crate::flags::{
-    BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, SAFE, SKIP_PERMISSIONS, VET,
-    starts_neither_a_session_nor_a_task, take_flag, take_valued,
+    ACCEPT_EDITS, BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, SAFE, SKIP_PERMISSIONS, TASK_FLAGS, VET,
+    is_a_one_shot, starts_neither_a_session_nor_a_task, take_flag, take_valued,
 };
 use crate::model::{
     model_asked_for, model_for_this_run, model_not_served, nothing_serves, resolve_advisor,
@@ -72,6 +72,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 struct Settled {
     as_json: bool,
     skip_permissions: bool,
+    accept_edits: bool,
     carried: Option<String>,
     agent: Option<String>,
     links: bravebot_tui::app::Links,
@@ -190,6 +191,18 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
             wants_json(args),
             Ending::Argument,
             t!(cli_locked_refuses_bypass, flag = bypass_flag).to_string(),
+        ));
+    }
+
+    // Taken out beside the flag above, for the reason that one is, and refused with it: the flag
+    // above answers every question this one answers and more, so both given is a line that does
+    // not say which of the two its author meant.
+    let accept_edits = take_flag(args, ACCEPT_EDITS);
+    if accept_edits && skip_permissions {
+        return Err(stopped_before_the_turn(
+            wants_json(args),
+            Ending::Argument,
+            t!(cli_accept_edits_not_with_bypass, flag = bypass_flag).to_string(),
         ));
     }
 
@@ -442,9 +455,20 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     }
 
     args.extend(foreign);
+    // Refused rather than ignored where there is no one-shot run to open in the mode: a session
+    // has the mode key, and a line that asked for a run to write unasked and was started as
+    // something that asks would leave its author believing the flag had been honoured.
+    if accept_edits && !is_a_one_shot(args, continues_with_a_task(args)) {
+        return Err(stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_accept_edits_needs_a_run).to_string(),
+        ));
+    }
     Ok(Settled {
         as_json,
         skip_permissions,
+        accept_edits,
         carried,
         agent,
         links,
@@ -482,6 +506,7 @@ fn main() -> ExitCode {
     let Settled {
         as_json,
         skip_permissions,
+        accept_edits,
         carried,
         agent,
         links,
@@ -517,7 +542,7 @@ fn main() -> ExitCode {
         }
         // Picking up where a session left off, chosen from a list or named outright.
         Some("--resume" | "-r" | "--continue" | "-c") if continues_with_a_task(&args) => {
-            run_task(&args, skip_permissions, agent, prompts)
+            run_task(&args, skip_permissions, accept_edits, agent, prompts)
         }
         Some("--resume" | "-r") => match args.get(1) {
             Some(id) => resume_named(id, agent, links, skip_permissions, prompts),
@@ -566,11 +591,9 @@ fn main() -> ExitCode {
         },
         // The task flags may lead: `bravebot -p "task"` and `bravebot --mode manifest "task"`
         // would otherwise be caught below as unknown options.
-        Some(
-            "-p" | "--print" | "--mode" | "--model" | "--advisor" | "--effort" | "--file"
-            | "--session-ref" | "--add-dir" | "--trust-workspace" | "--trace" | "--json"
-            | "--json-stream" | "--output-schema",
-        ) => run_task(&args, skip_permissions, agent, prompts),
+        Some(flag) if TASK_FLAGS.contains(&flag) => {
+            run_task(&args, skip_permissions, accept_edits, agent, prompts)
+        }
         Some("doctor") if args.get(1).map(String::as_str) == Some("--sandbox-check") => {
             match args.len() {
                 2 => sandbox_check::run(),
@@ -627,7 +650,7 @@ fn main() -> ExitCode {
             refused_with_the_usage(as_json, t!(cli_unknown_option, flag = flag))
         }
         // Anything else is treated as the task prompt.
-        Some(_) => run_task(&args, skip_permissions, agent, prompts),
+        Some(_) => run_task(&args, skip_permissions, accept_edits, agent, prompts),
     }
 }
 
@@ -1454,10 +1477,11 @@ fn a_plan_is_put(stdin_is_terminal: bool, stderr_is_terminal: bool) -> bool {
 fn run_task(
     args: &[String],
     skip_permissions: bool,
+    accept_edits: bool,
     agent: Option<String>,
     prompts: SystemPrompts,
 ) -> ExitCode {
-    match prepare_the_run(args, skip_permissions, agent, prompts) {
+    match prepare_the_run(args, skip_permissions, accept_edits, agent, prompts) {
         Ok(prepared) => run_and_report(prepared),
         Err(stopped) => stopped,
     }
@@ -1495,6 +1519,7 @@ struct Prepared {
 fn prepare_the_run(
     args: &[String],
     skip_permissions: bool,
+    accept_edits: bool,
     agent: Option<String>,
     prompts: SystemPrompts,
 ) -> Result<Prepared, ExitCode> {
@@ -1732,12 +1757,13 @@ fn prepare_the_run(
         );
     }
 
-    // Bypassing where the flag was given, and asking otherwise. There is no mode key here: a
-    // one-shot run has no session to hold a mode and nobody to press anything, so the command line
-    // is the whole of what can say.
-    let permission_mode = match skip_permissions {
-        true => bravebot_agent::PermissionMode::Bypass,
-        false => bravebot_agent::PermissionMode::Ask,
+    // Bypassing where the flag was given, accepting edits where the narrower one was, and asking
+    // otherwise. There is no mode key here: a one-shot run has no session to hold a mode and
+    // nobody to press anything, so the command line is the whole of what can say.
+    let permission_mode = match (skip_permissions, accept_edits) {
+        (true, _) => bravebot_agent::PermissionMode::Bypass,
+        (false, true) => bravebot_agent::PermissionMode::AcceptEdits,
+        (false, false) => bravebot_agent::PermissionMode::Ask,
     };
     // Resolved against the configuration rather than at parse, since a tier word names a model
     // only the configuration knows: the AWS account's ARN for that tier where it named one, and
@@ -3663,6 +3689,49 @@ mod tests {
         let mut alone = args(&["--dangerously-skip-permissions"]);
         assert!(take_flag(&mut alone, SKIP_PERMISSIONS));
         assert!(alone.is_empty());
+    }
+
+    /// CLI-1: `--accept-edits` is taken out wherever it is typed, and only a line that starts a
+    /// one-shot run has somewhere to put it. A session has the mode key, a background session has
+    /// nobody, and a command that starts no run has no write to answer.
+    #[test]
+    fn the_accept_edits_flag_is_taken_out_and_belongs_to_a_one_shot_run() {
+        for typed in [
+            &["--accept-edits", "-p", "do a thing"][..],
+            &["-p", "--accept-edits", "do a thing"][..],
+            &["-p", "do a thing", "--accept-edits"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert!(take_flag(&mut arguments, ACCEPT_EDITS), "{typed:?}");
+            assert_eq!(arguments, args(&["-p", "do a thing"]), "{typed:?}");
+        }
+        let one_shot = |typed: &[&str]| {
+            let typed = args(typed);
+            is_a_one_shot(&typed, continues_with_a_task(&typed))
+        };
+        for typed in [
+            &["-p", "task"][..],
+            &["--json", "task"][..],
+            &["fix the test"][..],
+            &["--resume", "an-id", "-p", "more"][..],
+            &["--continue", "more"][..],
+        ] {
+            assert!(one_shot(typed), "{typed:?} is a one-shot run");
+        }
+        for typed in [
+            &[][..],
+            &["-i", "task"][..],
+            &["--plain"][..],
+            &["--bg", "task"][..],
+            &["--resume"][..],
+            &["--resume", "an-id"][..],
+            &["--continue"][..],
+            &["doctor"][..],
+            &["sessions"][..],
+            &["--version"][..],
+        ] {
+            assert!(!one_shot(typed), "{typed:?} is not a one-shot run");
+        }
     }
 
     /// It composes with the other flag that is taken out before dispatch, in either order: both are

@@ -1852,6 +1852,182 @@ fn a_gateway_asking_for_a_write() -> Gateway {
     })
 }
 
+/// A gateway whose model asks to write `path` with `contents` and, once that call has an answer
+/// in the conversation, says it is done.
+fn a_gateway_writing(path: &'static str, contents: &'static str) -> Gateway {
+    a_gateway(r#"["tools"]"#, move |body| {
+        let frame = match body.contains(r#""role":"tool""#) {
+            true => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
+            false => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"write_file",
+                        "arguments":serde_json::json!({"path": path, "contents": contents})
+                            .to_string()}}]},
+                "finish_reason":"tool_calls"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
+/// Runs `-p` against a gateway whose model asks to write `path`, with `flags` before it, and says
+/// whether the file was made.
+fn a_write_run_made_the_file(
+    name: &str,
+    flags: &[&str],
+    path: &'static str,
+    contents: &'static str,
+) -> bool {
+    let gateway = a_gateway_writing(path, contents);
+    let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    if let Some(parent) = Path::new(path).parent() {
+        std::fs::create_dir_all(project.join(parent)).expect("a directory to write in");
+    }
+    let mut arguments = flags.to_vec();
+    arguments.extend(["-p", "write a file"]);
+    let output = bravebot_started_in(&scratch.path, &project, AT_A_GATEWAY, &arguments);
+    let (_, stderr) = said(&output);
+    gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .unwrap_or_else(|_| panic!("the run reached the gateway: {stderr}"));
+    project.join(path).exists()
+}
+
+/// CLI-1, MODE-2: `--accept-edits` lets a one-shot run write where nobody can be asked, and the
+/// same run without it does not, so the file is the flag's doing and not the sandbox's or the
+/// gateway's. The bypass run is the third arm: it is the other way a write lands, and a flag that
+/// merely stood in for it would be told apart only by the tests below.
+#[test]
+fn an_accept_edits_run_writes_and_a_plain_run_does_not() {
+    assert!(
+        !a_write_run_made_the_file("cli-running-accept-none", &[], "out.txt", "hi"),
+        "the control wrote, so the run below says nothing"
+    );
+    assert!(
+        a_write_run_made_the_file(
+            "cli-running-accept-edits",
+            &["--accept-edits"],
+            "out.txt",
+            "hi"
+        ),
+        "the flag did not let the write through"
+    );
+}
+
+/// MODE-2: a write whose body the credential scan found a value in is refused where nobody can be
+/// asked, as it is in a session nobody answers. A mode that answered it would be the person, and
+/// nobody was shown the bytes. The bypass run is the control that the file is writable at all.
+#[test]
+fn an_accept_edits_run_refuses_a_write_that_would_create_a_credential() {
+    // Forty hex characters in a file named for what it holds: inferred and not declared, so it is
+    // the kind of write a person decides about, and bypassing is what answers it.
+    let body = "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n";
+    assert!(
+        a_write_run_made_the_file(
+            "cli-running-accept-credential-control",
+            &["--dangerously-skip-permissions"],
+            "config/master.key",
+            body
+        ),
+        "the control did not write, so the refusal below says nothing"
+    );
+    assert!(
+        !a_write_run_made_the_file(
+            "cli-running-accept-credential",
+            &["--accept-edits"],
+            "config/master.key",
+            body
+        ),
+        "an accepting-edits run wrote a credential nobody was shown"
+    );
+}
+
+/// MODE-2: accepting edits does not answer a `run`. The same line, asked for under the bypass
+/// flag, does make the file, so the refusal is the mode's and not the sandbox's.
+#[cfg(unix)]
+#[test]
+fn an_accept_edits_run_refuses_a_command() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return;
+    }
+    let made = |name: &str, flag: &str| {
+        let gateway = a_gateway_asking_to_run("touch made.txt");
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("a project");
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            &environment,
+            &[flag, "-p", "make a file"],
+        );
+        let _ = said(&output);
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        project.join("made.txt").exists()
+    };
+    assert!(
+        made(
+            "cli-running-accept-run-control",
+            "--dangerously-skip-permissions"
+        ),
+        "the control did not run the command, so the refusal below says nothing"
+    );
+    assert!(
+        !made("cli-running-accept-run", "--accept-edits"),
+        "an accepting-edits run ran a command"
+    );
+}
+
+/// CLI-1: the flag is refused beside the bypass flag, and where there is no one-shot run to open in
+/// the mode, each with the argument status and nothing sent to the gateway.
+#[test]
+fn accept_edits_is_refused_with_the_bypass_flag_and_outside_a_one_shot_run() {
+    let gateway = a_gateway_writing("out.txt", "hi");
+    let scratch = Scratch::new("cli-running-accept-refused").with_settings(&settings_for(&gateway));
+    for (arguments, says) in [
+        (
+            &[
+                "--accept-edits",
+                "--dangerously-skip-permissions",
+                "-p",
+                "x",
+            ][..],
+            "--dangerously-skip-permissions",
+        ),
+        (&["--accept-edits", "--plain"][..], "one-shot"),
+        (&["--accept-edits", "--bg", "x"][..], "one-shot"),
+        (&["--accept-edits"][..], "one-shot"),
+    ] {
+        let output = bravebot_started_in(&scratch.path, &scratch.path, AT_A_GATEWAY, arguments);
+        let (_, stderr) = said(&output);
+        assert!(
+            stderr.contains("--accept-edits is refused") || stderr.contains("is for a one-shot"),
+            "{arguments:?}: {stderr}"
+        );
+        assert!(stderr.contains(says), "{arguments:?}: {stderr}");
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+    }
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a refused line sent a request"
+    );
+    assert!(!scratch.path.join("out.txt").exists());
+}
+
 /// CLI-24: a run that is refused a write writes its events while it goes and ends on the result
 /// object. Streaming a gate's refusal is covered in `json.rs`: the approval a one-shot run lacks
 /// ends the call without a gate event.
