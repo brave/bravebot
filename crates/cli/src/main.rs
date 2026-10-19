@@ -38,9 +38,9 @@ use bravebot_agent::servers;
 
 use crate::exit::{Ending, fail};
 use crate::finish::{
-    Finished, ending_of_a_turn, failure_of_a_turn, print_trace, refusals, refused_with_the_usage,
-    report, say_notices, say_the_result, say_what_a_stopped_manifest_produced,
-    stopped_before_the_turn, what_ran, with_declined,
+    Finished, ending_of_a_turn, failure_of_a_turn, refusals, refused_with_the_usage, report,
+    say_notices, say_the_result, say_what_a_stopped_manifest_produced, stopped_before_the_turn,
+    what_ran, with_declined,
 };
 use crate::flags::{
     ACCEPT_EDITS, BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, SAFE, SKIP_PERMISSIONS, TASK_FLAGS, VET,
@@ -1994,6 +1994,11 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
         permission_mode,
     } = prepared;
     let mut sink = json::Streaming::new(as_stream.then(|| json::Stream::new(std::io::stdout())));
+    // The trail goes to stderr as each gate decides, so a run that never finishes still shows
+    // what it decided (TRACE-5).
+    if trace {
+        sink = sink.with_live_trace(json::Stream::new(std::io::stderr()));
+    }
 
     // A one-shot run has nobody to ask about a write, so writes are refused rather than silently
     // applied. The one exception is a plan, which is put before the first step rather than in the
@@ -2164,7 +2169,7 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
                 reply: rendered.as_deref().unwrap_or(outcome.reply_for_display()),
                 notices: &outcome.notices,
                 attempt: attempt.as_deref(),
-                trail: trace.then_some((sink.recorded(), outcome.model.as_str())),
+                model: trace.then_some(outcome.model.as_str()),
                 clean: outcome.clean && declined.is_empty(),
                 ending,
                 not_served: not_served.as_deref(),
@@ -2191,16 +2196,10 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
         // A run that stopped is the one worth looking at, so what it produced is printed
         // whether or not --trace was asked for. Without it a failed plan is a one-line
         // complaint about a document nobody can see.
-        Err(bravebot_agent::TurnError::Manifest { attempt, cause }) => report_a_failed_turn(
-            &cause,
-            Some(&attempt),
-            trace,
-            as_json,
-            &reporter,
-            &sink,
-            &declined,
-        ),
-        Err(err) => report_a_failed_turn(&err, None, trace, as_json, &reporter, &sink, &declined),
+        Err(bravebot_agent::TurnError::Manifest { attempt, cause }) => {
+            report_a_failed_turn(&cause, Some(&attempt), as_json, &reporter, &sink, &declined)
+        }
+        Err(err) => report_a_failed_turn(&err, None, as_json, &reporter, &sink, &declined),
     }
 }
 
@@ -2309,7 +2308,6 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
 fn report_a_failed_turn(
     error: &bravebot_agent::TurnError,
     attempt: Option<&bravebot_agent::manifest::Attempt>,
-    trace: bool,
     as_json: bool,
     reporter: &progress::Progress<std::io::Stderr>,
     sink: &json::Streaming,
@@ -2323,18 +2321,9 @@ fn report_a_failed_turn(
     };
     let stopped = fail(ending, error);
     say_notices(&mut std::io::stderr().lock(), reporter.notices());
-    match attempt {
-        Some(attempt) => say_what_a_stopped_manifest_produced(
-            &mut std::io::stderr().lock(),
-            attempt,
-            trace.then(|| sink.recorded()),
-        ),
-        None => {
-            if trace {
-                eprintln!();
-                print_trace(&mut std::io::stderr().lock(), sink.recorded());
-            }
-        }
+    // The trail, where `--trace` asked for one, was written as the gates ran.
+    if let Some(attempt) = attempt {
+        say_what_a_stopped_manifest_produced(&mut std::io::stderr().lock(), attempt);
     }
     if as_json {
         say_the_result(&what_ran(
@@ -2753,6 +2742,7 @@ fn resume_hint(left: &Resumable, started_in: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::finish::trace_line;
     use crate::test_support::*;
     use crate::workspace::unattended_trust_with;
     use bravebot_agent::Workspace;
@@ -2766,7 +2756,6 @@ mod tests {
     use bravebot_core::slot::SlotId;
     use bravebot_session::store::Effort;
     use bravebot_tui::app::AskedFor;
-    use std::io::Write;
     use std::path::PathBuf;
 
     /// These commands start no session, so a flag that shapes one has nothing to shape. Taking it
@@ -2928,22 +2917,21 @@ mod tests {
     /// file at the other end. This is the whole of what makes a one-shot run pipeable.
     #[test]
     fn stdout_carries_the_reply_and_nothing_else() {
-        let sink = trail_of(vec![Event::GatePassed {
-            gate: "display",
-            detail: "assistant reply shown to the user".into(),
-        }]);
         let (reply, beside) = written(&Finished {
             reply: "ok",
             notices: &["a skill was loaded".to_string()],
             attempt: None,
-            trail: Some((&sink, "qwen-3-235b")),
+            model: Some("qwen-3-235b"),
             clean: false,
             ending: Ending::Refused,
             not_served: None,
         });
 
         assert_eq!(reply, "ok\n");
-        assert!(beside.contains("audit trail"), "got: {beside}");
+        assert!(
+            !beside.contains("audit trail"),
+            "the trail was written a second time, after the gates had already written it: {beside}"
+        );
         assert!(beside.contains("note: a skill was loaded"), "got: {beside}");
         assert!(beside.contains("model: qwen-3-235b"), "got: {beside}");
         assert!(beside.contains("a policy gate refused"), "got: {beside}");
@@ -2979,7 +2967,7 @@ mod tests {
             reply: "ok",
             notices: &[],
             attempt: None,
-            trail: None,
+            model: None,
             clean: true,
             ending: Ending::Done,
             not_served: None,
@@ -3032,42 +3020,19 @@ mod tests {
             },
         ]);
 
-        let mut output = Vec::new();
-        print_trace(&mut output, &sink);
-        let trail = String::from_utf8(output).expect("utf-8");
-        let lines: Vec<&str> = trail.lines().collect();
+        let lines: Vec<String> = sink
+            .recorded()
+            .map(|(delegate, event)| trace_line(delegate, event))
+            .collect();
 
-        assert_eq!(lines[0], "audit trail");
-        assert_eq!(lines.len(), 8, "a line each, plus the heading: {trail}");
-        assert!(lines[1].contains("ok      capability: file_read granted"));
-        assert!(lines[2].contains("BLOCK   network: host not allowed"));
-        assert!(lines[3].starts_with("  observe "));
-        assert!(lines[4].starts_with("  slot    file:a.rs"));
-        assert!(lines[5].contains("holds b.rs, unread"));
-        assert!(lines[6].starts_with("  release reply "));
-        assert!(lines[7].contains("BLOCK") && lines[7].contains("write.path [routing]"));
-    }
-
-    /// The trail is written after the reply is already on stdout, so a stderr nobody is reading
-    /// must not take the run down with it: the exit code still has a turn to report on.
-    #[test]
-    fn a_closed_stream_does_not_stop_the_trail() {
-        struct Closed;
-        impl Write for Closed {
-            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
-            }
-        }
-
-        let mut sink = RecordingSink::new();
-        sink.emit(Event::GatePassed {
-            gate: "display",
-            detail: "assistant reply shown to the user".into(),
-        });
-        print_trace(&mut Closed, &sink);
+        assert_eq!(lines.len(), 7, "a line each: {lines:?}");
+        assert!(lines[0].contains("ok      capability: file_read granted"));
+        assert!(lines[1].contains("BLOCK   network: host not allowed"));
+        assert!(lines[2].starts_with("  observe "));
+        assert!(lines[3].starts_with("  slot    file:a.rs"));
+        assert!(lines[4].contains("holds b.rs, unread"));
+        assert!(lines[5].starts_with("  release reply "));
+        assert!(lines[6].contains("BLOCK") && lines[6].contains("write.path [routing]"));
     }
 
     fn args(parts: &[&str]) -> Vec<String> {
@@ -4705,7 +4670,7 @@ mod tests {
             reply: "ok",
             notices: &[],
             attempt: None,
-            trail: None,
+            model: None,
             clean: true,
             ending: Ending::Failed,
             not_served: Some("a-premium-model was not served"),
@@ -4756,7 +4721,7 @@ mod tests {
             reply: "ok",
             notices: &[],
             attempt: None,
-            trail: None,
+            model: None,
             clean: true,
             ending: Ending::Done,
             not_served: Some("a-premium-model was not served"),
@@ -5090,7 +5055,7 @@ mod tests {
             reply: "ok",
             notices: &[],
             attempt: Some("manifest proposed, which was not usable\n  not JSON\n"),
-            trail: None,
+            model: None,
             clean: true,
             ending: Ending::Done,
             not_served: None,
@@ -5101,7 +5066,8 @@ mod tests {
     }
 
     /// A manifest run that stopped is the one worth looking at, so what it produced is printed
-    /// whether or not `--trace` was asked for. Only the audit trail is the flag's to add.
+    /// whether or not `--trace` was asked for. The trail is not the flag's to add here: it was
+    /// written as the gates ran.
     #[test]
     fn a_stopped_manifest_prints_what_it_produced_without_the_trace_flag() {
         let attempt = bravebot_agent::manifest::Attempt {
@@ -5109,23 +5075,13 @@ mod tests {
             steps: vec!["1. read notes.md: done".to_string()],
             ..Default::default()
         };
-        let sink = trail_of(vec![Event::GatePassed {
-            gate: "display",
-            detail: "assistant reply shown to the user".into(),
-        }]);
 
-        let mut untraced = Vec::new();
-        say_what_a_stopped_manifest_produced(&mut untraced, &attempt, None);
-        let untraced = String::from_utf8(untraced).expect("utf-8");
-        assert!(untraced.contains("not JSON at all"), "got: {untraced}");
-        assert!(untraced.contains("read notes.md"), "got: {untraced}");
-        assert!(!untraced.contains("audit trail"), "got: {untraced}");
-
-        let mut traced = Vec::new();
-        say_what_a_stopped_manifest_produced(&mut traced, &attempt, Some(&sink));
-        let traced = String::from_utf8(traced).expect("utf-8");
-        assert!(traced.contains("not JSON at all"), "got: {traced}");
-        assert!(traced.contains("audit trail"), "got: {traced}");
+        let mut said = Vec::new();
+        say_what_a_stopped_manifest_produced(&mut said, &attempt);
+        let said = String::from_utf8(said).expect("utf-8");
+        assert!(said.contains("not JSON at all"), "got: {said}");
+        assert!(said.contains("read notes.md"), "got: {said}");
+        assert!(!said.contains("audit trail"), "got: {said}");
     }
 
     /// Nobody is watching a one-shot run, so the list that answers a prompt in advance answers

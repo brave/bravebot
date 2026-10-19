@@ -1228,10 +1228,16 @@ fn a_one_shot_run_that_failed_prints_its_trail_under_trace() {
     let trail = stderr
         .find("audit trail")
         .unwrap_or_else(|| panic!("a failed run printed no trail under --trace: {stderr}"));
-    assert!(error < trail, "the trail came before the error: {stderr}");
+    // Written as the gates ran, so the gates before the failure are above it.
+    assert!(trail < error, "the trail came after the error: {stderr}");
     assert!(
-        stderr[trail..].contains("ok      precommit:"),
+        stderr[trail..error].contains("ok      precommit:"),
         "the trail held no gate that ran before the failure: {stderr}"
+    );
+    assert_eq!(
+        stderr.matches("audit trail").count(),
+        1,
+        "the trail was written twice: {stderr}"
     );
     assert!(
         stdout.is_empty(),
@@ -1243,6 +1249,116 @@ fn a_one_shot_run_that_failed_prints_its_trail_under_trace() {
     assert!(
         !stderr.contains("audit trail"),
         "a failed run printed the trail without --trace: {stderr}"
+    );
+}
+
+/// TRACE-5: `--trace` writes each decision to stderr when the gate takes it, so a run that is
+/// stuck shows what it had decided so far.
+///
+/// The gateway answers the first request and then holds the second until the test lets it go, so
+/// the run is provably still going while stderr is read. A trail written only when the run ends
+/// has nothing on stderr at that point.
+#[test]
+fn a_traced_run_writes_its_decisions_to_stderr_while_it_is_still_going() {
+    let (reached, held) = mpsc::channel::<()>();
+    let (release, released) = mpsc::channel::<()>();
+    let released = std::sync::Mutex::new(released);
+    let reached = std::sync::Mutex::new(reached);
+    let gateway = a_gateway(r#"["tools"]"#, move |body| {
+        let frame = match body.contains(r#""role":"tool""#) {
+            true => {
+                reached.lock().expect("lock").send(()).expect("signal");
+                let _ = released
+                    .lock()
+                    .expect("lock")
+                    .recv_timeout(Duration::from_secs(60));
+                serde_json::json!({"model":"reasons-only","choices":[{
+                    "index":0,"delta":{"role":"assistant","content":"all done"},
+                    "finish_reason":"stop"}],
+                    "usage":{"prompt_tokens":30,"completion_tokens":4}})
+            }
+            false => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"write_file",
+                        "arguments":"{\"path\":\"out.txt\",\"contents\":\"hi\"}"}}]},
+                "finish_reason":"tool_calls"}],
+                "usage":{"prompt_tokens":12,"completion_tokens":5}}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    });
+    let scratch = Scratch::new("cli-running-live-trace").with_settings(&settings_for(&gateway));
+
+    let mut run = prepared(
+        &scratch.path,
+        Some(&scratch.path),
+        AT_A_GATEWAY,
+        &["--trace", "-p", "write out.txt"],
+    );
+    let mut child = run
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the built binary runs");
+    let stderr = child.stderr.take().expect("piped");
+    let (lines, read) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if lines.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    held.recv_timeout(Duration::from_secs(60))
+        .expect("the run never reached the request the gateway holds");
+    assert!(
+        child.try_wait().expect("status").is_none(),
+        "the run ended while its second request was held"
+    );
+    // What stderr holds now was written before the run could end.
+    let mut so_far = Vec::new();
+    while so_far
+        .iter()
+        .all(|line: &String| !line.contains("precommit"))
+    {
+        so_far.push(
+            read.recv_timeout(Duration::from_secs(30))
+                .unwrap_or_else(|_| panic!("no decision on stderr while running: {so_far:?}")),
+        );
+    }
+    assert_eq!(so_far[0], "audit trail", "{so_far:?}");
+    assert!(
+        so_far
+            .last()
+            .expect("a line")
+            .starts_with("  ok      precommit:"),
+        "{so_far:?}"
+    );
+
+    release.send(()).expect("release");
+    let output = child.wait_with_output().expect("the run ends");
+    let rest: Vec<String> = read.try_iter().collect();
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("all done"),
+        "{rest:?}"
+    );
+    assert_eq!(
+        so_far
+            .iter()
+            .chain(&rest)
+            .filter(|line| *line == "audit trail")
+            .count(),
+        1,
+        "the trail was written again at the end: {rest:?}"
+    );
+    assert!(
+        rest.iter().any(|line| line.starts_with("model: ")),
+        "the closing model line is gone: {rest:?}"
     );
 }
 
