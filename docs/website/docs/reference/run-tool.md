@@ -181,7 +181,7 @@ outside those, an entry would cover a line nobody was shown.
 | a line carrying `NAME=value` | the same program under no assignment at all |
 | a line fed a `stdin_ref` | the same program fed any other reference |
 
-The assignment is the sharpest of the three: it decides what a program loads before its own arguments
+The assignment is the sharpest of the four: it decides what a program loads before its own arguments
 are read, so `LD_PRELOAD=./evil.so git log` is asked about however often `git log` was vouched for, and
 what it prints is quarantined.
 
