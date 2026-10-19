@@ -19638,7 +19638,7 @@ fn a_missing_agents_file_is_not_an_error() {
 }
 
 /// A skill of the user's own, unlike a built-in, has only its name in the system prompt by
-/// default (SKILL-17), on the first turn of the session the overview of it is said on. Its
+/// default (SKILL-18), on the first turn of the session the overview of it is said on. Its
 /// description is not: it is found with `search_skills`, which advertises its name and
 /// description and not its body (LOAD-3), and only then loaded by name like any other skill
 /// (LOAD-1). Nothing a directory holds is unreachable just because the catalogue did not
@@ -19706,7 +19706,7 @@ fn a_skill_body_stays_out_of_the_context_until_search_finds_it_and_load_skill_is
     );
 }
 
-/// SKILL-18: the count and names of what the default listing leaves out are put in the
+/// SKILL-19: the count and names of what the default listing leaves out are put in the
 /// conversation on the first turn of a session and not said again: a second turn carries the
 /// same message forward in its history, same as any other earlier exchange, rather than being
 /// told the names a second time.
@@ -19779,7 +19779,87 @@ fn the_skills_overview_is_said_once_per_session_not_once_per_turn() {
     );
 }
 
-/// SKILL-18: a session whose first turn has no skill to name beyond a built-in is not thereby
+/// SKILL-19: the overview is not part of the opening, so a prompt handed back to the box
+/// (`forget_since`) takes the opening with it and leaves the overview behind, the same as a
+/// kept-job notice would be. Pushed before `opening_done` instead, it would be forgotten with the
+/// opening while the flag that says it was already told stays set, losing it for the rest of the
+/// session.
+#[test]
+fn the_skills_overview_survives_a_prompt_handed_back_to_the_box() {
+    let scratch = Scratch::new("skills-overview-survives-forget-since");
+    write_project_skill(&scratch.path, "aardvark-polish", "aardvark-polish", "BODY");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with("first answer")]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let began = conversation.mark();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    cancel.cancel();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("first task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .expect_err("a pre-cancelled turn does not produce an answer");
+
+    assert!(
+        conversation.skills_overview_said(),
+        "a cancelled turn still put the overview in the conversation before it stopped"
+    );
+    assert!(
+        conversation.forget_since(began),
+        "nothing after the opening is a reply, so handing the prompt back should still work"
+    );
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("second answer")]);
+    let config = config_for(&endpoint);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("second task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+
+    let sent = received.recv().expect("second request");
+    assert!(
+        !sent.contains("first task"),
+        "handing the first prompt back to the box should have kept it out of the next \
+         request: {sent}"
+    );
+    assert_eq!(
+        sent.matches("aardvark-polish").count(),
+        1,
+        "the overview should have stayed in the conversation across the resend: {sent}"
+    );
+}
+
+/// SKILL-19: a session whose first turn has no skill to name beyond a built-in is not thereby
 /// marked as told. A skill written into the project before the next turn still gets named then,
 /// which a guard that marked the session told regardless of whether anything was said would
 /// break: the second turn would get the plain pointer to search_skills instead.
@@ -19846,7 +19926,7 @@ fn a_skill_written_in_after_an_empty_first_turn_is_still_named_on_the_next() {
     );
 }
 
-/// SKILL-17: a skill with a description long enough to warn about is said, as a count, and the
+/// SKILL-18: a skill with a description long enough to warn about is said, as a count, and the
 /// person is still shown the skill's name nowhere in that notice (SKILL-6).
 #[test]
 fn a_long_description_is_said_as_a_count_and_never_cut() {
@@ -36569,7 +36649,7 @@ fn a_delegate_on_an_alias_the_reply_resolves_reports_no_substitution() {
 /// A definition naming skills gives its delegate those and no others, listed directly: the rest
 /// of what the turn found is neither listed for it nor loadable by it, not even through
 /// search_skills. A definition naming none leaves its delegate the default any turn gets
-/// (SKILL-17): a built-in listed, every other skill the turn found reachable with search_skills
+/// (SKILL-18): a built-in listed, every other skill the turn found reachable with search_skills
 /// and loadable by name. One whose line is empty is offered nothing, built-in included. A name
 /// nothing found selects nothing and is said, so a misspelt one does not read to its author as a
 /// skill the delegate has.
@@ -36926,7 +37006,7 @@ fn an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind() {
 /// ADDRESS-1 and DELEGATE-23: a definition a person addresses supplies the skills it names as it
 /// does to a delegate. The turn is listed those and no others, and cannot load another, not even
 /// through search_skills. A definition naming none leaves the turn the default any turn gets
-/// (SKILL-17), and one whose line is empty is offered nothing, built-in included.
+/// (SKILL-18), and one whose line is empty is offered nothing, built-in included.
 #[test]
 fn an_addressed_turn_is_offered_only_the_skills_its_definition_names() {
     let home = Scratch::new("address-skills-home");

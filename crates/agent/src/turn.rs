@@ -2864,40 +2864,12 @@ where
 
     // Said once, before the preamble is built, rather than per call to `load_skill` or
     // `search_skills`: a count of how many descriptions are long is one fact about the turn,
-    // not one about each later call (SKILL-17).
+    // not one about each later call (SKILL-18).
     let long_descriptions = catalogue.long_descriptions();
     if long_descriptions > 0 {
         notices.push(crate::skills::Notice::descriptions_are_long(
             long_descriptions,
         ));
-    }
-
-    // The count and names of what the default listing leaves out, put in the conversation once
-    // per session rather than said again every turn (SKILL-18): the count tells the planner
-    // whether searching could find anything at all, and the names are a hint for when it might
-    // be worth the call. A message rather than a line in the system prompt, because the system
-    // prompt is rebuilt fresh every turn and nothing of it is kept (see `compose_in` below): a
-    // planner told only there would have the count and the names for one turn and then lose
-    // them, with nothing in its own conversation to have remembered either by. Marked only where
-    // something was actually said, so a session that started with nothing to report still gets
-    // told if a skill appears later in it.
-    if !conversation.skills_overview_said() {
-        let others = catalogue.other_skill_names();
-        if !others.is_empty() {
-            let count = tools::tally(others.len(), "skill", "skills");
-            let is_are = if others.len() == 1 { "is" } else { "are" };
-            conversation.push_composed_from(
-                Message::user(format!(
-                    "{count}, of your own or the project's, {is_are} not listed above: {}. \
-                     Call search_skills with a word or phrase if one of these, or something \
-                     else, might apply to this task.",
-                    others.join(", ")
-                )),
-                Composed::Notice,
-                Provenance::Driver,
-            );
-            conversation.skill_overview_was_said();
-        }
     }
 
     // Nothing is started here: LSP-8 starts a server on the first question that needs one, and
@@ -3200,6 +3172,39 @@ where
     // So a front end that hands the prompt back to its box can take this much out of the
     // conversation, and not what the turn goes on to do.
     conversation.opening_done();
+
+    // The count and names of what the default listing leaves out, put in the conversation once
+    // per session rather than said again every turn (SKILL-19): the count tells the planner
+    // whether searching could find anything at all, and the names are a hint for when it might
+    // be worth the call. A message rather than a line in the system prompt, because the system
+    // prompt is rebuilt fresh every turn and nothing of it is kept (see `compose_in` below): a
+    // planner told only there would have the count and the names for one turn and then lose
+    // them, with nothing in its own conversation to have remembered either by. After
+    // `opening_done` rather than before, since a prompt handed back to the box takes the opening
+    // out of the conversation (`forget_since`) and this is not part of it: losing it to a resend
+    // would leave the flag saying it was said with nothing in the conversation that still does.
+    // Marked only where something was actually said, so a session that started with nothing to
+    // report still gets told if a skill appears later in it. No `Provenance`, the way a message
+    // that is partly the driver's framing and partly a directory's names is elsewhere
+    // (`admit_context_file`, `attach_vetted_pictures`): picking one of the two would mislabel the
+    // other half.
+    if !conversation.skills_overview_said() {
+        let others = catalogue.other_skill_names();
+        if !others.is_empty() {
+            let count = tools::tally(others.len(), "skill", "skills");
+            let is_are = if others.len() == 1 { "is" } else { "are" };
+            conversation.push_composed(
+                Message::user(format!(
+                    "{count}, of your own or the project's, {is_are} not listed above: {}. \
+                     Call search_skills with a word or phrase if one of these, or something \
+                     else, might apply to this task.",
+                    others.join(", ")
+                )),
+                Composed::Notice,
+            );
+            conversation.skill_overview_was_said();
+        }
+    }
 
     // Premium is used when a subscription has been imported and this build knows the premium
     // host. Discovery happens per turn so an import mid-session takes effect on the next one, and

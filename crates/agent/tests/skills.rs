@@ -1316,7 +1316,7 @@ fn what_the_prompt_advertises_holds_no_bodies() {
     assert_eq!(skill.description, "how to commit");
 
     // A definition naming the skill curates the catalogue, which lists it in full rather than
-    // leaving it for search_skills (SKILL-17), so the actual rendering a request carries is
+    // leaving it for search_skills (SKILL-18), so the actual rendering a request carries is
     // exercised here too: a body leaking into it would pass the search-based check above, which
     // never touches `describe_for_prompt` at all.
     let curated = catalogue.only(&["commit-style".to_string()]);
@@ -1373,7 +1373,7 @@ fn an_argument_hint_reaches_the_interface_and_not_the_planner() {
         skill.description
     );
 
-    // Curated the way a definition naming the skill would (SKILL-17), so the actual rendering a
+    // Curated the way a definition naming the skill would (SKILL-18), so the actual rendering a
     // request carries is exercised, not only the fields a search result is built from.
     let curated = catalogue.only(&["hinted".to_string()]);
     let advertised = curated.describe_for_prompt();
@@ -1999,7 +1999,7 @@ fn the_help_skill_is_offered_everywhere_for_a_question_about_bravebot_and_nothin
 }
 
 /// A skill of the user's own is never in the default listing, however many there are: only a
-/// built-in is (SKILL-17).
+/// built-in is (SKILL-18).
 ///
 /// A directory of many skills is exactly what crowded the prompt before this clause existed,
 /// and that cost is removed by never putting the project's own skills in `describe_for_prompt`
@@ -2045,7 +2045,7 @@ fn describe_for_prompt_lists_only_built_in_skills() {
 }
 
 /// A description past the warn figure reaches the planner in full, wherever it is read from, and
-/// is only ever counted, never cut (SKILL-17).
+/// is only ever counted, never cut (SKILL-18).
 ///
 /// A built-in's own listing and a `search_skills` result are the two places a description
 /// reaches the planner outside `load_skill`, so both are checked here against the same long
@@ -2090,7 +2090,7 @@ fn a_long_description_is_never_cut_and_is_counted() {
 
     assert_eq!(body_of(&catalogue, "verbose").trim(), "THE-BODY");
 
-    // Curated the way a definition naming the skill would (SKILL-17), so the actual rendering a
+    // Curated the way a definition naming the skill would (SKILL-18), so the actual rendering a
     // request carries is exercised too, not only the fields a search result is built from.
     let curated = catalogue.only(&["verbose".to_string()]);
     let advertised = curated.describe_for_prompt();
@@ -2101,7 +2101,7 @@ fn a_long_description_is_never_cut_and_is_counted() {
 }
 
 /// `Catalogue::search` matches a query word by word, case-insensitively, against a skill's name
-/// and its description, in SKILL-2 order, and caps how many it returns in one call (SKILL-17).
+/// and its description, in SKILL-2 order, and caps how many it returns in one call (SKILL-18).
 #[test]
 fn search_matches_every_word_case_insensitively_and_caps_the_result() {
     let scratch = Scratch::new("search-skills");
@@ -2162,7 +2162,7 @@ fn search_matches_every_word_case_insensitively_and_caps_the_result() {
 }
 
 /// A curated catalogue's search runs over the names a definition kept, not the ones it dropped
-/// (SKILL-17, DELEGATE-23): without this, a delegate denied a skill by name could still reach it
+/// (SKILL-18, DELEGATE-23): without this, a delegate denied a skill by name could still reach it
 /// by searching for it, which would make the curation a label rather than a boundary.
 #[test]
 fn a_curated_catalogues_search_does_not_reach_a_skill_outside_its_list() {
@@ -2204,7 +2204,7 @@ fn a_curated_catalogues_search_does_not_reach_a_skill_outside_its_list() {
     );
 }
 
-/// SKILL-18: `other_skill_names` names every skill the default listing leaves out, and none at
+/// SKILL-19: `other_skill_names` names every skill the default listing leaves out, and none at
 /// all once a definition's own `skills:` line has curated the catalogue, since a curated listing
 /// already shows everything there is and a session told about it again would be told of skills
 /// it can neither search for nor load.

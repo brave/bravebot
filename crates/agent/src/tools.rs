@@ -10242,7 +10242,7 @@ fn load_skill<S: Sink>(
 
     let Some(skill) = skills.get(&name) else {
         // A built-in is listed in the system prompt; the rest are found with search_skills
-        // (SKILL-17). Either way the name has to come from one of those two, so this is a
+        // (SKILL-18). Either way the name has to come from one of those two, so this is a
         // mistake worth naming rather than a refusal worth explaining.
         return Produced::problem(format!(
             "error: no skill named '{name}'. Call search_skills to find one, or use a name you \
@@ -10282,7 +10282,7 @@ fn load_skill<S: Sink>(
     produced
 }
 
-/// Find a skill by a word or phrase, among the ones a built-in's listing left out (SKILL-17).
+/// Find a skill by a word or phrase, among the ones a built-in's listing left out (SKILL-18).
 ///
 /// `query` is routing, promoted the way `search`'s own `pattern` is: it only selects what to
 /// return out of a catalogue every entry of which already passed the trust gate at discovery,
@@ -10290,7 +10290,7 @@ fn load_skill<S: Sink>(
 ///
 /// A name and description a match returns are the words [`Catalogue::describe_for_prompt`]
 /// would have shown had the skill been a built-in, never cut, so this and the default listing
-/// read the planner the same way (SKILL-17).
+/// read the planner the same way (SKILL-18).
 fn search_skills<S: Sink>(
     policy: &mut Policy<'_, S>,
     skills: &crate::skills::Catalogue,
@@ -20907,7 +20907,7 @@ mod tests {
     }
 
     /// `search_skills` refuses a missing or blank query, matches by name, and never cuts a
-    /// description, mirroring `load_skill`'s own argument handling (SKILL-17).
+    /// description, mirroring `load_skill`'s own argument handling (SKILL-18).
     #[cfg(unix)]
     #[test]
     fn search_skills_matches_by_name_and_refuses_a_blank_query() {

@@ -345,7 +345,7 @@ pub struct Conversation {
     /// Not part of a [`Snapshot`], for the reason `reads` is not.
     masked_before: usize,
     /// Whether the planner has already been given the count and names of the skills the default
-    /// listing leaves out (SKILL-17).
+    /// listing leaves out (SKILL-18).
     ///
     /// Not part of a [`Snapshot`], for the reason `reads` is not: a resumed session telling the
     /// planner again costs one sentence, and never telling it because a stale record said it
@@ -742,8 +742,7 @@ impl Conversation {
         self.asked_to_write
     }
 
-    /// Whether the planner has already been given the count and names of the skills the
-    /// default listing leaves out (SKILL-17).
+    /// Whether `skills_overview_said` is set.
     pub fn skills_overview_said(&self) -> bool {
         self.skills_overview_said
     }

@@ -470,7 +470,7 @@ impl Notice {
         })
     }
 
-    /// That some skills have a description long enough to be worth saying so (SKILL-17).
+    /// That some skills have a description long enough to be worth saying so (SKILL-18).
     ///
     /// A count, never a name, as [SKILL-6](SKILL-6) counts what it skips: naming one would put a
     /// name read out of a directory on a screen as though the planner had asked for it. Nothing
@@ -577,7 +577,7 @@ pub struct Catalogue {
     /// Whether [`Catalogue::only`] narrowed this to a definition's own `skills:` line.
     ///
     /// A definition that named skills already made a short, deliberate list, which is not the
-    /// crowding [SKILL-17](SKILL-17) exists for, so the whole of a curated catalogue is listed
+    /// crowding [SKILL-18](SKILL-18) exists for, so the whole of a curated catalogue is listed
     /// directly rather than held back to built-ins and left for `search_skills` to find.
     curated: bool,
 }
@@ -596,7 +596,7 @@ impl Catalogue {
         self.curated
     }
 
-    /// The names of every skill the default listing leaves out (SKILL-17): every skill but a
+    /// The names of every skill the default listing leaves out (SKILL-18): every skill but a
     /// built-in, or none at all where [`Catalogue::only`] already curated the whole list.
     ///
     /// Names only, in [SKILL-2](SKILL-2) order: a description is the cost `search_skills` exists
@@ -653,10 +653,10 @@ impl Catalogue {
     /// those are found with [`Catalogue::search`] rather than listed. Past [`Catalogue::only`]
     /// narrowing this to a definition's own `skills:` line, every entry is listed, curated: a
     /// definition that named a handful of skills already made the short, deliberate list
-    /// [SKILL-17](SKILL-17) exists to get to, and holding it back to built-ins would make a
+    /// [SKILL-18](SKILL-18) exists to get to, and holding it back to built-ins would make a
     /// person wait on `search_skills` to find what their own definition already named.
     ///
-    /// A description is never cut; [SKILL-17](SKILL-17) says what happens where one is long.
+    /// A description is never cut; [SKILL-18](SKILL-18) says what happens where one is long.
     pub fn describe_for_prompt(&self) -> String {
         let mut out = String::new();
         for skill in self
@@ -670,7 +670,7 @@ impl Catalogue {
     }
 
     /// How many skills, of any source, have a description past [`DESCRIPTION_WARN_CHARS`]
-    /// (SKILL-17).
+    /// (SKILL-18).
     ///
     /// A count only: the driver compares a length, never a byte of what a description says, so
     /// it learns how many are long and not which ones.
@@ -715,7 +715,7 @@ pub(crate) fn prompt_line(name: &str, description: &str) -> String {
 }
 
 /// Past how many characters a description is long enough to be worth saying so, rather than
-/// cutting it (SKILL-17).
+/// cutting it (SKILL-18).
 ///
 /// A description says when to use a skill, and [SKILL-10] lets one wrap over as many lines as the
 /// author writes. What is past this is the author explaining the skill rather than saying when to
@@ -725,7 +725,7 @@ pub(crate) fn prompt_line(name: &str, description: &str) -> String {
 const DESCRIPTION_WARN_CHARS: usize = 1_024;
 
 /// How many skills one `search_skills` call returns before the rest are left for a narrower
-/// query (SKILL-17).
+/// query (SKILL-18).
 ///
 /// A broad query over a large directory could otherwise return the whole catalogue in one call,
 /// which is the cost `search_skills` exists to avoid paying by default.

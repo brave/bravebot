@@ -971,11 +971,11 @@ definition could ask for one model and have every delegate it starts answered by
 ### DELEGATE-23: a definition may name the skills its delegate is offered
 
 `skills:` is optional and is read as `tools:` is, on one line or as a list. A definition naming
-none leaves its delegate the same default any turn gets ([SKILL-17](skills.md#SKILL-17)): a
+none leaves its delegate the same default any turn gets ([SKILL-18](skills.md#SKILL-18)): a
 built-in is listed in the prompt, and every other skill the turn found is neither listed nor
 excluded, so the delegate reaches it with `search_skills` and loads it by name like the turn that
 spawned it would. A definition naming some curates its delegate's catalogue the way
-[SKILL-17](skills.md#SKILL-17) says: the ones of those the turn found are listed in the prompt
+[SKILL-18](skills.md#SKILL-18) says: the ones of those the turn found are listed in the prompt
 directly, and the rest are neither listed nor loadable by it, not even through `search_skills`.
 An empty line names none, and its delegate is offered no skill, built-in included.
 

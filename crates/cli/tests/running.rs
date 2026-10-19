@@ -12175,7 +12175,7 @@ fn a_safe_run_loads_none_of_the_customizations_a_plain_one_loads() {
         )
     };
     let (asked, stderr, fired) = ordinary;
-    // Not zebra-skill-words: a skill is never in the first request by default now (SKILL-17),
+    // Not zebra-skill-words: a skill is never in the first request by default now (SKILL-18),
     // loaded or not. Its exclusion from discovery is covered in bravebot_agent::tests::safe, and
     // that --safe keeps it unreachable even through search_skills is covered end to end by
     // a_safe_or_locked_run_finds_no_project_skill_with_search_skills below.
@@ -12352,7 +12352,7 @@ fn a_locked_run_loads_none_of_the_customizations_a_safe_one_leaves_out() {
 
 /// The companion to the two tests above for the one customization they no longer drive to a
 /// word on the wire: a project skill is not in the default listing in any of the three runs
-/// (SKILL-17), so the only way left to show --safe and --locked still keep it out is to have the
+/// (SKILL-18), so the only way left to show --safe and --locked still keep it out is to have the
 /// planner call search_skills and see what comes back.
 ///
 /// The mock model always calls search_skills first and sends a plain reply once the result is in

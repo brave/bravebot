@@ -1295,7 +1295,7 @@ fn a_turn_offered_skills_is_told_a_slash_name_is_the_user_asking_for_one() {
     );
 }
 
-/// SKILL-17: the default listing's sentence points the planner at `search_skills` for a skill it
+/// SKILL-18: the default listing's sentence points the planner at `search_skills` for a skill it
 /// does not list, and a curated catalogue's says there is nothing further to find, since a
 /// definition naming skills already made the whole of the list. Either wording left in place of
 /// the other would send the planner looking for a tool that is not the answer in that case, or

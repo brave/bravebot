@@ -11,7 +11,7 @@ documented-by:
 
 ## Scope
 
-Finding a skill of the user's own or the project's that [SKILL-17](../skills.md#SKILL-17) left
+Finding a skill of the user's own or the project's that [SKILL-18](../skills.md#SKILL-18) left
 out of the default listing. `query` is routing; there are no content arguments. The result is a
 match's name and description, in full, the same way the default listing shows a built-in's. Where
 skills come from and what they are trusted for is [skills.md](../skills.md); loading a match by
@@ -37,14 +37,14 @@ simply add a word to than one it has to escape or quote.
 ### FINDSKILL-2: the search runs over every skill the turn found, not only the ones listed
 
 A built-in, a skill of the user's own and a project's own are all searched, whether or not
-[SKILL-17](../skills.md#SKILL-17) lists any of them by default. Every entry here already passed
+[SKILL-18](../skills.md#SKILL-18) lists any of them by default. Every entry here already passed
 the trust gate [SKILL-5](../skills.md#SKILL-5) requires before the catalogue held it, so matching
 one reads no untrusted content and nothing a directory wrote decides what matches: only the
 length and the position of a word the planner typed against a name and a description the trust
 gate already cleared.
 
 A definition's own `skills:` line narrows this the same way it narrows the listing
-([SKILL-17](../skills.md#SKILL-17), [DELEGATE-23](../delegation.md#DELEGATE-23)): the search runs
+([SKILL-18](../skills.md#SKILL-18), [DELEGATE-23](../delegation.md#DELEGATE-23)): the search runs
 only over the names it kept, so a skill it left out is unreachable by this tool as well as absent
 from the prompt.
 
@@ -55,7 +55,7 @@ from the prompt.
 ### FINDSKILL-3: a match's description is returned in full, never cut
 
 Past 1,024 characters a description is long enough that the person is told so, as a count, per
-[SKILL-17](../skills.md#SKILL-17), but a match's description is never shortened to fit the
+[SKILL-18](../skills.md#SKILL-18), but a match's description is never shortened to fit the
 result.
 
 `verified-by: bravebot_agent::skills::a_long_description_is_never_cut_and_is_counted`
