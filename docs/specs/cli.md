@@ -195,6 +195,9 @@ over one set of failures is one of them going out of date.
 `verified-by: bravebot_cli::running::a_reply_off_the_output_schema_ends_on_its_own_status`
 `verified-by: bravebot_agent::backend::a_request_that_never_left_is_told_apart_from_one_that_was_answered`
 `verified-by: bravebot_cli::main::a_turn_something_was_refused_in_does_not_succeed`
+`verified-by: bravebot_cli::main::tests::what_nobody_could_be_asked_is_kept_and_what_was_answered_is_not`
+`verified-by: bravebot_cli::running::a_write_nobody_could_approve_exits_on_the_refused_status_and_says_so`
+`verified-by: bravebot_cli::running::a_manifest_plan_nobody_could_approve_exits_on_the_refused_status`
 
 <a id="CLI-7"></a>
 ### CLI-7: `doctor` reports configuration and confinement without changing anything

@@ -2155,6 +2155,40 @@ fn a_write_nobody_could_approve_exits_on_the_refused_status_and_says_so() {
     assert_eq!(object["refusals"][0]["gate"], "file_write", "{stdout}");
 }
 
+/// CLI-6: a manifest plan nobody could approve is a gate refusing it, not a failure to run, so the
+/// run exits on status 4 and `--json` names the `manifest_plan` refusal. The run stops before any
+/// step, so the plan is the only thing the result can point at.
+#[test]
+fn a_manifest_plan_nobody_could_approve_exits_on_the_refused_status() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let requests = count.clone();
+    let plan = r#"{"steps":[
+        {"capability":"FILE_READ","args":{"path":"a.md","out_slot":"raw"}},
+        {"capability":"ANSWER","args":{"from_slot":"raw"}}]}"#;
+    let gateway = a_gateway("[]", move |_| {
+        match requests.fetch_add(1, Ordering::SeqCst) {
+            0 => usage_reply(None, "Read a.md", 12, 5),
+            1 => usage_reply(None, plan, 20, 9),
+            _ => http(401, r#"{"error":{"message":"denied"}}"#),
+        }
+    });
+    let scratch = Scratch::new("cli-running-unapproved-plan")
+        .with_settings(&settings_for(&gateway))
+        .with_file("a.md", "hello");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--mode", "manifest", "--json", "-p", "read a.md"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    let object: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(object["status"], 4, "{stdout}");
+    assert_eq!(object["refusals"][0]["gate"], "manifest_plan", "{stdout}");
+}
+
 /// CLI-24: a run that is refused a write writes its events while it goes and ends on the result
 /// object. Streaming a gate's refusal is covered in `json.rs`: the approval a one-shot run lacks
 /// ends the call without a gate event.
