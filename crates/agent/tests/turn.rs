@@ -19771,6 +19771,73 @@ fn the_skills_overview_is_said_once_per_session_not_once_per_turn() {
     );
 }
 
+/// SKILL-18: a session whose first turn has no skill to name beyond a built-in is not thereby
+/// marked as told. A skill written into the project before the next turn still gets named then,
+/// which a guard that marked the session told regardless of whether anything was said would
+/// break: the second turn would get the plain pointer to search_skills instead.
+#[test]
+fn a_skill_written_in_after_an_empty_first_turn_is_still_named_on_the_next() {
+    let scratch = Scratch::new("skills-overview-nothing-then-something");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("first answer"),
+        reply_with("second answer"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("first task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the first turn finishes");
+
+    write_project_skill(&scratch.path, "bison-polish", "bison-polish", "BODY");
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("second task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+
+    let first = received.recv().expect("first request");
+    assert!(
+        !first.contains("bison-polish"),
+        "the first turn named a skill that did not exist yet: {first}"
+    );
+
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("bison-polish"),
+        "a skill written in after an empty first turn was not named on the next: {second}"
+    );
+}
+
 /// SKILL-17: a skill with a description long enough to warn about is said, as a count, and the
 /// person is still shown the skill's name nowhere in that notice (SKILL-6).
 #[test]

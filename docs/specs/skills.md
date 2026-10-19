@@ -435,6 +435,7 @@ session.
 
 `verified-by: bravebot_agent::preamble::an_overview_gives_the_count_and_names_a_default_listing_otherwise_leaves_out`
 `verified-by: bravebot_agent::turn::the_skills_overview_is_said_once_per_session_not_once_per_turn`
+`verified-by: bravebot_agent::turn::a_skill_written_in_after_an_empty_first_turn_is_still_named_on_the_next`
 
 ## Known costs
 
