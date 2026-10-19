@@ -51,7 +51,7 @@ fn roster(config: &Config) -> (Vec<Model>, Vec<String>) {
                 premium: false,
                 reads_effort: true,
                 provider: Some(provider.display_name().to_string()),
-                conversation_tokens: Some(model.window()),
+                conversation_tokens: Some(provider.window_of(model)),
                 // A block names models and describes none of them.
                 advertised: Advertised::default(),
             }));

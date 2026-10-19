@@ -419,6 +419,15 @@ Stating one still has to be possible, because one gateway serves models whose wi
 than an order of magnitude, and pinning a request to a particular upstream can cap the window well
 below what the model offers elsewhere.
 
+A provider's `options.contextWindow` states the window of every model of that provider that states
+none, for a server whose window is one setting of the server, such as a local Ollama. It is the only
+place to keep a figure for an entry that lists no models, since `limit` belongs to a listed model
+and listing models turns off the roster. A model's own `limit.context` outranks it, and it outranks
+a window the roster reports. A value that is not a whole number above zero states nothing.
+
+`verified-by: bravebot_config::provider::a_provider_window_is_the_default_for_models_that_state_none`
+`verified-by: bravebot_config::provider::an_unusable_provider_window_is_not_read`
+`verified-by: bravebot_aichat::models::a_provider_window_is_taken_for_fetched_models`
 `verified-by: bravebot_config::provider::a_model_without_a_stated_window_gets_the_assumed_one`
 `verified-by: bravebot_config::provider::a_stated_window_is_read`
 `verified-by: bravebot_tui::app::a_gateway_entry_carries_the_window_the_budget_is_taken_from`

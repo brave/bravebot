@@ -646,8 +646,8 @@ fn shown(plan: &Plan, destination: &Path, managed: &Managed) -> Vec<String> {
 /// budgets a conversation against, that the server drops what does not fit.
 ///
 /// Said only where the server stated a figure: a model that is not loaded has none, and guessing
-/// one would be worse than saying nothing. Shown only, since a `provider` block that lists no
-/// models has nowhere to keep a limit.
+/// one would be worse than saying nothing. Where it is below the assumed window the entry listed
+/// under it carries the figure as `options.contextWindow`, so it is the entry that is written.
 fn window_lines(window: Option<u64>) -> Vec<String> {
     let Some(window) = window else {
         return Vec::new();
@@ -1516,6 +1516,35 @@ mod tests {
         let unstated = asked(None);
         assert!(!unstated.contains("context window"), "{unstated}");
         assert!(!unstated.contains("OLLAMA_CONTEXT_LENGTH"), "{unstated}");
+    }
+
+    /// IMPORT-5: the answer that approves writes the window the server holds the model with, and a
+    /// model with no figure writes none. The regression rejected is showing the figure and leaving
+    /// it out of the file, which keeps budgeting compaction against the assumed window.
+    #[test]
+    fn approving_a_small_window_writes_it_into_the_file() {
+        let scratch = Scratch::new("cli-import-ollama-window-written");
+        let (said, offered) = asked_about(
+            &scratch,
+            vec![ollama_loaded_with(Some(4096))],
+            "y\n",
+            &Managed::default(),
+            &|_| None,
+        );
+        assert_eq!(offered.imported, [Source::Ollama], "{said}");
+        assert!(said.contains("contextWindow"), "{said}");
+        let file = written(&scratch);
+        assert!(file.contains(r#""contextWindow":4096"#), "{file}");
+
+        let scratch = Scratch::new("cli-import-ollama-window-unstated");
+        asked_about(
+            &scratch,
+            vec![ollama_loaded_with(None)],
+            "y\n",
+            &Managed::default(),
+            &|_| None,
+        );
+        assert!(!written(&scratch).contains("contextWindow"));
     }
 
     /// IMPORT-10: an entry for the same server under an id of its own already lists every model it
