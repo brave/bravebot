@@ -46896,6 +46896,77 @@ fn an_unattended_run_fires_no_prompt_hook() {
     );
 }
 
+/// HOOK-2: a question a delegate puts reaches the person through the parent's confirmer and fires
+/// `prompt-shown` once, and the turn's own question after it fires too. The regressions it rejects
+/// are a delegate's question that fires twice or not at all, and one that leaves the turn's later
+/// questions without an alert.
+#[cfg(unix)]
+#[test]
+fn a_delegate_s_question_fires_prompt_shown_once() {
+    let scratch = Scratch::new("hooks-prompt-delegate");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho fired >> fired.txt\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"prompt-shown\", \"run\": [{note}]}}"),
+    );
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-CHECKS",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"checker","task":"RUN-THE-CHECKS"}"#,
+                ),
+                reply_with("waiting"),
+                tool_request("ask_user", A_BRANCH_QUESTION),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "RUN-THE-CHECKS",
+            vec![
+                tool_request("run", r#"{"command":"printf checked"}"#),
+                reply_with("the checks pass"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let runs = std::sync::Arc::clone(&asked.seen);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut asked, bravebot_agent::PermissionMode::Ask, false);
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-CHECKS").with_home(Some(home)),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        runs.lock().unwrap().len(),
+        1,
+        "the delegate's run was not put to the person, so this says nothing"
+    );
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt")).expect("the hook ran");
+    assert_eq!(fired, "fired\nfired\n");
+}
+
 /// HOOK-6, HOOK-7: a `prompt-shown` hook that fails is said out loud and changes nothing about the
 /// question: the person's answer still reaches the planner.
 #[cfg(unix)]
