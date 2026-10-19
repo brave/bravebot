@@ -439,12 +439,20 @@ mod tests {
         let alone = finish(&mut view, "d.rs");
         assert!(alone.rows[0].id > inner);
 
-        // A turn that ends with a call unfinished leaves nothing for the next turn to pair with.
-        started(&mut view, "e.rs");
+        // A turn that ends with a call unfinished forgets it, so a finish after the end is a row of
+        // its own and does not reuse the row of the call the turn left running.
+        let unfinished = started(&mut view, "e.rs");
         view.event(&Event::new("turn.done", "s1", json!({"reply": "ok"})));
+        let after_end = finish(&mut view, "f.rs");
+        assert!(after_end.rows[0].id > unfinished);
+
+        // A new turn forgets a call the earlier one left running, even when that turn never
+        // reported an end.
         view.started(2, 2, json!({"text": "again"}));
-        let stray = finish(&mut view, "f.rs");
-        assert!(stray.rows[0].id > alone.rows[0].id);
+        let left = started(&mut view, "g.rs");
+        view.started(3, 3, json!({"text": "once more"}));
+        let after_start = finish(&mut view, "h.rs");
+        assert!(after_start.rows[0].id > left);
     }
 
     /// A failed model request must not leave a client showing a running turn.
