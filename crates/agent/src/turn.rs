@@ -4505,6 +4505,25 @@ where
                 }
             };
 
+            // What the person typed beside their answer to the question this call asked, after the
+            // result and in their own words (PROMPT-12). Trusted, so it is shown whatever the
+            // result was: a result held back as a reference is still followed by the note.
+            let body = match &output.told {
+                Some(told) => match policy.present(
+                    "tool_result",
+                    bravebot_core::SlotId::new("note"),
+                    "the user's note",
+                    told,
+                    conversation.quarantine(),
+                ) {
+                    Ok(presented) if presented.is_visible() => {
+                        format!("{body}\n\n{}", presented.for_context())
+                    }
+                    _ => body,
+                },
+                None => body,
+            };
+
             // A result answers the call it belongs to by id where the round replayed calls at
             // all. Where it did not, the result is a plain message, as everything here was
             // before: a conversation may hold both shapes, so long as no call goes unanswered.

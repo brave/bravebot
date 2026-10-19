@@ -7,6 +7,7 @@ governs:
   - crates/tui/src/confirm/chrome.rs
   - crates/tui/src/confirm/grants.rs
   - crates/tui/src/confirm/mcp.rs
+  - crates/tui/src/confirm/note.rs
   - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/confirm/run.rs
   - crates/tui/src/confirm/vet.rs
@@ -606,3 +607,69 @@ which under a light theme in a dark terminal is the path to unreadable.
 `verified-by: bravebot_tui::confirm::every_prompt_paints_the_themes_background_inside_its_border`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_paints_the_themes_background_inside_its_border`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_paints_the_themes_background_inside_its_border`
+
+<a id="PROMPT-12"></a>
+### PROMPT-12: an answer to a write, a run or a call may carry a note
+
+At the write prompt (a whole-file write and an edit), the run prompt and the prompt for a call to a
+server's tool, **Tab opens a one-line field** and **Enter sends the answer with what was typed**.
+Esc closes the field and answers nothing, so the question is still there. The field sends the
+plain no until the person switches it with Tab to the plain yes, so it approves nothing by default
+and an empty field sends the answer alone. It offers the yes only where the question's own `y` is
+taken from the same draw ([PROMPT-1](#PROMPT-1), [PROMPT-4](#PROMPT-4)): a plan whose rows have not
+all been on the screen is not run from the field either.
+
+The note is the person's own words, on the same footing as a prompt they typed. The planner is told
+them in a sentence the driver writes from the answer alone, `The user declined this and wrote: …` or
+`The user approved this and wrote: …`, and nothing in the driver reads them: no branch is taken on
+what they say. They are one line, cut at a fixed length with line breaks, control characters and
+the Unicode line and paragraph separators turned into spaces, so a note cannot start a line of its own that reads as the driver's. A refusal
+carrying a note ends on it, where a refusal without one ends on the question what the person would
+prefer. A note after an approval follows the result, and follows it whether the result reached the
+planner or was held back as a reference. The trail records the note as the person's.
+
+**A note belongs to the one answer it was typed at.** It is handed on once, with the result of the
+call that asked, and the next call's result carries none. No standing key takes one
+([PROMPT-6](#PROMPT-6)): `a`, `r`, `f`, `m`, `e`, a numbered key and the answer that stands for a
+tool open no field, and a note that arrives on any of those answers is dropped by the agent, whatever
+front end sent it. Enter at the question still answers nothing; in the field it sends the answer
+the field shows, which starts as no.
+
+**Opening, switching and sending come from keys that arrived on their own**
+([INPUT-34](terminal-input.md#INPUT-34), [PROMPT-7](#PROMPT-7)). A Tab, or an Enter, that arrived with
+others does nothing, so text another program writes into the terminal can neither open a field nor
+send one. Typing into an open field is taken however it arrived, since filling it decides nothing
+and the person reads it before sending.
+
+The prompts that offer no field give a refusal the sentence they always did: the trust question, the
+other questions a session opens with, and every other prompt here; the desktop window; a
+session in lines; and a one-shot run, which declines every question ([PROMPT-9](#PROMPT-9)). A step of a
+manifest run is put with the same write prompt and draws the field, but no planner is in that run's
+control path to be told ([manifest.md](manifest.md#MANIFEST-10)), so a note typed there is dropped.
+
+**Why.** In Claude Code and Codex the person can say why they refused, or what to do instead, as
+they refuse. Here a refusal told the planner to ask, which cost a model round and a second
+interruption, and steering took declining and then typing a message that arrived as a separate turn.
+
+`verified-by: bravebot_tui::confirm::a_note_typed_at_a_write_is_sent_with_the_no`
+`verified-by: bravebot_tui::confirm::a_note_can_be_sent_with_a_yes_where_the_question_takes_one`
+`verified-by: bravebot_tui::confirm::an_empty_note_is_no_note`
+`verified-by: bravebot_tui::confirm::escape_closes_the_note_and_leaves_the_question_open`
+`verified-by: bravebot_tui::confirm::a_tab_that_arrived_with_others_opens_no_note`
+`verified-by: bravebot_tui::confirm::a_note_is_sent_and_switched_only_by_keys_that_arrived_alone`
+`verified-by: bravebot_tui::confirm::no_standing_key_takes_a_note`
+`verified-by: bravebot_tui::confirm::a_note_cannot_say_yes_where_the_question_takes_no_yes`
+`verified-by: bravebot_tui::confirm::a_note_cannot_run_a_plan_that_was_not_all_on_the_screen`
+`verified-by: bravebot_tui::confirm::ctrl_c_in_a_note_interrupts_and_sends_no_words`
+`verified-by: bravebot_tui::confirm::a_run_and_a_call_take_a_note_with_the_plain_answers_only`
+`verified-by: bravebot_agent::confirm::a_note_is_one_bounded_line`
+`verified-by: bravebot_agent::confirm::a_standing_answer_gives_no_note`
+`verified-by: bravebot_core::policy::a_note_is_the_persons_own_and_is_handed_on_once`
+`verified-by: bravebot_agent::turn::a_note_beside_a_refused_write_is_told_to_the_planner`
+`verified-by: bravebot_agent::turn::a_refused_write_without_a_note_still_ends_on_the_question`
+`verified-by: bravebot_agent::turn::a_note_beside_an_approved_write_follows_its_result`
+`verified-by: bravebot_agent::turn::a_note_is_told_only_beside_the_answer_it_was_typed_at`
+`verified-by: bravebot_agent::turn::a_note_on_a_standing_answer_is_not_told_to_the_planner`
+`verified-by: bravebot_agent::turn::a_note_beside_an_edit_answer_is_told_to_the_planner`
+`verified-by: bravebot_agent::turn::a_note_beside_a_run_answer_is_told_to_the_planner`
+`verified-by: bravebot_agent::mcp::a_note_beside_a_call_answer_is_told_to_the_planner`

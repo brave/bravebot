@@ -5603,7 +5603,7 @@ fn run_turn_animated(
                     if answer.stops_the_turn() {
                         stop_what_is_running(session, &cancel);
                     }
-                    if answer == crate::confirm::CallAnswer::ApproveAndStand {
+                    if answer.answer == crate::confirm::CallAnswer::ApproveAndStand {
                         // The one answer at this prompt that outlasts it, so the one worth being able
                         // to find afterwards.
                         session.note(t!(session_stands_for_tool, tool = request.name()));

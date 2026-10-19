@@ -14,8 +14,9 @@ use crate::render::{marked_rows, quarantined_rows};
 use crate::theme;
 
 use super::chrome::{approving, centred, panel, refusing, stopping};
+use super::note::{self, Noted};
 use super::pinned::{self, Drawn, Question, Seen};
-use super::{Answer, Approves, Response, Step, ask_scrolled, pressed};
+use super::{Answer, Approves, Next, Response, pressed};
 
 /// Unchanged lines shown either side of a change, for orientation.
 const CONTEXT_LINES: usize = 2;
@@ -71,17 +72,87 @@ impl Approves for WriteAnswer {
     }
 }
 
-/// Draw the prompt and wait for an answer.
+impl Noted<WriteAnswer> {
+    /// What to tell the waiting turn: the answer's decision, with the words typed beside it.
+    pub fn decision(self) -> WriteDecision {
+        match &self.note {
+            Some(note) => self.answer.decision().with_note(note),
+            None => self.answer.decision(),
+        }
+    }
+
+    /// Whether the turn that asked stops as well as being refused. As [`WriteAnswer::stops_the_turn`].
+    pub fn stops_the_turn(&self) -> bool {
+        self.answer.stops_the_turn()
+    }
+}
+
+/// Draw the prompt and wait for an answer, which carries a note where the person typed one.
 ///
 /// Standalone as well as available through [`TerminalConfirmer`], because a turn running on a
 /// worker thread cannot hold the terminal: the main thread calls this on its behalf.
-pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> WriteAnswer {
-    ask_scrolled(
+pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> Noted<WriteAnswer> {
+    ask_reading(
         terminal,
-        WriteAnswer::Reject,
-        |frame, scroll, seen| draw(frame, request, scroll, seen),
-        |key, drawn| write_answer_for(key, request, drawn).map(Step::from),
+        request,
+        super::next_press,
+        crate::input::the_last_event_arrived_alone,
     )
+}
+
+/// [`ask`], taking each event from `next` and asking `alone` straight after each one, so a test can
+/// stand in for the terminal.
+pub(super) fn ask_reading<B: Backend>(
+    terminal: &mut Terminal<B>,
+    request: &WriteRequest,
+    mut next: impl FnMut() -> Next,
+    mut alone: impl FnMut() -> bool,
+) -> Noted<WriteAnswer> {
+    let mut scroll = 0u16;
+    let mut seen = Seen::default();
+    loop {
+        // A terminal that cannot be drawn to cannot carry a question, so refuse rather than
+        // proceed unseen. How far the body can scroll, and whether a yes is taken, are only
+        // knowable once it has been laid out at the width it will be drawn at, so they come back
+        // out of the draw.
+        let mut drawn = Drawn::default();
+        if terminal
+            .draw(|frame| drawn = draw(frame, request, scroll, &mut seen))
+            .is_err()
+        {
+            return Noted::plain(WriteAnswer::Reject);
+        }
+
+        match next() {
+            Next::Skip => continue,
+            Next::Lost => return Noted::plain(WriteAnswer::Reject),
+            Next::Press(key) if note::opens(key, alone()) => {
+                // A yes from the line is a yes only where this draw takes the question's own.
+                let may_yes = matches!(
+                    write_answer_for(
+                        KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+                        request,
+                        &drawn
+                    ),
+                    Some(Response::Answer(WriteAnswer::Approve))
+                );
+                if let Some(noted) = note::take_reading(terminal, may_yes, &mut next, &mut alone)
+                    .settle(
+                        WriteAnswer::Approve,
+                        WriteAnswer::Reject,
+                        WriteAnswer::Interrupt,
+                    )
+                {
+                    return noted;
+                }
+            }
+            Next::Press(key) => match write_answer_for(key, request, &drawn) {
+                Some(Response::Answer(answer)) => return Noted::plain(answer),
+                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
+                None => continue,
+            },
+        }
+    }
 }
 
 /// Interpret one key press at a write prompt, or `None` for a key that answers nothing.
@@ -394,7 +465,9 @@ fn write_keys(request: &WriteRequest, width: usize) -> impl Fn(bool) -> Vec<Line
         ]);
         Line::from(key_spans)
     };
-    let stop = Line::from(Vec::from(stopping()));
+    let mut stop = Line::from(Vec::from(stopping()));
+    stop.spans.push(Span::raw("    "));
+    stop.spans.extend(note::hint());
     let wide = answers(true, "    ").width() + stop.width() > width;
     // Both standing answers make the row wider than the box on a 100-column terminal, so the key
     // that stops the turn gets a row of its own rather than being broken across two. A prompt

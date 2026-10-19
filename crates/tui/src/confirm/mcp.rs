@@ -16,6 +16,7 @@ use crate::theme;
 use super::chrome::{
     answer_keys, approving, centred, indented, panel, refusing, stopping, verdict_rows,
 };
+use super::note::{self, Noted};
 use super::pinned::{self, Drawn, Question, Seen};
 use super::{Answer, Next, Response, answer_for, ask_plain, next_press};
 
@@ -403,7 +404,38 @@ const DESCRIPTION_ROWS: usize = 2;
 pub fn ask_mcp_call<B: Backend>(
     terminal: &mut Terminal<B>,
     request: &McpCallRequest,
-) -> CallAnswer {
+) -> Noted<CallAnswer> {
+    ask_mcp_call_reading(
+        terminal,
+        request,
+        next_press,
+        crate::input::the_last_event_arrived_alone,
+    )
+}
+
+impl Noted<CallAnswer> {
+    /// What to tell the waiting turn: the answer's decision, with the words typed beside it.
+    pub fn decision(self) -> CallDecision {
+        match &self.note {
+            Some(note) => self.answer.decision().with_note(note),
+            None => self.answer.decision(),
+        }
+    }
+
+    /// Whether the turn that asked stops as well as being refused. As [`CallAnswer::stops_the_turn`].
+    pub fn stops_the_turn(&self) -> bool {
+        self.answer.stops_the_turn()
+    }
+}
+
+/// [`ask_mcp_call`], taking each event from `next` and asking `alone` straight after each one, so a
+/// test can stand in for the terminal.
+pub(super) fn ask_mcp_call_reading<B: Backend>(
+    terminal: &mut Terminal<B>,
+    request: &McpCallRequest,
+    mut next: impl FnMut() -> Next,
+    mut alone: impl FnMut() -> bool,
+) -> Noted<CallAnswer> {
     let mut scroll = 0u16;
     let mut seen = Seen::default();
     let mut expanded = false;
@@ -413,14 +445,34 @@ pub fn ask_mcp_call<B: Backend>(
             .draw(|frame| drawn = draw_mcp_call(frame, request, expanded, scroll, &mut seen))
             .is_err()
         {
-            return CallAnswer::Reject;
+            return Noted::plain(CallAnswer::Reject);
         }
 
-        match next_press() {
+        match next() {
             Next::Skip => continue,
-            Next::Lost => return CallAnswer::Reject,
+            Next::Lost => return Noted::plain(CallAnswer::Reject),
+            Next::Press(key) if note::opens(key, alone()) => {
+                // A yes from the line is a yes only where this draw takes the question's own.
+                let may_yes = matches!(
+                    call_answer_for(
+                        KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+                        request,
+                        &drawn
+                    ),
+                    Some(CallResponse::Answer(CallAnswer::Approve))
+                );
+                if let Some(noted) = note::take_reading(terminal, may_yes, &mut next, &mut alone)
+                    .settle(
+                        CallAnswer::Approve,
+                        CallAnswer::Reject,
+                        CallAnswer::Interrupt,
+                    )
+                {
+                    return noted;
+                }
+            }
             Next::Press(key) => match call_answer_for(key, request, &drawn) {
-                Some(CallResponse::Answer(answer)) => return answer,
+                Some(CallResponse::Answer(answer)) => return Noted::plain(answer),
                 Some(CallResponse::Scroll(by)) => scroll = drawn.moved(scroll, by),
                 Some(CallResponse::Expand) => expanded = !expanded,
                 None => continue,
@@ -543,10 +595,12 @@ pub(super) fn draw_mcp_call(
             }
         }
         rows.extend(option("3", refusing(), Span::raw(t!(mcp_call_no))));
-        rows.push(Line::from(vec![
+        let mut stop = vec![
             Span::styled("  ctrl-c", muted.add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" {}", t!(stop_the_turn)), muted),
-        ]));
+            Span::styled(format!(" {}    ", t!(stop_the_turn)), muted),
+        ];
+        stop.extend(note::hint());
+        rows.push(Line::from(stop));
         rows
     };
     pinned::draw(

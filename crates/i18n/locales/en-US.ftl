@@ -1662,6 +1662,17 @@ resume-manifest-run = that was a manifest run, which cannot be continued; start 
 ## Shared by every question the interface stops to ask
 
 stop-the-turn = stop the turn
+# Beside a write, run or call question's keys: the key that opens a line to type a note into.
+note-key = note
+# The line a note is typed into, opened from a write, run or call question.
+note-title = add a note
+note-sent-with-no = sent with a no
+note-sent-with-yes = sent with a yes
+note-explained = the planner reads this beside your answer. it does not change what is approved.
+note-send = send
+note-switch-to-yes = answer yes
+note-switch-to-no = answer no
+note-back = back
 scroll-more = ↑↓ { $count } more
 scroll-back = ↑↓ back
 # Under a question's body in place of the scroll hint while rows that decide the question have not

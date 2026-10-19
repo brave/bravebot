@@ -641,7 +641,7 @@ mod tests {
     impl Confirmer for ShownWrites {
         fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
             self.0 += 1;
-            self.1
+            self.1.clone()
         }
         fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
             Unattended.confirm_run(request)
@@ -1042,7 +1042,7 @@ mod tests {
             WriteDecision::approve_always(),
             WriteDecision::approve_and_record(),
         ] {
-            let mut shown = ShownWrites::answering(answer);
+            let mut shown = ShownWrites::answering(answer.clone());
             let decided = Confining::new(&mut shown, PermissionMode::AcceptEdits, false)
                 .confirm_write(&a_credential_write());
             assert_eq!(

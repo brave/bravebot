@@ -440,7 +440,7 @@ impl Confirmer for Answering {
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
         self.calls.push(request.clone());
-        self.call
+        self.call.clone()
     }
 
     /// Refuses. This double answers no question about reach.
@@ -1051,6 +1051,60 @@ fn a_refused_call_reaches_no_server() {
         "the planner was not told the call was refused: {}",
         sent[1]
     );
+}
+
+/// What the planner is told in the round after one call, with the person answering `answer`.
+fn told_after_a_call(name: &str, answer: CallDecision) -> (String, usize) {
+    let scratch = Scratch::new(name);
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("fine"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, answer);
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    let sent = rounds(&chat);
+    (sent[1].clone(), methods(&server).len())
+}
+
+/// PROMPT-12: words a person typed beside the answer to a call reach the planner with the result,
+/// a refusal ends on them rather than on the question, and an answer that stands for the tool
+/// carries none.
+#[test]
+fn a_note_beside_a_call_answer_is_told_to_the_planner() {
+    let (refused, calls) = told_after_a_call(
+        "call-refused-with-a-note",
+        CallDecision::reject().with_note("ask for Paris, France"),
+    );
+    assert_eq!(calls, 0, "a refused call reached the server");
+    assert!(
+        refused.contains("The user declined this and wrote: ask for Paris, France"),
+        "{refused}"
+    );
+    assert!(!refused.contains("ask what they would prefer"), "{refused}");
+
+    let (approved, calls) = told_after_a_call(
+        "call-approved-with-a-note",
+        CallDecision::approve().with_note("that was the right tool"),
+    );
+    assert!(calls > 0, "an approved call did not reach the server");
+    assert!(
+        approved.contains("The user approved this and wrote: that was the right tool"),
+        "{approved}"
+    );
+
+    let (standing, _) = told_after_a_call(
+        "call-standing-with-a-note",
+        CallDecision::approve_and_stand().with_note("standing words"),
+    );
+    assert!(!standing.contains("standing words"), "{standing}");
 }
 
 /// Answer 2 stands for that one tool in that one project: the next call to it asks nothing and

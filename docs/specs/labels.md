@@ -22,7 +22,7 @@ guards:
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 118
+      - crates/core/src/policy.rs: 119
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 2
@@ -126,7 +126,7 @@ guards:
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 12
+      - crates/agent/src/turn.rs: 13
       - crates/core/src/policy.rs: 9
   - symbol: Policy::render_in_place
     sites:

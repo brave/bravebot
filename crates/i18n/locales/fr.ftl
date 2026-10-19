@@ -1437,6 +1437,17 @@ resume-manifest-run =
 ## Commun à toutes les questions que l'interface s'arrête pour poser
 
 stop-the-turn = arrêter le tour
+# À côté des touches d'une question d'écriture, d'exécution ou d'appel : la touche qui ouvre une ligne où taper une note.
+note-key = note
+# La ligne où se tape une note, ouverte depuis une question d'écriture, d'exécution ou d'appel.
+note-title = ajouter une note
+note-sent-with-no = envoyée avec un non
+note-sent-with-yes = envoyée avec un oui
+note-explained = le planificateur la lit à côté de votre réponse. elle ne change pas ce qui est approuvé.
+note-send = envoyer
+note-switch-to-yes = répondre oui
+note-switch-to-no = répondre non
+note-back = retour
 scroll-more = ↑↓ { $count } de plus
 scroll-back = ↑↓ retour
 prompt-unseen =
