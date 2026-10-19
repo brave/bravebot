@@ -77,7 +77,7 @@ help:
 	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
-	@echo "  make review-ready          Open PRs that are mergeable, not draft, and without changes requested [REPO=owner/name]"
+	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer [REPO=owner/name REVIEWER=login]"
 	@echo "  make fmt                   Apply formatting"
 	@echo "  make aws-logout            End every cached AWS SSO session, to test signing in again"
 	@echo
@@ -369,15 +369,17 @@ docs-changes:
 docs-updated-to-sha:
 	@python3 agents/skills/update-docs/docs-ref.py show
 
-# The pull requests a reviewer can pick up now: mergeable, not a draft, and with no review
-# asking for changes. REPO names another repository and LIMIT raises how many are read.
+# The pull requests a reviewer can pick up now: mergeable, not a draft, with every check passed
+# or skipped, and whose latest review by REVIEWER is an approval. REPO names another repository,
+# REVIEWER another account and LIMIT raises how many are read.
 REVIEW_REPO = brave/bravebot
+REVIEW_REVIEWER = netzenbot-reviewer
 REVIEW_LIMIT = 500
 .PHONY: review-ready
 review-ready:
 	@gh pr list --repo $(or $(REPO),$(REVIEW_REPO)) --limit $(or $(LIMIT),$(REVIEW_LIMIT)) \
-	  --json number,title,url,mergeable,reviewDecision,isDraft \
-	  --jq '.[] | select(.mergeable == "MERGEABLE" and .reviewDecision != "CHANGES_REQUESTED" and .isDraft == false) | "\(.url)  \(.title)"'
+	  --json number,title,url,mergeable,latestReviews,isDraft,statusCheckRollup \
+	  --jq '.[] | select(.mergeable == "MERGEABLE" and .isDraft == false and any(.latestReviews[]; .author.login == "$(or $(REVIEWER),$(REVIEW_REVIEWER))" and .state == "APPROVED") and all(.statusCheckRollup[]; (.conclusion // .state) | IN("SUCCESS", "NEUTRAL", "SKIPPED"))) | "\(.url)  \(.title)"'
 
 # All local checks before pushing, including the UI and Linux code paths.
 # Requires Docker and the desktop runtime dependencies described in checks.md.
