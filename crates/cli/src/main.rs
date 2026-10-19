@@ -22,6 +22,7 @@ mod plain;
 mod progress;
 mod push_identity;
 mod sandbox_check;
+mod session_delete;
 mod session_import;
 mod session_search;
 mod sessions_list;

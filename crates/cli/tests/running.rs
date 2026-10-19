@@ -13800,3 +13800,211 @@ fn a_program_of_the_same_user_cannot_read_the_environment_bravebot_was_started_w
         ),
     }
 }
+
+/// A scratch home, a checkout in it, and the folder the checkout's sessions are kept in, for the
+/// `sessions delete` and `sessions purge` runs (CLI-33).
+struct Recorded {
+    scratch: Scratch,
+    cwd: PathBuf,
+    store: PathBuf,
+}
+
+impl Recorded {
+    fn new(name: &str) -> Self {
+        let scratch = Scratch::new(name);
+        let cwd = scratch.path.join("checkout");
+        std::fs::create_dir_all(&cwd).expect("create the checkout");
+        let cwd = cwd.canonicalize().expect("canonical checkout");
+        let store = scratch
+            .path
+            .join(".bravebot/sessions")
+            .join(bravebot_agent::home::key_for(&cwd));
+        std::fs::create_dir_all(&store).expect("create the session folder");
+        Self {
+            scratch,
+            cwd,
+            store,
+        }
+    }
+
+    /// A record the checkout wrote, with a trail beside it, written out the way a listing reads it.
+    fn session(&self, id: &str) {
+        self.session_of(id, &self.cwd);
+    }
+
+    /// The same, for a record that says it was written in `directory`.
+    fn session_of(&self, id: &str, directory: &Path) {
+        let shown = directory.display().to_string();
+        assert!(
+            !shown.contains(['"', '\\']),
+            "the scratch path needs JSON escaping: {shown}"
+        );
+        std::fs::write(
+            self.store.join(format!("{id}.json")),
+            format!(r#"{{"id":"{id}","title":"work on {id}","directory":"{shown}","updated":1700000000}}"#),
+        )
+        .expect("seed the record");
+        std::fs::write(self.store.join(format!("{id}.audit.jsonl")), "{}\n")
+            .expect("seed the trail");
+    }
+
+    fn kept(&self, id: &str) -> bool {
+        self.store.join(format!("{id}.json")).exists()
+            && self.store.join(format!("{id}.audit.jsonl")).exists()
+    }
+
+    fn sessions(&self, arguments: &[&str]) -> Output {
+        let mut all = vec!["sessions"];
+        all.extend_from_slice(arguments);
+        bravebot_started_in(&self.scratch.path, &self.cwd, &[], &all)
+    }
+}
+
+const FIRST: &str = "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const SECOND: &str = "22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+/// CLI-33: an id that is not shaped like a session's name, and one that names no record here, are
+/// refused with the status for an argument, and neither removes anything.
+#[test]
+fn delete_refuses_a_malformed_or_unknown_id_and_removes_nothing() {
+    let recorded = Recorded::new("cli-running-delete-refused");
+    recorded.session(FIRST);
+
+    let malformed = recorded.sessions(&["delete", "../escape"]);
+    assert_eq!(malformed.status.code(), Some(2), "{:?}", said(&malformed));
+    assert!(
+        said(&malformed)
+            .1
+            .contains("is not shaped like a session id")
+    );
+
+    let unknown = recorded.sessions(&["delete", SECOND]);
+    assert_eq!(unknown.status.code(), Some(2), "{:?}", said(&unknown));
+    assert!(said(&unknown).1.contains("is recorded for this directory"));
+
+    assert!(recorded.kept(FIRST), "a refused delete removed a record");
+}
+
+/// CLI-33: a session a background session is running is refused with the status for a failure, and
+/// the message says to stop it first. The hold is the one a running session takes (BG-9).
+#[cfg(unix)]
+#[test]
+fn delete_refuses_a_session_something_is_running() {
+    let recorded = Recorded::new("cli-running-delete-held");
+    recorded.session(FIRST);
+    let _lease = a_running_background_session(&recorded, FIRST);
+
+    let output = recorded.sessions(&["delete", FIRST]);
+
+    assert_eq!(output.status.code(), Some(1), "{:?}", said(&output));
+    assert!(
+        said(&output).1.contains("Stop it first"),
+        "{:?}",
+        said(&output)
+    );
+    assert!(
+        recorded.kept(FIRST),
+        "a running session's record was deleted"
+    );
+}
+
+/// The roster entry a background session publishes, and the lock that says its process is alive.
+#[cfg(unix)]
+fn a_running_background_session(recorded: &Recorded, id: &str) -> bravebot_session::jobs::Lease {
+    use bravebot_session::jobs::{Job, Mode, Roster};
+    let roster = Roster::at(recorded.scratch.path.join(".bravebot/jobs"));
+    roster
+        .publish(&Job::starting(
+            id.to_string(),
+            &recorded.cwd,
+            "work",
+            Mode::Ask,
+        ))
+        .expect("publish the entry");
+    roster
+        .claim(id)
+        .expect("claim the entry")
+        .expect("nothing else holds it")
+}
+
+/// CLI-33: the positive control for the refusals above. An id of this directory's is deleted with
+/// its trail, and the other session stays.
+#[test]
+fn delete_removes_one_session_and_its_trail() {
+    let recorded = Recorded::new("cli-running-delete-done");
+    recorded.session(FIRST);
+    recorded.session(SECOND);
+
+    let output = recorded.sessions(&["delete", FIRST]);
+
+    assert!(output.status.success(), "{:?}", said(&output));
+    assert!(!recorded.store.join(format!("{FIRST}.json")).exists());
+    assert!(!recorded.store.join(format!("{FIRST}.audit.jsonl")).exists());
+    assert!(recorded.kept(SECOND), "a delete removed another session");
+}
+
+/// CLI-33: with no terminal to ask on and no `-y`, a purge is refused with the status for an
+/// argument and the records stay. Standard input is not a terminal in these runs.
+#[test]
+fn purge_without_a_terminal_or_yes_is_refused_and_deletes_nothing() {
+    let recorded = Recorded::new("cli-running-purge-refused");
+    recorded.session(FIRST);
+    recorded.session(SECOND);
+
+    let output = recorded.sessions(&["purge"]);
+
+    assert_eq!(output.status.code(), Some(2), "{:?}", said(&output));
+    assert!(said(&output).1.contains("Pass -y to delete without asking"));
+    assert!(recorded.kept(FIRST) && recorded.kept(SECOND));
+}
+
+/// CLI-33: `--dry-run` names what it would remove and removes nothing, with or without `-y`.
+#[test]
+fn a_dry_run_lists_the_records_and_deletes_nothing() {
+    let recorded = Recorded::new("cli-running-purge-dry-run");
+    recorded.session(FIRST);
+    recorded.session(SECOND);
+
+    for arguments in [&["purge", "--dry-run"][..], &["purge", "--dry-run", "-y"]] {
+        let output = recorded.sessions(arguments);
+        let (stdout, stderr) = said(&output);
+        assert!(output.status.success(), "{arguments:?}: {stderr}");
+        assert!(
+            stdout.contains(&format!("would delete {FIRST}"))
+                && stdout.contains(&format!("would delete {SECOND}")),
+            "{arguments:?}: {stdout}"
+        );
+        assert!(
+            recorded.kept(FIRST) && recorded.kept(SECOND),
+            "{arguments:?}"
+        );
+    }
+}
+
+/// CLI-33: the positive control for the purge refusals. With `-y` a purge removes this directory's
+/// records and trails, and leaves a session that is running and a record another directory wrote.
+#[cfg(unix)]
+#[test]
+fn purge_with_yes_removes_this_directorys_sessions_and_leaves_a_running_one() {
+    let recorded = Recorded::new("cli-running-purge-done");
+    let held = "33333333-cccc-4ccc-8ccc-cccccccccccc";
+    let foreign = "44444444-dddd-4ddd-8ddd-dddddddddddd";
+    recorded.session(FIRST);
+    recorded.session(held);
+    recorded.session_of(foreign, &recorded.scratch.path.join("elsewhere"));
+    let _lease = a_running_background_session(&recorded, held);
+
+    let output = recorded.sessions(&["purge", "-y"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stdout.contains("Deleted: 1"), "{stdout}");
+    assert!(stdout.contains(&format!("left {held}")), "{stdout}");
+    assert!(!recorded.store.join(format!("{FIRST}.json")).exists());
+    assert!(!recorded.store.join(format!("{FIRST}.audit.jsonl")).exists());
+    assert!(recorded.kept(held), "a running session was purged");
+    assert!(
+        recorded.kept(foreign),
+        "another directory's record was purged"
+    );
+}

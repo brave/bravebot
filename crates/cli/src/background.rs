@@ -39,12 +39,14 @@ pub(crate) fn sessions(args: &[String]) -> ExitCode {
         [word, rest @ ..] if word == "import" => crate::session_import::command(rest),
         [word, rest @ ..] if word == "search" => crate::session_search::command(rest),
         [word, rest @ ..] if word == "list" => crate::sessions_list::command(rest),
+        [word, rest @ ..] if word == "delete" => crate::session_delete::delete(rest),
+        [word, rest @ ..] if word == "purge" => crate::session_delete::purge(rest),
         _ => fail(Ending::Argument, t!(sessions_usage)),
     }
 }
 
-/// The directory `sessions import`, `sessions search` and `sessions list` look in: the one the
-/// person typed, or the current one. It has to exist and be a directory; a path that is not one is
+/// The directory `sessions import`, `sessions search`, `sessions list`, `sessions delete` and
+/// `sessions purge` look in: the one the person typed, or the current one. It has to exist and be a directory; a path that is not one is
 /// an argument error.
 pub(crate) fn project_directory(named: Option<PathBuf>) -> Result<PathBuf, ExitCode> {
     let directory = match named {

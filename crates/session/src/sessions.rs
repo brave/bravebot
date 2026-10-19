@@ -2520,6 +2520,47 @@ pub fn delete(project: &Path, id: &str) -> Result<(), Deletion> {
     std::fs::remove_file(&record).map_err(Deletion::Failed)
 }
 
+/// What `purge` would remove from a project, and what it leaves for being held.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Purge {
+    /// Ids of the records this project wrote, which `holds` did not name.
+    pub delete: Vec<String>,
+    /// Ids of the records `holds` named, which are left where they are.
+    pub held: Vec<String>,
+}
+
+/// The records of `project` a purge would remove (CLI-33), newest first.
+///
+/// A store is shared by every directory whose name maps to the same segment, so ownership is the
+/// path each record kept ([SESSION-28]) and never the directory it sits in. `holds` is asked about
+/// each id and names the ones something else is running.
+pub fn purge_plan(project: &Path, holds: impl Fn(&str) -> bool) -> Purge {
+    let mut plan = Purge::default();
+    for session in list(project)
+        .into_iter()
+        .filter(|session| Path::new(&session.directory) == project)
+    {
+        if holds(&session.id) {
+            plan.held.push(session.id);
+        } else {
+            plan.delete.push(session.id);
+        }
+    }
+    plan
+}
+
+/// Delete every id in `plan.delete` with [`delete`], returning the ids that could not be removed.
+///
+/// A failure does not stop the rest: a record that cannot be removed should cost itself and
+/// nothing more.
+pub fn purge(project: &Path, plan: &Purge) -> Vec<String> {
+    plan.delete
+        .iter()
+        .filter(|id| delete(project, id).is_err())
+        .cloned()
+        .collect()
+}
+
 /// What a resumed session shows beneath each turn, by turn number.
 ///
 /// Two files behind one type: the plan comes out of the record and the trail out of the audit
@@ -5533,6 +5574,68 @@ mod tests {
 
         assert!(load(&here, in_here.id()).is_some());
         assert!(load(&there, in_there.id()).is_some());
+    }
+
+    /// A purge is the delete over every record a directory wrote, so what it must not do is take
+    /// a neighbour's: another project's session, and a record that sits in this project's store
+    /// but says it was written somewhere else, which is how two directories sharing a store look.
+    #[test]
+    fn purging_a_project_removes_its_sessions_and_not_another_directorys() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let here = an_empty_project("bravebot-purge-here");
+        let there = an_empty_project("bravebot-purge-there");
+        let (first, second) = two_sessions_with_trails(&here);
+        let mut elsewhere = Handle::begin(&there, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut elsewhere);
+        let shares = project_directory(&here).unwrap();
+        std::fs::copy(
+            project_directory(&there)
+                .unwrap()
+                .join(format!("{}.json", elsewhere.id())),
+            shares.join(format!("{}.json", elsewhere.id())),
+        )
+        .expect("copy a record written in another directory into this store");
+
+        let plan = purge_plan(&here, |_| false);
+        let mut planned = plan.delete.clone();
+        planned.sort();
+        let mut wanted = vec![first.clone(), second.clone()];
+        wanted.sort();
+        assert_eq!(planned, wanted, "the plan is not this directory's records");
+        assert!(purge(&here, &plan).is_empty());
+
+        assert!(load(&here, &first).is_none() && load(&here, &second).is_none());
+        assert!(audit_of(&here, &first).is_empty() && audit_of(&here, &second).is_empty());
+        assert!(
+            load(&here, elsewhere.id()).is_some(),
+            "a record written in another directory was purged from a shared store"
+        );
+        assert!(
+            load(&there, elsewhere.id()).is_some(),
+            "another project's session was purged"
+        );
+    }
+
+    /// A session something else is running is left, and named, so that the person is told about
+    /// it rather than finding it written back by the next save.
+    #[test]
+    fn purging_leaves_a_session_something_is_running() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-purge-held");
+        let (running, idle) = two_sessions_with_trails(&root);
+
+        let plan = purge_plan(&root, |id| id == running);
+        assert_eq!(plan.held, vec![running.clone()]);
+        assert_eq!(plan.delete, vec![idle.clone()]);
+        assert!(purge(&root, &plan).is_empty());
+
+        assert!(load(&root, &running).is_some(), "a held session was purged");
+        assert!(!audit_of(&root, &running).is_empty());
+        assert!(load(&root, &idle).is_none());
     }
 
     /// A manifest run is a record like any other and is deleted like one.

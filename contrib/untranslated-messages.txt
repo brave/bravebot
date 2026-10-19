@@ -11,7 +11,9 @@ fr:auth-status-bedrock-lapsed
 fr:auth-status-bedrock-no-cli
 fr:auth-status-bedrock-no-profile
 fr:auth-status-bedrock-undecodable
+fr:cli-usage-sessions-delete
 fr:cli-usage-sessions-list
+fr:cli-usage-sessions-purge
 fr:command-hunks
 fr:diff-no-final-newline
 fr:session-hunk-added
@@ -41,6 +43,12 @@ fr:session-hunks-turn-moved
 fr:session-hunks-unavailable
 fr:session-hunks-uncovered
 fr:session-hunks-wrote-nothing
+fr:sessions-delete-done
+fr:sessions-delete-failed
+fr:sessions-delete-held
+fr:sessions-delete-invalid
+fr:sessions-delete-missing
+fr:sessions-delete-usage
 fr:sessions-list-continuable
 fr:sessions-list-more
 fr:sessions-list-none
@@ -48,5 +56,12 @@ fr:sessions-list-not-continuable
 fr:sessions-list-row
 fr:sessions-list-unknown
 fr:sessions-list-usage
+fr:sessions-purge-declined
+fr:sessions-purge-done
+fr:sessions-purge-held
+fr:sessions-purge-needs-yes
+fr:sessions-purge-none
+fr:sessions-purge-question
+fr:sessions-purge-row
 fr:source-is-large
 fr:sources-large-together
