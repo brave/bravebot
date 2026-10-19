@@ -150,6 +150,9 @@ pub enum RunRequestCause {
     Delegate,
     /// The session names no profile directory for a request to be recorded under.
     NoProfileDirectory,
+    /// No line has run with a sandbox and failed in this turn, so there is no refusal of access
+    /// for the request to follow.
+    NoConfinedAttempt,
 }
 
 impl fmt::Display for RunRequestCause {
@@ -164,6 +167,9 @@ impl fmt::Display for RunRequestCause {
             Self::ManagedClosedNetwork => f.write_str("a managed setting closes the network"),
             Self::Delegate => f.write_str("a delegate may not ask"),
             Self::NoProfileDirectory => f.write_str("the session has no profile directory"),
+            Self::NoConfinedAttempt => {
+                f.write_str("the line has not run with a sandbox and failed this turn")
+            }
         }
     }
 }

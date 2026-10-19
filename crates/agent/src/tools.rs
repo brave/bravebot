@@ -412,6 +412,9 @@ pub struct Tools<'a> {
     ///
     /// Initialized to the workspace root and updated when `run` specifies a `directory`.
     pub run_directory: &'a mut std::path::PathBuf,
+    /// How many lines ran with a sandbox in this turn and did not exit zero, which a request for
+    /// a line with no sandbox is accepted after and not before (SANDBOX-29).
+    pub confined_failures: &'a mut ConfinedFailures,
     /// The session whose run prompts may have their answers remembered past it.
     ///
     /// `None` for a turn with nobody to put a prompt to, which reads no record and writes none:
@@ -558,6 +561,31 @@ impl<'a> Tools<'a> {
         crate::findings::Recording {
             home: self.home,
             session: self.remembering,
+        }
+    }
+}
+
+/// How many lines have run with a sandbox in a turn and not exited zero, less the requests for no
+/// sandbox accepted since (SANDBOX-29).
+///
+/// Counted from exit codes, which are structure and not what a program printed, so nothing a
+/// program wrote reaches it. A request for a line with no sandbox is accepted only while it is
+/// above zero, and accepting one spends one, so each failure earns one request.
+#[derive(Debug, Default)]
+pub struct ConfinedFailures(usize);
+
+impl ConfinedFailures {
+    fn note(&mut self) {
+        self.0 = self.0.saturating_add(1);
+    }
+
+    fn spend(&mut self) -> bool {
+        match self.0 {
+            0 => false,
+            held => {
+                self.0 = held - 1;
+                true
+            }
         }
     }
 }
@@ -6918,6 +6946,14 @@ const NOT_ACCEPTING_REQUESTS: &str = "refused: this session does not accept a re
 const NOT_ACCEPTING_UNCONFINED: &str = "refused: this session does not accept a request to run a \
      line with no sandbox. Say what the line needs and why, so the person can arrange it.";
 
+/// What a request to run a line with no sandbox says when no line has failed with one in this turn.
+/// Unlike [`NOT_ACCEPTING_UNCONFINED`] it says what to do, since the session would accept the
+/// request after a line the sandbox refused.
+const UNCONFINED_BEFORE_A_FAILURE: &str = "refused: run the line with the sandbox first. A request \
+     to run a line with no sandbox is accepted only after a line has run with one and failed, \
+     and that has not happened yet this turn. If it then fails because the sandbox refused it \
+     access, ask again and say in 'why' what was refused.";
+
 /// Whether this turn may be asked to start one line with no profile (SANDBOX-29).
 ///
 /// Only in the mode `workspace-write`: `strict` and `read-only` are the person asking for the profile to be
@@ -7733,7 +7769,18 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         policy.refuse_run_request("scopes", &[cause]);
         return Produced::problem(NOT_ACCEPTING_REQUESTS);
     }
+    // Accepted after a line has failed with the sandbox on, or for a line whose own redirection
+    // the sandbox refuses before anything runs, which no run can fail at. Decided from exit codes
+    // and the compiled plan, never from what a program printed.
     if unconfined {
+        let leaves_the_workspace = plan
+            .writes
+            .iter()
+            .any(|path| tools.workspace.confines(path).is_err());
+        if !leaves_the_workspace && !tools.confined_failures.spend() {
+            policy.refuse_run_request("unconfined", &[RunRequestCause::NoConfinedAttempt]);
+            return Produced::problem(UNCONFINED_BEFORE_A_FAILURE);
+        }
         policy.record_sandbox_mode("unconfined");
     } else if tools.confine_runs {
         policy.record_sandbox_mode(tools.sandbox.name());
@@ -8168,6 +8215,15 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
 
             // Both streams carry the revalidated plan label; their bytes decide nothing.
             let text = crate::exec::both_streams(&ran.stdout, &ran.stderr);
+
+            // A line with a sandbox that did not exit zero earns one request for a line with none.
+            // Read off the exit codes and whether the person stopped it, not off what it printed.
+            if confinement.is_some()
+                && ran.stopped.is_none()
+                && ran.codes.iter().any(|code| *code != Some(0))
+            {
+                tools.confined_failures.note();
+            }
 
             // Capped only where the planner may read it. Output it may not read is quarantined
             // whole, so nothing of it enters the conversation and there is nothing to bound.
@@ -12681,6 +12737,7 @@ mod tests {
             "is not a reason to ask",
             "Say in 'why' what the sandbox refused",
             "asked about the line every time",
+            "before a line has run with the sandbox and failed in this turn is refused",
             "A session that does not accept it refuses the call",
         ] {
             assert!(said.contains(told), "{told} missing from {said}");
@@ -17482,6 +17539,8 @@ mod tests {
             delegated: bool,
             profile: bool,
             asks_about_unconfined: bool,
+            /// Whether a line has already run with the sandbox on and exited non-zero.
+            after_a_failed_line: bool,
         }
 
         /// A confining session in a trusted workspace, with a profile directory, under `mode`.
@@ -17493,6 +17552,7 @@ mod tests {
                 delegated: false,
                 profile: true,
                 asks_about_unconfined: false,
+                after_a_failed_line: false,
             }
         }
 
@@ -17527,6 +17587,9 @@ mod tests {
                 tools.delegated = session.delegated;
                 tools.profile = session.profile.then(|| std::path::Path::new("/profile"));
                 tools.asks_about_unconfined = session.asks_about_unconfined;
+                if session.after_a_failed_line {
+                    tools.confined_failures.note();
+                }
                 run(
                     &mut policy,
                     tools,
@@ -17705,7 +17768,10 @@ mod tests {
             use bravebot_sandbox::SandboxMode::{Strict, WorkspaceWrite};
             for (session, arguments) in [
                 (
-                    session_under(WorkspaceWrite),
+                    Session {
+                        after_a_failed_line: true,
+                        ..session_under(WorkspaceWrite)
+                    },
                     json!({"command": "echo hi", "unconfined": true}),
                 ),
                 (
@@ -17721,6 +17787,55 @@ mod tests {
                 );
                 assert_eq!(sandbox_refusals(&refused), Vec::<&str>::new(), "{said}");
             }
+        }
+
+        /// SANDBOX-29: a request for a line with no sandbox is refused, with a sentence that says
+        /// to run the line with the sandbox first, until a line has run with one and failed in the
+        /// turn, and the trail records the refusal under `sandbox`. Each failure earns one request:
+        /// after the person is asked once, the next request is refused again. The regressions it
+        /// rejects are a request accepted before any line failed, a refusal that does not say what
+        /// to do, a refusal the trail omits, and a failure that earns requests without end.
+        #[test]
+        fn a_request_for_no_sandbox_is_accepted_only_after_a_confined_line_failed() {
+            use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+            let asks = json!({"command": "echo hi", "unconfined": true});
+
+            let (said, refused, _) =
+                run_in("run-unconfined-first", &asks, session_under(WorkspaceWrite));
+            assert_eq!(said, UNCONFINED_BEFORE_A_FAILURE);
+            assert_eq!(
+                sandbox_refusals(&refused),
+                [
+                    "run.unconfined: the request was refused and the line did not run: the line \
+                     has not run with a sandbox and failed this turn"
+                ],
+                "{refused:?}"
+            );
+
+            let (said, refused, _) = run_in(
+                "run-unconfined-after-failure",
+                &asks,
+                Session {
+                    after_a_failed_line: true,
+                    ..session_under(WorkspaceWrite)
+                },
+            );
+            assert!(
+                said.starts_with("refused: the user did not approve running this"),
+                "the request after a failed line did not reach the confirmer: {said}"
+            );
+            assert_eq!(sandbox_refusals(&refused), Vec::<&str>::new(), "{said}");
+        }
+
+        #[test]
+        fn each_confined_failure_earns_one_request_for_no_sandbox() {
+            let mut failures = ConfinedFailures::default();
+            assert!(!failures.spend());
+            failures.note();
+            failures.note();
+            assert!(failures.spend());
+            assert!(failures.spend());
+            assert!(!failures.spend());
         }
 
         /// TRACE-1: a write refused for leaving the workspace names `unconfined` as the way out only
@@ -18363,6 +18478,7 @@ mod tests {
             let mut armed = 0usize;
             let mut jobs = Jobs::default();
             let mut run_directory = workspace.root().to_path_buf();
+            let mut confined_failures = ConfinedFailures::default();
             body(&mut Tools {
                 workspace,
                 output_cap: OUTPUT_CAP,
@@ -18388,6 +18504,7 @@ mod tests {
                 permission_mode: crate::LiveMode::default(),
                 auto_vetting: false,
                 run_directory: &mut run_directory,
+                confined_failures: &mut confined_failures,
                 confine_runs: false,
                 sandbox: bravebot_sandbox::SandboxMode::default(),
                 asks_about_unconfined: false,

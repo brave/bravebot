@@ -4683,12 +4683,24 @@ fn an_approval_names_what_answered_it() {
         let scratch = Scratch::new("names-what-answered");
         std::fs::write(scratch.path.join("notes.md"), "original").unwrap();
         let workspace = Workspace::new(&scratch.path).expect("workspace");
-        let (endpoint, _received) =
-            serve_sequence(vec![tool_request_2(tool, arguments), reply_with("done")]);
+        // A confined session first runs a line that exits non-zero, which a request for no sandbox
+        // is accepted after and not before (SANDBOX-29).
+        let mut calls = Vec::new();
+        if confined {
+            calls.push(tool_request_2("run", r#"{"command":"false"}"#));
+        }
+        calls.push(tool_request_2(tool, arguments));
+        calls.push(reply_with("done"));
+        let (endpoint, _received) = serve_sequence(calls);
         let config = config_for(&endpoint);
         let egress = bravebot_net::Egress::new();
         let mut sink = RecordingSink::new();
-        let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+        // Where the failed line is asked about, the person lets it run: it has to fail for the
+        // request after it to be accepted. Every other call is turned away.
+        let mut asked = match confined {
+            true => AskedAboutRuns::answering_in_turn(vec![bravebot_agent::RunDecision::approve()]),
+            false => AskedAboutRuns::answering(bravebot_agent::RunDecision::reject()),
+        };
         let seen = asked.seen.clone();
         let mut confirmer = bravebot_agent::Confining::new(&mut asked, mode, false);
 
@@ -4762,14 +4774,29 @@ fn an_approval_names_what_answered_it() {
     // A line that asked to start with no sandbox is put to the person under bypass as under every
     // other mode (SANDBOX-22), so the trail must not say bypass answered it.
     let unconfined = ("run", r#"{"command":"touch marker.txt","unconfined":true}"#);
-    for mode in [PermissionMode::Bypass, PermissionMode::Ask] {
+    // The failed line before it is answered by bypass and put to the person under ask.
+    for (mode, failed_line, shown_lines) in [
+        (
+            PermissionMode::Bypass,
+            "answered by bypass mode, nobody was asked",
+            1,
+        ),
+        (
+            PermissionMode::Ask,
+            "no mode answered, left to the confirmer",
+            2,
+        ),
+    ] {
         let (answered, shown) = answers_in(mode, unconfined.0, unconfined.1, true);
         assert_eq!(
             answered,
-            ["no mode answered, left to the confirmer"],
+            [failed_line, "no mode answered, left to the confirmer"],
             "an unconfined run under {mode:?}"
         );
-        assert_eq!(shown, 1, "an unconfined run under {mode:?} reached nobody");
+        assert_eq!(
+            shown, shown_lines,
+            "an unconfined run under {mode:?} reached nobody"
+        );
     }
 
     // Accepting edits does not answer a write that would create a credential: the prompt is still
@@ -21813,12 +21840,41 @@ fn scoped_run_remembering<C: bravebot_agent::Confirmer + Send>(
     confirmer: &mut C,
     state: Option<&std::path::Path>,
 ) -> ScopedRun {
+    scoped_run_after(
+        name,
+        &[],
+        arguments,
+        mode,
+        permission,
+        trust,
+        programs,
+        confirmer,
+        state,
+    )
+}
+
+/// [`scoped_run_remembering`] after each of `before`, which the planner calls first.
+#[allow(clippy::too_many_arguments)]
+fn scoped_run_after<C: bravebot_agent::Confirmer + Send>(
+    name: &str,
+    before: &[serde_json::Value],
+    arguments: serde_json::Value,
+    mode: bravebot_sandbox::SandboxMode,
+    permission: bravebot_agent::PermissionMode,
+    trust: bravebot_core::trust::TrustStore,
+    programs: impl FnOnce(&std::path::Path) -> bravebot_core::programs::TrustedPrograms,
+    confirmer: &mut C,
+    state: Option<&std::path::Path>,
+) -> ScopedRun {
     let scratch = Scratch::new(name);
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", &arguments.to_string()),
-        reply_with("done"),
-    ]);
+    let mut replies: Vec<String> = before
+        .iter()
+        .chain(std::iter::once(&arguments))
+        .map(|call| tool_request("run", &call.to_string()))
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let programs = programs(&scratch.path);
@@ -21851,8 +21907,10 @@ fn scoped_run_remembering<C: bravebot_agent::Confirmer + Send>(
     );
     outcome.outcome.as_ref().expect("the turn runs");
 
-    let _first = received.recv().expect("first request");
-    let second = received.recv().expect("second request");
+    for _ in 0..=before.len() {
+        let _ = received.recv().expect("a request before the last");
+    }
+    let second = received.recv().expect("the last request");
     ScopedRun {
         second,
         ran: scratch.path.join("ran.txt").exists(),
@@ -22638,13 +22696,61 @@ fn two_runs<C: bravebot_agent::Confirmer + Send>(
     programs: impl FnOnce(&std::path::Path) -> bravebot_core::programs::TrustedPrograms,
     confirmer: &mut C,
 ) -> TwoRuns {
+    runs(
+        name,
+        vec![first, second],
+        mode,
+        permission,
+        trust,
+        programs,
+        confirmer,
+    )
+}
+
+/// [`two_runs`] after a line that exits non-zero with the sandbox on, which is what a request for
+/// no sandbox is accepted after (SANDBOX-29). The confirmer sees that line first, then `first`,
+/// then `second`.
+#[allow(clippy::too_many_arguments)]
+fn two_runs_after_a_failed_line<C: bravebot_agent::Confirmer + Send>(
+    name: &str,
+    first: serde_json::Value,
+    second: serde_json::Value,
+    mode: bravebot_sandbox::SandboxMode,
+    permission: bravebot_agent::PermissionMode,
+    trust: bravebot_core::trust::TrustStore,
+    programs: impl FnOnce(&std::path::Path) -> bravebot_core::programs::TrustedPrograms,
+    confirmer: &mut C,
+) -> TwoRuns {
+    runs(
+        name,
+        vec![serde_json::json!({ "command": "false" }), first, second],
+        mode,
+        permission,
+        trust,
+        programs,
+        confirmer,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn runs<C: bravebot_agent::Confirmer + Send>(
+    name: &str,
+    calls: Vec<serde_json::Value>,
+    mode: bravebot_sandbox::SandboxMode,
+    permission: bravebot_agent::PermissionMode,
+    trust: bravebot_core::trust::TrustStore,
+    programs: impl FnOnce(&std::path::Path) -> bravebot_core::programs::TrustedPrograms,
+    confirmer: &mut C,
+) -> TwoRuns {
     let scratch = Scratch::new(name);
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", &first.to_string()),
-        tool_request("run", &second.to_string()),
-        reply_with("done"),
-    ]);
+    let mut replies: Vec<String> = calls
+        .iter()
+        .map(|call| tool_request("run", &call.to_string()))
+        .collect();
+    replies.push(reply_with("done"));
+    let count = calls.len();
+    let (endpoint, received) = serve_sequence(replies);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let programs = programs(&scratch.path);
@@ -22672,9 +22778,10 @@ fn two_runs<C: bravebot_agent::Confirmer + Send>(
         &bravebot_core::cancel::Cancel::new(),
     );
     outcome.outcome.as_ref().expect("the turn runs");
-    let _ = received.recv().expect("first request");
-    let _ = received.recv().expect("second request");
-    let third = received.recv().expect("third request");
+    for _ in 0..count {
+        let _ = received.recv().expect("a request before the last");
+    }
+    let third = received.recv().expect("the last request");
     let marker = |tag: &str| outside_the_session(&format!("{name}-{tag}"));
     TwoRuns {
         third,
@@ -22710,7 +22817,7 @@ fn an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confine
     let name = "unconfined-one-line";
     let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
     let seen = confirmer.seen.clone();
-    let result = two_runs(
+    let result = two_runs_after_a_failed_line(
         name,
         serde_json::json!({ "command": writing_the_marker(name, "first"), "unconfined": true }),
         serde_json::json!({ "command": writing_the_marker(name, "second") }),
@@ -22725,9 +22832,13 @@ fn an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confine
     assert!(first_wrote, "the approved line was held to a profile");
     assert!(!second_wrote, "the next line was left with no profile");
     let seen = seen.lock().unwrap();
-    assert!(seen[0].unconfined);
-    assert!(seen[0].confined.is_none());
-    assert!(!seen[1].unconfined);
+    assert!(
+        !seen[0].unconfined,
+        "the failed line was asked for with no sandbox"
+    );
+    assert!(seen[1].unconfined);
+    assert!(seen[1].confined.is_none());
+    assert!(!seen[2].unconfined);
     assert!(
         result.trail.contains("the programs ran in unconfined mode"),
         "{}",
@@ -22739,6 +22850,50 @@ fn an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confine
             .contains("the programs ran in workspace-write mode"),
         "{}",
         result.trail
+    );
+}
+
+/// SANDBOX-29: a request for no sandbox on the first line of a turn is refused before anybody is
+/// asked, so the line does not run, and the planner is told to run it with the sandbox first. The
+/// control is the same request after a line that ran with the sandbox and exited non-zero, which is
+/// put to the person and runs. The regressions it rejects are a request accepted with nothing
+/// having failed, which draws a prompt for a line that never tried the sandbox, and a refusal that
+/// does not say what to do.
+#[test]
+fn a_request_for_no_sandbox_before_a_confined_line_failed_is_refused_unasked() {
+    if cannot_confine_here() {
+        return;
+    }
+    let name = "unconfined-before-failure";
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+    let result = two_runs(
+        name,
+        serde_json::json!({ "command": writing_the_marker(name, "first"), "unconfined": true }),
+        serde_json::json!({ "command": "true" }),
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut confirmer,
+    );
+    let wrote = result.first_wrote;
+    clear_the_markers(name);
+    assert!(
+        !wrote,
+        "the line ran with no sandbox before any line failed"
+    );
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|request| !request.unconfined),
+        "the person was asked about a line that never ran with the sandbox"
+    );
+    let said = message_from(&result.third, "Result of run");
+    assert!(
+        said.contains("run the line with the sandbox first"),
+        "the refusal does not say what to do: {said}"
     );
 }
 
@@ -23181,14 +23336,18 @@ fn an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing() {
     );
 
     let state = Scratch::new("unconfined-vouched-state");
-    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision {
-        remember: true,
-        record: true,
-        ..bravebot_agent::RunDecision::approve()
-    });
+    let mut asked = AskedAboutRuns::answering_in_turn(vec![
+        bravebot_agent::RunDecision::approve(),
+        bravebot_agent::RunDecision {
+            remember: true,
+            record: true,
+            ..bravebot_agent::RunDecision::approve()
+        },
+    ]);
     let seen = asked.seen.clone();
-    let result = scoped_run_remembering(
+    let result = scoped_run_after(
         "unconfined-vouched",
+        &[serde_json::json!({ "command": "false" })],
         serde_json::json!({ "command": "uname", "unconfined": true }),
         bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
@@ -23198,17 +23357,19 @@ fn an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing() {
         Some(&state.path),
     );
     let seen = seen.lock().unwrap();
+    let seen: Vec<_> = seen.iter().filter(|request| request.unconfined).collect();
     assert_eq!(seen.len(), 1, "the vouched line was not asked about");
-    assert!(seen[0].unconfined);
     assert!(!seen[0].can_be_remembered());
     assert!(seen[0].would_vouch_for().is_empty());
     assert!(seen[0].record.is_none(), "a record was offered");
     assert!(seen[0].reach_record.is_none());
     assert_eq!(result.vouched, 1, "an answer vouched for a program");
     assert!(!result.recorded, "an answer recorded the line");
-    let said = message_from(&result.second, "Result of run");
+    // The request holds the failed line's result before this one's.
+    let last = result.second.rfind("Result of run").expect("a result");
+    let said = message_from(&result.second[last..], "Result of run");
     assert!(said.contains("It exited 0."), "{said}");
-    assert!(said.contains("[ref:1]"), "{said}");
+    assert!(said.contains("[ref:3]"), "{said}");
     assert!(
         !said.contains("Linux") && !said.contains("Darwin"),
         "{said}"
@@ -23229,7 +23390,7 @@ fn the_mode_that_asks_nothing_does_not_approve_an_unconfined_line() {
     fn run<C: bravebot_agent::Confirmer + Send>(name: &str, inner: &mut C) -> TwoRuns {
         let mut confirmer =
             bravebot_agent::Confining::new(inner, bravebot_agent::PermissionMode::Bypass, false);
-        two_runs(
+        two_runs_after_a_failed_line(
             name,
             serde_json::json!({
                 "command": writing_the_marker(name, "first"),
@@ -23346,7 +23507,7 @@ fn an_unconfined_line_is_refused_where_the_session_does_not_accept_it() {
     );
 
     let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
-    let control = two_runs(
+    let control = two_runs_after_a_failed_line(
         name,
         serde_json::json!({ "command": writing_the_marker(name, "first"), "unconfined": true }),
         serde_json::json!({ "command": "true" }),
@@ -23409,7 +23570,7 @@ fn a_refused_request_for_no_sandbox_or_for_scopes_is_recorded_with_its_cause() {
         return;
     }
     let mut person = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
-    let accepted = two_runs(
+    let accepted = two_runs_after_a_failed_line(
         name,
         serde_json::json!({ "command": "true", "unconfined": true }),
         serde_json::json!({ "command": "true", "scopes": ["remote"] }),
