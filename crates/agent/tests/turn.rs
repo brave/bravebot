@@ -30862,6 +30862,71 @@ fn a_task_list_the_summary_replaced_is_sent_again_after_the_cut() {
     );
 }
 
+/// COMPACT-18: a conversation past the budget whose bulk is an old tool result is brought under it
+/// by dropping that result from the request, with no summariser request, and the call keeps its
+/// answer.
+#[test]
+fn old_tool_results_are_dropped_before_a_summary_is_asked_for() {
+    let scratch = Scratch::new("compact-masks-old-results");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.push(bravebot_aichat::protocol::Message::user(
+        "read the build log",
+    ));
+    conversation.push(bravebot_aichat::protocol::Message::assistant_calling(
+        "reading",
+        vec![bravebot_aichat::protocol::ToolCallRequest {
+            id: "call-1".to_string(),
+            kind: "function".to_string(),
+            function: bravebot_aichat::protocol::ToolCallRequestFunction {
+                name: "read_file".to_string(),
+                arguments: r#"{"path":"build.log"}"#.to_string(),
+            },
+            extra_content: None,
+        }],
+    ));
+    conversation.push(bravebot_aichat::protocol::Message::tool_result(
+        "call-1",
+        "BUILD-LOG-LINE\n".repeat(4_000),
+    ));
+    conversation.push(bravebot_aichat::protocol::Message::assistant("it failed"));
+    for (prompt, answer) in [
+        ("what about the error type", "widened it"),
+        ("now the tests", "updated them"),
+        ("carry on", "carrying on"),
+    ] {
+        conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+        conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+    }
+    // About what the log amounts to, plus a little: dropping it is the way under 1,000.
+    conversation.measured(15_500);
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it"),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 1, "a summary was asked for: {bodies:#?}");
+    assert!(
+        !bodies[0].contains(A_SUMMARY_ASKING) && !bodies[0].contains("BUILD-LOG-LINE"),
+        "{}",
+        bodies[0]
+    );
+    assert!(
+        bodies[0].contains("call-1") && bodies[0].contains("dropped from the request"),
+        "the call lost its answer: {}",
+        bodies[0]
+    );
+}
+
 /// COMPACT-16: no list, nothing added.
 #[test]
 fn a_compaction_adds_no_task_list_where_the_planner_never_wrote_one() {
