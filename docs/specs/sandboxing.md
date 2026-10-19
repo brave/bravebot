@@ -1828,9 +1828,11 @@ without the sandbox, works, so a path that was never there is not counted as a r
 is let through fails, and so does one whose earlier stage is refused.
 
 A workflow whose program is not installed is skipped, named, and counted apart from the passes; it
-is not a failure. A workflow that fails without the sandbox as well is reported as that and not as
-the sandbox's. A failing row fails the suite, which runs in CI on Linux and macOS and reports the
-number skipped. `bravebot doctor --sandbox-check` runs the same suite on this machine, from a directory
+is not a failure. A program found only in a directory a stage may write is not installed, since the
+programs the suite starts are found as [SANDBOX-30](#SANDBOX-30) says. A workflow that fails without
+the sandbox as well is reported as that and not as the sandbox's. A failing row fails the suite,
+which runs in CI on Linux and macOS and reports the number skipped.
+`bravebot doctor --sandbox-check` runs the same suite on this machine, from a directory
 under the state directory, and prints each row, and for a row that failed the stage, the fix for
 that kind of failure and where the stage's output went. It exits with the failed ending
 ([CLI-6](cli.md#CLI-6)) when a row failed. It runs nothing on Windows, where programs are confined
@@ -1840,7 +1842,8 @@ by container.
 home, which the scratch home cannot hold. It runs `gh auth token` with the person's home and sends
 the output to the null device, first outside the sandbox and then under it, held to the person's
 filesystem lists as a session is ([SANDBOX-25](#SANDBOX-25)). The row appears only
-when `gh` is installed and the run outside the sandbox exits zero. It passes when the run under the
+when `gh` is installed, found as [SANDBOX-30](#SANDBOX-30) says, and the run outside the sandbox
+exits zero. It passes when the run under the
 sandbox exits zero and fails otherwise, with a fix that names `sandbox.filesystem.allowRead`
 ([SANDBOX-25](#SANDBOX-25)) and `gh auth login --insecure-storage`. The CI suite does not run it,
 since it depends on the host's login. Token variables are removed from the environment of both
@@ -1871,6 +1874,8 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_login_file_on_the_allow_read_list_passes`
 `verified-by: bravebot_agent::usability::no_login_outside_the_sandbox_gives_no_row`
 `verified-by: bravebot_agent::usability::the_login_probe_keeps_no_token`
+`verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
+`verified-by: bravebot_agent::usability_path::a_gh_found_only_in_a_directory_a_stage_may_write_gives_no_login_row`
 `verified-by: bravebot_cli::sandbox_check::doctor_sandbox_prints_a_failed_row_with_its_stage_and_its_fix`
 `verified-by: bravebot_cli::sandbox_check::doctor_sandbox_gives_each_kind_of_failure_its_own_fix`
 `verified-by: bravebot_cli::sandbox_check::doctor_sandbox_tells_a_refused_login_to_allow_the_read`
@@ -3128,8 +3133,11 @@ the session only; and whether a covered line is announced in the transcript befo
 
 The programs bravebot starts on its own account, unconfined and with the person's access to `~/.ssh`,
 `~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`), the clipboard tools, `osascript`, the
-inhibitor `/caffeinate` starts, a hook's program, a language server, the editor Ctrl-G opens, and
-the `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs ([SANDBOX-16](#SANDBOX-16)).
+inhibitor `/caffeinate` starts, a hook's program, a language server, the editor Ctrl-G opens, the
+`ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs ([SANDBOX-16](#SANDBOX-16)), and
+what `doctor --sandbox-check` runs with no sandbox ([SANDBOX-21](#SANDBOX-21)): the `gh` of the
+stored-login row, the programs of a workflow's setup stages, and the programs of a workflow run
+again without the sandbox as the control, `git`, `sh`, `cat` and `touch` among them.
 Each is resolved to an absolute path before it is started, from the absolute entries of `PATH` that
 lie outside every directory a confined stage may write.
 That list is the whole of it: a program started by a bare name in production code is one this
@@ -3145,11 +3153,12 @@ a new spawn is added to the list here, in the same change, or resolved first.
   is never removed from it, because closing a directory does not remove a file already written
   there.
 - **A command that opens no session leaves out the directory it ran in.** `doctor --push-identity`
-  is a new process, which knows of no directory a stage wrote in an earlier session. It leaves out
-  the directory it ran in and the checkout holding it, the nearest ancestor with a `.git`, so a
-  `bin` in the checkout that is first on `PATH` is not searched. A virtualenv or tool directory a
-  stage was granted elsewhere is not known to it. A program it starts is also started without this
-  agent's own credentials ([CRED-14](credential-protection.md#CRED-14)).
+  and `doctor --sandbox-check` are new processes, which know of no directory a stage wrote in an
+  earlier session. Each leaves out the directory it ran in and the checkout holding it, the nearest
+  ancestor with a `.git`, so a `bin` in the checkout that is first on `PATH` is not searched. A
+  virtualenv or tool directory a stage was granted elsewhere is not known to it. A program either
+  starts is also started without this agent's own credentials
+  ([CRED-14](credential-protection.md#CRED-14)).
 - **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
   and so is a file in another directory that links into one.
 - **An entry that is not absolute is not searched,** and neither is an empty one, which a shell
@@ -3168,6 +3177,12 @@ a new spawn is added to the list here, in the same change, or resolved first.
   `PATH` would be read as the current directory. A program the editor starts by name that is found
   only in a directory left out is not found by it. A `PATH` names directories, so a file in a
   searched entry that links into a directory left out is still found by those lookups.
+- **The suite's programs started with no sandbox search only those entries as well.** The `gh` of
+  the stored-login row and every stage a workflow starts with no confinement are given a `PATH`
+  reduced as the editor's is, so a `sh` that starts `mkdir`, or a `gh` that starts `git`, finds it
+  only among them. A stage started under the sandbox keeps the `PATH` a session's stage is given.
+  A program found only in a directory left out is not installed: its workflow is skipped
+  ([SANDBOX-21](#SANDBOX-21)), and a `gh` found only there gives no login row.
 - **A program named in another started program's arguments is resolved first.** A started program
   other than the editor keeps bravebot's own `PATH`, which can hold those directories, so an argument
   that names a program for it to start is that program's absolute path, found the same way. The
@@ -3230,6 +3245,13 @@ the lookup would have searched.
 `verified-by: bravebot_cli::push_identity::a_directory_under_no_checkout_is_left_out_by_itself`
 `verified-by: bravebot_cli::running::doctor_push_identity_starts_no_program_from_the_checkout_it_runs_in`
 `verified-by: bravebot_cli::running::doctor_push_identity_reports_a_program_found_only_in_the_checkout_as_absent`
+`verified-by: bravebot_cli::running::doctor_sandbox_check_starts_no_program_from_the_checkout_it_runs_in`
+`verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
+`verified-by: bravebot_agent::usability_path::a_setup_stage_starts_the_program_behind_a_directory_a_stage_may_write`
+`verified-by: bravebot_agent::usability_path::a_setup_stage_looks_up_the_programs_it_starts_only_behind_the_directory`
+`verified-by: bravebot_agent::usability_path::a_gh_found_only_in_a_directory_a_stage_may_write_gives_no_login_row`
+`verified-by: bravebot_agent::usability_path::the_login_is_asked_of_the_gh_behind_a_directory_a_stage_may_write`
+`verified-by: bravebot_agent::usability_path::the_gh_asked_for_the_login_looks_up_the_programs_it_starts_only_behind_the_directory`
 
 <a id="SANDBOX-31"></a>
 ### SANDBOX-31: on macOS a confined process looks up a fixed list of Mach services and no others
