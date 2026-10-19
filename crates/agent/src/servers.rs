@@ -986,8 +986,9 @@ fn executable_extensions(pathext: Option<&OsStr>) -> Vec<String> {
 
 /// The path a declaration's program starts from.
 ///
-/// A name with no extension is also tried with each of `extensions`, after the name itself, which
-/// is how Windows finds `npx` as `npx.exe`.
+/// A name with no extension is tried with each of `extensions` before the name itself, which is how
+/// Windows finds `npx` as `npx.exe`, and why the extensionless sh shim npm installs beside it does
+/// not shadow it.
 fn resolve(
     program: &str,
     path: Option<&OsStr>,
@@ -1004,14 +1005,11 @@ fn resolve(
     if path.is_none() {
         return Err(t!(servers_program_without_path, program = shown(program)).to_string());
     }
-    let spellings: Vec<String> = std::iter::once(program.to_string())
-        .chain(
-            extensions
-                .iter()
-                .filter(|_| given.extension().is_none())
-                .map(|extension| format!("{program}{extension}")),
-        )
-        .collect();
+    let added = extensions
+        .iter()
+        .filter(|_| given.extension().is_none())
+        .map(|extension| format!("{program}{extension}"));
+    let spellings: Vec<String> = added.chain(std::iter::once(program.to_string())).collect();
     searched
         .iter()
         .flat_map(|directory| spellings.iter().map(move |name| directory.join(name)))
@@ -2705,8 +2703,8 @@ mod tests {
         );
         assert_eq!(
             resolve("plain", Some(path), &dirs, &extensions),
-            Ok(bin.join("plain")),
-            "the name as written is tried before a spelling of it"
+            Ok(bin.join("plain.exe")),
+            "a spelling that starts is tried before the extensionless file beside it"
         );
         assert_eq!(
             resolve("npx.exe", Some(path), &dirs, &extensions),

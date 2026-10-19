@@ -1024,9 +1024,10 @@ fetches its package again each session, which is the trade incognito already mak
 
 A platform with no confinement for this starts no stdio server and says so, and asks nobody about
 one it could not start. On Windows the confinement is the AppContainer, and a program named without
-an extension is also looked for as `.com` and `.exe`, the `%PATHEXT%` spellings a container starts
-directly; `.bat` and `.cmd` are not, since they start through `cmd.exe`. Where the sandbox cannot
-be built, the server is not started either, and the line says why.
+an extension is looked for as `.com` and `.exe` first, the `%PATHEXT%` spellings a container starts
+directly, and only then as written, so the extensionless shim beside `npx.exe` does not shadow it;
+`.bat` and `.cmd` are not, since they start through `cmd.exe`. Where the sandbox cannot be built,
+the server is not started either, and the line says why.
 
 `verified-by: bravebot_agent::servers::a_name_with_no_extension_is_found_under_the_extension_windows_would_add`
 `verified-by: bravebot_agent::servers::only_the_extensions_a_program_starts_under_directly_are_added`
