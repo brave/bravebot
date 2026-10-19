@@ -32,6 +32,9 @@ pub fn settle_for_process(project: Option<&Path>, selected: Option<&Path>) {
     );
     bravebot_config::sandbox_network::settle(&layers);
     bravebot_config::git_identities::settle(&layers);
+    // Before the first request: the transport reads its answer once, and a window or an editor
+    // starts this process from a launcher whose environment holds no proxy (NET-8).
+    bravebot_agent::transport::settle(&layers);
 }
 
 /// Whether a safe verdict releases quarantined content with nobody asked, resolved as the terminal does.

@@ -657,6 +657,10 @@ doctor-proxy-unsupported = { $protocol } n'est pas pris en charge par cette vers
 doctor-proxy-unparseable = pas un proxy
 doctor-proxy-unparseable-detail = { $variable } contient une valeur qui ne peut pas être lue comme une adresse de proxy, elle n'est donc pas la route utilisée (sa valeur n'est jamais affichée)
 doctor-no-proxy = sans proxy
+doctor-network-file = indiqué dans
+doctor-network-file-detail = { $names } depuis { $path }
+doctor-network-file-ignored = ignoré
+doctor-network-file-ignored-detail = { $name } dans { $path } est un fichier du dépôt, il ne décide donc rien
 
 
 ## Une règle de permission que cette version n'a pas pu appliquer

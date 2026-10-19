@@ -167,6 +167,13 @@ rather than the shipped set coming back. Which roots are in force, and any named
 nothing, are reported by `doctor` ([CLI-7](cli.md#CLI-7)), each such path rather than the first of
 them.
 
+Where the environment names neither path, a settings file may: `SSL_CERT_FILE` and `SSL_CERT_DIR` in
+the `env` block of the person's own layers ([BACKEND-33](backends.md#BACKEND-33)), which are read
+once, before the first connection, by whatever entry point goes on to connect. The pair comes whole
+from one place: an exported variable naming either path means the file's are not consulted, so a
+bundle in a file is never added to an exported directory. `doctor` names the file the roots came
+from.
+
 **Why.** A network that inspects TLS presents a certificate from an authority whoever set the
 machine up has already installed, and every other client on it honours these two variables. A
 program that read neither would refuse every connection over an authority its user had already
@@ -198,6 +205,8 @@ that nothing is trusted.
 `verified-by: bravebot_net::transport::a_path_that_yields_nothing_does_not_discard_one_that_does`
 `verified-by: bravebot_net::transport::every_named_path_that_yields_nothing_is_reported_rather_than_the_first`
 `verified-by: bravebot_cli::doctor::the_network_section_names_every_path_that_yielded_nothing`
+`verified-by: bravebot_net::transport::a_certificate_file_a_settings_file_names_is_what_is_trusted`
+`verified-by: bravebot_net::transport::exported_roots_replace_the_files_rather_than_joining_them`
 `verified-by: bravebot_net::transport::a_client_gets_the_built_in_roots_when_nothing_names_others`
 `verified-by: bravebot_net::lib::the_one_way_out_is_built_against_the_stated_transport_rather_than_a_default_client`
 
@@ -210,6 +219,16 @@ is then set on each client explicitly rather than left to a library's default. A
 protocol this build cannot connect through is not carried at all. `doctor` names the proxy by
 protocol, host and port, the hosts it is not used for, and whether it requires a credential, or says
 that a proxy was named and is not the route; the credential itself is never printed.
+
+Where the environment names none of the three, the person's settings file may
+([BACKEND-33](backends.md#BACKEND-33)), for a process a launcher or a service started with no shell
+profile. The answer comes whole from the environment when it names any of them, whether or not that
+value parses, so a file's `ALL_PROXY` never outranks an exported `HTTPS_PROXY` by the order the
+variables are read in and an exported variable that names no route is reported rather than replaced.
+`NO_PROXY` is the one name read on its own: an exported one applies to a route a file stated and the
+file's is not consulted beside it, and the file's applies when nothing was exported. A project or
+local file's value is never used. `doctor` names the file that stated the proxy, and a checkout's
+file that stated one as read and not used, neither with the value.
 
 A variable that is set and non-empty and whose value cannot be read as a proxy address is named too,
 one line each, in the order the variables are read and in either case. That covers a value that is
@@ -279,6 +298,15 @@ did, since the usual mistake is a uri missing its scheme and the username stays 
 `verified-by: bravebot_cli::doctor::the_network_section_names_the_hosts_a_proxy_is_not_used_for`
 `verified-by: bravebot_cli::doctor::the_network_section_names_the_roots_in_force_and_the_proxy`
 `verified-by: bravebot_cli::doctor::the_network_section_never_prints_a_proxy_credential`
+`verified-by: bravebot_net::transport::a_proxy_a_settings_file_states_is_the_one_a_client_carries`
+`verified-by: bravebot_net::transport::an_exported_proxy_beats_the_file_whatever_names_each_used`
+`verified-by: bravebot_net::transport::an_exported_proxy_that_does_not_parse_is_not_replaced_by_the_file`
+`verified-by: bravebot_net::transport::a_proxy_in_the_file_that_does_not_parse_is_named_and_is_not_the_route`
+`verified-by: bravebot_net::transport::a_file_proxy_honours_the_no_proxy_it_is_given_and_keeps_its_credential`
+`verified-by: bravebot_net::transport::an_exported_no_proxy_applies_to_a_file_proxy_in_place_of_the_files`
+`verified-by: bravebot_net::transport::a_settings_file_hands_over_the_six_names_and_nothing_else`
+`verified-by: bravebot_cli::doctor::the_network_section_names_the_file_that_stated_the_proxy_and_the_one_that_was_ignored`
+`verified-by: bravebot_cli::doctor::the_network_section_names_no_file_when_the_environment_decided`
 
 <a id="NET-9"></a>
 ### NET-9: a redirect may not take an https chain into cleartext

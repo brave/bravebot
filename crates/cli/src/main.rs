@@ -274,6 +274,9 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     let layers = bravebot_config::Settings::load();
     bravebot_config::sandbox_network::settle(&layers);
     bravebot_config::git_identities::settle(&layers);
+    // And the proxy and certificate authorities the person's own file states, before the first
+    // request any command below goes on to make resolves them from the environment alone.
+    bravebot_agent::transport::settle(&layers);
 
     // After the mode above is engaged, because an incognito session is given no directory to log
     // into, and before the first thing that could fail in a way worth recording.

@@ -82,6 +82,19 @@ pub const GOOGLE_CLOUD_PROJECT: &str = "GOOGLE_CLOUD_PROJECT";
 /// The location a Vertex AI request is made in. `global` where it is not set.
 pub const VERTEX_LOCATION: &str = "VERTEX_LOCATION";
 
+/// The names that decide what this process trusts and where it sends requests, which a settings file
+/// may state in place of the environment (BACKEND-33). Absent from ALL and from SCRUBBED: they
+/// describe a machine's network rather than a build, and are read by `bravebot-net`, which keeps the
+/// same list and is held to it by a test in `bravebot-agent`.
+pub const NETWORK: [&str; 6] = [
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "ALL_PROXY",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+];
+
 /// Every name a build may bake in, in the order `doctor` reports them.
 pub const ALL: [&str; 5] = [SIGNING_KEY, KEY_ID, ENDPOINT, PREMIUM_ENDPOINT, DEFAULT_MODEL];
 
