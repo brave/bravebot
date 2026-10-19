@@ -2030,7 +2030,8 @@ fn fire_hooks<R: Reporter + ?Sized>(
     said
 }
 
-/// Take what `prompt-shown` hooks said went wrong, and say it to the display.
+/// The confirmer fires `prompt-shown` with no reporter to hand and leaves each hook's trouble in
+/// `waiting`, so it is drained here, where the turn has one.
 fn say_prompt_notices<R: Reporter + ?Sized>(
     waiting: &std::sync::Mutex<Vec<String>>,
     reporter: &mut R,
