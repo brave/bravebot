@@ -754,7 +754,9 @@ impl<'a> AichatClient<'a> {
             return Ok(as_brave_bot(
                 Request::post(url, body)
                     .header("content-type", "application/json")
-                    .header(API_KEY_HEADER, key),
+                    // Sent on the declared socket only, so a redirect to another host does not
+                    // carry the key with it.
+                    .socket_header(API_KEY_HEADER, key),
             ));
         }
 
@@ -1492,6 +1494,13 @@ mod tests {
         serde_json::from_slice(http.body.as_ref().expect("a body")).expect("json")
     }
 
+    fn socket_header<'a>(http: &'a Request, name: &str) -> Option<&'a str> {
+        http.socket_headers
+            .iter()
+            .find(|(header, _)| header == name)
+            .map(|(_, value)| value.as_str())
+    }
+
     fn header<'a>(http: &'a Request, name: &str) -> Option<&'a str> {
         http.headers
             .iter()
@@ -1870,9 +1879,11 @@ mod tests {
             .expect("prepared");
 
         assert_eq!(
-            header(&http, API_KEY_HEADER),
+            socket_header(&http, API_KEY_HEADER),
             Some("brv_live_testkeytestkeytestkeytestkey00")
         );
+        // An ordinary header is re-sent to whatever host a redirect names, so the key is not one.
+        assert_eq!(header(&http, API_KEY_HEADER), None);
         assert_eq!(header(&http, "digest"), None);
         assert_eq!(header(&http, "authorization"), None);
         // Still Brave's endpoint, so it is still told which product is asking.
