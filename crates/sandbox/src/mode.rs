@@ -71,9 +71,10 @@ impl SandboxMode {
 
     /// Whether a program under this mode can read or write more than under `other`.
     ///
-    /// `strict` and `read-only` are each looser than the other: `read-only` reads the machine,
-    /// and `strict` writes the session's directories. A managed pin of one therefore refuses the
-    /// other.
+    /// On Linux and macOS `strict` and `read-only` are each looser than the other: `read-only`
+    /// reads the machine, and `strict` writes the session's directories. A managed pin of one
+    /// therefore refuses the other. On Windows no mode but `off` reads the machine, so `read-only`
+    /// is no looser than `strict` and a pin of `strict` keeps it.
     pub fn is_looser_than(self, other: Self) -> bool {
         self.looser_than(other).is_some()
     }
@@ -84,7 +85,16 @@ impl SandboxMode {
     /// What a refusal under a managed pin gives as its reason. The modes are not a line, so
     /// "looser" alone does not tell a person under a `strict` pin why `read-only` is refused.
     pub fn looser_than(self, other: Self) -> Option<Looser> {
-        match (self.reads() > other.reads(), self.writes() > other.writes()) {
+        self.looser_than_on(other, cfg!(windows))
+    }
+
+    /// [`Self::looser_than`] for a named platform, so the Windows ranking is testable on a host
+    /// that is not Windows.
+    pub fn looser_than_on(self, other: Self, windows: bool) -> Option<Looser> {
+        match (
+            self.reads(windows) > other.reads(windows),
+            self.writes() > other.writes(),
+        ) {
             (true, true) => Some(Looser::Both),
             (true, false) => Some(Looser::Reads),
             (false, true) => Some(Looser::Writes),
@@ -92,12 +102,15 @@ impl SandboxMode {
         }
     }
 
-    /// How much of the machine a program can read, as a rank.
-    fn reads(self) -> u8 {
-        match self {
-            Self::Strict => 0,
-            Self::ReadOnly | Self::WorkspaceWrite => 1,
-            Self::Off => 2,
+    /// How much of the machine a program can read, as a rank. On Windows only `off` reads it: the
+    /// other three build a policy that grants no read of the machine.
+    fn reads(self, windows: bool) -> u8 {
+        match (self, windows) {
+            (Self::Off, true) => 1,
+            (_, true) => 0,
+            (Self::Strict, false) => 0,
+            (Self::ReadOnly | Self::WorkspaceWrite, false) => 1,
+            (Self::Off, false) => 2,
         }
     }
 
@@ -186,18 +199,37 @@ mod tests {
     fn strict_and_read_only_are_each_looser_than_the_other() {
         use SandboxMode::{ReadOnly, Strict};
         assert!(
-            ReadOnly.is_looser_than(Strict),
+            ReadOnly.looser_than_on(Strict, false).is_some(),
             "read-only reads the machine"
         );
         assert!(
-            Strict.is_looser_than(ReadOnly),
+            Strict.looser_than_on(ReadOnly, false).is_some(),
             "strict writes the session's directories"
         );
     }
 
+    /// On Windows no mode but `off` reads the machine, so `read-only` writes less than `strict`
+    /// and reads no more: a `strict` pin keeps it, and a `read-only` pin still refuses `strict`.
+    /// The fault it rejects is the Linux ranking applied there, which refuses `read-only` under
+    /// `strict`.
+    #[test]
+    fn on_windows_read_only_is_no_looser_than_strict() {
+        use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+        assert_eq!(ReadOnly.looser_than_on(Strict, true), None);
+        assert_eq!(Strict.looser_than_on(ReadOnly, true), Some(Looser::Writes));
+        assert_eq!(
+            WorkspaceWrite.looser_than_on(Strict, true),
+            Some(Looser::Writes)
+        );
+        assert_eq!(Strict.looser_than_on(WorkspaceWrite, true), None);
+        assert_eq!(Off.looser_than_on(WorkspaceWrite, true), Some(Looser::Both));
+        assert_eq!(ReadOnly.looser_than_on(Strict, false), Some(Looser::Reads));
+    }
+
     /// A refusal under a pin says which of reading and writing the asked mode does more of, so the
     /// answer for each pair has to be the one the ranks give and not merely "looser". The fault it
-    /// rejects is an answer that names one side for every pair, or swaps the two.
+    /// rejects is an answer that names one side for every pair, or swaps the two. Ranked as Linux
+    /// and macOS do; the Windows ranking is the one above.
     #[test]
     fn a_looser_mode_reads_more_writes_more_or_both() {
         use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
@@ -211,16 +243,20 @@ mod tests {
             (Off, WorkspaceWrite, Looser::Both),
         ] {
             assert_eq!(
-                asked.looser_than(pinned),
+                asked.looser_than_on(pinned, false),
                 Some(looser),
                 "{asked} under {pinned}"
             );
         }
         for (asked, pinned) in [(Strict, WorkspaceWrite), (ReadOnly, WorkspaceWrite)] {
-            assert_eq!(asked.looser_than(pinned), None, "{asked} under {pinned}");
+            assert_eq!(
+                asked.looser_than_on(pinned, false),
+                None,
+                "{asked} under {pinned}"
+            );
         }
         for mode in SandboxMode::ALL {
-            assert_eq!(mode.looser_than(mode), None, "{mode}");
+            assert_eq!(mode.looser_than_on(mode, false), None, "{mode}");
         }
     }
 

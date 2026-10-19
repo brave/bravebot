@@ -7580,6 +7580,7 @@ mod tests {
     /// lets a program write the session, or a pin of `strict` that `read-only` goes under, which lets
     /// a program read the machine.
     #[test]
+    #[cfg(not(windows))]
     fn a_pin_of_strict_and_a_pin_of_read_only_each_refuse_the_other() {
         use crate::sandbox::resolve;
         let strict = pinned("pin-strict", r#"{"sandbox": {"mode": "strict"}}"#);
@@ -7614,6 +7615,32 @@ mod tests {
         }
     }
 
+    /// SANDBOX-22: on Windows no mode but `off` reads the machine, so a pin of `strict` keeps
+    /// `read-only`, and a pin of `read-only` still refuses `strict`, which writes the session. The
+    /// fault it rejects is the Linux ranking reaching `resolve` on Windows, which refuses `read-only`
+    /// under a `strict` pin.
+    #[test]
+    #[cfg(windows)]
+    fn on_windows_a_pin_of_strict_keeps_read_only_and_a_pin_of_read_only_refuses_strict() {
+        use crate::sandbox::resolve;
+        let strict = pinned("pin-strict-windows", r#"{"sandbox": {"mode": "strict"}}"#);
+        let read_only = pinned(
+            "pin-read-only-windows",
+            r#"{"sandbox": {"mode": "read-only"}}"#,
+        );
+        assert_eq!(
+            resolve(Some(SandboxMode::ReadOnly), &Settings::default(), &strict)
+                .map(|choice| choice.mode),
+            Ok(SandboxMode::ReadOnly)
+        );
+        assert_eq!(
+            resolve(Some(SandboxMode::Strict), &Settings::default(), &read_only)
+                .expect_err("writes the session")
+                .pinned,
+            SandboxMode::ReadOnly
+        );
+    }
+
     /// SANDBOX-22: under a pin of `read-only` a checkout's `strict` is not obeyed and refuses
     /// nothing: the session starts at the pin, a refusal names the person's file rather than the
     /// checkout's, and the checkout's file is reported with the pin. Under a pin `strict` is not
@@ -7623,6 +7650,7 @@ mod tests {
     /// that is not theirs, a checkout's `strict` dropped under every pin, and a repository's file
     /// starting a session with the writes the person withheld.
     #[test]
+    #[cfg(not(windows))]
     fn a_checkouts_strict_under_a_read_only_pin_starts_at_the_pin() {
         use crate::sandbox::{Choice, Floor, Refused, Source, resolve};
         let strict = r#"{"sandbox": {"mode": "strict"}}"#;

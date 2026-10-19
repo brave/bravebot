@@ -1929,8 +1929,9 @@ it nothing holds a network shut; the floor below is what stops a managed pin fro
 A mode is looser than another when a program under it can read or write more. `off` is looser than
 every other mode, and `workspace-write` is looser than `read-only`, which reads the same machine and
 writes less. `strict` reads less than `read-only` and writes the session's directories, which
-`read-only` does not, so each of the two is looser than the other. The ranking is the one Linux and
-macOS give, on every platform.
+`read-only` does not, so each of the two is looser than the other. That is the ranking on Linux and
+macOS. On Windows no mode but `off` reads the machine, so `read-only` is no looser than `strict`, which a
+managed pin of `strict` therefore keeps, and `strict` is still looser than `read-only`.
 
 The mode is read, in this order, from `--sandbox <mode>` (the last one wins), from the `sandbox.mode`
 key of the settings, and from the managed file's pin; the default is `workspace-write`. In the settings, the home file and a `--settings` file outside
@@ -2035,8 +2036,8 @@ mode answers it.
 not name; the person reads the refusal sentence ([SANDBOX-19](#SANDBOX-19)) and chooses `workspace-write` or
 adds the directory. `off` is the whole of the confinement removed: a window never offers it, and
 the command line prints it on its opening line. On Windows, where `read-only` reads no more than
-`strict` and writes less, a pin of `strict` still refuses `read-only`, and the refusal says
-`read-only` reads more of the machine, since the ranking is the one Linux and macOS give. Under
+`strict` and writes less, a pin of `strict` keeps `read-only`, while a pin of `read-only` still
+refuses `strict`, which writes the session's directories. Under
 bypass, a `workspace-write` stage of the lead
 session writes every path outside the refusals [SANDBOX-28](#SANDBOX-28) lists, which includes
 shell start-up files and other repositories on the machine. Under `read-only`, a program that writes
@@ -2053,6 +2054,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_sandbox::mode::off_is_the_loosest_and_workspace_write_writes_more_than_read_only`
 `verified-by: bravebot_sandbox::mode::strict_and_read_only_are_each_looser_than_the_other`
 `verified-by: bravebot_sandbox::mode::a_looser_mode_reads_more_writes_more_or_both`
+`verified-by: bravebot_sandbox::mode::on_windows_read_only_is_no_looser_than_strict`
 `verified-by: bravebot_agent::confine::under_read_only_a_toolchain_writes_no_cache`
 `verified-by: bravebot_agent::confine::read_only_lends_no_network_and_no_remote_scope`
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
