@@ -112,7 +112,20 @@ pub fn side_request_model<'a>(
     egress: &bravebot_net::Egress,
     session_model: Option<&'a str>,
 ) -> Result<std::borrow::Cow<'a, str>, SideModelRefusal> {
-    let Some(named) = config.summary() else {
+    named_model_or_session(config, egress, config.summary(), session_model)
+}
+
+/// The model a call runs on: `named`, resolved, where it names one, and the session's own otherwise.
+///
+/// The question [`side_request_model`] puts for `summaryModel`, with the name passed in so a second
+/// setting is held to the same answers (PROC-13).
+pub fn named_model_or_session<'a>(
+    config: &'a bravebot_config::Config,
+    egress: &bravebot_net::Egress,
+    named: Option<String>,
+    session_model: Option<&'a str>,
+) -> Result<std::borrow::Cow<'a, str>, SideModelRefusal> {
+    let Some(named) = named else {
         return Ok(std::borrow::Cow::Borrowed(
             session_model.unwrap_or(&config.default_model),
         ));
@@ -136,7 +149,8 @@ pub fn side_request_model<'a>(
     }
 }
 
-/// Why the model `summaryModel` named cannot be the one a side request runs on.
+/// Why the model a setting named, `summaryModel` or `processorModel`, cannot be the one a call runs
+/// on.
 ///
 /// Each holds the resolved name. A named type rather than the name alone, so a `?` added later over
 /// some other `Result<_, String>` cannot be read as one of these.

@@ -4113,6 +4113,16 @@ where
                 output.origin.clone()
             };
 
+            // A processor answered by a model other than the one `processorModel` named (PROC-13).
+            if let Some(written) = &output.substituted {
+                let said =
+                    bravebot_i18n::t!(processor_model_substituted, model = written).to_string();
+                reporter.notice(said.clone());
+                state
+                    .notices
+                    .push(crate::skills::Notice::from_message(said));
+            }
+
             // A read of a file the planner may not see reserves the slot instead of filling
             // it. The planner is told the same thing either way, a reference and a size, and
             // the file is opened when a processor or a write finally needs the bytes.

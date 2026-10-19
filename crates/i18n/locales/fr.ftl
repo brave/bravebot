@@ -529,6 +529,9 @@ doctor-settings-fallback-ignored =
 doctor-settings-summary-ignored =
     summaryModel dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-processor-ignored =
+    processorModel dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-agent-ignored =
     agent dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
@@ -2942,6 +2945,15 @@ summary-model-refused =
 summary-model-not-served =
     { $model } est défini comme modèle de résumé et aucun service configuré ne le sert : rien n'a
     été envoyé
+processor-model-needs-sign-in =
+    { $model } est défini comme modèle de traitement et exige d'abord une connexion : rien n'a été envoyé
+processor-model-refused =
+    { $model } est défini comme modèle de traitement et les réglages gérés de cette machine ne
+    l'autorisent pas : rien n'a été envoyé
+processor-model-not-served =
+    { $model } est défini comme modèle de traitement et aucun service configuré ne le sert : rien n'a
+    été envoyé
+processor-model-substituted = Un processeur a demandé { $model } et un autre modèle a répondu
 delegate-skills-not-found =
     { $count ->
         [one] { $definition } nomme une compétence que cette session n'a pas trouvée, si bien qu'elle n'est pas proposée à son délégué : { $skills }

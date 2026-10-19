@@ -607,6 +607,8 @@ doctor-settings-fallback-ignored =
     fallbackModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-summary-ignored =
     summaryModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-processor-ignored =
+    processorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-agent-ignored =
     agent in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-style-ignored =
@@ -3503,6 +3505,19 @@ summary-model-refused =
 # a judge or a summariser answering without the exchange reads as a verdict rather than a failure.
 summary-model-not-served =
     { $model } is set as the summary model and no configured service answers for it, so nothing was sent
+# The model `processorModel` named, from the person's own settings file. A processor call is refused
+# rather than sent to the turn's model, since the setting is a cost boundary.
+processor-model-needs-sign-in =
+    { $model } is set as the processor model and needs a sign-in first, so nothing was sent
+# The same setting naming a model this machine's managed layer excludes (BACKEND-48).
+processor-model-refused =
+    { $model } is set as the processor model and this machine's managed settings do not allow it, so nothing was sent
+# The same setting naming a model no configured service answers for.
+processor-model-not-served =
+    { $model } is set as the processor model and no configured service answers for it, so nothing was sent
+# The endpoint substitutes a model it will not serve rather than refusing. The name it answered
+# with is left out, because a notice is the driver's own words. The model is the setting's value.
+processor-model-substituted = A processor asked for { $model } and was answered by a different model
 # A definition's skills line named skills this session did not find. The definition is its file's
 # path and the skills are that file's own words, joined with a comma, both from a vouched-for file.
 delegate-skills-not-found =

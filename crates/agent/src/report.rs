@@ -29,6 +29,25 @@ pub fn summary_model_refusal(refusal: &crate::compact::SideModelRefusal) -> Stri
     }
 }
 
+/// What a person is told when `processorModel` names a model a processor cannot run on.
+///
+/// Beside [`summary_model_refusal`] for the same reason: it names the key to correct, and a person
+/// reads it.
+pub fn processor_model_refusal(refusal: &crate::compact::SideModelRefusal) -> String {
+    use crate::compact::SideModelRefusal;
+    match refusal {
+        SideModelRefusal::NeedsSignIn(model) => {
+            bravebot_i18n::t!(processor_model_needs_sign_in, model = model).to_string()
+        }
+        SideModelRefusal::Refused(model) => {
+            bravebot_i18n::t!(processor_model_refused, model = model).to_string()
+        }
+        SideModelRefusal::NotServed(model) => {
+            bravebot_i18n::t!(processor_model_not_served, model = model).to_string()
+        }
+    }
+}
+
 use crate::diff::Change;
 use bravebot_core::todo::Row;
 use bravebot_core::vetting::Checking;

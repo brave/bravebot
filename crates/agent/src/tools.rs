@@ -157,6 +157,9 @@ pub struct Output {
     pub answers_for: Option<Option<SlotId>>,
     /// What an isolated processor said about what it did. For the person watching only.
     pub said: Option<Labelled<String>>,
+    /// The model a processor was answered by, where it is not the one `processorModel` named
+    /// (PROC-13). The turn words it for the person: this module is read by the planner.
+    pub substituted: Option<String>,
     /// The content alone, where `text` has the driver's own notes after it, so that a glimpse of
     /// a file is of the file and counts the file's lines.
     pub glimpsed: Option<Labelled<String>>,
@@ -1121,6 +1124,8 @@ struct Produced {
     /// Never part of `text`, which is what the planner is told about: this half of a processor's
     /// answer reaches a screen and stops there.
     said: Option<Labelled<String>>,
+    /// The sentence saying a processor was answered by a model other than `processorModel`'s.
+    substituted: Option<String>,
     /// The content alone, where `text` has the driver's own notes after it.
     glimpsed: Option<Labelled<String>>,
     /// The window of a file `text` shows, for the record of what the planner has been shown.
@@ -1210,6 +1215,7 @@ impl Produced {
             ran_git_in: Vec::new(),
             answers_for: None,
             said: None,
+            substituted: None,
             glimpsed: None,
             window: None,
             task_list: false,
@@ -2325,6 +2331,7 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
         told: produced.told,
         answers_for: produced.answers_for,
         said: produced.said,
+        substituted: produced.substituted,
         glimpsed: produced.glimpsed,
         window: produced.window,
         task_list: produced.task_list,
@@ -9304,6 +9311,7 @@ fn spawn_processor<S: Sink>(
                     Some(from) => format!("nothing was written and {from} is as it was"),
                     None => "there is nothing to write".to_string(),
                 };
+                let substituted = done.substituted;
                 let mut produced = confirmed(
                     format!(
                         "that answer marked no document, so {stands}. What it said is on the \
@@ -9316,6 +9324,7 @@ fn spawn_processor<S: Sink>(
                 .costing(done.usage)
                 .waiting(waited);
                 produced.said = done.note;
+                produced.substituted = substituted;
                 return produced;
             };
 
@@ -9339,6 +9348,17 @@ fn spawn_processor<S: Sink>(
                 .of_content();
             produced.answers_for = Some(spec.about().cloned());
             produced.said = done.note;
+            produced.substituted = done.substituted;
+            produced
+        }
+        Err(crate::processor::ProcessorError::Model(refusal)) => {
+            // The planner is told the call did not run and nothing more. The sentence naming the
+            // key to correct is the person's, and goes to the note.
+            let mut produced = Produced::problem(
+                "error: the configured processor model cannot be used, so nothing was sent",
+            )
+            .waiting(waited);
+            produced.note = crate::report::processor_model_refusal(&refusal);
             produced
         }
         Err(crate::processor::ProcessorError::Chat(error)) => {

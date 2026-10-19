@@ -407,7 +407,7 @@ one thing leaves everything else in force:
 | `env`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `agent`, `style`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `processorModel`, `agent`, `style`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
 | `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and a `--settings` file outside the project; a project or local file's are ignored and reported |
@@ -449,6 +449,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `advisorModel` | the model the planner may consult through the `advisor` tool ([below](#advisormodel)) |
 | `fallbackModel` | the model a turn moves to when its own keeps failing ([below](#fallbackmodel)) |
 | `summaryModel` | the model compaction summaries and `/goal` checks run on ([below](#summarymodel)) |
+| `processorModel` | the model an isolated processor runs on ([below](#processormodel)) |
 | `agent` | the definition every turn of a session is addressed to when `--agent` names none ([below](#agent)) |
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `promptCacheTtl` | how long a gateway or an AWS account keeps a cached prompt, `5m` or `1h` ([below](#promptcachettl)) |
@@ -513,7 +514,7 @@ others in force, so a mistake in a checkout cannot decide that your own file no 
 :::caution
 **A `.bravebot/settings.json` arrives with a checkout.** A repository you have just cloned cannot name
 the host every request goes to, the model, the advisor model, the fallback model, or the environment variables read as a
-gateway's credential: a `provider` block, or a `model`, `advisorModel`, `fallbackModel` or `summaryModel` key, in a project or local file is ignored, and `bravebot
+gateway's credential: a `provider` block, or a `model`, `advisorModel`, `fallbackModel`, `summaryModel` or `processorModel` key, in a project or local file is ignored, and `bravebot
 doctor` names each file whose block or key was dropped. It can still set the other keys here, so read
 a project's settings file before working in it; `doctor` names the files in force. It cannot grant a
 capability either. The names that would (`permissions.allow`, and `permissions.additionalDirectories`)
@@ -615,6 +616,31 @@ definition named do not fall back.
 **The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
 other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that names one is ignored and
 reported by `bravebot doctor`. A model your administrator refuses is not used as a fallback.
+
+The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
+
+### `processorModel`
+
+```json
+{ "processorModel": "haiku" }
+```
+
+The model an isolated processor runs on. A processor rewrites or reads a file nobody vouched for, so
+a large rewrite is billed for the whole file in and the whole file out. Naming a cheaper model here
+moves those calls onto it, while the planner keeps the model the session is using. Without the key,
+and with `"inherit"`, a processor runs on the session's model.
+
+A processor still has no tools and no memory, and a write of what it produced is approved from the
+diff of the real file, so a weaker model that rewrites a file worse shows up in that diff.
+
+A model that needs a sign-in this machine has not made, that your administrator refuses, or that no
+configured service answers for is reported and the call is not sent to the session's model instead,
+since naming a cheaper model is a limit on what bulk work costs. A processor answered by a model
+other than the one named says so.
+
+**The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
+other.** The model is sent the files a processor reads, so a `.bravebot/settings.json` or
+`.bravebot/settings.local.json` that names one is ignored and reported by `bravebot doctor`.
 
 The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
 
