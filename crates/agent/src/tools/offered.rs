@@ -991,21 +991,25 @@ fn table(
                     },
                     "unconfined": {
                         "type": "boolean",
-                        "description": "Start this one line with no sandbox, for a program \
-                                        that has to write where the sandbox does not let it, \
-                                        such as a login that stores a credential in its own \
-                                        directory, or for a line that redirects its output to \
-                                        a file outside the workspace, which a sandboxed line \
-                                        cannot do, or a script that runs git as a child \
-                                        process, which a sandboxed line on macOS cannot write a \
-                                        .git for. Ask for it whenever a line needs it: the \
-                                        user is asked about the line every time, shown the \
-                                        files it writes and told that it runs with no \
+                        "description": "Start this one line with no sandbox. Start every \
+                                        line without it first, and ask for it only after \
+                                        that same line failed because the sandbox refused it \
+                                        access: a program that has to write where the sandbox \
+                                        does not let it, such as a login that stores a \
+                                        credential in its own directory, a line that \
+                                        redirects its output to a file outside the \
+                                        workspace, which a sandboxed line cannot do, or a \
+                                        script that runs git as a child process, which a \
+                                        sandboxed line on macOS cannot write a .git for. A \
+                                        failure that is not a refusal of access, such as a \
+                                        wrong argument or a missing file, is not a reason to \
+                                        ask. Say in 'why' what the sandbox refused. The user \
+                                        is asked about the line every time, shown the files \
+                                        it writes, your reason and that it runs with no \
                                         sandbox, and no answer to it is remembered. A session \
                                         that does not accept it refuses the call with a \
-                                        sentence saying so, so you need not guess beforehand. \
-                                        What it prints is not trusted. Do not combine it with \
-                                        'scopes'."
+                                        sentence saying so. What it prints is not trusted. \
+                                        Do not combine it with 'scopes'."
                     },
                     "directory": {
                         "type": "string",

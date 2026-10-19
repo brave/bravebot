@@ -6958,8 +6958,8 @@ fn unconfined_way_out<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> &'s
     match unconfined_is_offered(policy, tools) {
         true => {
             ". A run line that redirects its output to a file there, started with \
-             'unconfined': true, can write it: the person is asked to approve that one line, \
-             which shows the file and runs with no sandbox"
+             'unconfined': true and the refusal named in 'why', can write it: the person is asked \
+             to approve that one line, which shows the file and runs with no sandbox"
         }
         false => "",
     }
@@ -12672,12 +12672,19 @@ mod tests {
         assert_eq!(properties["unconfined"]["type"], "boolean");
         let said = properties["unconfined"]["description"].as_str().unwrap();
         for told in [
-            "Ask for it whenever a line needs it",
+            "Start every line without it first",
+            "only after that same line failed because the sandbox refused it access",
+            "is not a reason to ask",
+            "Say in 'why' what the sandbox refused",
             "asked about the line every time",
             "A session that does not accept it refuses the call",
         ] {
             assert!(said.contains(told), "{told} missing from {said}");
         }
+        assert!(
+            !said.contains("Ask for it whenever a line needs it"),
+            "{said}"
+        );
         assert!(!said.contains("Only where the session is told"), "{said}");
         assert_eq!(properties["stdin_ref"]["type"], "string");
         assert_eq!(
