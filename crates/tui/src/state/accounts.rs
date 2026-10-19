@@ -171,13 +171,15 @@ impl Session {
         let spent = std::mem::take(&mut self.progress);
         self.charge(spent.tokens);
         self.spent_time(spent.timing);
-        // A turn stopped before any request completed reports nothing, and nothing must not zero the
-        // figures of the turn before it.
+        // A turn that ended before any request completed reports nothing (BACKEND-31), which is
+        // neither a zero drawn over the session's figures nor the turn before it left on the panel.
         if spent.tokens > 0 {
             self.served_from_cache(
                 spent.cached,
                 spent.tokens.saturating_sub(spent.output_tokens),
             );
+        } else {
+            self.restore_cache(None, None);
         }
         spent.tokens
     }

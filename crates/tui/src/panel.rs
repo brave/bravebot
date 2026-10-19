@@ -943,9 +943,9 @@ mod tests {
     }
 
     /// A turn stopped or failed before any request completed has reported nothing, so it neither
-    /// draws figures in a session that has none nor zeroes the ones an earlier turn left.
+    /// draws figures in a session that has none nor leaves the ones an earlier turn had (BACKEND-31).
     #[test]
-    fn a_turn_ended_before_any_request_leaves_the_cache_figures_alone() {
+    fn a_turn_ended_before_any_request_reports_no_cache_figures() {
         let figures = Cached {
             read_tokens: 12_000,
             written_tokens: 3_000,
@@ -967,8 +967,9 @@ mod tests {
             let mut earlier = Session::new("none");
             earlier.served_from_cache(figures, 20_000);
             end(&mut earlier);
-            assert_eq!(earlier.cached(), Some(figures), "fail: {fail}");
-            assert_eq!(earlier.cached_prompt_tokens(), Some(20_000), "fail: {fail}");
+            assert_eq!(earlier.cached(), None, "fail: {fail}");
+            assert_eq!(earlier.cached_prompt_tokens(), None, "fail: {fail}");
+            assert_eq!(cache_row_count(&earlier), 0, "fail: {fail}");
         }
     }
 
