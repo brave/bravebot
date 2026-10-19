@@ -1166,6 +1166,102 @@ fn an_empty_processor_reply_is_asked_for_once_more() {
     );
 }
 
+/// PROC-13: a manifest step's processor answered by another model than `processorModel` named says
+/// so, as a turn's does, naming the model as the setting wrote it.
+#[test]
+fn a_manifest_processor_answered_by_another_model_than_the_configured_one_says_so() {
+    let scratch = Scratch::new("manifest-processor-substituted");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+        ])),
+        // The mock answers as `test-model`, which is not the name that was asked for.
+        processor_reply("RAW TEXT"),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.processor_model = Some("a-model-the-service-does-not-hold".to_string());
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("shout in.md"),
+        skipping_permissions!(),
+        &mut reporter,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the run");
+
+    let said = "A processor asked for a-model-the-service-does-not-hold and was answered by a \
+                different model";
+    assert!(
+        reporter.notices.iter().any(|notice| notice == said),
+        "nobody watching was told the step was answered by another model: {:?}",
+        reporter.notices
+    );
+}
+
+/// PROC-13: a `processorModel` that needs a sign-in this machine has not made fails the manifest
+/// step. Nothing is sent to that model nor to the planner's in its place, and the file is untouched.
+#[test]
+fn a_manifest_processor_model_needing_a_sign_in_fails_the_step_and_sends_nothing() {
+    let scratch = Scratch::new("manifest-processor-sign-in");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+        ])),
+        processor_reply("NEVER ASKED FOR"),
+    ]);
+    let mut config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+        bravebot_config::env_var::USE_BEDROCK => Some("1".into()),
+        bravebot_config::env_var::AWS_REGION => Some("us-west-2".into()),
+        bravebot_config::env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+        // A profile no machine has, so no session exists whoever runs this.
+        bravebot_config::env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+        _ => None,
+    })
+    .expect("config");
+    config.processor_model = Some("haiku".to_string());
+    assert!(
+        bravebot_agent::backend::Backend::needs_sign_in(&config, &config.processor().unwrap()),
+        "the processor model would not have needed a sign-in"
+    );
+    let mut sink = RecordingSink::new();
+
+    let result = run(&config, &workspace, "shout in.md", &mut sink);
+
+    let error = format!("{result:?}");
+    assert!(
+        error.contains("haiku-arn") && error.contains("sign-in"),
+        "the step did not fail naming the model that needed a sign-in: {error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("in.md")).unwrap(),
+        "raw text"
+    );
+    // Shape and plan only: no processor request went to any model.
+    assert_eq!(received.try_iter().count(), 2);
+}
+
 /// The one further try is shared: an empty reply and then an unmarked one, or two empty ones, fail
 /// the step, and no third call is made.
 #[test]
