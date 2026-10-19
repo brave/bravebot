@@ -51,6 +51,19 @@ pub(crate) const FORGET_TRUST_COMMAND: &str = "/forget-trust";
 /// The line that lists, adds and removes the reach remembered for commands (SANDBOX-23).
 pub(crate) const REACH_COMMAND: &str = "/reach";
 
+/// The line that lists the MCP servers, starts one that is not running, or turns one off for the
+/// session (SERVERS-19).
+pub(crate) const MCP_COMMAND: &str = "/mcp";
+
+/// The word after `/mcp` that lists the servers, as the bare command does.
+pub(crate) const MCP_LIST: &str = "list";
+
+/// The word after `/mcp` that starts the servers that are not running, or the one named after it.
+pub(crate) const MCP_RECONNECT: &str = "reconnect";
+
+/// The word after `/mcp` that turns the server named after it off for the session.
+pub(crate) const MCP_DISABLE: &str = "disable";
+
 /// The line that reports the sandbox mode, or sets it from the next turn (SANDBOX-22).
 ///
 /// Typed while a turn runs, every word but `off` is carried out as typed, and the turn keeps the mode
@@ -293,7 +306,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 47] {
+pub fn commands() -> [Command; 48] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -575,6 +588,12 @@ pub fn commands() -> [Command; 47] {
             name: EXIT_COMMAND,
             argument: "",
             description: t!(command_exit),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: MCP_COMMAND,
+            argument: "[reconnect | disable] [alias]",
+            description: t!(command_mcp),
             mid_turn: MidTurn::Waits,
         },
     ]

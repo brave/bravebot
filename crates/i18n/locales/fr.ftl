@@ -1211,6 +1211,21 @@ mcp-record-not-read = il n'a pas pu être lu comme du texte, il a donc été lai
 ## Un serveur MCP distant dont la réponse pointe là où il n'est pas déclaré
 
 mcp-move-title = déclarer ce serveur là où pointe sa réponse ?
+mcp-start-title = démarrer { $alias } ?
+command-mcp = Lister les serveurs MCP, en redémarrer un, ou en désactiver un
+mcp-command-usage = /mcp accepte list, reconnect [alias] ou disable <alias>
+mcp-command-none = Aucun serveur MCP n'est demandé ici, et aucun ne fonctionne
+mcp-command-running = Serveurs MCP en cours d'exécution :
+mcp-command-not-running = Serveurs MCP demandés ici et arrêtés :
+mcp-command-not-connected = { $alias } : non connecté. /mcp reconnect { $alias } le réessaie
+mcp-command-off = { $alias } : désactivé pour cette session. /mcp reconnect { $alias } le redémarre
+mcp-command-already-running = { $alias } fonctionne déjà
+mcp-command-not-requested = { $alias } n'est pas demandé par les réglages de cette session
+mcp-command-nothing-to-reconnect = Chaque serveur MCP demandé fonctionne ou est désactivé. /mcp reconnect <alias> démarre un serveur désactivé.
+mcp-command-reconnected = { $alias } fonctionne. Ses outils vous sont présentés avant que le prochain tour ne planifie.
+mcp-command-disabled = { $alias } est désactivé pour cette session. Rien n'a été écrit.
+mcp-command-already-off = { $alias } est déjà désactivé
+mcp-command-needs-an-alias = /mcp { $command } demande l'alias d'un serveur
 mcp-move-declared = { $alias } est déclaré à { $url }
 mcp-move-destination = et sa réponse pointe vers { $url }
 mcp-move-reaching = qui atteint { $authority }

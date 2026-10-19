@@ -128,6 +128,20 @@ pub fn say<R, W: Write>(person: &mut Person<R, W>, line: impl std::fmt::Display)
     let _ = writeln!(person.screen, "{line}");
 }
 
+/// The aliases the settings in force request, each with the file that asked for it.
+///
+/// None in a safe session, where no declaration is read, so nothing is asked about and nothing
+/// starts.
+pub fn requested_by(settings: &bravebot_config::Settings) -> Vec<(PathBuf, String)> {
+    match bravebot_core::safe::engaged() {
+        true => Vec::new(),
+        false => settings
+            .mcp_requested()
+            .map(|(file, alias)| (file.to_path_buf(), alias.to_string()))
+            .collect(),
+    }
+}
+
 /// Reach the servers the settings in force request for the workspace at `root`, putting a question
 /// to `asker` where one is needed and somebody is there to answer it.
 pub fn for_this_session<A: Asker + ?Sized>(
@@ -137,34 +151,110 @@ pub fn for_this_session<A: Asker + ?Sized>(
     asker: &mut A,
     diagnostics: Stream,
 ) -> Reached {
-    // No declaration is read in a safe session, so nothing is asked about and nothing starts.
-    let requested: Vec<(PathBuf, String)> = match bravebot_core::safe::engaged() {
-        true => Vec::new(),
-        false => settings
-            .mcp_requested()
-            .map(|(file, alias)| (file.to_path_buf(), alias.to_string()))
-            .collect(),
-    };
-    let project = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let home = Home {
-        directory: crate::home::directory(),
-        writable: crate::home::writable().is_some(),
-    };
-    let mut reached = reach(
-        &requested,
-        &project,
-        &home,
-        &Managed::load(),
-        asking,
-        asker,
-        diagnostics,
-    );
+    let mut reached = reach_requested(requested_by(settings), root, asking, asker, diagnostics);
     // Said here because every way of starting assembles its servers through this function and puts
     // these notes in front of the person once, before the first turn.
     if bravebot_core::safe::engaged() {
         reached.notes.insert(0, t!(safe_mode_started).to_string());
     }
     reached
+}
+
+/// Start the servers called `aliases` among those the settings in force request, on the road a
+/// session takes as it opens (SERVERS-4, SERVERS-8): each is resolved against the person's
+/// declarations afresh, so one they have fixed since it failed is read as it is now, and the
+/// question is put again where no answer of theirs covers the declaration it resolves to.
+///
+/// An alias the settings do not request is not started, whatever it is declared as.
+pub fn reconnect<A: Asker + ?Sized>(
+    settings: &bravebot_config::Settings,
+    root: &Path,
+    aliases: &[String],
+    asking: Asking,
+    asker: &mut A,
+    diagnostics: Stream,
+) -> Reached {
+    reconnect_on(
+        settings,
+        root,
+        aliases,
+        &Machine::current(),
+        asking,
+        asker,
+        diagnostics,
+    )
+}
+
+/// As [`reconnect`], on the state directory and managed settings `machine` names, so a caller
+/// that is not the person's own session can point it at a directory of its own.
+pub fn reconnect_on<A: Asker + ?Sized>(
+    settings: &bravebot_config::Settings,
+    root: &Path,
+    aliases: &[String],
+    machine: &Machine,
+    asking: Asking,
+    asker: &mut A,
+    diagnostics: Stream,
+) -> Reached {
+    let wanted = only_named(requested_by(settings), aliases);
+    let project = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    reach(
+        &wanted,
+        &project,
+        &machine.home,
+        &machine.managed,
+        asking,
+        asker,
+        diagnostics,
+    )
+}
+
+/// What a start reads of the machine it runs on: the state directory and the administrator's
+/// settings.
+pub struct Machine {
+    pub home: Home,
+    pub managed: Managed,
+}
+
+impl Machine {
+    /// The person's own state directory and this machine's managed settings.
+    pub fn current() -> Self {
+        Self {
+            home: Home {
+                directory: crate::home::directory(),
+                writable: crate::home::writable().is_some(),
+            },
+            managed: Managed::load(),
+        }
+    }
+}
+
+/// The requests among `requested` for the servers called `aliases`, in the order they were made.
+fn only_named(requested: Vec<(PathBuf, String)>, aliases: &[String]) -> Vec<(PathBuf, String)> {
+    requested
+        .into_iter()
+        .filter(|(_, alias)| aliases.contains(alias))
+        .collect()
+}
+
+fn reach_requested<A: Asker + ?Sized>(
+    requested: Vec<(PathBuf, String)>,
+    root: &Path,
+    asking: Asking,
+    asker: &mut A,
+    diagnostics: Stream,
+) -> Reached {
+    let project = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let machine = Machine::current();
+    reach(
+        &requested,
+        &project,
+        &machine.home,
+        &machine.managed,
+        asking,
+        asker,
+        diagnostics,
+    )
 }
 
 /// Whoever is at this process's terminal: both ends, for the reason `bravebot mcp` asks for both. A
@@ -2231,6 +2321,25 @@ mod tests {
 
     fn recorded_projects(home: &Path) -> String {
         std::fs::read_to_string(mcp::projects_file(home)).unwrap_or_default()
+    }
+
+    /// A reconnect starts the servers it was asked for, not every one the settings request, and
+    /// starts none the settings do not request, whatever the person has declared under the name.
+    #[test]
+    fn a_reconnect_asks_about_the_named_servers_and_no_others() {
+        let request = |alias: &str| {
+            (
+                PathBuf::from("/project/.bravebot/settings.json"),
+                alias.to_string(),
+            )
+        };
+        let requested = vec![request("weather"), request("docs"), request("notes")];
+
+        assert_eq!(
+            only_named(requested.clone(), &words(&["notes", "weather"])),
+            vec![request("weather"), request("notes")]
+        );
+        assert!(only_named(requested, &words(&["mail"])).is_empty());
     }
 
     #[test]

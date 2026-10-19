@@ -120,6 +120,16 @@ The question is asked only where both standard input and standard output are a t
 either piped, `add` writes the declaration and tells you to run `enable` at a terminal, and
 `approve` and `enable` are refused.
 
+## Starting or stopping one during a session
+
+A server that failed to start is left out until the session ends. In the full-screen interface,
+`/mcp` lists the servers the session runs and those it asked for that are not running. `/mcp
+reconnect` starts every one that is not running, and `/mcp reconnect weather` starts that one. A
+start reads the declaration again and asks what a session asks as it opens: a server you approved
+starts without a question, and one whose declaration changed is put to you again. `/mcp disable
+weather` stops the server and drops its grant for this session. Nothing is written, so the next
+session starts it as before. Typed during a turn, the command waits for the turn to end.
+
 ### An approval is of what you were shown
 
 What you approve is the **digest**: a hash of the transport, the program and every argument, the

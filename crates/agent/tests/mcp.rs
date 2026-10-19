@@ -2258,6 +2258,102 @@ fn two_servers(scratch: &Scratch) -> (Session, [mpsc::Receiver<String>; 2]) {
 /// The one tool of the second server [`two_servers`] reaches.
 const DOCS_TOOL: &str = "mcp__docs__lookup";
 
+/// The aliases a session holds a grant for, in order.
+fn granted(session: &Session) -> Vec<String> {
+    session
+        .grants()
+        .iter()
+        .map(|grant| grant.as_str().to_string())
+        .collect()
+}
+
+/// A session joined by one a reconnect started holds the servers of both and a grant for each, and
+/// what the first was told stays told: its list was vouched for, and a start that reached it again
+/// would put the list to the person once more. A server the other holds under an alias the first
+/// holds is left out, so one alias is one server and one grant (SERVERS-19).
+#[test]
+fn a_session_joined_by_a_reconnect_keeps_the_first_servers_and_what_they_were_told() {
+    let scratch = Scratch::new("joined");
+    let (weather, _weather) = serve_weather();
+    let (docs, _docs) = serve_tool("lookup");
+    let new = |servers: Vec<Reached>| {
+        Session::new(
+            servers,
+            scratch.project(),
+            Some(scratch.state()),
+            true,
+            Managed::default(),
+        )
+    };
+    let first = new(vec![reach_as("weather", &weather)]);
+    let (endpoint, _chat) = serve_chat(vec![reply_with("done")]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(first.clone())),
+        &mut confirmer,
+    );
+    assert_eq!(
+        first.offering(),
+        vec![("weather".to_string(), Offering::Tools(1))],
+        "the first list was not vouched for, so this says nothing"
+    );
+
+    let second = new(vec![reach_as("docs", &docs), reach_as("weather", &weather)]);
+    let joined = first.joined_by(&second);
+
+    assert_eq!(joined.aliases(), vec!["weather", "docs"]);
+    assert_eq!(granted(&joined), vec!["weather", "docs"]);
+    assert_eq!(
+        joined.offering(),
+        vec![
+            ("weather".to_string(), Offering::Tools(1)),
+            ("docs".to_string(), Offering::Unasked)
+        ]
+    );
+}
+
+/// A session without a server holds no grant naming it and offers none of its tools, though its
+/// list was vouched for, and a turn does not put it to the person again. The server it keeps is
+/// untouched, and a session left with none is no session (SERVERS-19).
+#[test]
+fn a_session_without_a_server_holds_no_grant_for_it_and_offers_none_of_its_tools() {
+    let scratch = Scratch::new("without");
+    let (session, _bodies) = two_servers(&scratch);
+
+    let kept = session.without("docs").expect("weather is left");
+
+    assert_eq!(kept.aliases(), vec!["weather"]);
+    assert_eq!(granted(&kept), vec!["weather"]);
+    assert_eq!(
+        granted(&session),
+        vec!["weather", "docs"],
+        "the original changed"
+    );
+    let (endpoint, chat) = serve_chat(vec![reply_with("done")]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what can you call").with_mcp(Some(kept.clone())),
+        &mut confirmer,
+    );
+    assert_eq!(
+        confirmer.lists.len(),
+        1,
+        "the list of the server turned off was put to the person"
+    );
+    let sent = rounds(&chat);
+    let first = sent.first().expect("a round");
+    assert!(first.contains(FORECAST), "the server kept was not offered");
+    assert!(
+        !first.contains(DOCS_TOOL),
+        "a tool of the server turned off was offered: {first}"
+    );
+    assert!(kept.without("weather").is_none());
+}
+
 /// A worker holds the servers its parent holds and no other the session reached. A first turn
 /// holding both settles both lists, and the next is handed a grant for one, so neither it nor the
 /// worker it spawns is offered the other's tool, though that list was vouched for.

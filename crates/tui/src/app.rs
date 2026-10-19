@@ -444,6 +444,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if let Some(argument) = argument_to(line, REACH_COMMAND) {
         return Action::Reach(argument.to_string());
     }
+    if let Some(argument) = argument_to(line, MCP_COMMAND) {
+        return Action::Mcp(argument.to_string());
+    }
     if let Some(word) = argument_to(line, SANDBOX_COMMAND) {
         return Action::Sandbox(word.to_string());
     }
@@ -2700,6 +2703,7 @@ fn event_loop(
                 |asking| crate::ask::ask_as(terminal, asking, t!(ask_sandbox_off_title)),
             ),
             Action::Reach(argument) => held.reach(&argument),
+            Action::Mcp(argument) => held.mcp(terminal, &argument, skip_permissions),
             Action::ListCheckouts => held.list_checkouts(),
             Action::ListMemories => held.list_memories(),
             Action::RemoveCheckout(id) => held.remove_checkout_command(terminal, &id),
@@ -21345,6 +21349,59 @@ mod tests {
         assert_eq!(said.len(), 1, "{said:?}");
         assert!(said[0].contains("what the turn holds"), "{said:?}");
         assert_eq!(waiting_prompts(&session), vec!["/reach docker -- ls"]);
+    }
+
+    /// `/mcp` carries what follows it whole to the loop, and a longer word or a sentence that
+    /// mentions it is not the command (CMD-2).
+    #[test]
+    fn the_mcp_command_carries_its_words_unparsed() {
+        let mut session = Session::new("none");
+        for (line, argument) in [
+            ("/mcp", ""),
+            ("/mcp list", "list"),
+            ("/mcp reconnect weather", "reconnect weather"),
+            ("/mcp disable weather", "disable weather"),
+        ] {
+            type_line(&mut session, line);
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Mcp(argument.to_string()),
+                "{line}"
+            );
+        }
+        for line in ["/mcps", "does /mcp list work"] {
+            type_line(&mut session, line);
+            assert!(
+                !matches!(
+                    handle_key(&mut session, key(KeyCode::Enter)),
+                    Action::Mcp(_)
+                ),
+                "{line}"
+            );
+        }
+    }
+
+    /// A start puts questions to the person and takes the terminal, so typed mid-turn `/mcp` waits
+    /// behind the turn instead of running beside it (SERVERS-19).
+    #[test]
+    fn the_mcp_command_waits_for_the_turn_in_flight() {
+        let mut session = a_turn_running_on("first");
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(
+                &mut session,
+                "/mcp reconnect weather",
+                key(KeyCode::Enter),
+                beside,
+            )
+        });
+
+        let said = said_under_the_turn(&session);
+        assert!(
+            said.len() == 1 && said[0].contains("waits for the turn to end"),
+            "/mcp was carried out mid-turn: {said:?}"
+        );
+        assert_eq!(waiting_prompts(&session), vec!["/mcp reconnect weather"]);
     }
 
     /// `/sandbox` carries its word whole to the loop, bare for the report, and a longer word or a

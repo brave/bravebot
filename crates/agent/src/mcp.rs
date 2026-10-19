@@ -182,7 +182,9 @@ struct Server {
 }
 
 struct Shared {
-    servers: Vec<Server>,
+    /// Shared with the sessions [`Session::joined_by`] and [`Session::without`] make, so a server
+    /// one of them keeps is the process the other holds and is stopped when the last lets go.
+    servers: Vec<Arc<Server>>,
     /// The workspace root, which answer 2 of a call records and is read against. It moves with the
     /// session, since a standing answer is about the project a person is in.
     project: Mutex<PathBuf>,
@@ -271,13 +273,15 @@ impl Session {
     ) -> Self {
         let servers = reached
             .into_iter()
-            .map(|reached| Server {
-                alias: reached.alias().to_string(),
-                declaration: Mutex::new(reached.declaration),
-                local: matches!(reached.connection, Connection::Stdio(_)),
-                state: Mutex::new(State::Unasked(reached.listing)),
-                connection: Mutex::new(reached.connection),
-                _home: reached.home,
+            .map(|reached| {
+                Arc::new(Server {
+                    alias: reached.alias().to_string(),
+                    declaration: Mutex::new(reached.declaration),
+                    local: matches!(reached.connection, Connection::Stdio(_)),
+                    state: Mutex::new(State::Unasked(reached.listing)),
+                    connection: Mutex::new(reached.connection),
+                    _home: reached.home,
+                })
             })
             .collect();
         Self(Arc::new(Shared {
@@ -286,6 +290,48 @@ impl Session {
             directory,
             writable,
             managed,
+        }))
+    }
+
+    /// This session's servers and those of `other`, in that order, as a session of their own.
+    ///
+    /// The servers are the ones both hold, not copies: a list's answer already given stays given,
+    /// and nothing is started again. `other` supplies no server whose alias this session holds.
+    pub fn joined_by(&self, other: &Session) -> Session {
+        let mut servers = self.0.servers.clone();
+        servers.extend(
+            other
+                .0
+                .servers
+                .iter()
+                .filter(|added| servers.iter().all(|kept| kept.alias != added.alias))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        self.with_servers(servers)
+    }
+
+    /// This session without the server called `alias`, as a session of its own, or `None` where
+    /// that leaves no server. The grant naming it goes with it (SERVERS-9), and its process stops
+    /// once no turn still holds the session this was made from.
+    pub fn without(&self, alias: &str) -> Option<Session> {
+        let servers: Vec<Arc<Server>> = self
+            .0
+            .servers
+            .iter()
+            .filter(|server| server.alias != alias)
+            .cloned()
+            .collect();
+        (!servers.is_empty()).then(|| self.with_servers(servers))
+    }
+
+    fn with_servers(&self, servers: Vec<Arc<Server>>) -> Session {
+        Self(Arc::new(Shared {
+            servers,
+            project: Mutex::new(held(&self.0.project).clone()),
+            directory: self.0.directory.clone(),
+            writable: self.0.writable,
+            managed: self.0.managed.clone(),
         }))
     }
 

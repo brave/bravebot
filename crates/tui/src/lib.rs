@@ -43,6 +43,7 @@ pub mod logo;
 pub mod loops;
 pub mod manifest_run;
 pub mod markdown;
+pub mod mcp_command;
 pub mod model_prompt;
 pub mod panel;
 pub mod picking;

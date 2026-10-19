@@ -18,7 +18,9 @@ use super::chrome::{
 };
 use super::note::{self, Noted};
 use super::pinned::{self, Drawn, Question, Seen};
-use super::{Answer, Next, Response, answer_for, ask_plain, next_press};
+use super::{
+    Answer, Approves, Next, Response, Step, answer_for, ask_plain, ask_scrolled, next_press,
+};
 
 /// Put the language-server question to the user.
 ///
@@ -108,6 +110,117 @@ pub(super) fn draw_server(
         frame,
         inside,
         Question::scrolled(lines, usize::MAX, 0, &keys),
+        scroll,
+        seen,
+    )
+}
+
+/// Put SERVERS-4's question about one server to the person, blocking until answered.
+///
+/// The answer is `No` wherever the question cannot be drawn or the terminal cannot be read, and
+/// for Ctrl-C, which leaves the server out and stops nothing else: no turn is waiting on this.
+pub fn ask_to_start<B: Backend>(
+    terminal: &mut Terminal<B>,
+    question: &bravebot_agent::servers::Question<'_>,
+) -> bravebot_agent::servers::Answer {
+    use bravebot_agent::servers::Answer as Start;
+    let lines = question.lines();
+    ask_scrolled(
+        terminal,
+        Start::No,
+        |frame, scroll, seen| draw_start(frame, question.alias, &lines, scroll, seen),
+        |key, drawn| start_answer_for(key, drawn).map(Step::from),
+    )
+}
+
+impl Approves for bravebot_agent::servers::Answer {
+    fn approves(&self) -> bool {
+        match self {
+            Self::Once | Self::Project => true,
+            Self::No => false,
+        }
+    }
+}
+
+/// One key at the server question, or `None` for a key that answers nothing.
+///
+/// `1` and `2` are the answers the plain terminal takes, and are taken only once every row of the
+/// declaration has been drawn. `y` is not an answer here, since a yes with two meanings is the
+/// one a person should have to choose between.
+pub(super) fn start_answer_for(
+    key: KeyEvent,
+    drawn: &Drawn,
+) -> Option<Response<bravebot_agent::servers::Answer>> {
+    use bravebot_agent::servers::Answer as Start;
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Char('c') => Some(Response::Answer(Start::No)),
+            _ => None,
+        };
+    }
+    let page = drawn.page();
+    drawn.take(match key.code {
+        KeyCode::Char('1') => Some(Response::Answer(Start::Once)),
+        KeyCode::Char('2') => Some(Response::Answer(Start::Project)),
+        KeyCode::Char('3' | 'n' | 'N') | KeyCode::Esc => Some(Response::Answer(Start::No)),
+        KeyCode::Up | KeyCode::Char('k') => Some(Response::Scroll(-1)),
+        KeyCode::Down | KeyCode::Char('j') => Some(Response::Scroll(1)),
+        KeyCode::PageUp => Some(Response::Scroll(-page)),
+        KeyCode::PageDown => Some(Response::Scroll(page)),
+        KeyCode::Home => Some(Response::Scroll(i16::MIN)),
+        KeyCode::End => Some(Response::Scroll(i16::MAX)),
+        // Not an approval, for the reason Enter is not one at any other prompt here.
+        _ => None,
+    })
+}
+
+/// Draw the server question: the declaration as `bravebot mcp` draws it, then the three answers.
+///
+/// Every row of the declaration decides the question, since an approval binds to all of it
+/// (SERVERS-5), and no row that approves is taken until every one has been drawn.
+pub(super) fn draw_start(
+    frame: &mut ratatui::Frame,
+    alias: &str,
+    lines: &[String],
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
+    let area = centred(frame.area());
+    let inside = panel(
+        frame,
+        area,
+        theme::note(),
+        &t!(mcp_start_title, alias = alias),
+    );
+    let width = inside.width as usize;
+    let muted = Style::default().fg(theme::muted());
+
+    let mut body = Vec::new();
+    for (nth, line) in lines.iter().enumerate() {
+        let style = match nth {
+            0 => Style::default().add_modifier(Modifier::BOLD),
+            _ => muted,
+        };
+        body.extend(indented(line.trim_end(), style, width));
+    }
+    let keys = |answerable| {
+        let approving = approving(theme::ok(), answerable);
+        vec![
+            Line::from(Span::raw(format!("  {}", t!(mcp_question)))),
+            Line::from(vec![
+                Span::styled("  1", approving),
+                Span::raw(format!(" {}    ", t!(servers_answer_once))),
+                Span::styled("2", approving),
+                Span::raw(format!(" {}    ", t!(servers_answer_project))),
+                Span::styled("3", refusing()),
+                Span::raw(format!(" {}", t!(servers_answer_no))),
+            ]),
+        ]
+    };
+    pinned::draw(
+        frame,
+        inside,
+        Question::scrolled(body, usize::MAX, 0, &keys),
         scroll,
         seen,
     )

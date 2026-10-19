@@ -2660,6 +2660,7 @@ fn interactive(
         confined: reached.confined(),
         notes: std::mem::take(&mut reached.notes),
         session: reached.session(),
+        disabled: Vec::new(),
     };
 
     match bravebot_tui::app::run(
