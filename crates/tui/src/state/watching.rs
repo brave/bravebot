@@ -191,6 +191,8 @@ impl Session {
                     state: JobState::Running,
                     stop,
                 }),
+                live: Vec::new(),
+                live_total: 0,
             }),
             JobEvent::Ended { name, outcome } => {
                 if let Some(row) = self.job_row(&name) {
@@ -198,6 +200,14 @@ impl Session {
                     if let Some(job) = row.job.as_mut() {
                         job.state = JobState::Ended;
                     }
+                }
+            }
+            // Replaces what the last event held rather than adding to it: each is the newest of
+            // everything unread, so appending would draw the same lines twice (WATCH-24).
+            JobEvent::Printed { name, lines, total } => {
+                if let Some(row) = self.job_row(&name) {
+                    row.live = lines;
+                    row.live_total = total;
                 }
             }
             JobEvent::Dropped { name } => {

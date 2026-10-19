@@ -93,12 +93,23 @@ pub struct Output {
     /// One row for the whole of a job's life, made when it starts, so it is the row a person finds
     /// a running build at rather than one that appears the first time the planner looks.
     pub job: Option<JobView>,
+    /// The last lines a running job has printed that no look has handed the planner, drawn after
+    /// `lines` and gone at the next look, which reads them (WATCH-24).
+    ///
+    /// Screen only: nothing is decided from them and they are written nowhere (WATCH-12).
+    pub live: Vec<String>,
+    /// How many unread lines there were altogether, so the view can say what `live` left out.
+    pub live_total: usize,
 }
 
 impl Output {
     /// Whether the planner read what the row holds, or `None` for a job that has printed nothing
-    /// yet, where there is nothing it could have read or been kept from.
+    /// yet, where there is nothing it could have read or been kept from. A row holding lines no
+    /// look has returned says the planner has not read them, whatever earlier looks found.
     pub fn read(&self) -> Option<bool> {
+        if !self.live.is_empty() {
+            return Some(false);
+        }
         (self.job.is_none() || self.total > 0).then_some(self.read_by_the_planner)
     }
 }

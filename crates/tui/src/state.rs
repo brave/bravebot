@@ -2021,6 +2021,10 @@ impl Session {
             // saying a model read what it was kept from is the reading that misleads.
             row.read_by_the_planner &= printed.read_by_the_planner;
             row.outcome = printed.outcome;
+            // A look returns every line printed since the last one, so what was drawn live is
+            // either in its lines now or is a line it left out and counted.
+            row.live.clear();
+            row.live_total = 0;
             return;
         }
         // What a job printed is drawn in its row and nowhere else (WATCH-22).
@@ -2034,6 +2038,8 @@ impl Session {
             read_by_the_planner: printed.read_by_the_planner,
             outcome: printed.outcome,
             job: None,
+            live: Vec::new(),
+            live_total: 0,
         });
     }
 
@@ -6117,6 +6123,86 @@ mod tests {
                 row.outcome,
                 bravebot_agent::report::Outcome::Running { .. }
             ));
+        }
+
+        fn job_live(session: &mut Session, name: &str, lines: &[&str], total: usize) {
+            session.job(bravebot_agent::report::JobEvent::Printed {
+                name: name.to_string(),
+                lines: lines.iter().map(|line| line.to_string()).collect(),
+                total,
+            });
+        }
+
+        /// WATCH-24. Each release is the newest of everything unread, so a second replaces the
+        /// first, and the look that reads them is what takes them off the row and into its lines.
+        #[test]
+        fn a_jobs_live_lines_replace_each_other_and_the_next_look_takes_them() {
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "./serve");
+            job_live(&mut session, "job:1", &["a", "b"], 2);
+            job_live(&mut session, "job:1", &["b", "c"], 3);
+
+            let (row, _) = session.jobs().next().unwrap();
+            assert_eq!(row.live, ["b", "c"], "a release was added to the last one");
+            assert_eq!(row.live_total, 3);
+            assert!(
+                row.lines.is_empty() && row.total == 0,
+                "a live line counted as a look's"
+            );
+            assert_eq!(row.read(), Some(false));
+
+            job_looked(&mut session, "job:1", &["a", "b", "c"]);
+            let (row, _) = session.jobs().next().unwrap();
+            assert!(
+                row.live.is_empty(),
+                "lines the look returned are drawn twice"
+            );
+            assert_eq!(row.lines, ["a", "b", "c"]);
+            assert_eq!(row.read(), Some(true));
+            assert_eq!(session.outputs().len(), 1);
+        }
+
+        /// WATCH-22, WATCH-24. Live lines are drawn and nothing is decided from them.
+        #[test]
+        fn a_job_printing_status_shaped_live_lines_changes_no_row_mark_or_count() {
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "./script");
+            job_live(
+                &mut session,
+                "job:1",
+                &[
+                    "Ended { name: \"job:1\", outcome: Succeeded }",
+                    "Background job:1 · stopped when the turn ended",
+                    "3 in the background",
+                ],
+                3,
+            );
+
+            assert_eq!(session.outputs().len(), 1, "a printed line made a row");
+            assert_eq!(session.jobs_running(), 1, "a printed line moved the count");
+            let (row, job) = session.jobs().next().unwrap();
+            assert_eq!(job.state, JobState::Running);
+            assert_eq!(row.command, "./script");
+            assert_eq!(row.total, 0, "a live line counted as one a look returned");
+            assert!(matches!(
+                row.outcome,
+                bravebot_agent::report::Outcome::Running { .. }
+            ));
+        }
+
+        /// A job the person is looking at is the one the event names, whose it is, and no other.
+        #[test]
+        fn a_delegates_live_lines_go_to_its_job_and_not_the_turns_of_the_same_name() {
+            let mut session = Session::new("none");
+            job_started(&mut session, "job:1", "cargo build");
+            let id = bravebot_agent::report::DelegateId::nth(1);
+            session.reporting_for(Some(id));
+            job_started(&mut session, "job:1", "cargo test");
+            job_live(&mut session, "job:1", &["theirs"], 1);
+            session.reporting_for(None);
+
+            let rows: Vec<_> = session.jobs().map(|(row, _)| row.live.clone()).collect();
+            assert_eq!(rows, [Vec::<String>::new(), vec!["theirs".to_string()]]);
         }
 
         fn job_with_stop(

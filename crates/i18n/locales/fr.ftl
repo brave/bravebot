@@ -1526,6 +1526,10 @@ watching-output-more = { $count ->
     [one] 1 ligne de plus a été affichée et n'est pas conservée
    *[other] { $count } lignes de plus ont été affichées et ne sont pas conservées
     }
+watching-output-live-more = { $count ->
+    [one] 1 ligne plus ancienne n'est pas affichée ici et reste non lue
+   *[other] { $count } lignes plus anciennes ne sont pas affichées ici et restent non lues
+    }
 run-line-sent = le modèle a écrit :
 run-writes = il écrit ces fichiers :
 run-is-fed = le contenu de ceci lui est fourni :

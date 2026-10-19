@@ -1753,6 +1753,10 @@ watching-output-more = { $count ->
     [one] 1 more line was printed and is not kept
    *[other] { $count } more lines were printed and are not kept
     }
+watching-output-live-more = { $count ->
+    [one] 1 earlier line is not shown here and is still unread
+   *[other] { $count } earlier lines are not shown here and are still unread
+    }
 run-line-sent = the model wrote:
 run-writes = it writes these files:
 run-is-fed = it is fed the contents of:

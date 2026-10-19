@@ -1465,6 +1465,66 @@ mod tests {
             assert!(!row.contains("read"), "{row}");
         }
 
+        /// WATCH-23, WATCH-24. Lines no look has returned are drawn under the margin and the
+        /// row and view say the model has not read them, whatever an earlier look found.
+        #[test]
+        fn a_jobs_live_lines_are_marked_as_unread_even_after_a_look_that_was_read() {
+            let mut session = Session::new("kernel-enforced");
+            job_started(&mut session, "job:1", "sleep 600");
+            session.job(bravebot_agent::report::JobEvent::Printed {
+                name: "job:1".to_string(),
+                lines: vec!["LIVE-NEWEST".to_string()],
+                total: 4,
+            });
+            session.watch();
+            let screen = rendered(&session);
+            assert!(screen.contains("the model has not read this"), "{screen}");
+            let drawn = screen
+                .lines()
+                .find(|row| row.contains("LIVE-NEWEST"))
+                .unwrap_or_else(|| panic!("the live line was not drawn: {screen}"));
+            assert!(drawn.contains(QUARANTINE_BAR), "{drawn}");
+            assert!(screen.contains("3 earlier lines"), "{screen}");
+
+            let mut listing = Session::new("kernel-enforced");
+            job_started(&mut listing, "job:1", "sleep 600");
+            ran(&mut listing, "cargo test", true, &["ok"], 1);
+            listing.job(bravebot_agent::report::JobEvent::Printed {
+                name: "job:1".to_string(),
+                lines: vec!["LIVE-NEWEST".to_string()],
+                total: 1,
+            });
+            listing.watch();
+            let row = row_naming(&listed(&listing, 90, 24), "job:1");
+            assert!(row.contains("not read"), "{row}");
+
+            session.command_printed(bravebot_agent::report::Printed {
+                command: "sleep 600".to_string(),
+                lines: vec!["LOOKED".to_string()],
+                total: 1,
+                read_by_the_planner: true,
+                outcome: bravebot_agent::report::Outcome::Running {
+                    ran_for: std::time::Duration::from_secs(1),
+                    waited: None,
+                },
+                job: Some("job:1".to_string()),
+            });
+            session.job(bravebot_agent::report::JobEvent::Printed {
+                name: "job:1".to_string(),
+                lines: vec!["AFTER-THE-LOOK".to_string()],
+                total: 1,
+            });
+            let screen = rendered(&session);
+            assert!(
+                screen.contains("the model has not read this"),
+                "an earlier look's reading stood for lines it never returned: {screen}"
+            );
+            assert!(
+                screen.contains("LOOKED") && screen.contains("AFTER-THE-LOOK"),
+                "{screen}"
+            );
+        }
+
         /// A delegate numbers its jobs from one as the turn does, so its job's row and view say
         /// whose job it is, and the turn's say only the name.
         #[test]
