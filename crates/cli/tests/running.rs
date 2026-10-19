@@ -10812,7 +10812,7 @@ fn a_server_question_is_held() -> HeldServer {
     let mut seen = BufReader::new(terminal.try_clone().expect("clone"));
     shown_until(&mut seen, "trust this directory?");
     writeln!(terminal, "n").expect("answer the question");
-    shown_until(&mut seen, "[1/2/3]");
+    shown_until(&mut seen, "[y/N]");
     HeldServer {
         home,
         gateway,
@@ -10853,7 +10853,7 @@ fn a_server_nobody_approved_is_held_by_a_background_session_until_answered() {
         "the model was asked before the server question was answered"
     );
 
-    writeln!(held.terminal, "3").expect("answer the question");
+    writeln!(held.terminal, "n").expect("answer the question");
     let transcript = shown_until(&mut held.seen, "all done");
     assert!(
         transcript.contains("weather is not used in this session"),
@@ -10876,7 +10876,7 @@ fn a_server_nobody_approved_is_held_by_a_background_session_until_answered() {
 fn a_server_approved_at_the_held_question_is_started() {
     let mut held = a_server_question_is_held();
 
-    writeln!(held.terminal, "1").expect("answer the question");
+    writeln!(held.terminal, "y").expect("answer the question");
     let transcript = shown_until(&mut held.seen, "all done");
     // The server is confined and writes nothing, so the report that it was started and did not
     // finish its handshake is what says it was launched.

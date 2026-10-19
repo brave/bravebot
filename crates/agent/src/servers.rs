@@ -107,6 +107,12 @@ pub trait Asker {
 
     /// SERVERS-11's question about a remote server whose handshake was redirected. Whether it moved.
     fn ask_to_move(&mut self, request: &MoveRequest) -> bool;
+
+    /// Whether what this asker is told may be written into the state directory. A session in lines
+    /// answers no, so nothing it was told outlives it (CLI-14).
+    fn records(&self) -> bool {
+        true
+    }
 }
 
 /// The other end of a question at a terminal: where an answer is read, where things are shown, and
@@ -194,11 +200,18 @@ pub fn reach<A: Asker + ?Sized>(
     asker: &mut A,
     diagnostics: Stream,
 ) -> Reached {
+    // What an asker that records nothing is told is kept no more than an incognito session's is.
+    // A server's own directory under the state directory is not an answer, so a start still reads
+    // `home`.
+    let answering = &Home {
+        directory: home.directory.clone(),
+        writable: home.writable && asker.records(),
+    };
     let mut notes = Vec::new();
     let plans = settle(
         requested,
         project,
-        home,
+        answering,
         managed,
         asking,
         asker,
@@ -208,7 +221,7 @@ pub fn reach<A: Asker + ?Sized>(
     );
     let mut hops = Vec::new();
     let mut started = start(plans, home, diagnostics, &mut notes, &mut hops);
-    let moving = moves(hops, home, managed, asking, asker, &mut notes);
+    let moving = moves(hops, answering, managed, asking, asker, &mut notes);
     if !moving.is_empty() {
         let plans = moving
             .iter()
@@ -250,7 +263,7 @@ pub fn reach<A: Asker + ?Sized>(
             let Some(moving) = moving.iter().find(|moving| moving.alias == server.alias()) else {
                 continue;
             };
-            if moved(home, moving, &mut notes) {
+            if moved(answering, moving, &mut notes) {
                 started.push(server);
             }
         }
@@ -260,8 +273,8 @@ pub fn reach<A: Asker + ?Sized>(
         Session::new(
             started,
             project.to_path_buf(),
-            home.directory.clone(),
-            home.writable,
+            answering.directory.clone(),
+            answering.writable,
             managed.clone(),
         )
     });
@@ -3970,6 +3983,66 @@ done
         let now = Declaration::http(redirected.moved_to.clone()).expect("moved");
         assert_eq!(declared_in(&redirected.home), now);
         assert!(Approvals::read(&redirected.home).approves(&now.digest()));
+    }
+
+    /// An asker that records nothing is incognito for the answers it gives, even where the state
+    /// directory is writable: a yes to the server question approves nothing, and a yes to a move
+    /// rewrites nothing (CLI-14). A fault that kept the writability the home states keeps both.
+    #[test]
+    fn an_asker_that_records_nothing_keeps_neither_a_yes_to_a_server_nor_to_a_move() {
+        struct InLines(Person<&'static [u8], Vec<u8>>);
+
+        impl Asker for InLines {
+            fn anybody_there(&self) -> bool {
+                self.0.anybody_there()
+            }
+
+            fn ask_to_start(&mut self, question: &Question<'_>) -> Answer {
+                self.0.ask_to_start(question)
+            }
+
+            fn ask_to_move(&mut self, request: &MoveRequest) -> bool {
+                self.0.ask_to_move(request)
+            }
+
+            fn records(&self) -> bool {
+                false
+            }
+        }
+
+        let redirected = redirected("cli-servers-asker-records-nothing");
+        std::fs::remove_file(mcp::approvals_file(&redirected.home)).expect("unapproved");
+        let requested = vec![(
+            redirected.project.join(".bravebot/settings.json"),
+            "weather".to_string(),
+        )];
+        let home = Home {
+            directory: Some(redirected.home.clone()),
+            writable: true,
+        };
+        let mut asker = InLines(Person {
+            answers: b"1\ny\n",
+            screen: Vec::new(),
+            present: true,
+        });
+
+        let reached = reach(
+            &requested,
+            &redirected.project,
+            &home,
+            &Managed::at(&managed_beside(&redirected.home)),
+            Asking::Person,
+            &mut asker,
+            Stream::Null,
+        );
+
+        let screen = String::from_utf8(asker.0.screen).expect("screen");
+        assert!(screen.contains(t!(mcp_move_title)), "{screen}");
+        assert!(screen.contains(t!(mcp_move_this_session_only)), "{screen}");
+        assert_eq!(reached.aliases(), vec!["weather"], "{:?}", reached.notes);
+        assert!(!mcp::approvals_file(&redirected.home).exists());
+        assert!(!mcp::projects_file(&redirected.home).exists());
+        assert_eq!(declared_in(&redirected.home), redirected.declared);
     }
 
     /// A session that writes nothing says so on the prompt, and a yes starts the server where it

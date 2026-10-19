@@ -397,19 +397,8 @@ fn run(
 
     // After that question, and put on the same two streams every other question here is. Held for
     // the length of the session, since dropping one stops its server.
-    let mut terminal;
-    let mut attached;
-    let asker: &mut dyn bravebot_agent::servers::Asker = if hosted {
-        attached = Attached(&mut asking);
-        &mut attached
-    } else {
-        terminal = crate::mcp::Person {
-            answers: &mut asking.input,
-            screen: &mut asking.output,
-            present: true,
-        };
-        &mut terminal
-    };
+    let mut attached = Attached(&mut asking);
+    let asker: &mut dyn bravebot_agent::servers::Asker = &mut attached;
     let mut reached = bravebot_agent::servers::for_this_session(
         &settings,
         workspace.root(),
@@ -1143,8 +1132,8 @@ pub struct Prompting<R: BufRead, W: Write> {
     kind: Option<Held>,
 }
 
-/// Puts the questions about starting a tool server to whoever attaches, and holds them until one
-/// does (BG-7).
+/// Puts the questions about starting a tool server in lines, to whoever attaches where nobody is at
+/// the terminal, and holds them until one does (BG-7). Nothing it is told is recorded (CLI-14).
 struct Attached<'a, R: BufRead, W: Write>(&'a mut Prompting<R, W>);
 
 impl<R: BufRead, W: Write> bravebot_agent::servers::Asker for Attached<'_, R, W> {
@@ -1156,24 +1145,23 @@ impl<R: BufRead, W: Write> bravebot_agent::servers::Asker for Attached<'_, R, W>
         &mut self,
         question: &bravebot_agent::servers::Question<'_>,
     ) -> bravebot_agent::servers::Answer {
-        use bravebot_agent::servers::{Answer, Question};
+        use bravebot_agent::servers::Answer;
         self.0.say("");
-        for line in question.lines() {
-            self.0.say(&line);
-        }
-        self.0.say("");
-        for line in question.choices() {
-            self.0.say(&line);
-        }
         self.0.about(Held::Server);
-        match self.0.answer(&Question::answer_prompt()) {
-            Some(typed) => Answer::typed(&typed),
-            None => Answer::No,
+        // The one-answer form of every other question here: no second key, so the project answer is
+        // not offered, and only the affirmative starts the server (CLI-14).
+        match self.0.ask(&question.lines(), t!(mcp_question)) {
+            Decision::Approve => Answer::Once,
+            Decision::Reject => Answer::No,
         }
     }
 
     fn ask_to_move(&mut self, request: &MoveRequest) -> bool {
         matches!(self.0.confirm_move(request), Decision::Approve)
+    }
+
+    fn records(&self) -> bool {
+        false
     }
 }
 
@@ -3005,21 +2993,26 @@ mod tests {
         fn received(&mut self, _on: Waiting, _line: Option<&str>) {}
     }
 
-    /// BG-7: a server question is put to whoever attaches as a held question of its own kind, and
-    /// is read as the foreground reads it. A reader at the end of its input declines, so a session
-    /// nobody answers for is never given a server.
+    /// BG-7, CLI-14: a server question is put to whoever attaches as a held question of its own
+    /// kind, in the one-answer line form. Only `y` starts the server; `1` and `2`, which the
+    /// interface that draws reads as yes and as yes-for-the-project, are not answers here, and the
+    /// end of the input declines, so a session nobody answers for is never given a server.
     #[test]
-    fn a_server_question_is_held_as_its_own_kind_and_read_as_the_foreground_reads_it() {
+    fn a_server_question_is_held_as_its_own_kind_and_has_one_answer() {
         use bravebot_agent::servers::{Answer, Asker, Question};
 
         let declaration =
             bravebot_config::mcp::Declaration::http("https://news.example/mcp".to_string())
                 .expect("declaration");
         for (typed, expected) in [
-            (&b"1\n"[..], Answer::Once),
-            (b"2\n", Answer::Project),
+            (&b"y\n"[..], Answer::Once),
+            (b"Y\n", Answer::Once),
+            (b"1\n", Answer::No),
+            (b"2\n", Answer::No),
             (b"3\n", Answer::No),
+            (b"yes\n", Answer::No),
             (b"what\n", Answer::No),
+            (b"\n", Answer::No),
             (b"", Answer::No),
         ] {
             let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -3044,8 +3037,27 @@ mod tests {
             );
             let screen = String::from_utf8(asking.output).expect("text");
             assert!(screen.contains("news"), "{screen}");
-            assert!(screen.contains("[1/2/3]"), "{screen}");
+            assert!(screen.contains(t!(mcp_question)), "{screen}");
+            assert!(screen.contains(t!(line_answer)), "{screen}");
+            for offered in ["[1/2/3]", t!(servers_answer_project)] {
+                assert!(
+                    !screen.contains(offered),
+                    "an answer that records was offered: {screen}"
+                );
+            }
         }
+    }
+
+    /// CLI-14: nothing a session in lines is told about a server outlives it, which the asker
+    /// states to the code that would write the answer.
+    #[test]
+    fn the_server_asker_in_lines_records_nothing() {
+        use bravebot_agent::servers::Asker;
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(Vec::new())),
+            Vec::new(),
+        );
+        assert!(!Attached(&mut asking).records());
     }
 
     fn a_message_to_ask_about() -> bravebot_agent::confirm::MessageRequest {
