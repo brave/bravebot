@@ -1195,15 +1195,13 @@ mod tests {
     /// A blank line at an idle prompt is not a prompt, so the stored last prompt stays.
     #[test]
     fn a_blank_line_leaves_the_last_prompt_alone() {
-        let mut job = Job::starting(
-            ID.to_string(),
-            std::path::Path::new("/work"),
-            "fix",
-            Mode::Ask,
-        );
-        job.typed("   ");
-        job.typed("");
-        assert_eq!(job.prompt, "fix");
+        let shared = a_shared();
+        let mut watching = Watching(Arc::clone(&shared));
+        watching.waiting(Waiting::Prompt);
+        watching.received(Waiting::Prompt, Some("   "));
+        watching.received(Waiting::Prompt, Some(""));
+        let published = shared.roster.get(ID).expect("entry");
+        assert_eq!(published.job.prompt, "fix the build");
     }
 
     /// BG-8: the process runs in the mode it was started in, and an entry made for a process
