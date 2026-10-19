@@ -180,10 +180,22 @@ def selftest():
     cask_text = done[Path("Casks/bravebot.rb")]
     installer = next(text for path, text in done.items() if path.name.endswith(".installer.yaml"))
     checks.append(("a release writes the cask and three manifests", len(done) == 4, sorted(done)))
-    checks.append(("the cask holds each macOS digest", all(good[a].strip() in cask_text for a in CASK_ASSETS.values()), cask_text))
-    checks.append(("the manifest holds each Windows digest, in upper case",
-                   all(good[a].strip().upper() in installer for a in WINGET_ASSETS.values()), installer))
-    checks.append(("the cask names the fixed repository", f"{RELEASE_URL}/v#{{version}}/" in cask_text, cask_text))
+    # Each digest has to sit beside its own architecture and asset: a swap of arm and intel puts
+    # every digest in the text and installs the wrong binary.
+    cask_arch = dict(re.findall(r'(\w+): "(\w+)"', re.search(r"arch (.*)", cask_text).group(1)))
+    cask_digest = dict(re.findall(r'(arm|intel):\s+"([0-9a-f]+)"', re.search(r"sha256 arm:.*\n.*", cask_text).group(0)))
+    for platform, asset in CASK_ASSETS.items():
+        checks.append((f"the cask pairs {platform} with the digest of {asset}",
+                       cask_digest.get(platform) == good[asset].strip()
+                       and asset == f"bravebot-darwin-{cask_arch.get(platform)}", cask_text))
+    checks.append(("the cask names the fixed repository", f"{RELEASE_URL}/v#{{version}}/bravebot-darwin-#{{arch}}" in cask_text, cask_text))
+    entries = {m[0]: m for m in re.findall(
+        r"- Architecture: (\S+)\n  InstallerUrl: (\S+)\n  InstallerSha256: (\S+)\n", installer)}
+    checks.append(("the manifest has one entry per Windows architecture", sorted(entries) == sorted(WINGET_ASSETS), installer))
+    for arch, asset in WINGET_ASSETS.items():
+        _, url, sha = entries.get(arch, (arch, None, None))
+        checks.append((f"the manifest pairs {arch} with the url and upper case digest of {asset}",
+                       url == f"{RELEASE_URL}/v0.9.0/{asset}" and sha == good[asset].strip().upper(), installer))
 
     for asset in assets:
         none, why, left = attempt("v0.9.0", good, skip=asset)

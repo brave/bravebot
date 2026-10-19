@@ -67,7 +67,7 @@ One fixed line per installation, composed from nothing: not from the answer, not
 not from the environment.
 
 **Why.** This is a line somebody pastes into a shell, so no part of it may come from anywhere a
-value arrives from. Offering the wrong one of the two is its own harm and not a smaller one: the
+value arrives from. Offering the wrong one of the four is its own harm and not a smaller one: the
 npm command against a script install puts a second copy on the machine and updates neither. A
 package manager's own line is the same: `brew upgrade --cask bravebot` and `winget upgrade
 Brave.Bravebot`, which update only what that manager installed.
@@ -75,7 +75,7 @@ Brave.Bravebot`, which update only what that manager installed.
 The same four literals answer `bravebot update` ([CLI-29](cli.md#CLI-29)), which is why they and
 the installation they are chosen by sit in the configuration surface rather than beside the
 startup line: a presentation crate may not reach another one
-([LAYER-1](layering.md#LAYER-1)), and two copies of the pair would be two commands to keep in step.
+([LAYER-1](layering.md#LAYER-1)), and two copies of the four would be four commands to keep in step.
 
 `verified-by: bravebot_tui::update::a_newer_version_is_announced_along_with_the_command_that_installs_it`
 `verified-by: bravebot_tui::update::a_script_install_is_given_the_script_again`

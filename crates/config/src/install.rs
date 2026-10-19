@@ -16,6 +16,7 @@
 //! Nothing here asks a registry anything. The command is a literal per installation, and which
 //! installation this is comes from the launcher's word and a path on disk.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 /// What the npm launcher sets [`crate::env_var::INSTALLED_VIA`] to.
@@ -106,14 +107,11 @@ fn method(via: Option<&str>, running: Option<&Path>, recorded: Option<&Path>) ->
 /// under neither and is not told to ask a package manager for an update it did not come from.
 fn package_manager(running: &Path) -> Option<Install> {
     let resolved = std::fs::canonicalize(running).unwrap_or_else(|_| running.to_path_buf());
-    let names: Vec<String> = resolved
-        .components()
-        .map(|part| part.as_os_str().to_string_lossy().into_owned())
-        .collect();
-    let below = |parent: &str, name: &dyn Fn(&str) -> bool| {
+    let names: Vec<&OsStr> = resolved.components().map(|part| part.as_os_str()).collect();
+    let below = |parent: &str, name: &dyn Fn(&OsStr) -> bool| {
         names
             .windows(2)
-            .any(|pair| pair[0].eq_ignore_ascii_case(parent) && name(&pair[1]))
+            .any(|pair| pair[0].eq_ignore_ascii_case(parent) && name(pair[1]))
     };
     // Homebrew's own directory for casks, then the package's name: another cask's binary under it
     // is not this one's.
@@ -122,8 +120,9 @@ fn package_manager(running: &Path) -> Option<Install> {
     }
     // WinGet names a portable package's directory `<identifier>_<source>`.
     if below("Packages", &|name| {
-        name.get(..15)
-            .is_some_and(|head| head.eq_ignore_ascii_case("Brave.Bravebot_"))
+        name.as_encoded_bytes()
+            .get(..15)
+            .is_some_and(|head| head.eq_ignore_ascii_case(b"Brave.Bravebot_"))
     }) && names.iter().any(|part| part.eq_ignore_ascii_case("WinGet"))
     {
         return Some(Install::Winget);

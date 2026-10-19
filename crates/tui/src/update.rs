@@ -459,6 +459,31 @@ mod tests {
         assert!(!said.contains("npm install"), "the wrong command: {said}");
     }
 
+    /// A package manager's copy is told its manager's own upgrade command, read from the release
+    /// listing like the script's, and never the npm or script line, which would put a second copy
+    /// beside the one the manager owns.
+    #[test]
+    fn a_package_manager_install_is_given_its_managers_upgrade_command() {
+        let brew = line(Install::Homebrew, version(0, 5, 0), version(1, 0, 0)).expect("newer");
+        assert!(brew.contains("brew upgrade --cask bravebot"), "{brew}");
+        let winget = line(Install::Winget, version(0, 5, 0), version(1, 0, 0)).expect("newer");
+        assert!(winget.contains("winget upgrade Brave.Bravebot"), "{winget}");
+        for said in [&brew, &winget] {
+            assert!(!said.contains("npm install"), "the wrong command: {said}");
+            assert!(!said.contains("install.sh"), "the wrong command: {said}");
+        }
+        let listing = br#"{"tag_name":"v0.7.2"}"#;
+        for install in [Install::Homebrew, Install::Winget] {
+            assert_eq!(
+                version_in(install, listing),
+                Some(version(0, 7, 2)),
+                "{install:?} did not read the release listing"
+            );
+            assert_eq!(install.source(), Install::Script.source());
+            assert_eq!(install.other(), Install::Npm);
+        }
+    }
+
     /// Saying nothing is the ordinary case: most launches are of the newest version, and a line
     /// about it every time is what makes people stop reading the startup screen.
     #[test]
