@@ -3097,14 +3097,19 @@ remembered prefix. `p` vouches for no line and does not make a later line's outp
 **Recorded.** The `sandbox` gate's detail names `unconfined` and says the line was covered by a prefix
 ([TRACE-1](trace.md#TRACE-1)).
 
-**Why.** The exact key asks for a line a person read whole. A prefix is a looser key, and the reports
-that led to the exact one were each a remembered answer covering more than the line read: an entry
-that ignored a redirection, the directory or a step's environment, a reference, a path rendered
-lossily, a list of spellings that missed the next one, and a long value that pushed the deciding rows
-off the screen. Each condition above answers one of them, and the table answers the argument that a
-prefix covers: only a program somebody has read the whole option list of may carry one, and what
-follows it is literal or asked about. What a person gets in return is one answer for the line they
-repeat.
+**Why.** The exact key asks for a line a person read whole. A prefix is a looser key, and a looser key
+covers more than the line the person read whenever it leaves something out. A prefix that ignores a
+redirection, `stdin_ref`, an assignment or another tree runs a line whose input or output the person
+never saw, which the single-stage condition rules out. One that ignores the directory covers the same
+words in a checkout the person did not read, which the one-tree condition rules out. One that ignores
+a step's environment, a credential scope or a toolchain list runs with access the person did not
+grant, which the same single-stage condition rules out. One that holds a reference, or a path
+rendered lossily, covers whatever the reference or the rendering later stands for, which the
+bytes-only key rules out. One that matches an open-ended list of spellings covers the spelling nobody
+listed, which the literal table rules out, as it does an argument after the prefix that makes the
+program run another program. One whose deciding rows are pushed off the screen by a long value is
+approved unread, which the rule that `p` takes no answer until the prefix and the sentence are shown
+rules out. What a person gets in return is one answer for the line they repeat.
 
 **What it costs.** A covered line runs with the person's own access and no sandbox, and with no
 question, as often as the planner asks, including at a moment the person did not expect. The prefix
