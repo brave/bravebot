@@ -221,6 +221,8 @@ struct Beside<'a> {
     /// The configuration the turn was started with. The turn holds a copy of its own, so `/model`
     /// may change this one for the turn after.
     config: &'a mut Config,
+    /// The managed settings, read once before the turn, which `/sandbox` holds a mode to (CMD-8).
+    managed: &'a bravebot_config::Managed,
 }
 
 /// A press during a turn that is not one of the keys that only stop it.
@@ -271,9 +273,7 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         // reached this arm without one gets the refusal to ask, which keeps the mode.
         Action::Sandbox(word) => session.answer_while_working(|session| {
             let kept = session.sandbox_mode();
-            crate::sandbox_command::run(session, &word, &bravebot_config::Managed::load(), |_| {
-                Vec::new()
-            });
+            crate::sandbox_command::run(session, &word, beside.managed, |_| Vec::new());
             if session.sandbox_mode() != kept {
                 session.note(t!(session_sandbox_turn_keeps_its_mode).to_string());
             }
@@ -5385,7 +5385,9 @@ fn run_turn_animated(
     });
 
     let home = bravebot_agent::home::directory();
+    let managed = bravebot_config::Managed::load();
     let mut beside = Beside {
+        managed: &managed,
         stored,
         root: workspace.root(),
         home: home.as_deref(),
@@ -11365,6 +11367,7 @@ mod tests {
             bravebot_stamp::BUILD,
         );
         press(&mut Beside {
+            managed: &bravebot_config::Managed::default(),
             stored: &mut stored,
             root,
             home: None,
@@ -20034,6 +20037,7 @@ mod tests {
             "/rename deploy watch",
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -20093,6 +20097,7 @@ mod tests {
             EXPORT_COMMAND,
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root: &root,
                 home: None,
@@ -20150,6 +20155,7 @@ mod tests {
             &format!("{EXPORT_COMMAND} ../elsewhere.md"),
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root: &root,
                 home: None,
@@ -20373,6 +20379,7 @@ mod tests {
             &format!("/pr {PULL}"),
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -20519,6 +20526,7 @@ mod tests {
             "/note the wrong file was edited",
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -20567,6 +20575,7 @@ mod tests {
             NOTE_COMMAND,
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -20704,6 +20713,7 @@ mod tests {
             "/rename deploy watch",
             ctrl_enter(),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -20741,6 +20751,7 @@ mod tests {
             STATUS_COMMAND,
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -20803,6 +20814,7 @@ mod tests {
             FORGET_TRUST_COMMAND,
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root: &root,
                 home: Some(&home),
@@ -21310,6 +21322,55 @@ mod tests {
             assert!(said[0].contains(mode.name()), "{said:?}");
             assert!(said[1].contains("keeps the mode it began with"), "{said:?}");
         }
+    }
+
+    /// A mode looser than the managed floor is refused mid-turn as at rest (CMD-8, SANDBOX-22): the
+    /// turn is handed the `Managed` read before it, not a default. The regression it rejects is the
+    /// arm reading no pin, which would set the looser mode and add the note about the turn.
+    #[test]
+    fn a_looser_sandbox_mode_than_the_pin_is_refused_mid_turn() {
+        let dir = crate::testutil::scratch_dir("mid-turn-sandbox-pin");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let file = dir.join("managed.json");
+        std::fs::write(&file, r#"{"sandbox": {"mode": "strict"}}"#).expect("managed file");
+        let managed = bravebot_config::Managed::at(&file);
+        let mut session = a_turn_running_on("first");
+        session.set_sandbox_mode(bravebot_sandbox::SandboxMode::Strict);
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        typed_during_a_turn(
+            &mut session,
+            "/sandbox read-only",
+            key(KeyCode::Enter),
+            &mut Beside {
+                managed: &managed,
+                stored: &mut stored,
+                root,
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut a_config_needing_no_sign_in(),
+            },
+        );
+
+        assert_eq!(
+            session.sandbox_mode(),
+            bravebot_sandbox::SandboxMode::Strict
+        );
+        assert!(session.queued.is_empty());
+        let said = said_under_the_turn(&session);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("managed.json"), "{said:?}");
+        assert!(
+            !said[0].contains("keeps the mode it began with"),
+            "{said:?}"
+        );
     }
 
     /// The bare word reports the mode and changes nothing, mid-turn as at rest, with no sentence
