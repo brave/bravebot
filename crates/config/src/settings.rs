@@ -837,8 +837,22 @@ impl Settings {
             home_layer.clone(),
             checkout.map(project_settings_file),
             checkout.map(local_settings_file),
-        ]
-        .map(|layer| layer.filter(|layer| Some(layer.as_path()) != named));
+        ];
+        // A named path that is one of those files is read once, whatever it was spelled as: a
+        // relative name or a link reaches the same file under a different string, and comparing
+        // strings would read it a second time as the named layer. It takes the found layer's own
+        // spelling, so everything below that tells the layers apart by path still does.
+        let named = named.map(|named| {
+            let file = resolved(named);
+            found_layers
+                .iter()
+                .flatten()
+                .find(|layer| resolved(layer) == file)
+                .map_or_else(|| named.to_path_buf(), PathBuf::clone)
+        });
+        let named = named.as_deref();
+        let found_layers =
+            found_layers.map(|layer| layer.filter(|layer| Some(layer.as_path()) != named));
         let [home_path, project_path, local_path] = found_layers;
         let paths = [
             home_path,
@@ -4573,6 +4587,45 @@ mod tests {
             self
         }
 
+        /// The same file as [`Layers::naming_the_project_layer`], reached by a `..` out of and back
+        /// into the directory, which is a different string for it as a relative name is.
+        fn naming_the_project_layer_by_another_spelling(mut self) -> Self {
+            self.named = Some(
+                self.cwd
+                    .join(PROJECT_DIR)
+                    .join("..")
+                    .join(PROJECT_DIR)
+                    .join(SETTINGS_FILE),
+            );
+            self
+        }
+
+        /// The same file as [`Layers::naming_the_project_layer`], reached through a symbolic link
+        /// that sits outside every layer directory.
+        #[cfg(unix)]
+        fn naming_the_project_layer_by_a_link(mut self) -> Self {
+            let link = self.cwd.join("project-settings-link.json");
+            std::os::unix::fs::symlink(self.cwd.join(PROJECT_DIR).join(SETTINGS_FILE), &link)
+                .expect("link to the project layer");
+            self.named = Some(link);
+            self
+        }
+
+        /// The same file as [`Layers::naming_the_project_layer`], as a name relative to the
+        /// process's working directory, which is where a `--settings` argument is resolved.
+        fn naming_the_project_layer_by_a_relative_name(mut self) -> Self {
+            let here = std::env::current_dir().expect("working directory");
+            let file = self.cwd.join(PROJECT_DIR).join(SETTINGS_FILE);
+            let mut relative = PathBuf::new();
+            for _ in here.components().skip(1) {
+                relative.push("..");
+            }
+            relative.extend(file.components().skip(1));
+            assert!(relative.is_relative());
+            self.named = Some(relative);
+            self
+        }
+
         /// A file the command line named that nobody wrote, for the failure case.
         fn naming_nothing(mut self) -> Self {
             self.named = Some(
@@ -5304,6 +5357,53 @@ mod tests {
         assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["A_TOKEN"]);
         assert_eq!(settings.get("AWS_PROFILE"), Some("shared"));
         assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
+    }
+
+    /// The clause is about the file and not the string: a relative name or a `..` reaches a found
+    /// layer's file under another spelling, and comparing spellings read it a second time.
+    #[test]
+    fn a_command_line_file_spelled_differently_from_a_layer_is_read_once() {
+        let settings = Layers::new("named-twice-spelled")
+            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .naming_the_project_layer_by_another_spelling()
+            .read();
+
+        assert_eq!(settings.layers().count(), 2);
+        assert_eq!(settings.overridden().count(), 0);
+        assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["A_TOKEN"]);
+    }
+
+    /// [`resolved`] merges the spellings `canonicalize` can: a `..`, a link and a relative name. It
+    /// does not merge a hard link, which is a second directory entry for one inode and not a
+    /// path that leads to the first, nor a spelling that differs only in case on a case-sensitive
+    /// filesystem, where it is another file. Those stay a second read of the same bytes
+    /// (TRUST-2), which costs a layer counted twice and no more reach.
+    #[cfg(unix)]
+    #[test]
+    fn a_command_line_link_to_a_layer_is_read_once() {
+        let settings = Layers::new("named-twice-linked")
+            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .naming_the_project_layer_by_a_link()
+            .read();
+
+        assert_eq!(settings.layers().count(), 2);
+        assert_eq!(settings.overridden().count(), 0);
+        assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["A_TOKEN"]);
+    }
+
+    #[test]
+    fn a_command_line_relative_name_for_a_layer_is_read_once() {
+        let settings = Layers::new("named-twice-relative")
+            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .naming_the_project_layer_by_a_relative_name()
+            .read();
+
+        assert_eq!(settings.layers().count(), 2);
+        assert_eq!(settings.overridden().count(), 0);
+        assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["A_TOKEN"]);
     }
 
     /// A named file that is also a found layer is read after all three, not at its own position,
