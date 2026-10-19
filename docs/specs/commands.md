@@ -360,8 +360,8 @@ does not read:
   the turn still drawn behind it, and is left with Escape or Ctrl-C, which stop nothing. A question
   the turn asks takes the screen for as long as it is open, and the list is there again once it is
   answered. The theme under the cursor is in force while the list is open, and Escape puts back the
-  one that was. A row taken is carried out as a name typed is, and what it says is held under the
-  turn. A list still open when the turn ends stays open and takes the next key. The roster `/model`
+  one that was. A row taken is carried out as a name typed is, and what it says goes into the
+  transcript as it is said. A list still open when the turn ends stays open and takes the next key. The roster `/model`
   lists is asked for on the thread that draws the turn, so a slow listing holds the drawing, and
   any question the turn asks, until it returns.
 - **`/advisor`.** It names the model a later turn's planner may consult
@@ -378,8 +378,8 @@ does not read:
 
 - **`/export`.** It reads the transcript, which the session keeps, and writes a file under the
   working directory by the rules it has at rest ([SESSION-17](sessions.md#SESSION-17)): a path that
-  leaves the directory or names a file that is already there is refused, and the refusal is said
-  under the turn. The turn works in that directory, but a new file there changes neither the
+  leaves the directory or names a file that is already there is refused, and the refusal goes into
+  the transcript as it is said. The turn works in that directory, but a new file there changes neither the
   directory it works in nor what it may reach, and a name that is taken is never replaced, so
   nothing the turn wrote is lost to it. The file holds the transcript as it stands when the line is
   typed, so a reply the turn is still writing is not in it, and neither is a prompt waiting behind
@@ -431,13 +431,13 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_command_that_changes_something_waits_behind_what_was_typed_first`
 `verified-by: bravebot_tui::app::export_typed_mid_turn_writes_the_transcript_as_it_stands`
 `verified-by: bravebot_tui::app::export_typed_mid_turn_refuses_a_path_outside_the_working_directory`
-`verified-by: bravebot_tui::app::every_command_carried_out_mid_turn_answers_under_the_turn`
+`verified-by: bravebot_tui::app::every_command_carried_out_mid_turn_answers_in_the_transcript`
 `verified-by: bravebot_tui::app::ctrl_enter_on_a_rename_mid_turn_hurries_nothing`
 `verified-by: bravebot_tui::app::trust_forgotten_mid_turn_is_forgotten_as_it_is_typed`
 `verified-by: bravebot_tui::app::an_effort_named_mid_turn_is_set_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_theme_or_an_effort_nobody_has_is_refused_mid_turn`
 `verified-by: bravebot_tui::app::a_command_that_opens_a_picker_opens_it_as_it_is_typed_mid_turn`
-`verified-by: bravebot_tui::app::a_level_picked_in_a_picker_opened_mid_turn_is_kept_and_said_under_the_turn`
+`verified-by: bravebot_tui::app::a_level_picked_in_a_picker_opened_mid_turn_is_kept_and_said_in_the_transcript`
 `verified-by: bravebot_tui::app::leaving_a_picker_opened_mid_turn_does_not_stop_the_turn`
 `verified-by: bravebot_tui::app::a_picker_still_open_when_the_turn_ends_goes_on_at_rest`
 `verified-by: bravebot_tui::app::a_row_taken_while_another_working_loop_runs_is_carried_out_afterwards`
