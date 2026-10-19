@@ -235,8 +235,11 @@ impl Job {
         }
     }
 
-    /// Record the last prompt the person typed.
+    /// Record the last prompt the person typed. A blank line is not a prompt and leaves it alone.
     pub fn typed(&mut self, prompt: &str) {
+        if prompt.trim().is_empty() {
+            return;
+        }
         self.prompt = bounded(prompt);
     }
 
