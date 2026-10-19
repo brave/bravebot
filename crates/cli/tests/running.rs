@@ -9112,6 +9112,7 @@ fn the_usage_tables() -> (Vec<String>, Vec<String>) {
 
 /// The words the usage lines put after `bravebot <command>`, for a command that takes subcommands:
 /// `login` and `status` for `auth`. A word that opens with `[`, `<` or `-` is an argument or a flag.
+#[cfg(unix)]
 fn usage_words_after(command: &str) -> Vec<String> {
     let scratch = Scratch::new(&format!("cli-running-usage-after-{command}"));
     let output = bravebot(&scratch.path, &[], &["--help"]);
