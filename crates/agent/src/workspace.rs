@@ -4174,7 +4174,11 @@ impl Workspace {
         let git_key = match absolute {
             true => {
                 let resolved = self.root.join(in_repository(named, ".git"));
-                to_key(&resolved.to_string_lossy(), BACKSLASH_SEPARATES).into_owned()
+                // The map is keyed by text, and a lossy rendering would let two roots share a key.
+                let Some(text) = resolved.to_str() else {
+                    return Err(crate::git::Declined::Untrusted);
+                };
+                to_key(text, BACKSLASH_SEPARATES).into_owned()
             }
             false => self.git_dir_key(named),
         };
