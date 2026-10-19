@@ -80,14 +80,14 @@ impl Registry for Install {
     fn url(self) -> &'static str {
         match self {
             Self::Npm => NPM_URL,
-            Self::Script => RELEASES_URL,
+            Self::Script | Self::Homebrew | Self::Winget => RELEASES_URL,
         }
     }
 
     fn field(self) -> &'static str {
         match self {
             Self::Npm => "version",
-            Self::Script => "tag_name",
+            Self::Script | Self::Homebrew | Self::Winget => "tag_name",
         }
     }
 
@@ -96,14 +96,14 @@ impl Registry for Install {
     fn source(self) -> &'static str {
         match self {
             Self::Npm => "npm",
-            Self::Script => "releases",
+            Self::Script | Self::Homebrew | Self::Winget => "releases",
         }
     }
 
     fn other(self) -> Self {
         match self {
             Self::Npm => Self::Script,
-            Self::Script => Self::Npm,
+            Self::Script | Self::Homebrew | Self::Winget => Self::Npm,
         }
     }
 }
