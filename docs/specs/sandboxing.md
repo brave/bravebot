@@ -3073,8 +3073,7 @@ condition below holds, and in no other case it is asked about as [SANDBOX-29](#S
 - **Every condition [SANDBOX-29](#SANDBOX-29) puts on accepting `unconfined` still holds.** The mode
   is not `strict`, `read-only` or `off`, the workspace is trusted, a managed `run.network` is not
   `closed`, and the caller is not a delegate. A rule that says ask, or deny, decides first
-  ([PERM-14](permissions.md#PERM-14)). A front end that cannot ask refuses the request as it does
-  today, so a prefix on file is never read by a run with nobody to ask or by the desktop. The mode that
+  ([PERM-14](permissions.md#PERM-14)). A front end that cannot ask refuses the request, so a prefix on file is never read by a run with nobody to ask or by the desktop. The mode that
   asks nothing does not accept the request either.
 - **The answer is for one tree.** A prefix remembered for the session is forgotten by `/cd`, `/clear`
   and `/branch`. A prefix remembered past the session is written to the record of that directory, in a
@@ -3088,7 +3087,7 @@ a sentence saying that a later line starting with it runs with no sandbox and no
 tree, that nothing after the prefix is covered, and where the answer is recorded. `p` is offered next
 to `y` and `n` only for a line the table covers, and takes no answer until both the prefix and the
 sentence are on the screen. A prompt whose prefix or sentence does not fit is not offered `p`.
-`a`, `r`, `f`, `m` and `e` are not offered, as before.
+`a`, `r`, `f`, `m` and `e` are not offered for an `unconfined` line ([SANDBOX-29](#SANDBOX-29)).
 
 **What it prints is quarantined** as the output of a line the person did not read as written:
 untrusted and private ([RUN-4](tools/run.md#RUN-4)), and the transcript says the line ran under a
