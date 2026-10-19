@@ -16977,6 +16977,97 @@ fn a_processor_answered_by_another_model_than_the_configured_one_says_so() {
     );
 }
 
+/// PROC-1: the processor's request is built from nothing each time. It carries no tool list, none
+/// of the conversation that led to the call, and it is made once, whatever the reply asks for.
+#[test]
+fn a_processors_request_has_no_tool_list_no_history_and_no_second_round() {
+    let scratch = Scratch::new("processor-request-shape");
+    std::fs::write(scratch.path.join("config.py"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"config.py"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"PROCESSOR-INSTRUCTION"}"#,
+        ),
+        // The processor answers with a call, which a second round would have to act on.
+        tool_request_saying(
+            &format!(
+                "{}\nSAFE OUTPUT",
+                bravebot_core::processor::ProcessorSpec::NOTE_MARKER
+            ),
+            "write_file",
+            r#"{"path":"evil.txt","contents":"injected"}"#,
+        ),
+        tool_request(
+            "write_file",
+            r#"{"path":"config.py","contents_ref":"ref:3"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("PLANNER-TASK-TEXT rewrite the config"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<serde_json::Value> = received
+        .try_iter()
+        .map(|body| serde_json::from_str(&body).expect("a JSON request"))
+        .collect();
+    // The processor's request opens with its own system text, which no other request does.
+    let processor: Vec<&serde_json::Value> = bodies
+        .iter()
+        .filter(|body| {
+            body["messages"][0]
+                .to_string()
+                .contains("You are an isolated processor")
+        })
+        .collect();
+    assert_eq!(
+        processor.len(),
+        1,
+        "the processor is asked once, and its reply's call is not a reason to ask again"
+    );
+    assert!(
+        processor[0].get("tools").is_none(),
+        "the processor's request carries a tool list: {}",
+        processor[0]
+    );
+    assert_eq!(
+        processor[0]["messages"].as_array().map(Vec::len),
+        Some(2),
+        "the processor's request is its system text and the pieces it reads, and nothing else"
+    );
+    assert!(
+        !scratch.path.join("evil.txt").exists(),
+        "a processor's tool call was carried out"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("config.py")).unwrap(),
+        "SAFE OUTPUT\n",
+        "what the processor said is the reference the planner wrote"
+    );
+    let text = processor[0].to_string();
+    assert!(
+        !text.contains("PLANNER-TASK-TEXT"),
+        "the processor was shown the planner's conversation: {text}"
+    );
+    assert!(
+        text.contains("original"),
+        "the reference it reads is in the request"
+    );
+}
+
 /// The home directory is the caller's to name, and a task that has not named one has none. This
 /// pins the default: a library that read `$HOME` here would make every test in this file depend
 /// on whatever the developer happened to have installed under it.
