@@ -275,26 +275,30 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
     });
 }
 
-/// `path` relative to `root` where it lies at or under it, comparing names folded where the volume
-/// folds case, since the key a rule's prefix arrives in was folded the same way.
+/// `path` relative to `root` where it lies at or under it. Names are compared as the OS holds them,
+/// except where the volume folds case: the key a rule's prefix arrives in was folded there, and
+/// folding takes text.
 fn beneath(path: &std::path::Path, root: &std::path::Path, folds_case: bool) -> Option<String> {
-    let fold = |name: &std::ffi::OsStr| {
-        let name = name.to_string_lossy();
-        match folds_case {
-            true => bravebot_core::trust::fold_case(&name),
-            false => name.into_owned(),
-        }
-    };
+    if !folds_case {
+        let relative = path.strip_prefix(root).ok()?;
+        return Some(tail(relative.components()));
+    }
+    let fold = |name: &std::ffi::OsStr| bravebot_core::trust::fold_case(&name.to_string_lossy());
     let mut names = path.components();
     for held in root.components() {
         if fold(names.next()?.as_os_str()) != fold(held.as_os_str()) {
             return None;
         }
     }
-    let relative: Vec<_> = names
+    Some(tail(names))
+}
+
+/// The names left after the root, joined with `/` as a rule's own string spells them.
+fn tail<'a>(names: impl Iterator<Item = std::path::Component<'a>>) -> String {
+    let names: Vec<_> = names
         .map(|name| name.as_os_str().to_string_lossy())
         .collect();
-    Some(relative.join("/"))
+    names.join("/")
 }
 
 /// A full path keyed from `/` spelled as the host opens it: `/C:/x` is `C:/x` where a backslash
@@ -1352,6 +1356,25 @@ mod tests {
         assert_eq!(
             permissions.for_path(Subject::Read, "notes.md"),
             Decision::Unmatched
+        );
+    }
+
+    /// PERM-7: a root that is not UTF-8 is not the directory whose name is its lossy lookalike
+    /// (PATH-003).
+    #[cfg(unix)]
+    #[test]
+    fn a_root_that_is_not_utf8_is_not_its_lossy_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::Path;
+        let root = Path::new(std::ffi::OsStr::from_bytes(b"/p/dir-\xff"));
+        assert_eq!(beneath(Path::new("/p/dir-\u{FFFD}/a/b"), root, false), None);
+        assert_eq!(
+            beneath(
+                Path::new(std::ffi::OsStr::from_bytes(b"/p/dir-\xff/a/b")),
+                root,
+                false
+            ),
+            Some("a/b".to_string())
         );
     }
 
