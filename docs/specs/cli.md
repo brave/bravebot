@@ -1760,5 +1760,11 @@ picker has no key to delete a row yet.
 `verified-by: bravebot_cli::session_delete::delete_takes_one_id_and_purge_takes_its_two_flags`
 `verified-by: bravebot_cli::session_delete::a_muddled_request_is_refused_rather_than_guessed_at`
 `verified-by: bravebot_cli::session_delete::only_the_word_for_yes_agrees_to_a_purge`
+`verified-by: bravebot_cli::running::delete_refuses_a_malformed_or_unknown_id_and_removes_nothing`
+`verified-by: bravebot_cli::running::delete_refuses_a_session_something_is_running`
+`verified-by: bravebot_cli::running::delete_removes_one_session_and_its_trail`
+`verified-by: bravebot_cli::running::purge_without_a_terminal_or_yes_is_refused_and_deletes_nothing`
+`verified-by: bravebot_cli::running::a_dry_run_lists_the_records_and_deletes_nothing`
+`verified-by: bravebot_cli::running::purge_with_yes_removes_this_directorys_sessions_and_leaves_a_running_one`
 `verified-by: bravebot_session::sessions::purging_a_project_removes_its_sessions_and_not_another_directorys`
 `verified-by: bravebot_session::sessions::purging_leaves_a_session_something_is_running`
