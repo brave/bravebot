@@ -221,6 +221,8 @@ struct Beside<'a> {
     /// The configuration the turn was started with. The turn holds a copy of its own, so `/model`
     /// may change this one for the turn after.
     config: &'a mut Config,
+    /// The managed settings, read once before the turn, which `/sandbox` holds a mode to (CMD-8).
+    managed: &'a bravebot_config::Managed,
 }
 
 /// A press during a turn that is not one of the keys that only stop it.
@@ -267,6 +269,15 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         Action::SetEffort(level) => {
             session.answer_while_working(|session| set_effort(session, &level));
         }
+        // The move to `off` asks and so waits (CMD-8); no question is put here, and a form that
+        // reached this arm without one gets the refusal to ask, which keeps the mode.
+        Action::Sandbox(word) => session.answer_while_working(|session| {
+            let kept = session.sandbox_mode();
+            crate::sandbox_command::run(session, &word, beside.managed, |_| Vec::new());
+            if session.sandbox_mode() != kept {
+                session.note(t!(session_sandbox_turn_keeps_its_mode).to_string());
+            }
+        }),
         Action::Advisor(word) => {
             session.answer_while_working(|session| set_advisor(session, beside.config, &word));
         }
@@ -5374,7 +5385,9 @@ fn run_turn_animated(
     });
 
     let home = bravebot_agent::home::directory();
+    let managed = bravebot_config::Managed::load();
     let mut beside = Beside {
+        managed: &managed,
         stored,
         root: workspace.root(),
         home: home.as_deref(),
@@ -11352,6 +11365,7 @@ mod tests {
             bravebot_stamp::BUILD,
         );
         press(&mut Beside {
+            managed: &bravebot_config::Managed::default(),
             stored: &mut stored,
             root,
             home: None,
@@ -19631,6 +19645,7 @@ mod tests {
                 PR_COMMAND,
                 RENAME_COMMAND,
                 REQUEST_COMMAND,
+                SANDBOX_COMMAND,
                 STATUS_COMMAND,
                 STYLE_COMMAND,
                 THEME_COMMAND,
@@ -19794,9 +19809,10 @@ mod tests {
             let mut session = a_turn_running_on("first");
             type_while_working(&mut session, line);
 
+            let said = said_under_the_turn(&session);
             assert!(
-                session.said_while_working().is_empty(),
-                "{line} was carried out mid-turn"
+                said.len() == 1 && said[0].contains("waits for the turn to end"),
+                "{line} was carried out mid-turn: {said:?}"
             );
             assert!(session.looping().is_none() && session.goal().is_none());
             session.complete("answered", Vec::new(), 0);
@@ -19828,10 +19844,14 @@ mod tests {
 
             type_while_working(&mut session, stop);
 
+            assert!(
+                session.commands_waiting().any(|waiting| waiting == stop),
+                "{stop} ran ahead of {start}"
+            );
             assert_eq!(
                 session.said_while_working().len(),
-                said,
-                "{stop} ran ahead of {start}"
+                said + 1,
+                "{stop} said something other than why it waits"
             );
             session.complete("answered", Vec::new(), 0);
             queued_next(&mut session);
@@ -20015,6 +20035,7 @@ mod tests {
             "/rename deploy watch",
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -20074,6 +20095,7 @@ mod tests {
             EXPORT_COMMAND,
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root: &root,
                 home: None,
@@ -20131,6 +20153,7 @@ mod tests {
             &format!("{EXPORT_COMMAND} ../elsewhere.md"),
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root: &root,
                 home: None,
@@ -20354,6 +20377,7 @@ mod tests {
             &format!("/pr {PULL}"),
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -20500,6 +20524,7 @@ mod tests {
             "/note the wrong file was edited",
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -20548,6 +20573,7 @@ mod tests {
             NOTE_COMMAND,
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -20685,6 +20711,7 @@ mod tests {
             "/rename deploy watch",
             ctrl_enter(),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -20722,6 +20749,7 @@ mod tests {
             STATUS_COMMAND,
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root,
                 home: None,
@@ -20795,6 +20823,7 @@ mod tests {
             FORGET_TRUST_COMMAND,
             key(KeyCode::Enter),
             &mut Beside {
+                managed: &bravebot_config::Managed::default(),
                 stored: &mut stored,
                 root: &root,
                 home: Some(&home),
@@ -21259,7 +21288,9 @@ mod tests {
             )
         });
 
-        assert!(said_under_the_turn(&session).is_empty());
+        let said = said_under_the_turn(&session);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("what the turn holds"), "{said:?}");
         assert_eq!(waiting_prompts(&session), vec!["/reach docker -- ls"]);
     }
 
@@ -21293,26 +21324,209 @@ mod tests {
         }
     }
 
-    /// `/sandbox` in every form waits for the turn in flight (CMD-8), so the turn's `run`
-    /// description, its refusals and the profile its programs start under all come from one mode.
-    /// The regression it rejects is the word carried out as typed, which changes the mode under a
-    /// turn that has already told the planner what it is.
+    /// A mode named mid-turn is the session's mode as it is typed (CMD-8), so the next turn is built
+    /// with it, and the running turn is told it keeps the one it began with. The regression it
+    /// rejects is the word left in the queue for the whole turn, which is what a person saw.
     #[test]
-    fn the_sandbox_command_waits_for_the_turn_in_flight() {
-        for line in ["/sandbox", "/sandbox strict"] {
+    fn a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_keeps_its_own() {
+        for (line, mode) in [
+            ("/sandbox strict", bravebot_sandbox::SandboxMode::Strict),
+            (
+                "/sandbox read-only",
+                bravebot_sandbox::SandboxMode::ReadOnly,
+            ),
+        ] {
             let mut session = a_turn_running_on("first");
 
             nothing_beside(|beside| {
                 typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
             });
 
-            assert!(said_under_the_turn(&session).is_empty(), "{line}");
-            assert_eq!(waiting_prompts(&session), vec![line]);
-            assert_eq!(
-                session.sandbox_mode(),
-                bravebot_sandbox::SandboxMode::WorkspaceWrite
-            );
+            assert_eq!(session.sandbox_mode(), mode, "{line}");
+            assert!(session.queued.is_empty(), "{line} waited");
+            let said = said_under_the_turn(&session);
+            assert_eq!(said.len(), 2, "{said:?}");
+            assert!(said[0].contains(mode.name()), "{said:?}");
+            assert!(said[1].contains("keeps the mode it began with"), "{said:?}");
         }
+    }
+
+    /// A mode looser than the managed floor is refused mid-turn as at rest (CMD-8, SANDBOX-22): the
+    /// turn is handed the `Managed` read before it, not a default. The regression it rejects is the
+    /// arm reading no pin, which would set the looser mode and add the note about the turn.
+    #[test]
+    fn a_looser_sandbox_mode_than_the_pin_is_refused_mid_turn() {
+        let dir = crate::testutil::scratch_dir("mid-turn-sandbox-pin");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let file = dir.join("managed.json");
+        std::fs::write(&file, r#"{"sandbox": {"mode": "strict"}}"#).expect("managed file");
+        let managed = bravebot_config::Managed::at(&file);
+        let mut session = a_turn_running_on("first");
+        session.set_sandbox_mode(bravebot_sandbox::SandboxMode::Strict);
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        typed_during_a_turn(
+            &mut session,
+            "/sandbox read-only",
+            key(KeyCode::Enter),
+            &mut Beside {
+                managed: &managed,
+                stored: &mut stored,
+                root,
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut a_config_needing_no_sign_in(),
+            },
+        );
+
+        assert_eq!(
+            session.sandbox_mode(),
+            bravebot_sandbox::SandboxMode::Strict
+        );
+        assert!(session.queued.is_empty());
+        let said = said_under_the_turn(&session);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("managed.json"), "{said:?}");
+        assert!(
+            !said[0].contains("keeps the mode it began with"),
+            "{said:?}"
+        );
+    }
+
+    /// The bare word reports the mode and changes nothing, mid-turn as at rest, with no sentence
+    /// about the running turn since nothing moved.
+    #[test]
+    fn the_sandbox_report_is_given_mid_turn() {
+        let mut session = a_turn_running_on("first");
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/sandbox", key(KeyCode::Enter), beside)
+        });
+
+        assert!(session.queued.is_empty());
+        assert_eq!(said_under_the_turn(&session).len(), 1);
+        assert_eq!(
+            session.sandbox_mode(),
+            bravebot_sandbox::SandboxMode::WorkspaceWrite
+        );
+    }
+
+    /// The move to `off` asks first, and the turn has the screen while it runs, so it waits and
+    /// says why. The regression it rejects is `off` carried out as typed with the question answered
+    /// by nobody, which would start programs with no profile.
+    #[test]
+    fn moving_the_sandbox_to_off_mid_turn_waits_and_says_why() {
+        let mut session = a_turn_running_on("first");
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/sandbox off", key(KeyCode::Enter), beside)
+        });
+
+        assert_eq!(waiting_prompts(&session), vec!["/sandbox off"]);
+        assert_eq!(
+            session.sandbox_mode(),
+            bravebot_sandbox::SandboxMode::WorkspaceWrite
+        );
+        let said = said_under_the_turn(&session);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("asks first"), "{said:?}");
+    }
+
+    /// A mode named behind a waiting line lands where it was typed, as every command that changes
+    /// something does, and says it waits behind what was typed before it.
+    #[test]
+    fn a_sandbox_mode_named_behind_a_waiting_line_waits_behind_it() {
+        let mut session = a_turn_running_on("first");
+        type_while_working(&mut session, CLEAR_COMMAND);
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/sandbox strict", key(KeyCode::Enter), beside)
+        });
+
+        assert_eq!(
+            waiting_prompts(&session),
+            vec![CLEAR_COMMAND, "/sandbox strict"]
+        );
+        assert_eq!(
+            session.sandbox_mode(),
+            bravebot_sandbox::SandboxMode::WorkspaceWrite
+        );
+        assert!(
+            said_under_the_turn(&session)
+                .iter()
+                .any(|said| said.contains("behind the lines typed before it"))
+        );
+    }
+
+    /// A command that rewrites the conversation or the workspace waits and says why, so the line
+    /// is never left under the box with no reason given. The regression it rejects is a silent wait.
+    #[test]
+    fn a_command_that_waits_for_the_turn_says_why() {
+        for line in [
+            CLEAR_COMMAND,
+            COMPACT_COMMAND,
+            "/cd crates/tui",
+            "/add-dir ../other",
+            EXIT_COMMAND,
+        ] {
+            let mut session = a_turn_running_on("first");
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
+
+            assert_eq!(waiting_prompts(&session), vec![line]);
+            let said = said_under_the_turn(&session);
+            assert_eq!(said.len(), 1, "{line}: {said:?}");
+            assert!(said[0].contains("what the turn holds"), "{line}: {said:?}");
+        }
+    }
+
+    /// A stopped prompt still comes back to the box after `/sandbox` was carried out mid-turn.
+    #[test]
+    fn a_stopped_prompt_comes_back_after_a_sandbox_mode_set_mid_turn() {
+        let mut session = a_turn_running_on("first");
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/sandbox strict", key(KeyCode::Enter), beside)
+        });
+
+        finish_turn(
+            &mut session,
+            &a_config_needing_no_sign_in(),
+            &workspace_for_test(),
+            Line {
+                text: "first",
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            FinishedTurn {
+                decisions: None,
+                outcome: Err(turn::TurnError::Cancelled { attempts: Some(0) }),
+                conversation: Conversation::new(),
+                sink: Trail::new(),
+                servers: None,
+            },
+            RetainedTurn {
+                files: bravebot_core::file_authority::FileAuthority::new(TrustStore::new("/work")),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
+                began: Conversation::new().mark(),
+            },
+        );
+
+        assert_eq!(session.input(), "first");
+        assert_eq!(
+            session.sandbox_mode(),
+            bravebot_sandbox::SandboxMode::Strict
+        );
     }
 
     /// A command that changes something waits behind whatever was typed before it, so it lands
@@ -21334,14 +21548,17 @@ mod tests {
         ] {
             let mut session = a_turn_running_on("first");
             type_while_working(&mut session, first);
+            let before = said_under_the_turn(&session).len();
 
             nothing_beside(|beside| {
                 typed_during_a_turn(&mut session, then, key(KeyCode::Enter), beside)
             });
 
+            let said = said_under_the_turn(&session);
             assert!(
-                said_under_the_turn(&session).is_empty(),
-                "{then} was carried out ahead of a waiting {first}"
+                said.len() == before + 1
+                    && said[before].contains("behind the lines typed before it"),
+                "{then} was carried out ahead of a waiting {first}: {said:?}"
             );
             assert_eq!(session.effort(), None, "{then} set a level");
             assert!(
@@ -21366,9 +21583,10 @@ mod tests {
                 }
                 // Refused before anything is written, so no directory the fixture names is touched.
                 _ if command.name == EXPORT_COMMAND => format!("{} ../refused", command.name),
-                MidTurn::Runs | MidTurn::Changes | MidTurn::RunsUnlessItStarts => {
-                    command.name.to_string()
-                }
+                MidTurn::Runs
+                | MidTurn::Changes
+                | MidTurn::RunsUnlessItStarts
+                | MidTurn::ChangesUnlessItAsks => command.name.to_string(),
             };
             let mut session = a_turn_running_on("first");
 

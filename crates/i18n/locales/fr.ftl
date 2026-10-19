@@ -2261,6 +2261,15 @@ command-when-queued = en file
 command-when-either = direct/en file
 
 
+## Pourquoi une commande tapée pendant un tour attend
+
+# Dit sous le tour quand une commande rejoint la file. Le tour tient la conversation, l'espace de travail, le terminal et le réseau.
+command-waits-for-the-turn = La commande { $command } attend la fin du tour : elle agit sur ce que le tour tient ou lance un tour.
+# Une commande exécutée dès qu'elle est tapée quand rien n'attend devant elle.
+command-waits-behind-the-queue = La commande { $command } attend la fin du tour, derrière les lignes tapées avant elle.
+# `/sandbox off`, qui demande avant de changer quoi que ce soit.
+command-waits-to-ask = La commande { $command } attend la fin du tour : passer à off demande d'abord, et le tour a l'écran.
+
 ## Where a skill offered after a slash was found
 
 skill-from-project = (projet)
@@ -3179,6 +3188,7 @@ session-sandbox-needs-a-mode = /sandbox demande l'un de : { $names }, ou rien po
 session-sandbox-already = Le mode du bac à sable est déjà { $mode }.
 session-sandbox-kept = Le mode du bac à sable reste { $mode }.
 session-sandbox-set = Le mode du bac à sable est { $mode } dès le prochain tour, pour le reste de cette session.
+session-sandbox-turn-keeps-its-mode = Le tour en cours, et chaque programme qu'il lance, garde le mode avec lequel il a commencé.
 session-sandbox-set-off = Le mode du bac à sable est off dès le prochain tour, pour le reste de cette session : les programmes que `run` lance n'ont aucun profil.
 session-sandbox-refused-mode =
     /sandbox { $asked } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned }, et une session ne peut

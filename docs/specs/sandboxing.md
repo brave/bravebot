@@ -1965,9 +1965,9 @@ saved under. `/sandbox` alone says the mode in force and the flag or file that c
 uses. `/sandbox strict`, `/sandbox read-only`, `/sandbox workspace-write` and `/sandbox off` set the mode for the rest of the
 process, and only a person's typed word does ([CMD-1](commands.md#CMD-1)): no tool, skill, hook or
 `AGENTS.md` line sets it, and the planner is told the mode in force and nothing about the command.
-The word waits while a turn runs ([CMD-8](commands.md#CMD-8)), so a turn's `run` description, its
+A mode named while a turn runs is set as it is typed, and `off` waits for the turn to end because it asks first ([CMD-8](commands.md#CMD-8)). A turn is built with the mode in force when it begins, so a turn's `run` description, its
 failure sentence, its `scopes` and `request_path` refusals and the profile its programs start under
-all come from one mode, and the change applies from the next turn; a delegate spawned after it runs
+all come from one mode, every stage of the running turn keeps it, and the change applies from the next turn; a delegate spawned by a later turn runs
 under the new mode. A move to `off` asks first, saying that programs then start with no profile, and
 a no keeps the mode. The managed floor holds: a mode looser than the managed file's `sandbox.mode`
 pin, and `off` under a managed `run.network` of `closed`, is refused with a sentence naming the
@@ -2126,7 +2126,8 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_tui::sandbox_command::a_word_that_is_not_a_mode_changes_nothing_and_the_bare_word_only_reports`
 `verified-by: bravebot_tui::sandbox_command::the_report_names_what_chose_the_mode`
 `verified-by: bravebot_tui::app::the_sandbox_command_carries_its_word_unparsed`
-`verified-by: bravebot_tui::app::the_sandbox_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_keeps_its_own`
+`verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_waits_and_says_why`
 `verified-by: bravebot_tui::ask::a_question_the_driver_puts_is_not_titled_as_the_agents`
 
 <a id="SANDBOX-23"></a>

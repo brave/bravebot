@@ -2665,6 +2665,15 @@ command-when-queued = queued
 command-when-either = now/queued
 
 
+## Why a command typed while a turn runs waits
+
+# Said under the turn when a command joins the queue. The turn holds the conversation, the workspace, the terminal and the network.
+command-waits-for-the-turn = { $command } waits for the turn to end: it acts on what the turn holds or starts a turn.
+# A command that is carried out as typed when nothing is waiting ahead of it.
+command-waits-behind-the-queue = { $command } waits for the turn to end, behind the lines typed before it.
+# `/sandbox off`, which asks before it changes anything.
+command-waits-to-ask = { $command } waits for the turn to end: moving to off asks first, and the turn has the screen.
+
 ## Where a skill offered after a slash was found
 
 skill-from-project = (project)
@@ -3731,6 +3740,7 @@ session-sandbox-needs-a-mode = /sandbox takes one of { $names }, or nothing to r
 session-sandbox-already = The sandbox mode is already { $mode }.
 session-sandbox-kept = The sandbox mode stays { $mode }.
 session-sandbox-set = The sandbox mode is { $mode } from the next turn, for the rest of this session.
+session-sandbox-turn-keeps-its-mode = The turn running now, and every program it starts, keeps the mode it began with.
 session-sandbox-set-off = The sandbox mode is off from the next turn, for the rest of this session: programs `run` starts have no profile.
 session-sandbox-refused-mode =
     /sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a session may
