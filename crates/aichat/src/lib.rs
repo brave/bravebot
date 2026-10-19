@@ -1963,7 +1963,7 @@ mod tests {
             .prepare(&request("z-ai/glm-4.6"))
             .expect("prepared");
 
-        assert_eq!(header(&http, API_KEY_HEADER), None);
+        assert_eq!(socket_header(&http, API_KEY_HEADER), None);
         assert_eq!(header(&http, "authorization"), Some("Bearer a-token"));
     }
 
