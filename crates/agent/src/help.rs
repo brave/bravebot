@@ -68,7 +68,8 @@ const PAGES: [Page; 36] = [
     page!("using/watches"),
 ];
 
-/// What a page is called when the planner asks for it: the skill's name, a slash, the page's place.
+/// The name the planner loads a page by. `page()` strips exactly this prefix and matches what is
+/// left against a page's id, so the two must agree.
 fn name_of(id: &str) -> String {
     format!("{SKILL}/{id}")
 }
@@ -145,12 +146,16 @@ mod tests {
         found
     }
 
+    /// A page published on the website but missing from the binary is a page the planner cannot
+    /// load, so a question about it is answered from memory.
     #[test]
     fn every_published_page_is_carried_in_the_binary() {
         let carried: Vec<&str> = PAGES.iter().map(|page| page.id).collect();
         assert_eq!(carried, on_disk());
     }
 
+    /// A near-miss or traversal name that loaded a page would let the planner read a file the
+    /// table does not name.
     #[test]
     fn a_page_is_found_by_its_exact_name_and_nothing_else() {
         let text = page("bravebot-help/using/watches").expect("the watches page");
@@ -168,6 +173,7 @@ mod tests {
         }
     }
 
+    /// A page left out of the index is one the planner is never told to load.
     #[test]
     fn the_index_names_every_page_with_its_title() {
         let index = body();
