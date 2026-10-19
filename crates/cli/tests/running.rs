@@ -302,6 +302,89 @@ fn a_configured_gateway_is_not_refused() {
     );
 }
 
+/// A proxy on a loopback port that sends back the first line of each request it is given and
+/// answers every one with a 502, so a run that goes through it fails at once.
+fn a_proxy() -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let address = format!("http://{}", listener.local_addr().expect("addr"));
+    let (sent, lines) = mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            let _ = sent.send(request);
+            let _ = stream.write_all(http(502, r#"{"error": "bad gateway"}"#).as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (address, lines)
+}
+
+/// The settings that send a run to a gateway at a host nothing resolves, so the only way the run
+/// reaches anything is through a proxy.
+const UNREACHABLE_GATEWAY: &str = r#""provider": {
+        "openrouter": {
+            "env": ["OPENROUTER_API_KEY"],
+            "options": {"baseURL": "http://gateway.invalid/api/v1"},
+            "models": {"z-ai/glm-4.6": {}}
+        }
+    },
+    "model": "openrouter/z-ai/glm-4.6""#;
+
+/// NET-8 and BACKEND-33 through the binary: a proxy written in the person's own settings file is
+/// the one a request made by `-p` goes through, with nothing exported.
+#[test]
+fn a_proxy_in_the_persons_settings_file_carries_a_request_the_binary_makes() {
+    let (proxy, lines) = a_proxy();
+    let scratch = Scratch::new("cli-running-proxy-from-file").with_settings(&format!(
+        r#"{{ {UNREACHABLE_GATEWAY}, "env": {{"HTTP_PROXY": "{proxy}"}} }}"#
+    ));
+
+    let output = bravebot(
+        &scratch.path,
+        &[("OPENROUTER_API_KEY", "a-token")],
+        &["-p", "say something"],
+    );
+
+    // The run makes other requests of its own first, so every line the proxy was sent is read.
+    let sent: Vec<String> = lines.try_iter().collect();
+    assert!(
+        sent.iter().any(|line| line.contains("gateway.invalid")),
+        "the proxy was not asked for the gateway: {sent:?} {:?}",
+        said(&output)
+    );
+}
+
+/// The same name in a file that arrives with a clone is not used: the request is not sent through
+/// it.
+#[test]
+fn a_proxy_in_a_checkouts_settings_file_carries_nothing() {
+    let (proxy, lines) = a_proxy();
+    let scratch = Scratch::new("cli-running-proxy-from-checkout")
+        .with_settings(&format!("{{ {UNREACHABLE_GATEWAY} }}"));
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        format!(r#"{{"env": {{"HTTP_PROXY": "{proxy}"}}}}"#),
+    )
+    .expect("the checkout's settings");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        &[("OPENROUTER_API_KEY", "a-token")],
+        &["-p", "say something"],
+    );
+
+    assert!(
+        lines.recv_timeout(Duration::from_secs(2)).is_err(),
+        "a checkout's proxy carried a request: {:?}",
+        said(&output)
+    );
+}
+
 /// The connections an Ollama has taken, read once the run that made them has ended.
 ///
 /// The listener counts on a thread of its own, so a request the run made just before it exited may
