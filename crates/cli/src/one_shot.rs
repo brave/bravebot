@@ -37,6 +37,8 @@ pub(crate) struct OneShot<R: Read, W: Write> {
     /// Every question but the plan. Delegated rather than restated so there is one account of what
     /// a one-shot refuses, and adding a question here cannot quietly start approving it.
     refusing: bravebot_agent::Unattended,
+    /// What to call just before the plan is put to the person (HOOK-2).
+    alert: Option<bravebot_agent::PromptAlert>,
 }
 
 impl<R: Read, W: Write> OneShot<R, W> {
@@ -46,6 +48,7 @@ impl<R: Read, W: Write> OneShot<R, W> {
             output,
             attended,
             refusing: bravebot_agent::Unattended,
+            alert: None,
         }
     }
 
@@ -90,10 +93,23 @@ impl<R: Read, W: Write> OneShot<R, W> {
 }
 
 impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
+    fn alert_when_asking(&mut self, alert: Option<bravebot_agent::PromptAlert>) {
+        self.alert = alert;
+    }
+
+    /// False, because every question but the plan is refused unasked. The plan is the one that is
+    /// put, and it fires the alert itself.
+    fn asks_a_person(&self) -> bool {
+        false
+    }
+
     /// The one question this confirmer may answer yes to, and only where somebody is there.
     fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
         if !self.attended {
             return self.refusing.confirm_manifest(request);
+        }
+        if let Some(alert) = &self.alert {
+            alert();
         }
         // A question that could not be written is a plan nobody saw, so it is declined rather than
         // taken as unanswered and waved through.

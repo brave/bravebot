@@ -119,6 +119,9 @@ and a turn that died is exactly when they want telling.
 `verified-by: bravebot_agent::turn::a_hook_fires_when_a_question_is_put_to_a_person`
 `verified-by: bravebot_agent::turn::an_unattended_run_fires_no_prompt_hook`
 `verified-by: bravebot_agent::permission_mode::the_alert_comes_before_a_question_the_mode_did_not_answer`
+`verified-by: bravebot_agent::permission_mode::no_alert_comes_before_a_question_the_inner_confirmer_refuses_unasked`
+`verified-by: bravebot_cli::main::a_one_shot_run_alerts_for_a_plan_it_puts_and_not_for_a_write_it_refuses`
+`verified-by: bravebot_agent::turn::a_delegate_s_question_fires_prompt_shown_once`
 
 <a id="HOOK-3"></a>
 ### HOOK-3: a hook is a program and its arguments, never a line a shell parses
@@ -369,9 +372,10 @@ somewhere to say it, which is the end of the call the question came up in.
   A hook that must return at once starts its own long work and exits.
 - **`prompt-shown` covers questions the turn raises, and no others.** The trust question asked when
   an interface opens, and a question put to a person outside a turn, fire nothing: no turn is
-  running to read the hooks. A confirmer whose channel to the person is closed is asked through
-  the same path as an open one and fires it, because the mode that wraps it cannot tell the two
-  apart.
+  running to read the hooks. A confirmer that refuses without asking, such as a
+  one-shot run's for everything but a plan, fires it for nothing it refuses. A channel that
+  closed during the turn is found closed only when a question fails to send, so the question that
+  finds it closed fires it once.
 - **There is no moment for a session.** A session is many turns, and something that should happen
   once when the program opens fires per turn instead. The interactive interface is where a session
   begins and ends, and nothing there fires a hook yet.

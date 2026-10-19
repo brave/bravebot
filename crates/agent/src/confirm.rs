@@ -1581,6 +1581,16 @@ pub trait Confirmer {
     /// is nobody being waited on.
     fn alert_when_asking(&mut self, _alert: Option<PromptAlert>) {}
 
+    /// Whether a question put to this confirmer reaches a person.
+    ///
+    /// False for one that refuses without asking anyone, so a wrapper that would alert before each
+    /// question it passes on does not alert for one nobody sees (PROMPT-9). A confirmer that
+    /// returns false and does ask some question, as a one-shot run does for a plan, fires the alert
+    /// it was handed through [`Confirmer::alert_when_asking`] for that question itself.
+    fn asks_a_person(&self) -> bool {
+        true
+    }
+
     /// Ask about a write. Implementations must default to refusal when they cannot ask.
     ///
     /// The answer carries whether to stop asking about what the scan found as well as whether to
@@ -1759,6 +1769,11 @@ pub trait Confirmer {
 pub struct Unattended;
 
 impl Confirmer for Unattended {
+    /// Nobody is asked, so nothing is alerted for.
+    fn asks_a_person(&self) -> bool {
+        false
+    }
+
     /// Refuses. Nothing about a test double is a person agreeing to start a process.
     fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
         Decision::Reject

@@ -292,7 +292,9 @@ impl<'a, C: Confirmer> Confining<'a, C> {
     /// The inner confirmer, for a question the mode did not answer: a person is about to be asked,
     /// so whoever asked to be told is, first.
     fn asking(&mut self) -> &mut C {
-        if let Some(alert) = &self.alert {
+        if self.inner.asks_a_person()
+            && let Some(alert) = &self.alert
+        {
             alert();
         }
         self.inner
@@ -334,8 +336,15 @@ impl<'a, C: Confirmer> Confining<'a, C> {
 }
 
 impl<C: Confirmer> Confirmer for Confining<'_, C> {
+    /// Kept here for the questions this asks of a person, and handed to the inner confirmer for the
+    /// ones it asks itself while refusing the rest, as a one-shot run does for a plan.
     fn alert_when_asking(&mut self, alert: Option<PromptAlert>) {
+        self.inner.alert_when_asking(alert.clone());
         self.alert = alert;
+    }
+
+    fn asks_a_person(&self) -> bool {
+        self.inner.asks_a_person()
     }
 
     /// The one question the mode may answer either way.
@@ -994,6 +1003,32 @@ mod tests {
             })));
             confining.confirm_host(&request);
             assert_eq!(*seen.lock().unwrap(), trace, "{mode:?}");
+        }
+    }
+
+    /// HOOK-2, PROMPT-9: over a confirmer that refuses without asking, no question is alerted for in
+    /// any mode. The regression it rejects is the wrapper alerting before a question nobody is
+    /// asked.
+    #[test]
+    fn no_alert_comes_before_a_question_the_inner_confirmer_refuses_unasked() {
+        let request = crate::confirm::HostRequest {
+            hosts: vec!["a.example".to_string()],
+        };
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Bypass,
+        ] {
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut inner = crate::confirm::Unattended;
+            let mut confining = Confining::new(&mut inner, mode, false);
+            let said = seen.clone();
+            confining.alert_when_asking(Some(std::sync::Arc::new(move || {
+                said.lock().unwrap().push("alert");
+            })));
+            confining.confirm_host(&request);
+            assert!(seen.lock().unwrap().is_empty(), "{mode:?}");
         }
     }
 
