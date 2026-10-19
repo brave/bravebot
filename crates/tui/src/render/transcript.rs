@@ -400,15 +400,6 @@ fn push_tail(session: &Session, width: u16, opening: bool, lines: &mut Vec<Line<
         lines.push(Line::raw(""));
     }
 
-    // What a command typed during the turn answered, under the turn and drawn as a note is. Kept
-    // off the transcript until the turn ends (CMD-8), and the session's rather than a delegate's.
-    if !session.said_while_working().is_empty() && !session.watching_a_delegate() {
-        for entry in session.said_while_working() {
-            lines.extend(note_lines(&entry.text));
-        }
-        lines.push(Line::raw(""));
-    }
-
     // One blank above it and no more. Every entry already leaves a trailing blank behind it, so
     // an invitation that carried its own would sit two rows below whatever startup reported.
     if opening {

@@ -297,8 +297,8 @@ has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/st
 and `/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
 that sets one, which wait. `/rename`, `/note`, `/issue`, `/pr`, `/forget-trust`, `/model`, `/theme`, `/effort` and
 `/config` are too
-when nothing is waiting, and the four that open a list draw it over the turn. What they answer is drawn under the
-turn and joins the transcript after it, and nothing waiting moves. During a compaction, a `/btw` question, a `/manifest` run or a goal check,
+when nothing is waiting, and the four that open a list draw it over the turn. What they answer goes into the
+transcript as it is said, so it scrolls with the rest of the history, and nothing waiting moves. During a compaction, a `/btw` question, a `/manifest` run or a goal check,
 every command waits.
 
 **The turn in flight is the one on the screen.** Work handed out to a [delegate](#watching-a-delegate-reading-a-command-and-asking-something-aside)

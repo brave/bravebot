@@ -229,8 +229,8 @@ struct Beside<'a> {
 /// turn has ended, as it would have after any turn.
 ///
 /// A command the key handler carried out as it was typed, but which needs more than the session to
-/// finish, is finished here, and what it says is held under the turn as the key handler holds its
-/// own (CMD-8).
+/// finish, is finished here, and what it says goes into the transcript as the key handler's own
+/// does (CMD-8).
 fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut Beside<'_>) {
     let action = handle_key_while_working(session, key);
     carry_out_held_pick(session, beside.config);
@@ -291,7 +291,7 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
 
 /// Carry out the row a picker was left on, if it was left on one.
 ///
-/// Said under the turn as any command carried out mid-turn is. Asked after every key, and every
+/// Said in the transcript as any command carried out mid-turn is. Asked after every key, and every
 /// frame as well: a row taken while another working loop had the keys is held until a loop that
 /// holds the configuration can carry it out, and the turn that follows is the first.
 fn carry_out_held_pick(session: &mut Session, config: &mut Config) {
@@ -302,8 +302,8 @@ fn carry_out_held_pick(session: &mut Session, config: &mut Config) {
 
 /// Carry out what the picker closed on, which a key handler left for whoever can.
 ///
-/// Said as a command carried out mid-turn is, so it joins the transcript once the turn has been
-/// folded in (CMD-8).
+/// Said as a command carried out mid-turn is, so it goes into the transcript as it is said
+/// (CMD-8).
 fn carry_out_pick(session: &mut Session, config: &mut Config, picked: crate::picking::Picked) {
     use crate::picking::Picked;
     match picked {
@@ -5833,7 +5833,7 @@ fn finish_turn(
         )
     };
     // After the turn is folded in, so the prompt a stop gives back and the trail a failure keeps
-    // are decided over a transcript holding only the turn.
+    // are decided with what commands said during the turn still set apart from it.
     session.settle_what_was_said();
     let Carried {
         trust,
@@ -6485,9 +6485,7 @@ fn fold_outcome(
                 bravebot_agent::Ending::Stopped { attempts } => session.stopped(attempts),
                 bravebot_agent::Ending::Done => {}
             }
-            if let Some(last) = session.transcript.last_mut() {
-                last.trail = trail;
-            }
+            session.keep_trail(trail);
             if occupied.last_request_tokens > 0 {
                 session.measured(
                     occupied.last_request_tokens,
@@ -19696,24 +19694,24 @@ mod tests {
     /// answers when it is typed, because the turn holds none of those, and so does a word that
     /// lists the jobs or asks for one to be stopped, which sets a token the turn reads later. Ahead
     /// of a prompt already waiting, too, which is left where it was and still within the turn's
-    /// reach, while the command is never handed to the turn and its answer is kept out of the
-    /// turn's transcript.
+    /// reach, while the command is never handed to the turn and its answer is the only thing it
+    /// adds to the turn's transcript.
     #[test]
     fn a_command_that_reads_or_ends_what_the_session_keeps_answers_mid_turn() {
-        for line in [
-            "/cost",
-            "/copy",
-            "/copy two",
-            "/watch",
-            "/watch stop 1",
-            "/watch everything",
-            "/jobs",
-            "/jobs stop job:1",
-            "/jobs everything",
-            "/loop",
-            "/loop stop",
-            "/goal",
-            "/goal clear",
+        for (line, said) in [
+            ("/cost", 1),
+            ("/copy", 1),
+            ("/copy two", 1),
+            ("/watch", 1),
+            ("/watch stop 1", 1),
+            ("/watch everything", 1),
+            ("/jobs", 1),
+            ("/jobs stop job:1", 1),
+            ("/jobs everything", 1),
+            ("/loop", 1),
+            ("/loop stop", 1),
+            ("/goal", 1),
+            ("/goal clear", 1),
         ] {
             let mut session = a_turn_running_on("first");
             type_while_working(&mut session, "second");
@@ -19721,14 +19719,15 @@ mod tests {
 
             assert_eq!(type_while_working(&mut session, line), Action::Redraw);
 
-            assert!(
-                !session.said_while_working().is_empty(),
-                "{line} said nothing while the turn ran"
+            assert_eq!(
+                session.said_while_working().len(),
+                said,
+                "{line} did not say exactly what it should while the turn ran"
             );
             assert_eq!(
                 session.transcript.len(),
-                transcript,
-                "{line} wrote into the transcript of the turn in flight"
+                transcript + said,
+                "{line} wrote something besides its answer into the transcript"
             );
             let waiting: Vec<&str> = session
                 .queued
@@ -19849,9 +19848,8 @@ mod tests {
         }
     }
 
-    /// A turn only. A compaction shares the working status but folds in no turn, and folding one
-    /// in is when what a command said mid-turn joins the transcript, so a word typed during one
-    /// waits.
+    /// A turn only. A compaction shares the working status but is not a turn, so a word typed
+    /// during one waits.
     #[test]
     fn a_command_typed_during_a_compaction_waits() {
         let mut session = Session::new("none");
@@ -19865,9 +19863,9 @@ mod tests {
         assert_eq!(session.queued.len(), 1, "/cost did not wait");
     }
 
-    /// A stopped turn gives its prompt back only where the transcript holds nothing after it, so
-    /// an answer put there mid-turn would cost the person the line they stopped. Held until the
-    /// turn is folded in, the prompt comes back and the answer is kept as well.
+    /// A stopped turn gives its prompt back only where the turn recorded nothing after it, and what
+    /// a command said mid-turn is not the turn's doing, so the prompt comes back and the answer
+    /// stays in the transcript as well.
     #[test]
     fn a_stopped_prompt_comes_back_after_a_command_answered_mid_turn() {
         let mut session = a_turn_running_on("first");
@@ -19997,7 +19995,7 @@ mod tests {
 
     /// `/rename` mid-turn names the session as it is typed. The turn was handed only the record's
     /// id, and the record is written after the turn under whatever name the session has by then, so
-    /// nothing the turn does reads the name. What it says is held under the turn.
+    /// nothing the turn does reads the name. What it says goes into the transcript as it is said.
     #[test]
     fn a_session_renamed_mid_turn_is_renamed_as_it_is_typed() {
         if !crate::test_profile::in_isolated_profile() {
@@ -20033,8 +20031,8 @@ mod tests {
         );
         assert_eq!(
             session.transcript.len(),
-            transcript,
-            "/rename wrote into the transcript of the turn in flight"
+            transcript + 1,
+            "/rename wrote something besides its answer into the transcript"
         );
         assert!(session.queued.is_empty(), "/rename waited");
         assert_eq!(session.input(), "", "/rename was left in the box");
@@ -20057,7 +20055,7 @@ mod tests {
     /// The turn holds neither the transcript nor the name the file goes under, and the moment a
     /// person wants the file is while the turn is still going. The file says its last prompt was
     /// still running, neither the prompt waiting behind the turn nor the reply half written is in
-    /// it, and where it went is said under the turn without joining the transcript.
+    /// it, and where it went is said in the transcript after the line was written.
     #[test]
     fn export_typed_mid_turn_writes_the_transcript_as_it_stands() {
         if !crate::test_profile::in_isolated_profile() {
@@ -20110,15 +20108,15 @@ mod tests {
         );
         assert_eq!(
             session.transcript.len(),
-            transcript,
-            "/export wrote into the transcript of the turn in flight"
+            transcript + 1,
+            "/export wrote something besides its answer into the transcript"
         );
         assert_eq!(waiting_prompts(&session), vec!["second"], "/export waited");
         assert_eq!(session.input(), "", "/export was left in the box");
     }
 
     /// A path typed after `/export` is confined to the working directory whenever it is typed, so
-    /// one that leaves it is refused mid-turn as at rest, and the refusal is said under the turn.
+    /// one that leaves it is refused mid-turn as at rest, and the refusal goes into the transcript.
     #[test]
     fn export_typed_mid_turn_refuses_a_path_outside_the_working_directory() {
         if !crate::test_profile::in_isolated_profile() {
@@ -20748,7 +20746,18 @@ mod tests {
                 "the report stated {stated:?}: {said}"
             );
         }
-        assert_eq!(session.transcript.len(), transcript, "wrote into the turn");
+        // The report is one note per line, so the transcript grows by exactly its lines.
+        const STATUS_REPORT_LINES: usize = 11;
+        assert_eq!(
+            session.transcript.len(),
+            transcript + STATUS_REPORT_LINES,
+            "/status wrote something besides its report into the transcript"
+        );
+        assert_eq!(
+            session.said_while_working().len(),
+            STATUS_REPORT_LINES,
+            "the report is not all of what /status said"
+        );
         assert!(session.queued.is_empty(), "/status waited");
         assert_eq!(session.input(), "", "/status was left in the box");
     }
@@ -20830,8 +20839,8 @@ mod tests {
         assert!(session.queued.is_empty(), "/effort high waited");
     }
 
-    /// A name this program does not know changes nothing mid-turn either, and the refusal is said
-    /// under the turn rather than dropped with the line.
+    /// A name this program does not know changes nothing mid-turn either, and the refusal goes into
+    /// the transcript rather than being dropped with the line.
     #[test]
     fn a_theme_or_an_effort_nobody_has_is_refused_mid_turn() {
         for (line, refused) in [
@@ -20900,11 +20909,11 @@ mod tests {
     }
 
     /// While a picker opened mid-turn is open it takes the keys, and a row taken is carried out as
-    /// any command mid-turn is: kept for the next turn, said under this one, and nothing written
-    /// into the transcript the turn will be folded into. The regressions it rejects are a letter
-    /// reaching the box under the picker, and the pick joining the transcript.
+    /// any command mid-turn is: kept for the next turn, and said in the transcript as it is said.
+    /// The regressions it rejects are a letter
+    /// reaching the box under the picker, and the pick writing anything but its own answer.
     #[test]
-    fn a_level_picked_in_a_picker_opened_mid_turn_is_kept_and_said_under_the_turn() {
+    fn a_level_picked_in_a_picker_opened_mid_turn_is_kept_and_said_in_the_transcript() {
         use bravebot_aichat::protocol::Effort;
         let mut session = a_turn_running_on("first");
         let transcript = session.transcript.len();
@@ -20928,7 +20937,16 @@ mod tests {
             said_under_the_turn(&session).first().copied(),
             Some(said_of(Some(Effort::Medium)).as_str())
         );
-        assert_eq!(session.transcript.len(), transcript, "wrote into the turn");
+        assert_eq!(
+            session.transcript.len(),
+            transcript + 1,
+            "the pick wrote something besides its answer into the transcript"
+        );
+        assert_eq!(
+            session.said_while_working().len(),
+            1,
+            "the pick said more than one thing"
+        );
         assert!(!cancel.is_cancelled());
     }
 
@@ -21131,7 +21149,7 @@ mod tests {
         assert_eq!(
             said_under_the_turn(&session),
             [t!(session_models_unavailable, problem = problem).to_string()],
-            "the failure was not said under the turn"
+            "the failure was not said in the transcript"
         );
         assert!(session.queued.is_empty(), "/model waited");
         assert_eq!(
@@ -21178,7 +21196,16 @@ mod tests {
             "the reply would be compared with a model the turn never asked for"
         );
         assert!(!said_under_the_turn(&session).is_empty());
-        assert_eq!(session.transcript.len(), transcript, "wrote into the turn");
+        assert_eq!(
+            session.transcript.len(),
+            transcript + 2,
+            "the pick wrote something besides its answer into the transcript"
+        );
+        assert_eq!(
+            session.said_while_working().len(),
+            2,
+            "the pick said something other than its two lines"
+        );
         assert_eq!(session.input(), "", "a letter reached the box");
         assert!(session.picking().is_none());
 
@@ -21325,10 +21352,10 @@ mod tests {
         }
     }
 
-    /// Every command carried out mid-turn says what it did under the turn. One that came back as an
+    /// Every command carried out mid-turn says what it did in the transcript. One that came back as an
     /// action [`turn_key`] has no arm for would be taken off the box and dropped without a word.
     #[test]
-    fn every_command_carried_out_mid_turn_answers_under_the_turn() {
+    fn every_command_carried_out_mid_turn_answers_in_the_transcript() {
         for command in commands() {
             let line = match command.mid_turn {
                 MidTurn::Waits => continue,

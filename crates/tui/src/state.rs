@@ -1154,12 +1154,13 @@ pub struct Session {
     /// Held as it arrived. What is drawn from it is [`Session::reply_so_far`], since a model
     /// that has nowhere else to put its working writes it in here.
     streaming: String,
-    /// What the commands carried out during the turn in flight have said, drawn at the tail.
+    /// Where in the transcript the commands carried out during the turn in flight put what they
+    /// said, oldest first.
     ///
-    /// Not in the transcript until the turn has ended (CMD-8). A stopped turn gives its prompt
-    /// back only where the transcript has nothing after it, and a failed one hangs its trail on the
-    /// last entry, so a note put there mid-turn would cost a person the prompt they stopped.
-    said_while_working: Vec<Entry>,
+    /// The entries are in the transcript as they are said (CMD-8), so they scroll with the rest of
+    /// it. The places are kept because a stopped turn gives its prompt back only where the turn
+    /// recorded nothing, and what a command said is not the turn's doing.
+    said_while_working: Vec<usize>,
     /// The call the model is writing, named as the model named it, until the round's calls start.
     ///
     /// Beside the spinner rather than in the transcript for the reason the reply taking shape is
@@ -2853,7 +2854,13 @@ impl Session {
         // recorded exactly when that prompt is the whole of what this turn added. Any other length
         // leaves it sent, which is also the safe answer where the transcript has been rewound from
         // under the figure: the entry popped below is then not the prompt.
-        let something_was_recorded = self.transcript.len() != self.turn_start.transcript_len + 1;
+        let said_by_commands = self
+            .said_while_working
+            .iter()
+            .filter(|&&at| at > self.turn_start.transcript_len)
+            .count();
+        let something_was_recorded =
+            self.transcript.len() != self.turn_start.transcript_len + 1 + said_by_commands;
         let waiting = !self.queued.is_empty();
         let the_box_is_taken = !self.input.trim().is_empty();
         if something_was_recorded || waiting || the_box_is_taken {
@@ -2875,7 +2882,9 @@ impl Session {
             return false;
         }
 
-        self.transcript.pop();
+        // By place, since a command typed during the turn may have said something after it.
+        self.transcript.remove(self.turn_start.transcript_len);
+        self.said_while_working.clear();
         // Back the way it was typed. A paste that returned as its words would fill the box
         // somebody is about to edit with the stack trace they folded away in the first place.
         let returning = self.folded(&prompt.into());
@@ -4196,6 +4205,7 @@ impl Session {
         // must be read beside a list of its own.
         self.hunks_listed = None;
         self.prompt_at = None;
+        self.said_while_working.clear();
         self.recall = recall;
         (self.sent, self.sent_pasted) = taken;
         self.turn_places
@@ -4447,29 +4457,48 @@ impl Session {
         self.transcript.push(Entry::system(message));
     }
 
-    /// Carry out a command while a turn is working, holding what it says until the turn has ended.
+    /// Carry out a command while a turn is working, keeping where in the transcript it said things.
     ///
-    /// Everything `answer` notes is moved off the transcript into [`Session::said_while_working`],
-    /// which is drawn under the turn. A command answered here only appends, so what it put on the
-    /// end is all of what it said.
+    /// What `answer` notes stays in the transcript, so it scrolls with the rest of the history. A
+    /// command answered here only appends, so the entries added at the end are all of what it said.
+    /// They are remembered in [`Session::said_while_working`] so that a stop does not count them as
+    /// the turn having done something.
     pub fn answer_while_working<R>(&mut self, answer: impl FnOnce(&mut Self) -> R) -> R {
         let before = self.transcript.len();
         let answered = answer(self);
-        let said = self.transcript.split_off(before);
-        self.said_while_working.extend(said);
+        self.said_while_working
+            .extend(before..self.transcript.len());
         self.scroll = 0;
         answered
     }
 
     /// What the commands carried out during the turn in flight have said, oldest first.
-    pub fn said_while_working(&self) -> &[Entry] {
-        &self.said_while_working
+    pub fn said_while_working(&self) -> Vec<&Entry> {
+        self.said_while_working
+            .iter()
+            .filter_map(|&at| self.transcript.get(at))
+            .collect()
     }
 
-    /// Put what was said during the turn into the transcript, now that the turn has been folded in.
+    /// Attach a turn's trail to the last entry the turn itself wrote, skipping what commands said
+    /// while it worked, which is the commands' and not the turn's.
+    pub fn keep_trail(&mut self, trail: Vec<bravebot_session::audit::TrailLine>) {
+        let said = &self.said_while_working;
+        let last = self
+            .transcript
+            .iter_mut()
+            .enumerate()
+            .rev()
+            .find(|(at, _)| !said.contains(at));
+        if let Some((_, entry)) = last {
+            entry.trail = trail;
+        }
+    }
+
+    /// Stop treating the entries commands said during the turn as the turn's own to set apart,
+    /// now that the turn has been folded in.
     pub fn settle_what_was_said(&mut self) {
-        let said = std::mem::take(&mut self.said_while_working);
-        self.transcript.extend(said);
+        self.said_while_working.clear();
     }
 
     /// Put a status report in the transcript, one note per line.
@@ -11979,6 +12008,70 @@ mod tests {
     fn stop(s: &mut Session, prompt: &str) {
         s.stopped(Some(0));
         s.restore(prompt);
+    }
+
+    /// CMD-8. What a command carried out mid-turn says is in the transcript as it is said, so it
+    /// scrolls with the history instead of sitting at the tail until the turn ends. The regression
+    /// it rejects is the answer being held apart, which pinned it to the bottom of the screen for
+    /// as long as the turn ran. A stop afterwards still gives the prompt back, since the turn
+    /// recorded nothing, and the answer stays where it was said.
+    #[test]
+    fn what_a_command_says_mid_turn_is_in_the_transcript_and_does_not_cost_the_stopped_prompt() {
+        let mut s = session();
+        for c in "hello".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+
+        s.answer_while_working(|s| s.note("noted on turn 1"));
+
+        let said: Vec<&str> = s.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(said, vec!["hello", "noted on turn 1"]);
+        assert_eq!(s.said_while_working().len(), 1);
+
+        s.stopped(Some(0));
+        assert!(s.restore("hello"), "the note cost the person their prompt");
+
+        let said: Vec<&str> = s.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(
+            said,
+            vec!["noted on turn 1"],
+            "the note was lost or the prompt kept"
+        );
+        assert_eq!(s.input, "hello");
+    }
+
+    /// A turn that ends after a command said something has its trail on its own entry. The last
+    /// entry in the transcript is the command's note, which the trail does not belong to.
+    #[test]
+    fn a_trail_skips_what_a_command_said_while_the_turn_worked() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        s.answer_while_working(|s| s.note("said"));
+
+        s.keep_trail(vec![bravebot_session::audit::TrailLine {
+            text: "ran".into(),
+            blocked: false,
+        }]);
+
+        assert_eq!(s.transcript[0].trail.len(), 1, "the turn lost its trail");
+        assert!(s.transcript[1].trail.is_empty(), "the note took the trail");
+    }
+
+    /// A command that said something and then a turn that did work: the stop is recorded and the
+    /// prompt stays sent, as it does when no command was typed.
+    #[test]
+    fn a_stop_after_a_command_and_some_work_keeps_the_prompt_sent() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        s.answer_while_working(|s| s.note("said"));
+        s.note("the turn did something");
+
+        s.stopped(Some(0));
+        assert!(!s.restore("a"), "work on the screen was hidden");
+        assert_eq!(s.input, "");
     }
 
     /// Hurried prompts go as a turn of their own, so they get what a turn gets: every picture each
