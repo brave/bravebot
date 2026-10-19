@@ -5833,7 +5833,7 @@ fn finish_turn(
         )
     };
     // After the turn is folded in, so the prompt a stop gives back and the trail a failure keeps
-    // are decided over a transcript holding only the turn.
+    // are decided with what commands said during the turn still set apart from it.
     session.settle_what_was_said();
     let Carried {
         trust,
@@ -6485,9 +6485,7 @@ fn fold_outcome(
                 bravebot_agent::Ending::Stopped { attempts } => session.stopped(attempts),
                 bravebot_agent::Ending::Done => {}
             }
-            if let Some(last) = session.transcript.last_mut() {
-                last.trail = trail;
-            }
+            session.keep_trail(trail);
             if occupied.last_request_tokens > 0 {
                 session.measured(
                     occupied.last_request_tokens,

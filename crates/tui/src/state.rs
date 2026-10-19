@@ -4480,6 +4480,21 @@ impl Session {
             .collect()
     }
 
+    /// Attach a turn's trail to the last entry the turn itself wrote, skipping what commands said
+    /// while it worked, which is the commands' and not the turn's.
+    pub fn keep_trail(&mut self, trail: Vec<bravebot_session::audit::TrailLine>) {
+        let said = &self.said_while_working;
+        let last = self
+            .transcript
+            .iter_mut()
+            .enumerate()
+            .rev()
+            .find(|(at, _)| !said.contains(at));
+        if let Some((_, entry)) = last {
+            entry.trail = trail;
+        }
+    }
+
     /// Stop treating the entries commands said during the turn as the turn's own to set apart,
     /// now that the turn has been folded in.
     pub fn settle_what_was_said(&mut self) {
@@ -12024,6 +12039,24 @@ mod tests {
             "the note was lost or the prompt kept"
         );
         assert_eq!(s.input, "hello");
+    }
+
+    /// A turn that ends after a command said something has its trail on its own entry. The last
+    /// entry in the transcript is the command's note, which the trail does not belong to.
+    #[test]
+    fn a_trail_skips_what_a_command_said_while_the_turn_worked() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        s.answer_while_working(|s| s.note("said"));
+
+        s.keep_trail(vec![bravebot_session::audit::TrailLine {
+            text: "ran".into(),
+            blocked: false,
+        }]);
+
+        assert_eq!(s.transcript[0].trail.len(), 1, "the turn lost its trail");
+        assert!(s.transcript[1].trail.is_empty(), "the note took the trail");
     }
 
     /// A command that said something and then a turn that did work: the stop is recorded and the
