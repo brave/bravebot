@@ -900,6 +900,10 @@ import-found-exported =
     { $source } configures a model service bravebot can use, in this process's environment.
 # Where the source is a server that answered rather than a file: Ollama, at the address asked.
 import-found-running = { $source } is running at { $url }, serving models bravebot can use.
+# Under the model, where the running server stated the window it holds that model loaded with.
+import-ollama-window = the server has it loaded with a context window of { $window } tokens
+# Said where that window is below the one a conversation is otherwise budgeted against.
+import-ollama-window-small = Ollama drops the earliest turns beyond that window, where a conversation is otherwise kept within { $assumed } tokens. Set OLLAMA_CONTEXT_LENGTH higher before starting Ollama to keep more.
 import-adds = Importing it adds these to { $file }:
 # One gateway, with the host its requests go to: that host is where a credential is sent, so it is
 # the part of the entry the question is really about.

@@ -268,6 +268,14 @@ API key would otherwise see the three routes and no sign that their setup was lo
 **What counts as an answer.** Only the affirmative approves. Any other line declines, and so does
 the end of input.
 
+**The window a running Ollama holds.** Under the model line of an Ollama question, where
+[IMPORT-10](#IMPORT-10) read a figure for that model, the question gives the context window the
+server has it loaded with. Where the figure is below the window a conversation is otherwise
+budgeted against (131,072 tokens), it also says the server drops the earliest turns beyond it and
+names `OLLAMA_CONTEXT_LENGTH`. A model with no figure has no line, and no figure is guessed. The
+figure is shown and never written: a `provider` block that lists no models has nowhere to keep a
+limit, and one that lists models is taken at its word.
+
 **Names already set.** A name already set in the file, including one the first answer just wrote,
 is shown as left as it is ([IMPORT-7](#IMPORT-7)). A source left with nothing to add is not asked
 about.
@@ -289,6 +297,7 @@ listing only such models reaches nothing.
 `verified-by: bravebot_cli::import::only_the_affirmative_writes_and_the_end_of_input_declines`
 `verified-by: bravebot_cli::import::a_name_the_first_answer_wrote_is_left_by_the_second`
 `verified-by: bravebot_cli::import::a_setup_found_only_in_the_environment_says_so`
+`verified-by: bravebot_cli::import::a_window_below_the_assumed_one_is_shown_with_what_the_server_drops`
 `verified-by: bravebot_cli::import::a_model_a_tier_names_is_not_added_to_an_aws_entry_again`
 `verified-by: bravebot_cli::import::an_exported_tier_names_a_model_as_a_written_one_does`
 
@@ -428,7 +437,7 @@ working, and ending over one would refuse a service that answers.
 `verified-by: bravebot_cli::running::an_import_that_leaves_no_model_to_run_ends_with_the_refusal_for_that_case`
 
 <a id="IMPORT-10"></a>
-### IMPORT-10: a running Ollama is asked once, on this machine, within a bound, and says nothing where it does not answer
+### IMPORT-10: a running Ollama is asked on this machine, within a bound, and says nothing where it does not answer
 
 **When.** Ollama is asked wherever the other two sources are read: at the start
 [IMPORT-1](#IMPORT-1) describes, for [IMPORT-8](#IMPORT-8)'s refusal lines, and by
@@ -436,7 +445,7 @@ working, and ending over one would refuse a service that answers.
 file the import could write, so an incognito start opens no connection. A start with a service
 configured asks nothing.
 
-**What is asked.** One `GET <address>/api/tags` to the [IMPORT-2](#IMPORT-2) address, carrying no
+**What is asked.** One `GET <address>/api/tags`, and then the one `GET <address>/api/ps` of the window below, each to the [IMPORT-2](#IMPORT-2) address, carrying no
 credential. A redirect is followed only where it keeps that address and port, so whatever
 listens there cannot send the request off the machine. It is bounded twice, because it is made
 before the start has said anything:
@@ -446,6 +455,13 @@ before the start has said anything:
 - a listing over 1 MiB is not read.
 
 Only each model's `name`, `modified_at` and `capabilities` are read.
+
+**The window.** Once a listing is read, one `GET <address>/api/ps` is made under the same bounds
+and carries no credential, and each loaded model's `context_length` is read by `name`. A model that
+is not loaded, a zero figure, and a reply that fails or does not decode leave that model with no
+figure, and nothing is said. A server that answers the listing and then holds this request
+holds the start for those bounds a second time. The figure only decides what [IMPORT-5](#IMPORT-5) shows beside the
+model, before any session exists, and the reply is read by no model.
 
 **A failure says nothing.** A refused connection, a timeout, an error status, a redirect
 elsewhere, a listing over the bound, or one that does not decode means there is no Ollama source, and nothing is said
@@ -474,6 +490,9 @@ list every model twice in the model picker.
 `verified-by: bravebot_config::import::an_ollama_reporting_no_capabilities_defaults_to_its_newest_model`
 `verified-by: bravebot_config::import::an_ollama_that_does_not_answer_is_no_source`
 `verified-by: bravebot_aichat::ollama::a_listing_is_read_as_ollama_writes_it`
+`verified-by: bravebot_aichat::ollama::a_loaded_model_carries_the_window_it_runs_with`
+`verified-by: bravebot_aichat::ollama::a_failed_question_about_what_is_loaded_leaves_the_listing_without_windows`
+`verified-by: bravebot_config::import::the_window_is_the_one_of_the_model_chosen`
 `verified-by: bravebot_aichat::ollama::an_oversized_listing_is_not_read`
 `verified-by: bravebot_aichat::ollama::a_listener_that_never_answers_does_not_hold_the_start`
 `verified-by: bravebot_aichat::ollama::anything_but_a_listing_is_no_source`
@@ -481,8 +500,8 @@ list every model twice in the model picker.
 `verified-by: bravebot_cli::import::an_ollama_already_configured_under_another_id_is_not_offered_again`
 `verified-by: bravebot_cli::import::an_opencode_entry_for_the_same_server_leaves_the_ollama_source_with_nothing_to_add`
 `verified-by: bravebot_cli::running::a_first_run_with_nothing_listening_refuses_as_before`
-`verified-by: bravebot_cli::running::a_first_run_whose_settings_file_cannot_be_imported_into_asks_ollama_once`
-`verified-by: bravebot_cli::running::a_start_with_no_service_asks_the_ollama_on_this_machine_once`
+`verified-by: bravebot_cli::running::a_first_run_whose_settings_file_cannot_be_imported_into_asks_ollama_one_round_only`
+`verified-by: bravebot_cli::running::a_start_with_no_service_asks_the_ollama_on_this_machine_for_its_listing_and_what_is_loaded`
 `verified-by: bravebot_cli::running::an_incognito_start_opens_no_connection_to_ollama`
 `verified-by: bravebot_cli::running::a_start_with_a_service_configured_asks_ollama_nothing`
 
@@ -517,7 +536,7 @@ configuration, in their home directory, and every value it writes has been shown
 approved ([IMPORT-5](#IMPORT-5)). A checkout's files, which carry a repository author's bytes, are
 never opened ([IMPORT-2](#IMPORT-2)).
 
-The import makes one request before any question, to a running Ollama ([IMPORT-10](#IMPORT-10)).
+The import makes two requests before any question, both to a running Ollama ([IMPORT-10](#IMPORT-10)).
 Its body is labelled untrusted, as any roster's is. What it decides is whether to offer the source
 and which model to show. Both are decided before any session exists and reach no planner, which is
 the case [reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md) calls the inverse

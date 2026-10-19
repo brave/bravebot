@@ -256,6 +256,8 @@ pub struct Found {
     pub read: Vec<PathBuf>,
     /// The server that answered, for that line where no file was read.
     pub running_at: Option<String>,
+    /// The context window, in tokens, the running server holds [`Found::model`] loaded with.
+    pub window: Option<u64>,
     /// Names under `env`, with their values.
     pub env: Vec<(String, String)>,
     /// The top-level `model` key.
@@ -435,6 +437,9 @@ pub struct Installed {
     /// What it can do, or `None` where the listing reported nothing, which an Ollama older than
     /// the field does.
     pub capabilities: Option<Vec<String>>,
+    /// The context window it is loaded with, in tokens, or `None` where it is not loaded or the
+    /// server did not say.
+    pub window: Option<u64>,
 }
 
 /// Everything the sources hold, Claude Code first and Ollama last.
@@ -496,6 +501,7 @@ pub fn running(host: &str, listed: Vec<Installed>) -> Found {
         source: Source::Ollama,
         read: Vec::new(),
         running_at: Some(host.to_string()),
+        window: chosen.window,
         env: Vec::new(),
         model: Some(format!("{OLLAMA_ID}/{}", chosen.name)),
         model_gateway: Some(OLLAMA_ID.to_string()),
@@ -515,6 +521,7 @@ fn ollama_left(name: &str, reason: Reason, running_at: Option<&str>) -> Found {
         source: Source::Ollama,
         read: Vec::new(),
         running_at: running_at.map(str::to_string),
+        window: None,
         env: Vec::new(),
         model: None,
         model_gateway: None,
@@ -735,6 +742,7 @@ fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Opt
         source: Source::ClaudeCode,
         read: file.map(|_| path.to_path_buf()).into_iter().collect(),
         running_at: None,
+        window: None,
         env,
         model,
         model_gateway: None,
@@ -876,6 +884,7 @@ fn opencode(configs: &[PathBuf], auth: Option<&Path>) -> Option<Found> {
         source: Source::Opencode,
         read: read_from,
         running_at: None,
+        window: None,
         env: Vec::new(),
         model,
         model_gateway,
@@ -2366,6 +2375,7 @@ mod tests {
             name: name.to_string(),
             modified_at: modified_at.to_string(),
             capabilities: capabilities.map(|can| can.iter().map(|it| it.to_string()).collect()),
+            window: None,
         }
     }
 
@@ -2405,6 +2415,28 @@ mod tests {
             listed
         });
         (found, asked.into_inner())
+    }
+
+    /// IMPORT-10: the window shown is the one of the model that is written, not of another model
+    /// the server happens to have loaded.
+    #[test]
+    fn the_window_is_the_one_of_the_model_chosen() {
+        let mut listed = three_pulled();
+        let newest = listed
+            .iter()
+            .position(|model| model.name == "qwen3-coder-oc:latest")
+            .expect("the newest");
+        listed[newest].window = Some(4096);
+        for (index, model) in listed.iter_mut().enumerate() {
+            if index != newest {
+                model.window = Some(777);
+            }
+        }
+
+        let found = running("http://localhost:11434", listed);
+
+        assert_eq!(found.model.as_deref(), Some("ollama/qwen3-coder-oc:latest"));
+        assert_eq!(found.window, Some(4096));
     }
 
     /// IMPORT-10: nothing configured and Ollama running is the case the configuration guide
