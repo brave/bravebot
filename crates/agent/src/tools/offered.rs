@@ -1008,9 +1008,11 @@ fn table(
                                         ask. Say in 'why' what the sandbox refused. The user \
                                         is asked about the line every time, shown the files \
                                         it writes, your reason and that it runs with no \
-                                        sandbox, and no answer to it is remembered. A session \
-                                        that does not accept it refuses the call with a \
-                                        sentence saying so. What it prints is not trusted. \
+                                        sandbox, and no answer to it is remembered. A request \
+                                        before a line has run with the sandbox and failed in \
+                                        this turn is refused. A session that does not accept it \
+                                        refuses the call with a sentence saying so. What it \
+                                        prints is not trusted. \
                                         Do not combine it with 'scopes'."
                     },
                     "directory": {

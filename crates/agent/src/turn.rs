@@ -902,6 +902,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
     let mut armed = 0usize;
     let mut jobs = tools::Jobs::default();
     let mut run_directory = workspace.root().to_path_buf();
+    let mut confined_failures = tools::ConfinedFailures::default();
     let done = tools::apply_kept_checkout(
         &mut policy,
         &mut tools::Tools {
@@ -933,6 +934,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             permission_mode: task.permission_mode.clone(),
             auto_vetting: task.auto_vetting,
             run_directory: &mut run_directory,
+            confined_failures: &mut confined_failures,
             confine_runs: false,
             sandbox: bravebot_sandbox::SandboxMode::default(),
             asks_about_unconfined: false,
@@ -2396,6 +2398,7 @@ struct State<'s> {
     jobs: &'s mut tools::Jobs,
     told_of_kept_jobs: bool,
     run_directory: std::path::PathBuf,
+    confined_failures: tools::ConfinedFailures,
     spent: Elapsed,
     told_mode: crate::permission_mode::PermissionMode,
     turn_model: Option<String>,
@@ -3166,6 +3169,7 @@ where
         jobs,
         told_of_kept_jobs,
         run_directory,
+        confined_failures: tools::ConfinedFailures::default(),
         spent: Elapsed::default(),
         told_mode,
         turn_model,
@@ -3972,6 +3976,7 @@ where
                         permission_mode: task.permission_mode.clone(),
                         auto_vetting: task.auto_vetting,
                         run_directory: &mut state.run_directory,
+                        confined_failures: &mut state.confined_failures,
                         confine_runs: task.confine_runs,
                         sandbox: task.sandbox,
                         asks_about_unconfined: task.asks_about_unconfined,
