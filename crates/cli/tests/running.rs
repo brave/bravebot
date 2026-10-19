@@ -329,7 +329,7 @@ const BRAVE_HOSTS: [(&str, &str); 4] = [
 /// This is what gives the two silences below their meaning: the same run, the same address, and
 /// here the request arrives.
 #[test]
-fn a_start_with_no_service_asks_the_ollama_on_this_machine_once() {
+fn a_start_with_no_service_asks_the_ollama_on_this_machine_for_its_listing_and_what_is_loaded() {
     let scratch = Scratch::new("cli-running-ollama-asked");
     let (address, ollama) = an_ollama();
 
@@ -6881,10 +6881,11 @@ fn a_first_run_with_nothing_listening_refuses_as_before() {
 }
 
 /// IMPORT-10: a settings file the import cannot write into ends the start in the refusal naming
-/// it, and Ollama is asked once on the way there rather than again for the refusal's lines.
+/// it, and Ollama is asked one round (the listing and what is loaded) on the way there rather than
+/// again for the refusal's lines.
 #[cfg(target_os = "linux")]
 #[test]
-fn a_first_run_whose_settings_file_cannot_be_imported_into_asks_ollama_once() {
+fn a_first_run_whose_settings_file_cannot_be_imported_into_asks_ollama_one_round_only() {
     let scratch = Scratch::new("cli-running-import-ollama-not-a-document");
     std::fs::create_dir_all(scratch.path.join(".bravebot")).expect("settings directory");
     std::fs::write(scratch.settings(), "{ not json").expect("settings file");
@@ -6900,7 +6901,7 @@ fn a_first_run_whose_settings_file_cannot_be_imported_into_asks_ollama_once() {
         transcript.contains("does not hold a settings document"),
         "{transcript}"
     );
-    assert_eq!(asked.load(Ordering::SeqCst), 1, "{transcript}");
+    assert_eq!(asked.load(Ordering::SeqCst), 2, "{transcript}");
 }
 
 /// IMPORT-8 and IMPORT-10: a one-shot run has nobody to ask, so a running Ollama puts the command
