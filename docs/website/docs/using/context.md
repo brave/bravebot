@@ -153,20 +153,27 @@ What happens depends on the type:
 
 | Dropped | Result |
 |---|---|
-| an image or a PDF | carried as bytes, so the model looks at it |
+| an image or a PDF | carried as bytes, so the model looks at it, with a line before them naming the file as `Dropped file: <path>` |
 | a text file | its contents enter the turn as trusted input |
 | anything else | its path is written into the line, as dropping a file always did |
 
 Extensions are recognised whatever their case. Dropping a directory attaches nothing. A dropped PNG
 or JPEG also gets a thumbnail under the box, as a pasted picture does.
 
+The path line goes ahead of the bytes in a turn's prompt, in a question beside the work, and in a plan's
+task. A file that cannot be shown to the model is replaced by the sentence `<path> could not be shown to
+you.` A pasted picture carries no path, so on a line that pastes and drops, the numbers in the markers
+can differ from the order the pictures are sent in.
+
 **Onto a line armed with `!`, a drop writes each file's path and attaches nothing**, as dropping a
 file into a shell does. The shell is handed the line as it stands, so there is no marker and no
-trust or reach is granted. A path holding a space, a quote or anything else a shell would read as
-syntax is written in single quotes, so the name reaches the command as one word. The quotes are
-written for the place a word starts: drop the file there, not inside a quote you opened. When a
-dropped file's name holds a control character or a character the terminal draws as nothing, no path
-from that drop is written, and a note says so.
+trust or reach is granted. A path made only of ASCII letters, digits and `_@+:,./-` is written as it
+is. Any other path is written in single quotes, with each `'` and `\` written outside the quotes as
+`\'` and `\\`, so the name reaches the command as one word. This is the quoting `sh`, `bash`, `zsh`
+and `fish` read. Nushell and PowerShell quote differently, `csh` and `tcsh` still expand `!`, and
+the quotes are written for the place a word starts: drop the file there, not inside a quote you
+opened. When a dropped file's name holds a control character or a character the terminal draws as
+nothing, no path from that drop is written, and a note says so.
 
 **A prompt recalled from your history names the file rather than the marker.** Nothing staged beside
 a line outlives the session that staged it. The name is enough: the planner reads it and goes to the

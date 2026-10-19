@@ -299,6 +299,10 @@ What was skipped is counted, never named. A directory in an untrusted project ca
 that reads like an instruction, and that name would otherwise be on your screen as though the agent
 had written it.
 
+A skipped skill directory is left out of that count only when a skill with the same directory name,
+from a more specific root you vouched for and that is read later, takes its place. A built-in skill,
+one in `~/.bravebot` and one from a less specific root do not cover it, so it is still counted.
+
 The notice is said when it is learned, before the first request goes out, rather than when the turn
 ends. A turn that fails or is cancelled has already told you what it was working without.
 

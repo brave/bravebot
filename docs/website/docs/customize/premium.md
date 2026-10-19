@@ -114,6 +114,7 @@ picking it means.
 
 ## Requirements and limits
 
+- A session spend limit can count credentials instead of tokens: `/limit 200 credits`, or `"limit": "200 credits"` in a settings file. Each credential handed out counts, delegates included. See [`/limit`](../reference/commands.md#limit-amount--off).
 - **macOS and Linux** to import, including a machine with no desktop session. Nothing here needs one.
   Importing is not supported on Windows, since no Brave profile is located there. A batch imported on
   another machine and copied to `~/.bravebot` on Windows is spent normally.

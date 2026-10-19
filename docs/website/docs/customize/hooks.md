@@ -93,6 +93,11 @@ A relative path such as `./scripts/format.sh` runs whatever file is at that name
 directory when the hook fires, and a program the agent ran there may have written it. Where that
 matters, name the hook's program by an absolute path outside the project.
 
+A program named without a path, such as `cargo`, is looked for only in `PATH` directories that a
+program the agent runs cannot write. One found only under the session's own directory, such as a
+`.venv/bin` or `node_modules/.bin` entry, is reported as a hook that could not be started. A name
+with a path in it is yours and is never looked up.
+
 ## What a hook is told
 
 One line of JSON on standard input, naming the moment and nothing else:

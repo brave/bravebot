@@ -33,7 +33,8 @@ call and plan prompts. A refusal and ctrl-c work at every draw.
 
 A prompt also says what approving **does**, and what it does not. The run prompt says what the command is
 confined to (the directories and what each program brings beyond them), or that it is not sandboxed
-where nothing confines it. It asks for the side effects and the output together, and names the exact
+where nothing confines it. On Linux and Windows it also warns when a program other than git can write
+a repository's hooks and configuration, which git runs later with no sandbox. It asks for the side effects and the output together, and names the exact
 command it would vouch for. The trust prompt explains the consequence and names both answers. The prompt about a
 directory your settings file asked for says that opening it grants reach and trust, and that a file
 asked for it. The prompt over one quarantined slot says what approving does *not* do: no path is
@@ -50,6 +51,10 @@ of machinery, so a prompt cannot carry a verdict and forget to say what it was. 
 An untrusted body is marked as such, and command output is drawn inside a margin it cannot forge. The
 margin is on every drawn row, not every line of content, so a line wider than the box is broken to the
 width by the same step that draws the margin and each row carries a bar of its own.
+
+The questions for `read_output` and `vet_content` show every line of what a yes would release, in
+the terminal, in `--plain` and in ACP. The cap of 40 lines still applies to every other question,
+such as a write.
 
 A check's **verdict word** sits outside the margin, because it is the system's own. The **sentence**
 the check wrote about the content sits inside it, because that is free text about bytes somebody else
@@ -85,6 +90,22 @@ Saying no to a write does not stop the turn. The agent carries on and can try so
 how you steer without starting over.
 
 **Ctrl-C refuses and stops.** Declining, and Ctrl-C, vouch for nothing.
+
+**A note says why, or what to do instead.** At the write prompt (a whole-file write, an edit and a
+download), the run prompt and the prompt for a call to an
+[MCP server's](../customize/mcp-servers.md) tool, Tab opens a one-line field. Enter sends the answer
+with what you typed, and Esc closes the field and answers nothing, so the question is still there. The
+field sends no until you press Tab to switch it to yes, so an empty field or a stray Enter approves
+nothing. Where the question's own `y` is not available, such as a plan whose rows have not all been
+on the screen, the field offers no yes either.
+
+The agent is told your words after the result of an approved call, or in place of the question it
+would otherwise end on when you declined. A decline with no note ends on asking what you would prefer,
+which costs another round and another interruption. The note is one line, cut at a fixed length, and
+it belongs to the one answer it was typed at. It is recorded in the audit trail as yours. The keys that
+stand for a lasting answer (`a`, `r`, `f`, `m`, `e` and a number) open no field. A Tab or an Enter that
+arrived together with other keys, as a paste does, opens or sends nothing. The trust question, the
+desktop window, a session in lines and a one-shot run offer no field.
 
 ## Vouching for a command
 
@@ -383,6 +404,8 @@ later run without the flag asks. A remote server whose reply points somewhere el
 followed: a yes would rewrite your declaration to an address the server chose, so the hop is refused
 without asking. See [MCP servers](../customize/mcp-servers.md#approving-one).
 
+Starting a language server is still put to you in this mode, and is refused where nobody can be asked.
+
 **No check runs where nothing would read its word.** A [vetting check](vetting.md) normally sits in front
 of every prompt whose answer would promote quarantined content, and this is the one mode where those
 prompts are answered without being shown to anybody. A check there would be a model call whose word
@@ -396,7 +419,7 @@ run that sets [`read: true`](../reference/run-tool.md#reading-the-output-in-the-
 output at once, unless it is longer than one result may hold, and the audit trail records the release
 as the mode's, as it would for `read_output`.
 With `--vet` the check still reads it first, through `read_output`, and `read` changes nothing. The
-result for such a run says so, and says that `read_output` is the way to see the output.
+result for such a run says the argument was not applied.
 
 What stays is the structural guarantee, that untrusted content cannot *decide* what happens. What
 goes is the narrower protection of not showing the planner bytes nobody vouched for. **This is a mode
@@ -420,6 +443,18 @@ wrote down would take protection away at the moment you were relying on a mode t
 **A question the planner posed reaches you in every mode**, and so does a line you type unprompted.
 Neither asks for consent: the first asks for information, and the second is you speaking. An answer
 invented on your behalf is reported to the planner as your own words.
+
+**The same call three times running is held and asked about**, in every mode, bypassing included. When
+the planner asks for a call whose tool and arguments equal those of the two calls before it, with no
+different call between them, it does not run. You are asked whether to refuse it and tell the planner
+to try another approach (the default, so a bare Enter is safe), run it this once, or stop the turn.
+A yes covers that one call and starts the count again. Only the tool name and the arguments are
+compared, never a result, so polling the same `read_output` or running the same test again with no
+edit between is held at the third call, and a different call between two identical ones starts the
+count again. A call that differs by one argument each time is not caught. Where nobody can be asked (a
+one-shot run, a planned run or a delegate) the call is dropped and the planner is told. The trail
+records the round, the count and your answer, and nothing of the call. There is no setting for the
+number.
 
 ### In the desktop application
 
@@ -457,12 +492,24 @@ rule refused and that retrying is not the answer.
 
 **A rule covers the file, not only the spelling used to ask for it.** A call is checked under the name
 it gave and again under the name it reaches once every link on the way is followed, so a link to a
-denied file is refused, and an `ask` rule still asks for a write that comes through one. The second
+denied file is refused, and an `ask` rule still asks for a write that comes through one. On Linux and macOS a
+file with more than one hard link is also checked under each other name the open directories hold for
+it, so a hard link to a denied file is refused in a read and in a write. If that search hits its cap or
+cannot list a directory while a `Read` or `Edit` deny rule is in force, the call is refused. The second
 name can add a refusal or a question and never removes one. A `deny` or `ask` rule written through a
 link covers the place the link reaches: with `linked` a link to `real`, `Read(linked/**)` refuses
-`real/secret.txt`. An `allow` rule is matched as written, so a grant reaches no further than the
+`real/secret.txt`. A `deny` or `ask` rule written as a full path, or from `~/`, that lies inside the
+project also covers the file under the relative name the file tools ask by, so in a session opened in
+your home directory `Read(~/.ssh/**)` refuses `.ssh/id_ed25519`. On Linux and macOS a `deny` or `ask`
+rule also covers the name a file has under a second path to an open directory, such as a macOS
+firmlink or a Linux bind mount once you have opened it with `/add-dir`; the file is matched by its
+device and inode. An `allow` rule is matched as written, so a grant reaches no further than the
 spelling you approved.
 
+- **Unicode spellings.** A `deny` or `ask` path rule covers every spelling Unicode treats as the
+  same name, so a rule written with a precomposed `é` refuses the file named with a letter and a
+  combining accent, and the reverse. A compatibility form is not the same name: a full-width letter
+  is not the plain letter. An `allow` rule is matched as written.
 - **Case.** On a volume that treats `.env` and `.ENV` as one file, a rule written one way covers the
   other, in every list. On a volume that keeps them apart, or where it cannot be told, a rule about
   `Docs` says nothing about `docs`.
@@ -481,10 +528,16 @@ spelling you approved.
   An `allow` rule does not look through them, and `npx`, `devbox run` and `docker exec` are not looked
   through by any list.
 - **Redirections.** A `deny` rule on a file refuses a redirection to it or from it, as it refuses a
-  write.
+  write. It holds when the redirection reaches the file through `..`, as `config/sub/../app.env`
+  does, whether or not a link is on the path.
 - **Files read on your behalf.** A denied `AGENTS.md`, a file it points at, a skill or an agent
   definition is left out of the turn, and you are told. A checkout cannot put a denied file into the
   system prompt by committing a link to it.
+- **Files you name.** A file named with `@` or `--file`, or dropped, is checked against the rules
+  before it is vouched for or opened. A covered one is left out of the turn and you are told.
+- **`lsp` answers.** A location in a covered file is left out of the answer, without a count of how
+  many were left out. Hover text names no file, so it is withheld whenever any rule covers reading a
+  path.
 
 Two settings go further than any list of rules: `readsStayInWorkspace` refuses every path outside the
 working directory, and `bypassUnreachable` takes the mode that asks about nothing out of reach. See
@@ -640,7 +693,10 @@ input, so nothing the run goes on to read can change the plan.
 The prompt shows your task in your own words and then every step, in order, each naming what it would do
 and every field that decides where it lands. Every step, never a count and never the first few: one
 answer covers all of them, and the step below the fold is as binding as the first. A plan longer than the
-box is scrolled to rather than cut short.
+box is scrolled to rather than cut short. Every prompt that shows a body longer than the box (write,
+output, run, vetting, call, plan and the questions a session opens with) scrolls with Up, Down, `k`,
+`j`, PageUp, PageDown, Home and End. `j` and `k` are never answers. In the run prompt, the answer that
+remembers a requested credential scope for every session is `e`, not `k`.
 
 It says that nothing the run reads can add a step, drop one, or send anything anywhere the plan does not
 already name; that approving the plan is **not** approving its writes, which are each still put to you as

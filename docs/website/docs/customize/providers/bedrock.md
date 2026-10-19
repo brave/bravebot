@@ -115,7 +115,17 @@ stopped working.
 Credentials are resolved by running the AWS CLI, which is the tool you already sign in with. It holds
 short-lived keys that expire during a session. `aws sso logout` clears them, and it takes no option to
 narrow itself: it removes every cached token, so other tools sharing that cache need a fresh
-`aws sso login` afterwards.
+`aws sso login` afterwards. The CLI is looked up only in directories a program the agent runs cannot
+write ([why](../../security/security.md)), so an `aws` found only under the session's directory reads
+as not installed.
+
+### Replies that send no tools
+
+`/recap`, `/btw`, `/handoff` and the summary a [compaction](../../using/context.md) writes send the
+model no tools. Bedrock refuses a request whose earlier messages call a tool when none is declared, so
+these used to fail with a 400 once the conversation had used a tool. The calls and results already in the
+conversation are sent as text instead, as `[call <id>: <name> <arguments>]` and
+`[result of call <id>]`.
 
 ### The assumed context window
 
