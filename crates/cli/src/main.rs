@@ -294,6 +294,20 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
         }
     }
 
+    // Taken out before the refusals below read the first argument: a leading `--sandbox <mode>`
+    // would otherwise hide the command from them, and `completion` would go unrefused the flags it
+    // refuses (CLI-20). The mode is resolved further down, once the settings it reads are in place.
+    let sandbox_flag = match take_sandbox(args) {
+        Ok(flag) => flag,
+        Err(complaint) => {
+            return Err(stopped_before_the_turn(
+                as_json,
+                Ending::Argument,
+                complaint,
+            ));
+        }
+    };
+
     // Taken out here, like the settings file, because a session, a session in lines and a one-shot
     // run all use the name the same way. It is matched later, by whichever of them starts, because
     // the set it is matched against depends on the directory's trust (CLI-17).
@@ -375,16 +389,6 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // are: a turn started by any of the ways below holds its programs to the one answer settled
     // here, and a managed floor that the flag or a file goes under stops the session before it
     // starts rather than being met on the first `run`.
-    let sandbox_flag = match take_sandbox(args) {
-        Ok(flag) => flag,
-        Err(complaint) => {
-            return Err(stopped_before_the_turn(
-                as_json,
-                Ending::Argument,
-                complaint,
-            ));
-        }
-    };
     // Refused rather than resolved in favour of one of the two: a line that names a confining mode
     // beside a flag that says nothing is confined has two authors' worth of intent in it.
     let sandbox_flag = match sandbox_flag {

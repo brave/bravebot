@@ -1181,6 +1181,7 @@ what fails when they differ. Session ids are not completed.
 `verified-by: bravebot_cli::running::a_completion_script_names_every_command_and_flag_the_usage_table_lists`
 `verified-by: bravebot_cli::running::a_completion_script_reads_and_writes_nothing_under_the_home`
 `verified-by: bravebot_cli::running::a_completion_with_no_script_to_print_is_refused_with_the_argument_status`
+`verified-by: bravebot_cli::running::completion_refuses_the_agent_and_prompt_flags_behind_a_leading_sandbox_flag`
 `verified-by: bravebot_cli::running::the_bash_script_completes_commands_subcommands_and_flags_by_position`
 `verified-by: bravebot_cli::main::a_definition_is_refused_where_nothing_would_work_under_it`
 `verified-by: bravebot_cli::main::the_system_prompt_flags_are_refused_where_nothing_would_use_them`
