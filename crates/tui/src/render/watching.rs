@@ -229,6 +229,25 @@ fn draw_output(frame: &mut Frame, session: &Session, output: &Output) -> Laid {
         )));
     }
 
+    // What a running job has printed that no look has returned, behind the lines a look did,
+    // always under the margin: the planner has not read these.
+    for line in &output.live {
+        let spans = [Span::styled(line.clone(), dim())];
+        lines.extend(marked_rows(&margin, &spans, width));
+    }
+    if output.live_total > output.live.len() {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                t!(
+                    watching_output_live_more,
+                    count = output.live_total - output.live.len()
+                )
+            ),
+            dim(),
+        )));
+    }
+
     // Counted back from the end, the way the transcript is, so a view opened on a long log starts
     // at the last thing the command said and the same keys walk back through it.
     let total = lines.len() as u16;

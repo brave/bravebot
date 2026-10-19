@@ -454,9 +454,10 @@ pub struct Printed {
 
 /// What happened to a background job, for the person watching (RUN-26).
 ///
-/// Every field is the driver's own: a name it minted, the line the person endorsed, the clock and
-/// the exit codes. Nothing here was read out of a byte the job printed, so a display may draw it
-/// and decide from it.
+/// Every field but one is the driver's own: a name it minted, the line the person endorsed, the
+/// clock and the exit codes. Nothing in them was read out of a byte the job printed, so a display
+/// may draw them and decide from them. The exception is [`JobEvent::Printed`], whose lines are
+/// bytes the job printed, released for the screen and fit only to be drawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JobEvent {
     /// A job exists: started in the background, or moved there part way through a run.
@@ -474,6 +475,19 @@ pub enum JobEvent {
     Ended { name: String, outcome: Outcome },
     /// The turn ended with it still running, and it is stopped with the turn.
     Dropped { name: String },
+    /// What a running job has printed that no look has handed the planner, for the screen only
+    /// (WATCH-24).
+    ///
+    /// Released through the same gate as a look's lines, so a display draws them and decides
+    /// nothing from them: no mark, count or name is made or changed from what is in `lines`. The
+    /// planner's cursor does not move for them, and a look afterwards returns every one.
+    Printed {
+        name: String,
+        /// The last of the unread lines, each already trimmed to a sensible width.
+        lines: Vec<String>,
+        /// How many unread lines there were altogether, so the row can say what it left out.
+        total: usize,
+    },
 }
 
 /// A few lines of a result the planner read, for the person watching to see beside the call.

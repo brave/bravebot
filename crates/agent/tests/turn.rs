@@ -43450,6 +43450,89 @@ fn a_look_that_stops_a_job_is_its_finish_under_its_name() {
     );
 }
 
+/// A running job the planner has not looked at still has its lines drawn: the screen is told what
+/// it printed at the next round, and the planner's look afterwards returns every one of those lines
+/// (WATCH-24).
+#[cfg(unix)]
+#[test]
+fn a_running_job_nobody_has_looked_at_gives_the_screen_its_lines_and_the_look_keeps_them() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("background-live-lines");
+    let write = |name: &str, body: &str| {
+        let path = scratch.path.join(name);
+        std::fs::write(&path, body).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    write(
+        "serve",
+        "#!/bin/sh\necho LIVE-LINE-ONE\ntouch ready\nsleep 30\n",
+    );
+    write(
+        "await-ready",
+        "#!/bin/sh\nwhile [ ! -e ready ]; do sleep 0.05; done\n",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./serve","background":true}"#),
+        tool_request("run", r#"{"command":"./await-ready"}"#),
+        tool_request("run", r#"{"command":"./await-ready"}"#),
+        tool_request("job_output", r#"{"job":"job:1","kill":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start the server and wait for it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    use bravebot_agent::report::JobEvent;
+    let live: Vec<&JobEvent> = reporter
+        .jobs
+        .iter()
+        .filter(|event| matches!(event, JobEvent::Printed { .. }))
+        .collect();
+    assert_eq!(
+        live.len(),
+        1,
+        "once, however many rounds ran: {:?}",
+        reporter.jobs
+    );
+    let JobEvent::Printed { name, lines, total } = live[0] else {
+        unreachable!()
+    };
+    assert_eq!(name, "job:1");
+    assert_eq!(lines, &["LIVE-LINE-ONE"]);
+    assert_eq!(*total, 1);
+
+    let look = reporter
+        .printed
+        .iter()
+        .find(|printed| printed.job.as_deref() == Some("job:1"))
+        .expect("the look was put under the job");
+    assert_eq!(
+        look.lines,
+        ["LIVE-LINE-ONE"],
+        "the screen's lines moved the planner's cursor past them"
+    );
+}
+
 /// Records, when told the turn is stopping a job, whether the job's process is still alive.
 #[cfg(unix)]
 struct NotesWhetherAStoppedJobStillRan {

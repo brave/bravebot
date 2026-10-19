@@ -1753,6 +1753,39 @@ fn collect_delegates<S: Sink, R: Reporter>(
     Ok(collected)
 }
 
+/// Give the screen what each running job has printed that no look has handed the planner (WATCH-24).
+///
+/// Through the gate that releases a look's lines for display, so what the planner may not read is
+/// still only drawn, in the marked block. Nothing is added to the conversation and the planner's
+/// cursor on each job does not move, so its next look returns every line shown here.
+fn show_what_running_jobs_have_printed<S: Sink, R: Reporter>(
+    jobs: &mut tools::Jobs,
+    policy: &mut Policy<'_, S>,
+    reporter: &mut R,
+) {
+    for unread in jobs.unread_output() {
+        let (lines, total) = released_lines(
+            policy,
+            "job_output",
+            &unread.text,
+            LIVE_LINES,
+            KEPT_WIDTH,
+            true,
+        );
+        reporter.job(crate::report::JobEvent::Printed {
+            name: unread.name,
+            lines,
+            total,
+        });
+    }
+}
+
+/// How many of a running job's unread lines the screen is given, the newest of them.
+///
+/// The screen is a glance at a job nobody has looked at, so it keeps the end of what the job
+/// printed, bounded because a program can print without end.
+const LIVE_LINES: usize = 200;
+
 /// Tell the turn about every background job that has ended since it last looked (CMDLINE-14).
 ///
 /// The exit is what says so, rather than the planner deciding to ask. A job's finish arrives as a
@@ -3377,6 +3410,8 @@ where
             conversation,
             reporter,
         )?;
+
+        show_what_running_jobs_have_printed(state.jobs, policy, reporter);
 
         // Once, after the finishes above, so what is left is what is still going: a job
         // the session kept from an earlier turn is something the planner has no other way

@@ -1106,7 +1106,7 @@ struct Mark {
 ///
 /// Byte counts and nothing else. Comparing two of these says whether more has arrived; it never says
 /// what arrived, and nothing here reads a byte of it.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Seen {
     stdout: Mark,
     /// One per standard-error pipe, grown to match when a pipeline's stages are first looked at.

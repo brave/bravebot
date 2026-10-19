@@ -662,6 +662,12 @@ struct Job {
     /// rather than one offset into the composed text, because output arriving on one stream moves
     /// where the other sits in that composition.
     seen: crate::exec::Seen,
+    /// How much of each pipe the screen has been shown the unread lines of (WATCH-24).
+    ///
+    /// Byte counts, like `seen`, and only a way to tell that more has arrived since the screen was
+    /// last given the unread lines. It never moves `seen`: the planner's next look still returns
+    /// everything it has not read.
+    drawn: crate::exec::Seen,
     /// Whether somebody has already been given the account of how this one ended.
     ///
     /// Set by whichever route got there first, so the finish is news exactly once: the turn's own
@@ -719,6 +725,12 @@ impl Job {
             self.label.confidentiality,
         )
     }
+}
+
+/// What a running job has printed that the planner has not looked at, for the screen alone.
+pub(crate) struct Unread {
+    pub name: String,
+    pub text: Labelled<String>,
 }
 
 /// A background job's finish, as the turn is told about it (CMDLINE-14).
@@ -810,6 +822,7 @@ impl Jobs {
                 said: lines.told,
                 label,
                 seen: crate::exec::Seen::default(),
+                drawn: crate::exec::Seen::default(),
                 reported: false,
                 covered_by_record,
                 stop: stop.clone(),
@@ -913,6 +926,32 @@ impl Jobs {
             });
         }
         finished
+    }
+
+    /// What each running job has printed since the planner last looked, where more has arrived
+    /// since the screen was last given it (WATCH-24).
+    ///
+    /// Read without moving the planner's cursor, so a `job_output` call afterwards returns every
+    /// line. Whether more has arrived is a comparison of byte counts; the text goes to the caller
+    /// to be released for display and is not read here.
+    pub(crate) fn unread_output(&mut self) -> Vec<Unread> {
+        let mut unread = Vec::new();
+        for (name, job) in self.running.iter_mut() {
+            if job.reported || !job.running.has_more(&job.drawn) {
+                continue;
+            }
+            let mut cursor = job.seen.clone();
+            let text = job.running.since(&mut cursor);
+            job.drawn = cursor;
+            if text.is_empty() {
+                continue;
+            }
+            unread.push(Unread {
+                name: name.clone(),
+                text: Labelled::new(text, job.label_now()),
+            });
+        }
+        unread
     }
 
     /// Tell the person what the turn ending does to each job nobody has had the finish of, then
@@ -11014,6 +11053,64 @@ mod tests {
                 .expect("the actual process printed");
             assert_eq!(printed.label().is_trusted(), !changed);
         }
+    }
+
+    /// What the screen is given of a running job is read from where the planner last looked and
+    /// moves only the screen's own cursor, so a look afterwards still returns every line and the
+    /// screen is given each line once.
+    #[cfg(unix)]
+    #[test]
+    fn unread_output_leaves_the_planners_cursor_where_it_was() {
+        use bravebot_core::TrustStore;
+        use bravebot_core::file_authority::FileAuthority;
+
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("bravebot-unread-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("serve");
+        std::fs::write(&script, "#!/bin/sh\necho first\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut jobs = Jobs::new();
+        let plan = crate::cmdline::compile("./serve", &root, None, &mut |_, _| Ok(())).unwrap();
+        let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
+            panic!("one pipeline");
+        };
+        let running = crate::exec::start_steps(steps, &root, None, None).unwrap();
+        jobs.keep(
+            running,
+            JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+            Label::trusted_public(),
+            FileAuthority::new(TrustStore::new(&root)),
+            0,
+            false,
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let first = loop {
+            let unread = jobs.unread_output();
+            if let Some(unread) = unread.into_iter().next() {
+                break unread;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the job's line never became unread"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert_eq!(first.name, "job:1");
+        assert!(
+            jobs.unread_output().is_empty(),
+            "the same lines were given to the screen twice"
+        );
+
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let looked = job.running.since(&mut job.seen);
+        assert!(
+            looked.contains("first"),
+            "giving the screen the lines moved the planner's cursor past them: {looked:?}"
+        );
+        drop(jobs);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A stop the person asked for that no round was left to read is still theirs at the turn's
