@@ -39,7 +39,7 @@ pub use mcp::{CallAnswer, ask_mcp_call, ask_move, ask_server, ask_to_start, ask_
 #[cfg(test)]
 use mcp::{
     CallResponse, call_answer_for, draw_mcp_call, draw_move, draw_server, draw_tool_list,
-    tool_list_answer_for,
+    start_answer_for, tool_list_answer_for,
 };
 use pinned::{Drawn, Seen};
 #[cfg(test)]
@@ -5085,6 +5085,56 @@ mod tests {
 
     fn press(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    /// SERVERS-4: `1` and `2` approve only from a draw that took a yes, and `y` and Enter answer
+    /// nothing from any draw. Every refusing key answers `No` whether or not the declaration has
+    /// been drawn, and a key with no meaning here answers nothing.
+    #[test]
+    fn the_server_question_approves_only_by_one_or_two_once_drawn_and_refuses_by_its_keys() {
+        use bravebot_agent::servers::Answer as Start;
+        let unseen = Drawn::default();
+        let seen = Drawn::taking_yes();
+        let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+
+        for key in [KeyCode::Char('y'), KeyCode::Char('Y'), KeyCode::Enter] {
+            for drawn in [&unseen, &seen] {
+                assert_eq!(start_answer_for(press(key), drawn), None, "{key:?}");
+            }
+        }
+        for key in [KeyCode::Char('1'), KeyCode::Char('2')] {
+            assert_eq!(
+                start_answer_for(press(key), &unseen),
+                None,
+                "{key:?} answered before every row was drawn"
+            );
+        }
+        assert_eq!(
+            start_answer_for(press(KeyCode::Char('1')), &seen),
+            Some(Response::Answer(Start::Once))
+        );
+        assert_eq!(
+            start_answer_for(press(KeyCode::Char('2')), &seen),
+            Some(Response::Answer(Start::Project))
+        );
+
+        for drawn in [&unseen, &seen] {
+            for pressed in [
+                press(KeyCode::Char('3')),
+                press(KeyCode::Char('n')),
+                press(KeyCode::Char('N')),
+                press(KeyCode::Esc),
+                ctrl('c'),
+            ] {
+                assert_eq!(
+                    start_answer_for(pressed, drawn),
+                    Some(Response::Answer(Start::No)),
+                    "{pressed:?}"
+                );
+            }
+        }
+        assert_eq!(start_answer_for(ctrl('1'), &seen), None);
+        assert_eq!(start_answer_for(ctrl('y'), &seen), None);
     }
 
     /// The three rows are the three keys, `2` only where the answer can be kept, and Enter answers
