@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button, ButtonMenu, Icon, type IconName } from '../nala'
+import { useFocusReturn, useMenuItemRoles } from '../hooks'
 import { keyshortcuts } from './IconButton'
 
 export interface ModeChoice { label: string; icon: IconName; says: string }
@@ -23,7 +24,7 @@ export function ModePicker<T extends string>({ name, testId, noun, modes, choice
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const trigger = useRef<HTMLElement>(null)
-  const reason = useRef('explicit')
+  const { onClose, restoreFocus } = useFocusReturn(trigger)
   const current = modes[mode]
   const tooltip = `${current.label}: ${current.says}`
 
@@ -39,19 +40,7 @@ export function ModePicker<T extends string>({ name, testId, noun, modes, choice
   }, [current.label, open, tooltip, mode, noun])
 
   // Leo stamps `role="menuitem"` on every item when the menu opens. These are a radio group.
-  useEffect(() => {
-    const menu = trigger.current?.parentElement
-    if (!menu) return
-    const restore = (): void => {
-      for (const item of menu.querySelectorAll<HTMLElement>('leo-menu-item[data-role]')) {
-        if (item.getAttribute('role') !== item.dataset.role) item.setAttribute('role', item.dataset.role!)
-      }
-    }
-    restore()
-    const watch = new MutationObserver(restore)
-    watch.observe(menu, { subtree: true, childList: true, attributes: true, attributeFilter: ['role'] })
-    return () => watch.disconnect()
-  }, [])
+  useMenuItemRoles(trigger)
 
   return (
     <ButtonMenu
@@ -59,11 +48,10 @@ export function ModePicker<T extends string>({ name, testId, noun, modes, choice
       isOpen={open}
       placement="top-end"
       positionStrategy="fixed"
-      onClose={(detail) => { reason.current = detail.reason }}
+      onClose={onClose}
       onChange={({ isOpen }) => {
         setOpen(isOpen)
-        if (!isOpen && reason.current !== 'blur') trigger.current?.focus()
-        if (!isOpen) reason.current = 'explicit'
+        if (!isOpen) restoreFocus()
       }}
     >
       <Button ref={trigger} slot="anchor-content" kind="plain-faint" size="tiny"

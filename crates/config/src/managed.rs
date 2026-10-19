@@ -27,6 +27,9 @@
 //! pinning the account a request is billed to while leaving every model name free to reach it answers
 //! where the traffic goes and not what it spends.
 //!
+//! And it may write `deny` and `ask` rules, which are added to every layer's own and cannot be lifted
+//! by one (PERM-19). `allow` is never read from here.
+//!
 //! And it may pin the two `permissions` keys that only refuse: that the file tools stay inside the
 //! workspace, and that the mode asking about nothing is unreachable here (PERM-16, PERM-17). Both fit
 //! the reading the server lists fit, since a name that can only remove capability is one two parties
@@ -98,6 +101,12 @@ const MODEL_DENY: &str = "models.deny";
 /// Where the network for the programs `run` starts is pinned, and the name `doctor` reports the pin
 /// by.
 const RUN_NETWORK: &str = "run.network";
+
+/// Where the rules it refuses are listed, and the name `doctor` reports each list by (PERM-19).
+const RULES_DENY: &str = "permissions.deny";
+
+/// Where the rules it asks about are listed.
+const RULES_ASK: &str = "permissions.ask";
 
 /// A server as the managed layer compares it with an entry (SERVERS-12).
 #[derive(Debug, Clone, Copy)]
@@ -191,13 +200,31 @@ impl Models {
     /// trimmed: an inference-profile ARN and a roster slug are both names a service either knows or
     /// does not, and a pattern language here would be a second place to get a near-match wrong.
     pub fn refuses(&self, model: &str) -> Option<(&Path, ModelRefusal)> {
-        let model = model.trim();
-        let refusal = match self.denied.iter().any(|denied| denied == model) {
+        self.refuses_any(&[model])
+    }
+
+    /// As [`Models::refuses`], for a model that is spelled more than one way.
+    ///
+    /// A gateway model is asked for as `openrouter/z-ai/glm-4.6` and sent to the gateway as
+    /// `z-ai/glm-4.6`, and an entry may be written either way. A deny entry naming any spelling
+    /// refuses it, and an allow entry naming any spelling permits it, so the one model gets one
+    /// answer whichever way the administrator wrote it down.
+    pub fn refuses_any(&self, spellings: &[&str]) -> Option<(&Path, ModelRefusal)> {
+        let names = || spellings.iter().map(|name| name.trim());
+        let refusal = match self
+            .denied
+            .iter()
+            .any(|denied| names().any(|name| denied == name))
+        {
             true => Some(ModelRefusal::Denied),
             false => self
                 .allowed
                 .as_ref()
-                .filter(|allowed| !allowed.iter().any(|allowed| allowed == model))
+                .filter(|allowed| {
+                    !allowed
+                        .iter()
+                        .any(|allowed| names().any(|name| allowed == name))
+                })
                 .map(|_| ModelRefusal::NotAllowed),
         };
         Some((self.path.as_deref()?, refusal?))
@@ -251,6 +278,12 @@ pub struct Managed {
     /// quoted `"true"` in a file nobody at the machine can change is the person least likely to find
     /// out the pin does nothing.
     narrowing_unreadable: Vec<&'static str>,
+    /// The `deny` and `ask` rules it wrote (PERM-19).
+    ///
+    /// Read from this layer for the reason the keys above are: a rule in either list only narrows,
+    /// so an administrator naming one takes nothing from the person at the machine that the rule
+    /// had not taken. `allow` is not read, since a grant is the person's own (PERM-14).
+    rules: crate::settings::ManagedRules,
     /// What it pinned `run.network` to, or `None` where it said nothing.
     ///
     /// Final, unlike the strictest-wins keys above: an administrator who pins `closed` takes the
@@ -347,6 +380,7 @@ impl Managed {
         Self {
             narrowing,
             narrowing_unreadable,
+            rules: crate::settings::managed_rules(&root),
             hosts,
             hosts_unreadable,
             network,
@@ -455,6 +489,11 @@ impl Managed {
         self.narrowing
     }
 
+    /// The `deny` and `ask` rules it wrote, which [`Settings::under`] adds to every layer's own.
+    pub(crate) fn rules(&self) -> &crate::settings::ManagedRules {
+        &self.rules
+    }
+
     /// The sandbox mode it pinned, which no flag or settings file may loosen (SANDBOX-22).
     pub fn sandbox(&self) -> Option<bravebot_sandbox::SandboxMode> {
         self.sandbox
@@ -476,7 +515,8 @@ impl Managed {
         self.network
     }
 
-    /// Whether the file named `run.network` as neither `open` nor `closed`, which pins nothing.
+    /// Whether the file named `run.network` as neither `open` nor `closed`, which is read as
+    /// `closed` (SANDBOX-20).
     pub fn network_unreadable(&self) -> bool {
         self.network_unreadable
     }
@@ -520,6 +560,8 @@ impl Managed {
             .chain(self.models.allowed.is_some().then_some(MODEL_ALLOW))
             .chain((!self.models.denied.is_empty()).then_some(MODEL_DENY))
             .chain(self.narrowing.named())
+            .chain((!self.rules.deny.is_empty()).then_some(RULES_DENY))
+            .chain((!self.rules.ask.is_empty()).then_some(RULES_ASK))
             .chain(self.network.is_some().then_some(RUN_NETWORK))
             .chain(self.sandbox.is_some().then_some("sandbox.mode"))
             .chain(self.hosts.keys())
@@ -797,6 +839,55 @@ mod tests {
         );
     }
 
+    /// The set is the clause's list and no other: a name dropped from it leaves an administrator
+    /// unable to pin where that request goes, and one added widens the layer past destinations.
+    #[test]
+    fn every_name_the_clause_lists_is_pinnable_and_the_set_holds_no_other() {
+        let listed = [
+            "BRAVE_AI_CHAT_ENDPOINT",
+            "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+            "BRAVEBOT_USE_BEDROCK",
+            "AWS_REGION",
+            "AWS_PROFILE",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        ];
+        let env: String = listed
+            .iter()
+            .map(|name| format!(r#""{name}": "pinned-value""#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let managed = scratch("managed-every-name", &format!(r#"{{"env": {{{env}}}}}"#));
+
+        for name in listed {
+            assert_eq!(
+                managed.get(name),
+                Some("pinned-value"),
+                "{name} is pinnable"
+            );
+        }
+        let mut pinned: Vec<&str> = managed.pinned().collect();
+        pinned.sort_unstable();
+        let mut expected = listed.to_vec();
+        expected.sort_unstable();
+        assert_eq!(pinned, expected);
+    }
+
+    /// The path is a literal for the platform, so a different directory means a different file
+    /// answers for the machine.
+    #[test]
+    fn the_file_is_read_from_the_directory_the_platform_reserves() {
+        let expected = if cfg!(target_os = "macos") {
+            "/Library/Application Support/bravebot/managed.json"
+        } else if cfg!(windows) {
+            r"C:\ProgramData\bravebot\managed.json"
+        } else {
+            "/etc/bravebot/managed.json"
+        };
+        assert_eq!(managed_file(), Path::new(expected));
+    }
+
     /// A layer that can pin anything is a layer somebody uses to pin a preference. What an
     /// organisation and an individual can disagree about is where a request goes, so nothing else
     /// is read, however the file spells it.
@@ -870,18 +961,61 @@ mod tests {
         );
     }
 
-    /// The rules themselves are not this layer's to write. `deny` and `ask` narrow, but a rule names
-    /// a path, a program or a host, and a file pinning one would be deciding what a session may work
-    /// on rather than whether it may leave the tree at all: the two keys above are the whole of what
-    /// is read here, and PERM-14 already says which file may write a rule.
+    /// PERM-19: `deny` and `ask` are read from the managed file, as text or as an object, and named
+    /// among what it pinned. The failure this rejects is a file whose rules are ignored, which leaves
+    /// an administrator with nothing to write, or one whose `ask` list is dropped.
     #[test]
-    fn a_pinned_permission_rule_is_not_read() {
+    fn a_pinned_deny_or_ask_rule_is_read_and_named_as_pinned() {
         let managed = scratch(
             "managed-rules",
-            r#"{"permissions": {"deny": ["Read(./.env)"], "allow": ["Bash(rm *)"]}}"#,
+            r#"{"permissions": {
+                 "deny": ["Read(./.env)", {"rule": "Bash(git push *)", "reason": "ask first"}],
+                 "ask": ["WebFetch"]
+               }}"#,
         );
-        assert!(managed.is_empty(), "a rule in the managed file was pinned");
-        assert!(managed.narrowing().is_empty());
+        assert_eq!(managed.rules().deny, ["Read(./.env)", "Bash(git push *)"]);
+        assert_eq!(managed.rules().ask, ["WebFetch"]);
+        assert_eq!(
+            managed.pinned().collect::<Vec<_>>(),
+            vec!["permissions.deny", "permissions.ask"]
+        );
+        assert!(!managed.is_empty());
+    }
+
+    /// PERM-19: a grant is the person's own, so `allow` is read from nowhere in this file, and a
+    /// malformed entry in it is not reported as a rule an administrator wrote.
+    #[test]
+    fn a_pinned_allow_rule_is_not_read_or_reported() {
+        let managed = scratch(
+            "managed-allow",
+            r#"{"permissions": {"allow": ["Bash(rm *)", 1]}}"#,
+        );
+        assert!(managed.rules().is_empty(), "an allow entry was read");
+        assert!(managed.is_empty());
+        let misshapen = scratch(
+            "managed-allow-misshapen",
+            r#"{"permissions": {"allow": "x"}}"#,
+        );
+        assert!(misshapen.rules().is_empty(), "an allow value was reported");
+    }
+
+    /// PERM-11 and PERM-19: an entry that is not a line, and a list or block that is not the shape
+    /// rules are read from, are carried out to be reported. The failure this rejects is dropping
+    /// them in silence, which reads to an administrator as a rule that holds.
+    #[test]
+    fn a_pinned_rule_list_that_is_not_readable_is_carried_out_to_be_reported() {
+        let managed = scratch(
+            "managed-rules-unreadable",
+            r#"{"permissions": {"deny": [1, ["Read(./.env)"], "Bash(ls)"], "ask": "WebFetch"}}"#,
+        );
+        assert_eq!(managed.rules().deny, ["Bash(ls)"]);
+        assert_eq!(managed.rules().unreadable, ["1", r#"["Read(./.env)"]"#]);
+        assert_eq!(
+            managed.rules().misshapen,
+            [r#"{"permissions":{"ask":"WebFetch"}}"#]
+        );
+        let block = scratch("managed-rules-block", r#"{"permissions": "deny all"}"#);
+        assert_eq!(block.rules().misshapen, [r#"{"permissions":"deny all"}"#]);
     }
 
     /// Half of "our account or nothing": the switch that reaches somebody's own AWS account is one

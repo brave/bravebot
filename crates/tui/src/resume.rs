@@ -34,7 +34,7 @@ pub struct Picker {
     /// What has been typed to narrow it.
     search: String,
     /// A refusal to show under the list, cleared by the next key.
-    note: Option<&'static str>,
+    note: Option<String>,
     /// Which of the matching sessions is under the cursor.
     selected: usize,
     /// The project these sessions belong to, for the heading.
@@ -51,6 +51,8 @@ pub struct Picker {
     corpus: Option<Corpus>,
     /// For each session whose words hold the phrase, the line that does.
     said: HashMap<String, String>,
+    /// Whether a running background session holds a record, which Enter refuses (BG-9).
+    held: fn(&str) -> bool,
 }
 
 impl Picker {
@@ -66,6 +68,7 @@ impl Picker {
             reads_from: None,
             corpus: None,
             said: HashMap::new(),
+            held: bravebot_session::jobs::is_running,
         }
     }
 
@@ -79,6 +82,13 @@ impl Picker {
     #[cfg(test)]
     fn with_corpus(mut self, corpus: Corpus) -> Self {
         self.corpus = Some(corpus);
+        self
+    }
+
+    /// Ask `held` rather than the roster whether a running background session holds a record.
+    #[cfg(test)]
+    fn with_held(mut self, held: fn(&str) -> bool) -> Self {
+        self.held = held;
         self
     }
 
@@ -248,7 +258,7 @@ pub enum Outcome {
     /// Distinct from `Continue` so the refusal is said out loud. A picker that quietly ignored
     /// Enter would look broken, and the reason is worth knowing: the record is still there to
     /// read, it just has nothing to carry on from.
-    Refused(&'static str),
+    Refused(String),
 }
 
 /// Why a manifest run cannot be picked up.
@@ -258,6 +268,19 @@ pub enum Outcome {
 /// the same, because what a run produced is worth reading whether or not it can be resumed.
 pub fn manifest_note() -> &'static str {
     t!(resume_manifest_run)
+}
+
+/// How much of a background session's name the refusal quotes, so that the id after it is not
+/// cut off at the edge of a 100 column terminal.
+const NAME_SHOWN: usize = 12;
+
+/// The refusal for choosing a record a running background session holds, which names the session
+/// and says how to join it, or `None` where `held` says nothing holds it (BG-9).
+fn held_note(id: &str, held: impl Fn(&str) -> bool) -> Option<String> {
+    if !held(id) {
+        return None;
+    }
+    Some(bravebot_session::jobs::held_refusal(id, NAME_SHOWN))
 }
 
 /// Interpret one key press.
@@ -276,7 +299,11 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
     match code {
         KeyCode::Esc => Outcome::Cancel,
         KeyCode::Enter => match picker.chosen() {
-            Some(session) if session.manifest => Outcome::Refused(manifest_note()),
+            Some(session) if session.manifest => Outcome::Refused(manifest_note().to_string()),
+            Some(session) => match held_note(&session.id, picker.held) {
+                Some(note) => Outcome::Refused(note),
+                None => Outcome::Resume,
+            },
             _ => Outcome::Resume,
         },
         KeyCode::Up => {
@@ -403,16 +430,9 @@ fn pick<B: Backend>(
     current: Option<&str>,
     from_pr: Option<&str>,
 ) -> Choice {
-    let mut listed = sessions::list(project);
-    listed.retain(|session| Some(session.id.as_str()) != current);
-    let mut picker = Picker::new(listed, project.display().to_string()).reading(project);
-    picker.within_a_session = current.is_some();
-    if let Some(wanted) = from_pr {
-        picker = picker.from_pull_request(wanted);
-    }
-    if picker.is_empty() {
+    let Some(mut picker) = opened(project, current, from_pr) else {
         return Choice::Fresh;
-    }
+    };
 
     loop {
         if terminal.draw(|frame| draw(frame, &picker)).is_err() {
@@ -455,6 +475,21 @@ fn pick<B: Backend>(
             }
         }
     }
+}
+
+/// The list `pick` shows, or `None` where there is nothing to show.
+///
+/// A named pull request is shown even with no session listed at all: that none is linked to it is
+/// the answer, and it has to be seen.
+fn opened(project: &Path, current: Option<&str>, from_pr: Option<&str>) -> Option<Picker> {
+    let mut listed = sessions::list(project);
+    listed.retain(|session| Some(session.id.as_str()) != current);
+    let mut picker = Picker::new(listed, project.display().to_string()).reading(project);
+    picker.within_a_session = current.is_some();
+    if let Some(wanted) = from_pr {
+        picker = picker.from_pull_request(wanted);
+    }
+    (!picker.is_empty() || picker.from_pr.is_some()).then_some(picker)
 }
 
 /// Draw the list.
@@ -519,7 +554,7 @@ fn draw(frame: &mut Frame, picker: &Picker) {
 
     frame.render_widget(Paragraph::new(list_lines(picker, layout[3])), layout[3]);
 
-    let (footer, colour) = match picker.note {
+    let (footer, colour) = match &picker.note {
         Some(note) => (format!("  {note}"), theme::note()),
         None if picker.within_a_session => {
             (format!("  {}", t!(resume_keys_within)), theme::muted())
@@ -606,6 +641,8 @@ mod tests {
         Summary {
             id: id.to_string(),
             title: title.to_string(),
+            directory: "/w".to_string(),
+            front: Some("terminal".to_string()),
             branch: Some("main".to_string()),
             issue: None,
             pull_request: None,
@@ -620,6 +657,8 @@ mod tests {
         Summary {
             id: id.to_string(),
             title: title.to_string(),
+            directory: "/w".to_string(),
+            front: Some("terminal".to_string()),
             branch: Some("main".to_string()),
             issue: None,
             pull_request: None,
@@ -928,8 +967,35 @@ mod tests {
         );
         assert_eq!(
             handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE),
-            Outcome::Refused(manifest_note())
+            Outcome::Refused(manifest_note().to_string())
         );
+    }
+
+    /// BG-9: a record a running background session holds is refused on Enter in the picker, with
+    /// the line that tells the person to attach; a record nothing holds is picked as before.
+    #[test]
+    fn a_session_a_background_session_holds_cannot_be_picked() {
+        fn holds_the_second(id: &str) -> bool {
+            id == "2222222222"
+        }
+        let mut picker = Picker::new(
+            vec![
+                summary("1111111111", "free", 200),
+                summary("2222222222", "held", 100),
+            ],
+            "/work",
+        )
+        .with_held(holds_the_second);
+        assert_eq!(
+            handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE),
+            Outcome::Resume
+        );
+        picker.down();
+        let Outcome::Refused(note) = handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE)
+        else {
+            panic!("a held session was picked");
+        };
+        assert!(note.contains("bravebot attach 22222222"), "{note}");
     }
 
     #[test]
@@ -1054,5 +1120,35 @@ mod tests {
         let screen = drawn(&by_title);
         assert!(screen.contains("Tidy the docs"), "{screen}");
         assert!(!screen.contains("ledger"), "{screen}");
+    }
+
+    /// A directory with no sessions is where a plain `--resume` has nothing to offer and starts an
+    /// ordinary session, but `--from-pr` there asked whether any session is linked to one pull
+    /// request, and a new session that never mentions it does not answer that.
+    #[test]
+    fn with_no_sessions_only_from_pr_opens_the_list_and_it_says_nothing_matches() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let project = crate::test_profile::project("never-used");
+        std::fs::create_dir_all(&project).expect("a project directory");
+
+        assert!(
+            opened(&project, None, None).is_none(),
+            "--resume drew an empty list"
+        );
+        let picker = opened(&project, None, Some("42")).expect("--from-pr drew no list");
+        // Wide enough that the scratch profile's long path leaves the pull request on its row.
+        let mut terminal =
+            Terminal::new(ratatui::backend::TestBackend::new(400, 12)).expect("a terminal");
+        terminal
+            .draw(|frame| draw(frame, &picker))
+            .expect("a frame");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains(t!(resume_nothing_matches)), "{screen}");
+        assert!(
+            screen.contains(&t!(resume_from_pr, pull_request = "42")),
+            "{screen}"
+        );
     }
 }

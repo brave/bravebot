@@ -341,6 +341,8 @@ fn an_unanswerable_output_read_refuses() {
             reference: "$1".into(),
             verdict: bravebot_core::vetting::Verdict::Inconclusive("not checked"),
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }),
         Decision::Reject,
         "approving output nobody could see is the one thing this cannot mean"
@@ -359,6 +361,8 @@ fn an_unanswerable_vouch_refuses() {
             truncated: true,
             verdict: bravebot_core::vetting::Verdict::Inconclusive("not checked"),
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }),
         Decision::Reject
     );
@@ -492,7 +496,7 @@ fn a_tool_list() -> bravebot_agent::confirm::ToolListRequest {
         alias: "weather".into(),
         tools: Vec::new(),
         refused: 0,
-        changed: false,
+        withheld: 0,
         verdict: bravebot_core::vetting::Verdict::Safe,
         reason: None,
     }
@@ -731,6 +735,8 @@ fn vetted_content_never_approves_itself_or_consumes_another_kind_of_reply() {
                 verdict,
                 reason: None,
                 picture: None,
+                label: None,
+                reason_label: None,
             }),
             Decision::Reject
         );
@@ -755,6 +761,8 @@ fn vetted_content_requires_its_own_explicit_approval() {
             verdict: bravebot_core::vetting::Verdict::Unsafe,
             reason: Some("instructions".into()),
             picture: None,
+            label: None,
+            reason_label: None,
         }),
         Decision::Approve
     );
@@ -1386,7 +1394,7 @@ fn confirm_run_with_an_approving_window(request: RunRequest) -> (RunDecision, bo
 /// SANDBOX-29: the window draws no card for a request to run a line with no sandbox and refuses it,
 /// where an approving window would have said yes. The control is the same line without the request,
 /// which the window is asked about and approves. The regression it rejects is a bridge that
-/// forwards the request, since the window reads `off` as `standard` and has no line showing a
+/// forwards the request, since the window reads `off` as `workspace-write` and has no line showing a
 /// program is unconfined.
 #[test]
 fn the_window_refuses_an_unconfined_run_without_asking() {
@@ -1396,6 +1404,7 @@ fn the_window_refuses_an_unconfined_run_without_asking() {
 
     let (decision, asked) = confirm_run_with_an_approving_window(RunRequest {
         unconfined: true,
+        key_choice: None,
         ..a_run()
     });
     assert!(!asked, "a card was drawn for it");

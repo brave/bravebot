@@ -19,6 +19,7 @@ files and prints a pointer to them.
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -42,13 +43,20 @@ from specs import (  # noqa: E402
     load_specs,
 )
 
+_shared = importlib.util.spec_from_file_location(
+    "work_dir", Path(__file__).resolve().parents[2] / "work_dir.py"
+)
+workdir = importlib.util.module_from_spec(_shared)
+_shared.loader.exec_module(workdir)
+
 ERROR = "error"
 WARNING = "warning"
 
 # `reads_a_step_without_keying` is read by the security-audit skill rather than here: it names the
 # functions that read a `Step` field by field for something that is not a key, which that skill
 # otherwise faults. It is listed so a deliberate key is told apart from a `sites:` indented out of
-# its `guards` entry, which is what the unknown-key error is for.
+# its `guards` entry, which is what the unknown-key error is for. `kept_in` is the security-audit
+# skill's too: it says which register row each question and remembered set lands in.
 FRONT_MATTER_KEYS = {
     "id",
     "title",
@@ -57,6 +65,7 @@ FRONT_MATTER_KEYS = {
     "guards",
     "documented-by",
     "reads_a_step_without_keying",
+    "kept_in",
 }
 
 UNVERIFIED_FILE = Path("agents/unverified-clauses.txt")
@@ -1426,8 +1435,7 @@ def main():
             f"{len(findings)} mechanical findings"
         ],
     }
-    manifest_path = work_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    manifest_path = workdir.write_manifest(work_dir, manifest)
 
     print(render(findings, chosen, args.strict), file=sys.stderr)
     print(json.dumps({"work_dir": str(work_dir), "manifest": str(manifest_path)}))

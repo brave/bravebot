@@ -37,8 +37,9 @@ bravebot -c                # the same
 The list is sorted on what each record says it was last written, not by id.
 
 Typing narrows the list by title, branch and linked issue or pull request, and by what was said in
-the session: the prompts you typed, the model's replies, and the paths and commands its calls
-named. A session found that way shows the first matching line under its title. Add `since:7d`
+the session: the prompts you typed, the model's replies, the paths and commands its calls named,
+and the [notes](#noting-something-on-a-session) you added. A session found that way shows the first
+matching line under its title. Add `since:7d`
 (`h` for hours, `d` for days, `w` for weeks) to keep only sessions written within that long. Tool
 results, files you attached and [imported sessions](#importing-sessions-from-claude-code) are not
 searched. The records are read when you type the first character, so a long list pauses once.
@@ -239,6 +240,27 @@ that needs an answer can be found without opening each one. At the box there is 
 left with an empty one rather than this session's name. An incognito session leaves the title alone,
 and so does setting [`terminalTitle`](../customize/configuration.md#terminaltitle) to `false`.
 
+## Noting something on a session
+
+```
+/note it edited the wrong config file
+```
+
+`/note` adds a note to the session while it runs, on the turn the session is on. It is written to the
+record at once, with the turn number and the fact that you typed it, in a place of its own. It is not
+part of the conversation: the model is never given it, so it changes nothing about the work. Typed
+while a turn runs with nothing waiting, it is carried out at once. A resume, a `/branch` and a
+continued session keep the notes, and a record from before notes existed has none. The resume list
+and `bravebot sessions search` find a session by the words of its notes.
+`/note` on its own lists the notes the session holds, one line each with its turn. A session that writes
+no record, as an incognito one does, says a note reached none.
+
+A note is for whoever reviews the session later. `/session-review` reads the notes of the sessions it
+reviews and treats each as a lead from you: it checks the note against the session's audit trail and
+the code, and reports it only when the cause is in bravebot. Nothing in a note is run or followed as
+an instruction, and a filed issue carries none of its words. A session with a new note is reviewed
+again for that note.
+
 ## Telling sessions apart
 
 The title says which session a terminal holds. The info panel says the rest: press Ctrl-X, or type
@@ -281,6 +303,17 @@ line break, an escape or a character outside ASCII in it included. Alone, each s
 one. Both are written to the session record at once, a resume brings them back, and `/clear` starts
 a session with neither.
 
+## Deleting a session
+
+`bravebot sessions delete <id>` removes one session of this directory, taking the id from
+`bravebot sessions list`. `bravebot sessions purge` removes all of them; it asks first, naming the
+directory and how many, unless you pass `-y`, and `--dry-run` prints what it would remove and
+removes nothing. Each deletes the record, its trail and its search index, and nothing else: your
+prompt history is one file for every project and stays, and so do the sessions of other
+directories. A session running in the background is left until you stop it with
+`bravebot sessions stop`. A session open in another terminal is not seen, and its next save writes
+its record back, so close it first. Both work under `--incognito`.
+
 ## Importing sessions from Claude Code
 
 ```sh
@@ -313,8 +346,8 @@ build cannot read.
 ```
 
 `/clear` begins a new session in the same directory and keeps the current one resumable. Because it
-is a new session it asks the trust question again, unless you said to
-[remember the answer](../security/trust.md#remembering-the-answer) there, restores no standing
+is a new session it asks the trust question again, unless a yes was
+[kept](../security/trust.md#remembering-the-answer) there, restores no standing
 permissions, and closes any directory `/add-dir` had opened.
 
 ## Starting a plan-then-execute run
@@ -369,6 +402,18 @@ was asked, and every path that turn wrote over, or that it wrote over none.
 back every row from the first down to the one chosen. A number past what the session remembers
 rewinds nothing and says how far back it does go, rather than going as far as it can: reading a tree
 two turns younger than you believe it is would be worse than a refusal.
+
+### Putting back one hunk
+
+`/hunks` lists the hunks the last turn wrote, numbered from one across its files, and `/hunks 2` puts
+hunk 2 back as it stood before the turn while every other line of the file stays as it is. The list
+is drawn again afterwards, since the numbers below the hunk have moved, and `/undo` still puts the
+whole turn back.
+
+It is for the case where most of a turn is right and one change is not. A file you have edited since
+is protected: the file is compared with what the turn kept, and a hunk that has moved or changed is
+refused rather than written over. Only a file the session trusts is compared, so any other is named
+and left to `/undo`. The [command reference](../reference/commands.md#hunks-number) has the rest.
 
 ### What will not go back
 
@@ -473,10 +518,10 @@ from before stays resumable. It stops being updated for as long as the incognito
 your skills and your imported credentials are all read as usual, so the session is the one you
 configured rather than a fresh install. The record of command lines you asked to be remembered past a
 session is read on the same terms: a line already in it still stops the asking, and the key that would
-add one is not offered. So is the record of directories you told the startup question to
-[remember](../security/trust.md#remembering-the-answer): a kept answer still trusts the directory,
-the session says so as it opens, `r` is not offered, and `/forget-trust` changes nothing and names
-the file so you can remove it yourself.
+add one is not offered. So is the record of directories you answered yes to at the startup question,
+which is [kept](../security/trust.md#remembering-the-answer): a kept yes still trusts the directory,
+the session says so as it opens, a new yes is not kept and the question says so, and `/forget-trust`
+changes nothing and names the file so you can remove it yourself.
 
 **One thing is not read: your standing answer about [vetting](../security/vetting.md).** If you have
 pressed the key that stops bravebot asking before content nobody vouched for reaches the planner,

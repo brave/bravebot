@@ -11,6 +11,7 @@ bravebot 0.9.0: a general-purpose agent resistant to prompt injection
 
 Usage:
   bravebot                               Start an interactive session
+  bravebot -i "<prompt>"                 Start an interactive session and send the prompt as its first turn
   bravebot --plain                       Start a session in lines, taking nothing from the terminal
   bravebot "<task>" [--file <path>]...   Run a single task
   cat file | bravebot -p "<task>"        ...with piped input, never trusted
@@ -41,6 +42,7 @@ Usage:
 | Command | What it does |
 |---|---|
 | `bravebot` | start an interactive session in the current directory |
+| `bravebot -i "<prompt>"`, `--interactive` | start the same session and send the prompt as its first turn ([below](#-i-prompt)) |
 | `bravebot --plain` | start a session in lines, drawing nothing ([below](#--plain)) |
 | `bravebot "<task>"` | run one task and print the reply |
 | `bravebot --resume`, `-r` | choose a session in this directory to pick up |
@@ -63,6 +65,9 @@ Usage:
 | `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot sessions import claude-code` | copy Claude Code's sessions for this directory in as words to read ([Sessions](../using/sessions.md#importing-sessions-from-claude-code)) |
 | `bravebot sessions search [workspace:<dir>] [since:<n>h\|d\|w] <text>` | print the ids and titles of past sessions that said it ([Sessions](../using/sessions.md#picking-one-back-up)) |
+| `bravebot sessions list [--json] [--limit <n>]` | print the sessions recorded for this directory, newest first ([Sessions](../using/sessions.md#picking-one-back-up)) |
+| `bravebot sessions delete <id>` | delete one session recorded for this directory, with its trail and search index ([Sessions](../using/sessions.md#deleting-a-session)) |
+| `bravebot sessions purge [--dry-run] [-y]` | delete every session recorded for this directory, asking first unless `-y` is given ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot permissions check <call>` | say which permission rule decides a tool call, and the file it is in ([below](#permissions-check)) |
 | `bravebot completion <shell>` | print a completion script for `bash`, `zsh` or `fish` ([below](#completion)) |
@@ -81,6 +86,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--add-dir <path>` | make a directory outside the working one reachable for this run; repeatable ([below](#--add-dir-path)) |
 | `--trust-workspace` | trust the working directory for this run, writing no record ([below](#--trust-workspace)) |
 | `-p`, `--print` | non-interactive; reads piped stdin as quarantined context |
+| `-i`, `--interactive <prompt>` | open the interactive session and send the prompt as its first turn ([below](#-i-prompt)) |
 | `--plain` | a session in lines, taking nothing from the terminal ([below](#--plain)) |
 | `--mode <turn\|manifest>` | how a one-shot is run; `turn` (the default) decides step by step, `manifest` plans the whole run first ([below](#--mode-turnmanifest)) |
 | `--model <name>` | the model this run asks for; outranks every other way one is named ([below](#--model-name)) |
@@ -89,9 +95,11 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--output-schema <path>` | hold the reply to the JSON Schema in this file, or end on status 6 ([below](#--output-schema-path)) |
 | `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../customize/configuration.md#runnetwork)) |
+| `--sandbox <mode>` | how far the programs the agent runs may reach: `strict`, `read-only` (which also stops the agent's file tools writing), `workspace-write` or `off`. Without it the mode is `workspace-write` ([`sandbox.mode`](../security/security.md)) |
 | `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../customize/configuration.md#sandboxfilesystem)) |
 | `--log-level <error\|info\|debug>` | how much of a failure's shape goes to the [diagnostic log](#--log-level-errorinfodebug) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
+| `--issue <url>`, `--pr <url>` | give the session it opens its issue and pull request links, as `/issue` and `/pr` do ([below](#--issue-url-and---pr-url)) |
 | `--system-prompt <prompt>` | replace the opening of the system prompt for this run; the rest of it stays ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--append-system-prompt <prompt>` | add your own words to the system prompt for this run, after the project's `AGENTS.md` ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
@@ -100,20 +108,24 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
 | `--tools <a,b,c>` | offer the agent only the named tools; a tool a setting removed stays removed, and no MCP server's tools are offered ([below](#--tools-abc-and---no-shell)) |
 | `--no-shell` | offer no tool that runs a program or reads what one printed: `run`, `read_output` and `job_output` ([below](#--tools-abc-and---no-shell)) |
-| `--locked` | as `--safe`, and read no project or local settings file; refuse `--dangerously-skip-permissions` and make the bypass mode unreachable ([below](#--locked)) |
+| `--locked` | as `--safe`, and read no project or local settings file; refuse `--dangerously-skip-permissions` and `--dangerously-bypass-approvals-and-sandbox` and make the bypass mode unreachable ([below](#--locked)) |
 | `--safe` | load none of your hooks, skills, definitions, MCP server requests or `AGENTS.md`, and say so once; sign-in, model and permissions still apply |
 | `--incognito` | write nothing to `~/.bravebot`: no history, no session record, no preference |
+| `--accept-edits` | for a one-shot run, write files without asking; commands, fetches and a write that would create a credential are still refused ([below](#--accept-edits)) |
 | `--dangerously-skip-permissions` | bypass every permission check; recommended only for a sandbox with no internet access |
+| `--dangerously-bypass-approvals-and-sandbox` | as `--dangerously-skip-permissions` with `--sandbox off`: nothing is asked and no program is confined; refused where that flag is, and beside a `--sandbox` other than `off` |
 | `-h`, `--help` | show the help |
 | `-V`, `--version` | show the version |
 
 `-p` may lead, as it does for other agents: `bravebot -p "task"`.
 
-Eight flags are taken out of the line before anything dispatches on it, so each may go anywhere and
+Nine flags are taken out of the line before anything dispatches on it, so each may go anywhere and
 each combines with every way of starting, one another included: `--incognito`, `--safe`, `--locked`,
-`--dangerously-skip-permissions`, `--settings`, `--vet`, `--tools` and `--no-shell`. `--agent` is taken out there too, and
+`--dangerously-skip-permissions`, `--accept-edits`, `--settings`, `--vet`, `--tools` and `--no-shell`. `--agent` is taken out there too, and
 combines with a session, `--plain` and a one-shot run, but not with `--resume`, `--continue`,
 `--fork` or `--mode manifest`, a task carrying on a session included.
+`--issue` and `--pr` are taken out there too, and combine with a session opened by no command,
+`-i`, `--resume`, `--continue`, `--fork` or `--from-pr`, and with nothing else.
 `--system-prompt` and `--append-system-prompt` are taken out there as well, and combine with every
 way of starting except `--mode manifest`.
 
@@ -131,7 +143,7 @@ sign-in, the model, permission rules and trust. `--bg` refuses it.
 For a run on a shared machine, or one whose checkout you do not trust. It does what `--safe` does,
 and reads settings from only your own file under `~/.bravebot`, the managed file and the one
 `--settings` names: the checkout's `.bravebot/settings.json` and `settings.local.json` are not read.
-It refuses `--dangerously-skip-permissions`, and the bypass mode cannot be reached from the keyboard
+It refuses `--dangerously-skip-permissions` and `--dangerously-bypass-approvals-and-sandbox`, and the bypass mode cannot be reached from the keyboard
 either. A permission question nobody can answer is declined, as it is in any unattended run. `--bg`
 refuses it.
 
@@ -150,8 +162,22 @@ unknown name even with `--dangerously-skip-permissions`. `--tools` offers no MCP
 `--mode manifest`, `--bg` and the commands that start no session refuse them.
 
 `--dangerously-skip-permissions` is the only way to reach the mode that answers every permission
-question, including the ones that decide trust, and the only way a run nobody is watching may write.
-See [modes](../security/permissions.md#answering-in-advance-modes) for what it costs.
+question, including the ones that decide trust. See
+[modes](../security/permissions.md#answering-in-advance-modes) for what it costs.
+
+### `--accept-edits`
+
+Opens a one-shot run in the accepting-edits mode, so a script that only needs to change files does
+not have to take the larger grant. Writes go through unasked. A command, a fetch, vouching for a
+directory and a write the credential scan found a value in are refused, because nobody can be asked.
+A `deny` rule still holds, and an allow rule still decides nothing in a one-shot run.
+
+```sh
+bravebot --accept-edits -p "apply the lint fixes"
+```
+
+It is refused together with `--dangerously-skip-permissions`, and refused where the line starts no
+one-shot run: a session has the mode key.
 
 ## `--mode <turn|manifest>`
 
@@ -296,6 +322,23 @@ from here.
 What is checked is that the file is there. What is in it is read by the rule every layer gets, where
 a file that is oversized or unparseable leaves the others in force, and `bravebot doctor` lists the
 layers it read, so a named file that did not parse shows up by its absence from that list.
+
+## `--issue <url>` and `--pr <url>`
+
+```sh
+bravebot --issue https://github.com/brave/bravebot/issues/1267
+bravebot -i "work on this issue" --issue https://github.com/brave/bravebot/issues/1267
+bravebot --resume <id> --pr https://github.com/brave/bravebot/pull/1270
+```
+
+Set the session's issue or pull request link as [`/issue` and `/pr`](commands.md) do, so the
+[info panel](../using/sessions.md#telling-sessions-apart) says what the session is about from the first frame. A value
+that is not one `http` or `https` address with a host in printable ASCII is refused before the
+session opens, with status 2, and the message does not repeat it. A missing value is refused too.
+Given twice, the last of a kind is used. On `--resume`, `--continue` and `--fork` the link replaces
+the one the record held, and a link the line does not give is left alone. A line that opens no
+interactive session (a one-shot run, `--plain`, `--bg` or a command such as `doctor`) refuses them
+rather than dropping them.
 
 ## `--agent <name>`
 
@@ -470,6 +513,34 @@ Both are refused with the argument status before anything is sent when the id na
 this directory, when `--continue` finds none, when the session is a `--mode manifest` run or is
 running in the background, and with `--agent` or `--mode manifest`.
 
+## `-i <prompt>`
+
+```sh
+bravebot -i "fix the failing test in crates/parser"
+bravebot --dangerously-skip-permissions --interactive "fix the failing test, then run the suite"
+bravebot -i "review the diff" --model opus --effort high
+```
+
+Opens the session a bare `bravebot` opens and sends the prompt as its first turn, as though you had
+typed it and pressed Enter, so you can watch the work, stop it with Esc and carry on from the reply.
+It is sent once every question the session opens with is answered, the one about trusting the
+working directory included, and leaving at one of them sends nothing. A prompt opening with `/` or
+`!` is sent as words, as `-p` sends it, not run as a command. `bravebot "<task>"` is still the
+one-shot run.
+
+The prompt is one argument, so quote it; its line breaks are kept. Characters a terminal draws as
+nothing are removed from it, as from a paste, and the session says how many. `-i` goes first, and
+the flags that combine with every way of starting go anywhere around it, as they do with a bare
+`bravebot`. Only `--model <name>` and `--effort <level>` may follow the prompt: they apply to this
+session and are not recorded, so the next session opens on the model and level it would have
+without them, and `/model` and `/effort` change them once the session is open as they always do.
+`--file` and the other options for a task belong to a one-shot run and are refused here rather
+than ignored.
+
+It is refused with the argument status when no prompt follows it, after `--resume`, `--continue`,
+`--fork`, `--from-pr` or `--bg`, and where stdin or stdout is not a terminal, since there is nothing
+to draw the session on. Use `-p` for a run nobody watches.
+
 ## `--plain`
 
 ```sh
@@ -488,10 +559,11 @@ is the terminal's, so its own interrupt ends the process.
 Every question is put in lines: what it is about, then the question, then how to answer it. **Only the
 affirmative approves**, and any other line refuses, as does the end of the input. One answer per
 question and no second key, so the answers that grant something standing are not offered and nothing
-answered here outlives the session. A directory you told the drawing interface or the desktop app to
-[remember](../security/trust.md#remembering-the-answer) is not asked about here either; the session says it is trusting it
-for that reason and names the file that holds the answer: delete the lines about the directory from
-it to be asked again.
+answered here outlives the session, except the yes to the question about the working directory,
+which is [kept](../security/trust.md#remembering-the-answer) as it is in the drawing interface, after
+lines that say so and name the file. A directory whose yes was kept is not asked about here; the
+session says it is trusting it for that reason and names the file that holds the answer: delete the
+lines about the directory from it to be asked again.
 
 stdin must be a terminal, and `--plain` is refused where it is not, naming `-p` as the invocation
 that reads a pipe. It composes with `--incognito`, `--dangerously-skip-permissions`, `--settings` and
@@ -896,6 +968,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/add-dir <path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd <path>` | Work in another directory from now on, and trust it for this session |
 | `/rename <name>` | Call this conversation something else |
+| `/note <note>` | Note something on this session's record, without putting it in the conversation |
 | `/compact` | Summarise the conversation so far, keeping the recent part |
 | `/btw <question>` | Ask something beside the work, without putting it in the conversation |
 | `/recap` | Recap where this session stands, without putting it in the conversation |

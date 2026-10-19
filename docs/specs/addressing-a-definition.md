@@ -5,6 +5,8 @@ status: normative
 governs:
   - crates/tui/src/app.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/completion.rs
+  - crates/tui/src/state/settings.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/transcript.rs
   - crates/tui/src/render/prompt.rs
@@ -14,10 +16,21 @@ governs:
   - crates/agent/src/agents.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
+  - crates/agent/src/turn/setup.rs
+  - crates/agent/src/turn/round_steps.rs
+  - crates/agent/src/turn/prompts.rs
+  - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/workspace.rs
+  - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
   - crates/tui/src/status.rs
+  - crates/tui/src/command_table.rs
 guards:
   - symbol: Policy::address
   - symbol: Session::address

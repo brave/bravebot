@@ -142,10 +142,18 @@ however long its reply was going to be.
 A connection that gave out is worth another attempt. A refusal is not, and only the statuses that
 mean the server is temporarily unable are treated as retryable.
 
+A `Retry-After` header on such an answer is read as whole seconds or an IMF-fixdate HTTP date and
+carried on the failure as a duration of at most one hour. A value that is neither, a date already
+past aside, is absent. It is a number that only sets a timer ([BACKEND-54](backends.md#BACKEND-54)):
+the header's text is never kept or shown, and the retryable set above is decided from the status
+alone.
+
 **Why.** Retrying a refusal turns one denied request into several.
 
 `verified-by: bravebot_net::lib::a_connection_that_gave_out_is_worth_another_attempt_and_a_refusal_is_not`
 `verified-by: bravebot_net::lib::only_the_statuses_that_mean_not_now_are_worth_another_attempt`
+`verified-by: bravebot_net::lib::a_retry_after_is_read_as_seconds_or_a_date_and_bounded`
+`verified-by: bravebot_net::lib::a_status_carries_the_wait_the_server_asked_for_and_nothing_it_wrote`
 `verified-by: bravebot_net::egress::a_non_success_status_is_an_error`
 
 <a id="NET-7"></a>
@@ -189,7 +197,7 @@ that nothing is trusted.
 `verified-by: bravebot_net::transport::a_directory_entry_that_is_not_a_certificate_is_skipped`
 `verified-by: bravebot_net::transport::a_path_that_yields_nothing_does_not_discard_one_that_does`
 `verified-by: bravebot_net::transport::every_named_path_that_yields_nothing_is_reported_rather_than_the_first`
-`verified-by: bravebot_cli::main::the_network_section_names_every_path_that_yielded_nothing`
+`verified-by: bravebot_cli::doctor::the_network_section_names_every_path_that_yielded_nothing`
 `verified-by: bravebot_net::transport::a_client_gets_the_built_in_roots_when_nothing_names_others`
 `verified-by: bravebot_net::lib::the_one_way_out_is_built_against_the_stated_transport_rather_than_a_default_client`
 
@@ -264,13 +272,13 @@ did, since the usual mistake is a uri missing its scheme and the username stays 
 `verified-by: bravebot_net::transport::a_lower_case_proxy_variable_that_cannot_be_parsed_is_named`
 `verified-by: bravebot_net::transport::a_proxy_variable_a_case_folding_lookup_answers_twice_is_named_once`
 `verified-by: bravebot_net::transport::two_spellings_of_a_proxy_variable_holding_different_values_are_both_named`
-`verified-by: bravebot_cli::main::the_network_section_names_a_proxy_variable_that_cannot_be_parsed`
-`verified-by: bravebot_cli::main::the_network_section_names_every_proxy_variable_that_cannot_be_parsed`
+`verified-by: bravebot_cli::doctor::the_network_section_names_a_proxy_variable_that_cannot_be_parsed`
+`verified-by: bravebot_cli::doctor::the_network_section_names_every_proxy_variable_that_cannot_be_parsed`
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_for_a_proxy_variable_that_names_no_route`
-`verified-by: bravebot_cli::main::a_proxy_this_build_cannot_connect_through_is_reported_as_not_the_route`
-`verified-by: bravebot_cli::main::the_network_section_names_the_hosts_a_proxy_is_not_used_for`
-`verified-by: bravebot_cli::main::the_network_section_names_the_roots_in_force_and_the_proxy`
-`verified-by: bravebot_cli::main::the_network_section_never_prints_a_proxy_credential`
+`verified-by: bravebot_cli::doctor::a_proxy_this_build_cannot_connect_through_is_reported_as_not_the_route`
+`verified-by: bravebot_cli::doctor::the_network_section_names_the_hosts_a_proxy_is_not_used_for`
+`verified-by: bravebot_cli::doctor::the_network_section_names_the_roots_in_force_and_the_proxy`
+`verified-by: bravebot_cli::doctor::the_network_section_never_prints_a_proxy_credential`
 
 <a id="NET-9"></a>
 ### NET-9: a redirect may not take an https chain into cleartext

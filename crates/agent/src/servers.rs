@@ -9,19 +9,20 @@
 //!
 //! A server's handshake is its `initialize` and then its `tools/list`, and the list is held as the
 //! one labelled text it arrived as: nothing of it reaches the planner until a person has read it at
-//! the start of a turn and said yes, or said yes to the same list under the same declaration before
-//! (SERVERS-8). A session holds the servers it started, their lists, and a grant naming each.
+//! the start of a turn and said yes (SERVERS-8). A session holds the servers it started, their lists, and a grant naming each.
 //!
 //! The two questions a session puts while it starts its servers, whether to use one (SERVERS-4) and
 //! whether one moved where its reply pointed (SERVERS-11), go to an [`Asker`]. A [`Person`] at a
 //! terminal is one, and a front end with its own screen is another.
 
 use crate::SessionScratch;
+use crate::confine::developer_directory;
 use crate::confirm::MoveRequest;
 use crate::mcp::{Connection, Session, Unmoved, managed_refusal, shown, unreadable};
 use bravebot_config::mcp::{
     self, Approvals, Declaration, Declarations, Digest, Problem, Projects, Timeouts,
 };
+use bravebot_config::sandbox_network::Hosts;
 use bravebot_config::{Managed, Server};
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::RecordingSink;
@@ -106,6 +107,12 @@ pub trait Asker {
 
     /// SERVERS-11's question about a remote server whose handshake was redirected. Whether it moved.
     fn ask_to_move(&mut self, request: &MoveRequest) -> bool;
+
+    /// Whether what this asker is told may be written into the state directory. A session in lines
+    /// answers no, so nothing it was told outlives it (CLI-14).
+    fn records(&self) -> bool {
+        true
+    }
 }
 
 /// The other end of a question at a terminal: where an answer is read, where things are shown, and
@@ -193,11 +200,18 @@ pub fn reach<A: Asker + ?Sized>(
     asker: &mut A,
     diagnostics: Stream,
 ) -> Reached {
+    // What an asker that records nothing is told is kept no more than an incognito session's is.
+    // A server's own directory under the state directory is not an answer, so a start still reads
+    // `home`.
+    let answering = &Home {
+        directory: home.directory.clone(),
+        writable: home.writable && asker.records(),
+    };
     let mut notes = Vec::new();
     let plans = settle(
         requested,
         project,
-        home,
+        answering,
         managed,
         asking,
         asker,
@@ -207,17 +221,35 @@ pub fn reach<A: Asker + ?Sized>(
     );
     let mut hops = Vec::new();
     let mut started = start(plans, home, diagnostics, &mut notes, &mut hops);
-    let moving = moves(hops, home, managed, asking, asker, &mut notes);
+    let moving = moves(hops, answering, managed, asking, asker, &mut notes);
     if !moving.is_empty() {
         let plans = moving
             .iter()
-            .map(|moving| {
-                let plan = Plan::Http {
-                    url: moving.url.clone(),
-                    declared: moving.declaration.digest(),
-                    timeouts: moving.declaration.timeouts(),
-                };
-                (moving.alias.clone(), plan)
+            .filter_map(|moving| {
+                match planned(&moving.declaration, &|name| std::env::var_os(name)) {
+                    Ok(Plan::Http {
+                        headers,
+                        timeouts,
+                        tools,
+                        exclude_tools,
+                        ..
+                    }) => {
+                        let plan = Plan::Http {
+                            url: moving.url.clone(),
+                            headers,
+                            declared: moving.declaration.digest(),
+                            timeouts,
+                            tools,
+                            exclude_tools,
+                        };
+                        Some((moving.alias.clone(), plan))
+                    }
+                    Ok(other) => Some((moving.alias.clone(), other)),
+                    Err(reason) => {
+                        notes.push(format!("{}: {reason}", moving.alias));
+                        None
+                    }
+                }
             })
             .collect();
         let mut again = Vec::new();
@@ -231,7 +263,7 @@ pub fn reach<A: Asker + ?Sized>(
             let Some(moving) = moving.iter().find(|moving| moving.alias == server.alias()) else {
                 continue;
             };
-            if moved(home, moving, &mut notes) {
+            if moved(answering, moving, &mut notes) {
                 started.push(server);
             }
         }
@@ -241,8 +273,8 @@ pub fn reach<A: Asker + ?Sized>(
         Session::new(
             started,
             project.to_path_buf(),
-            home.directory.clone(),
-            home.writable,
+            answering.directory.clone(),
+            answering.writable,
             managed.clone(),
         )
     });
@@ -397,11 +429,16 @@ enum Plan {
         /// The digest of the declaration, which a vouch for the server's list is recorded beside.
         declared: Digest,
         timeouts: Timeouts,
+        tools: Vec<String>,
+        exclude_tools: Vec<String>,
     },
     Http {
         url: String,
+        headers: Vec<(String, String)>,
         declared: Digest,
         timeouts: Timeouts,
+        tools: Vec<String>,
+        exclude_tools: Vec<String>,
     },
 }
 
@@ -739,12 +776,40 @@ fn planned(
     declaration: &Declaration,
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Plan, String> {
-    let (argv, names, env, reads, directory) = match declaration {
-        Declaration::Http { url, timeouts } => {
+    let (argv, names, env, reads, directory, tools, exclude_tools) = match declaration {
+        Declaration::Http {
+            url,
+            env_http_headers,
+            bearer_env,
+            timeouts,
+            tools,
+            exclude_tools,
+        } => {
+            let mut headers = Vec::new();
+            let bearer = bearer_env
+                .as_ref()
+                .and_then(|var| environment(var).map(|token| (var, token)));
+            if let Some((var, token)) = bearer {
+                let token_str = token
+                    .to_str()
+                    .ok_or_else(|| problem(&Problem::Value(var.clone())))?;
+                headers.push(("Authorization".to_string(), format!("Bearer {token_str}")));
+            }
+            for (header, var) in env_http_headers {
+                if let Some(val) = environment(var) {
+                    let val_str = val
+                        .to_str()
+                        .ok_or_else(|| problem(&Problem::Value(var.clone())))?;
+                    headers.push((header.clone(), val_str.to_string()));
+                }
+            }
             return Ok(Plan::Http {
                 url: url.clone(),
+                headers,
                 declared: declaration.digest(),
                 timeouts: *timeouts,
+                tools: tools.clone(),
+                exclude_tools: exclude_tools.clone(),
             });
         }
         Declaration::Stdio {
@@ -753,8 +818,10 @@ fn planned(
             env,
             reads,
             directory,
+            tools,
+            exclude_tools,
             ..
-        } => (argv, variables, env, reads, directory),
+        } => (argv, variables, env, reads, directory, tools, exclude_tools),
     };
     // A stored name is never in `variables`, so the environment is not read for it.
     let variables = names
@@ -781,7 +848,12 @@ fn planned(
     let (named, arguments) = argv
         .split_first()
         .ok_or_else(|| problem(&mcp::Problem::Program))?;
-    let program = resolve(named, path.as_deref(), &searched)?;
+    // Read only where it means something, so another platform's environment is asked for nothing.
+    let pathext = match cfg!(windows) {
+        true => executable_extensions(environment("PATHEXT").as_deref()),
+        false => Vec::new(),
+    };
+    let program = resolve(named, path.as_deref(), &searched, &pathext)?;
     Ok(Plan::Stdio {
         program,
         arguments: arguments.to_vec(),
@@ -791,6 +863,8 @@ fn planned(
         directory: directory.as_ref().map(PathBuf::from),
         declared: declaration.digest(),
         timeouts: declaration.timeouts(),
+        tools: tools.clone(),
+        exclude_tools: exclude_tools.clone(),
     })
 }
 
@@ -907,8 +981,34 @@ pub fn refused_declaration(
     }
 }
 
+/// The extensions Windows starts a program through directly, from `%PATHEXT%` where it is set, each
+/// with its leading dot. `.bat` and `.cmd` are left out: they start through `cmd.exe`, which reads
+/// the line again as its own syntax, and the sandbox refuses an argument it would act on.
+///
+/// Empty off Windows, where a program is found under the name it was given.
+fn executable_extensions(pathext: Option<&OsStr>) -> Vec<String> {
+    if !cfg!(windows) {
+        return Vec::new();
+    }
+    let given = pathext.and_then(OsStr::to_str).unwrap_or(".COM;.EXE");
+    given
+        .split(';')
+        .map(|extension| extension.trim().to_ascii_lowercase())
+        .filter(|extension| matches!(extension.as_str(), ".com" | ".exe"))
+        .collect()
+}
+
 /// The path a declaration's program starts from.
-fn resolve(program: &str, path: Option<&OsStr>, searched: &[PathBuf]) -> Result<PathBuf, String> {
+///
+/// A name with no extension is tried with each of `extensions` before the name itself, which is how
+/// Windows finds `npx` as `npx.exe`, and why the extensionless sh shim npm installs beside it does
+/// not shadow it.
+fn resolve(
+    program: &str,
+    path: Option<&OsStr>,
+    searched: &[PathBuf],
+    extensions: &[String],
+) -> Result<PathBuf, String> {
     let given = Path::new(program);
     if given.is_absolute() {
         return Ok(given.to_path_buf());
@@ -919,9 +1019,14 @@ fn resolve(program: &str, path: Option<&OsStr>, searched: &[PathBuf]) -> Result<
     if path.is_none() {
         return Err(t!(servers_program_without_path, program = shown(program)).to_string());
     }
+    let added = extensions
+        .iter()
+        .filter(|_| given.extension().is_none())
+        .map(|extension| format!("{program}{extension}"));
+    let spellings: Vec<String> = added.chain(std::iter::once(program.to_string())).collect();
     searched
         .iter()
-        .map(|directory| directory.join(program))
+        .flat_map(|directory| spellings.iter().map(move |name| directory.join(name)))
         .find(|candidate| startable(candidate) && candidate.to_str().is_some())
         .ok_or_else(|| t!(servers_program_not_found, program = shown(program)).to_string())
 }
@@ -1159,6 +1264,19 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
             t!(mcp_directory, path = shown(directory))
         ));
     }
+    let mut header_items: Vec<String> = Vec::new();
+    if let Some(bearer) = declaration.bearer_env() {
+        header_items.push(format!("Authorization: Bearer ${bearer}"));
+    }
+    for (header, var) in declaration.env_http_headers() {
+        header_items.push(format!("{header}: ${var}"));
+    }
+    if !header_items.is_empty() {
+        lines.push(format!(
+            "{indent}{}",
+            t!(mcp_headers, headers = header_items.join(", "))
+        ));
+    }
     let timeouts = declaration.timeouts();
     if !timeouts.is_default() {
         lines.push(format!(
@@ -1167,6 +1285,24 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
                 mcp_timeouts,
                 startup = timeouts.startup().as_secs(),
                 tool = timeouts.tool().as_secs()
+            )
+        ));
+    }
+    if !declaration.tools().is_empty() {
+        lines.push(format!(
+            "{indent}{}",
+            t!(
+                mcp_declaration_tools,
+                names = declaration.tools().join(", ")
+            )
+        ));
+    }
+    if !declaration.exclude_tools().is_empty() {
+        lines.push(format!(
+            "{indent}{}",
+            t!(
+                mcp_declaration_exclude_tools,
+                names = declaration.exclude_tools().join(", ")
             )
         ));
     }
@@ -1195,6 +1331,7 @@ pub fn problem(found: &Problem) -> String {
         Problem::Directory => t!(mcp_problem_directory).to_string(),
         Problem::Url => t!(mcp_problem_url).to_string(),
         Problem::Credentials => t!(mcp_problem_credentials).to_string(),
+        Problem::Header(name) => t!(mcp_problem_header, name = name).to_string(),
         Problem::Remote(key) => t!(mcp_problem_remote, key = *key).to_string(),
         Problem::Timeout(key) => t!(
             mcp_problem_timeout,
@@ -1202,6 +1339,8 @@ pub fn problem(found: &Problem) -> String {
             most = mcp::MAX_TIMEOUT_SECS
         )
         .to_string(),
+        Problem::Tool(name) => t!(mcp_problem_tool, name = name).to_string(),
+        Problem::Tools(key) => t!(mcp_problem_tools, key = *key).to_string(),
     }
 }
 
@@ -1471,7 +1610,17 @@ fn start(
     notes: &mut Vec<String>,
     hops: &mut Vec<Hop>,
 ) -> Vec<crate::mcp::Reached> {
-    start_under(None, plans, home, diagnostics, notes, hops)
+    let network = bravebot_config::run_network();
+    let hosts = bravebot_config::sandbox_network::settled().map(|settled| &settled.hosts);
+    start_under(
+        None,
+        (network, hosts),
+        plans,
+        home,
+        diagnostics,
+        notes,
+        hops,
+    )
 }
 
 /// [`start`], resolving each policy against `granting` rather than against what this machine's
@@ -1486,8 +1635,12 @@ fn start(
 /// The backend still spawns. Only the capabilities the policy is resolved against are the
 /// caller's, so a narrower policy than this machine demanded is installed by the real sandbox,
 /// which every backend can do: a profile naming fewer paths is one any of them accepts.
+///
+/// `session` is the network setting and host list the session settled, which each local server is
+/// held to as a stage is (SANDBOX-20, SANDBOX-24).
 fn start_under(
     granting: Option<Capabilities>,
+    session: (bravebot_sandbox::network::Network, Option<&Hosts>),
     plans: Vec<(String, Plan)>,
     home: &Home,
     diagnostics: Stream,
@@ -1522,6 +1675,8 @@ fn start_under(
                 directory,
                 declared,
                 timeouts,
+                tools,
+                exclude_tools,
             } => {
                 reads.retain(|file| state.as_ref().is_none_or(|state| !file.starts_with(state)));
                 let sandbox = match &sandbox {
@@ -1561,13 +1716,29 @@ fn start_under(
                     continue;
                 };
                 let granted = granting.clone().unwrap_or_else(|| sandbox.capabilities());
+                let (policy, proxied) = match crate::confine::held_to_the_session_network(
+                    policy, &program, session.0, session.1, &granted,
+                ) {
+                    Ok(held) => held,
+                    Err(reason) => {
+                        notes.push(
+                            t!(servers_not_confined, alias = alias, reason = reason).to_string(),
+                        );
+                        continue;
+                    }
+                };
                 let (policy, left_out) = nameable(&alias, policy, &granted);
                 notes.extend(left_out);
+                let variables = proxied
+                    .into_iter()
+                    .fold(at_home(variables, &own), |held, (name, value)| {
+                        held.with(name, value)
+                    });
                 let launched = StdioServer::launch(
                     alias.as_str(),
                     program.to_str().unwrap_or_default(),
                     &arguments,
-                    at_home(variables, &own),
+                    variables,
                     sandbox.as_ref(),
                     &policy,
                     diagnostics,
@@ -1591,7 +1762,7 @@ fn start_under(
                     // Held apart from the handshake, so a server that fails one has been stopped
                     // by the time its home is removed.
                     let outcome =
-                        handshake_local(server, declared, timeouts).map(
+                        handshake_local(server, declared, timeouts, &tools, &exclude_tools).map(
                             |reached| match throwaway {
                                 Some(throwaway) => reached.holding(throwaway),
                                 None => reached,
@@ -1602,12 +1773,23 @@ fn start_under(
             }
             Plan::Http {
                 url,
+                headers,
                 declared,
                 timeouts,
+                tools,
+                exclude_tools,
             } => {
                 waiting.push(wait_for(&alias, timeouts));
                 std::thread::spawn(move || {
-                    let (outcome, hop) = handshake_remote(&alias, url.clone(), declared, timeouts);
+                    let (outcome, hop) = handshake_remote(
+                        &alias,
+                        url.clone(),
+                        headers,
+                        declared,
+                        timeouts,
+                        &tools,
+                        &exclude_tools,
+                    );
                     let hop = hop.map(|destination| Hop {
                         alias: alias.clone(),
                         url,
@@ -1686,11 +1868,14 @@ fn handshake_local(
     mut server: StdioServer,
     declared: Digest,
     timeouts: Timeouts,
+    tools: &[String],
+    exclude_tools: &[String],
 ) -> McpResult<crate::mcp::Reached> {
     server.set_bound(timeouts.startup());
     server.initialize("bravebot", env!("CARGO_PKG_VERSION"))?;
     let alias = server.name().to_string();
-    let listing = bravebot_mcp::listed_or_none(&alias, server.list_tools())?;
+    let listing =
+        bravebot_mcp::listed_or_none(&alias, server.list_tools())?.filtered(tools, exclude_tools);
     server.set_bound(timeouts.tool());
     Ok(crate::mcp::Reached::new(
         Connection::Stdio(server),
@@ -1707,8 +1892,11 @@ fn handshake_local(
 fn handshake_remote(
     alias: &str,
     url: String,
+    headers: Vec<(String, String)>,
     declared: Digest,
     timeouts: Timeouts,
+    tools: &[String],
+    exclude_tools: &[String],
 ) -> (McpResult<crate::mcp::Reached>, Option<Labelled<String>>) {
     let mut sink = RecordingSink::new();
     let mut routing = Routing::new();
@@ -1726,7 +1914,17 @@ fn handshake_remote(
         Err(denial) => return (Err(McpError::Denied(denial)), None),
     };
     let egress = bravebot_net::Egress::new();
-    let reached = handshake_at(&mut policy, &egress, alias, url, declared, timeouts);
+    let reached = handshake_at(
+        &mut policy,
+        &egress,
+        alias,
+        url,
+        headers,
+        declared,
+        timeouts,
+        tools,
+        exclude_tools,
+    );
     let hop = match &reached {
         Err(McpError::Denied(_)) => policy.take_server_hop(),
         _ => None,
@@ -1734,17 +1932,24 @@ fn handshake_remote(
     (reached, hop)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handshake_at(
     policy: &mut Policy<'_, RecordingSink>,
     egress: &bravebot_net::Egress,
     alias: &str,
     url: String,
+    headers: Vec<(String, String)>,
     declared: Digest,
     timeouts: Timeouts,
+    tools: &[String],
+    exclude_tools: &[String],
 ) -> McpResult<crate::mcp::Reached> {
-    let mut server = HttpServer::new(alias, url).starting_within(timeouts.startup());
+    let mut server = HttpServer::new(alias, url)
+        .with_headers(headers)
+        .starting_within(timeouts.startup());
     server.initialize(policy, egress, "bravebot", env!("CARGO_PKG_VERSION"))?;
-    let listing = bravebot_mcp::listed_or_none(alias, server.list_tools(policy, egress))?;
+    let listing = bravebot_mcp::listed_or_none(alias, server.list_tools(policy, egress))?
+        .filtered(tools, exclude_tools);
     server.set_bound(timeouts.tool());
     Ok(crate::mcp::Reached::new(
         Connection::Http(server),
@@ -1815,6 +2020,7 @@ fn confinement_here(
         own,
         &temporary_directory(),
         crate::home::profile().as_deref(),
+        developer_directory().as_deref(),
     )
 }
 
@@ -1877,8 +2083,9 @@ fn confinement(
     own: &Path,
     temporary: &Path,
     home: Option<&Path>,
+    developer: Option<&Path>,
 ) -> Option<SandboxPolicy> {
-    let mut policy = base(prelude?, temporary, None, None);
+    let mut policy = base(prelude?, temporary, developer, None);
     let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let own = canonical(own);
     policy = policy.allow_read(&own).allow_write(&own);
@@ -1910,6 +2117,7 @@ mod tests {
     use super::*;
     use crate::mcp::entry;
     use bravebot_config::Rule;
+    use bravebot_sandbox::network::Network;
     use bravebot_sandbox::policy::ConfinementLevel;
 
     /// A state directory of its own under the build directory, emptied first.
@@ -2416,6 +2624,41 @@ mod tests {
         assert!(!mcp::projects_file(&home).exists());
     }
 
+    /// The regression it rejects: a yes whose record cannot be written being treated as a no, or
+    /// passing without a word, so the person is not told the answer will be asked again
+    /// (SERVERS-4). A directory where the file belongs makes the write fail on any platform.
+    #[test]
+    fn a_yes_whose_record_cannot_be_written_still_starts_the_server_and_says_which_record() {
+        for (typed, blocked, said) in [
+            ("1\n", "approvals", "its approval was not recorded"),
+            ("2\n", "projects", "was not recorded as a project"),
+        ] {
+            let (home, project, _) = declared("cli-servers-unwritable", &["weather-mcp"]);
+            let bin = home.parent().unwrap().join("bin");
+            installed(&bin, "weather-mcp");
+            let file = match blocked {
+                "approvals" => mcp::approvals_file(&home),
+                _ => mcp::projects_file(&home),
+            };
+            std::fs::create_dir_all(&file).unwrap();
+
+            let settled = settled(&home, &project, Asking::Person, true, true, typed, &bin);
+
+            assert_eq!(started(&settled), vec!["weather"], "{typed:?}");
+            assert_eq!(settled.notes.len(), 1, "{typed:?}: {:?}", settled.notes);
+            assert!(
+                settled.notes[0].contains(said),
+                "{typed:?}: {:?}",
+                settled.notes
+            );
+            assert!(
+                blocked == "projects" || settled.notes[0].contains("weather"),
+                "{typed:?}: {:?}",
+                settled.notes
+            );
+        }
+    }
+
     #[test]
     fn a_program_is_found_in_the_path_it_names_and_nowhere_else() {
         let root = scratch("cli-servers-resolve");
@@ -2424,31 +2667,82 @@ mod tests {
         let path = bin.as_os_str();
 
         assert_eq!(
-            resolve("weather-mcp", Some(path), std::slice::from_ref(&bin)),
+            resolve("weather-mcp", Some(path), std::slice::from_ref(&bin), &[]),
             Ok(program.clone())
         );
         assert_eq!(
-            resolve(program.to_str().unwrap(), None, &[]),
+            resolve(program.to_str().unwrap(), None, &[], &[]),
             Ok(program.clone()),
             "an absolute program needs no PATH"
         );
         assert_eq!(
-            resolve("weather-mcp", None, &[]),
+            resolve("weather-mcp", None, &[], &[]),
             Err(t!(servers_program_without_path, program = "weather-mcp").to_string())
         );
         assert_eq!(
-            resolve("other-mcp", Some(path), std::slice::from_ref(&bin)),
+            resolve("other-mcp", Some(path), std::slice::from_ref(&bin), &[]),
             Err(t!(servers_program_not_found, program = "other-mcp").to_string())
         );
         assert_eq!(
-            resolve("sh", Some(path), std::slice::from_ref(&bin)),
+            resolve("sh", Some(path), std::slice::from_ref(&bin), &[]),
             Err(t!(servers_program_not_found, program = "sh").to_string()),
             "a program on this process's own PATH and not on the one named is not found"
         );
         assert_eq!(
-            resolve("bin/weather-mcp", Some(path), std::slice::from_ref(&bin)),
+            resolve(
+                "bin/weather-mcp",
+                Some(path),
+                std::slice::from_ref(&bin),
+                &[]
+            ),
             Err(t!(servers_program_relative, program = "bin/weather-mcp").to_string())
         );
+    }
+
+    #[test]
+    fn a_name_with_no_extension_is_found_under_the_extension_windows_would_add() {
+        let root = scratch("cli-servers-resolve-extension");
+        let bin = root.join("bin");
+        let exe = installed(&bin, "npx.exe");
+        installed(&bin, "plain");
+        installed(&bin, "plain.exe");
+        installed(&bin, "tool.js.exe");
+        let dirs = [bin.clone()];
+        let path = bin.as_os_str();
+        let extensions = vec![".exe".to_string()];
+
+        assert_eq!(resolve("npx", Some(path), &dirs, &extensions), Ok(exe));
+        assert_eq!(
+            resolve("npx", Some(path), &dirs, &[]),
+            Err(t!(servers_program_not_found, program = "npx").to_string()),
+            "with no extension to add the name is looked up as it was written"
+        );
+        assert_eq!(
+            resolve("plain", Some(path), &dirs, &extensions),
+            Ok(bin.join("plain.exe")),
+            "a spelling that starts is tried before the extensionless file beside it"
+        );
+        assert_eq!(
+            resolve("npx.exe", Some(path), &dirs, &extensions),
+            Ok(bin.join("npx.exe"))
+        );
+        assert_eq!(
+            resolve("tool.js", Some(path), &dirs, &extensions),
+            Err(t!(servers_program_not_found, program = "tool.js").to_string()),
+            "a name that has an extension is not given another"
+        );
+    }
+
+    #[test]
+    fn only_the_extensions_a_program_starts_under_directly_are_added() {
+        let given = OsString::from(".COM;.EXE;.BAT;.CMD;.VBS");
+        let added = executable_extensions(Some(given.as_os_str()));
+        if cfg!(windows) {
+            assert_eq!(added, vec![".com".to_string(), ".exe".to_string()]);
+            assert_eq!(executable_extensions(None), added, "the default list");
+        } else {
+            assert!(added.is_empty(), "no extension is added off Windows");
+        }
     }
 
     #[test]
@@ -2655,6 +2949,32 @@ mod tests {
                 Some("uv tool run"),
                 unpinned("server"),
             ),
+            (
+                &["npm", "exec", "server@latest"][..],
+                Some("npm exec"),
+                unpinned("server@latest"),
+            ),
+            (&["yarn", "dlx", "server@2.0.0"][..], Some("yarn dlx"), None),
+            (
+                &["yarn", "dlx", "server"][..],
+                Some("yarn dlx"),
+                unpinned("server"),
+            ),
+            (
+                &["npx", "-p", "server@latest", "serve"][..],
+                Some("npx"),
+                unpinned("server@latest"),
+            ),
+            (
+                &["uvx", "--spec", "tool>=1", "serve"][..],
+                Some("uvx"),
+                unpinned("tool>=1"),
+            ),
+            (
+                &["uvx", "--spec", "tool==1.0.0", "serve"][..],
+                Some("uvx"),
+                None,
+            ),
             (&["pipx", "install", "server"][..], None, None),
             (&["weather-mcp", "--stdio"][..], None, None),
             (&["node", "server.js"][..], None, None),
@@ -2830,6 +3150,7 @@ mod tests {
             &kept,
             &temporary,
             Some(&home),
+            None,
         )
         .expect("a policy");
 
@@ -2868,6 +3189,7 @@ mod tests {
             &kept,
             &temporary,
             Some(&home),
+            None,
         )
         .expect("a policy");
         assert_eq!(undirected.starting_in.as_deref(), Some(temporary.as_path()));
@@ -2880,7 +3202,8 @@ mod tests {
                 None,
                 &kept,
                 &temporary,
-                Some(&home)
+                Some(&home),
+                None,
             )
             .is_none()
         );
@@ -2907,6 +3230,7 @@ mod tests {
             &root.join("kept"),
             &root.join("tmp"),
             Some(&linked),
+            None,
         )
         .expect("a policy");
 
@@ -2966,6 +3290,7 @@ mod tests {
             &root.join("kept"),
             &root.join("tmp"),
             Some(&home),
+            None,
         )
         .expect("a policy");
 
@@ -3018,6 +3343,7 @@ mod tests {
             &root.join("kept"),
             &root.join("tmp"),
             Some(&home),
+            None,
         )
         .expect("a policy");
 
@@ -3166,6 +3492,93 @@ mod tests {
         );
     }
 
+    /// SERVERS-18: header names and environment variable names are drawn,
+    /// and secret values are never read or shown.
+    #[test]
+    fn a_declarations_headers_are_drawn_with_variable_names_and_without_secrets() {
+        let mut headers = std::collections::BTreeMap::new();
+        headers.insert("X-Api-Key".to_string(), "SECRET_KEY".to_string());
+        let declared = Declaration::http("https://api.example.com".into())
+            .expect("declaration")
+            .heading(headers, Some("TOKEN".into()))
+            .expect("heading");
+
+        let lines = drawn("api", &declared, "abcd1234");
+        let header_line = lines
+            .iter()
+            .find(|line| line.contains("headers:"))
+            .expect("headers line");
+        assert!(
+            header_line.contains("Authorization: Bearer $TOKEN"),
+            "{header_line}"
+        );
+        assert!(
+            header_line.contains("X-Api-Key: $SECRET_KEY"),
+            "{header_line}"
+        );
+
+        let env_fn = |var: &str| match var {
+            "TOKEN" => Some("secret-token-123".into()),
+            "SECRET_KEY" => Some("secret-key-456".into()),
+            _ => None,
+        };
+        let plan = planned(&declared, &env_fn).expect("planned");
+        match plan {
+            Plan::Http { headers, .. } => {
+                assert_eq!(
+                    headers,
+                    vec![
+                        (
+                            "Authorization".to_string(),
+                            "Bearer secret-token-123".to_string()
+                        ),
+                        ("X-Api-Key".to_string(), "secret-key-456".to_string()),
+                    ]
+                );
+            }
+            _ => panic!("expected Plan::Http"),
+        }
+
+        // Unset variables are omitted without error
+        let env_unset = |_var: &str| None;
+        let plan_unset = planned(&declared, &env_unset).expect("planned with unset vars");
+        match plan_unset {
+            Plan::Http { headers, .. } => {
+                assert!(
+                    headers.is_empty(),
+                    "unset variables omit headers: {headers:?}"
+                );
+            }
+            _ => panic!("expected Plan::Http"),
+        }
+
+        // Invalid UTF-8 values are refused rather than dropped
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let bad_bytes = std::ffi::OsString::from_vec(vec![0xFF, 0xFE]);
+            let env_bad_token = |var: &str| {
+                if var == "TOKEN" {
+                    Some(bad_bytes.clone())
+                } else {
+                    None
+                }
+            };
+            let err = planned(&declared, &env_bad_token).unwrap_err();
+            assert_eq!(err, problem(&Problem::Value("TOKEN".into())));
+
+            let env_bad_header = |var: &str| {
+                if var == "SECRET_KEY" {
+                    Some(bad_bytes.clone())
+                } else {
+                    None
+                }
+            };
+            let err2 = planned(&declared, &env_bad_header).unwrap_err();
+            assert_eq!(err2, problem(&Problem::Value("SECRET_KEY".into())));
+        }
+    }
+
     /// One per declaration, so what a runner fetched is there on its next launch and a declaration
     /// edited to run something else starts with nothing the one before it wrote.
     #[test]
@@ -3281,6 +3694,8 @@ done
             directory: Some(work.to_path_buf()),
             declared: digested(&["weather-mcp"]),
             timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
         };
         Some(start(
             vec![("weather".to_string(), plan)],
@@ -3657,6 +4072,66 @@ done
         assert!(Approvals::read(&redirected.home).approves(&now.digest()));
     }
 
+    /// An asker that records nothing is incognito for the answers it gives, even where the state
+    /// directory is writable: a yes to the server question approves nothing, and a yes to a move
+    /// rewrites nothing (CLI-14). A fault that kept the writability the home states keeps both.
+    #[test]
+    fn an_asker_that_records_nothing_keeps_neither_a_yes_to_a_server_nor_to_a_move() {
+        struct InLines(Person<&'static [u8], Vec<u8>>);
+
+        impl Asker for InLines {
+            fn anybody_there(&self) -> bool {
+                self.0.anybody_there()
+            }
+
+            fn ask_to_start(&mut self, question: &Question<'_>) -> Answer {
+                self.0.ask_to_start(question)
+            }
+
+            fn ask_to_move(&mut self, request: &MoveRequest) -> bool {
+                self.0.ask_to_move(request)
+            }
+
+            fn records(&self) -> bool {
+                false
+            }
+        }
+
+        let redirected = redirected("cli-servers-asker-records-nothing");
+        std::fs::remove_file(mcp::approvals_file(&redirected.home)).expect("unapproved");
+        let requested = vec![(
+            redirected.project.join(".bravebot/settings.json"),
+            "weather".to_string(),
+        )];
+        let home = Home {
+            directory: Some(redirected.home.clone()),
+            writable: true,
+        };
+        let mut asker = InLines(Person {
+            answers: b"1\ny\n",
+            screen: Vec::new(),
+            present: true,
+        });
+
+        let reached = reach(
+            &requested,
+            &redirected.project,
+            &home,
+            &Managed::at(&managed_beside(&redirected.home)),
+            Asking::Person,
+            &mut asker,
+            Stream::Null,
+        );
+
+        let screen = String::from_utf8(asker.0.screen).expect("screen");
+        assert!(screen.contains(t!(mcp_move_title)), "{screen}");
+        assert!(screen.contains(t!(mcp_move_this_session_only)), "{screen}");
+        assert_eq!(reached.aliases(), vec!["weather"], "{:?}", reached.notes);
+        assert!(!mcp::approvals_file(&redirected.home).exists());
+        assert!(!mcp::projects_file(&redirected.home).exists());
+        assert_eq!(declared_in(&redirected.home), redirected.declared);
+    }
+
     /// A session that writes nothing says so on the prompt, and a yes starts the server where it
     /// moved for the session only.
     #[test]
@@ -3717,11 +4192,14 @@ done
             directory: Some(work.clone()),
             declared: digested(&["weather-mcp"]),
             timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
         };
         let mut notes = Vec::new();
 
         let started = start_under(
             Some(a_backend_naming_an_absent_path(false)),
+            (Network::Open, None),
             vec![("weather".to_string(), plan)],
             &home,
             Stream::Null,
@@ -3805,6 +4283,8 @@ done
             directory: Some(work.clone()),
             declared: digested(&["weather-mcp"]),
             timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
         };
         let mut notes = Vec::new();
 
@@ -3886,6 +4366,8 @@ done
             directory: Some(work),
             declared: digested(&["weather-mcp"]),
             timeouts,
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
         };
         let home = Home {
             directory: Some(state),
@@ -4008,7 +4490,16 @@ done
     ) -> McpResult<crate::mcp::Reached> {
         let (url, _bodies) = serving_holding(weather, String::new(), method, hold);
         let declared = Declaration::http(url.clone()).expect("declaration");
-        handshake_remote("weather", url, declared.digest(), timeouts).0
+        handshake_remote(
+            "weather",
+            url,
+            Vec::new(),
+            declared.digest(),
+            timeouts,
+            &[],
+            &[],
+        )
+        .0
     }
 
     /// A remote server that does not answer its handshake within the startup bound its declaration
@@ -4073,5 +4564,305 @@ done
 
         assert_eq!(error.to_string(), "tool 'lookup' timed out after 1 seconds");
         assert!(called.elapsed() < Duration::from_millis(2900));
+    }
+
+    /// SERVERS-17: handshake_local filters tools by allow and deny lists.
+    #[cfg(unix)]
+    #[test]
+    fn handshake_local_filters_tools_by_allow_and_deny_lists() {
+        let root = scratch("cli-servers-handshake-local-filter");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let script = installed(&root.join("bin"), "mock-mcp");
+        std::fs::write(
+            &script,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"mock","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}},{"name":"ping","inputSchema":{"type":"object"}},{"name":"drop","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+    *'"notifications/initialized"'*)
+      ;;
+  esac
+done
+"#,
+        )
+        .expect("write script");
+        let home_dir = root.join("home");
+        std::fs::create_dir_all(&home_dir).expect("home");
+        let home = Home {
+            directory: Some(home_dir),
+            writable: true,
+        };
+        let plan = Plan::Stdio {
+            program: script,
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: Vec::new(),
+            reads: Vec::new(),
+            directory: None,
+            declared: digested(&["mock-mcp"]),
+            timeouts: Timeouts::default(),
+            tools: vec!["echo".to_string(), "ping".to_string()],
+            exclude_tools: vec!["ping".to_string()],
+        };
+        let mut notes = Vec::new();
+        let started = start(
+            vec![("mock".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(started.len(), 1, "notes: {notes:?}");
+        assert_eq!(started[0].listing().offered(), 1);
+        assert_eq!(started[0].listing().refused(), 0);
+        assert_eq!(started[0].listing().withheld(), 2);
+    }
+
+    fn limited_to_a_port(enforced: bool) -> Capabilities {
+        Capabilities {
+            network_denial_enforced: enforced,
+            egress_limited_to_a_port: enforced,
+            ..a_backend_naming_an_absent_path(false)
+        }
+    }
+
+    fn listing(allowed: Option<&[&str]>, denied: &[&str]) -> Hosts {
+        let entry = |name: &&str| bravebot_config::sandbox_network::HostEntry {
+            entry: name.to_string(),
+            by: None,
+        };
+        Hosts {
+            allowed: allowed.map(|names| names.iter().map(entry).collect()),
+            denied: denied.iter().map(entry).collect(),
+            on_unlisted: None,
+        }
+    }
+
+    fn a_servers_policy() -> SandboxPolicy {
+        let own = scratch("servers-egress-own");
+        confinement(
+            Some(Prelude::MacOs),
+            Path::new("/usr/bin/weather-mcp"),
+            &[],
+            &[],
+            None,
+            &own,
+            Path::new("/tmp"),
+            None,
+            None,
+        )
+        .expect("a policy on macOS's base")
+    }
+
+    /// SANDBOX-20: a closed session leaves a local server no network, where the base gives it
+    /// egress, and a platform that cannot deny it refuses to start the server.
+    #[test]
+    fn a_closed_session_takes_the_network_from_a_local_server_or_refuses_it() {
+        let policy = a_servers_policy();
+        assert!(policy.allow_network, "the base gives a server egress");
+        let program = Path::new("/usr/bin/weather-mcp");
+
+        let (held, proxied) = crate::confine::held_to_the_session_network(
+            policy.clone(),
+            program,
+            Network::Closed,
+            None,
+            &limited_to_a_port(true),
+        )
+        .expect("a platform that denies the network holds the server");
+        assert!(!held.allow_network);
+        assert!(proxied.is_empty());
+
+        let refused = crate::confine::held_to_the_session_network(
+            policy,
+            program,
+            Network::Closed,
+            None,
+            &limited_to_a_port(false),
+        )
+        .expect_err("a platform that cannot deny the network does not start the server");
+        assert!(refused.contains("run.network"), "{refused}");
+    }
+
+    /// SANDBOX-24: a server under a host list reaches the proxy's port alone and is given its
+    /// variables, an empty list is still a list, and a list of refusals alone filters nothing.
+    #[test]
+    fn a_host_list_holds_a_local_server_to_the_proxy_or_refuses_it() {
+        let program = Path::new("/usr/bin/weather-mcp");
+        for allowed in [&["mine.example"][..], &[][..]] {
+            let hosts = listing(Some(allowed), &[]);
+            let (held, proxied) = crate::confine::held_to_the_session_network(
+                a_servers_policy(),
+                program,
+                Network::Open,
+                Some(&hosts),
+                &limited_to_a_port(true),
+            )
+            .expect("held to the proxy");
+            let port = held.egress_only_to.expect("egress is limited to one port");
+            assert!(
+                proxied
+                    .iter()
+                    .any(|(name, value)| name == "HTTPS_PROXY"
+                        && value.ends_with(&format!(":{port}"))),
+                "{proxied:?}"
+            );
+        }
+
+        let hosts = listing(Some(&["mine.example"]), &[]);
+        let refused = crate::confine::held_to_the_session_network(
+            a_servers_policy(),
+            program,
+            Network::Open,
+            Some(&hosts),
+            &limited_to_a_port(false),
+        )
+        .expect_err("a platform that cannot hold a program to the proxy refuses the server");
+        assert!(refused.contains("allowedHosts"), "{refused}");
+
+        for hosts in [None, Some(&listing(None, &["bad.example"]))] {
+            let (held, proxied) = crate::confine::held_to_the_session_network(
+                a_servers_policy(),
+                program,
+                Network::Open,
+                hosts,
+                &limited_to_a_port(false),
+            )
+            .expect("no list is no proxy");
+            assert!(held.allow_network && held.egress_only_to.is_none());
+            assert!(proxied.is_empty());
+        }
+    }
+
+    /// SANDBOX-20: the launch applies the setting. Where the platform cannot deny the network, a
+    /// closed session starts no server and the note names the setting, and the same plan under an
+    /// open session starts.
+    #[cfg(unix)]
+    #[test]
+    fn a_closed_session_starts_no_local_server_where_the_network_cannot_be_denied() {
+        let root = scratch("cli-servers-closed")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let program = installed(&root.join("server"), "weather-mcp");
+        std::fs::write(&program, HOME_WRITING_SERVER).expect("write the server");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let home = Home {
+            directory: None,
+            writable: false,
+        };
+        let plan = || {
+            vec![(
+                "weather".to_string(),
+                Plan::Stdio {
+                    program: program.clone(),
+                    arguments: Vec::new(),
+                    variables: Variables::new(),
+                    searched: Vec::new(),
+                    reads: Vec::new(),
+                    directory: Some(work.clone()),
+                    declared: digested(&["weather-mcp"]),
+                    timeouts: Timeouts::default(),
+                    tools: Vec::new(),
+                    exclude_tools: Vec::new(),
+                },
+            )]
+        };
+        for (network, started) in [(Network::Closed, 0), (Network::Open, 1)] {
+            let mut notes = Vec::new();
+            let reached = start_under(
+                Some(limited_to_a_port(false)),
+                (network, None),
+                plan(),
+                &home,
+                Stream::Null,
+                &mut notes,
+                &mut Vec::new(),
+            );
+            assert_eq!(reached.len(), started, "{network:?}: {notes:?}");
+            if started == 0 {
+                assert!(
+                    notes.iter().any(|note| note.contains("run.network")),
+                    "{notes:?}"
+                );
+            }
+        }
+    }
+
+    /// SANDBOX-24: a server held to the proxy is started with the variables that name it, set after
+    /// the declaration's, so a declared `HTTPS_PROXY` cannot point it elsewhere.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_held_to_the_proxy_is_started_with_the_proxys_variables() {
+        let root = scratch("cli-servers-proxied")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        let held = bravebot_sandbox::for_current_platform()
+            .map(|sandbox| sandbox.capabilities().egress_limited_to_a_port)
+            .unwrap_or(false);
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() || !held {
+            eprintln!("SKIPPED (no confinement that holds a program to a port here)");
+            return;
+        }
+        let program = installed(&root.join("server"), "weather-mcp");
+        let (_, answering) = HOME_WRITING_SERVER
+            .split_once("while ")
+            .expect("the server answers in a loop");
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\nprintf '%s' \"$HTTPS_PROXY\" > proxy-was\nwhile {answering}"),
+        )
+        .expect("write the server");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let home = Home {
+            directory: None,
+            writable: false,
+        };
+        let plan = Plan::Stdio {
+            program,
+            arguments: Vec::new(),
+            variables: Variables::new().with("HTTPS_PROXY", "http://elsewhere.example:1"),
+            searched: Vec::new(),
+            reads: Vec::new(),
+            directory: Some(work.clone()),
+            declared: digested(&["weather-mcp"]),
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+        };
+        let hosts = listing(Some(&["mine.example"]), &[]);
+        let mut notes = Vec::new();
+
+        let started = start_under(
+            None,
+            (Network::Open, Some(&hosts)),
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(started.len(), 1, "{notes:?}");
+        let seen = std::fs::read_to_string(work.join("proxy-was")).expect("the server wrote it");
+        assert!(
+            seen.starts_with("http://127.0.0.1:"),
+            "the server was given {seen}"
+        );
     }
 }

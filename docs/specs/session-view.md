@@ -232,6 +232,7 @@ Three limits belong to the launcher and the bridge. First, creating a socket pai
 `verified-by: bravebot_agent::spawn_gate::a_run_stage_waits_for_a_channel_being_created`
 `verified-by: bravebot_agent::spawn_gate::a_shell_mode_command_waits_for_a_channel_being_created`
 `verified-by: bravebot_sandbox::process::a_start_waits_for_a_channel_being_created`
+`verified-by: bravebot_sandbox::windows::a_stage_start_waits_for_a_channel_being_created`
 `verified-by: bravebot_bedrock::credentials::a_start_of_the_cli_waits_for_a_channel_being_created`
 `verified-by: bravebot_lsp::server::a_server_start_waits_for_a_channel_being_created`
 `verified-by: bravebot_sandbox::inspection::the_kernel_marks_the_process_non_dumpable`

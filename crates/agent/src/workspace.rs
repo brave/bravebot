@@ -27,41 +27,31 @@ use bravebot_filetype::{SNIFF_BYTES, looks_binary};
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+/// Locks `lock`, reading on past a poisoned one.
+///
+/// The values guarded here are lists of records, lists of names and counters, which a panic in
+/// another thread cannot leave inconsistent, so stopping a session over one would cost more than
+/// reading on.
+fn locked<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
+    lock.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+mod checkouts;
 #[path = "../../ui-files/src/names.rs"]
 mod names;
+mod reach;
 
-/// Extensions carried as bytes, with the media type to name in the URI.
-///
-/// Decided by extension rather than by looking at the file. Naming a type from the bytes would be
-/// the driver deciding something from content nobody has vouched for, and the type ends up in a
-/// `data:` URI where it is routing.
-///
-/// One table, so a file dropped on the terminal and a file a processor is asked about are the same
-/// kinds of file. A second list would be a second answer waiting to disagree.
-pub const ATTACHABLE: &[(&str, &str)] = &[
-    ("png", "image/png"),
-    ("jpg", "image/jpeg"),
-    ("jpeg", "image/jpeg"),
-    ("gif", "image/gif"),
-    ("webp", "image/webp"),
-    ("pdf", "application/pdf"),
-];
-
-/// The media type for `path`, where its extension names one this agent carries as bytes.
-///
-/// The extension is compared without regard to case, since `SHOT.PNG` is the same kind of file as
-/// `shot.png` and a person naming one means the picture either way.
-pub fn media_for(path: &str) -> Option<&'static str> {
-    let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
-    ATTACHABLE
-        .iter()
-        .find(|(named, _)| *named == extension)
-        .map(|(_, media)| *media)
-}
+pub use checkouts::{
+    Candidates, CheckoutInfo, CheckoutRead, Happened, Retired, SessionCheckout, Unremoved,
+    record_checkout,
+};
+use checkouts::{Made, TemporaryCheckouts, WorkingWrites};
+use reach::HostGrants;
+pub use reach::{Moved, PathReach, ReferenceProblem, Referenced};
 
 /// The most an attachment may weigh.
 ///
@@ -99,26 +89,6 @@ pub struct GitQuestion<'a> {
     pub until: Option<i64>,
 }
 
-/// A directory the person's settings named and the workspace opened (REFER-3).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Referenced {
-    /// What the person calls it.
-    pub alias: String,
-    /// The directory, canonical.
-    pub path: PathBuf,
-    /// The person's own words about when to consult it.
-    pub description: Option<String>,
-}
-
-/// Why an entry of the `references` block did not open (REFER-3).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReferenceProblem {
-    /// The settings reader could not use the entry.
-    Unusable(bravebot_config::ReferenceFault),
-    /// The directory could not be opened, for the reason carried.
-    NotOpened(String),
-}
-
 /// Whether the first component of `named` is exactly `~`.
 fn named_home(named: &str) -> bool {
     Path::new(named).components().next() == Some(Component::Normal(std::ffi::OsStr::new("~")))
@@ -145,14 +115,18 @@ fn expand_home(named: &str, home: Option<&Path>) -> Result<Option<PathBuf>, &'st
 ///
 /// "No such file or directory" alone reads as the file being absent, when the writer may have
 /// meant another directory than the one the path was joined to.
+///
+/// Names the directory and not the path joined to it. [`WorkspaceError::describe`] passes the
+/// detail through as it is, and a read through a reference was made on a filename the planner is
+/// never told (LIST-2).
 fn io_detail(error: &std::io::Error, named: &str, root: &Path) -> String {
     if error.kind() == std::io::ErrorKind::NotFound
         && !Path::new(named).is_absolute()
         && !named_home(named)
     {
         return format!(
-            "{error}; a relative path is looked up under the working directory, as {}",
-            root.join(named).display()
+            "{error}; a relative path is looked up under the working directory, {}",
+            root.display()
         );
     }
     error.to_string()
@@ -219,6 +193,14 @@ impl WorkspaceError {
                 remedy: Remedy::Nothing,
                 ..
             } => format!("'{named}' resolves outside the workspace; refusing to touch it"),
+            Self::Escapes {
+                remedy: Remedy::Inside,
+                ..
+            } => format!(
+                "'{named}' is inside the workspace, and a path there is named relative to the \
+                 workspace root; refusing to touch it as typed. Name it without the workspace's \
+                 own directory in front, or as '.' for the root itself"
+            ),
             // What the person can do is part of the sentence, since the planner cannot do it and has
             // otherwise been seen to reach the same file through `run` instead.
             Self::Escapes {
@@ -239,6 +221,23 @@ impl WorkspaceError {
                  window to have it read with their next message"
             ),
             Self::Escapes {
+                remedy: Remedy::OpenItself,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
+                 open the directory this path names, with /add-dir in the terminal or --add-dir \
+                 when starting bravebot, after which this path reaches it"
+            ),
+            Self::Escapes {
+                remedy: Remedy::OpenItselfEndsCheckouts,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
+                 open the directory this path names, with /add-dir in the terminal or --add-dir \
+                 when starting bravebot, after which this path reaches it. That directory holds \
+                 the working directory, and {ENDS_CHECKOUTS}"
+            ),
+            Self::Escapes {
                 remedy: Remedy::OpenEndsCheckouts,
                 ..
             } => format!(
@@ -256,6 +255,21 @@ impl WorkspaceError {
                  directory it is in, with /add-dir in the terminal or --add-dir when starting \
                  bravebot, would also make this path reach it, but that directory holds the \
                  working directory, and {ENDS_CHECKOUTS}"
+            ),
+            Self::Escapes {
+                remedy: Remedy::Credential,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace, in a place that holds credentials, \
+                 which cannot be opened to the file tools; refusing to touch it"
+            ),
+            Self::Escapes {
+                remedy: Remedy::CredentialDrop,
+                ..
+            } => format!(
+                "'{named}' resolves outside the workspace, in a place that holds credentials, \
+                 which cannot be opened to the file tools; refusing to touch it. The person can \
+                 drop the file on the window to have it read with their next message"
             ),
             Self::Escapes {
                 remedy: Remedy::Kept,
@@ -321,6 +335,7 @@ impl WorkspaceError {
             Remedy::Open => Remedy::OpenOrDrop,
             Remedy::OpenEndsCheckouts => Remedy::DropOrOpenEndsCheckouts,
             Remedy::Kept => Remedy::Drop,
+            Remedy::Credential => Remedy::CredentialDrop,
             other => other,
         };
         Self::Escapes { path, remedy }
@@ -353,10 +368,16 @@ const ENDS_CHECKOUTS: &str = "while one is open no delegate is given a checkout"
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Remedy {
     /// None is offered: the path climbs with `..` through a link, off the top of the file system
-    /// or to a place inside the root; a link carries it out; it is inside the root, where a
-    /// directory cannot be opened; or what was refused is a command's redirection or a rewind.
+    /// or to a place inside the root; a link carries it out; it names a credential location, which
+    /// cannot be opened; or what was refused is a command's redirection or a rewind.
     Nothing,
-    /// Opening the directory makes the same path reach the file, for whatever the call does to it.
+    /// The path lands inside the root and in no opened directory, where a directory cannot be
+    /// opened. It is named in some other way than relative to the root: from the top of the file
+    /// system, through a link to the root or through `~`. The relative spelling reaches the file,
+    /// so the planner is told that and not that the path leaves the workspace, which it does not.
+    Inside,
+    /// Opening the directory a file is in, or a name nothing is at yet would be created in, makes
+    /// the same path reach it, for whatever the call does to it.
     Open,
     /// [`Remedy::Open`] for a call that reads the file, where dropping it is a second way to have
     /// it read. A drop only ever reads (DROP-3), so no other call is told of it.
@@ -367,6 +388,20 @@ pub enum Remedy {
     /// [`Remedy::OpenOrDrop`] where the directory holds the working directory. The drop is named
     /// first, since it reaches the file and costs nothing.
     DropOrOpenEndsCheckouts,
+    /// The path names a directory, which is opened as itself rather than through the directory it
+    /// is in. This remedy names no drop for any call, since a directory cannot be dropped.
+    OpenItself,
+    /// [`Remedy::OpenItself`] where the directory holds the working directory, so opening it leaves
+    /// no delegate a checkout (CHECKOUT-7).
+    OpenItselfEndsCheckouts,
+    /// The directory a file is in, or a name nothing is at yet would be created in, is or lies
+    /// inside a credential location, which `/add-dir` and `request_path` both refuse (SANDBOX-18),
+    /// so no directory is offered. A write is still pointed at the unconfined line where the
+    /// session accepts one. A path that names such a directory is [`Remedy::Nothing`].
+    Credential,
+    /// [`Remedy::Credential`] for a call that reads the file, where a drop is the one way to have
+    /// it read.
+    CredentialDrop,
     /// `permissions.readsStayInWorkspace` refuses opening a directory, and the call is not a read,
     /// which a drop would not serve (PERM-16).
     Kept,
@@ -379,6 +414,7 @@ impl Remedy {
     pub fn offered(self) -> &'static str {
         match self {
             Self::Nothing => "none",
+            Self::Inside => "name it relative to the workspace root",
             Self::Open => "open its directory",
             Self::OpenOrDrop => "open its directory, or drop the file",
             Self::OpenEndsCheckouts => {
@@ -387,6 +423,15 @@ impl Remedy {
             Self::DropOrOpenEndsCheckouts => {
                 "drop the file, or open its directory, which holds the working directory and so \
                  ends checkouts"
+            }
+            Self::OpenItself => "open the directory itself",
+            Self::OpenItselfEndsCheckouts => {
+                "open the directory itself, which holds the working directory and so ends \
+                 checkouts"
+            }
+            Self::Credential => "none, since its directory is or lies inside a credential location",
+            Self::CredentialDrop => {
+                "drop the file, since its directory is or lies inside a credential location"
             }
             Self::Kept => {
                 "none, since permissions.readsStayInWorkspace refuses opening its directory"
@@ -438,6 +483,8 @@ enum Reach {
 pub struct Workspace {
     #[cfg(test)]
     after_write: Arc<Mutex<Option<WriteInterruption>>>,
+    #[cfg(test)]
+    while_reading: Arc<Mutex<Option<ReadingHook>>>,
     root: PathBuf,
     /// Absolute directories the user named, each canonical.
     ///
@@ -555,36 +602,6 @@ pub struct Workspace {
     reference_problems: Vec<(String, ReferenceProblem)>,
 }
 
-/// One path the person let programs reach for the session (SANDBOX-28).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PathReach {
-    pub path: PathBuf,
-    /// Whether programs may write it as well as read it.
-    pub write: bool,
-    /// What the planner said it was for.
-    pub why: String,
-}
-
-/// The hosts a person answered a prompt about for the session (SANDBOX-24).
-#[derive(Debug, Default)]
-struct HostGrants {
-    /// Allowed, oldest first.
-    allowed: Vec<String>,
-    /// Declined, so the same host is not asked about again this session.
-    declined: std::collections::BTreeSet<String>,
-}
-
-/// Which names the session wrote in the working directory, and when, counted in writes.
-///
-/// Names only, placed by their spelling as a checkout's candidates are. Nothing here reads a file.
-#[derive(Debug, Default)]
-struct WorkingWrites {
-    /// The number of writes recorded so far.
-    count: u64,
-    /// For each name, the number of the last write to it.
-    last: std::collections::BTreeMap<String, u64>,
-}
-
 /// The most directories [`Workspace::record_touch`] keeps, so a planner reading through a large
 /// tree cannot make every turn look for instructions in thousands of directories.
 const TOUCHED_LIMIT: usize = 64;
@@ -613,354 +630,60 @@ fn place_by_spelling(root: &Path, typed: &str) -> Option<String> {
     (!relative.is_empty()).then(|| relative.join("/"))
 }
 
-/// A checkout the session made and has not removed, as the driver recorded it (CHECKOUT-21).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionCheckout {
-    /// Its number, `c1` and on.
-    pub id: String,
-    pub path: PathBuf,
-    /// The commit it holds, in full.
-    pub commit: String,
-    /// The delegate it was made for.
-    pub delegate: bravebot_core::delegate::DelegateId,
-    /// Whether the driver recorded a file effect in it or a program started in it (CHECKOUT-15).
-    pub worked_in: bool,
-    pub candidates: Candidates,
-    /// The `.git` directory it was made from. The checkout's HEAD is the `worktrees/<id>/` entry
-    /// the driver wrote there, never what `<checkout>/.git` names (CHECKOUT-12).
-    pub repository: PathBuf,
-    /// What it took on disk when its delegate ended (CHECKOUT-15). `None` while that delegate
-    /// runs.
-    pub size: Option<crate::git::checkout::Size>,
-}
-
-/// What the driver recorded doing in a checkout. One record for the delegate's workspace and the
-/// session's list, so the list reads what the delegate did.
-#[derive(Debug, Default)]
-struct Record {
-    worked_in: AtomicBool,
-    written: Mutex<Candidates>,
-    size: Mutex<Option<crate::git::checkout::Size>>,
-}
-
-/// A checkout the session made, with what removing it takes.
-#[derive(Debug, Clone)]
-struct Made {
-    id: String,
-    path: PathBuf,
-    key: String,
-    commit: String,
-    delegate: bravebot_core::delegate::DelegateId,
-    /// The repository it was made from, recorded so `/cd` does not change which one removes it.
-    git_dir: PathBuf,
-    record: Arc<Record>,
-    /// How many working-directory writes had been recorded when it was made (CHECKOUT-14).
-    after: u64,
-    /// The lock on its directory, held for as long as the session keeps it (CHECKOUT-16).
-    _claim: Option<Arc<std::fs::File>>,
-}
-
-impl Made {
-    fn listed(&self) -> SessionCheckout {
-        SessionCheckout {
-            id: self.id.clone(),
-            path: self.path.clone(),
-            commit: self.commit.clone(),
-            delegate: self.delegate,
-            worked_in: self.record.worked_in.load(Ordering::SeqCst),
-            candidates: self
-                .record
-                .written
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone(),
-            repository: self.git_dir.clone(),
-            size: *self.record.size.lock().unwrap_or_else(|e| e.into_inner()),
-        }
-    }
-
-    /// Remove the checkout and its entry. Its rules go with it, except those that distrust a
-    /// path, and its root leaves the history list once no rule of its own is left (CHECKOUT-8,
-    /// CHECKOUT-12). `withdraw` takes them out of the map and says whether any remain.
-    fn remove(
-        &self,
-        withdraw: impl FnOnce(&str) -> bool,
-        listed: &Mutex<Vec<PathBuf>>,
-        session_checkouts: &Mutex<Vec<Made>>,
-    ) -> Result<(), crate::git::checkout::Refused> {
-        crate::git::checkout::remove(&self.git_dir, &self.path, &self.id)?;
-        session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|made| made.path != self.path);
-        if !withdraw(&self.key)
-            && let Ok(mut listed) = listed.lock()
-        {
-            listed.retain(|root| root != &self.path);
-        }
-        Ok(())
-    }
-}
-
-/// The system temporary directory's share of a session's checkouts, for a session with no state
-/// directory to keep them in (CHECKOUT-6).
+/// A session's checkouts, with the numbers and the write log they are judged by, for a front end
+/// that builds a workspace for each turn (CHECKOUT-16).
 ///
-/// Taking it takes every checkout under it with the entry each has in the repository's
-/// `worktrees/`, which taking the directory alone would leave naming a checkout that is gone.
-#[derive(Debug)]
-struct TemporaryCheckouts {
-    directory: crate::scratch::SessionScratch,
-    git_dir: PathBuf,
-}
-
-impl Drop for TemporaryCheckouts {
-    /// A failure is not reported, as [`crate::scratch::SessionScratch`]'s is not: what is left is
-    /// what a session killed outright leaves.
-    fn drop(&mut self) {
-        let Ok(entries) = std::fs::read_dir(self.directory.path()) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            if let Some(id) = entry.file_name().to_str() {
-                let _ = crate::git::checkout::remove(&self.git_dir, &entry.path(), id);
-            }
-        }
-    }
-}
-
-/// Why `/checkouts remove` removed nothing (CHECKOUT-15).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Unremoved {
-    /// The session keeps no checkout by that number.
-    NoSuch,
-    /// The working directory or a directory added by name is inside it.
-    WorkedFrom,
-    /// It is there and could not be removed.
-    Stuck,
-}
-
-/// What happened to a checkout, as the trail words it (CHECKOUT-19).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Happened {
-    Made,
-    Removed,
-    /// A file a delegate wrote there came back into the working directory (CHECKOUT-14).
-    Applied,
-}
-
-/// Record in the trail that a checkout was made, applied from or removed (CHECKOUT-19).
-///
-/// The event holds the checkout's path. The sink attributes it as it does any decision, to the run
-/// whose gates it is recording, so a checkout a delegate's run made for a delegate of its own keeps
-/// that run's number. The commit and the checkout's number are left out: the trail holds gate
-/// names, capabilities, labels, paths, hosts and slot ids (TRACE-2). Both are in the session
-/// record, against the path.
-pub fn record_checkout<S: Sink + ?Sized>(sink: &mut S, happened: Happened, path: &Path) {
-    let did = match happened {
-        Happened::Made => "made",
-        Happened::Removed => "removed",
-        Happened::Applied => "applied from",
-    };
-    sink.emit(bravebot_core::event::Event::GatePassed {
-        gate: "checkout",
-        detail: format!("{did} {}", path.display()),
-    });
-}
-
-/// A checkout a delegate works in, as the driver recorded it (CHECKOUT-5, CHECKOUT-7).
-#[derive(Debug)]
-pub struct CheckoutInfo {
-    made: Made,
-    left_out: Vec<String>,
-    /// The workspace the delegate's parent had, which is where sources are read from
-    /// (CHECKOUT-9).
-    source: Workspace,
-    listed: Arc<Mutex<Vec<PathBuf>>>,
+/// A workspace given it by [`Workspace::with_kept_between_turns`] lists, numbers and judges the
+/// working directory's writes against the same record as the one it was taken from, as a
+/// delegate's clone does. Holding it keeps each checkout's lock and the temporary directory for as
+/// long as the session does, and not for one turn.
+#[derive(Clone)]
+pub struct KeptBetweenTurns {
+    checkouts: Arc<Mutex<Vec<PathBuf>>>,
     session_checkouts: Arc<Mutex<Vec<Made>>>,
+    checkout_numbers: Arc<AtomicU64>,
+    temporary_checkouts: Arc<Mutex<Option<TemporaryCheckouts>>>,
+    working_writes: Arc<Mutex<WorkingWrites>>,
 }
 
-impl CheckoutInfo {
-    /// The `worktrees/<id>` entry the driver wrote in the repository's common directory when it
-    /// made the checkout (CHECKOUT-12).
-    fn entry(&self) -> PathBuf {
-        self.made.git_dir.join("worktrees").join(&self.made.id)
+impl KeptBetweenTurns {
+    /// The checkouts the session made and has not removed (CHECKOUT-21).
+    pub fn checkouts(&self) -> Vec<SessionCheckout> {
+        listed(&self.session_checkouts)
     }
 }
 
-/// The writes in a checkout, as the driver recorded them (CHECKOUT-13).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Candidates {
-    /// The names a planner typed for files it wrote in the checkout, relative to it.
-    pub named: std::collections::BTreeSet<String>,
-    /// How many writes went through a reference. Only the planner's own count: where they landed
-    /// is a name out of a directory nobody vouched for (WRITE-4), and nothing here compares it.
-    pub referenced: usize,
+/// The checkouts in `made` whose directories are still there, oldest first.
+fn listed(made: &Mutex<Vec<Made>>) -> Vec<SessionCheckout> {
+    locked(made)
+        .iter()
+        .filter(|made| made.path.exists())
+        .map(Made::listed)
+        .collect()
 }
 
 /// The largest file [`Workspace::read_checkout_file`] reads, so one write cannot hold the whole of
 /// memory.
 const CHECKOUT_FILE_CEILING: u64 = 16 * 1024 * 1024;
 
-/// Why a file in a checkout could not be read to be brought back (CHECKOUT-14).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CheckoutRead {
-    NoSuchCheckout,
-    /// The driver recorded no write to the path in that checkout.
-    NotACandidate,
-    /// A link stands in the path's place, or on the way to it.
-    Linked,
-    NotAFile,
-    NotText,
-    TooLarge,
-    /// A deny rule covers the path.
-    Denied,
-}
-
-impl CheckoutRead {
-    /// The driver's own sentence, which names no byte of any file.
-    pub fn describe(self) -> &'static str {
-        match self {
-            Self::NoSuchCheckout => "the session keeps no such checkout",
-            Self::NotACandidate => "the driver recorded no write to it in that checkout",
-            Self::Linked => "a link stands in its place, and a link is not followed",
-            Self::NotAFile => "it is not a file there any more",
-            Self::NotText => "it is not text",
-            Self::TooLarge => "it is too large to bring back",
-            Self::Denied => "a deny rule covers it",
-        }
-    }
-}
-
-/// What became of a checkout when its delegate ended (CHECKOUT-15).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Retired {
-    /// Something was done in it, so it stays.
-    Kept,
-    /// Nothing was, so it and its entry are gone.
-    Removed,
-    /// Nothing was done in it and it could not be removed.
-    Stuck,
-}
-
-impl CheckoutInfo {
-    /// The number the session gave it, `c1` and on.
-    pub fn key(&self) -> &str {
-        &self.made.key
-    }
-
-    pub fn id(&self) -> &str {
-        &self.made.id
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.made.path
-    }
-
-    /// The commit it holds, in full.
-    pub fn commit(&self) -> &str {
-        &self.made.commit
-    }
-
-    /// The repository-relative paths a deny rule covered, which were not written.
-    pub fn left_out(&self) -> &[String] {
-        &self.left_out
-    }
-
-    /// Record that a file effect or a program happened in the checkout.
-    pub fn mark_worked_in(&self) {
-        self.made.record.worked_in.store(true, Ordering::SeqCst);
-    }
-
-    pub fn worked_in(&self) -> bool {
-        self.made.record.worked_in.load(Ordering::SeqCst)
-    }
-
-    /// Record a write to `typed`, the name a planner gave the file, where it names one inside the
-    /// checkout (CHECKOUT-13).
-    ///
-    /// Placed by its spelling alone. Following a link to where the file landed would record the
-    /// link's target, a name the planner never typed and the repository supplied.
-    pub fn record_typed(&self, typed: &str) {
-        let Some(relative) = place_by_spelling(&self.made.path, typed) else {
-            return;
-        };
-        self.mark_worked_in();
-        self.written().named.insert(relative);
-    }
-
-    /// Record a write a planner made through a reference (CHECKOUT-13).
-    pub fn record_through_a_reference(&self) {
-        self.mark_worked_in();
-        self.written().referenced += 1;
-    }
-
-    pub fn candidates(&self) -> Candidates {
-        self.written().clone()
-    }
-
-    fn written(&self) -> std::sync::MutexGuard<'_, Candidates> {
-        self.made
-            .record
-            .written
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// What it took on disk as its delegate ended, measured by [`CheckoutInfo::retire`] where the
-    /// checkout stayed (CHECKOUT-15). `None` before then.
-    pub fn size(&self) -> Option<crate::git::checkout::Size> {
-        *self
-            .made
-            .record
-            .size
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// End the checkout: remove it unless the record shows something was done in it. Its rules go
-    /// with it, except those that distrust a path, which stay for as long as the session lasts
-    /// (CHECKOUT-8, CHECKOUT-12). One that stays is measured, for the person (CHECKOUT-15).
-    pub fn retire(&self, authority: &bravebot_core::file_authority::FileAuthority) -> Retired {
-        let retired = if self.worked_in() {
-            Retired::Kept
-        } else {
-            match self.made.remove(
-                |key| authority.withdraw_beneath(key),
-                &self.listed,
-                &self.session_checkouts,
-            ) {
-                Ok(()) => return Retired::Removed,
-                Err(_) => Retired::Stuck,
-            }
-        };
-        use crate::git::checkout::{MEASURING, Size, size};
-        let deadline = Instant::now() + MEASURING;
-        // What git keeps for it in the repository goes when it does, so it counts too.
-        let worktrees = self.made.git_dir.join("worktrees");
-        let admin = if std::fs::symlink_metadata(&worktrees).is_ok_and(|meta| meta.is_dir()) {
-            size(&worktrees.join(&self.made.id), deadline)
-        } else {
-            Size {
-                bytes: 0,
-                whole: false,
-            }
-        };
-        let measured = size(&self.made.path, deadline).and(admin);
-        *self
-            .made
-            .record
-            .size
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(measured);
-        retired
-    }
-}
-
 #[cfg(test)]
 #[derive(Debug)]
 struct WriteInterruption {
     entered: std::sync::mpsc::Sender<()>,
     resume: std::sync::mpsc::Receiver<bool>,
+}
+
+/// Called with the directory a listing or a search has opened its capture on, so a test can hold
+/// that read there until the others it runs beside have arrived.
+#[cfg(test)]
+#[derive(Clone)]
+struct ReadingHook(Arc<dyn Fn(&str) + Send + Sync>);
+
+#[cfg(test)]
+impl std::fmt::Debug for ReadingHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ReadingHook")
+    }
 }
 
 /// What a path held before a turn wrote to it.
@@ -990,76 +713,6 @@ pub enum Before {
     /// Something, but not something this turn kept: past [`MAX_REWIND_BYTES`], or a file that
     /// would not be read. The path is kept so a rewind can say it did not go back.
     NotKept,
-}
-
-/// What changed when the working directory moved.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Moved {
-    /// The new primary root, canonical.
-    pub root: PathBuf,
-    /// Directories that were open and are not any more, in the order they closed, the one left
-    /// behind first. Empty is possible: moving into a directory that was already open closes
-    /// nothing but the root it replaces.
-    pub closed: Vec<PathBuf>,
-}
-
-/// Whether two directories are the same tree, or one holds the other.
-///
-/// Component-wise, so `/work/srcfoo` is not taken to be inside `/work/src`. A test on the
-/// characters would close a directory that merely shares a prefix with the new root's name.
-fn overlaps(one: &Path, other: &Path) -> bool {
-    one.starts_with(other) || other.starts_with(one)
-}
-
-/// Why a checkout cannot be made under a directory (CHECKOUT-7).
-///
-/// An added directory is named because a person typed it, or accepted it from a settings file
-/// after being shown it, so saying it tells the planner nothing read from the repository.
-enum CheckoutOverlap {
-    InsideWorkingDirectory,
-    AddedHoldsWorkingDirectory(PathBuf),
-    AddedHoldsCheckouts(PathBuf),
-}
-
-impl CheckoutOverlap {
-    fn cause(&self) -> CheckoutRefusal {
-        match self {
-            Self::InsideWorkingDirectory => CheckoutRefusal::InsideWorkingDirectory,
-            Self::AddedHoldsWorkingDirectory(dir) => {
-                CheckoutRefusal::OpenedHoldsWorkingDirectory(dir.display().to_string())
-            }
-            Self::AddedHoldsCheckouts(dir) => {
-                CheckoutRefusal::OpenedHoldsCheckouts(dir.display().to_string())
-            }
-        }
-    }
-
-    fn describe(&self) -> String {
-        let way_out = |dir: &Path| {
-            format!(
-                "The person can close it with /add-dir close {} in the terminal, or start \
-                 bravebot again without opening it.",
-                dir.display()
-            )
-        };
-        match self {
-            Self::InsideWorkingDirectory => "it would sit inside the working directory".to_string(),
-            Self::AddedHoldsWorkingDirectory(dir) => format!(
-                "'{}', a directory opened beside the working directory, holds the working \
-                 directory, so {ENDS_CHECKOUTS}, since a delegate in a checkout would still reach \
-                 the working directory through it. {}",
-                dir.display(),
-                way_out(dir)
-            ),
-            Self::AddedHoldsCheckouts(dir) => format!(
-                "'{}', a directory opened beside the working directory, holds the directory \
-                 checkouts are made in, so every run that reaches it would reach the checkout. \
-                 {}",
-                dir.display(),
-                way_out(dir)
-            ),
-        }
-    }
 }
 
 /// Refuse a directory whose resolved name the trust map cannot key a rule under.
@@ -1190,6 +843,8 @@ impl Workspace {
         Ok(Self {
             #[cfg(test)]
             after_write: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            while_reading: Arc::new(Mutex::new(None)),
             root: canonical,
             added: Arc::default(),
             scratch: None,
@@ -1341,6 +996,12 @@ impl Workspace {
                 .is_some_and(|dir| resolved.starts_with(dir))
     }
 
+    /// Whether a resolved path lands where this workspace's file tools may write: the root or a
+    /// directory reached by its absolute name.
+    pub(crate) fn lands_in_reach(&self, resolved: &Path) -> bool {
+        resolved.starts_with(&self.root) || self.is_opened(resolved)
+    }
+
     /// Whether an absolute path is one this workspace may touch.
     ///
     /// For a destination something else opens, which is what a redirection in a command line is:
@@ -1355,7 +1016,7 @@ impl Workspace {
             remedy: Remedy::Nothing,
         };
         let resolved = destination(path).ok_or_else(escapes)?;
-        if resolved.starts_with(&self.root) || self.is_opened(&resolved) {
+        if self.lands_in_reach(&resolved) {
             return Ok(());
         }
         Err(escapes())
@@ -1408,425 +1069,21 @@ impl Workspace {
         refuse_misleading_names(&below, &named, false, windows)
     }
 
-    /// The directory a name would open, without opening it.
-    ///
-    /// Every reason a name cannot be opened is decided here, so a caller that has to show the path
-    /// before opening one shows what opening it would actually reach: a name is canonicalized, so
-    /// `shared` pointing at `/` is the filesystem root and not the spelling in front of it. A
-    /// question about the spelling would be collecting an answer to a different question.
-    ///
-    /// A directory already inside the primary root is refused. It is reachable by its relative path
-    /// already, and admitting it would give one file two spellings, one governed by the project's
-    /// trust rules and one by its own.
-    ///
-    /// So is one whose resolved name the trust map cannot key a rule under, which is what a share
-    /// resolves to on Windows: `refuse_unkeyable` says why.
-    ///
-    /// And so is the session's own directory, for the reason a directory inside the root is: it is
-    /// reachable already, and adding it would put a rule the user wrote over a directory whose whole
-    /// point is carrying none.
-    ///
-    /// Every name is refused, before any of that, where a settings layer asked for the file tools to
-    /// stay inside the workspace: see [`Workspace::with_reads_kept_inside`] and PERM-16. A caller
-    /// that would have put the name to a person reports the refusal instead, which is what PERM-13
-    /// already requires of a name that cannot be opened whatever the answer.
-    pub fn resolve_directory(&self, directory: &str) -> Result<PathBuf, WorkspaceError> {
-        // First, and without touching the filesystem: the refusal is a standing one, so it does not
-        // depend on what is at the name or on which of the reasons below a name would have failed
-        // for. Every door that opens a directory comes through here, `/add-dir`, `--add-dir` and a
-        // name a settings file asked about alike, so this is the one place it has to be said
-        // (PERM-16).
-        if self.reads_stay_inside {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                // Not "is outside the workspace": the refusal is returned above without looking at
-                // the name, so it is also given for a path inside the workspace, and a reason
-                // stating where the path sits would be false there. What is true of every name is
-                // that none opens while the key is set, which is also what tells somebody not to
-                // try a different path.
-                reason: "cannot be opened while permissions.readsStayInWorkspace keeps the file \
-                         tools inside the workspace",
-            });
-        }
-        let candidate = Path::new(directory);
-        if !candidate.is_absolute() {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "must be an absolute path",
-            });
-        }
-
-        let canonical = candidate.canonicalize().map_err(|e| WorkspaceError::Io {
-            path: directory.to_string(),
-            detail: e.to_string(),
-        })?;
-
-        if !canonical.is_dir() {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "must be a directory",
-            });
-        }
-
-        if canonical.starts_with(&self.root) {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "is already inside the workspace, so it can be named relatively",
-            });
-        }
-
-        if self.reaches_scratch(&canonical) {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "is the session's own directory, which is reachable already",
-            });
-        }
-
-        // A directory added here becomes a session directory, which a stage may read and write.
-        // The macOS profile lets a row at a credential location lift the refusal of it, so the
-        // location is refused here on every platform (SANDBOX-18).
-        if self.home.as_deref().is_some_and(|home| {
-            bravebot_sandbox::rules::inside_a_credential_location(&canonical, home)
-        }) {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "is or lies inside a credential location, which cannot be added",
-            });
-        }
-
-        refuse_unkeyable(&canonical, directory, BACKSLASH_SEPARATES)?;
-
-        Ok(canonical)
+    /// For starting over inside one process (`/clear`, `/resume`): everything the ending session
+    /// opened or was let reach goes with it. The directories added by name and the checkouts are
+    /// the session's own, and so are the paths and hosts it was let reach (SANDBOX-24, SANDBOX-28).
+    pub fn end_session(&mut self) {
+        self.close_added_directories();
+        self.forget_session_checkouts();
+        self.forget_reach_and_hosts();
     }
 
-    /// Whether `canonical` is the session's own directory or a directory inside it.
-    ///
-    /// Not a directory that holds it: the temporary directory it sits in is one a person may open by
-    /// name, and the answer they give about that is theirs to give.
-    fn reaches_scratch(&self, canonical: &Path) -> bool {
-        self.scratch
-            .as_deref()
-            .is_some_and(|directory| canonical.starts_with(directory))
-    }
-
-    /// Also allow paths inside `directory`, which must exist.
-    ///
-    /// Returns the canonical path, which is what the caller records trust against and shows the
-    /// user: the name they typed may be a symlink or contain `..`, and the rule has to be about the
-    /// directory that was actually opened.
-    pub fn add_directory(&mut self, directory: &str) -> Result<PathBuf, WorkspaceError> {
-        self.open_directory(directory)
-    }
-
-    /// [`Workspace::add_directory`] through a shared reference, for the one route that opens a
-    /// directory in the middle of a turn, where the turn holds a clone of the workspace and the
-    /// session's own copy has to see the directory after it (PATHREQ-7).
-    pub fn open_directory(&self, directory: &str) -> Result<PathBuf, WorkspaceError> {
-        let canonical = self.resolve_directory(directory)?;
-
-        bravebot_sandbox::programs::keep_out(&canonical);
-        let mut added = self.added.lock().unwrap_or_else(|e| e.into_inner());
-        if !added.contains(&canonical) {
-            added.push(canonical.clone());
-        }
-        Ok(canonical)
-    }
-
-    /// Whether `directory`, as [`Workspace::add_directory`] returned it, holds the working
-    /// directory, so that no delegate is given a checkout while it is open (CHECKOUT-7).
-    ///
-    /// Decided from the two paths alone, both of which a person typed.
-    pub fn ends_checkouts(&self, directory: &Path) -> bool {
-        self.root.starts_with(directory)
-    }
-
-    /// Open every directory the person's settings name as a reference, and keep what each is for
-    /// (REFER-3).
-    ///
-    /// Reachability and nothing else, as `--add-dir` is: no rule is recorded in the trust map, so
-    /// what a reference holds is read on the footing of any file the person has not vouched for.
-    /// A `~` starts a path from the home directory this workspace was built with. An entry that
-    /// cannot be opened is kept as a problem for the caller to report and the rest still open, since
-    /// one stale entry must not leave the others unavailable.
-    #[must_use]
-    pub fn with_references(
-        mut self,
-        entries: &[bravebot_config::Reference],
-        unread: &[(String, bravebot_config::ReferenceFault)],
-    ) -> Self {
-        for (alias, fault) in unread {
-            self.reference_problems
-                .push((alias.clone(), ReferenceProblem::Unusable(*fault)));
-        }
-        for entry in entries {
-            let opened = expand_home(&entry.path, self.home.as_deref())
-                .map_err(|reason| WorkspaceError::Invalid {
-                    path: entry.path.clone(),
-                    reason,
-                })
-                .and_then(|expanded| match expanded {
-                    // Refused rather than rendered with replacement characters, so the directory
-                    // opened is the one the home directory and the entry name together.
-                    Some(path) => match path.to_str() {
-                        Some(text) => self.add_directory(text),
-                        None => Err(WorkspaceError::Invalid {
-                            path: entry.path.clone(),
-                            reason: "expands to a path that is not text",
-                        }),
-                    },
-                    None => self.add_directory(&entry.path),
-                });
-            match opened {
-                Ok(path) => self.references.push(Referenced {
-                    alias: entry.alias.clone(),
-                    path,
-                    description: entry.description.clone(),
-                }),
-                Err(error) => self.reference_problems.push((
-                    entry.alias.clone(),
-                    ReferenceProblem::NotOpened(error.to_string()),
-                )),
-            }
-        }
-        self
-    }
-
-    /// The references that opened and are still open, in alias order (REFER-3).
-    ///
-    /// A reference closed since, with `/add-dir close`, `/clear` or a `/cd` that overlapped it, is
-    /// left out, so the planner is never told of a directory its file tools would refuse.
-    pub fn references(&self) -> impl Iterator<Item = &Referenced> {
-        let added = self.added_directories();
-        self.references
-            .iter()
-            .filter(move |reference| added.contains(&reference.path))
-    }
-
-    /// Each open reference as the alias it is written under after an `@` and its directory
-    /// (REFER-6).
-    pub fn reference_sources(&self) -> Vec<(String, PathBuf)> {
-        self.references()
-            .map(|reference| (reference.alias.clone(), reference.path.clone()))
-            .collect()
-    }
-
-    /// The entries that did not open, with the alias each was written under (REFER-3).
-    pub fn reference_problems(&self) -> &[(String, ReferenceProblem)] {
-        &self.reference_problems
-    }
-
-    /// The directories added by name, in the order they were added.
-    pub fn added_directories(&self) -> Vec<PathBuf> {
-        self.added.lock().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-
-    /// Let programs reach `path` for the rest of the session. A second grant of a path already
-    /// held keeps one row, writable if either grant was.
-    pub fn grant_path_reach(&self, path: PathBuf, write: bool, why: String) {
-        let mut held = self.path_reach.lock().unwrap_or_else(|e| e.into_inner());
-        match held.iter_mut().find(|row| row.path == path) {
-            Some(row) => {
-                row.write |= write;
-                row.why = why;
-            }
-            None => held.push(PathReach { path, write, why }),
-        }
-    }
-
-    /// The paths programs may reach by the person's leave, oldest first.
-    pub fn path_reach(&self) -> Vec<PathReach> {
-        self.path_reach
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-    }
-
-    /// Let programs reach `hosts` for the rest of the session, on top of the allowed-hosts list.
-    ///
-    /// Each is a name the sandbox crate accepted for a record. A host held already is not added
-    /// twice. A host both declined and granted is not asked about, since a grant outranks a decline.
-    pub fn grant_hosts(&self, hosts: &[String]) {
-        let mut held = self.host_grants.lock().unwrap_or_else(|e| e.into_inner());
-        for host in hosts {
-            if !held.allowed.contains(host) {
-                held.allowed.push(host.clone());
-            }
-        }
-    }
-
-    /// Remember that the person declined `hosts`, so they are not asked about them again.
-    pub fn decline_hosts(&self, hosts: &[String]) {
-        let mut held = self.host_grants.lock().unwrap_or_else(|e| e.into_inner());
-        held.declined.extend(hosts.iter().cloned());
-    }
-
-    /// The hosts programs may reach by the person's leave, oldest first.
-    pub fn granted_hosts(&self) -> Vec<String> {
-        self.host_grants
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .allowed
-            .clone()
-    }
-
-    /// Of `hosts`, those the person has neither allowed nor declined this session.
-    pub fn unanswered_hosts(&self, hosts: &[String]) -> Vec<String> {
-        let held = self.host_grants.lock().unwrap_or_else(|e| e.into_inner());
-        hosts
-            .iter()
-            .filter(|host| !held.allowed.contains(host) && !held.declined.contains(*host))
-            .cloned()
-            .collect()
-    }
-
-    /// End the grant numbered `number`, counting from one in `path_reach` order.
-    pub fn end_path_reach(&self, number: usize) -> Option<PathReach> {
-        let mut held = self.path_reach.lock().unwrap_or_else(|e| e.into_inner());
-        (number >= 1 && number <= held.len()).then(|| held.remove(number - 1))
-    }
-
-    /// Work in `directory` from now on, which must exist.
-    ///
-    /// The primary root is what a relative path means, so moving it moves the whole of what this
-    /// workspace is about. Returns the canonical path, and the directories that were open and are
-    /// no longer, which the caller has to tell the user about: reach that goes quietly is reach
-    /// somebody will discover by being refused a file they could read a minute ago.
-    ///
-    /// **Nothing may overlap the new root.** The directory left behind is closed, and so is any
-    /// added directory inside the new root or containing it. That is not tidiness: a directory the
-    /// root reaches is reachable already, and leaving it open would record a second open directory
-    /// for a path under the root to be named under, with nothing to choose between them
-    /// ([`Workspace::trust_key`]). An added directory that overlaps nothing is left open, since the
-    /// user opened it by name and moving elsewhere does not withdraw that.
-    ///
-    /// **The session's own directory is not a working directory.** It is removed when the session
-    /// ends, so a root inside it is a root that goes while the session is still using it, and every
-    /// read, write and run afterwards fails against a directory that is no longer there.
-    ///
-    /// **Refused while the session keeps a checkout** (CHECKOUT-16). The checkout is keyed under
-    /// the directory the session is in, and the record that lists it moves with the session, so a
-    /// move would leave the checkout keyed under the directory it left. The refusal names each one.
-    pub fn change_root(&mut self, directory: &str) -> Result<Moved, WorkspaceError> {
-        let kept: Vec<String> = self
-            .session_checkouts()
-            .into_iter()
-            .map(|checkout| checkout.id)
-            .collect();
-        if !kept.is_empty() {
-            return Err(WorkspaceError::KeepsCheckouts { ids: kept });
-        }
-        let candidate = Path::new(directory);
-        if !candidate.is_absolute() {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "must be an absolute path",
-            });
-        }
-
-        let canonical = candidate.canonicalize().map_err(|e| WorkspaceError::Io {
-            path: directory.to_string(),
-            detail: e.to_string(),
-        })?;
-
-        if !canonical.is_dir() {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "must be a directory",
-            });
-        }
-
-        if canonical == self.root {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "is already the working directory",
-            });
-        }
-
-        // The key holds the file tools to the working directory, and moving the working directory
-        // outward is how that reach grows without a name being opened: a parent contains whatever
-        // `resolve_directory` refused beside the old root, so the move reaches by relocation what
-        // the key refuses by name (PERM-16). Refused here rather than at the command, for the
-        // reason `resolve_directory` refuses here: this is the one function a root moves through.
-        if self.reads_stay_inside && !canonical.starts_with(&self.root) {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "is not inside the working directory, and \
-                         permissions.readsStayInWorkspace keeps the file tools inside it",
-            });
-        }
-
-        if self.reaches_scratch(&canonical) {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "is the session's own directory, which the session removes when it ends",
-            });
-        }
-
-        refuse_unkeyable(&canonical, directory, BACKSLASH_SEPARATES)?;
-
-        bravebot_sandbox::programs::keep_out(&canonical);
-        // The old root among them: it is a directory that was open, and after this it is not.
-        let mut closed = vec![std::mem::replace(&mut self.root, canonical.clone())];
-        // Names relative to the root left behind mean nothing under the new one (INSTR-14).
-        self.touched = Arc::default();
-        {
-            let mut added = self.added.lock().unwrap_or_else(|e| e.into_inner());
-            let (overlapping, kept) = std::mem::take(&mut *added)
-                .into_iter()
-                .partition(|open| overlaps(open, &canonical));
-            *added = kept;
-            closed.extend(overlapping);
-        }
-        // Whatever the new root is now reachable as itself, so it did not close.
-        closed.retain(|open| *open != canonical);
-
-        Ok(Moved {
-            root: canonical,
-            closed,
-        })
-    }
-
-    /// Close every directory added by name, leaving only the primary root.
-    ///
-    /// For starting over inside one process: opening a directory is a grant, so it goes when the
-    /// grants do. Leaving them open while the trust map that vouched for them was discarded would
-    /// leave a tree reachable that nobody had vouched for.
-    pub fn close_added_directories(&mut self) {
-        self.added.lock().unwrap_or_else(|e| e.into_inner()).clear();
-    }
-
-    /// Close one directory added by name, and return the name it was open under (TRUST-9).
-    ///
-    /// The caller withdraws the rule it recorded under that name, which is why the name comes back
-    /// rather than the one typed: the rule is about the directory that was opened.
-    ///
-    /// `directory` is matched as it is spelled and, failing that, as it resolves now. The spelling
-    /// comes first because the name a directory was opened under is the one `/status` shows, and
-    /// a link put there since may resolve to another open directory. Resolving follows what
-    /// still exists of the path, so a directory deleted since it was opened can still be closed
-    /// under any name that reached it. A directory beneath another open one stays reachable
-    /// through that one.
-    pub fn close_added_directory(&mut self, directory: &str) -> Result<PathBuf, WorkspaceError> {
-        let candidate = Path::new(directory);
-        if !candidate.is_absolute() {
-            return Err(WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "must be an absolute path",
-            });
-        }
-        let mut added = self.added.lock().unwrap_or_else(|e| e.into_inner());
-        let open = added
-            .iter()
-            .position(|open| open == candidate)
-            .or_else(|| {
-                let resolved = destination(candidate)?;
-                added.iter().position(|open| *open == resolved)
-            })
-            .ok_or_else(|| WorkspaceError::Invalid {
-                path: directory.to_string(),
-                reason: "is not a directory opened beside the working directory",
-            })?;
-        Ok(added.remove(open))
+    /// The paths programs were let reach and the hosts answered, which `/branch` also ends since no
+    /// record holds them. A clone shares them, which is why a session handed on by `/resume` has to
+    /// be cleared of them as well.
+    pub fn forget_reach_and_hosts(&self) {
+        locked(&self.path_reach).clear();
+        *locked(&self.host_grants) = HostGrants::default();
     }
 
     /// Resolve a path against the workspace.
@@ -1967,6 +1224,147 @@ impl Workspace {
         (!Path::new(&landed).components().eq(typed)).then_some(landed)
     }
 
+    /// The other names of the file `named` opens, where it has a hard link, by device and inode
+    /// (PERM-7). A hard link canonicalizes to its own name, so [`Workspace::landing`] cannot reach
+    /// the name a rule is written about.
+    ///
+    /// Found by walking the open directories for a file with the same identity, which is asked
+    /// only of a file whose link count is above one. `None` where the walk stopped at the search
+    /// cap or could not list a directory, so the caller does not read it as "no other name". A
+    /// symbolic link is not followed, and every directory is walked, an ignored one included,
+    /// because a link can be made anywhere a stage may write. Always empty off Unix, where the
+    /// file index is not in the standard library.
+    #[cfg(unix)]
+    pub(crate) fn hard_links(&self, named: &str) -> Option<Vec<String>> {
+        use std::os::unix::fs::MetadataExt;
+
+        let Ok(resolved) = self.resolve(named) else {
+            return Some(Vec::new());
+        };
+        let Ok(found) = std::fs::metadata(&resolved) else {
+            return Some(Vec::new());
+        };
+        if !found.is_file() || found.nlink() < 2 {
+            return Some(Vec::new());
+        }
+        let mut names = Vec::new();
+        let mut budget = self.search_files;
+        let roots = std::iter::once(self.root.clone()).chain(self.added_directories());
+        for root in roots {
+            let mut pending = vec![root];
+            while let Some(directory) = pending.pop() {
+                let entries = std::fs::read_dir(&directory).ok()?;
+                for entry in entries.flatten() {
+                    budget = budget.checked_sub(1)?;
+                    let Ok(kind) = entry.file_type() else {
+                        continue;
+                    };
+                    if kind.is_dir() {
+                        pending.push(entry.path());
+                    } else if kind.is_file()
+                        && entry.metadata().is_ok_and(|other| {
+                            other.dev() == found.dev() && other.ino() == found.ino()
+                        })
+                    {
+                        // A name that is not UTF-8 has no spelling a rule can be written about, and
+                        // its lossy rendering would be matched as a different file's name, so the
+                        // walk gives up on it like any other it cannot finish.
+                        let path = entry.path();
+                        path.to_str()?;
+                        names.push(self.relative_display(&path));
+                    }
+                }
+            }
+        }
+        Some(names)
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn hard_links(&self, _named: &str) -> Option<Vec<String>> {
+        Some(Vec::new())
+    }
+
+    /// The names `named` has under the other open directories that are the same directory, found by
+    /// device and inode (PERM-7). A macOS firmlink and a Linux bind mount give a tree a second
+    /// absolute name, and a file in it a second spelling no rule written about the first one
+    /// matches, so [`Workspace::landing`] cannot reach it: the second name canonicalizes to itself.
+    ///
+    /// Every ancestor of where the name lands is compared with every open directory, so a tree
+    /// opened by one name inside another's is found as well. Always empty off Unix, where the file
+    /// index is not in the standard library.
+    ///
+    /// `None` where one of the names is not UTF-8, which no rule can be written about and whose
+    /// lossy rendering would be matched as a different file's name, so the caller does not read it
+    /// as "no other name".
+    #[cfg(unix)]
+    pub(crate) fn same_tree_names(&self, named: &str) -> Option<Vec<String>> {
+        use std::os::unix::fs::MetadataExt;
+
+        if self.added_directories().is_empty() {
+            return Some(Vec::new());
+        }
+        let Ok(resolved) = self.resolve(named) else {
+            return Some(Vec::new());
+        };
+        let roots: Vec<PathBuf> = std::iter::once(self.root.clone())
+            .chain(self.added_directories())
+            .collect();
+        let identity = |directory: &Path| {
+            std::fs::metadata(directory)
+                .ok()
+                .filter(|found| found.is_dir())
+                .map(|found| (found.dev(), found.ino()))
+        };
+        let opened: Vec<_> = roots
+            .iter()
+            .filter_map(|root| Some((root, identity(root)?)))
+            .collect();
+        self.displayed_if_utf8(&Self::names_in_the_same_directories(
+            &resolved, &opened, identity,
+        ))
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn same_tree_names(&self, _named: &str) -> Option<Vec<String>> {
+        Some(Vec::new())
+    }
+
+    /// `paths` spelled relative to the workspace root, or `None` if any is not UTF-8.
+    #[cfg(unix)]
+    fn displayed_if_utf8(&self, paths: &[PathBuf]) -> Option<Vec<String>> {
+        paths
+            .iter()
+            .map(|path| path.to_str().map(|_| self.relative_display(path)))
+            .collect()
+    }
+
+    /// `resolved` re-rooted at each open directory that is the same directory as one of its
+    /// ancestors, other than as it is already spelled. `identity` is what makes two directories
+    /// one, so the rule is testable where the host has no second path to a tree.
+    #[cfg(unix)]
+    fn names_in_the_same_directories<I: Copy + PartialEq>(
+        resolved: &Path,
+        opened: &[(&PathBuf, I)],
+        identity: impl Fn(&Path) -> Option<I>,
+    ) -> Vec<PathBuf> {
+        let mut names = Vec::new();
+        for ancestor in resolved.ancestors().skip(1) {
+            let Some(held) = identity(ancestor) else {
+                continue;
+            };
+            let Ok(rest) = resolved.strip_prefix(ancestor) else {
+                continue;
+            };
+            for (root, root_identity) in opened {
+                let name = root.join(rest);
+                if *root_identity == held && name != resolved && !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        names
+    }
+
     /// `named` spelled relative to the workspace root, without asking the file system: `./docs/a.md`
     /// and `<root>/docs/a.md` are `docs/a.md`, and a link is not followed.
     ///
@@ -2076,6 +1474,14 @@ impl Workspace {
         skills: &[PathBuf],
     ) -> Result<PathBuf, WorkspaceError> {
         let refused = match self.resolve(relative) {
+            Ok(resolved)
+                if Self::leaves_loaded_skill(relative, &resolved, skills, self.home.as_deref()) =>
+            {
+                WorkspaceError::Escapes {
+                    path: relative.to_string(),
+                    remedy: Remedy::Nothing,
+                }
+            }
             Ok(resolved) => return Ok(resolved),
             Err(refused) => refused,
         };
@@ -2102,20 +1508,75 @@ impl Workspace {
         if inside { Ok(resolved) } else { Err(refused) }
     }
 
+    /// Whether `named`, spelled inside the directory of a loaded skill, lands outside it once links
+    /// are followed.
+    ///
+    /// The policy labels such a name by provenance, from its spelling alone (LOAD-5), so a link
+    /// from the directory into one this workspace opened would hand a file the trust map has not
+    /// vouched for to the planner as the user's own. `resolved` is where [`Workspace::resolve`]
+    /// says the name lands, and it accepts any opened directory.
+    fn leaves_loaded_skill(
+        named: &str,
+        resolved: &Path,
+        skills: &[PathBuf],
+        home: Option<&Path>,
+    ) -> bool {
+        let Ok(expanded) = expand_home(named, home) else {
+            return false;
+        };
+        let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(named));
+        if !candidate.is_absolute()
+            || candidate
+                .components()
+                .any(|part| matches!(part, Component::ParentDir))
+        {
+            return false;
+        }
+        let mut spelled_in = skills
+            .iter()
+            .filter(|directory| candidate.starts_with(directory))
+            .peekable();
+        spelled_in.peek().is_some()
+            && !spelled_in.any(|directory| {
+                destination(directory).is_some_and(|landed| resolved.starts_with(landed))
+            })
+    }
+
     /// What a person can do so that `resolved`, which no opened directory holds, is reached.
     /// Inside the root a directory cannot be opened, and the relative path reaches the file.
+    ///
+    /// The directory to open is `resolved` itself where it is a directory, and the directory it is
+    /// in for a file or for a name nothing is at yet. A directory that is or lies inside a credential
+    /// location is refused by [`Workspace::resolve_directory`], so none is offered. The warning
+    /// about checkouts is asked of that directory.
     fn remedy_outside(&self, resolved: &Path) -> Remedy {
         if resolved.starts_with(&self.root) {
-            Remedy::Nothing
-        } else if self.reads_stay_inside {
-            Remedy::Kept
-        } else if resolved
-            .parent()
-            .is_some_and(|directory| self.root.starts_with(directory))
-        {
-            Remedy::OpenEndsCheckouts
+            return Remedy::Inside;
+        }
+        if self.reads_stay_inside {
+            return Remedy::Kept;
+        }
+        let itself = resolved.is_dir();
+        let to_open = if itself {
+            Some(resolved)
         } else {
-            Remedy::Open
+            resolved.parent()
+        };
+        if let (Some(directory), Some(home)) = (to_open, self.home.as_deref())
+            && bravebot_sandbox::rules::inside_a_credential_location(directory, home)
+        {
+            return if itself {
+                Remedy::Nothing
+            } else {
+                Remedy::Credential
+            };
+        }
+        let ends_checkouts = to_open.is_some_and(|directory| self.ends_checkouts(directory));
+        match (itself, ends_checkouts) {
+            (false, false) => Remedy::Open,
+            (false, true) => Remedy::OpenEndsCheckouts,
+            (true, false) => Remedy::OpenItself,
+            (true, true) => Remedy::OpenItselfEndsCheckouts,
         }
     }
 
@@ -2981,6 +2442,20 @@ impl Workspace {
         Ok(resolved)
     }
 
+    /// Run `hook` with the directory, inside the capture of every listing and search from here on.
+    #[cfg(test)]
+    pub(crate) fn hold_reads(&self, hook: impl Fn(&str) + Send + Sync + 'static) {
+        *locked(&self.while_reading) = Some(ReadingHook(Arc::new(hook)));
+    }
+
+    #[cfg(test)]
+    fn hold_while_reading(&self, directory: &str) {
+        let hook = locked(&self.while_reading).clone();
+        if let Some(ReadingHook(hook)) = hook {
+            hook(directory);
+        }
+    }
+
     #[cfg(test)]
     fn interrupt_after_write(&self) -> Result<(), WorkspaceError> {
         let synchronization_failed = |detail: &str| WorkspaceError::Io {
@@ -3058,10 +2533,7 @@ impl Workspace {
     /// discarded with the delegate, and a rewind of the parent's turn puts back nothing there
     /// (CHECKOUT-17).
     pub fn mark_rewind_gap(&self, gap: CoverageGap) {
-        self.rewind
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .mark(gap);
+        locked(&self.rewind).mark(gap);
         self.mark_checkout_gap();
     }
 
@@ -3069,12 +2541,7 @@ impl Workspace {
     /// workspace is one.
     fn mark_checkout_gap(&self) {
         if let Some(checkout) = &self.checkout {
-            checkout
-                .source
-                .rewind
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .mark(CoverageGap::Checkout);
+            locked(&checkout.source.rewind).mark(CoverageGap::Checkout);
         }
     }
 
@@ -3102,23 +2569,7 @@ impl Workspace {
     /// the state asked for is the state that is there. A path whose contents were not kept is
     /// refused without being touched, since what it held is not here to write.
     pub(crate) fn put_back(&self, path: &Path, was: &Before) -> Result<(), WorkspaceError> {
-        let escapes = || WorkspaceError::Escapes {
-            path: path.display().to_string(),
-            remedy: Remedy::Nothing,
-        };
-        let reached = match was {
-            Before::Nothing => path.parent(),
-            Before::Bytes(_) | Before::NotKept => Some(path),
-        };
-        let lands = reached.and_then(destination).ok_or_else(escapes)?;
-        let confined = if self.is_opened(path) && !path.starts_with(&self.root) {
-            self.is_opened(&lands)
-        } else {
-            lands.starts_with(&self.root)
-        };
-        if !confined {
-            return Err(escapes());
-        }
+        self.confine_put_back(path, matches!(was, Before::Nothing))?;
         let failed = |detail: String| WorkspaceError::Io {
             path: path.display().to_string(),
             detail,
@@ -3131,6 +2582,61 @@ impl Workspace {
             },
             Before::NotKept => Err(failed("what it held was not kept".to_string())),
         }
+    }
+
+    /// Refuse a path a rewind may not reach, which is the same question whether it writes the path
+    /// or only reads it to put part of it back. `removal` is where the name is unlinked rather than
+    /// what it points at, so it is the directory holding the name that is asked.
+    fn confine_put_back(&self, path: &Path, removal: bool) -> Result<(), WorkspaceError> {
+        let escapes = || WorkspaceError::Escapes {
+            path: path.display().to_string(),
+            remedy: Remedy::Nothing,
+        };
+        let reached = if removal { path.parent() } else { Some(path) };
+        let lands = reached.and_then(destination).ok_or_else(escapes)?;
+        let confined = if self.is_opened(path) && !path.starts_with(&self.root) {
+            self.is_opened(&lands)
+        } else {
+            lands.starts_with(&self.root)
+        };
+        if confined { Ok(()) } else { Err(escapes()) }
+    }
+
+    /// What a path holds now, read where [`Workspace::put_back`] would write it.
+    ///
+    /// Refused as a write would be, so a file that has since become a link out of the project is
+    /// not read to decide what to put back into it. Only a file, and only one within what a rewind
+    /// keeps: a pipe would be waited on, and a file past the budget has no earlier text to be
+    /// compared with.
+    pub(crate) fn read_back(&self, path: &Path) -> Result<Vec<u8>, WorkspaceError> {
+        use std::io::Read as _;
+        self.confine_put_back(path, false)?;
+        let failed = |detail: String| WorkspaceError::Io {
+            path: path.display().to_string(),
+            detail,
+        };
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        // Opened without waiting for a writer, and asked what it is once it is open, so a pipe put
+        // there since a look at the path is refused and not waited on.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+        }
+        let file = options.open(path).map_err(|e| failed(e.to_string()))?;
+        let found = file.metadata().map_err(|e| failed(e.to_string()))?;
+        if !found.is_file() || found.len() > MAX_REWIND_BYTES as u64 {
+            return Err(failed("not a file within the rewind budget".to_string()));
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_REWIND_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| failed(e.to_string()))?;
+        if bytes.len() > MAX_REWIND_BYTES {
+            return Err(failed("not a file within the rewind budget".to_string()));
+        }
+        Ok(bytes)
     }
 }
 
@@ -3196,6 +2702,88 @@ pub fn peeked_for_review(peeked: &Labelled<String>, replaces: bool) -> Labelled<
         peeked.clone()
     } else {
         Labelled::trusted(String::new())
+    }
+}
+
+/// `body` written in the line ending and byte order mark of the file it replaces, where the trust
+/// map vouches for that file (WRITE-6).
+///
+/// Where the map does vouch for the path, the bytes go through
+/// [`Policy::read_trusted_content`], the gate `edit_file` reads a file through before comparing it.
+///
+/// The label is asked before the gate is, for the reason `skills` gives: the gate still runs
+/// whenever this proceeds, and what asking first avoids is recording a denial for a condition that
+/// is ordinary and expected. A write over a file nobody vouched for is that condition, and WRITE-6
+/// says it converts nothing, so a refusal there would mark the turn as one where something was
+/// blocked on every such write. What ending a file uses is a fact about its bytes, and converting
+/// on it would be the driver deciding from untrusted content. The body comes back as it went in,
+/// and nothing here reports which case it was.
+///
+/// Called before the diff is built, so the text a person approves is the text that lands.
+pub fn in_the_replaced_files_format<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tool: &str,
+    pre_image: &Labelled<String>,
+    body: Labelled<String>,
+) -> Labelled<String> {
+    if !pre_image.label().is_trusted() {
+        return body;
+    }
+    let Ok(existing) = policy.read_trusted_content(tool, pre_image) else {
+        return body;
+    };
+    let format = FileFormat::of(&existing);
+    policy.render_in_place(tool, &body, |text| format.applied_to(text))
+}
+
+/// The two things about a file's bytes a whole-file write would otherwise lose.
+///
+/// Read from a file the trust map vouches for and from nowhere else.
+#[derive(Clone, Copy)]
+struct FileFormat {
+    crlf: bool,
+    bom: bool,
+}
+
+/// The mark `std::fs::read_to_string` leaves at the start of a file that carried one.
+const BOM: char = '\u{feff}';
+
+impl FileFormat {
+    /// What `existing` uses, classified by [`crate::diff::LineEnding`] so the crate has one rule
+    /// for what a file's terminators are rather than two. A file holding `\r\n` anywhere is CRLF,
+    /// which is `Crlf` and `Mixed` together, and every other file is LF, including one with no
+    /// newline in it at all.
+    ///
+    /// `edit_file` converts for `Crlf` alone (`crate::replace`), because it matches a passage
+    /// inside the file and has to leave a mixed file's other lines as they are. A whole-file write
+    /// replaces every line, so there is nothing to leave alone and a mixed file comes out
+    /// consistent.
+    fn of(existing: &str) -> Self {
+        Self {
+            crlf: matches!(
+                crate::diff::LineEnding::of(existing),
+                Some(crate::diff::LineEnding::Crlf | crate::diff::LineEnding::Mixed)
+            ),
+            bom: existing.starts_with(BOM),
+        }
+    }
+
+    /// `text` in this format: every newline the file's, and the file's mark in front of it.
+    ///
+    /// Endings are taken to LF first, so a body that already mixes the two comes out consistent
+    /// rather than half converted. A body that brought its own mark keeps it, since removing one
+    /// the planner wrote would be a change to the document rather than to its format.
+    fn applied_to(&self, text: String) -> String {
+        let text = if self.crlf {
+            text.replace("\r\n", "\n").replace('\n', "\r\n")
+        } else {
+            text.replace("\r\n", "\n")
+        };
+        if self.bom && !text.starts_with(BOM) {
+            format!("{BOM}{text}")
+        } else {
+            text
+        }
     }
 }
 
@@ -3729,7 +3317,7 @@ impl Workspace {
         pattern: Option<&Labelled<String>>,
         depth: Option<usize>,
     ) -> Result<Labelled<Listing>, WorkspaceError> {
-        policy.capture_files(|policy, _capture| {
+        policy.capture_files_shared(|policy| {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("file_list", "directory", Role::Routing, directory)?;
 
@@ -3741,6 +3329,9 @@ impl Workspace {
                         path: "<untrusted>".into(),
                         reason: "the directory was not trusted",
                     })?;
+
+            #[cfg(test)]
+            self.hold_while_reading(&relative);
 
             let glob =
                 match pattern {
@@ -4038,7 +3629,7 @@ impl Workspace {
             context.min(MAX_SEARCH_CONTEXT)
         };
         let offset = if output.summarises() { 1 } else { offset };
-        policy.capture_files(|policy, _capture| {
+        policy.capture_files_shared(|policy| {
             policy.before_capability(Capability::FileRead)?;
             for pattern in patterns {
                 policy.before_action("file_grep", "pattern", Role::Routing, pattern)?;
@@ -4053,6 +3644,9 @@ impl Workspace {
                         path: "<untrusted>".into(),
                         reason: "the directory was not trusted",
                     })?;
+
+            #[cfg(test)]
+            self.hold_while_reading(&relative);
 
             if patterns.is_empty() {
                 return Err(WorkspaceError::Invalid {
@@ -4382,46 +3976,11 @@ impl Workspace {
             };
 
             let root = self.resolve(&named)?;
-            let git_dir = root.join(".git");
             let spelled = |inside: &str| in_repository(&named, inside);
-            // A question about a checkout's own repository is answered from the common directory
-            // and the entry the driver recorded, and the checkout's `.git` is never read
-            // (CHECKOUT-12).
-            let routed = self.checkout.as_deref().filter(|_| root == self.root);
-            let git_key = match routed {
-                Some(checkout) => checkout
-                    .source
-                    .trusted_git_dir(policy, ".")
-                    .map_err(declined)?,
-                None => self.trusted_git_dir(policy, &named).map_err(declined)?,
-            };
-            // Status compares every file in the working tree, so all of it is its read set.
-            let read_set = if query == crate::git::Query::Status {
-                let tree_key = self.trust_key(&named);
-                if !policy.trusts_beneath(&tree_key) {
-                    return Err(declined(crate::git::Declined::UntrustedTree));
-                }
-                tree_key
-            } else {
-                git_key.clone()
-            };
             let deadline = Instant::now() + self.search_time;
-            let opened = match routed {
-                Some(checkout) => {
-                    let entry = checkout.entry();
-                    checkout
-                        .source
-                        .surveyed_linked(policy, &checkout.made.git_dir, &entry, query, deadline)
-                        .map_err(declined)?;
-                    crate::git::Repository::open_linked(&checkout.made.git_dir, &entry, &root)
-                        .map_err(declined)?
-                }
-                None => {
-                    self.surveyed(policy, &named, &root, query, deadline)
-                        .map_err(declined)?;
-                    crate::git::Repository::open(&git_dir).map_err(declined)?
-                }
-            };
+            let (opened, read_set) = self
+                .open_for_git(policy, &named, &root, query, deadline)
+                .map_err(declined)?;
             let request = crate::git::Request {
                 query,
                 revision: revision.as_deref(),
@@ -4466,6 +4025,115 @@ impl Workspace {
             )?;
             Ok(Labelled::new(answer, label))
         })
+    }
+
+    /// Open the repository the planner called `named`, whose root is `root`, for `query`, with the
+    /// key its answer is read under.
+    ///
+    /// Everything that can decline a repository is here, in the order that keeps a repository
+    /// nobody vouched for from being decoded: the map and the rules are asked of the name alone,
+    /// then the directory listings are held against the rules, and only then is a file under `.git`
+    /// read (GIT-2). [`Workspace::read_git`] and [`Workspace::read_git_opens`] both go through it,
+    /// so what one opens the other does.
+    fn open_for_git<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        named: &str,
+        root: &Path,
+        query: crate::git::Query,
+        deadline: Instant,
+    ) -> Result<(crate::git::Repository, String), crate::git::Declined> {
+        // A question about a checkout's own repository is answered from the common directory and
+        // the entry the driver recorded, and the checkout's `.git` is never read (CHECKOUT-12).
+        let routed = self.checkout.as_deref().filter(|_| root == self.root);
+        let git_key = match routed {
+            Some(checkout) => checkout.source.trusted_git_dir(policy, ".")?,
+            None => self.trusted_git_dir(policy, named)?,
+        };
+        // Status compares every file in the working tree, so all of it is its read set.
+        let read_set = if query == crate::git::Query::Status {
+            let tree_key = self.trust_key(named);
+            if !policy.trusts_beneath(&tree_key) {
+                return Err(crate::git::Declined::UntrustedTree);
+            }
+            tree_key
+        } else {
+            git_key
+        };
+        let opened = match routed {
+            Some(checkout) => {
+                let entry = checkout.entry();
+                checkout.source.surveyed_linked(
+                    policy,
+                    &checkout.made.git_dir,
+                    &entry,
+                    query,
+                    deadline,
+                )?;
+                crate::git::Repository::open_linked(&checkout.made.git_dir, &entry, root)?
+            }
+            None => {
+                self.surveyed(policy, named, root, query, deadline)?;
+                crate::git::Repository::open(&root.join(".git"))?
+            }
+        };
+        Ok((opened, read_set))
+    }
+
+    /// Whether `read_git` would open the repository git finds from `directory`, the nearest
+    /// directory at or above it that holds a `.git` and is inside an opened directory, for a
+    /// question about its history. A result sealed from the planner names the tool only where
+    /// this holds.
+    ///
+    /// A `.git` that is a file (a linked worktree or a submodule), a repository the map does not
+    /// trust and one a rule covers are each declined as `read_git` declines them, while a
+    /// delegate's checkout, whose `.git` is also a file, is opened as it is there (CHECKOUT-12).
+    /// Nothing under `.git` is read until the map has vouched for all of it, as for a question.
+    /// The checks a tool call makes on the name it was given, beyond the opener, are not made.
+    ///
+    /// A repository `read_git` cannot be asked for by its name is declined: one whose name is not
+    /// text, and one under a directory named `~`, which the tool reads as the home directory.
+    pub fn read_git_opens<S: Sink>(&self, policy: &Policy<'_, S>, directory: &Path) -> bool {
+        let Ok(directory) = directory.canonicalize() else {
+            return false;
+        };
+        let added = self.added_directories();
+        let Some(bound) = std::iter::once(self.root.as_path())
+            .chain(added.iter().map(PathBuf::as_path))
+            .find(|opened| directory.starts_with(opened))
+        else {
+            return false;
+        };
+        let mut holder = None;
+        for above in directory.ancestors() {
+            if !above.starts_with(bound) {
+                break;
+            }
+            match above.join(".git").symlink_metadata() {
+                Ok(_) => {
+                    holder = Some(above);
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return false,
+            }
+        }
+        let Some(holder) = holder.filter(|holder| holder.to_str().is_some()) else {
+            return false;
+        };
+        let named = match self.relative_display(holder) {
+            named if named.is_empty() => ".".to_owned(),
+            named => named,
+        };
+        if named == "~" || named.starts_with("~/") {
+            return false;
+        }
+        let Ok(root) = self.resolve(&named) else {
+            return false;
+        };
+        let deadline = Instant::now() + self.search_time;
+        self.open_for_git(policy, &named, &root, crate::git::Query::Log, deadline)
+            .is_ok()
     }
 
     /// Whether a `deny` rule covers reading `inside` the repository the planner called `named`,
@@ -4597,86 +4265,6 @@ impl Workspace {
             .map_err(refused)
     }
 
-    /// The checkout this workspace is the root of, where it is a delegate's (CHECKOUT-7).
-    pub fn checkout(&self) -> Option<&CheckoutInfo> {
-        self.checkout.as_deref()
-    }
-
-    pub(crate) fn checkout_handle(&self) -> Option<Arc<CheckoutInfo>> {
-        self.checkout.clone()
-    }
-
-    /// The checkouts the session made and has not removed, oldest first (CHECKOUT-21). One whose
-    /// directory is gone, removed by hand or only half removed, is not among them.
-    pub fn session_checkouts(&self) -> Vec<SessionCheckout> {
-        self.session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .filter(|made| made.path.exists())
-            .map(Made::listed)
-            .collect()
-    }
-
-    /// Remove the session's checkout `id`, one [`Workspace::session_checkouts`] lists, and take
-    /// its rules out of `trust` the way a delegate's ending does (CHECKOUT-15).
-    ///
-    /// Whether to ask first is the caller's, from what the list says: nothing here reads the
-    /// checkout.
-    ///
-    /// One `/cd` or `/add-dir` reached is kept, for the reason [`Workspace::change_root`] refuses
-    /// the session's own directory: every read, write and run there would fail afterwards.
-    pub fn remove_session_checkout(
-        &self,
-        id: &str,
-        trust: &mut bravebot_core::trust::TrustStore,
-    ) -> Result<(), Unremoved> {
-        let made = self
-            .session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .find(|made| made.id == id && made.path.exists())
-            .cloned()
-            .ok_or(Unremoved::NoSuch)?;
-        if std::iter::once(self.root.clone())
-            .chain(self.added_directories())
-            .any(|open| open.starts_with(&made.path))
-        {
-            return Err(Unremoved::WorkedFrom);
-        }
-        made.remove(
-            |key| trust.withdraw_beneath(key),
-            &self.checkouts,
-            &self.session_checkouts,
-        )
-        .map_err(|_| Unremoved::Stuck)
-    }
-
-    /// Whether the session wrote `relative` in the working directory, by a name the planner typed,
-    /// after checkout `id` was made (CHECKOUT-14). False where the session keeps no such checkout.
-    ///
-    /// The driver's own record of its writes. Whether the file differs from the checkout's is a
-    /// comparison of bytes, which is the person's to make from the difference they are shown.
-    pub fn written_since_checkout(&self, id: &str, relative: &str) -> bool {
-        let Some(after) = self
-            .session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .find(|made| made.id == id)
-            .map(|made| made.after)
-        else {
-            return false;
-        };
-        self.working_writes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .last
-            .get(relative)
-            .is_some_and(|last| *last > after)
-    }
-
     /// The paths a status over the session's checkout `id` lists (CHECKOUT-13).
     ///
     /// The same terms as `read_git`'s status in a checkout (GIT-11, CHECKOUT-12): the map has to
@@ -4690,14 +4278,7 @@ impl Workspace {
         id: &str,
     ) -> Result<crate::git::Listing, crate::git::Declined> {
         use crate::git::Declined;
-        let made = self
-            .session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .find(|made| made.id == id && made.path.exists())
-            .cloned()
-            .ok_or(Declined::NoRepository)?;
+        let made = self.session_checkout(id).ok_or(Declined::NoRepository)?;
         let root = made.path.to_string_lossy().into_owned();
         let tree_key = self.trust_key(&root);
         policy.capture_files(|policy, _capture| {
@@ -4767,21 +4348,10 @@ impl Workspace {
         listed: &std::collections::BTreeSet<String>,
     ) -> Result<Labelled<String>, CheckoutRead> {
         let made = self
-            .session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .find(|made| made.id == id && made.path.exists())
-            .cloned()
+            .session_checkout(id)
             .ok_or(CheckoutRead::NoSuchCheckout)?;
-        let candidate = made
-            .record
-            .written
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .named
-            .contains(relative)
-            || listed.contains(relative);
+        let candidate =
+            locked(&made.record.written).named.contains(relative) || listed.contains(relative);
         if !candidate {
             return Err(CheckoutRead::NotACandidate);
         }
@@ -4813,151 +4383,27 @@ impl Workspace {
         Ok(Labelled::new(text, policy.label_in_force(&key)))
     }
 
-    /// Bring back the checkouts a resumed session's record kept (CHECKOUT-16), and say which of
-    /// them it could not.
-    ///
-    /// What the record says is read as a claim and not as an answer: a checkout is taken back only
-    /// where its directory is the one this session would have made for that number, under
-    /// `state`'s `checkouts/` for this working directory, is a directory and not a link, and has
-    /// the `worktrees/<id>` entry in this repository's `.git`. Removing a checkout deletes that
-    /// directory and that entry, so a record that named any other path would otherwise point the
-    /// deletion at it. The commit has to be a full object id, since it is shown to the person and
-    /// handed to the planner. The repository removing it is always this one, never one the record
-    /// names.
-    ///
-    /// The numbers it holds are not made again. The rules a checkout needs came back with the
-    /// map. A write to the working directory after the resume reads as one made since the
-    /// checkout (CHECKOUT-14): the writes before it are not known, and saying too much is the safe
-    /// way to be wrong.
-    pub fn restore_session_checkouts(&self, state: &Path, kept: &[SessionCheckout]) -> Vec<String> {
-        let directory = state.canonicalize().ok().map(|state| {
-            state
-                .join("checkouts")
-                .join(crate::home::key_for(&self.root))
-        });
-        let git_dir = self.root.join(".git");
-        let mut unplaced = Vec::new();
-        for one in kept {
-            let number = one
-                .id
-                .strip_prefix('c')
-                .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
-                .and_then(|digits| digits.parse::<u64>().ok());
-            let whole_id = matches!(one.commit.len(), 40 | 64)
-                && one.commit.bytes().all(|b| b.is_ascii_hexdigit());
-            let placed = match (&directory, number) {
-                (Some(directory), Some(_)) if whole_id => {
-                    one.path == directory.join(&one.id)
-                        && std::fs::symlink_metadata(&one.path)
-                            .is_ok_and(|found| found.file_type().is_dir())
-                        && std::fs::symlink_metadata(git_dir.join("worktrees").join(&one.id))
-                            .is_ok_and(|found| found.file_type().is_dir())
-                }
-                _ => false,
-            };
-            let mut held = self
-                .session_checkouts
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if !placed || held.iter().any(|made| made.id == one.id) {
-                if !held.iter().any(|made| made.id == one.id) {
-                    unplaced.push(one.id.clone());
-                }
-                continue;
-            }
-            if let Some(number) = number {
-                self.checkout_numbers
-                    .fetch_max(number + 1, Ordering::SeqCst);
-            }
-            let record = Record {
-                worked_in: AtomicBool::new(one.worked_in),
-                written: Mutex::new(one.candidates.clone()),
-                size: Mutex::new(one.size),
-            };
-            held.push(Made {
-                id: one.id.clone(),
-                path: one.path.clone(),
-                key: self.trust_key(&one.path.to_string_lossy()),
-                commit: one.commit.clone(),
-                delegate: one.delegate,
-                git_dir: git_dir.clone(),
-                record: Arc::new(record),
-                after: 0,
-                _claim: crate::git::checkout::reclaim(&one.path),
-            });
-            if let Ok(mut listed) = self.checkouts.lock() {
-                listed.push(one.path.clone());
-            }
+    /// What this workspace's checkouts are kept in, for the workspace of the next turn to be given
+    /// by [`Workspace::with_kept_between_turns`] (CHECKOUT-16).
+    pub fn kept_between_turns(&self) -> KeptBetweenTurns {
+        KeptBetweenTurns {
+            checkouts: self.checkouts.clone(),
+            session_checkouts: self.session_checkouts.clone(),
+            checkout_numbers: self.checkout_numbers.clone(),
+            temporary_checkouts: self.temporary_checkouts.clone(),
+            working_writes: self.working_writes.clone(),
         }
-        unplaced
     }
 
-    /// Remove what no session record lists and no running session holds under this working
-    /// directory's key in `state`'s `checkouts/`, with the `worktrees/<id>` entries (CHECKOUT-16).
-    /// `listed` says whether a record names an id. Answers the ids removed.
-    ///
-    /// Slow where a leftover holds a large build tree, so a caller runs it off the thread a
-    /// session opens on.
-    pub fn sweep_checkouts(&self, state: &Path, listed: &dyn Fn(&str) -> bool) -> Vec<String> {
-        let Ok(state) = state.canonicalize() else {
-            return Vec::new();
-        };
-        let directory = state
-            .join("checkouts")
-            .join(crate::home::key_for(&self.root));
-        crate::git::checkout::sweep(&self.root.join(".git"), &directory, listed)
-    }
-
-    /// The checkouts under this working directory's key in `state`'s `checkouts/` that `listed`
-    /// does not name and this session does not keep, with their paths, by number (CHECKOUT-16).
-    /// Removes nothing: it is what `/checkouts` names where the opening sweep removes none.
-    pub fn unlisted_checkouts(
-        &self,
-        state: &Path,
-        listed: &dyn Fn(&str) -> bool,
-    ) -> Vec<(String, PathBuf)> {
-        let Ok(state) = state.canonicalize() else {
-            return Vec::new();
-        };
-        let directory = state
-            .join("checkouts")
-            .join(crate::home::key_for(&self.root));
-        let kept: Vec<String> = self.session_checkouts().into_iter().map(|c| c.id).collect();
-        crate::git::checkout::unlisted(&directory, &|id| listed(id) || kept.iter().any(|k| k == id))
-    }
-
-    /// For starting over inside one process: the session beginning here has made no checkout, so
-    /// the list empties for every clone. The checkouts themselves stay on disk.
-    pub fn forget_session_checkouts(&self) {
-        self.session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
-    }
-
-    /// The workspace instructions, skills and definitions are read from: this one, or the
-    /// working directory's where this one is a checkout (CHECKOUT-9).
-    pub fn sources(&self) -> &Workspace {
-        self.checkout
-            .as_deref()
-            .map_or(self, |checkout| &checkout.source)
-    }
-
-    /// Which tree the session opened keeps checkouts from being made under `directory`, if any
-    /// does (CHECKOUT-7). A directory holding the working directory is named before one holding
-    /// `directory`, since it is the one a person has to close in either case.
-    fn checkout_overlap(&self, directory: &Path) -> Option<CheckoutOverlap> {
-        if directory.starts_with(&self.root) {
-            return Some(CheckoutOverlap::InsideWorkingDirectory);
-        }
-        let added = self.added_directories();
-        if let Some(dir) = added.iter().find(|dir| self.root.starts_with(dir)) {
-            return Some(CheckoutOverlap::AddedHoldsWorkingDirectory(dir.clone()));
-        }
-        added
-            .into_iter()
-            .find(|dir| directory.starts_with(dir))
-            .map(CheckoutOverlap::AddedHoldsCheckouts)
+    /// Keep the checkouts in `kept`, taken from the workspace of an earlier turn, in place of this
+    /// workspace's own (CHECKOUT-16).
+    pub fn with_kept_between_turns(mut self, kept: &KeptBetweenTurns) -> Self {
+        self.checkouts = kept.checkouts.clone();
+        self.session_checkouts = kept.session_checkouts.clone();
+        self.checkout_numbers = kept.checkout_numbers.clone();
+        self.temporary_checkouts = kept.temporary_checkouts.clone();
+        self.working_writes = kept.working_writes.clone();
+        self
     }
 
     /// Make a checkout for the delegate `made_for` and return the workspace it works in (CHECKOUT-1,
@@ -5030,10 +4476,7 @@ impl Workspace {
                 .join("checkouts")
                 .join(crate::home::key_for(&self.root)),
             None => {
-                let mut held = self
-                    .temporary_checkouts
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let mut held = locked(&self.temporary_checkouts);
                 if held.is_none() {
                     *held = Some(TemporaryCheckouts {
                         directory: crate::scratch::SessionScratch::for_checkouts()
@@ -5106,17 +4549,10 @@ impl Workspace {
             delegate: made_for,
             git_dir: self.root.join(".git"),
             record: Arc::default(),
-            after: self
-                .working_writes
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .count,
+            after: locked(&self.working_writes).count,
             _claim: made.claim.clone(),
         };
-        self.session_checkouts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(entry.clone());
+        locked(&self.session_checkouts).push(entry.clone());
 
         let mut delegate = self.clone();
         delegate.added = Arc::new(Mutex::new(self.added_directories()));
@@ -5146,7 +4582,7 @@ impl Workspace {
         };
         let mut parts: Vec<&str> = relative.split('/').collect();
         parts.pop();
-        let mut touched = self.touched.lock().unwrap_or_else(|e| e.into_inner());
+        let mut touched = locked(&self.touched);
         for end in 1..=parts.len() {
             if touched.len() >= TOUCHED_LIMIT {
                 return;
@@ -5158,39 +4594,9 @@ impl Workspace {
     /// The directories below the root the session has read from or written to, `/`-joined and
     /// relative to it, shallowest first and in name order within a depth (INSTR-14).
     pub fn touched_directories(&self) -> Vec<String> {
-        let mut directories: Vec<String> = self
-            .touched
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .cloned()
-            .collect();
+        let mut directories: Vec<String> = locked(&self.touched).iter().cloned().collect();
         directories.sort_by_key(|directory| directory.matches('/').count());
         directories
-    }
-
-    /// Record a write in the checkout this workspace is, where it is one: by the name the planner
-    /// typed, or as one more write through a reference where it gave none.
-    pub(crate) fn record_write(&self, typed: Option<&str>) {
-        if let Some(typed) = typed {
-            self.record_touch(typed);
-        }
-        let Some(checkout) = &self.checkout else {
-            if let Some(relative) = typed.and_then(|typed| place_by_spelling(&self.root, typed)) {
-                let mut writes = self
-                    .working_writes
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                writes.count += 1;
-                let count = writes.count;
-                writes.last.insert(relative, count);
-            }
-            return;
-        };
-        match typed {
-            Some(typed) => checkout.record_typed(typed),
-            None => checkout.record_through_a_reference(),
-        }
     }
 
     /// Collect workspace-relative paths of regular files beneath `directory`.
@@ -5376,7 +4782,7 @@ impl Workspace {
     /// map holds a key under and the one a rule is matched against. A name on a drive letter keeps
     /// the root the host gave it, which is the name a person reads and types, and a turn's policy
     /// keys it as it asks the map ([`bravebot_core::policy::Policy::with_backslash_separates`]).
-    pub(crate) fn relative_display(&self, path: &Path) -> String {
+    pub fn relative_display(&self, path: &Path) -> String {
         self.displayed(path, BACKSLASH_SEPARATES)
     }
 
@@ -5863,6 +5269,58 @@ mod tests {
         assert!(second.path_reach().is_empty());
     }
 
+    /// SANDBOX-24 and SANDBOX-28: the reach and the host answers belong to the session that was
+    /// asked, so one that ends inside this process takes them with it, and the directories it
+    /// opened by name. A yes and a no are both asked about again, and the clone `/resume` hands to
+    /// the next session sees none of them.
+    #[test]
+    fn a_session_ending_in_this_process_takes_its_reach_and_host_answers_with_it() {
+        let root = crate::testutil::scratch_dir("reach-and-hosts-forgotten");
+        let opened = crate::testutil::scratch_dir("reach-and-hosts-forgotten-opened");
+        std::fs::create_dir_all(&root).expect("scratch");
+        std::fs::create_dir_all(&opened).expect("scratch");
+        let mut workspace = Workspace::new(root).expect("workspace");
+        let handed_on = workspace.clone();
+        let hosts = |names: &[&str]| names.iter().map(|h| h.to_string()).collect::<Vec<_>>();
+        workspace
+            .add_directory(opened.to_str().expect("utf-8 path"))
+            .expect("a directory to open");
+        workspace.grant_path_reach(PathBuf::from("/data/in"), true, "reads in".to_string());
+        workspace.grant_hosts(&hosts(&["yes.example"]));
+        workspace.decline_hosts(&hosts(&["no.example"]));
+        assert!(
+            handed_on
+                .unanswered_hosts(&hosts(&["yes.example", "no.example"]))
+                .is_empty(),
+            "the fixture must hold both answers"
+        );
+        assert!(
+            !handed_on.added_directories().is_empty(),
+            "the fixture must hold a directory opened by name"
+        );
+
+        workspace.end_session();
+
+        assert!(
+            handed_on.added_directories().is_empty(),
+            "the next session kept a directory opened by name"
+        );
+        assert!(
+            handed_on.path_reach().is_empty(),
+            "the next session kept a path programs were let reach"
+        );
+        assert!(
+            handed_on.granted_hosts().is_empty(),
+            "the next session kept a host that was allowed"
+        );
+        assert_eq!(
+            handed_on.unanswered_hosts(&hosts(&["yes.example", "no.example"])),
+            hosts(&["yes.example", "no.example"]),
+            "the next session kept a host answer, a no included"
+        );
+        std::fs::remove_dir_all(&opened).ok();
+    }
+
     /// SANDBOX-24: a host answer is held by the workspace and shared by a clone (a delegate's view).
     /// A yes is held once, in the order given; a no is remembered so the host is not asked about
     /// again; a later yes lifts the no; a host not answered is still unanswered.
@@ -6052,6 +5510,80 @@ mod tests {
         assert_eq!(volume_folds_case(&root), folds);
         assert_eq!(trust_store(&root).folds_case(), folds);
         assert!(!trust_store(&root.join("does-not-exist")).folds_case());
+    }
+
+    /// Lists a checkout under `id` as kept at `path`, which need not exist.
+    fn keep_checkout(workspace: &Workspace, id: &str, path: PathBuf) {
+        locked(&workspace.session_checkouts).push(Made {
+            id: id.to_string(),
+            path,
+            key: String::new(),
+            commit: String::new(),
+            delegate: bravebot_core::delegate::DelegateId::nth(1),
+            git_dir: workspace.root.join(".git"),
+            record: Arc::default(),
+            after: 0,
+            _claim: None,
+        });
+    }
+
+    /// CHECKOUT-15, CHECKOUT-21. Removing, reading and the status over a checkout name it by number,
+    /// so the number has to match whole and the directory has to be there: `c1` is not `c10`, and
+    /// one removed by hand is not one the session still keeps.
+    #[test]
+    fn a_kept_checkout_is_found_by_its_whole_number_and_only_while_its_directory_is_there() {
+        let root = crate::testutil::scratch_dir("session-checkout-lookup");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        for id in ["c1", "c10"] {
+            std::fs::create_dir(root.join(id)).unwrap();
+        }
+        for id in ["c1", "c10", "c2"] {
+            keep_checkout(&workspace, id, root.join(id));
+        }
+
+        let found = |id: &str| workspace.session_checkout(id).map(|made| made.id);
+        assert_eq!(found("c1").as_deref(), Some("c1"));
+        assert_eq!(found("c10").as_deref(), Some("c10"));
+        assert_eq!(
+            found("c"),
+            None,
+            "a number that starts the others was found"
+        );
+        assert_eq!(found("c100"), None, "a number the others start was found");
+        assert_eq!(found("c2"), None, "a checkout with no directory was found");
+
+        std::fs::remove_dir(root.join("c1")).unwrap();
+        assert_eq!(found("c1"), None, "a checkout removed by hand was found");
+        assert_eq!(found("c10").as_deref(), Some("c10"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// CHECKOUT-14. Whether a file was written since a checkout was made is the driver's own
+    /// record of writes and does not read the checkout's directory, so it answers the same once
+    /// the directory has been removed by hand. Only a checkout the session keeps answers at all.
+    #[test]
+    fn a_write_since_a_checkout_still_counts_once_its_directory_is_removed_by_hand() {
+        let root = crate::testutil::scratch_dir("written-since-removed-checkout");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        keep_checkout(&workspace, "c1", root.join("never-made"));
+        assert!(workspace.session_checkout("c1").is_none());
+
+        assert!(!workspace.written_since_checkout("c1", "README"));
+        workspace.record_write(Some("README"));
+        assert!(
+            workspace.written_since_checkout("c1", "README"),
+            "a write after the checkout was made stopped counting with its directory"
+        );
+        assert!(!workspace.written_since_checkout("c1", "other.txt"));
+        assert!(
+            !workspace.written_since_checkout("c2", "README"),
+            "a checkout the session does not keep reported a write"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Losing the journal lock cannot turn an attempted mutation into an empty complete backup.
@@ -6646,6 +6178,131 @@ mod tests {
         let _ = std::fs::remove_dir_all(path);
     }
 
+    /// A hard link is another name for the file a rule is about, and nothing in its name says so
+    /// (PERM-7). A file with one name has no other, and a walk that cannot finish says so instead
+    /// of answering "none".
+    #[cfg(unix)]
+    #[test]
+    fn a_hard_link_is_found_by_device_and_inode_and_the_walk_gives_up_at_its_cap() {
+        let (path, workspace) = tree("hard-link");
+        std::fs::create_dir(path.join("sub")).unwrap();
+        std::fs::hard_link(path.join(".env"), path.join("sub/copy.txt")).unwrap();
+
+        let mut found = workspace.hard_links("sub/copy.txt").unwrap();
+        found.sort();
+        assert_eq!(found, [".env", "sub/copy.txt"]);
+        assert_eq!(workspace.hard_links("plain.txt"), Some(Vec::new()));
+        assert_eq!(workspace.hard_links("not-yet.txt"), Some(Vec::new()));
+        let capped = workspace.clone().with_search_caps(Some(1), None);
+        assert_eq!(capped.hard_links(".env"), None);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// A second path to an open tree is another spelling of every file in it (PERM-7), and which
+    /// directories are one is the file system's answer, so the rule is driven with a made one.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_is_respelled_under_each_open_directory_that_is_the_same_directory() {
+        let root = PathBuf::from("/work");
+        let mirror = PathBuf::from("/mnt/mirror/work");
+        let other = PathBuf::from("/elsewhere");
+        let opened = [(&root, 1), (&mirror, 1), (&other, 2)];
+        let identity = |directory: &Path| match directory.to_str()? {
+            "/work" | "/mnt/mirror/work" => Some(1),
+            "/elsewhere" => Some(2),
+            _ => None,
+        };
+
+        let names = Workspace::names_in_the_same_directories(
+            Path::new("/mnt/mirror/work/src/a.md"),
+            &opened,
+            identity,
+        );
+        assert_eq!(names, [PathBuf::from("/work/src/a.md")]);
+        let names = Workspace::names_in_the_same_directories(
+            Path::new("/work/src/a.md"),
+            &opened,
+            identity,
+        );
+        assert_eq!(names, [PathBuf::from("/mnt/mirror/work/src/a.md")]);
+        assert!(
+            Workspace::names_in_the_same_directories(
+                Path::new("/elsewhere/src/a.md"),
+                &opened,
+                identity
+            )
+            .is_empty(),
+            "a directory that is not the same one gives the file no other name"
+        );
+    }
+
+    /// The macOS firmlink is the second path the issue reproduces with: the name under it
+    /// canonicalizes to itself, so the rule written about the working directory never sees it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_firmlink_path_to_the_working_directory_is_found_as_the_same_tree() {
+        let (path, mut workspace) = tree("firmlink");
+        std::fs::create_dir(path.join("src")).unwrap();
+        std::fs::write(path.join("src/a.md"), "a").unwrap();
+        let second =
+            Path::new("/System/Volumes/Data").join(workspace.root().strip_prefix("/").unwrap());
+        let second = second.to_str().unwrap().to_string();
+        workspace
+            .add_directory(&second)
+            .expect("the firmlink path opens");
+
+        let typed = format!("{second}/src/a.md");
+        assert_eq!(workspace.same_tree_names(&typed).unwrap(), ["src/a.md"]);
+        assert_eq!(workspace.same_tree_names("src/a.md").unwrap(), [typed]);
+        let created = format!("{second}/not-yet.md");
+        assert_eq!(workspace.same_tree_names(&created).unwrap(), ["not-yet.md"]);
+        assert_eq!(workspace.same_tree_names("not-yet.md").unwrap(), [created]);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// A link whose name is not UTF-8 is not reported under its lossy lookalike (PATH-003): the
+    /// walk gives up, so a caller with a deny rule refuses, and a file that really is named with
+    /// the replacement character is still found under its own name.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_hard_link_named_with_invalid_utf8_is_not_matched_as_its_lossy_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let (path, workspace) = tree("hard-link-bytes");
+        let invalid = path.join(OsStr::from_bytes(b"x-\xff"));
+        let lookalike = path.join("x-\u{FFFD}");
+        std::fs::hard_link(path.join(".env"), &invalid).unwrap();
+        assert_eq!(workspace.hard_links(".env"), None);
+
+        std::fs::remove_file(&invalid).unwrap();
+        std::fs::hard_link(path.join(".env"), &lookalike).unwrap();
+        let mut found = workspace.hard_links(".env").unwrap();
+        found.sort();
+        assert_eq!(found, [".env", "x-\u{FFFD}"]);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// A second name under another open directory that is not UTF-8 is not rendered as its lossy
+    /// lookalike (PATH-003): the names are not given, so a caller with a deny rule refuses, and a
+    /// name that really holds the replacement character is given under its own spelling.
+    #[cfg(unix)]
+    #[test]
+    fn a_second_tree_name_with_invalid_utf8_is_not_matched_as_its_lossy_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let (path, workspace) = tree("tree-name-bytes");
+        let invalid = workspace.root().join(OsStr::from_bytes(b"x-\xff"));
+        assert_eq!(workspace.displayed_if_utf8(&[invalid]), None);
+        let lookalike = workspace.root().join("x-\u{FFFD}");
+        assert_eq!(
+            workspace.displayed_if_utf8(&[lookalike]),
+            Some(vec!["x-\u{FFFD}".to_string()])
+        );
+        let _ = std::fs::remove_dir_all(path);
+    }
+
     /// A file that does not exist yet lands under the directory its link points at.
     #[cfg(unix)]
     #[test]
@@ -6704,6 +6361,7 @@ mod tests {
             ".ssh/keys",
             ".bravebot",
             ".bravebot/profiles",
+            ".bravebot/sessions",
             ".aws",
             ".kube",
             ".config/gcloud",
@@ -6724,6 +6382,8 @@ mod tests {
             ".ssh/keys",
             ".bravebot",
             ".bravebot/profiles",
+            // A read-write grant, so the session records that a program may read are refused here.
+            ".bravebot/sessions",
             ".aws",
             ".kube",
             ".config/gcloud",
@@ -6844,6 +6504,51 @@ mod tests {
         let _ = std::fs::remove_dir_all(home.parent().expect("base"));
     }
 
+    /// GIT-7. A directory named `~` in the project is not the home directory the name stands for in
+    /// a tool's arguments, so a repository in it is not one `read_git` can be asked for by name, and
+    /// is not judged as the repository of the home directory that name would be read as.
+    #[test]
+    fn read_git_opens_no_repository_under_a_directory_named_tilde() {
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        let (home, project) = home_and_project("read-git-opens-tilde");
+        let tilde = project.join("~");
+        for base in [&home, &tilde] {
+            std::fs::create_dir_all(base.join(".git/refs/heads")).expect("refs");
+            std::fs::create_dir_all(base.join(".git/objects")).expect("objects");
+            std::fs::write(base.join(".git/HEAD"), "ref: refs/heads/main\n").expect("HEAD");
+        }
+        let mut workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home.clone()));
+        workspace
+            .add_directory(home.to_str().expect("utf-8"))
+            .expect("home opened");
+        let mut trust = TrustStore::new(&project);
+        trust.trust(".");
+        trust.trust(home.to_str().expect("utf-8"));
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "read");
+        let policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+
+        assert!(
+            workspace.read_git_opens(&policy, &home),
+            "the home directory's own repository was not opened, so the control proves nothing"
+        );
+        assert!(
+            !workspace.read_git_opens(&policy, &tilde),
+            "a repository in a directory named ~ was judged as the home directory's"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
     /// Only a whole first segment is a home, so `~notes` is a directory of the project like any
     /// other name.
     #[test]
@@ -6927,6 +6632,78 @@ mod tests {
                 "{climbing}"
             );
         }
+        let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// A path whose directory `/add-dir` refuses as a credential location is not refused with
+    /// `/add-dir` as the way to reach it, and no `request_path` can open it either. A read is left
+    /// the drop, and a write or a directory is offered nothing here. A path beside a credential
+    /// location is still offered the directory.
+    ///
+    /// The failure this rejects is choosing the remedy without asking the question
+    /// [`Workspace::resolve_directory`] asks, which sends a person to a command that refuses the
+    /// directory.
+    #[test]
+    fn a_refusal_inside_a_credential_location_offers_no_directory_to_open() {
+        let (home, project) = home_and_project("credential-remedy");
+        for row in [".ssh", ".bravebot", ".aws", ".sshfoo"] {
+            std::fs::create_dir_all(home.join(row)).expect("a directory under the home");
+        }
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home.clone()));
+
+        for (typed, itself) in [
+            (".ssh/config", false),
+            (".bravebot/settings.json", false),
+            (".aws/credentials", false),
+            (".ssh/not-yet", false),
+            (".ssh", true),
+        ] {
+            let named = home.join(typed).display().to_string();
+            let error = workspace
+                .resolve(&named)
+                .expect_err("outside the workspace");
+            let expected = if itself {
+                Remedy::Nothing
+            } else {
+                Remedy::Credential
+            };
+            assert!(
+                matches!(&error, WorkspaceError::Escapes { remedy, .. } if *remedy == expected),
+                "{named}: {error:?}"
+            );
+            let told = error.describe(&named);
+            assert!(
+                !told.contains("add-dir") && !told.contains("drop"),
+                "{named}: a route that cannot work was named: {told}"
+            );
+            let read = error.for_a_read();
+            let told = read.describe(&named);
+            assert!(!told.contains("add-dir"), "{named}: {told}");
+            // A directory cannot be dropped, so a read that names one is offered nothing.
+            assert_eq!(
+                told.contains("drop the file on the window"),
+                !itself,
+                "{named}: {told}"
+            );
+        }
+
+        let beside = home.join(".sshfoo/config").display().to_string();
+        let error = workspace
+            .resolve(&beside)
+            .expect_err("outside the workspace");
+        assert!(
+            matches!(
+                &error,
+                WorkspaceError::Escapes {
+                    remedy: Remedy::Open,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert!(error.describe(&beside).contains("/add-dir"));
         let _ = std::fs::remove_dir_all(home.parent().expect("base"));
     }
 
@@ -7031,12 +6808,15 @@ mod tests {
     }
 
     /// A missing relative file says where it was looked for, so a path that is merely absent reads
-    /// differently from one the writer meant somewhere else.
+    /// differently from one the writer meant somewhere else. It says so by the directory alone:
+    /// the detail reaches the planner unchanged in a sentence about a reference, where the path is
+    /// a filename the reference withholds (LIST-2).
     #[test]
     fn a_missing_relative_file_says_where_it_was_looked_for() {
         let missing = io::Error::from(io::ErrorKind::NotFound);
         let detail = io_detail(&missing, "todo.txt", Path::new("/work/project"));
-        assert!(detail.contains("/work/project/todo.txt"), "{detail}");
+        assert!(detail.contains("/work/project"), "{detail}");
+        assert!(!detail.contains("todo.txt"), "{detail}");
         let absolute = io_detail(&missing, "/home/me/todo.txt", Path::new("/work/project"));
         assert!(!absolute.contains("/work/project"), "{absolute}");
     }

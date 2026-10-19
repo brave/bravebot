@@ -33,9 +33,8 @@ fn main() {
     } = start
     else {
         println!(
-            "bravebot-host {} (agent {})",
-            env!("CARGO_PKG_VERSION"),
-            bravebot_ui_bridge::agent_build()
+            "{}",
+            bravebot_ui_bridge::arguments::version_line("bravebot-host")
         );
         return;
     };

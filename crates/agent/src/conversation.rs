@@ -126,6 +126,56 @@ pub enum Composed {
         /// The skill's name as the catalogue spells it.
         name: String,
     },
+    /// A message the driver wrote for the planner in the middle of a turn: a nudge after a stop or
+    /// a spent budget, the mode having changed, a delegate's report, a background job's output, the
+    /// jobs still running.
+    ///
+    /// House-keeping for the planner: it belongs to the round above it, so a transcript draws no
+    /// row for it, no fork is cut in front of it and no compaction cuts between the two.
+    Notice,
+    /// A message the agent or a front end wrote in its own words into the conversation, and that a
+    /// person is shown as it stands: the line a goal's carry-on or `/init` sends, the standard
+    /// input a run was given, a file the kernel would not show, and what a shell line the person
+    /// ran themselves printed.
+    ///
+    /// Drawn plainly, and not as a prompt: nobody typed it, so it is no place to fork from.
+    Written,
+    /// A message another background session's planner sent, as the frame the driver wrote around it
+    /// (MSG-7, MSG-11).
+    ///
+    /// The fields are the driver's: the sender's id, its name as the roster held it when the message
+    /// arrived and the label the policy layer gave the words. The words ride beside them in `text`,
+    /// which is where a surface finds them without reading the frame back. `None` where the planner
+    /// was given a reference and not the words, so that no content is written here.
+    SessionMessage {
+        /// The sender's full id.
+        from: String,
+        /// The sender's name, cut and made printable.
+        name: String,
+        /// The label the words arrived under, in the policy layer's own form.
+        label: String,
+        /// What the sender wrote, where the planner was shown it.
+        text: Option<String>,
+    },
+    /// The result of a `message_session` call that put its message in the receiver's process
+    /// (MSG-11).
+    ///
+    /// In the API's own shape, as [`Composed::Skill`] is. The fields are the driver's, the
+    /// roster's and the policy layer's, and `text` is what the planner wrote and the policy layer
+    /// let through. Only a call that was delivered carries it, so a transcript draws a refused or
+    /// declined call as the call and nothing more.
+    ///
+    /// House-keeping for the planner: the call above it is drawn as the message.
+    MessageSent {
+        /// The receiver's full id.
+        to: String,
+        /// The receiver's name, as the roster held it.
+        name: String,
+        /// The label the message was sent under.
+        label: String,
+        /// What the planner wrote.
+        text: String,
+    },
 }
 
 impl Composed {
@@ -140,6 +190,8 @@ impl Composed {
                 | Self::Summary
                 | Self::Skill { .. }
                 | Self::SkillKept { .. }
+                | Self::Notice
+                | Self::MessageSent { .. }
         )
     }
 }
@@ -270,6 +322,9 @@ pub struct Conversation {
     /// Carried word for word and put back after the summary (COMPACT-16). Model output the
     /// planner already held, so it comes back at the label of the context it came from.
     carried_task_list: Option<String>,
+    /// Where the turn now running put the end of its opening: what it read for the prompt, and the
+    /// prompt. A position in `messages`, so a compaction that moves them clears it.
+    opening_end: Option<usize>,
 }
 
 /// A window of a file as `read_file` showed it, for telling a repeat of the same read from a new one.
@@ -325,6 +380,13 @@ impl ShownReads {
     }
 }
 
+/// How many messages a conversation held when a turn began, for [`Conversation::forget_since`].
+///
+/// Taken from the live conversation rather than read off a rewind point, because a [`Snapshot`]
+/// leaves out the note a resume adds and so counts one message fewer than the conversation holds.
+#[derive(Debug, Clone, Copy)]
+pub struct Mark(usize);
+
 impl Default for Conversation {
     fn default() -> Self {
         Self::new()
@@ -348,6 +410,7 @@ impl Conversation {
             reads: ShownReads::default(),
             task_list: None,
             carried_task_list: None,
+            opening_end: None,
         }
     }
 
@@ -474,6 +537,13 @@ impl Conversation {
         self.push_composed_from(message, Composed::Skill { name }, source);
     }
 
+    /// Add the result of a `message_session` call whose message was delivered, tagged with who it
+    /// went to and what it said (MSG-11).
+    pub fn push_message_result(&mut self, message: Message, sent: Composed, source: Provenance) {
+        debug_assert!(matches!(sent, Composed::MessageSent { .. }));
+        self.push_composed_from(message, sent, source);
+    }
+
     /// The same as [`Conversation::push`], for a message whose composer knows whose words it holds.
     ///
     /// Written where the prose is written, by the one caller that knows, for the reason the tag of
@@ -541,6 +611,55 @@ impl Conversation {
     /// purpose here.
     pub fn last_request_tokens(&self) -> u64 {
         self.measured
+    }
+
+    /// Where the conversation stands now, before a turn adds to it.
+    pub fn mark(&self) -> Mark {
+        Mark(self.messages.len())
+    }
+
+    /// Say that the turn has put its opening into the conversation: whatever it read for the
+    /// prompt, and the prompt itself.
+    ///
+    /// Everything pushed between the mark and this call is part of the opening, and a resend
+    /// pushes it again, so a message the turn pushes before the prompt that a resend would not
+    /// push again belongs after this call.
+    pub fn opening_done(&mut self) {
+        self.opening_end = Some(self.messages.len());
+    }
+
+    /// Take the opening of the turn that began at `mark` out of the conversation, so a prompt
+    /// handed back to the box is not in the next request as well as in the one sent from there.
+    /// Returns whether it did.
+    ///
+    /// Only the opening goes. What the driver said after it stays: a message from another session,
+    /// which was taken out of its inbox and has nowhere else to come from, and a notice, which is a
+    /// statement about the moment it was made.
+    ///
+    /// Nothing goes once the planner has replied or called a tool. What it did then is not undone
+    /// by taking the prompt back, and the next request should still say so. Nor does anything go
+    /// where a compaction ran, since it moved the position the opening was recorded at.
+    ///
+    /// What the conversation has met is not taken back: the planner was shown the prompt and what
+    /// came with it, so the integrity and confidentiality it holds, the quarantine and the
+    /// reference counter stay as they are, for the reason compaction leaves them.
+    pub fn forget_since(&mut self, mark: Mark) -> bool {
+        let Some(end) = self.opening_end.take() else {
+            return false;
+        };
+        let Some(after) = self.messages.get(end..) else {
+            return false;
+        };
+        // An opening at or before the mark is an earlier turn's.
+        if mark.0 >= end
+            || after
+                .iter()
+                .any(|stored| !matches!(stored.message.role, Role::User))
+        {
+            return false;
+        }
+        self.messages.drain(mark.0..end);
+        true
     }
 
     /// Record that the planner has asked for a write.
@@ -640,7 +759,25 @@ impl Conversation {
             .iter()
             .filter(|&&index| !matches!(self.messages[index].composed, Some(Composed::Summary)))
             .count();
-        (given_up >= kept + self.skills_to_carry(cut).len()).then_some(cut)
+        let carried = self.skills_to_carry(cut);
+        if given_up < kept + carried.len() {
+            return None;
+        }
+
+        // Counts are not sizes: one exchange can be a repeated one-line prompt and the next
+        // eighty thousand tokens of file reads, so the same bound is applied to what each side
+        // weighs.
+        let freed: usize = self.messages[..cut]
+            .iter()
+            .filter(|stored| !matches!(stored.composed, Some(Composed::Summary)))
+            .map(stored_bytes)
+            .sum();
+        let retained: usize = self.messages[cut..]
+            .iter()
+            .chain(&carried)
+            .map(stored_bytes)
+            .sum();
+        (freed >= retained).then_some(cut)
     }
 
     /// The skills a cut at `boundary` would have to carry, as the result of the newest load of
@@ -749,6 +886,8 @@ impl Conversation {
             Some(at) => self.task_list = Some(at - boundary + 1 + carried.len()),
             None => {}
         }
+        // A position in the messages the drain below moves.
+        self.opening_end = None;
         let replaced: Vec<Stored> = self.messages.drain(..boundary).collect();
         self.archive.extend(replaced);
         self.reads.compacted(boundary, 1 + carried.len());
@@ -851,6 +990,20 @@ pub enum Said {
         /// What the agent composed it for.
         why: Composed,
         /// The message as the planner was sent it.
+        text: String,
+    },
+    /// A message this session's planner put to another session, and which one (MSG-11).
+    ///
+    /// Only a message that was delivered. A call that was refused, declined or never answered is
+    /// the call, drawn as a [`Said::Tool`].
+    Sent {
+        /// The receiver's full id.
+        to: String,
+        /// The receiver's name, as the roster held it.
+        name: String,
+        /// The label the message was sent under.
+        label: String,
+        /// What the planner wrote.
         text: String,
     },
 }
@@ -1012,6 +1165,7 @@ impl Conversation {
             reads: ShownReads::default(),
             task_list: None,
             carried_task_list: None,
+            opening_end: None,
         }
     }
 
@@ -1042,7 +1196,8 @@ impl Conversation {
         let mut said = Vec::new();
         // The archive first: what compaction took out of the request is still the person's
         // session, and they are the one reading this.
-        for stored in self.archive.iter().chain(self.messages.iter()) {
+        let all: Vec<&Stored> = self.archive.iter().chain(self.messages.iter()).collect();
+        for (index, stored) in all.iter().copied().enumerate() {
             if let Some(why) = stored
                 .composed
                 .as_ref()
@@ -1073,6 +1228,13 @@ impl Conversation {
                         said.push(Said::Assistant(spoken));
                     }
                     for call in message.tool_calls.iter().flatten() {
+                        // A message the call put in another session's process is drawn as the
+                        // message, from the tag its result carries and never from the call's
+                        // arguments: a call that was refused or declined has the same arguments.
+                        if let Some(sent) = message_delivered(&all, index, &call.id) {
+                            said.push(sent);
+                            continue;
+                        }
                         said.push(Said::Tool {
                             line: crate::tools::describe_stored_call(
                                 &call.function.name,
@@ -1087,6 +1249,31 @@ impl Conversation {
         }
         said
     }
+}
+
+/// The message the call with this id put in another session's process, where its result says it did
+/// (MSG-11).
+///
+/// Looked up in the run of results immediately after the round, as [`answered`] does.
+fn message_delivered(exchange: &[&Stored], index: usize, id: &str) -> Option<Said> {
+    exchange[index + 1..]
+        .iter()
+        .take_while(|stored| stored.message.tool_call_id.is_some())
+        .filter(|stored| stored.message.tool_call_id.as_deref() == Some(id))
+        .find_map(|stored| match &stored.composed {
+            Some(Composed::MessageSent {
+                to,
+                name,
+                label,
+                text,
+            }) => Some(Said::Sent {
+                to: to.clone(),
+                name: name.clone(),
+                label: label.clone(),
+                text: text.clone(),
+            }),
+            _ => None,
+        })
 }
 
 /// Whether the round beginning at `index` answered the call with this id.
@@ -1132,6 +1319,20 @@ const SKILL_KEPT_BYTES: usize = 5_000 * BYTES_PER_TOKEN;
 /// The most of all skills sent again after one summary, about 25,000 tokens.
 const SKILLS_KEPT_BYTES: usize = 25_000 * BYTES_PER_TOKEN;
 
+/// What a message adds to a request, in bytes: its text and the calls it carries.
+///
+/// A measure of shape, not of meaning: nothing here reads what the words say.
+fn stored_bytes(stored: &Stored) -> usize {
+    let calls: usize = stored
+        .message
+        .tool_calls
+        .iter()
+        .flatten()
+        .map(|call| call.function.name.len() + call.function.arguments.len())
+        .sum();
+    stored.message.content.text().len() + calls
+}
+
 /// The leading `limit` bytes of `text` at a character boundary, and whether any was left out.
 fn within(text: &str, limit: usize) -> (&str, bool) {
     if text.len() <= limit {
@@ -1170,7 +1371,12 @@ fn opens_an_exchange(stored: &Stored) -> bool {
     stored.message.role == Role::User
         && !matches!(
             stored.composed,
-            Some(Composed::ToolResult | Composed::Resumed | Composed::SkillKept { .. })
+            Some(
+                Composed::ToolResult
+                    | Composed::Resumed
+                    | Composed::SkillKept { .. }
+                    | Composed::Notice
+            )
         )
 }
 
@@ -1407,6 +1613,33 @@ mod tests {
         );
     }
 
+    /// LAYER-6: a note the driver wrote mid-turn is house-keeping and a line it wrote for a turn
+    /// is drawn plainly, and neither is a prompt, whatever the words are.
+    #[test]
+    fn a_notice_is_left_out_and_a_written_line_is_not_a_prompt() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("typed words"));
+        conversation.push_composed(
+            Message::user("(from the system, not the user) stop"),
+            Composed::Notice,
+        );
+        conversation.push_composed(Message::user("carry on"), Composed::Written);
+
+        assert_eq!(
+            conversation.recounted(),
+            vec![
+                Said::User("typed words".into()),
+                Said::Composed {
+                    why: Composed::Written,
+                    text: "carry on".into()
+                },
+            ]
+        );
+        let notice = &conversation.messages()[1];
+        assert!(!opens_an_exchange(notice), "compaction may cut at a nudge");
+        assert!(opens_an_exchange(&conversation.messages()[2]));
+    }
+
     /// And the tag is not sent. The messages are the request body, so a field inside one would be
     /// a field the backend was asked to accept.
     #[test]
@@ -1606,9 +1839,9 @@ mod tests {
     fn a_typed_prompt_that_opens_like_a_note_is_a_place_to_cut() {
         let mut conversation = Conversation::new();
         for (prompt, answer) in [
-            ("first", "a"),
-            ("second", "b"),
-            ("third", "c"),
+            ("first, a prompt as long as the one below", "a"),
+            ("second, a prompt as long as the one below", "b"),
+            ("third, a prompt as long as the one below", "c"),
             (
                 &format!("{TOOL_RESULT_PREFIX}my experiment: explain it") as &str,
                 "d",
@@ -2135,6 +2368,44 @@ mod tests {
         assert!(conversation.compaction_boundary().is_some());
     }
 
+    /// COMPACT-5 compares what each side weighs, not how many exchanges it holds. Four prompts
+    /// (three of them repeats) in front of eight huge reads pass a count of two against two, and
+    /// the summary written would be longer than the few bytes it replaced.
+    #[test]
+    fn a_cut_that_frees_a_few_bytes_and_keeps_huge_reads_is_not_made() {
+        let mut conversation = Conversation::new();
+        for _ in 0..4 {
+            conversation.push(Message::user("fix the build"));
+        }
+        for round in 0..8 {
+            let mut call = a_call("read_file", r#"{"path":"src/main.rs"}"#);
+            call.id = format!("r{round}");
+            conversation.push(Message::assistant_calling("looking", vec![call]));
+            conversation.push(Message::tool_result(
+                format!("r{round}"),
+                "x".repeat(40_000),
+            ));
+        }
+        assert_eq!(conversation.compaction_boundary(), None);
+    }
+
+    /// The size bound must not stop a cut that does free more than it keeps: many short exchanges
+    /// followed by one very large one is the shape the by-round fallback is for.
+    #[test]
+    fn a_cut_that_frees_more_than_it_keeps_is_still_made_after_a_large_exchange_is_given_up() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("read everything"));
+        let mut call = a_call("read_file", r#"{"path":"big.rs"}"#);
+        call.id = "big".to_string();
+        conversation.push(Message::assistant_calling("looking", vec![call]));
+        conversation.push(Message::tool_result("big", "x".repeat(40_000)));
+        conversation.push(Message::assistant("read it"));
+        for prompt in ["second", "third", "fourth"] {
+            an_exchange(&mut conversation, prompt);
+        }
+        assert!(conversation.compaction_boundary().is_some());
+    }
+
     /// The same bound on the round fallback, which is where it was actually costing something: a
     /// long turn added one round at a time, so each compaction gave up one round to keep twelve.
     #[test]
@@ -2354,7 +2625,13 @@ mod tests {
     /// second time in the summary would put two lists in front of the planner.
     #[test]
     fn a_task_list_the_cut_leaves_in_place_is_not_sent_twice() {
-        let mut conversation = four_exchanges();
+        // Heavy enough to give up more than the list weighs when it is sent again (COMPACT-5).
+        let mut conversation = Conversation::new();
+        for prompt in ["first", "second", "third"] {
+            an_exchange(&mut conversation, prompt);
+        }
+        conversation.push(Message::user("fourth"));
+        conversation.push(Message::assistant("d"));
         conversation.push(Message::tool_result("t1", "0 of 1 done\n[pending] a"));
         conversation.task_list_shown();
 
@@ -2490,6 +2767,165 @@ mod tests {
         assert_eq!(conversation.holds(), Confidentiality::Private);
     }
 
+    fn texts(conversation: &Conversation) -> Vec<String> {
+        conversation
+            .messages()
+            .iter()
+            .map(|stored| stored.message.content.text())
+            .collect()
+    }
+
+    /// A prompt handed back to the box is sent again from there. If the conversation keeps the
+    /// first copy, each send adds another and every later request carries all of them.
+    #[test]
+    fn a_turn_taken_back_leaves_the_messages_a_turn_that_never_ran_would_have() {
+        let mut conversation = four_exchanges();
+        let before = texts(&conversation);
+        let began = conversation.mark();
+
+        conversation.push(Message::user("Contents of notes.md: ..."));
+        conversation.push(Message::user("summarise the notes"));
+        conversation.opening_done();
+
+        assert!(conversation.forget_since(began));
+
+        assert_eq!(texts(&conversation), before);
+    }
+
+    /// A message another session sent is taken out of the inbox when the turn collects it, so it
+    /// is in no other place. Taking the turn's messages back wholesale would lose it.
+    #[test]
+    fn a_turn_taken_back_keeps_a_message_that_reached_it_after_its_opening() {
+        let mut conversation = four_exchanges();
+        let mut expected = texts(&conversation);
+        let began = conversation.mark();
+
+        conversation.push(Message::user("summarise the notes"));
+        conversation.opening_done();
+        conversation.push(Message::user("a message from another session"));
+        expected.push("a message from another session".to_string());
+
+        assert!(conversation.forget_since(began));
+
+        assert_eq!(texts(&conversation), expected);
+    }
+
+    /// Once the planner has replied or called a tool, what it did is part of the record. Taking the
+    /// prompt out from under it would leave a round of work with no request, and the next request
+    /// would not say the work was done.
+    #[test]
+    fn a_turn_the_planner_has_answered_is_not_taken_back() {
+        for answered in [
+            Message::assistant("it says hello"),
+            Message::assistant_calling(
+                "looking",
+                vec![a_call("read_file", r#"{"path":"notes.md"}"#)],
+            ),
+        ] {
+            let mut conversation = four_exchanges();
+            let began = conversation.mark();
+            conversation.push(Message::user("summarise the notes"));
+            conversation.opening_done();
+            conversation.push(answered);
+            let held = texts(&conversation);
+
+            assert!(!conversation.forget_since(began));
+
+            assert_eq!(texts(&conversation), held);
+        }
+    }
+
+    /// The planner was shown the prompt and what came with it, whether or not the next request
+    /// repeats it. What the conversation has met, and the names it has handed out, stay: the
+    /// quarantine holds content those names refer to.
+    #[test]
+    fn a_turn_taken_back_does_not_forget_what_the_planner_was_shown() {
+        let mut conversation = four_exchanges();
+        let began = conversation.mark();
+
+        conversation.push(Message::user("again"));
+        conversation.opening_done();
+        conversation.observed(Label::untrusted_private());
+        let handed_out = conversation.next_reference();
+
+        assert!(conversation.forget_since(began));
+
+        assert_eq!(conversation.context(), Integrity::Untrusted);
+        assert_eq!(conversation.holds(), Confidentiality::Private);
+        assert_ne!(
+            conversation.next_reference(),
+            handed_out,
+            "a name already handed out was handed out again"
+        );
+    }
+
+    /// The note a resume adds is in the conversation but not in its snapshot, so a length read off
+    /// a snapshot is one short and would take the note out with the prompt.
+    #[test]
+    fn a_turn_taken_back_keeps_the_note_a_resume_added() {
+        let mut first = four_exchanges();
+        first.next_reference();
+        let mut conversation = Conversation::restored(first.snapshot());
+        let noted = conversation.len();
+        assert_eq!(noted, 9, "the resume added no note");
+        let began = conversation.mark();
+
+        conversation.push(Message::user("again"));
+        conversation.opening_done();
+
+        assert!(conversation.forget_since(began));
+
+        assert_eq!(conversation.len(), noted);
+        assert_eq!(
+            conversation.messages().last().map(|m| m.composed.clone()),
+            Some(Some(Composed::Resumed))
+        );
+    }
+
+    /// A turn that never reached its opening has nothing to take back, and an opening left by an
+    /// earlier turn is not this one's.
+    #[test]
+    fn a_turn_that_put_in_no_opening_takes_back_nothing() {
+        let mut conversation = four_exchanges();
+        let began = conversation.mark();
+        assert!(!conversation.forget_since(began), "there was no opening");
+
+        let earlier = conversation.mark();
+        conversation.push(Message::user("an earlier prompt"));
+        conversation.opening_done();
+        let began = conversation.mark();
+        let held = texts(&conversation);
+
+        assert!(!conversation.forget_since(began));
+        assert!(!conversation.forget_since(earlier));
+
+        assert_eq!(texts(&conversation), held);
+    }
+
+    /// Compaction moved the messages the recorded position refers to. With enough after the
+    /// opening for the old position to fit the new layout, a drain at it would take out some other
+    /// message.
+    #[test]
+    fn a_turn_that_compacted_is_not_taken_back() {
+        let mut conversation = four_exchanges();
+        let began = conversation.mark();
+        conversation.push(Message::user("summarise the notes"));
+        conversation.opening_done();
+        for n in 0..6 {
+            conversation.push(Message::user(format!("a message from another session {n}")));
+        }
+        conversation.compacted(2, "they asked about the first thing");
+        let compacted = texts(&conversation);
+        assert!(
+            compacted.len() > 9,
+            "the layout no longer fits the old position"
+        );
+
+        assert!(!conversation.forget_since(began));
+
+        assert_eq!(texts(&conversation), compacted);
+    }
+
     /// Integrity is the one thing here that must never come back better than it went in, and a
     /// file is the easiest place to make that mistake.
     #[test]
@@ -2617,14 +3053,19 @@ mod tests {
     /// A prompt and an answer, the filler between the parts of the skill tests.
     fn an_exchange(conversation: &mut Conversation, prompt: &str) {
         conversation.push(Message::user(prompt));
-        conversation.push(Message::assistant("ok"));
+        // Long enough that a carried skill's wrapper is not heavier than an exchange (COMPACT-5
+        // weighs bytes), and the same for every exchange so a count still says what a size would.
+        conversation.push(Message::assistant("ok ".repeat(200)));
     }
 
     /// A round in which the planner loaded `name` and was shown `body`, recorded as a turn records it.
     fn a_skill_load(conversation: &mut Conversation, id: &str, name: &str, body: &str) {
         let mut call = a_call("load_skill", &format!(r#"{{"name":"{name}"}}"#));
         call.id = id.to_string();
-        conversation.push(Message::assistant_calling("loading", vec![call]));
+        // As long as the wrapper a carried copy is sent in, so that what a cut gives up is not
+        // lighter than the skill it brings back (COMPACT-5 weighs bytes).
+        let reason = "loading the skill ".repeat(20);
+        conversation.push(Message::assistant_calling(reason, vec![call]));
         conversation.push_skill_result(
             Message::tool_result(id, format!("{TOOL_RESULT_PREFIX}load_skill:\n\n{body}")),
             name.to_string(),
@@ -2652,7 +3093,11 @@ mod tests {
             let mut call = a_call("read_file", r#"{"path":"src/main.rs"}"#);
             call.id = format!("r{round}");
             conversation.push(Message::assistant_calling("looking", vec![call]));
-            conversation.push(Message::tool_result(format!("r{round}"), "some lines"));
+            // Long enough that a carried skill is not heavier than a round (COMPACT-5 weighs bytes).
+            conversation.push(Message::tool_result(
+                format!("r{round}"),
+                "some lines ".repeat(30),
+            ));
         }
     }
 
@@ -3097,7 +3542,7 @@ mod tests {
             },
         );
         conversation.push(Message::assistant("done"));
-        for prompt in ["second", "third", "fourth"] {
+        for prompt in ["second", "third", "fourth", "fifth"] {
             an_exchange(&mut conversation, prompt);
         }
 

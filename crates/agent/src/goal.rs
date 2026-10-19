@@ -465,6 +465,20 @@ mod tests {
         assert_eq!(read(""), Verdict::Unreadable);
     }
 
+    /// The word has to be the whole first line. A reader that took a line beginning with one would
+    /// read `MET, mostly` as the condition holding and stop a session whose judge was hedging.
+    #[test]
+    fn a_first_line_that_only_begins_with_a_verdict_word_is_not_a_verdict() {
+        for answer in [
+            "MET, mostly\nthe tests pass on one platform",
+            "Metered work remains",
+            "NOT MET YET",
+            "IMPOSSIBLE?",
+        ] {
+            assert_eq!(read(answer), Verdict::Unreadable, "{answer:?}");
+        }
+    }
+
     /// A verdict with no reason after it is still a verdict. Only the first line decides, and a
     /// judge that answered `MET` and stopped has said everything that is needed.
     #[test]
@@ -496,6 +510,10 @@ mod tests {
         assert!(
             sent.contains("nothing above runs the tests"),
             "the reason did not travel with the work: {sent}"
+        );
+        assert!(
+            sent.contains("stopping condition") && sent.contains("has not been met"),
+            "nothing says a stopping condition has not been met: {sent}"
         );
     }
 

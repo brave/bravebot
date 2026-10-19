@@ -26,7 +26,7 @@ growing further. It keeps growing while a turn runs.
 | Escape | discard a half-typed prompt, keeping it for Up, or stop a running turn (with vi editing, from NORMAL mode) |
 | Ctrl-C | stop the nearest thing there is to stop, and leave when there is nothing left |
 | Up / Down | walk back through every prompt you have sent in any session, starting with a line you cleared |
-| Ctrl-N | on a prompt recalled with Up, walk only this session's prompts instead, and press it again to come back. It stays where you put it, and is not offered until this session has sent a prompt |
+| Ctrl-N | on a prompt recalled with Up, cycle between every prompt, this project's and this session's. It stays where you put it, and a scope with nothing in it is skipped |
 | Ctrl-R | search every prompt you have sent |
 | Tab | complete a slash command or an `@path` |
 | Ctrl-U, Ctrl-K, Ctrl-W, Alt-D | delete to the line start, to the line end, the word before, the word after; the text is kept |
@@ -86,7 +86,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 | `trail` | `ctrl-t` | show or hide the audit trail |
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](sessions.md#telling-sessions-apart) |
-| `scope` | `ctrl-n` | switch Up between every stored prompt and this session's |
+| `scope` | `ctrl-n` | cycle Up between every stored prompt, this project's and this session's |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, and the arrows walk the caret and the history.
@@ -237,8 +237,10 @@ with one byte or with two. Stopping a turn still answers the first press.
 
 **Stopping shows a cancelled status**, which is its own outcome rather than a failure or an answer.
 The reply stops arriving, and the prompt comes back to the box for editing when the box can take it:
-no work had followed it, nothing is queued behind it, and the box is empty. What still finishes is a
-tool call already running, because stopping one part way could leave a file half written.
+no work had followed it, nothing is queued behind it, and the box is empty. Where the model had
+not yet replied, it also comes out of what the model reads, so sending it again does not repeat it
+in every later request. What still finishes is a tool call already running, because stopping one
+part way could leave a file half written.
 
 Otherwise the prompt stays in the transcript, marked stopped. That is any of three cases: the turn had
 already done something visible, there are prompts waiting behind it, or the box is not empty. The
@@ -248,10 +250,11 @@ A cancelled prompt drops out of the history you walk back through even where its
 stays: see [Sessions](sessions.md).
 
 Escape and Ctrl-C reach an open mode before they reach anything else. A scroller, a delegate's view or
-a prompt search closes on that press, and the press that reaches the turn is the next one. A summary,
-an [aside](#watching-a-delegate-reading-a-command-and-asking-something-aside) and the check a goal is
-judged by are each a single request with no round for a stop to land between, so nothing stops those
-and Ctrl-C leaves once one comes back.
+a prompt search closes on that press, and the press that reaches the turn is the next one. Either key
+also stops a summary, an
+[aside](#watching-a-delegate-reading-a-command-and-asking-something-aside) or the check a goal is
+judged by: the request is dropped and the conversation stays as it was. Stopping a goal check takes
+the goal off too.
 
 ## Sending while a turn runs
 
@@ -290,12 +293,12 @@ the turn ends becomes a turn of its own.
 **A [slash command](../reference/commands.md) is never sent.** Most wait to be carried out: one
 comes off the box and is drawn under it like anything else waiting, but it is not offered to the turn
 in flight, so nothing about it reaches the planner. It runs when the queue is reached after the turn
-has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/status`, `/watch`, `/jobs`, `/panel`, `/copy`, `/loop`
+has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/status`, `/watch`, `/jobs`, `/panel`, `/copy`, `/export`, `/loop`
 and `/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
-that sets one, which wait. `/rename`, `/issue`, `/pr`, `/forget-trust`, `/theme <name>` and
-`/effort <level>` are too
-when nothing is waiting, and `/theme` and `/effort` alone wait. What they answer is drawn under the
-turn and joins the transcript after it, and nothing waiting moves. During a compaction, a `/btw` question, a `/manifest` run or a goal check,
+that sets one, which wait. `/rename`, `/note`, `/issue`, `/pr`, `/forget-trust`, `/model`, `/theme`, `/effort` and
+`/config` are too
+when nothing is waiting, and the four that open a list draw it over the turn. What they answer goes into the
+transcript as it is said, so it scrolls with the rest of the history, and nothing waiting moves. During a compaction, a `/btw` question, a `/manifest` run or a goal check,
 every command waits.
 
 **The turn in flight is the one on the screen.** Work handed out to a [delegate](#watching-a-delegate-reading-a-command-and-asking-something-aside)
@@ -387,7 +390,7 @@ box, newest at the bottom and seeded with whatever single line you had already t
 |---|---|
 | letters | narrow the list; every word you type has to match somewhere in the prompt |
 | Up / Down | walk the matches |
-| Ctrl-S | swap between every prompt and the ones sent from this workspace |
+| Ctrl-S | cycle between every prompt, the ones sent from this project and the ones this session sent |
 | Enter | put the prompt under the cursor into the box |
 | Escape, Ctrl-C, Backspace past the start | close the search and leave the box as it was |
 
@@ -413,7 +416,7 @@ search instead, already narrowed to this workspace, on the newest match with not
 Up says the prompt you want is an old one, and walking one at a time is no way to reach the hundredth,
 so this is the key that takes you off that path. The history is already holding that line, so putting it
 away would store a second copy of something stored. A line you put away earlier is still there
-afterwards, and one more press of the same key from inside the search widens it to every prompt.
+afterwards, and further presses of the same key from inside the search move on to this session's prompts and back to every prompt.
 
 The border of the box names this chord beside Ctrl-R while you are walking the history. Where the row
 will not hold both beside which prompt is being shown, they are given up one at a time, this one first.

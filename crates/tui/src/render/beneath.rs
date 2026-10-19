@@ -13,7 +13,7 @@ use crate::wrap;
 use super::{dim, head_of, printable, tail_of};
 
 /// How a command is written in the list: the word, and what follows it.
-fn command_word(command: &crate::app::Command) -> String {
+fn command_word(command: &crate::command_table::Command) -> String {
     if command.argument.is_empty() {
         command.name.to_string()
     } else {
@@ -231,11 +231,11 @@ pub(super) fn lines_beneath_the_box(
 /// visible rows instead would slide the descriptions sideways with each letter typed.
 fn slash_lines(
     session: &Session,
-    commands: &[crate::app::Command],
+    commands: &[crate::command_table::Command],
     skills: &[crate::skills::Skill],
     width: u16,
 ) -> Vec<Line<'static>> {
-    let column = crate::app::commands()
+    let column = crate::command_table::commands()
         .iter()
         .map(|command| command_word(command).chars().count())
         .chain(
@@ -314,18 +314,18 @@ fn slash_lines(
 ///
 /// Work that is not a turn, a compaction or an aside, holds every command back, whatever the table
 /// says of one typed during a turn.
-fn command_when(session: &Session, command: &crate::app::Command) -> &'static str {
-    use crate::app::MidTurn;
+fn command_when(session: &Session, command: &crate::command_table::Command) -> &'static str {
+    use crate::command_table::MidTurn;
     if !session.a_turn_is_running() {
         return t!(command_when_queued);
     }
     match command.mid_turn {
-        MidTurn::Runs if crate::app::waits_behind_the_queue(session, command.name) => {
+        MidTurn::Runs if crate::command_table::waits_behind_the_queue(session, command.name) => {
             t!(command_when_queued)
         }
         MidTurn::Runs => t!(command_when_now),
         MidTurn::Waits => t!(command_when_queued),
-        MidTurn::Changes | MidTurn::RunsWhenNamed | MidTurn::RunsUnlessItStarts => {
+        MidTurn::Changes | MidTurn::RunsUnlessItStarts | MidTurn::ChangesUnlessItAsks => {
             t!(command_when_either)
         }
     }
@@ -370,12 +370,12 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The ten the file can move are
-/// the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
+/// list names the key that answers rather than the key that used to. The eleven the file can move
+/// are the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
     bindings: &Keybindings,
-) -> [(String, &'static str); 25] {
+) -> [(String, &'static str); 26] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "letters as commands, then stop",
@@ -408,6 +408,7 @@ pub(super) fn shortcuts(
             bindings.scope_name(),
             "earlier prompts: this session or all",
         ),
+        (bindings.undo_name(), "undo the last edit"),
         ("drag".to_string(), "select, copy on release"),
     ]
 }

@@ -1030,7 +1030,7 @@ fn a_handshake_not_answered_within_its_bound_is_a_timeout_naming_the_request() {
 /// Called with `one_at_a_time` held, which is what keeps another test from writing to it.
 fn logged(level: bravebot_diag::Level, run: impl FnOnce()) -> String {
     let dir = tempfile::tempdir().expect("a scratch directory");
-    bravebot_diag::configure(level, Some(dir.path().join("logs")));
+    bravebot_diag::configure(level, Some(dir.path().to_path_buf()));
     run();
     bravebot_diag::configure(bravebot_diag::Level::Error, None);
     std::fs::read_dir(dir.path().join("logs"))

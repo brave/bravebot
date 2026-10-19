@@ -6,7 +6,8 @@
 
 use std::time::{Duration, Instant};
 
-/// How long after the last completed turn, with the terminal left, a recap is owed.
+/// How long after the last completed turn, with the terminal left, a recap is owed where the
+/// settings name no other time.
 pub const IDLE: Duration = Duration::from_secs(5 * 60);
 
 /// The fewest turns a session has to have had for a recap to be worth the request.
@@ -17,6 +18,8 @@ pub const FEWEST_TURNS: usize = 3;
 pub struct Away {
     /// Whether the settings leave the automatic recap on.
     enabled: bool,
+    /// How long after the last completed turn a recap is owed.
+    idle: Duration,
     /// Whether the terminal is believed to be in front of the person. True until it reports
     /// otherwise, so a terminal that reports no focus changes never recaps by itself.
     focused: bool,
@@ -30,6 +33,7 @@ impl Default for Away {
     fn default() -> Self {
         Self {
             enabled: true,
+            idle: IDLE,
             focused: true,
             last_turn_done: None,
             recapped_since: false,
@@ -41,6 +45,12 @@ impl Away {
     /// Take what the settings said. Only a real `false` turns it off.
     pub fn adopt(&mut self, setting: Option<bool>) {
         self.enabled = setting.unwrap_or(true);
+    }
+
+    /// Take the idle time the settings named, in seconds. Absence leaves the built-in [`IDLE`];
+    /// what counts as usable is `Settings::parse`'s rule alone.
+    pub fn adopt_idle(&mut self, seconds: Option<u64>) {
+        self.idle = seconds.map_or(IDLE, Duration::from_secs);
     }
 
     /// The terminal was left or came back to.
@@ -67,7 +77,7 @@ impl Away {
             && turns >= FEWEST_TURNS
             && self
                 .last_turn_done
-                .is_some_and(|done| now.saturating_duration_since(done) >= IDLE)
+                .is_some_and(|done| now.saturating_duration_since(done) >= self.idle)
     }
 }
 
@@ -125,6 +135,25 @@ mod tests {
         assert!(!away.due(now, FEWEST_TURNS));
         away.adopt(None);
         assert!(away.due(now, FEWEST_TURNS));
+    }
+
+    #[test]
+    fn a_recap_waits_for_the_idle_time_the_setting_names() {
+        let (mut away, now) = owed();
+        let start = now - IDLE;
+        away.adopt_idle(Some(IDLE.as_secs() * 2));
+        assert!(!away.due(now, FEWEST_TURNS), "the built-in time was used");
+        assert!(away.due(now + IDLE, FEWEST_TURNS));
+
+        away.adopt_idle(Some(60));
+        assert!(!away.due(start + Duration::from_secs(59), FEWEST_TURNS));
+        assert!(away.due(start + Duration::from_secs(60), FEWEST_TURNS));
+
+        {
+            away.adopt_idle(None);
+            assert!(!away.due(start + IDLE - Duration::from_secs(1), FEWEST_TURNS));
+            assert!(away.due(now, FEWEST_TURNS));
+        }
     }
 
     #[test]

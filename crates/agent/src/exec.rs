@@ -240,16 +240,6 @@ impl Ran {
         // most cases anyway; it is stated rather than relied on.
         self.stopped.is_none() && self.codes.iter().all(|code| *code == Some(0))
     }
-
-    /// The stages that did not succeed, as `1-indexed position, code`, for a short report.
-    pub fn failures(&self) -> Vec<(usize, Option<i32>)> {
-        self.codes
-            .iter()
-            .enumerate()
-            .filter(|(_, code)| **code != Some(0))
-            .map(|(index, code)| (index + 1, *code))
-            .collect()
-    }
 }
 
 /// What a run printed, as the one text a reader gets.

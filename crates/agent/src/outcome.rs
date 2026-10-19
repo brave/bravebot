@@ -72,6 +72,13 @@ pub struct Diagnosis {
     /// act on, and the number is what names the setting to raise. Absent for every other
     /// category, and absent where the ceiling is not known.
     pub ceiling: Option<u64>,
+    /// How long the service asked for the next request to wait, where it said.
+    ///
+    /// A bounded duration the network layer read out of a `Retry-After` header and kept as a
+    /// number, so it may be said back as a figure of this program's own wording and never as
+    /// anything the service wrote. Absent where no header parsed or the status was not a
+    /// rate limit.
+    pub retry_after: Option<std::time::Duration>,
 }
 
 impl Diagnosis {
@@ -82,6 +89,7 @@ impl Diagnosis {
             status: None,
             attempts: None,
             ceiling: None,
+            retry_after: None,
         }
     }
 
@@ -94,6 +102,12 @@ impl Diagnosis {
     /// The same, with the output ceiling that stopped the reply.
     pub fn at_ceiling(mut self, ceiling: u64) -> Self {
         self.ceiling = Some(ceiling);
+        self
+    }
+
+    /// The same, with the wait the service asked for.
+    pub fn asking_for_a_wait_of(mut self, wait: std::time::Duration) -> Self {
+        self.retry_after = Some(wait);
         self
     }
 

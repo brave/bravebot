@@ -12,7 +12,9 @@ use crate::state::{Delegate, Laid, Output, Session, Watched};
 use crate::theme;
 
 use super::transcript::{assistant_lines, draw_transcript};
-use super::{QUARANTINE_BAR, TURN_MARKER, dim, marked_rows, one_line};
+use super::{
+    QUARANTINE_BAR, TURN_MARKER, dim, head_of, highlight_selection, marked_rows, one_line,
+};
 
 /// Draw the delegate view: the list of them, or the one somebody opened.
 ///
@@ -43,9 +45,7 @@ pub(super) fn draw_watching(frame: &mut Frame, session: &Session) -> Laid {
     let laid = draw_transcript(frame, areas[1], session);
     draw_watching_footer(frame, areas[2], session);
 
-    if let Some(selection) = &session.selection {
-        crate::select::highlight(frame.buffer_mut(), selection);
-    }
+    highlight_selection(frame, session);
 
     laid
 }
@@ -131,14 +131,11 @@ fn draw_aside(
     // line would otherwise be clipped at the edge of the screen.
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     let total = paragraph.line_count(areas[1].width) as u16;
-    let max_offset = total.saturating_sub(areas[1].height);
-    let offset = max_offset.saturating_sub(session.scroll.min(max_offset));
+    let offset = offset_from_end(total, areas[1].height, session.scroll);
     frame.render_widget(paragraph.scroll((offset, 0)), areas[1]);
 
     draw_watching_footer(frame, areas[2], session);
-    if let Some(selection) = &session.selection {
-        crate::select::highlight(frame.buffer_mut(), selection);
-    }
+    highlight_selection(frame, session);
     Laid::default()
 }
 
@@ -235,15 +232,19 @@ fn draw_output(frame: &mut Frame, session: &Session, output: &Output) -> Laid {
     // Counted back from the end, the way the transcript is, so a view opened on a long log starts
     // at the last thing the command said and the same keys walk back through it.
     let total = lines.len() as u16;
-    let max_offset = total.saturating_sub(areas[1].height);
-    let offset = max_offset.saturating_sub(session.scroll.min(max_offset));
+    let offset = offset_from_end(total, areas[1].height, session.scroll);
     frame.render_widget(Paragraph::new(lines).scroll((offset, 0)), areas[1]);
 
     draw_watching_footer(frame, areas[2], session);
-    if let Some(selection) = &session.selection {
-        crate::select::highlight(frame.buffer_mut(), selection);
-    }
+    highlight_selection(frame, session);
     Laid::default()
+}
+
+/// The first row to draw so that the last of `total` rows lands on the bottom row of `height`,
+/// moved `scroll` rows back towards the start and never past it.
+fn offset_from_end(total: u16, height: u16, scroll: u16) -> u16 {
+    let max_offset = total.saturating_sub(height);
+    max_offset.saturating_sub(scroll.min(max_offset))
 }
 
 /// Which delegate this is, and what it was asked to do.
@@ -473,9 +474,7 @@ fn draw_delegate_list(frame: &mut Frame, session: &Session) -> Laid {
         layout[2],
     );
 
-    if let Some(selection) = &session.selection {
-        crate::select::highlight(frame.buffer_mut(), selection);
-    }
+    highlight_selection(frame, session);
 
     laid
 }
@@ -521,16 +520,8 @@ fn window_start(rows: usize, cursor: usize, visible: usize) -> usize {
 /// Drawn in the same columns as a delegate's row, and with no count, because it is a place to go
 /// rather than a run that has done any work.
 fn session_row(highlighted: bool, width: usize) -> Line<'static> {
-    let (mark_style, name_style, detail) = if highlighted {
-        let on_bar = Style::default().fg(theme::on_primary());
-        (on_bar, on_bar.add_modifier(Modifier::BOLD), on_bar)
-    } else {
-        (
-            Style::default().fg(theme::brand_primary()),
-            Style::default().fg(theme::text()),
-            dim(),
-        )
-    };
+    let (mark_style, name_style, detail) =
+        row_styles(highlighted, Style::default().fg(theme::brand_primary()));
 
     let name = t!(watching_list_session);
     let about = t!(watching_list_session_detail);
@@ -546,10 +537,7 @@ fn session_row(highlighted: bool, width: usize) -> Line<'static> {
         Span::styled(format!("{name:<NAME_COLUMN$}"), name_style),
         Span::styled(about, detail),
     ]);
-    match highlighted {
-        true => line.style(theme::picked_out()),
-        false => line,
-    }
+    picked(line, highlighted)
 }
 
 /// Wide enough for the longest kind and a two-digit number, so every task starts in one column
@@ -579,28 +567,14 @@ fn aside_row(
 
     let spent = 4 + NAME_COLUMN + STANDING_COLUMN + 4;
     let room = width.saturating_sub(spent);
-    let question = one_line(&aside.question);
-    let question = if question.chars().count() > room {
-        question
-            .chars()
-            .take(room.saturating_sub(1))
-            .collect::<String>()
-            + "…"
-    } else {
-        let padding = room.saturating_sub(question.chars().count());
-        question + &" ".repeat(padding)
-    };
+    let question = padded(&one_line(&aside.question), room);
 
-    let (mark_style, name_style, detail, standing_style) = if highlighted {
-        let on_bar = Style::default().fg(theme::on_primary());
-        (on_bar, on_bar.add_modifier(Modifier::BOLD), on_bar, on_bar)
+    let (mark_style, name_style, detail) =
+        row_styles(highlighted, Style::default().fg(theme::ok()));
+    let standing_style = if highlighted {
+        detail
     } else {
-        (
-            Style::default().fg(theme::ok()),
-            Style::default().fg(theme::text()),
-            dim(),
-            Style::default().fg(standing_colour),
-        )
+        Style::default().fg(standing_colour)
     };
 
     let line = Line::from(vec![
@@ -609,10 +583,7 @@ fn aside_row(
         Span::styled(format!("{question}  "), detail),
         Span::styled(format!("{standing:<STANDING_COLUMN$}"), standing_style),
     ]);
-    match highlighted {
-        true => line.style(theme::picked_out()),
-        false => line,
-    }
+    picked(line, highlighted)
 }
 
 /// One delegate on the list: how it is going, what it is, what it was asked, and how much it has
@@ -642,27 +613,9 @@ fn delegate_row(delegate: &Delegate, highlighted: bool, width: usize) -> Line<'s
     // counts line up down the right edge and read as a column.
     let spent = 4 + NAME_COLUMN + calls.chars().count() + 4;
     let room = width.saturating_sub(spent);
-    let task = one_line(&delegate.task);
-    let task = if task.chars().count() > room {
-        task.chars()
-            .take(room.saturating_sub(1))
-            .collect::<String>()
-            + "…"
-    } else {
-        let padding = room.saturating_sub(task.chars().count());
-        task + &" ".repeat(padding)
-    };
+    let task = padded(&one_line(&delegate.task), room);
 
-    let (mark_style, name_style, detail) = if highlighted {
-        let on_bar = Style::default().fg(theme::on_primary());
-        (on_bar, on_bar.add_modifier(Modifier::BOLD), on_bar)
-    } else {
-        (
-            Style::default().fg(colour),
-            Style::default().fg(theme::text()),
-            dim(),
-        )
-    };
+    let (mark_style, name_style, detail) = row_styles(highlighted, Style::default().fg(colour));
 
     let line = Line::from(vec![
         Span::styled(format!("  {mark} "), mark_style),
@@ -670,10 +623,7 @@ fn delegate_row(delegate: &Delegate, highlighted: bool, width: usize) -> Line<'s
         Span::styled(format!("{task}  "), detail),
         Span::styled(calls, detail),
     ]);
-    match highlighted {
-        true => line.style(theme::picked_out()),
-        false => line,
-    }
+    picked(line, highlighted)
 }
 
 /// How wide the word saying whether the planner read a command's output is drawn, so the counts
@@ -712,27 +662,13 @@ fn output_row(output: &Output, highlighted: bool, width: usize) -> Line<'static>
 
     let spent = 4 + NAME_COLUMN + STANDING_COLUMN + count.chars().count() + 6;
     let room = width.saturating_sub(spent);
-    let command = if command.chars().count() > room {
-        command
-            .chars()
-            .take(room.saturating_sub(1))
-            .collect::<String>()
-            + "…"
-    } else {
-        let padding = room.saturating_sub(command.chars().count());
-        command + &" ".repeat(padding)
-    };
+    let command = padded(&command, room);
 
-    let (mark_style, name_style, detail, standing_style) = if highlighted {
-        let on_bar = Style::default().fg(theme::on_primary());
-        (on_bar, on_bar.add_modifier(Modifier::BOLD), on_bar, on_bar)
+    let (mark_style, name_style, detail) = row_styles(highlighted, Style::default().fg(colour));
+    let standing_style = if highlighted {
+        detail
     } else {
-        (
-            Style::default().fg(colour),
-            Style::default().fg(theme::text()),
-            dim(),
-            Style::default().fg(standing_colour),
-        )
+        Style::default().fg(standing_colour)
     };
 
     let line = Line::from(vec![
@@ -742,6 +678,30 @@ fn output_row(output: &Output, highlighted: bool, width: usize) -> Line<'static>
         Span::styled(format!("{standing:<STANDING_COLUMN$}  "), standing_style),
         Span::styled(count, detail),
     ]);
+    picked(line, highlighted)
+}
+
+/// A column of a list row cut to `room` with an ellipsis, or padded to it with spaces, so the
+/// column after it starts at the same place on every row. With no room the ellipsis alone is
+/// drawn. `text` is one line already: [`head_of`] cuts whatever follows a line break as overflow.
+pub(super) fn padded(text: &str, room: usize) -> String {
+    let cut = head_of(text, room);
+    let padding = room.saturating_sub(cut.chars().count());
+    cut + &" ".repeat(padding)
+}
+
+/// The mark, name and detail styles of a list row, for the row that would open or any other.
+fn row_styles(highlighted: bool, plain_mark: Style) -> (Style, Style, Style) {
+    if highlighted {
+        let on_bar = Style::default().fg(theme::on_primary());
+        (on_bar, on_bar.add_modifier(Modifier::BOLD), on_bar)
+    } else {
+        (plain_mark, Style::default().fg(theme::text()), dim())
+    }
+}
+
+/// The row filled edge to edge where it is the one that would open.
+fn picked(line: Line<'static>, highlighted: bool) -> Line<'static> {
     match highlighted {
         true => line.style(theme::picked_out()),
         false => line,

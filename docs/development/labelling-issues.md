@@ -1,10 +1,11 @@
 # Filing an issue
 
-A session files an issue through the [issue-poster](../../agents/agents/issue-poster.md) definition,
-which holds the procedure: search the backlog, apply the labels below, assign, post, and read the
-issue back. This page holds what the labels mean, and the definition links here rather than copying
-it. `make check-spec` fails when the definition writes a label this page does not describe, and when
-a skill that files an issue does not name it.
+The [issue-poster](../../agents/agents/issue-poster.md) definition is the only thing that files an
+issue from a session or a skill. It holds the procedure: search the backlog, apply the labels below,
+assign, post, and read the issue back. A skill hands each draft to it, and no script under
+`agents/skills` runs `gh issue create`. This page holds what the labels mean, and the definition
+links here rather than copying it. `make check-spec` fails when the definition writes a label this
+page does not describe, and when a file under `agents/skills` files an issue itself.
 
 ## The title
 
@@ -54,10 +55,10 @@ already editing the issue for another reason.
 ## The kind, and the three axes
 
 The kind labels say what an issue **is**: `bug`, `security`, `spec-mismatch`, `spec-coverage`,
-`spec-bug`, `parity`, `beyond-parity`, `enhancement`, `maintenance`. The three axes say what to **do** about it, and every open
+`spec-bug`, `parity`, `beyond-parity`, `enhancement`, `refactor`. The three axes say what to **do** about it, and every open
 issue carries one value from each: an `importance`, an `urgency`, and a `size`.
 
-`maintenance` is code to delete, share or split where what the program does stays the same: an
+`refactor` is code to delete, share or split where what the program does stays the same: an
 item nothing uses, two copies of one block, a file too long to work on. Where the cleanup turns up
 something that does not work, the issue is a `bug` instead.
 
@@ -178,13 +179,13 @@ another coding agent's published advisory finds here, applies the same set, exce
 `security`, `needs-security-review` and `severity` go only on a finding about the guarantee.
 
 Every issue the peer-advisories skill files also carries `release-blocking`, described in
-[the next section](#release-blocking-and-blocked). The skill refuses to post while that label does
+[the next section](#release-blocking-and-blocked). The poster refuses to post while that label does
 not exist.
 
 The [peer-features skill](../../agents/skills/peer-features/SKILL.md), which files what other
 coding agents document that bravebot lacks or could do measurably better, applies a kind, an `area`
 and no axis. A missing capability is `parity`. A change that makes an existing capability about 10%
-better than the best other tool is `enhancement` with `beyond-parity`. The skill refuses to post
+better than the best other tool is `enhancement` with `beyond-parity`. The poster refuses to post
 while `beyond-parity` does not exist, because a person creates labels:
 
 ```bash
@@ -192,12 +193,22 @@ gh label create beyond-parity --repo brave/bravebot --color 0E8A16 \
   --description "Better than what comparable tools offer, by a concrete margin"
 ```
 
-The [maintenance skill](../../agents/skills/maintenance/SKILL.md), which files dead code,
-duplication and files or functions past a length, applies `maintenance`, or `bug` where a reviewer
-found a defect, an `area` or `infrastructure` where one is clear, and no axis. It assigns every
-issue to netzenbot. The skill refuses to post while `maintenance` does not exist:
+The [session-review skill](../../agents/skills/session-review/SKILL.md), which files the problems
+bravebot gave a person in a recorded session, applies `bug` or `enhancement`, `session-analysis`, an
+`area` where one is clear, and no axis. `session-analysis` marks an issue found by reading a recorded
+session, and `is:open label:session-analysis` lists them. It files defects in the product only, and
+leaves out defects in this repository's skills, scripts, `Makefile`, `contrib/` and CI workflows. It
+never files a problem that touches the guarantee: it prints that to the person running it. An issue
+it files carries no text from the session. The poster refuses to post while `session-analysis` does
+not exist, because a person creates labels:
 
 ```bash
-gh label create maintenance --repo brave/bravebot --color C5DEF5 \
-  --description "Dead code, duplication or structure to clean up; behaviour does not change"
+gh label create session-analysis --repo brave/bravebot --color 8cad49 \
+  --description "Found by reading a recorded bravebot session"
 ```
+
+The [maintenance skill](../../agents/skills/maintenance/SKILL.md), which files dead code,
+duplication and files or functions past a length, applies the existing `refactor` label, or `bug`
+where a reviewer found a defect, an `area` or `infrastructure` where one is clear, and no axis.
+It assigns every issue to netzenbot. If a required label is missing, the poster refuses and prints
+a creation command for a person. Do not create or use a `maintenance` label for these findings.

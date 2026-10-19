@@ -13,9 +13,18 @@ of.
 """
 
 import argparse
+import importlib.util
 import json
 import sys
 from pathlib import Path
+
+_shared = importlib.util.spec_from_file_location(
+    "work_dir", Path(__file__).resolve().parents[2] / "work_dir.py"
+)
+workdir = importlib.util.module_from_spec(_shared)
+_shared.loader.exec_module(workdir)
+
+read_manifest = workdir.read_manifest
 
 ERROR = "error"
 WARNING = "warning"
@@ -156,11 +165,9 @@ def main():
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    manifest_path = Path(args.work_dir) / "manifest.json"
-    if not manifest_path.exists():
-        print(f"no manifest at {manifest_path}", file=sys.stderr)
+    manifest = read_manifest(args.work_dir)
+    if manifest is None:
         return 2
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     mechanical = list(manifest.get("mechanical_findings", []))
     findings, dropped, unclear, missing = load_verdicts(manifest)

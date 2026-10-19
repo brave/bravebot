@@ -332,7 +332,7 @@ pub struct BedrockClient<'a> {
     recalled: Refusals,
     /// How long to wait before the first retry. Doubled for each retry after that.
     ///
-    /// [`BACKOFF`] unless overridden by [`Self::with_backoff`].
+    /// [`BACKOFF`] unless a test shortens it.
     backoff: Duration,
 }
 
@@ -384,6 +384,7 @@ impl<'a> BedrockClient<'a> {
     /// Wait this long before the first retry instead of [`BACKOFF`]. Later retries still double it.
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
+    #[cfg(test)]
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
         self.backoff = backoff;
         self
@@ -1485,6 +1486,7 @@ mod tests {
         BedrockError::Egress(EgressError::Status {
             url: "https://bedrock-runtime.us-west-2.amazonaws.com/model/x/converse".to_string(),
             status,
+            retry_after: None,
         })
     }
 
@@ -1511,6 +1513,7 @@ mod tests {
             let error = BedrockError::Egress(EgressError::Status {
                 url: "https://bedrock-runtime.us-west-2.amazonaws.com/model/x/converse".to_string(),
                 status,
+                retry_after: None,
             });
             assert!(error.is_credential_refused(), "{status} was not recognised");
             let said = error.to_string();
@@ -1528,6 +1531,7 @@ mod tests {
             let error = BedrockError::Egress(EgressError::Status {
                 url: "https://bedrock-runtime.us-west-2.amazonaws.com/model/x/invoke".to_string(),
                 status,
+                retry_after: None,
             });
             assert!(
                 !error.is_credential_refused(),
@@ -3133,7 +3137,7 @@ mod tests {
         };
         let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("a scratch directory");
-        bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().join("logs")));
+        bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().to_path_buf()));
         for (streaming, base_ms) in [(false, 7), (true, 11)] {
             let config = config();
             let egress = Egress::new();

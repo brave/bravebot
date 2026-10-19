@@ -207,6 +207,40 @@ fn a_dropped_picture_and_pdf_reach_the_model_before_a_pasted_picture() {
     );
 }
 
+/// DROP-10: `dropped` is the list of text, so a picture named in it fails the turn rather than
+/// reaching the model as bytes. A turn that went on without the file would answer without what it
+/// was asked about and report success.
+#[test]
+fn a_picture_named_in_the_text_list_fails_the_turn_and_is_not_sent() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("picture-as-text");
+    let outside = elsewhere("picture-as-text");
+    let shot = outside.join("Shot.png");
+    std::fs::write(&shot, b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR").unwrap();
+    let (config, requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+
+    let failed = window.turn(&session, "describe this", json!({"dropped": [shot]}));
+
+    assert_eq!(failed.name, "turn.error", "{:?}", failed.data);
+    assert_eq!(failed.data["category"], "workspace", "{:?}", failed.data);
+    assert!(
+        requests.try_recv().is_err(),
+        "a request reached the model although the dropped file could not be read"
+    );
+
+    let done = window.turn(&session, "carry on", json!({}));
+    server.join().unwrap();
+    assert_eq!(done.name, "turn.done", "{:?}", done.data);
+    let sent = requests.recv().unwrap();
+    assert!(
+        !sent.contains("image_url") && !sent.contains("data:image/png"),
+        "the picture reached the model in a later request: {sent}"
+    );
+}
+
 /// PASTE-9: a pasted picture is written into the session record, so a turn sent after the session
 /// is opened again still carries it in the conversation.
 #[test]
@@ -326,6 +360,17 @@ fn a_picture_the_bridge_cannot_carry_refuses_the_send() {
             json!({"attachments": inside}),
         ),
     ];
+    // The note a window shows for a dropped file that grew past the cap after it was staged.
+    let grown = window
+        .dispatch(
+            "turn.send",
+            json!({"session": session, "prompt": "look", "attachments": [heavy]}),
+        )
+        .unwrap_err();
+    assert_eq!(
+        grown.message,
+        "heavy.pdf is 8.0 MB, and an attachment carries at most 8.0 MB"
+    );
     for (case, extra) in refused {
         let mut params = json!({"session": session, "prompt": "look"});
         for (key, value) in extra.as_object().unwrap() {
@@ -354,4 +399,86 @@ fn a_picture_the_bridge_cannot_carry_refuses_the_send() {
     assert_eq!(done.name, "turn.done", "{:?}", done.data);
     let message = user_message(&requests.recv().unwrap(), "look");
     assert_eq!(pictures(&message), [data_url("image/png", b"picture")]);
+}
+
+/// The window stages a drop by what the bridge says each file is, so a dropped file gets the
+/// marker the terminal would give it, and a picture or PDF over the agent's cap is left out with
+/// the note the bridge built (DROP-12). Text has no cap. Names only: none of these paths exists.
+#[test]
+fn a_dropped_file_is_classified_by_the_terminals_rules() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("classify");
+    let mut window = Window::with_settings(project.join("no-settings.json"));
+    let cap = bravebot_agent::workspace::MAX_ATTACHMENT_BYTES as u64;
+    assert_eq!(cap, 8 * 1024 * 1024);
+    let file = |path: &str, bytes: u64| json!({"path": path, "bytes": bytes});
+    let answer = window.call(
+        "drops.classify",
+        json!({"files": [
+            file("/a/SHOT.PNG", cap),
+            file("/a/scan.pdf", 1),
+            file("/a/notes.md", cap * 4),
+            file("/a/Makefile", 0),
+            file("/a/app.dmg", cap * 4),
+            file("/a/.png", 1),
+            file("/a/big.jpg", cap + 1),
+            file("/a/huge.pdf", cap + cap / 8),
+        ]}),
+    );
+    assert_eq!(
+        answer,
+        json!({"files": [
+            {"kind": "image", "noun": "Image"},
+            {"kind": "pdf", "noun": "PDF"},
+            {"kind": "text", "noun": "File"},
+            {"kind": "text", "noun": "File"},
+            null,
+            null,
+            {"note": "big.jpg is 8.0 MB, and an attachment carries at most 8.0 MB"},
+            {"note": "huge.pdf is 9.0 MB, and an attachment carries at most 8.0 MB"},
+        ]})
+    );
+    for params in [
+        json!({}),
+        json!({"files": "/a/shot.png"}),
+        json!({"files": ["/a/shot.png"]}),
+        json!({"files": [{"path": "/a/shot.png"}]}),
+        json!({"files": [{"path": "/a/shot.png", "bytes": -1}]}),
+        json!({"paths": ["/a/shot.png"]}),
+    ] {
+        let refused = window.dispatch("drops.classify", params).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest);
+    }
+}
+
+/// The window asks the bridge about each pasted picture's size, so the cap, the type it names a
+/// picture by, the marker's noun and the note for one too large are the bridge's, and the window
+/// holds none of its own (PASTE-11). The note is the terminal's.
+#[test]
+fn a_window_asks_the_bridge_whether_a_paste_fits_and_is_told_the_terminals_note() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("paste-check");
+    let mut window = Window::with_settings(project.join("no-settings.json"));
+    let cap = bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES as u64;
+    assert_eq!(cap, 10 * 1024 * 1024);
+    let fits = window.call("pastes.check", json!({"bytes": cap}));
+    assert_eq!(fits["ok"], true);
+    let media = fits["media"].as_str().unwrap();
+    assert!(
+        bravebot_agent::turn::PASTED_IMAGE_MEDIA.contains(&media),
+        "{media} is not a type turn.send takes"
+    );
+    assert_eq!(fits["noun"], "Image");
+    assert_eq!(
+        window.call("pastes.check", json!({"bytes": cap * 2})),
+        json!({"ok": false, "note": "that picture is 20.0 MB, and a paste carries at most 10.0 MB"})
+    );
+    for params in [json!({}), json!({"bytes": "big"}), json!({"bytes": -1})] {
+        let refused = window.dispatch("pastes.check", params).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest);
+    }
 }

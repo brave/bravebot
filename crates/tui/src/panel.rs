@@ -7,6 +7,7 @@
 
 use crate::state::Session;
 use crate::theme;
+use bravebot_aichat::protocol::Cached;
 use bravebot_i18n::t;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -399,23 +400,28 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>) {
     if let Some(rate) = crate::render::cache_hit_rate(session) {
         context.push(row(rate, dim()));
     }
-    if let Some(cached) = session.cached() {
-        context.push(row(
-            t!(
-                panel_cache_read,
-                tokens = crate::status::tokens(cached.read_tokens)
-            )
-            .to_string(),
-            dim(),
-        ));
-        context.push(row(
-            t!(
-                panel_cache_written,
-                tokens = crate::status::tokens(cached.written_tokens)
-            )
-            .to_string(),
-            dim(),
-        ));
+    // A zero is a service that reported nothing as much as a cache that missed, so it draws nothing.
+    if let Some(cached) = session.cached().filter(Cached::any) {
+        if cached.read_tokens > 0 {
+            context.push(row(
+                t!(
+                    panel_cache_read,
+                    tokens = crate::status::tokens(cached.read_tokens)
+                )
+                .to_string(),
+                dim(),
+            ));
+        }
+        if cached.written_tokens > 0 {
+            context.push(row(
+                t!(
+                    panel_cache_written,
+                    tokens = crate::status::tokens(cached.written_tokens)
+                )
+                .to_string(),
+                dim(),
+            ));
+        }
     }
     section(&mut body, t!(panel_context).to_string(), context);
     (body, links)
@@ -446,7 +452,9 @@ fn plan_rows(plan: &[bravebot_core::todo::Row], width: usize, room: usize) -> Ve
     let mut lines: Vec<Line<'static>> = plan[start..start + shown]
         .iter()
         .map(|task| {
-            let (marker, text) = if task.struck() {
+            let (marker, text) = if task.status == bravebot_core::todo::Status::Cancelled {
+                (dim(), dim().add_modifier(Modifier::CROSSED_OUT))
+            } else if task.struck() {
                 (
                     Style::default().fg(theme::ok()),
                     dim().add_modifier(Modifier::CROSSED_OUT),
@@ -901,6 +909,68 @@ mod tests {
                 .any(|row| row.contains(&t!(panel_cache_read, tokens = "").to_string())),
             "a cache figure was drawn before any turn reported one: {none:#?}"
         );
+    }
+
+    fn cache_row_count(session: &Session) -> usize {
+        texts(&lines(session, WIDTH, 30))
+            .iter()
+            .filter(|row| {
+                row.contains(&t!(panel_cache_read, tokens = "").to_string())
+                    || row.contains(&t!(panel_cache_written, tokens = "").to_string())
+            })
+            .count()
+    }
+
+    /// A zero says a service that reported nothing exactly as much as it says a missed cache, so
+    /// it draws nothing, and a write-only turn draws the write alone.
+    #[test]
+    fn a_zero_cache_figure_is_not_drawn() {
+        let mut session = Session::new("none");
+        session.served_from_cache(Cached::default(), 20_000);
+        assert_eq!(cache_row_count(&session), 0);
+
+        session.served_from_cache(
+            Cached {
+                read_tokens: 0,
+                written_tokens: 3_000,
+            },
+            20_000,
+        );
+        let rows = texts(&lines(&session, WIDTH, 30));
+        let written = t!(panel_cache_written, tokens = crate::status::tokens(3_000)).to_string();
+        assert!(rows.iter().any(|row| row.contains(&written)), "{rows:#?}");
+        assert_eq!(cache_row_count(&session), 1, "{rows:#?}");
+    }
+
+    /// A turn stopped or failed before any request completed has reported nothing, so it neither
+    /// draws figures in a session that has none nor leaves the ones an earlier turn had (BACKEND-31).
+    #[test]
+    fn a_turn_ended_before_any_request_reports_no_cache_figures() {
+        let figures = Cached {
+            read_tokens: 12_000,
+            written_tokens: 3_000,
+        };
+        let ending = || bravebot_agent::Ending::Stopped { attempts: None };
+        for fail in [false, true] {
+            let end = |session: &mut Session| {
+                if fail {
+                    session.fail("boom", ending());
+                } else {
+                    session.stopped(None);
+                }
+            };
+            let mut fresh = Session::new("none");
+            end(&mut fresh);
+            assert_eq!(fresh.cached(), None, "fail: {fail}");
+            assert_eq!(fresh.cached_prompt_tokens(), None, "fail: {fail}");
+
+            let mut earlier = Session::new("none");
+            earlier.served_from_cache(figures, 20_000);
+            end(&mut earlier);
+            assert_eq!(earlier.cached(), None, "fail: {fail}");
+            assert_eq!(earlier.cached_prompt_tokens(), None, "fail: {fail}");
+            assert_eq!(cache_row_count(&earlier), 0, "fail: {fail}");
+        }
     }
 
     /// A loop spends while nobody is watching, and the panel can be closed or the terminal too
@@ -1724,6 +1794,105 @@ mod tests {
         assert!(
             !cleared.contains(&t!(panel_plan).to_string()),
             "/clear left a plan: {cleared:#?}"
+        );
+    }
+
+    /// The session record cannot tell a turn that emptied its list from one that kept none, so a
+    /// report with no rows must leave the plan as the report before it in the turn set it, not
+    /// fall back to an earlier turn's plan or to nothing.
+    #[test]
+    fn an_empty_report_after_one_with_rows_keeps_that_plan() {
+        let shown = |session: &Session| texts(&lines(session, WIDTH, 30));
+        let mut session = working_on(plan(&[("Earlier turn", Status::Done)]));
+        session.complete("done", Vec::new(), 0);
+
+        session.type_char('b');
+        session.submit();
+        session.set_todos(plan(&[("Later turn", Status::Active)]));
+        session.set_todos(Vec::new());
+        let during = shown(&session);
+        assert!(
+            during.iter().any(|row| row.ends_with("Later turn"))
+                && !during.iter().any(|row| row.ends_with("Earlier turn")),
+            "the empty report changed the plan mid-turn: {during:#?}"
+        );
+
+        session.complete("done", Vec::new(), 0);
+        let after = shown(&session);
+        assert!(
+            after.iter().any(|row| row.ends_with("Later turn"))
+                && !after.iter().any(|row| row.ends_with("Earlier turn")),
+            "the plan fell back once the turn ended: {after:#?}"
+        );
+
+        let mut first = working_on(plan(&[("Only plan", Status::Active)]));
+        first.set_todos(Vec::new());
+        first.complete("done", Vec::new(), 0);
+        assert!(
+            shown(&first).iter().any(|row| row.ends_with("Only plan")),
+            "the plan went when its turn was the first"
+        );
+    }
+
+    /// TODO-3 in the panel, which draws the plan a second time and from its own branch. The
+    /// transcript test beside this one draws neither, so without this the panel could show a
+    /// cancelled task with the finished tick and nothing would fail.
+    ///
+    /// Asserted against a done row in the same plan rather than against a colour named here: what
+    /// matters is that the two are told apart, and pinning the literal colour would fail on a
+    /// theme change that kept them distinct.
+    #[test]
+    fn a_cancelled_task_in_the_panel_is_struck_and_marked_apart_from_a_done_one() {
+        let drawn = lines(
+            &working_on(plan(&[
+                ("finished it", Status::Done),
+                ("dropped it", Status::Cancelled),
+                ("still to do", Status::Pending),
+            ])),
+            WIDTH,
+            14,
+        );
+        let row_for = |needle: &str| -> Line<'static> {
+            drawn
+                .iter()
+                .find(|line| line.to_string().contains(needle))
+                .unwrap_or_else(|| panic!("no panel row holds {needle}: {:#?}", texts(&drawn)))
+                .clone()
+        };
+
+        let done = row_for("finished it");
+        let cancelled = row_for("dropped it");
+        let pending = row_for("still to do");
+
+        // Struck through, as a done row is: the task is over either way.
+        for (name, line) in [("done", &done), ("cancelled", &cancelled)] {
+            assert!(
+                line.spans[1]
+                    .style
+                    .add_modifier
+                    .contains(Modifier::CROSSED_OUT),
+                "the {name} row's text is not struck through: {:?}",
+                line.spans[1].style
+            );
+        }
+        assert!(
+            !pending.spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::CROSSED_OUT),
+            "a task still to do was struck through: {:?}",
+            pending.spans[1].style
+        );
+
+        // And told apart at the marker, which is the whole point: a cancelled task is not a win.
+        assert_ne!(
+            cancelled.spans[0].style.fg, done.spans[0].style.fg,
+            "a cancelled task's marker is the same colour as a finished one's, so a dropped step \
+             reads as a completed one"
+        );
+        assert_ne!(
+            cancelled.spans[0].content, done.spans[0].content,
+            "a cancelled task carries the finished marker"
         );
     }
 

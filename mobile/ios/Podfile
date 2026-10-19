@@ -1,0 +1,2 @@
+# This app builds with Swift Package Manager. CocoaPods is not used and `pod install` must not be run.
+# The React Native CLI locates the iOS project through this file, so it stays, empty of dependencies.

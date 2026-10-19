@@ -264,6 +264,13 @@ pub struct RunRequest {
     /// without one. [`RunRequest::confined`] is `None` for such a line, since its stages start
     /// with no profile.
     pub unconfined: bool,
+    /// The keys the prompt may offer the person to choose between for the owner a `git` push of
+    /// this line leaves to ssh, where it may offer them (SANDBOX-16).
+    ///
+    /// `Some` exactly where the digits are bound: a confined line whose one unchosen owner ssh
+    /// could offer two or more keys, in a session that may write the answer down. The acting layer
+    /// reads the answer against this list and not against what was drawn.
+    pub key_choice: Option<Box<KeyChoice>>,
 }
 
 /// What a confined `run` is held to, in the words a prompt needs.
@@ -293,6 +300,10 @@ pub struct Confined {
     pub requested_reaches: Vec<(String, bravebot_sandbox::scope::Reach)>,
     /// What a stage carries beyond them, in step order. A stage that carries nothing is absent.
     pub carried: Vec<Carried>,
+    /// Whether a stage whose program is not git may write a repository's hooks and configuration,
+    /// which is so on a platform whose backend holds no `.git` back for a stage that writes more
+    /// than the temporary directory (SANDBOX-18).
+    pub writes_git_directories: bool,
 }
 
 /// What one ambient authority is, in the words a person reads.
@@ -324,13 +335,51 @@ pub struct Carried {
     /// What the person's environment moves that scope to, beyond its fixed rows, each named with
     /// the variable it came from.
     pub reaches: Vec<bravebot_sandbox::scope::Reach>,
-    /// The public key the person's `git.identities` chose for the owner the argv's ssh address
-    /// names, which ssh offers the host first.
-    pub identity: Option<std::path::PathBuf>,
+    /// What decides the key ssh offers the host for the owner the argv's ssh address names, where
+    /// the person decided it.
+    pub identity: Option<Offered>,
     /// Whether the stage keeps the network a closed session took from the others.
     pub network: bool,
     /// What a person attached to this command with `/reach`, each with the day it was allowed.
     pub remembered: Vec<Remembered>,
+}
+
+/// Who decided which key a `git` stage has ssh offer first (SANDBOX-16).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Offered {
+    /// The public key the person's `git.identities` names for the owner.
+    Configured(std::path::PathBuf),
+    /// What the person chose for the owner at an earlier run prompt: a key, or leaving it to ssh.
+    Chosen(crate::reach::ChosenKey),
+}
+
+/// The keys a run prompt offers the person to choose between for the one owner a line's `git`
+/// push leaves to ssh (SANDBOX-16).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyChoice {
+    /// The host and owner its argv's ssh address names.
+    pub address: bravebot_sandbox::scope::Address,
+    /// The public key files on offer, numbered from 1 in this order.
+    pub candidates: Vec<std::path::PathBuf>,
+    /// Where the answer is written, which the prompt shows for the reason
+    /// [`RunRequest::record`] carries a path.
+    pub record: std::path::PathBuf,
+}
+
+impl KeyChoice {
+    /// The host and owner as a `git.identities` entry names them.
+    pub fn owner(&self) -> String {
+        self.address.entry_name()
+    }
+}
+
+/// Which key the person chose at a run prompt that offered a [`KeyChoice`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyAnswer {
+    /// The candidate at this place in [`KeyChoice::candidates`], counted from 0.
+    Candidate(usize),
+    /// Leave the key to ssh, which offers the agent's keys in order.
+    SshDefault,
 }
 
 /// One reach a person remembered for a command, as the plan that carries it says so.
@@ -364,9 +413,11 @@ impl Confined {
 
     /// The sentence that introduces the directories, for a front end to draw above them.
     pub fn heading(&self) -> String {
-        match self.reads_the_machine {
-            true => t!(run_confined_machine).to_string(),
-            false => t!(run_confined).to_string(),
+        match (self.reads_the_machine, self.writes_git_directories) {
+            (true, false) => t!(run_confined_machine).to_string(),
+            (true, true) => t!(run_confined_machine_git).to_string(),
+            (false, false) => t!(run_confined).to_string(),
+            (false, true) => t!(run_confined_git).to_string(),
         }
     }
 
@@ -393,6 +444,9 @@ impl Confined {
             let sentence = match request {
                 Requested::Loopback => {
                     t!(run_carries_loopback, program = program.as_str()).to_string()
+                }
+                Requested::SshKey => {
+                    t!(run_carries_ssh_key, program = program.as_str()).to_string()
                 }
                 Requested::Scope(scope) => self.scope_sentence(*scope, program),
                 Requested::Toolchain(toolchain) => t!(
@@ -444,15 +498,33 @@ impl Confined {
                     .to_string(),
                 );
             }
-            if let Some(key) = &stage.identity {
-                sentences.push(
+            match &stage.identity {
+                Some(Offered::Configured(key)) => sentences.push(
                     t!(
                         run_carries_identity,
                         program = program,
                         path = key.display().to_string()
                     )
                     .to_string(),
-                );
+                ),
+                Some(Offered::Chosen(chosen)) => sentences.push(match &chosen.key {
+                    Some(key) => t!(
+                        run_carries_identity_chosen,
+                        program = program,
+                        path = key.display().to_string(),
+                        owner = chosen.owner(),
+                        date = chosen.allowed.as_str()
+                    )
+                    .to_string(),
+                    None => t!(
+                        run_carries_identity_chosen_default,
+                        program = program,
+                        owner = chosen.owner(),
+                        date = chosen.allowed.as_str()
+                    )
+                    .to_string(),
+                }),
+                None => {}
             }
             for remembered in &stage.remembered {
                 let date = remembered.allowed.as_str();
@@ -511,6 +583,7 @@ impl RunRequest {
             confined: None,
             reach_record: None,
             unconfined: false,
+            key_choice: None,
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),
@@ -660,6 +733,7 @@ impl RunRequest {
                         bravebot_sandbox::scope::Scope::Signing
                     )
                     | bravebot_sandbox::scope::Requested::Loopback
+                    | bravebot_sandbox::scope::Requested::SshKey
             ) && !names.contains(&request.name())
             {
                 names.push(request.name());
@@ -683,6 +757,18 @@ impl RunRequest {
     /// Whether the prompt may offer to remember the requested reach.
     pub fn offers_to_keep_reach(&self) -> bool {
         !self.kept_reach_shapes().is_empty()
+    }
+
+    /// The answer a digit pressed at the prompt gives, or `None` for a digit it does not offer:
+    /// `0` leaves the key to ssh, and `1` up to the number of keys on offer chooses that key.
+    pub fn key_answer_for(&self, digit: u32) -> Option<KeyAnswer> {
+        let choice = self.key_choice.as_ref()?;
+        let at = usize::try_from(digit).ok()?;
+        match at {
+            0 => Some(KeyAnswer::SshDefault),
+            _ if at <= choice.candidates.len() => Some(KeyAnswer::Candidate(at - 1)),
+            _ => None,
+        }
     }
 
     /// Whether the prompt may offer to record this answer past the session.
@@ -753,6 +839,8 @@ pub struct OutputRequest {
     pub command: String,
     /// What it printed, in full.
     pub output: String,
+    /// The label it was released under, in the same short form the trail uses (LABEL-10).
+    pub label: String,
     /// How many lines that is, counted before the bytes were released.
     ///
     /// Carried rather than counted here, for the reason [`WriteRequest::diff`] is carried: this
@@ -768,6 +856,9 @@ pub struct OutputRequest {
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
     pub reason: Option<String>,
+    /// The label the check's sentence was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` where there is no sentence.
+    pub reason_label: Option<String>,
 }
 
 impl OutputRequest {
@@ -803,6 +894,10 @@ pub struct VetRequest {
     pub expects: String,
     /// The content, in full. Empty for a picture, which is shown as a file to open instead.
     pub content: String,
+    /// The label the content was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` for a picture, which is opened in the person's own viewer and has no
+    /// text to carry it beside.
+    pub label: Option<String>,
     /// How many lines that is, counted before the bytes were released, as
     /// [`OutputRequest::lines`] is.
     pub lines: usize,
@@ -810,6 +905,9 @@ pub struct VetRequest {
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
     pub reason: Option<String>,
+    /// The label the check's sentence was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` where there is no sentence.
+    pub reason_label: Option<String>,
     /// Where the slot holds a picture or a PDF, the copy of it the person is asked to open.
     ///
     /// `None` for text, and for a picture on a run bypassing permissions, where the mode answers
@@ -972,6 +1070,9 @@ pub struct VouchRequest {
     /// whatever it says has to be true of all of them. What a file holds decides how it is
     /// previewed and never whether it is asked about.
     pub preview: String,
+    /// The label the preview was released under, in the same short form the trail uses
+    /// (LABEL-10).
+    pub label: String,
     /// Whether the preview is only part of the file.
     pub truncated: bool,
     /// What a check said about the whole file, or that it did not complete.
@@ -983,6 +1084,9 @@ pub struct VouchRequest {
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
     pub reason: Option<String>,
+    /// The label the check's sentence was released under, in the same short form the trail uses
+    /// (LABEL-10). `None` where there is no sentence.
+    pub reason_label: Option<String>,
 }
 
 /// A file the planner has asked to read that holds something the scan took for a credential.
@@ -1059,8 +1163,8 @@ pub struct ToolListRequest {
     pub tools: Vec<ListedTool>,
     /// How many tools the server listed that are not drawn, because this client refused them.
     pub refused: usize,
-    /// Whether a list for this declaration was vouched for before and this one is not it.
-    pub changed: bool,
+    /// How many tools were withheld by the server's allow or deny list.
+    pub withheld: usize,
     /// What a check said about the list, or that none was made.
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
@@ -1149,6 +1253,32 @@ pub struct HostRequest {
     pub hosts: Vec<String>,
 }
 
+/// A message the planner wants to send to another background session (MSG-3).
+///
+/// The name, the state and the directory are the roster's, read when the call was made. The text is
+/// the planner's whole message, and the label is the one it will be sent under, assigned by the
+/// policy layer from what the planner's context held. A person who answers yes is approving the
+/// session named, and the words as drawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageRequest {
+    pub name: String,
+    pub state: String,
+    pub directory: String,
+    pub text: String,
+    pub label: bravebot_core::label::Label,
+}
+
+/// What the person decided about a message (MSG-3, MSG-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageDecision {
+    /// Send this one.
+    Once,
+    /// Send this one and the later ones to this session until the turn ends.
+    ForTheTurn,
+    /// Send nothing. Also what nobody being there to ask comes to.
+    Decline,
+}
+
 /// What the person decided about a call to a server's tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CallDecision {
@@ -1214,9 +1344,25 @@ pub struct RunDecision {
     ///
     /// [SANDBOX-27]: ../../../docs/specs/sandboxing.md
     pub remember_reach: Option<crate::reach::Lasting>,
+    /// The key the person chose for the owner the line's push leaves to ssh, from the prompt's
+    /// [`RunRequest::key_choice`] ([SANDBOX-16]). Run with it and remembered for every session.
+    ///
+    /// [SANDBOX-16]: ../../../docs/specs/sandboxing.md
+    pub key: Option<KeyAnswer>,
 }
 
 impl RunDecision {
+    /// Run it with the key `answer` names offered first, and remember that choice for the owner.
+    ///
+    /// Vouches for nothing and records no line: it decides which key a push offers, and the next
+    /// line pushing to that owner is asked about as it would have been.
+    pub fn approve_with_key(answer: KeyAnswer) -> Self {
+        Self {
+            key: Some(answer),
+            ..Self::approve()
+        }
+    }
+
     /// Run it this once.
     pub fn approve() -> Self {
         Self {
@@ -1225,6 +1371,7 @@ impl RunDecision {
             record: false,
             record_family: false,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1236,6 +1383,7 @@ impl RunDecision {
             record: false,
             record_family: false,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1251,6 +1399,7 @@ impl RunDecision {
             record: true,
             record_family: false,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1263,6 +1412,7 @@ impl RunDecision {
             record: false,
             record_family: true,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1280,6 +1430,7 @@ impl RunDecision {
             record: false,
             record_family: false,
             remember_reach: Some(lasting),
+            key: None,
         }
     }
 
@@ -1291,6 +1442,7 @@ impl RunDecision {
             record: false,
             record_family: false,
             remember_reach: None,
+            key: None,
         }
     }
 
@@ -1508,9 +1660,8 @@ pub trait Confirmer {
     /// Ask whether the tools an MCP server offers may be offered to the planner. Implementations
     /// must default to refusal when they cannot ask.
     ///
-    /// A yes promotes the list as drawn, descriptions and all, and records a digest of it, so an
-    /// unchanged list asks nothing next session. That makes it a standing decision, like the vouch
-    /// offer, and a verdict travels with it on the same footing.
+    /// A yes promotes the list as drawn, descriptions and all, for the rest of the session and
+    /// records nothing, so the next session asks again.
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision;
 
     /// Ask about one call to an MCP server's tool. Implementations must default to refusal, and
@@ -1541,6 +1692,15 @@ pub trait Confirmer {
     /// so nothing waits on the answer. Separate from [`Confirmer::confirm_path`] because the hosts
     /// were chosen by a program, and a yes widens the network and no directory.
     fn confirm_host(&mut self, request: &HostRequest) -> Decision;
+
+    /// Ask whether a message the planner wrote may be sent to another background session.
+    /// Implementations must decline when they cannot ask.
+    ///
+    /// Separate from every other question here because what a yes grants is a place for words to go:
+    /// the text becomes part of another planner's context, and the person is the only check on it
+    /// that does not rest on the sender's model. Only a background session sends, so a front end
+    /// that hosts none declines. No mode and no allow rule answers it.
+    fn confirm_message(&mut self, request: &MessageRequest) -> MessageDecision;
 
     /// Put a series of questions to the person, one answer per question in the order they were
     /// asked.
@@ -1595,6 +1755,10 @@ impl Confirmer for Unattended {
 
     fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     /// Refuses. Nobody is there to say a server is where its reply pointed.
@@ -1732,6 +1896,10 @@ impl Confirmer for ApproveWrites {
         Decision::Reject
     }
 
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -1805,6 +1973,10 @@ impl Confirmer for ChoosesFirst {
 
     fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -1898,6 +2070,10 @@ impl Confirmer for ApproveRuns {
         Decision::Reject
     }
 
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -1973,6 +2149,10 @@ impl Confirmer for RemembersRuns {
         Decision::Reject
     }
 
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -2046,6 +2226,10 @@ impl Confirmer for ReadsOutput {
 
     fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2126,6 +2310,10 @@ impl Confirmer for VetsContent {
 
     fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2211,6 +2399,10 @@ impl Confirmer for ExposesReads {
         Decision::Reject
     }
 
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -2283,6 +2475,10 @@ impl Confirmer for ApproveFetches {
 
     fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2359,6 +2555,10 @@ impl Confirmer for ApprovePlans {
 
     fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+        MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2455,6 +2655,10 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_host(&mut self, request: &HostRequest) -> Decision {
         self.timing(|inner| inner.confirm_host(request))
+    }
+
+    fn confirm_message(&mut self, request: &MessageRequest) -> MessageDecision {
+        self.timing(|inner| inner.confirm_message(request))
     }
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
@@ -2580,6 +2784,7 @@ mod tests {
             confined: None,
             reach_record: None,
             unconfined: false,
+            key_choice: None,
         };
         let offered = request(
             a_listed_line(),
@@ -2694,6 +2899,8 @@ mod tests {
             reference: "output_1".to_string(),
             verdict: Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 
@@ -2704,6 +2911,8 @@ mod tests {
             truncated: false,
             verdict: Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 
@@ -2766,6 +2975,10 @@ mod tests {
 
         fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
             Decision::Reject
+        }
+
+        fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
+            MessageDecision::Decline
         }
 
         fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2933,6 +3146,7 @@ mod tests {
                     remembered: Vec::new(),
                 },
             ],
+            writes_git_directories: false,
         };
 
         let sentences = confined.sentences();
@@ -2972,6 +3186,7 @@ mod tests {
             }],
             network: bravebot_sandbox::network::Network::Open,
             filesystem: Default::default(),
+            writes_git_directories: false,
         };
 
         let sentences = confined.sentences();
@@ -3015,6 +3230,7 @@ mod tests {
             requested: Vec::new(),
             requested_reaches: Vec::new(),
             carried,
+            writes_git_directories: false,
         };
 
         let closed = confined(Network::Closed, vec![keeping("curl")]).sentences();
@@ -3044,6 +3260,7 @@ mod tests {
             requested: Vec::new(),
             requested_reaches: Vec::new(),
             carried: Vec::new(),
+            writes_git_directories: false,
         };
         let said = confined(Counts {
             allow_read: 1,
@@ -3065,6 +3282,36 @@ mod tests {
             );
         }
         assert!(confined(Counts::default()).sentences().is_empty());
+    }
+
+    /// SANDBOX-18: a hook or a configuration a program writes into a `.git` runs later with no
+    /// sandbox, so where the platform lets a program that is not git write one, the heading the
+    /// person approves under says so, whichever account of the reach it gives, and where it does
+    /// not, the heading is the one it was.
+    #[test]
+    fn a_line_that_can_write_a_repositorys_hooks_says_so_in_its_heading() {
+        let confined = |reads_the_machine, writes_git_directories| Confined {
+            reads_the_machine,
+            directories: Vec::new(),
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: Vec::new(),
+            writes_git_directories,
+        };
+
+        for reads_the_machine in [true, false] {
+            let plain = confined(reads_the_machine, false).heading();
+            let said = confined(reads_the_machine, true).heading();
+            assert!(
+                said.contains("hooks and configuration") && said.contains("no sandbox"),
+                "{said}"
+            );
+            assert!(!plain.contains("hooks"), "{plain}");
+            assert!(said.starts_with(plain.trim_end_matches(':')), "{said}");
+            assert!(confined(reads_the_machine, true).sentences().is_empty());
+        }
     }
 
     fn a_run() -> RunRequest {

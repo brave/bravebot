@@ -16,24 +16,29 @@ use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
 use crate::input;
+
+use crate::list_picker::{self, ListPicker, Outcome, Panel, PickerRow};
 use crate::theme::{self, Theme};
 
-/// What the picker is showing and where the cursor is.
-#[derive(Debug)]
-pub struct Picker {
-    /// Everything on offer, `brave` first among the built-ins.
-    themes: Vec<Theme>,
-    /// Which one is under the cursor.
-    selected: usize,
-    /// The theme in force when the picker opened, restored on cancel.
-    previous: Theme,
+impl PickerRow for Theme {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn hint(&self) -> Option<&'static str> {
+        theme::hint(self)
+    }
+
+    fn same_as(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
 }
+
+/// What the picker is showing and where the cursor is. Everything on offer, `brave` first among the
+/// built-ins, with the theme in force when the picker opened kept for the mark and for a cancel.
+pub type Picker = ListPicker<Theme>;
 
 impl Picker {
     /// Open on the theme in use, since that is the row a user is looking for.
@@ -52,29 +57,7 @@ impl Picker {
             .iter()
             .position(|theme| theme.name == current)
             .unwrap_or(0);
-        Self {
-            themes,
-            selected,
-            previous,
-        }
-    }
-
-    /// The theme under the cursor.
-    pub fn chosen(&self) -> Option<&Theme> {
-        self.themes.get(self.selected)
-    }
-
-    fn down(&mut self) {
-        let last = self.themes.len().saturating_sub(1);
-        self.selected = (self.selected + 1).min(last);
-    }
-
-    fn up(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
-    }
-
-    fn is_current(&self, theme: &Theme) -> bool {
-        theme.name == self.previous.name
+        Self::open(themes, selected, previous)
     }
 
     /// Put the theme under the cursor in force so the list itself shows what it would look like.
@@ -85,43 +68,39 @@ impl Picker {
     }
 
     fn restore(&self) {
-        theme::apply(&self.previous);
+        theme::apply(self.previous());
     }
 }
 
-/// What a key press did to the picker.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Outcome {
-    /// Still choosing; the preview may have changed.
-    Continue,
-    /// Keep the theme under the cursor.
-    Select,
-    /// Put back the theme that was in force when the picker opened.
-    Cancel,
+/// Open on the theme in use, with the theme under the cursor already in force.
+///
+/// The way in for a picker that is held as state; [`choose`] opens the same one.
+pub fn opened(themes: Vec<Theme>, current: &str) -> Picker {
+    let picker = Picker::new(themes, current);
+    picker.preview();
+    picker
 }
 
 /// Interpret one key press.
-pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -> Outcome {
-    if modifiers.contains(KeyModifiers::CONTROL) {
-        return match code {
-            KeyCode::Char('c') => Outcome::Cancel,
-            _ => Outcome::Continue,
-        };
+///
+/// The theme under the cursor is in force as the cursor reaches it. Leaving puts back the theme the
+/// picker opened on, and taking a row keeps it.
+pub fn press(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -> Outcome {
+    let outcome = list_picker::handle_key(picker, code, modifiers);
+    match outcome {
+        Outcome::Continue => picker.preview(),
+        Outcome::Cancel => picker.restore(),
+        Outcome::Select => match picker.chosen() {
+            Some(theme) => theme::apply(theme),
+            None => picker.restore(),
+        },
     }
+    outcome
+}
 
-    match code {
-        KeyCode::Esc => Outcome::Cancel,
-        KeyCode::Enter => Outcome::Select,
-        KeyCode::Up | KeyCode::Char('k') => {
-            picker.up();
-            Outcome::Continue
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            picker.down();
-            Outcome::Continue
-        }
-        _ => Outcome::Continue,
-    }
+/// Draw the panel over whatever is already in the frame.
+pub fn draw(frame: &mut Frame, picker: &Picker) {
+    list_picker::draw(frame, picker, &panel());
 }
 
 /// Show the list as a centred panel over whatever `behind` draws, and return the theme the user
@@ -136,14 +115,14 @@ pub fn choose<B: Backend>(
     current: &str,
     mut behind: impl FnMut(&mut Frame),
 ) -> Option<Theme> {
-    let mut picker = Picker::new(themes, current);
-    picker.preview();
+    let mut picker = opened(themes, current);
+    let panel = panel();
 
     loop {
         if terminal
             .draw(|frame| {
                 behind(frame);
-                draw(frame, &picker);
+                list_picker::draw(frame, &picker, &panel);
             })
             .is_err()
         {
@@ -162,129 +141,22 @@ pub fn choose<B: Backend>(
             continue;
         }
 
-        match handle_key(&mut picker, key.code, key.modifiers) {
-            Outcome::Continue => {
-                picker.preview();
-                continue;
-            }
-            Outcome::Cancel => {
-                picker.restore();
-                return None;
-            }
-            Outcome::Select => {
-                let chosen = picker.chosen().cloned();
-                if let Some(ref theme) = chosen {
-                    theme::apply(theme);
-                } else {
-                    picker.restore();
-                }
-                return chosen;
-            }
+        match press(&mut picker, key.code, key.modifiers) {
+            Outcome::Continue => continue,
+            Outcome::Cancel => return None,
+            Outcome::Select => return picker.chosen().cloned(),
         }
     }
 }
 
-fn draw(frame: &mut Frame, picker: &Picker) {
-    let area = centred(frame.area(), picker.themes.len());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme::brand_primary()))
-        .title(format!(" {} ", t!(theme_picker_title)))
-        .style(Style::default().bg(theme::background()).fg(theme::text()));
-    let inside = block.inner(area);
-    frame.render_widget(block, area);
-
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),    // list
-            Constraint::Length(1), // hint for the theme under the cursor
-            Constraint::Length(1), // keys
-        ])
-        .split(inside);
-
-    frame.render_widget(Paragraph::new(list_lines(picker, layout[0])), layout[0]);
-
-    // Drawn empty rather than skipped when the cursor is on a theme with nothing to add, so the
-    // list does not shift under the cursor as it moves. Indented like the key line rather than like
-    // a name, so a sentence under the list does not read as another theme to pick.
-    let hint = picker.chosen().and_then(theme::hint);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            hint.map(|hint| format!(" {hint}")).unwrap_or_default(),
-            Style::default()
-                .fg(theme::muted())
-                .add_modifier(Modifier::ITALIC),
-        ))),
-        layout[1],
-    );
-
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(" {}", t!(theme_picker_keys)),
-            Style::default().fg(theme::muted()),
-        ))),
-        layout[2],
-    );
-}
-
-/// A centred panel sized to the theme list, never larger than the terminal.
-///
 /// Narrower than the confirm box: a name list does not need the width a diff does, and OpenCode's
 /// theme dialog is a compact select rather than a full-bleed page.
-fn centred(area: Rect, theme_count: usize) -> Rect {
-    let available = area.width.saturating_sub(2);
-    let width = available.min(42).max(24.min(available));
-    // Borders, hint line, key line, and one row per theme that fits.
-    let list = (theme_count as u16)
-        .saturating_add(4)
-        .min(area.height.saturating_sub(2));
-    let height = list.max(6).min(area.height.saturating_sub(2));
-
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect {
-        x,
-        y,
-        width,
-        height,
+fn panel() -> Panel {
+    Panel {
+        title: t!(theme_picker_title),
+        keys: t!(theme_picker_keys),
+        width: 42,
     }
-}
-
-fn list_lines(picker: &Picker, area: Rect) -> Vec<Line<'static>> {
-    let visible = (area.height as usize).max(1);
-    let first = picker.selected.saturating_sub(visible.saturating_sub(1));
-
-    let mut lines = Vec::new();
-    for (index, theme) in picker.themes.iter().enumerate().skip(first).take(visible) {
-        let chosen = index == picker.selected;
-        let marker = if chosen { "❯ " } else { "  " };
-        let name = if chosen {
-            Style::default()
-                .fg(theme::brand_primary())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::text())
-        };
-
-        let mut spans = vec![
-            Span::styled(marker, Style::default().fg(theme::brand_primary())),
-            Span::styled(theme.name.clone(), name),
-        ];
-
-        if picker.is_current(theme) {
-            spans.push(Span::styled(
-                format!("  {}", t!(picker_current)),
-                Style::default().fg(theme::ok()),
-            ));
-        }
-
-        lines.push(Line::from(spans));
-    }
-    lines
 }
 
 #[cfg(test)]
@@ -292,6 +164,8 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    use ratatui::layout::Rect;
 
     fn offered() -> Vec<Theme> {
         theme::builtins()
@@ -310,58 +184,52 @@ mod tests {
     }
 
     #[test]
-    fn the_arrows_walk_the_list_and_stop_at_its_ends() {
-        let mut picker = Picker::new(offered(), theme::BRAVE);
-        handle_key(&mut picker, KeyCode::Up, KeyModifiers::NONE);
-        assert_eq!(picker.chosen().expect("a theme").name, theme::BRAVE);
-
-        for _ in 0..100 {
-            handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
-        }
-        assert_eq!(
-            picker.chosen().expect("a theme").name,
-            offered().last().expect("non-empty").name
-        );
-    }
-
-    #[test]
-    fn enter_selects_and_escape_keeps_the_current_theme() {
-        let mut picker = Picker::new(offered(), theme::BRAVE);
-        assert_eq!(
-            handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE),
-            Outcome::Select
-        );
-        assert_eq!(
-            handle_key(&mut picker, KeyCode::Esc, KeyModifiers::NONE),
-            Outcome::Cancel
-        );
-    }
-
-    #[test]
-    fn ctrl_c_leaves_the_theme_alone() {
-        let mut picker = Picker::new(offered(), theme::BRAVE);
-        assert_eq!(
-            handle_key(&mut picker, KeyCode::Char('c'), KeyModifiers::CONTROL),
-            Outcome::Cancel
-        );
-    }
-
-    #[test]
     fn preview_puts_the_cursor_theme_in_force_and_cancel_restores() {
         let _held = theme::exclusive();
         theme::apply_brave();
         let mut picker = Picker::new(offered(), theme::BRAVE);
-        handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+        list_picker::handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
         picker.preview();
         assert_ne!(theme::name(), theme::BRAVE);
         picker.restore();
         assert_eq!(theme::name(), theme::BRAVE);
     }
 
+    /// The cursor's theme is in force as the cursor reaches it, leaving puts back the one the picker
+    /// opened on, and taking a row keeps it. The regressions it rejects are a preview that is not
+    /// put back by Escape, and one that is dropped by taking the row.
+    #[test]
+    fn a_key_press_previews_the_row_and_leaving_puts_the_old_theme_back() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+        let mut picker = opened(offered(), theme::BRAVE);
+
+        assert_eq!(
+            press(&mut picker, KeyCode::Down, KeyModifiers::NONE),
+            Outcome::Continue
+        );
+        assert_ne!(theme::name(), theme::BRAVE, "the row was not previewed");
+        assert_eq!(
+            press(&mut picker, KeyCode::Esc, KeyModifiers::NONE),
+            Outcome::Cancel
+        );
+        assert_eq!(theme::name(), theme::BRAVE, "leaving kept the preview");
+
+        let mut picker = opened(offered(), theme::BRAVE);
+        press(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+        let previewed = theme::name();
+        assert_eq!(
+            press(&mut picker, KeyCode::Enter, KeyModifiers::NONE),
+            Outcome::Select
+        );
+        assert_eq!(theme::name(), previewed, "taking the row dropped it");
+        theme::apply_brave();
+    }
+
     fn rendered(picker: &Picker) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
         terminal
-            .draw(|frame| draw(frame, picker))
+            .draw(|frame| list_picker::draw(frame, picker, &panel()))
             .expect("draw succeeds");
         terminal
             .backend()
@@ -421,14 +289,52 @@ mod tests {
         );
     }
 
+    /// What the picker is drawn over survives around it: every cell outside the panel keeps what
+    /// was already in the frame, and the panel is smaller than the frame. A full-screen takeover
+    /// would overwrite the margins.
+    #[test]
+    fn the_session_stays_visible_around_a_list_sized_panel() {
+        let picker = Picker::new(offered(), theme::BRAVE);
+        let frame_area = Rect::new(0, 0, 80, 24);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                for y in 0..frame_area.height {
+                    for x in 0..frame_area.width {
+                        frame.buffer_mut()[(x, y)].set_symbol("~");
+                    }
+                }
+                draw(frame, &picker);
+            })
+            .expect("draw succeeds");
+
+        let panel_area = list_picker::centred(frame_area, picker.rows().len(), panel().width);
+        assert!(panel_area.width < frame_area.width, "{panel_area:?}");
+        assert!(panel_area.height < frame_area.height, "{panel_area:?}");
+        let buffer = terminal.backend().buffer();
+        for y in 0..frame_area.height {
+            for x in 0..frame_area.width {
+                let inside = x >= panel_area.x
+                    && x < panel_area.x + panel_area.width
+                    && y >= panel_area.y
+                    && y < panel_area.y + panel_area.height;
+                if !inside {
+                    assert_eq!(buffer[(x, y)].symbol(), "~", "({x},{y}) was overwritten");
+                }
+            }
+        }
+        // And the panel itself is drawn over the session, not beside it.
+        assert_eq!(buffer[(panel_area.x, panel_area.y)].symbol(), "╭");
+    }
+
     #[test]
     fn the_panel_stays_inside_a_tiny_terminal() {
         let picker = Picker::new(offered(), theme::BRAVE);
         let mut terminal = Terminal::new(TestBackend::new(30, 8)).expect("terminal");
         terminal
-            .draw(|frame| draw(frame, &picker))
+            .draw(|frame| list_picker::draw(frame, &picker, &panel()))
             .expect("draw succeeds");
-        let area = centred(Rect::new(0, 0, 30, 8), picker.themes.len());
+        let area = list_picker::centred(Rect::new(0, 0, 30, 8), picker.rows().len(), panel().width);
         assert!(area.width <= 30);
         assert!(area.height <= 8);
         assert!(area.x + area.width <= 30);

@@ -9,6 +9,29 @@ use bravebot_net::Egress;
 use serde_json::{Value, json};
 
 pub fn list(config: &Config) -> Value {
+    let (rows, warnings) = roster(config);
+    catalogue(config, rows, warnings)
+}
+
+/// Take the window of the model a turn will be answered by, the one `model` names or, where it names
+/// none, the configured default, so the turn compacts against that model's budget and not the
+/// default one (BACKEND-7, BACKEND-14, COMPACT-9).
+///
+/// Every turn builds its configuration afresh, so nothing carries over from an earlier model: the
+/// budget is the default until this says otherwise. A model whose row states no window, or that no
+/// row describes, or a listing that could not be fetched, leaves the default in place.
+pub fn adopt_window(config: &mut Config, model: Option<&str>) {
+    let rows = roster(config).0;
+    config.adopt_window_of_model_in_force(model, |in_force| {
+        rows.iter()
+            .find(|row| row.key == in_force)
+            .and_then(|row| row.conversation_tokens)
+    });
+}
+
+/// The rows every service this window reaches offers, and what could not be asked of the ones that
+/// failed.
+fn roster(config: &Config) -> (Vec<Model>, Vec<String>) {
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
     if let Some(bedrock) = &config.bedrock {
@@ -88,7 +111,7 @@ pub fn list(config: &Config) -> Value {
             None => warnings.push("Could not load Brave models. Try again.".into()),
         }
     }
-    catalogue(config, rows, warnings)
+    (rows, warnings)
 }
 
 /// The rows an AWS account offers, keyed by the bare id the Bedrock backend is reached by.
@@ -382,6 +405,58 @@ mod tests {
             );
         }
         assert_eq!(refused(&config, Some("an-allowed-model")), None);
+    }
+
+    /// A configuration whose only service is a local gateway stating a window for its one model, and
+    /// whose configured default is that model. No Brave credentials, so no listing costs a request.
+    fn a_config_with_a_gateway_stating_a_window(window: u64) -> Config {
+        use bravebot_config::env_var;
+
+        let mut config = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            _ => None,
+        })
+        .expect("an account named on its own is a working configuration");
+        config.providers = bravebot_config::Settings::parse(&format!(
+            r#"{{"provider": {{"ollama": {{"options": {{"baseURL": "http://localhost:11434/v1"}},
+                "models": {{"tiny": {{"limit": {{"context": {window}, "output": 2048}}}}}}}}}}}}"#
+        ))
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 1, "the block configured no service");
+        config.default_model = "ollama/tiny".into();
+        config
+    }
+
+    /// BACKEND-7, BACKEND-14 and COMPACT-9 in the window: every turn is built from a fresh
+    /// configuration whose budget is the default, so the window of the model that answers is taken
+    /// before it runs. A model named for the turn and the configured default, which a turn naming
+    /// none asks for, each have their own.
+    #[test]
+    fn a_turn_in_the_window_compacts_against_the_window_of_the_model_that_answers() {
+        let mut named = a_config_with_a_gateway_stating_a_window(8_192);
+        adopt_window(&mut named, Some("ollama/tiny"));
+        assert_eq!(named.context_budget, 8_192);
+        assert!(!named.budget_is_guessed());
+
+        let mut unnamed = a_config_with_a_gateway_stating_a_window(102_400);
+        adopt_window(&mut unnamed, None);
+        assert_eq!(unnamed.context_budget, 102_400);
+    }
+
+    /// A model no roster describes states no window, so the default stands rather than the window
+    /// of the configured default or of the first row.
+    #[test]
+    fn a_turn_in_the_window_on_a_model_no_roster_describes_keeps_the_default() {
+        let mut config = a_config_with_a_gateway_stating_a_window(102_400);
+        adopt_window(&mut config, Some("a-model-nothing-lists"));
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::DEFAULT_CONTEXT_BUDGET
+        );
+        assert!(config.budget_is_guessed());
     }
 
     /// A configuration that reaches Google Vertex through a block naming `models` where given. The

@@ -146,6 +146,69 @@ class References(unittest.TestCase):
         )
         self.assertEqual(symbols(files, "unreferenced"), [])
 
+    def test_a_cfg_test_field_does_not_cover_the_impl_after_it(self):
+        files = {
+            "crates/a/src/lib.rs": textwrap.dedent(
+                """\
+                pub struct Client<T> {
+                    attempts: u32,
+                    #[cfg(test)]
+                    test_request: Option<std::collections::HashMap<String, T>>,
+                    config: u32,
+                }
+
+                impl Client<u8> {
+                    pub fn shipped() { after_the_field(); }
+                }
+
+                pub fn make() -> Client<u8> {
+                    Client {
+                        attempts: 0,
+                        #[cfg(test)]
+                        test_request: None,
+                        config: 0,
+                    }
+                }
+
+                fn more() {
+                    after_the_literal();
+                    let c = Client { attempts: 0, #[cfg(test)] test_request: None, config: 0 };
+                }
+
+                impl Client<u16> {
+                    pub fn also_shipped() { after_the_inline_literal(); }
+                }
+
+                #[cfg(test)]
+                mod tests {
+                    fn t() { used_only_in_tests(); }
+                }
+                """
+            ),
+            "crates/a/src/other.rs": (
+                "pub fn after_the_field() {}\npub fn after_the_literal() {}\n"
+                "pub fn after_the_inline_literal() {}\npub fn used_only_in_tests() {}\n"
+            ),
+        }
+        self.assertEqual(symbols(files, "test-only"), ["used_only_in_tests"])
+
+    def test_a_cfg_test_statement_block_still_covers_its_block(self):
+        files = {
+            "crates/a/src/lib.rs": textwrap.dedent(
+                """\
+                pub fn f() {
+                    #[cfg(test)]
+                    if let Some(x) = hook() {
+                        used_only_under_the_statement();
+                    }
+                    used_after_the_statement();
+                }
+                """
+            ),
+            "crates/a/src/other.rs": "pub fn used_only_under_the_statement() {}\npub fn used_after_the_statement() {}\n",
+        }
+        self.assertEqual(symbols(files, "test-only"), ["used_only_under_the_statement"])
+
     def test_code_after_a_test_module_and_under_not_test_is_not_test_code(self):
         files = {
             "crates/a/src/lib.rs": textwrap.dedent(
@@ -397,6 +460,17 @@ def unused(count):
     return "".join(f"pub fn unused_number_{i}() {{}}\n" for i in range(count))
 
 
+class Labels(unittest.TestCase):
+    def test_cleanup_uses_refactor_and_defects_use_bug_with_the_same_area_and_no_axes(self):
+        """Cleanup and defect findings retain their area without acquiring triage labels."""
+        manifest = {"candidates": {"U1": {"path": "agents/tool.py"}}}
+        for defect, kind in ((False, "refactor"), (True, "bug")):
+            for area, expected_area in (("trust", "area/trust"), ("", "infrastructure")):
+                with self.subTest(bug=defect, area=area):
+                    finding = {"candidates": ["U1"], "bug": defect, "area": area}
+                    self.assertEqual(m.labels_for(finding, manifest), [kind, expected_area])
+
+
 class Pipeline(unittest.TestCase):
     def prepared(self, root, count=3):
         work = root / ".work"
@@ -461,7 +535,7 @@ class Pipeline(unittest.TestCase):
         self.assertIn("0 findings", out)
         self.assertIn("U2 unclear", out)
 
-    def test_drafts_carry_the_kind_the_area_and_the_assignee(self):
+    def test_drafts_use_refactor_for_cleanup_bug_for_defects_and_keep_area_and_assignee(self):
         files = {"crates/a/src/lib.rs": unused(1), "contrib/tool.py": "def unused_tool():\n    pass\n"}
         with tree(files) as root:
             manifest, work = self.prepared(root)
@@ -484,10 +558,12 @@ class Pipeline(unittest.TestCase):
             _, text, _ = quiet(m.main, ["draft", "--work-dir", str(work)])
 
         self.assertEqual(code, 0)
-        self.assertEqual(
-            [d["labels"] for d in drafts],
-            [["maintenance", "area/trust"], ["maintenance", "infrastructure"], ["bug"], ["maintenance"]],
-        )
+        expected_labels = [["refactor", "area/trust"], ["refactor", "infrastructure"], ["bug"], ["refactor"]]
+        self.assertEqual([d["labels"] for d in drafts], expected_labels)
+        for entry, labels in zip(drafts, expected_labels):
+            self.assertIn(
+                f"      {' '.join(labels)}, assignee netzenbot, body {entry['body_file']}", text
+            )
         self.assertEqual({d["assignee"] for d in drafts}, {"netzenbot"})
         self.assertEqual(drafts[0]["title"], "Delete unused_number_0")
         self.assertEqual([d["title_too_long"] for d in drafts], [False, False, False, True])

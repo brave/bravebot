@@ -18,11 +18,13 @@ documents use, under a stable id, without duplicating a rule, a check or a spec.
 ## Step 0: Work in a worktree
 
 Make a worktree on a branch of its own from the latest `upstream/main`, and do every step below
-there. The checkout the user started from is left alone.
+there. The checkout the user started from is left alone. Run these in the main clone. The worktree
+goes in `.worktrees/`, which is inside the workspace and ignored by git, so the file tools reach it
+without `/add-dir`.
 
 ```sh
 git fetch upstream main
-git worktree add -b add-best-practice-<topic> ../bravebot-add-best-practice-<topic> upstream/main
+git worktree add -b add-best-practice-<topic> .worktrees/add-best-practice-<topic> upstream/main
 ```
 
 ---

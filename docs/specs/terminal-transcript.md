@@ -14,8 +14,11 @@ governs:
   - crates/tui/src/render/beneath.rs
   - crates/tui/src/render/hint.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/entry.rs
+  - crates/tui/src/state/scroller.rs
   - crates/tui/src/theme.rs
   - crates/tui/src/theme_prompt.rs
+  - crates/tui/src/list_picker.rs
   - crates/tui/src/model_prompt.rs
   - ui/src/renderer/components/Transcript.tsx
   - ui/scripts/ux-state.test.mjs
@@ -148,6 +151,7 @@ because it is one release however many pieces it arrives in.
 `verified-by: bravebot_tui::state::the_finished_round_takes_over_from_the_reply_that_was_arriving`
 `verified-by: bravebot_tui::state::a_reply_that_was_arriving_is_taken_down_however_the_round_ends`
 `verified-by: bravebot_tui::state::a_round_starting_afresh_starts_from_an_empty_tail`
+`verified-by: bravebot_tui::state::a_delegates_round_leaves_the_reply_the_turn_is_writing`
 `verified-by: bravebot_agent::turn::the_reply_reaches_the_interface_while_it_is_being_written`
 `verified-by: bravebot_agent::turn::showing_a_reply_as_it_arrives_is_recorded_once_for_the_round`
 
@@ -155,7 +159,10 @@ because it is one release however many pieces it arrives in.
 ### VIEW-7: where a result went is drawn only where that is not the ordinary answer
 
 A call whose result the planner may read says nothing about it. A result the planner may not read
-says so, and so does a name that was never opened.
+says so on the call, and so does a name that was never opened. The marked block that holds the
+content of a result kept from the planner does not say it again: the heading names the content
+untrusted and the margin marks every row. A block whose content is in no model's context at all, as
+a processor's remark is, says so in its heading, since that is the exception among blocks.
 
 **Why.** Nearly every call reads into the planner's context, and a line under nearly every call
 distinguishes nothing while crowding out the lines that do. What the design turns on is the
@@ -167,6 +174,9 @@ went is still in the audit trail, which is what the record is for.
 
 `verified-by: bravebot_tui::render::the_ordinary_landing_is_not_given_a_line_of_its_own`
 `verified-by: bravebot_tui::render::a_result_the_planner_may_not_read_still_says_so`
+`verified-by: bravebot_tui::render::a_block_states_its_reach_only_where_that_is_the_exception`
+`verified-by: bravebot_cli::progress::a_block_states_its_reach_only_where_that_is_the_exception`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/marking.test.mjs, which renders the real transcript row through react-dom and asserts that a block of content kept from the planner draws no sentence about it, and that a block of content in no model's context draws that sentence in its heading and not under the content; make check-ui and the Front end CI job both run it)`
 
 <a id="VIEW-8"></a>
 ### VIEW-8: a note from the session is drawn in one ink of its own
@@ -287,6 +297,8 @@ list cannot carry, which is why it is the one the row does.
 `verified-by: bravebot_tui::theme_prompt::a_theme_that_paints_every_ink_itself_has_nothing_to_add`
 `verified-by: bravebot_tui::theme_prompt::the_picker_is_drawn_as_a_centred_panel`
 `verified-by: bravebot_tui::theme_prompt::the_panel_stays_inside_a_tiny_terminal`
+`verified-by: bravebot_tui::theme_prompt::the_session_stays_visible_around_a_list_sized_panel`
+`verified-by: bravebot_tui::render::moving_the_theme_cursor_repaints_the_session_behind_the_panel`
 `verified-by: bravebot_tui::theme_prompt::the_list_shows_names_a_person_reads`
 
 <a id="VIEW-13"></a>
@@ -368,6 +380,7 @@ a gateway has.
 `verified-by: bravebot_tui::model_prompt::a_heading_is_held_where_the_list_has_room_for_two_rows`
 `verified-by: bravebot_tui::model_prompt::a_blank_row_is_given_up_so_the_heading_and_the_cursor_both_fit`
 `verified-by: bravebot_tui::model_prompt::a_service_is_never_given_two_headings_at_once`
+`verified-by: bravebot_tui::model_prompt::no_row_on_screen_is_without_its_service_heading_wherever_the_list_is_scrolled`
 `verified-by: bravebot_tui::model_prompt::the_model_in_use_is_marked`
 `verified-by: bravebot_tui::model_prompt::a_premium_model_says_so`
 `verified-by: bravebot_tui::model_prompt::the_list_shows_names_a_person_reads`
@@ -699,7 +712,7 @@ one place left to say what each of them was for.
 `verified-by: bravebot_agent::tools::a_stored_call_to_a_servers_tool_shows_what_it_sent_but_not_a_credential`
 `verified-by: bravebot_tui::render::a_resumed_call_to_a_servers_tool_shows_what_it_sent`
 `verified-by: bravebot_ui_bridge::servers::a_call_to_a_servers_tool_reaches_the_window_with_what_it_sends`
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which renders the real transcript row through react-dom, live and replayed, and asserts that the reason reaches the markup while the call runs and once it is over and that a call with none draws nothing for it; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which renders the real transcript row through react-dom, live and replayed, and asserts that the reason reaches the markup after the call while the call runs and once it is over and that a call with none draws nothing for it; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
 
 <a id="VIEW-26"></a>
 ### VIEW-26: a call the model is writing is named beside the indicator until it starts

@@ -8,9 +8,11 @@
 
 pub mod advisor;
 pub mod agents;
+pub mod answers;
 pub mod aside;
 pub mod attached;
 pub mod backend;
+mod calendar;
 pub mod cmdline;
 pub mod compact;
 pub mod confine;
@@ -27,10 +29,14 @@ pub mod granted;
 pub mod home;
 pub mod hooks;
 pub mod host_proxy;
+pub mod hunks;
+#[cfg(test)]
+mod kept_answers;
 pub mod lsp;
 pub mod manifest;
 pub mod mcp;
 pub mod memory;
+pub mod messages;
 pub mod mode;
 pub mod outcome;
 pub mod output_schema;
@@ -48,6 +54,7 @@ pub mod repo_map;
 pub mod report;
 pub mod request_view;
 pub mod rewind;
+pub mod sandbox_reason;
 pub mod scratch;
 pub mod scrub;
 pub mod servers;

@@ -1140,10 +1140,9 @@ fn a_session_that_moves_before_anything_is_written_is_recorded_where_it_moved_to
 
 /// A session that has written a record without having had a turn is written where it moves to.
 ///
-/// A shell command and a compaction both write a record before the first turn, and what makes the
-/// session resumable in its new home is a record being there. Moving without writing one would
-/// leave the session offering no id to resume by, and its only record under a directory it is no
-/// longer working in.
+/// A shell command writes a record before the first turn, and what makes the session resumable in
+/// its new home is a record being there. Moving without writing one would leave the session
+/// offering no id to resume by, and its only record under a directory it is no longer working in.
 #[test]
 fn a_record_written_before_the_first_turn_follows_the_session_when_it_moves() {
     let scratch = Scratch::new("moved-after-a-command");
@@ -2783,6 +2782,49 @@ mod preserved_history {
         assert!(final_turn.contains("**Outcome:** completed"));
         assert!(final_turn.contains("**Usage:** 44 tokens"));
         assert!(!final_turn.contains("**Tasks:**"));
+    }
+
+    /// An export written while a turn runs ends at what the transcript holds, so it has to say the
+    /// last prompt had not ended, and say it of that prompt alone: the ones before it carry the
+    /// endings they were recorded with.
+    #[test]
+    fn exporting_while_a_turn_runs_marks_the_running_prompt_and_no_other() {
+        let scratch = Scratch::new("export-running");
+        let (session, conversation) = fixture();
+        let mut reopened = reopen(
+            &scratch.project,
+            &save(&scratch.project, &session, &conversation),
+        );
+        submit(&mut reopened, "running prompt");
+        assert!(reopened.a_turn_is_running());
+
+        let markdown = bravebot_tui::render::as_markdown(&reopened, "history");
+
+        let running = "**Outcome:** still running when exported";
+        assert_eq!(markdown.matches(running).count(), 1, "{markdown}");
+        let (earlier, last) = markdown.split_once("running prompt").unwrap();
+        assert!(!earlier.contains(running), "{earlier}");
+        assert!(earlier.contains("**Outcome:** completed"), "{earlier}");
+        assert!(last.contains(running), "{last}");
+    }
+
+    /// A turn whose record kept no ending is not one that is running. Its outcome is left out, as
+    /// an older record's always were, and nothing is said of it.
+    #[test]
+    fn exporting_a_turn_with_no_recorded_ending_does_not_call_it_running() {
+        let scratch = Scratch::new("export-no-ending");
+        let (session, conversation) = fixture();
+        let mut record = save(&scratch.project, &session, &conversation);
+        record.history.as_mut().expect("a kept history")[3].outcome = None;
+        let reopened = reopen(&scratch.project, &record);
+        assert!(!reopened.a_turn_is_running());
+
+        let markdown = bravebot_tui::render::as_markdown(&reopened, "history");
+
+        assert!(!markdown.contains("still running"), "{markdown}");
+        let last = markdown.split("no plan prompt").nth(1).unwrap();
+        assert!(!last.contains("**Outcome:**"), "{last}");
+        assert!(markdown.contains("**Outcome:** failed"), "{markdown}");
     }
 
     /// Distinct values reject shifting one turn's plan or measurements onto its neighbour.
@@ -4455,6 +4497,38 @@ mod preserved_history {
             ["earlier prompt", "prompt from a second session"]
         );
     }
+
+    /// A cancellation that does remove an entry must take only that line, because a second
+    /// session has been appending to the file since this one loaded it.
+    #[test]
+    fn cancelling_a_submitted_prompt_keeps_what_another_session_recorded() {
+        let _scratch = Scratch::new("submitted-recall-elsewhere");
+        let mut session = Session::new("test").with_stored_history();
+        submit(&mut session, "earlier prompt");
+        session.complete("done", vec![], 0);
+        bravebot_session::store::append_history(&bravebot_session::store::Entry::sent(
+            "prompt from a second session",
+            None,
+        ));
+        submit(&mut session, "cancelled prompt");
+        bravebot_session::store::append_history(&bravebot_session::store::Entry::sent(
+            "later prompt from a second session",
+            None,
+        ));
+        session.stopped(Some(0));
+        session.restore("cancelled prompt");
+        assert_eq!(
+            bravebot_session::store::load_history()
+                .iter()
+                .map(|entry| entry.prompt.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "earlier prompt",
+                "prompt from a second session",
+                "later prompt from a second session"
+            ]
+        );
+    }
 }
 
 /// Live manifests charge the continuing session once; stopping creates no separate record.
@@ -5485,4 +5559,152 @@ fn resume_by_id_does_not_follow_an_id_out_of_the_sessions_directory() {
             "{typed:?} reached a record"
         );
     }
+}
+
+/// RUN-5, TRUST-6: a resume brings back the answer that confined lines run without asking, in the
+/// directory it was given for and nowhere else, whichever turn wrote the record.
+///
+/// The controls make each half attributable: a map whose yes did not say so comes back without it,
+/// so the answer is not read from the rules; and the same record resumed in another directory
+/// comes back without it, so the answer does not follow a move.
+#[test]
+fn a_resume_keeps_the_answer_about_confined_lines_for_its_own_directory_only() {
+    let scratch = Scratch::new("confined-lines-resume");
+    let conversation = a_conversation();
+    let trusting = |saying: bool| {
+        let mut trust = bravebot_agent::workspace::trust_store(&scratch.project);
+        trust.trust(".");
+        if saying {
+            trust.allow_confined_lines();
+        }
+        trust
+    };
+    let snapshot = conversation.snapshot();
+    let (spend, timing, todos, programs) =
+        (BTreeMap::new(), BTreeMap::new(), a_plan(), a_program_list());
+    macro_rules! standing {
+        ($trust:expr) => {
+            Standing {
+                history: None,
+                conversation: &snapshot,
+                turns: 1,
+                tokens: 1,
+                spend: &spend,
+                timing: &timing,
+                model: None,
+                todos: &todos,
+                asides: &[],
+                trust: $trust,
+                programs: &programs,
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+            }
+        };
+    }
+
+    let said = trusting(true);
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    handle.save("first", standing!(&said));
+    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+    assert!(
+        record
+            .trust_map(&scratch.project)
+            .expect("a map was recorded")
+            .allows_confined_lines(),
+        "a resume lost the answer its own user gave"
+    );
+    assert!(
+        !record
+            .trust_map(scratch.project.join("moved"))
+            .expect("a map was recorded")
+            .allows_confined_lines(),
+        "the answer followed the record into another directory"
+    );
+
+    // A rewind point holds the answer of the turn before it, in its own directory only.
+    let mut point_before = a_point_before_turn_two(&conversation);
+    point_before.trust = trusting(true);
+    let point = bravebot_session::sessions::RewindPoint {
+        coverage: Default::default(),
+        snapshot: point_before,
+        backups: Vec::new(),
+        prompt: "second".to_string(),
+    };
+    let mut pointed = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    pointed.save(
+        "first",
+        Standing {
+            rewind: &[point],
+            ..standing!(&said)
+        },
+    );
+    let record = sessions::load(&scratch.project, pointed.id()).expect("the session loads");
+    let back = record.rewind_points(&scratch.project);
+    assert_eq!(back.len(), 1, "the point was not written down");
+    assert!(
+        back[0].snapshot.trust.allows_confined_lines(),
+        "a rewind lost the answer its own turn started with"
+    );
+    let moved = record.rewind_points(scratch.project.join("moved"));
+    assert!(
+        !moved[0].snapshot.trust.allows_confined_lines(),
+        "the answer followed a rewind point into another directory"
+    );
+
+    let unsaid = trusting(false);
+    let mut other = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    other.save("first", standing!(&unsaid));
+    let record = sessions::load(&scratch.project, other.id()).expect("the session loads");
+    assert!(
+        !record
+            .trust_map(&scratch.project)
+            .expect("a map was recorded")
+            .allows_confined_lines(),
+        "a yes that did not say so came back as one that did"
+    );
+
+    // A later turn, written back to the record it came from, carries the answer of that turn.
+    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+    let mut resumed = Handle::resuming(
+        &scratch.project,
+        &record,
+        Front::Terminal,
+        bravebot_stamp::BUILD,
+    );
+    macro_rules! next {
+        ($trust:expr) => {
+            sessions::Continuation {
+                conversation: &snapshot,
+                prompt: "second",
+                tokens: 1,
+                model: "test-model",
+                trust: $trust,
+                begins: 0,
+                ends: 0,
+                prompt_at: None,
+                rewind: &[],
+                timing: Default::default(),
+            }
+        };
+    }
+    assert!(resumed.save_continuation(record.clone(), next!(&unsaid)));
+    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+    assert!(
+        !record
+            .trust_map(&scratch.project)
+            .expect("a map was recorded")
+            .allows_confined_lines(),
+        "a later turn kept an answer its map no longer held"
+    );
+    assert!(resumed.save_continuation(record.clone(), next!(&said)));
+    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+    assert!(
+        record
+            .trust_map(&scratch.project)
+            .expect("a map was recorded")
+            .allows_confined_lines(),
+        "a later turn did not write the answer its map held"
+    );
 }

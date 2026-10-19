@@ -436,6 +436,13 @@ impl bravebot_agent::Confirmer for ApprovesRuns {
         bravebot_agent::confirm::Decision::Reject
     }
 
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,

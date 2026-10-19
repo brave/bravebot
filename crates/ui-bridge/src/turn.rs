@@ -200,6 +200,8 @@ pub struct BridgeReporter {
     reporting_for: Option<DelegateId>,
     /// Where the submitted prompt entered the recounted conversation (SESSION-23).
     prompt_at: Option<usize>,
+    /// The task list as the turn last wrote it, kept for the record (SESSION-23).
+    task_list: Vec<Row>,
 }
 
 impl BridgeReporter {
@@ -212,12 +214,18 @@ impl BridgeReporter {
             notices: Vec::new(),
             reporting_for: None,
             prompt_at: None,
+            task_list: Vec::new(),
         }
     }
 
     /// The latest cumulative measurements, retained for manifest storage on failure.
     pub fn spent(&self) -> Option<bravebot_agent::Spent> {
         self.spent
+    }
+
+    /// The task list the turn last wrote, whichever way it ended. Empty where it wrote none.
+    pub fn task_list(&self) -> &[Row] {
+        &self.task_list
     }
 
     /// Where the turn's prompt landed in the recounted conversation, if it got that far.
@@ -249,8 +257,9 @@ impl Reporter for BridgeReporter {
     }
 
     fn todos(&mut self, rows: Vec<Row>) {
-        let rows: Vec<_> = rows.iter().map(wire::row).collect();
-        self.say("todos", json!({ "rows": rows }));
+        let wired: Vec<_> = rows.iter().map(wire::row).collect();
+        self.task_list = rows;
+        self.say("todos", json!({ "rows": wired }));
     }
 
     /// How much the model has written, when it changes and not before.
@@ -623,8 +632,7 @@ impl Confirmer for BridgeConfirmer {
     /// Ask whether to offer an MCP server's tools to the model (SERVERS-8).
     ///
     /// The request carries each tool as the client drew it, the server's descriptions among them.
-    /// A yes offers the list and is recorded beside the server's approval, so the same list is
-    /// offered unasked in a later session. A no offers none of its tools for the rest of this one.
+    /// A yes offers the list for this session and records nothing. A no offers none of its tools for the rest of this one.
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         self.yes_or_no(Kind::McpTools, "mcp-tools.request", |id| {
             wire::mcp_tools_request(id, request)
@@ -662,6 +670,15 @@ impl Confirmer for BridgeConfirmer {
         self.yes_or_no(Kind::Host, "host.request", |id| {
             wire::host_request(id, request)
         })
+    }
+
+    /// Declined without asking: the desktop hosts no background session, and a session offered no
+    /// way to send is never asked (MSG-3).
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
     }
 
     /// Ask whether a remote MCP server moved where its reply pointed (SERVERS-11).
@@ -733,7 +750,7 @@ impl Confirmer for BridgeConfirmer {
     /// pair, and it is what every failure here resolves to.
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
         // A window has no line that shows a program is unconfined, and reads the mode `off` as
-        // `standard` for that reason (SANDBOX-22), so it draws no card for the request and refuses.
+        // `workspace-write` for that reason (SANDBOX-22), so it draws no card for the request and refuses.
         if request.unconfined {
             return RunDecision::reject();
         }

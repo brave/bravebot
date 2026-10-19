@@ -123,7 +123,7 @@ was out, and the update they ran installed 0.11.0.
 An ask stands for an hour whether or not it learned a version, so a registry that refuses, that
 cannot be reached, or that answers with something this program will not offer is left alone until
 the hour is up. Each registry has a stamp of its own. A stamp in the future is asked again rather
-than waited out.
+than waited out. A launch that cannot write the stamp does not ask.
 
 **Why.** A published version changes on the order of days, so asking on every launch is a request
 to somebody else's registry per session for a number that has rarely moved. An hour is short
@@ -133,7 +133,9 @@ answer instead of on the ask exempts every launch that learned nothing, which ma
 trouble the one asked every session and the launches it refuses the ones that keep coming back. A
 machine that has both installations on it would double that again if one stamp overwrote the
 other. A clock that went backwards, or a record somebody else wrote, must not leave this silent
-until the date catches up with the file.
+until the date catches up with the file. An ask with no stamp holds no later launch back, so a
+state directory this user cannot write to would make every launch a request, and its answer would
+be thrown away too.
 
 `verified-by: bravebot_tui::update::a_fresh_answer_is_not_asked_for_again`
 `verified-by: bravebot_tui::update::a_registry_is_asked_again_once_an_hour_has_passed`
@@ -141,7 +143,8 @@ until the date catches up with the file.
 `verified-by: bravebot_tui::update::an_ask_that_learned_nothing_still_holds_the_next_one_off_for_the_day`
 `verified-by: bravebot_tui::update::recording_one_registrys_ask_keeps_the_others`
 `verified-by: bravebot_tui::update::a_registry_has_one_record_however_often_it_is_asked`
-`verified-by: by-construction (the stamp is written before the request is made, so an ask that is refused, that answers with nothing usable, or that is still out when the session ends is recorded as readily as one that answers)`
+`verified-by: bravebot_tui::persist::a_launch_whose_stamp_cannot_be_written_does_not_ask`
+`verified-by: by-construction (the stamp is written before the request is made, and the request is made only once it has landed, so an ask that is refused, that answers with nothing usable, or that is still out when the session ends is recorded as readily as one that answers)`
 
 <a id="UPDATE-7"></a>
 ### UPDATE-7: a recorded answer belongs to the registry that gave it

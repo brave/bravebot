@@ -29,6 +29,7 @@
 //! and is put in front of each request afresh. A persistent session therefore holds one copy of
 //! AGENTS.md however many turns it runs, where a `Message::user` would accumulate one per turn.
 
+use crate::calendar::civil_from_days;
 use crate::request_view::{Prompt, Provenance};
 use crate::skills::{Catalogue, ImportRefusal, Notice};
 use crate::workspace::Workspace;
@@ -54,6 +55,19 @@ const WORKSPACE_AGENT_FILES: &[&str] = &[AGENTS_FILE, "CLAUDE.md", ".claude/CLAU
 /// A pointer is a sentence. Anything longer is a document that happens to cite another, and
 /// following that would replace instructions with the ones they referred to in passing.
 const POINTER_BYTES: usize = 500;
+
+/// How long one instruction file may be before its size is said out loud.
+///
+/// About 200 lines of prose, which is the length Claude Code recommends staying under. The file is
+/// always loaded, however long it is: a person who meant to write that much should not have it
+/// dropped or cut short, and the cost of it is worth a sentence rather than a refusal.
+const INSTRUCTIONS_WARN_BYTES: usize = 16_384;
+
+/// How long every instruction file together may be before the total is said out loud.
+///
+/// Codex stops adding instruction files at 32 KiB in all, which is the same judgement about the
+/// same cost. Said once for the turn rather than once per file, since the total is one fact.
+const INSTRUCTIONS_COMBINED_WARN_BYTES: usize = 32_768;
 
 /// How many files deep an `@path` import may nest, counting the instructions file as zero.
 const IMPORT_DEPTH: usize = 4;
@@ -147,9 +161,11 @@ pub fn compose_in<S: Sink>(
         .push_str(github_cli_guidance(github_cli));
     preamble
         .for_a_person
-        .push_str(missing_module_guidance(workspace.scratch().is_some()));
+        .push_str(missing_dependency_guidance(workspace.scratch().is_some()));
 
     let mut standing = Prompt::default();
+    // What the sources admitted so far cost, for the combined word of INSTR-15.
+    let mut standing_bytes = 0;
     // Neither file is read in a safe session. What the command line named is the person's words for
     // this run and stays.
     let safe = bravebot_core::safe::engaged();
@@ -158,6 +174,7 @@ pub fn compose_in<S: Sink>(
         && let Some(text) = read_home_agents(policy, home)
     {
         let origin = format!("~/.bravebot/{AGENTS_FILE}");
+        admit_by_size(&origin, &text, &mut standing_bytes, &mut preamble.notices);
         standing.push(Provenance::Driver, format!("From {origin}:\n\n"));
         standing.push(Provenance::TrustedFile(origin), text.trim());
         standing.push(Provenance::Driver, "\n\n");
@@ -168,6 +185,12 @@ pub fn compose_in<S: Sink>(
     };
     match workspace_agents {
         Ok(Some(found)) => {
+            admit_by_size(
+                &found.origin,
+                &found.text,
+                &mut standing_bytes,
+                &mut preamble.notices,
+            );
             standing.push(Provenance::Driver, format!("From {}:\n\n", found.origin));
             standing.push(
                 Provenance::TrustedFile(found.origin.to_string()),
@@ -182,6 +205,7 @@ pub fn compose_in<S: Sink>(
         for relative in nested_agents_files(sources) {
             match read_nested_agents(policy, sources, &relative) {
                 Ok(Some(text)) => {
+                    admit_by_size(&relative, &text, &mut standing_bytes, &mut preamble.notices);
                     standing.push(Provenance::Driver, format!("From {relative}:\n\n"));
                     standing.push(Provenance::TrustedFile(relative), text.trim());
                     standing.push(Provenance::Driver, "\n\n");
@@ -499,34 +523,34 @@ fn github_cli_guidance(present: bool) -> &'static str {
      without asking the network: where it fails for that reason, fetch_url is the way.\n"
 }
 
-/// What to do when a Python program fails for a module its interpreter lacks, said only where the
-/// session has a directory of its own to write the stand-in in.
+/// What to do when a program fails because something it needs is missing from this machine, said
+/// only where the session has a directory of its own to write a stand-in in.
 ///
-/// A planner not told of this road looks for a newer interpreter, finds none, and asks the person
-/// to install one or edit the program. For the person's own turn and not for a delegate: the road
-/// is two `run`s, and a reader is offered none.
+/// A planner not told of this road asks the person to install what is missing or to edit the
+/// program. It names no language, package or variable, since text naming one of them covers that
+/// one alone. For the person's own turn and not for a delegate: the road is two `run`s, and a
+/// reader is offered none.
 ///
-/// A new directory inside the session's, and only that on `PYTHONPATH`, because a directory there
-/// is imported from ahead of the standard library and the session's own holds whatever else the
-/// work put in it. In single quotes, because the line compiler reads an unquoted backslash as an
-/// escape and a Windows path is made of them.
-fn missing_module_guidance(scratch: bool) -> &'static str {
+/// A search path read in addition to the program's own, because the assignment replaces whatever
+/// the variable held and a line cannot name the old value, so a path that stands in for a default
+/// would lose it. A new directory inside the session's, and only that on the path, because the
+/// session's own holds whatever else the work put in it. In single quotes, because the line
+/// compiler reads an unquoted backslash as an escape and a Windows path is made of them.
+fn missing_dependency_guidance(scratch: bool) -> &'static str {
     if !scratch {
         return "";
     }
-    "\nWhen a Python program fails because a module is missing, such as `tomllib` on a Python older \
-     than 3.11, check whether an installed package provides the same module under another name, \
-     with a line that only reads and whose exit status is the answer, such as `python3 -c 'import \
-     tomli'` run with the interpreter the program uses. Where one does, write a module of the \
-     missing name in a new directory inside the scratch directory that re-exports the package, \
-     such as `tomllib.py` holding `from tomli import *`, and run the program again with \
-     `PYTHONPATH=` and that directory's path in front of it on that one line. Write the path out \
-     in full and in single quotes, since a line expands no variable and reads an unquoted \
-     backslash as an escape. Name only that directory, since whatever else the scratch directory \
-     holds would be imported ahead of the standard library. That leaves the program, the machine \
-     and the person's settings as they were, so try it before asking the person to install \
-     something or edit the program. Where nothing installed provides the module, say which module \
-     is missing and what provides it.\n"
+    "\nWhen a program fails because something it needs is missing from this machine, check whether \
+     something installed can stand in for it, with a line that only reads and whose exit status is \
+     the answer, run by the same interpreter or runtime the program uses. Where something can, \
+     write what connects the two in a new directory inside the scratch directory, and run the \
+     program again with that directory on a search path the program reads from its environment in \
+     addition to its own, assigned in front of it on that one line. Write the path out in full and \
+     in single quotes, since a line expands no variable and reads an unquoted backslash as an \
+     escape. Name only that directory, since whatever else the scratch directory holds would be \
+     found as well. That leaves the program, the machine and the person's settings as they were, \
+     so try it before asking the person to install anything or to edit the program. Where \
+     nothing installed can stand in, say what is missing and what provides it.\n"
 }
 
 /// Whether this tree is under version control, walking up the way git itself does.
@@ -629,29 +653,29 @@ pub(crate) fn today() -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-/// Convert a count of days since 1970-01-01 to a civil date.
+/// What one gate-passed source costs, said out loud where it is worth saying (INSTR-15).
 ///
-/// Howard Hinnant's `civil_from_days`, exact for every date this will see and needing no leap-year
-/// table. Duplicated from `crate::subscription` rather than shared: that one is part of the
-/// credential protocol's wire format, and coupling a line of the system prompt to it would mean a
-/// change for one had to answer for the other.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let day_of_era = (z - era * 146_097) as u64;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era as i64 + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted_month = (5 * day_of_year + 2) / 153;
-    let day = (day_of_year - (153 * shifted_month + 2) / 5 + 1) as u32;
-    let month = if shifted_month < 10 {
-        shifted_month + 3
-    } else {
-        shifted_month - 9
-    } as u32;
-
-    (if month <= 2 { year + 1 } else { year }, month, day)
+/// Every source reaches the prompt whatever its size; this only decides what is said about it.
+/// `total` is what the sources admitted so far add up to, so the combined word is said at the one
+/// source that crosses the line and not again.
+///
+/// **The only thing read here is the byte length of text that has already passed the trust gate**,
+/// which is the test [`pointer_target`] already rests on (INSTR-8). `origin` is a path from
+/// INSTR-1's fixed set, so a notice names a file and a number and never anything a file holds.
+/// An untrusted source never reaches this, because [`read_instructions`] has already refused it.
+fn admit_by_size(origin: &str, text: &str, total: &mut usize, notices: &mut Vec<Notice>) {
+    let bytes = text.len();
+    if bytes > INSTRUCTIONS_WARN_BYTES {
+        notices.push(Notice::source_is_large(origin, bytes));
+    }
+    let before = *total;
+    *total += bytes;
+    if before <= INSTRUCTIONS_COMBINED_WARN_BYTES && *total > INSTRUCTIONS_COMBINED_WARN_BYTES {
+        notices.push(Notice::sources_large_together(
+            *total,
+            INSTRUCTIONS_COMBINED_WARN_BYTES,
+        ));
+    }
 }
 
 /// `~/.bravebot/AGENTS.md`, trusted for sitting where it sits.

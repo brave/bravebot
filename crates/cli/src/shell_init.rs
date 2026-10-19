@@ -30,11 +30,20 @@ pub(crate) fn command(args: &[String]) -> Option<()> {
     Some(())
 }
 
+// Each `chmod` is skipped for a link: chmod follows one, and STATE-1 steps over a link rather than
+// narrowing wherever it leads.
 const BASH: &str = r#"# bravebot shell integration: add `eval "$(bravebot shell-init bash)"` to ~/.bashrc
 __bravebot_dir="${HOME}/.bravebot/shell"
 __bravebot_file="${__bravebot_dir}/$$"
 __bravebot_last=
-(umask 077; mkdir -p "$__bravebot_dir" && chmod 700 "${HOME}/.bravebot" "$__bravebot_dir" && : > "$__bravebot_file")
+(
+    umask 077
+    mkdir -p "$__bravebot_dir" || exit
+    narrowed=true
+    [ -L "${HOME}/.bravebot" ] || chmod 700 "${HOME}/.bravebot" || narrowed=false
+    [ -L "$__bravebot_dir" ] || chmod 700 "$__bravebot_dir" || narrowed=false
+    $narrowed && : > "$__bravebot_file"
+)
 __bravebot_record() {
     local status=$? line number
     if [ -z "$BRAVEBOT_INCOGNITO" ]; then
@@ -77,7 +86,14 @@ __bravebot_chain_exit
 const ZSH: &str = r#"# bravebot shell integration: add `eval "$(bravebot shell-init zsh)"` to ~/.zshrc
 __bravebot_dir="${HOME}/.bravebot/shell"
 __bravebot_file="${__bravebot_dir}/$$"
-(umask 077; mkdir -p "$__bravebot_dir" && chmod 700 "${HOME}/.bravebot" "$__bravebot_dir" && : > "$__bravebot_file")
+(
+    umask 077
+    mkdir -p "$__bravebot_dir" || exit
+    narrowed=true
+    [ -L "${HOME}/.bravebot" ] || chmod 700 "${HOME}/.bravebot" || narrowed=false
+    [ -L "$__bravebot_dir" ] || chmod 700 "$__bravebot_dir" || narrowed=false
+    $narrowed && : > "$__bravebot_file"
+)
 __bravebot_record() {
     [[ -n $BRAVEBOT_INCOGNITO ]] && return 0
     local line=${1//$'\n'/ }
@@ -111,7 +127,8 @@ begin
     set -l old (umask)
     umask 077
     mkdir -p $__bravebot_dir
-    chmod 700 $HOME/.bravebot $__bravebot_dir
+    test -L $HOME/.bravebot; or chmod 700 $HOME/.bravebot
+    test -L $__bravebot_dir; or chmod 700 $__bravebot_dir
     printf '' > $__bravebot_file
     umask $old
 end

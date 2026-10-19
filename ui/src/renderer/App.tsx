@@ -1,33 +1,26 @@
 import { SettingsView, type SettingsPage } from './components/SettingsView'
 import { BotDetails } from './components/BotDetails'
-import type { BotFormValue } from './components/Bots'
 import type { ComposerFooterProps, ProjectChoice } from './components/Composer'
 import { botHistory } from '../shared/bot-history'
 import type { Tab } from '../shared/view'
 import type { FileAttachment } from '../shared/files'
+import { grantsOf, named, sent, type Staged } from './staging'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AskAnswer,
   BridgeEvent,
-  Checking,
-  Hook,
   ForkedSession,
   KeptTrust,
   OpenedSession,
   PermissionMode,
   SandboxMode,
-  RewindPoint,
-  RewoundSession,
   RunRecord,
   SettingsRules,
-  Waiting,
   SessionSummary,
-  Shown,
-  TodoRow,
 } from '../shared/protocol'
 import { nextPermissionMode } from '../shared/protocol'
 import { Sidebar } from './components/Sidebar'
-import { SessionInfo, firstChat, type SessionInfoValue, type SessionStatus } from './components/Sessions'
+import { SessionInfo, firstChat } from './components/Sessions'
 import { FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
 import { Context } from './components/Context'
 import { Gutter, useColumns } from './components/Gutter'
@@ -39,203 +32,27 @@ import { TooltipLayer } from './components/TooltipLayer'
 import { useEvent, useStableValue } from './hooks'
 import { About, type AboutInfo } from './components/About'
 import { conversationModel, rememberModel } from './models'
-import type { ExportFormat } from '../shared/export'
+import { canSend } from './can-send'
 import { useCommandRouter, usePublishedState } from './commands'
-import { type Fork, forkOf, forkedSessions } from '../shared/forks'
+import { type Fork, forkedSessions } from '../shared/forks'
 import { activeBots, botProjects, type Bot } from '../shared/bots'
 import { projectLabel } from '../shared/recents'
 import type { Doing } from './components/BotAvatar'
 import * as t from './transcript'
-import { receiveTurn, type Turns, type TurnDisclosure } from './turn-details'
-import { AuditInspector } from './components/AuditInspector'
+import { useAudit } from './use-audit'
+import { useExport } from './use-export'
+import { useRewind } from './use-rewind'
+import { useBots } from './use-bots'
+import { useAppearance } from './use-appearance'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, dropConversation, experienceError } from './experience'
 import { showToast } from './toasts'
-import { applyAppearance } from './theme'
-import { SYSTEM, parseAppearance, type Appearance } from '../shared/theme'
-import { planRewind, pointForPrompt, RequestFailed, rewindFailure } from './rewind'
+import { planRewind } from './rewind'
+import { Unconfigurable, METHOD, call, callBot } from './rpc'
 import { RewindConfirm } from './components/Rewind'
-
-/** What the app is doing, which decides most of what the interface offers. */
-interface Live {
-  model: string | null
-  handle: string
-  /**
-   * The record's own id, or `null` for a session made in this window and not yet listed.
-   *
-   * Kept rather than looked up by title: two sessions can share a title, and a context menu
-   * that closed whichever one matched first would close the wrong one.
-   */
-  summary: {
-    id: string | null
-    title: string
-    project: string
-    branch: string | null
-    directory: string
-  }
-  entries: t.Entry[]
-  turns: Turns
-  todos: TodoRow[]
-  quarantine: Shown[]
-  phase: Waiting | null
-  /** What a running confined check was given. Beside the phase, which a check does not change. */
-  checking: Checking | null
-  hook: Hook | null
-  /** The word of the tool call the model is writing, while it is; the call itself is not yet drawn. */
-  composing: string | null
-  tokens: number
-  contextTokens?: number
-  running: boolean
-  /** Set when a fresh session needs the trust question answered before it can run. */
-  askingTrust: string | null
-  /** Where remembering the answer would write it, while the question offers that (TRUST-23). */
-  keepingTrust: string | null
-  /** The yes kept about this directory, as last heard: said above the transcript while it lasts. */
-  trustRemembered: KeptTrust | null
-  /**
-   * Where this session was cut from, for a session that was forked out of another.
-   *
-   * The title is carried because it is what the banner says, and the window may not have the
-   * parent in its list — a session with no record yet is in no list at all.
-   */
-  forkedFrom: { directory: string; id: string; title: string; prompt: number } | null
-  /**
-   * A prompt to scroll to and mark, counted over the prompts the transcript drew.
-   *
-   * An ordinal rather than an entry id, because ids are minted fresh every time a session is
-   * opened and this arrives from a session that was open a moment ago. The ordinal is the same
-   * coordinate the fork itself was cut on, so it is the one thing about a place in a transcript
-   * that two sessions can both mean.
-   */
-  focus: number | null
-  /**
-   * The bot whose session this is, and whether it still knows it is one.
-   *
-   * `null` for an ordinary session. For a bot's, `grounded` says whether the conversation
-   * currently carries its briefing: false when the session has just been opened, and false again
-   * once compaction has taken the briefing out of it. The next prompt sent while it is false
-   * carries the briefing with it, which is the whole of what makes a bot persist.
-   */
-  bot: { slug: string; grounded: boolean } | null
-  /**
-   * How many messages compaction has taken out of this conversation, as of the last thing heard
-   * about it.
-   *
-   * Watched rather than the `compacting` phase, which is emitted before compaction is attempted
-   * and so also fires when there was nothing worth compacting — and then on every round of a
-   * conversation that is over budget and cannot get under it. This only rises, and it rises
-   * exactly once per compaction that actually happened.
-   */
-  archived: number
-  /** Whether the session opened with auto-vetting on, as the agent settled it then. */
-  autoVetting: boolean
-  /** What the session's next turn asks before it acts, as the bridge last reported it. */
-  permissionMode: PermissionMode
-  /** What the session's next turn holds a program to, as the bridge last reported it. */
-  sandboxMode: SandboxMode
-  /** The permission rules this session opened under. Null where the bridge reported none. */
-  rules?: SettingsRules | null
-  /**
-   * The entry id of a prompt this window has sent and not yet been told the ordinal of.
-   *
-   * A prompt is drawn the moment it is sent, and where it landed among the things the user said
-   * is not knowable here: the turn adds a user message for every file named in the prompt, and
-   * another if it spends its tool budget. So the agent reports it when the turn ends, and this
-   * says which row to put it on. `null` for a turn nobody in this window asked for, a watch
-   * firing or a bot bringing its memory up to date, which draw no prompt and must not take the
-   * ordinal of the one above them.
-   */
-  awaitingOrdinal?: string | null
-  /** The points the session can be put back to, newest first, as the agent last listed them. */
-  rewind?: RewindPoint[]
-  outcome?: 'complete' | 'failed'
-  draftId?: string
-  queuePaused?: boolean
-  queued?: { prompt: string; attachments: FileAttachment[] }[]
-  attachments?: FileAttachment[]
-  /** Why the last message did not go: a name written with `@` that is not a text file in the project. */
-  sendRefused?: string | null
-}
-
-/**
- * Where a session was cut from, ready for a banner, or `null` for one that was not.
- *
- * The title comes from the session list, which is the fresher of the two places it could come
- * from — a fork's record on disk says only what the parent was called; the list says what it is
- * called. A parent the list does not hold (one whose record has not been written yet, or one in
- * a project since deleted) falls back to its id, which is at least a true name.
- */
-function cameFrom(
-  forks: Fork[],
-  directory: string,
-  id: string,
-  sessions: SessionSummary[],
-): Live['forkedFrom'] {
-  const fork = forkOf(forks, directory, id)
-  if (!fork) return null
-  const parent = sessions.find(
-    (session) => session.id === fork.parent.id && session.directory === fork.parent.directory,
-  )
-  return {
-    directory: fork.parent.directory,
-    id: fork.parent.id,
-    title: parent?.title ?? fork.parent.id,
-    prompt: fork.prompt,
-  }
-}
-
-/** Whether a bot has recorded this conversation, in the folder it ran in. */
-function hadConversation(bot: Bot, summary: { id: string; directory: string }): boolean {
-  return bot.conversations.some((each) => each.id === summary.id && each.directory === summary.directory)
-}
-
-/** What a chat is called until its first prompt names it. */
-const NEW_CHAT = 'New Chat'
-
-/** What a chat in a bot's home folder is listed under. */
-const NO_PROJECT = 'No project'
-
-/** Raised for the one failure that needs its own screen rather than a line of text. */
-class Unconfigurable extends Error {}
-
-/** Which kinds of question a person can be put. Declared beside the method each is answered by. */
-export type Asked = t.Asked
-
-/** Which method answers which question. See [`t.REPLY`], which is where they are written down. */
-const METHOD: Record<Asked, string> = t.REPLY
-
-async function call<T>(method: string, params?: Record<string, unknown>): Promise<T> {
-  const answer = await window.bravebot.request<T>(method, params)
-  if (answer.error) {
-    // `config` is `Config::from_env` failing, which for a packaged app or one launched from a checkout
-    // means the credentials were not baked in at compile time. It is not recoverable
-    // from here and needs saying properly.
-    if (answer.error.code === 'config') throw new Unconfigurable(answer.error.message)
-    throw new RequestFailed(answer.error.code, answer.error.message)
-  }
-  return answer.ok as T
-}
-
-/**
- * Send a turn as a bot.
- *
- * The same failure handling as [`call`], over a different channel — and a different channel
- * because this is the one kind of turn that carries files. See `bravebot:bots:send`.
- */
-async function callBot(request: {
-  session: string
-  slug: string
-  prompt: string
-  grounded: boolean
-  model: string | null
-  attachments?: string[]
-}): Promise<void> {
-  const answer = await window.bravebot.sendBotTurn(request)
-  if (answer.error) {
-    if (answer.error.code === 'config') throw new Unconfigurable(answer.error.message)
-    throw new RequestFailed(answer.error.code, answer.error.message)
-  }
-}
+import { apply } from './apply'
+import { hadConversation, listSessions } from './session-list'
+import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft } from './live'
 
 export function App(): React.JSX.Element {
   /** Settings take the place of the chat view while open; which page was last open is kept. */
@@ -256,11 +73,7 @@ export function App(): React.JSX.Element {
   const setLive = useCallback((action: React.SetStateAction<Live | null>) => {
     const old = liveRef.current
     const next = typeof action === 'function' ? action(old) : action
-    if (old && next && old.handle === next.handle && !old.summary.id && next.summary.id) {
-      setConversation(conversationKey(next.summary.directory, next.summary.id),
-        conversationPreferences(conversationKey(old.summary.directory, old.draftId ?? old.handle)))
-      setConversation(conversationKey(old.summary.directory, old.draftId ?? old.handle), { draft: '' })
-    }
+    if (old && next && old.handle === next.handle) promoteDraft(old, next)
     liveRef.current = next
     handleRef.current = next?.handle ?? null
     if (next) openedLives.current.set(next.handle, next)
@@ -273,11 +86,7 @@ export function App(): React.JSX.Element {
     const old = openedLives.current.get(handle) ?? null
     const next = typeof action === 'function' ? action(old) : action
     if (next) {
-      if (old && !old.summary.id && next.summary.id) { setConversation(
-        conversationKey(next.summary.directory, next.summary.id),
-        conversationPreferences(conversationKey(old.summary.directory, old.draftId ?? old.handle)))
-        setConversation(conversationKey(old.summary.directory, old.draftId ?? old.handle), { draft: '' })
-      }
+      if (old) promoteDraft(old, next)
       openedLives.current.set(handle, next)
       refreshLives((n) => n + 1)
     }
@@ -297,46 +106,20 @@ export function App(): React.JSX.Element {
   const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null)
   // The composer's text lives here rather than in `Transcript` because the Send menu item
   // has to be grey when there is nothing to send, and only this component talks to the menu.
-  const draftKey = live ? conversationKey(live.summary.directory, live.summary.id ?? live.draftId ?? live.handle) : ''
+  const draftKey = live ? liveKey(live) : ''
   const draft = preferences.conversations[draftKey]?.draft ?? ''
   const setDraft = useCallback((text: string) => {
     const current = liveRef.current
-    if (current) setConversation(conversationKey(current.summary.directory, current.summary.id ?? current.draftId ?? current.handle), { draft: text })
+    if (current) setConversation(liveKey(current), { draft: text })
   }, [])
   useEffect(() => {
     if (live?.summary.id) rememberModel(live.summary.directory, live.summary.id, live.model)
   }, [live?.summary.id, live?.summary.directory, live?.model])
-  /**
-   * Whether an export carries the tool calls as well as the conversation.
-   *
-   * Off to begin with, because the common reason to export a session is to show somebody
-   * what was asked and what came back. Held for the window rather than per session and not
-   * written to disk: it is answered next to the format, at the moment of exporting, and a
-   * setting remembered across launches would decide the contents of a file somebody is about
-   * to hand to another person without being on screen when they do.
-   */
-  const [includeTools, setIncludeTools] = useState(false)
-
   const [forks, setForks] = useState<Fork[]>([])
-  const [bots, setBots] = useState<Bot[]>([])
+  const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
+  const { chosen, writeAppearance } = useAppearance()
 
-  /**
-   * Appearance (System / Light / Dark) and whether the picker is open.
-   *
-   * Remembered in `bravebot-ui.json` like the columns; arrives asynchronously, so it cannot
-   * seed `useState`.
-   */
-  const [chosen, setChosen] = useState<Appearance>(SYSTEM)
-
-  // Read inside the event handler, which is installed once and must not close over a
-  // stale session handle.
-
-
-  // The whole of what is on screen, for the same reason: `send` is installed once and has to know
-  // whether this session belongs to a bot and whether it still carries its briefing.
-
-
-  // Read inside `open`, which is installed once for the same reason. The list lives in the
+  // Read inside `showSession`, which is installed once for the same reason. The list lives in the
   // main process; this is the copy on screen, refreshed when it can have changed.
   const forksRef = useRef<Fork[]>(forks)
   forksRef.current = forks
@@ -349,44 +132,6 @@ export function App(): React.JSX.Element {
   const readForks = useCallback(async () => {
     setForks(await window.bravebot.readForks().catch(() => []))
   }, [])
-
-  /**
-   * Read the bot list again.
-   *
-   * The main process owns it, and writes to it that this window did not make: a bot's session id
-   * and its compaction watermark are taken off what the agent answered. So this is asked for after
-   * a turn as well as after an edit — the copy on screen is a copy.
-   */
-  const readBots = useCallback(async () => {
-    setBots(await window.bravebot.readBots().catch(() => []))
-  }, [])
-
-  // Read inside the event listener and inside `send`, both installed once and neither able to
-  // close over a list that changes under them.
-  const botsRef = useRef<Bot[]>(bots)
-  botsRef.current = bots
-
-  /**
-   * Paint the window from the remembered appearance at startup, and follow writes
-   * that arrive through the main process (another window, a driver, the picker).
-   */
-  useEffect(() => {
-    const take = (state: { chosen: Appearance }): void => {
-      const appearance = parseAppearance(state.chosen)
-      setChosen(appearance)
-      applyAppearance(appearance)
-    }
-    void window.bravebot
-      .readTheme()
-      .then(take)
-      .catch(() => undefined)
-    return window.bravebot.onThemeChanged(take)
-  }, [])
-
-  useEffect(() => window.bravebot.onWindowActive((active) => {
-    if (active) delete document.documentElement.dataset.windowInactive
-    else document.documentElement.dataset.windowInactive = ''
-  }), [])
 
   const refresh = useCallback(async () => {
     try {
@@ -491,7 +236,7 @@ export function App(): React.JSX.Element {
         id: summary.id,
       })
       if (bot) setConversation(conversationKey(summary.directory, summary.id), { botSlug: bot.slug })
-      setLive({
+      setLive(newLive({
         handle: opened.session,
         model: bot?.model ?? conversationModel(summary.directory, summary.id, opened.model),
         summary: {
@@ -502,15 +247,7 @@ export function App(): React.JSX.Element {
           directory: opened.record.directory,
         },
         entries: t.fromSaid(opened.said),
-        turns: {},
         todos: Object.values(opened.todos).flat(),
-        quarantine: [],
-        phase: null,
-        checking: null,
-        hook: null,
-        tokens: 0,
-        composing: null,
-        running: false,
         // A record with no stored map was written before maps were kept. Nothing
         // recorded is not the same as nothing trusted, so it is asked about again.
         contextTokens: opened.contextTokens,
@@ -518,6 +255,7 @@ export function App(): React.JSX.Element {
         // map the record carries is this session's own and comes first.
         askingTrust: opened.trust.known ? null : opened.record.directory,
         keepingTrust: opened.keeping ?? null,
+        confinedLinesNotice: opened.confinedLines ?? null,
         trustRemembered: opened.remembered ?? null,
         // Looked up rather than carried: this session may have been forked in another launch
         // entirely, and the file the main process keeps is where that is written down.
@@ -534,7 +272,7 @@ export function App(): React.JSX.Element {
         sandboxMode: opened.sandboxMode,
         rules: opened.settingsRules ?? null,
         rewind: opened.rewind ?? [],
-      })
+      }))
       const notes = [opened.branchNote, opened.buildNote, opened.frontNote].filter(Boolean) as string[]
       setProblem(notes.length ? notes.join(' · ') : null)
     } catch (error) {
@@ -563,11 +301,12 @@ export function App(): React.JSX.Element {
         settingsRules?: SettingsRules | null
         remembered?: KeptTrust | null
         keeping?: string | null
+        confinedLines?: string | null
       }>('session.new', {
         directory: chosen,
       })
       setConversation(conversationKey(chosen, draftId), { botSlug: bot?.slug ?? null })
-      setLive({
+      setLive(newLive({
         handle: made.session,
         draftId,
         model: bot?.model ?? made.model,
@@ -579,18 +318,11 @@ export function App(): React.JSX.Element {
           directory: chosen,
         },
         entries: [],
-        turns: {},
         todos: [],
-        quarantine: [],
-        phase: null,
-        checking: null,
-        hook: null,
-        tokens: 0,
-        composing: null,
-        running: false,
         contextTokens: 0,
         askingTrust: made.remembered ? null : chosen,
         keepingTrust: made.keeping ?? null,
+        confinedLinesNotice: made.confinedLines ?? null,
         trustRemembered: made.remembered ?? null,
         forkedFrom: null,
         focus: null,
@@ -600,7 +332,7 @@ export function App(): React.JSX.Element {
         permissionMode: made.permissionMode,
         sandboxMode: made.sandboxMode,
         rules: made.settingsRules ?? null,
-      })
+      }))
       setProblem(null)
       return made.session
     } catch (error) {
@@ -609,19 +341,23 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
-  const answerTrust = useCallback(async (trusted: boolean, remember = false) => {
+  const answerTrust = useCallback(async (trusted: boolean) => {
     const handle = handleRef.current
-    // One answer per question: a second click would be refused, the offer to remember being spent.
+    // One answer per question: a second click would be refused, the offer to keep a yes being spent.
     if (!handle || answeringTrust.current) return
     answeringTrust.current = true
     const path = openedLives.current.get(handle)?.keepingTrust ?? null
+    // Said back to the bridge only for a question that showed the sentence: the bridge takes the
+    // answer to cover confined lines (RUN-5) from this and from nothing else.
+    const confinedLines = !!openedLives.current.get(handle)?.confinedLinesNotice
     try {
-      const { kept } = await call<{ trusted: boolean; kept: boolean | null }>('trust.reply', { session: handle, trusted, remember })
+      const { kept } = await call<{ trusted: boolean; kept: boolean | null }>('trust.reply', { session: handle, trusted, confinedLines })
       const remembered = kept === true && path ? { at: Math.floor(Date.now() / 1000), path } : null
       updateSession(handle, (old) => (old ? {
         ...old,
         askingTrust: null,
         keepingTrust: null,
+        confinedLinesNotice: null,
         trustRemembered: remembered ?? old.trustRemembered,
       } : old))
       // Still a yes, for this session. Said, because the next session here will ask after all.
@@ -635,7 +371,7 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
-  const send = useCallback(async (prompt: string, target?: string, selectedFiles?: FileAttachment[]) => {
+  const send = useCallback(async (prompt: string, target?: string, selectedFiles?: FileAttachment[], queuedStaged?: Staged[]) => {
     const handle = target ?? handleRef.current
     if (!handle) return
     // Read before the state below is changed, because that is what clears it: this is the turn
@@ -644,6 +380,10 @@ export function App(): React.JSX.Element {
     const bot = sending?.bot ?? null
     const model = sending?.model ?? null
     const attachments = selectedFiles ?? sending?.attachments ?? []
+    // A queued message carries what it named when it was queued. Otherwise it is what the draft
+    // still names: a marker deleted before sending took its file or picture off.
+    const staged = queuedStaged ?? named(sending?.staging, prompt)
+    const grants = grantsOf(staged)
     // The files the prompt names with `@`, asked of the bridge before anything is drawn: a name
     // that cannot go stops the send here, with the message still where it was written. The bridge
     // reads the prompt again at `turn.send`, and that check is the one that decides what goes.
@@ -654,17 +394,17 @@ export function App(): React.JSX.Element {
       updateSession(handle, (old) => old ? {
         ...old,
         sendRefused: refused,
-        queued: queued ? [{ prompt, attachments }, ...(old.queued ?? [])] : old.queued,
+        queued: queued ? [{ prompt, attachments, staged }, ...(old.queued ?? [])] : old.queued,
         queuePaused: queued ? true : old.queuePaused,
       } : old)
       if (!queued && sending) {
-        const key = conversationKey(sending.summary.directory, sending.summary.id ?? sending.draftId ?? sending.handle)
+        const key = liveKey(sending)
         if (!conversationPreferences(key).draft.trim()) setConversation(key, { draft: prompt })
       }
       return
     }
-    const named = Array.isArray(mentioned.ok.files) ? mentioned.ok.files : []
-    const reads = [...new Set([...attachments.map((file) => file.path), ...named])]
+    const mentionedFiles = Array.isArray(mentioned.ok.files) ? mentioned.ok.files : []
+    const reads = [...new Set([...attachments.map((file) => file.path), ...mentionedFiles])]
     // Made here rather than inside the update so its id can be remembered: the agent says where
     // this prompt landed when the turn ends, and that answer has to find the row it belongs to.
     const said = t.userSaid(prompt)
@@ -675,7 +415,15 @@ export function App(): React.JSX.Element {
             summary: old.summary.title === NEW_CHAT ? { ...old.summary, title: prompt.slice(0, 70) } : old.summary,
             attachments: selectedFiles ? old.attachments : [],
             sendRefused: null,
-            entries: [...old.entries, ...reads.map((path): t.Entry => ({ kind: 'attached', id: crypto.randomUUID(), path })), said],
+            staging: queuedStaged ? old.staging : sent(old.staging),
+            entries: [
+              ...old.entries,
+              ...reads.map((path): t.Entry => ({ kind: 'attached', id: crypto.randomUUID(), path })),
+              // A dropped text file is read at the top of the turn as a picked one is. A picture or
+              // a PDF goes in the prompt's own message, whose marker already says so.
+              ...staged.flatMap((item): t.Entry[] => item.via === 'drop' && item.file.kind === 'text' ? [{ kind: 'attached', id: crypto.randomUUID(), path: item.file.name }] : []),
+              said,
+            ],
             awaitingOrdinal: said.id,
             running: true,
             queuePaused: old.queued?.length ? old.queuePaused : false,
@@ -690,9 +438,9 @@ export function App(): React.JSX.Element {
         // would be a window that could have the planner read any file on the machine. So this
         // names the bot and says whether the briefing is due, and the paths are composed over
         // there from a definition this side cannot reach.
-        await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id) })
+        await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id), ...grants })
       } else {
-        await call('turn.send', { session: handle, prompt, model, attachments: attachments.map((file) => file.id) })
+        await call('turn.send', { session: handle, prompt, model, attachments: attachments.map((file) => file.id), ...grants })
       }
     } catch (error) {
       if (error instanceof Unconfigurable) {
@@ -733,7 +481,7 @@ export function App(): React.JSX.Element {
       if (!message) continue
       const handle = item.handle
       dequeuing.current.add(handle)
-      void send(message.prompt, handle, message.attachments).finally(() => {
+      void send(message.prompt, handle, message.attachments, message.staged).finally(() => {
         dequeuing.current.delete(handle)
         refreshLives((revision) => revision + 1)
       })
@@ -760,7 +508,7 @@ export function App(): React.JSX.Element {
    * this must not be wrong in.
    */
   const answer = useCallback(
-    async (kind: Asked, request: number, approve: boolean, remember = false) => {
+    async (kind: t.Asked, request: number, approve: boolean, remember = false) => {
       const handle = handleRef.current
       if (!handle) return
       const decision = approve ? 'approve' : 'reject'
@@ -801,26 +549,7 @@ export function App(): React.JSX.Element {
   )
 
   const { widths, collapsed, dragging, folding, start, reset, nudge, toggle } = useColumns()
-  const [audit, setAudit] = useState<{ handle: string; turn: number | null; trigger: HTMLButtonElement; wasFolded: boolean } | null>(null)
-  useEffect(() => { setAudit(null) }, [live?.handle])
-  const selectedAudit = audit?.handle === live?.handle ? audit : null
-  const openAudit = (turn: number | null, trigger: HTMLButtonElement) => {
-    if (!live) return
-    setAudit({ handle: live.handle, turn, trigger, wasFolded: selectedAudit?.wasFolded ?? collapsed.right })
-    if (collapsed.right) toggle('right')
-  }
-  const closeAudit = () => {
-    if (selectedAudit?.wasFolded && !collapsed.right) toggle('right')
-    setAudit(null)
-    // The live trigger disappears at completion; return to that turn's new footer instead.
-    const trigger = selectedAudit?.trigger.isConnected ? selectedAudit.trigger :
-      selectedAudit && selectedAudit.turn !== null ? document.querySelector<HTMLButtonElement>(`.turn-footer [data-audit-turn="${selectedAudit.turn}"]`) : null
-    trigger?.focus({ preventScroll: true })
-  }
-  const discloseTurn = (turn: number, field: TurnDisclosure, open: boolean) => {
-    if (!live) return
-    updateSession(live.handle, (old) => old?.turns[turn] ? { ...old, turns: { ...old.turns, [turn]: { ...old.turns[turn]!, [field]: open } } } : old)
-  }
+  const { selectedAudit, openAudit, discloseTurn, auditPanel } = useAudit(live, collapsed, toggle, updateSession)
 
   /** Which sessions in the list came out of another one, for the mark beside their names. */
   const forked = useMemo(() => forkedSessions(forks), [forks])
@@ -829,77 +558,21 @@ export function App(): React.JSX.Element {
   // Unrecorded sessions are stamped to the minute so the list serialises the same between
   // keystrokes and the column is not re-rendered for a clock that nobody can see move.
   const now = Math.floor(Date.now() / 60000) * 60
-  // A bot's home folder is not a project, so a conversation there is listed as having none.
   const homes = useMemo(() => new Set(bots.map((bot) => bot.home)), [bots])
-  const placed = (summary: SessionSummary): SessionSummary =>
-    homes.has(summary.directory) ? { ...summary, project: NO_PROJECT, branch: null } : summary
-  const unstableSessions = sessions.map((summary) => {
-    const current = [...openedLives.current.values()].find((item) => item.summary.id === summary.id && item.summary.directory === summary.directory)
-    return placed(current ? { ...summary, title: current.summary.title } : summary)
+  const { ownSessions: unstableSessions, info: unstableInfo, attention } = listSessions({
+    sessions,
+    opened: [...openedLives.current.values()],
+    conversations: preferences.conversations,
+    bots,
+    now,
+    currentKey: live ? conversationKey(live.summary.directory, live.summary.id ?? live.draftId ?? '') : '',
   })
-  for (const current of openedLives.current.values()) {
-    const id = current.summary.id ?? current.draftId
-    if (!id || unstableSessions.some((summary) => summary.id === id && summary.directory === current.summary.directory)) continue
-    unstableSessions.unshift(placed({ ...current.summary, id, updated: now, bytes: 0 }))
-  }
-  for (const [key, preference] of Object.entries(preferences.conversations)) {
-    if (!preference.draft.trim()) continue
-    try {
-      const [directory, id]: unknown[] = JSON.parse(key)
-      if (typeof directory !== 'string' || typeof id !== 'string' || !id.startsWith('draft:') || unstableSessions.some((session) => session.directory === directory && session.id === id)) continue
-      unstableSessions.unshift(placed({ id, directory, title: `Draft · ${preference.draft.slice(0, 60)}`, project: projectLabel(directory), branch: null, updated: now, bytes: 0 }))
-    } catch { /* Ignore malformed preference keys. */ }
-  }
   const ownSessions = useStableValue(unstableSessions)
   const ownSessionsRef = useRef(ownSessions)
   ownSessionsRef.current = ownSessions
-  const unstableInfo: Record<string, SessionInfoValue> = {}
-  for (const summary of ownSessions) {
-    const current = [...openedLives.current.values()].find((item) => (item.summary.id ?? item.draftId) === summary.id && item.summary.directory === summary.directory)
-    const owner = preferences.conversations[conversationKey(summary.directory, summary.id)]?.botSlug
-    const bot = bots.find((item) => hadConversation(item, summary) || item.slug === owner)
-      ?? bots.find((item) => item.slug === current?.bot?.slug)
-    const outstanding = current ? t.outstanding(current.entries) : undefined
-    // Only what asks something of the reader. "Ready" and "Completed" were true of nearly
-    // every row and so said nothing about any of them.
-    const status: SessionStatus | undefined = !current ? undefined
-      : outstanding ? (outstanding.kind === 'ask' ? 'answer' : 'approval')
-        : current.running ? 'working'
-          : current.entries.at(-1)?.kind === 'error' ? 'failed'
-            : undefined
-    if (!bot && !status) continue
-    unstableInfo[conversationKey(summary.directory, summary.id)] = {
-      bot: bot ? { name: bot.name, avatar: bot.avatar } : undefined,
-      status,
-    }
-  }
   const sessionInfo = useStableValue(unstableInfo)
-  const attention = Object.entries(sessionInfo).filter(([key, info]) =>
-    (info.status === 'answer' || info.status === 'approval') &&
-    key !== (live ? conversationKey(live.summary.directory, live.summary.id ?? live.draftId ?? '') : '')).length
 
-  /**
-   * Show a bot.
-   *
-   * Two paths, and which one is taken says whether the bot has ever spoken. One that has is
-   * resumed — the same session, every time, which is the whole of what makes it persistent. One
-   * that has not has no session to resume: the agent writes no record until a first turn, so
-   * there is nothing on disk to open and a fresh one is begun in its checkout instead. Its
-   * durable id is learned when the turn that creates it finishes, by the main process, off what
-   * the agent answered.
-   */
   /** The bot whose session is on screen, if one is — for the header, which names it. */
-  useEffect(() => {
-    const edited = (event: Event) => {
-      const slug = (event as CustomEvent<string>).detail
-      for (const session of openedLives.current.values()) {
-        if (session.bot?.slug === slug) updateSession(session.handle, (old) => old?.bot ? { ...old, bot: { ...old.bot, grounded: false } } : old)
-      }
-    }
-    document.addEventListener('bravebot:memory-edited', edited)
-    return () => document.removeEventListener('bravebot:memory-edited', edited)
-  }, [])
-
   const openBotRecord = useMemo(
     () => (live?.bot ? (bots.find((each) => each.slug === live.bot?.slug) ?? null) : null),
     [live?.bot, bots],
@@ -916,20 +589,6 @@ export function App(): React.JSX.Element {
     : live?.entries.at(-1)?.kind === 'error'
       ? 'failed'
       : 'open'
-
-  const saveBot = useCallback(
-    async (bot: BotFormValue) => {
-      try {
-        const saved = await window.bravebot.writeBot(bot)
-        if (!saved) throw new Error('Could not save bot.')
-        setLive((old) => old?.bot?.slug === saved.slug && !old.running
-          ? { ...old, model: saved.model ?? old.model } : old)
-        await readBots()
-        return true
-      } catch (error) { setProblem(String(error)); return false }
-    },
-    [readBots],
-  )
 
   const chooseModel = useCallback(async (model: string) => {
     const current = liveRef.current
@@ -965,24 +624,6 @@ export function App(): React.JSX.Element {
   }, [updateSession])
 
   /**
-   * Take a bot away for good.
-   *
-   * No session to let go of, unlike `retireBot` below. This is only ever reached from a row in
-   * the archive, and archiving is what put it there — which closed its session on the way past.
-   * A bot that is deletable is therefore a bot that is not on screen, by construction rather than
-   * by a check here.
-   */
-  const removeBot = useCallback(
-    async (slug: string) => {
-      try {
-        await window.bravebot.removeBot(slug)
-        await readBots()
-      } catch (error) { setProblem(String(error)) }
-    },
-    [readBots],
-  )
-
-  /**
    * Start a manifest run for a task: plan all of it, ask once, then walk the plan.
    *
    * One run per press. The session does not hold this as a mode, so the next message is an
@@ -1004,21 +645,21 @@ export function App(): React.JSX.Element {
   /** Start a run from whatever is in the composer, where a run can take it. */
   const submitPlan = useCallback(() => {
     const task = draft.trim()
-    if (!task || !handleRef.current || live?.running || live?.askingTrust || backendReady === false) return
+    if (!handleRef.current || !canSend(live, backendReady, task)) return
     // A run reads nothing before it plans, so it cannot take attached files, and a bot's turn
     // carries a briefing a run has no place for.
-    if (live?.attachments?.length || live?.bot) return
+    if (live?.attachments?.length || named(live?.staging, task).length || live?.bot) return
     setDraft('')
     void plan(task)
-  }, [draft, live?.running, live?.askingTrust, live?.attachments, live?.bot, plan, backendReady])
+  }, [draft, live?.running, live?.askingTrust, live?.attachments, live?.staging, live?.bot, plan, backendReady])
 
   /** Send whatever is in the composer, on the same terms the Send button uses. */
   const submit = useCallback(() => {
     const prompt = draft.trim()
-    if (!prompt || !handleRef.current || live?.running || live?.askingTrust || backendReady === false) return
+    if (!handleRef.current || !canSend(live, backendReady, prompt)) return
     setDraft('')
     void send(prompt)
-  }, [draft, live?.running, send, backendReady])
+  }, [draft, live?.running, live?.askingTrust, send, backendReady])
 
   /**
    * Let go of the open session.
@@ -1097,57 +738,7 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
-  /**
-   * The conversation, as an export would carry it.
-   *
-   * Derived rather than built at the moment somebody picks a format, because whether there
-   * is anything to export decides two things that have to agree: whether the button is grey
-   * and whether the menu item is. One list, read twice.
-   */
-  const exportable = useMemo(
-    () => (live ? t.conversation(live.entries, includeTools) : []),
-    [live, includeTools],
-  )
-
-  /**
-   * Whether there is anything worth writing to a file.
-   *
-   * Counts what was *said*, not what is in `exportable`: a session that has only made tool
-   * calls would otherwise offer an export that `parseExportRequest` then refuses, because a
-   * file of nothing but calls is not a conversation. Two places decide this and they have to
-   * agree; this is the one that greys the button, and the boundary is the one that cannot be
-   * got around.
-   */
-  const canExport = useMemo(() => exportable.some((turn) => turn.role !== 'tool'), [exportable])
-
-  /**
-   * Write the conversation to a file.
-   *
-   * The turns go over structured and the main process composes the document — see
-   * `shared/export.ts`. A saved file is confirmed in a toast that names where it went; a failure
-   * goes to the problem toast where every other recoverable failure in this component goes.
-   */
-  const exportSession = useCallback(
-    async (format: ExportFormat) => {
-      if (!live || !canExport) return
-      const outcome = await window.bravebot.exportSession({
-        format,
-        document: {
-          title: live.summary.title,
-          directory: live.summary.directory,
-          branch: live.summary.branch,
-          turns: exportable,
-        },
-      })
-      if (outcome.status === 'saved') {
-        showToast('Exported', `Saved to ${outcome.where}`)
-      } else if (outcome.status === 'failed') {
-        setProblem(`Could not export that: ${outcome.message}`)
-      }
-      // A cancelled sheet says nothing. Somebody changed their mind, which is not news.
-    },
-    [live, canExport, exportable],
-  )
+  const { includeTools, toggleTools, canExport, exportSession } = useExport(live, setProblem)
 
   const resetColumns = useCallback(() => {
     reset('left')
@@ -1234,7 +825,7 @@ export function App(): React.JSX.Element {
 
         // The fork first and the parent second: the cut is made out of the parent's live state,
         // so letting go of it before asking would be asking about a session that had gone.
-        setLive({
+        setLive(newLive({
           handle: forked.session,
           model: live.model,
           summary: {
@@ -1248,42 +839,35 @@ export function App(): React.JSX.Element {
             directory: forked.directory,
           },
           entries: t.fromSaid(forked.said),
-          turns: {},
           todos: Object.values(forked.todos).flat(),
-          quarantine: [],
-          phase: null,
-          checking: null,
-          hook: null,
-          tokens: 0,
-          composing: null,
-          running: false,
           contextTokens: forked.contextTokens,
           askingTrust: forked.trust.known ? null : forked.directory,
           keepingTrust: forked.keeping ?? null,
+          confinedLinesNotice: forked.confinedLines ?? null,
           trustRemembered: forked.remembered ?? null,
           // A fork is a session and not a bot, even when it was cut out of a bot's. A bot is one
-        // conversation resumed forever; a second one carrying its name would be a second bot
-        // wearing it, with the same memory file and no way to tell them apart in the list.
-        bot: null,
-        // A child begins with the archive its parent had at the cut, which the fork answer does
-        // not carry. Zero is the safe way to be wrong: it can only ask for a briefing that is not
-        // needed, where too high a figure would miss the one that is — and a fork is not a bot, so
-        // in this build it asks for nothing at all.
-        archived: 0,
-        autoVetting: forked.autoVetting,
-        permissionMode: forked.permissionMode,
-        sandboxMode: forked.sandboxMode,
-        rules: forked.settingsRules ?? null,
-        // The parent's backups stay the parent's: nothing in the child has written anything yet.
-        rewind: [],
-        forkedFrom: {
+          // conversation resumed forever; a second one carrying its name would be a second bot
+          // wearing it, with the same memory file and no way to tell them apart in the list.
+          bot: null,
+          // A child begins with the archive its parent had at the cut, which the fork answer does
+          // not carry. Zero is the safe way to be wrong: it can only ask for a briefing that is not
+          // needed, where too high a figure would miss the one that is — and a fork is not a bot, so
+          // in this build it asks for nothing at all.
+          archived: 0,
+          autoVetting: forked.autoVetting,
+          permissionMode: forked.permissionMode,
+          sandboxMode: forked.sandboxMode,
+          rules: forked.settingsRules ?? null,
+          // The parent's backups stay the parent's: nothing in the child has written anything yet.
+          rewind: [],
+          forkedFrom: {
             directory: forked.parent.directory,
             id: forked.parent.id,
             title: forked.parent.title ?? live.summary.title,
             prompt: forked.parent.prompt,
           },
           focus: null,
-        })
+        }))
         // From the agent rather than from `entry.text`: what the composer opens with should be
         // the prompt that was actually cut out, not the one this window thought it clicked.
         setDraft(forked.prefill)
@@ -1297,63 +881,7 @@ export function App(): React.JSX.Element {
     [live, refresh, readForks],
   )
 
-  /**
-   * Which rewind is waiting on its confirmation, for which session.
-   *
-   * The handle is kept so a dialog asked about one session is never answered against another.
-   */
-  const [rewinding, setRewinding] = useState<{ handle: string; steps: number; busy: boolean } | null>(null)
-  const askRewind = useCallback((steps: number) => {
-    const current = liveRef.current
-    if (!current || current.running || !current.rewind?.some((point) => point.steps === steps)) return
-    setRewinding({ handle: current.handle, steps, busy: false })
-  }, [])
-  const rewindEntry = useCallback((id: string) => {
-    const entry = liveRef.current?.entries.find((candidate) => candidate.id === id)
-    const point = entry?.kind === 'user' ? pointForPrompt(liveRef.current?.rewind ?? [], entry.prompt) : null
-    if (point) askRewind(point.steps)
-  }, [askRewind])
-
-  /**
-   * Put the session back and draw it again from what the agent says it now holds.
-   *
-   * Redrawn rather than patched, as opening a saved session is: what is on screen afterwards is
-   * what the next turn will be working from.
-   */
-  const confirmRewind = useCallback(async () => {
-    if (!rewinding || rewinding.busy) return
-    const { handle, steps } = rewinding
-    setRewinding({ ...rewinding, busy: true })
-    try {
-      const rewound = await call<RewoundSession>('session.rewind', { session: handle, steps })
-      updateSession(handle, (old) => old ? {
-        ...old,
-        entries: t.fromSaid(rewound.said),
-        turns: Object.fromEntries(Object.entries(old.turns).filter(([turn]) => Number(turn) < rewound.turn)),
-        todos: Object.values(rewound.todos).flat(),
-        contextTokens: rewound.contextTokens,
-        archived: rewound.archived,
-        rewind: rewound.rewind,
-        awaitingOrdinal: null,
-        focus: null,
-        // Held, so the prompt going back in the composer is not overtaken by one queued before it.
-        queuePaused: old.queued?.length ? true : old.queuePaused,
-        // The turn that carried the briefing may be one of those undone.
-        bot: old.bot ? { ...old.bot, grounded: false } : null,
-      } : old)
-      const draftNow = liveRef.current?.handle === handle ? draft : ''
-      setDraft(rewound.text + (draftNow.trim() ? `\n\n${draftNow}` : ''))
-      showToast(`Back to before turn ${rewound.turn}`)
-      setProblem(rewound.refused.length
-        ? `These files still hold what the undone turns wrote, so check them before going on: ${rewound.refused.join(', ')}`
-        : null)
-      void refresh()
-    } catch (error) {
-      setProblem(rewindFailure(error))
-    } finally {
-      setRewinding(null)
-    }
-  }, [rewinding, draft, setDraft, updateSession, refresh])
+  const { rewinding, askRewind, rewindEntry, confirmRewind, cancel: cancelRewind } = useRewind({ liveRef, updateSession, refresh, draft, setDraft, setProblem })
 
   /** Show the session this one was cut out of, at the point of the cut. */
   const openParent = useCallback(() => {
@@ -1397,7 +925,7 @@ export function App(): React.JSX.Element {
   const startBotChat = useCallback(async (bot: Bot, prompt: string, directory: string | null): Promise<boolean> => {
     const handle = await create(directory ?? bot.home, { slug: bot.slug, model: bot.model })
     if (!handle) return false
-    updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt, attachments: [] }] } : old)
+    updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt, attachments: [], staged: [] }] } : old)
     return true
   }, [create, updateSession])
 
@@ -1441,7 +969,7 @@ export function App(): React.JSX.Element {
     else if (choice.kind === 'none') directory = owner?.home ?? null
     else directory = choice.directory
     if (!directory || directory === current.summary.directory) return
-    const oldKey = conversationKey(current.summary.directory, current.draftId ?? current.handle)
+    const oldKey = preIdKey(current)
     const text = conversationPreferences(oldKey).draft
     const handle = await create(directory, owner ? { slug: owner.slug, model: current.model } : undefined)
     if (!handle) return
@@ -1451,12 +979,6 @@ export function App(): React.JSX.Element {
     if (text) setDraft(text)
     refreshLives((n) => n + 1)
   }, [create, setDraft])
-
-  const writeAppearance = useCallback((appearance: Appearance) => {
-    applyAppearance(appearance)
-    window.bravebot.writeTheme(appearance)
-    setChosen(appearance)
-  }, [])
 
   const openSettingsPage = useCallback((page?: SettingsPage) => {
     if (page) setSettingsPage(page)
@@ -1483,7 +1005,7 @@ export function App(): React.JSX.Element {
     rewindEntry,
     undoTurn: () => { const newest = live?.rewind?.[0]; if (newest) askRewind(newest.steps) },
     exportSession: (format) => void exportSession(format),
-    toggleExportTools: () => setIncludeTools((on) => !on),
+    toggleExportTools: toggleTools,
     theme: () => openSettingsPage('general'),
   })
 
@@ -1493,7 +1015,7 @@ export function App(): React.JSX.Element {
     () => ({
       hasSession: live !== null,
       running: live?.running ?? false,
-      canSend: live !== null && !live.running && !live.askingTrust && backendReady !== false && draft.trim().length > 0,
+      canSend: canSend(live, backendReady, draft),
       canExport,
       includeTools,
       canRewind: live !== null && !live.running && (live.rewind?.length ?? 0) > 0,
@@ -1510,12 +1032,7 @@ export function App(): React.JSX.Element {
   const stableSwitchTab = useEvent(switchTab)
   const stableOpenBot = useEvent(openBot)
   const openSettings = useEvent(() => openSettingsPage())
-  const stableCloseAudit = useEvent(closeAudit)
   const stableSwitchProject = useEvent((choice: ProjectChoice) => { void switchProject(choice) })
-  const auditTurn = selectedAudit && selectedAudit.turn !== null ? live?.turns[selectedAudit.turn] : undefined
-  const auditPanel = useMemo(() => selectedAudit
-    ? <AuditInspector key={`${selectedAudit.handle}:${selectedAudit.turn}`} details={auditTurn} onClose={stableCloseAudit} />
-    : null, [selectedAudit, auditTurn, stableCloseAudit])
 
   // A bot's own page, while no conversation is open over it.
   const viewedBot = !live && !reading && botView ? bots.find((each) => each.slug === botView && each.retired === 0) ?? null : null
@@ -1622,12 +1139,20 @@ export function App(): React.JSX.Element {
           }).catch((error) => setProblem(String(error)))
         }}
         onRemoveAttachment={(id) => setLive((old) => old ? { ...old, attachments: old.attachments?.filter((file) => file.id !== id) } : old)}
+        onStaging={(handle, staging) => updateSession(handle, (old) => old ? { ...old, staging } : old)}
         queuePaused={live?.queuePaused ?? false}
         onResumeQueued={() => setLive((old) => old ? { ...old, queuePaused: false } : old)}
         queued={live?.queued?.map((message) => message.prompt) ?? []}
         onQueue={() => {
           if (!draft.trim()) return
-          setLive((old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: draft.trim(), attachments: old.attachments ?? [] }], attachments: [] } : old)
+          // The queued message keeps the grants it names, and sends them when its turn comes. The
+          // terminal names the files instead (DROP-8), because its queue joins the running turn.
+          setLive((old) => old ? {
+            ...old,
+            queued: [...(old.queued ?? []), { prompt: draft.trim(), attachments: old.attachments ?? [], staged: named(old.staging, draft) }],
+            attachments: [],
+            staging: sent(old.staging),
+          } : old)
           setDraft('')
         }}
         onRemoveQueued={(index) => setLive((old) => old ? { ...old, queued: old.queued?.filter((_, at) => at !== index) } : old)}
@@ -1652,7 +1177,7 @@ export function App(): React.JSX.Element {
         onCancel={cancel}
         canExport={canExport}
         includeTools={includeTools}
-        onToggleTools={() => setIncludeTools((on) => !on)}
+        onToggleTools={toggleTools}
         onExport={(format) => void exportSession(format)}
         // Followed but never raised here: the banner says a kept answer settled this session, and
         // one another session kept since did not.
@@ -1705,167 +1230,12 @@ export function App(): React.JSX.Element {
       {rewinding && live?.handle === rewinding.handle && (() => {
         const plan = planRewind(live.rewind ?? [], rewinding.steps)
         return plan && <RewindConfirm plan={plan} bot={live.bot !== null} running={live.running} busy={rewinding.busy}
-          onCancel={() => setRewinding(null)} onConfirm={() => void confirmRewind()} />
+          onCancel={cancelRewind} onConfirm={() => void confirmRewind()} />
       })()}
       {live?.askingTrust && (
-        <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} onAnswer={answerTrust} />
+        <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} confinedLines={live.confinedLinesNotice} onAnswer={answerTrust} />
       )}
       <TooltipLayer />
     </div>
   )
-}
-
-/** Fold one event into the live session. */
-export function apply(
-  message: BridgeEvent,
-  setLive: React.Dispatch<React.SetStateAction<Live | null>>,
-  setBuild: (build: string) => void,
-  refresh: () => void,
-): void {
-  if (message.event === 'agent.ready') {
-    setBuild((message.data as { build: string }).build)
-    return
-  }
-
-  setLive((old) => {
-    if (!old) return old
-    old = { ...old, turns: receiveTurn(old.turns, message) }
-    switch (message.event) {
-      case 'watch.fired':
-        return { ...old, entries: [...old.entries, t.watchFired(message.data.number, message.data.path)] }
-      case 'watch.ended':
-        return { ...old, entries: [...old.entries, t.narrated(`Watch ${message.data.number} ended: ${message.data.reason}${message.data.message ? `. ${message.data.message}` : ''}`)] }
-      case 'turn.started':
-        return { ...old, running: true, phase: null, checking: null, hook: null, composing: null, tokens: 0,
-          sandboxMode: message.data.sandbox ?? old.sandboxMode,
-          entries: t.beginTurn(old.entries, message.data.turn) }
-      case 'audit':
-        return old
-      // A phase opens a round, so a call written in the last one is over.
-      case 'phase':
-        return { ...old, phase: message.data.phase, composing: null }
-      case 'composing':
-        return { ...old, composing: message.data.call }
-      // The phase is left alone: it is what the word goes back to once the check is over.
-      case 'check.started':
-        return { ...old, checking: message.data }
-      case 'check.finished':
-        return { ...old, checking: null }
-      // Likewise left to the phase: a hook runs in the middle of a round.
-      case 'hook.started':
-        return { ...old, hook: message.data }
-      case 'hook.finished':
-        return { ...old, hook: null }
-      case 'tokens':
-        return { ...old, tokens: message.data.written }
-      case 'narration':
-        return { ...old, composing: null, entries: [...old.entries, t.narrated(message.data.text)] }
-      case 'tool.started':
-        return { ...old, composing: null, entries: [...old.entries, t.started(message.data)] }
-      case 'tool.finished':
-        return { ...old, entries: t.finish(old.entries, message.data) }
-      case 'landed':
-        return { ...old, entries: t.land(old.entries, message.data.landing) }
-      case 'quarantined':
-        return {
-          ...old,
-          quarantine: [...old.quarantine, message.data],
-          entries: [...old.entries, t.quarantined(message.data)],
-        }
-      case 'todos':
-        return { ...old, todos: message.data.rows }
-      case 'confirm.request':
-        return { ...old, entries: [...old.entries, t.asked(message.data)] }
-      case 'run.request':
-        return { ...old, entries: [...old.entries, t.askedRun(message.data)] }
-      case 'output.request':
-        return { ...old, entries: [...old.entries, t.askedOutput(message.data)] }
-      case 'vet.request':
-        return { ...old, entries: [...old.entries, t.askedVet(message.data)] }
-      case 'fetch.request':
-        return { ...old, entries: [...old.entries, t.askedFetch(message.data)] }
-      case 'server.request':
-        return { ...old, entries: [...old.entries, t.askedServer(message.data)] }
-      case 'manifest.request':
-        return { ...old, entries: [...old.entries, t.askedManifest(message.data, t.narrowing(old.rules))] }
-      case 'exposure.request':
-        return { ...old, entries: [...old.entries, t.askedExposure(message.data)] }
-      case 'mcp-server.request':
-        return { ...old, entries: [...old.entries, t.askedMcpServer(message.data)] }
-      case 'mcp-tools.request':
-        return { ...old, entries: [...old.entries, t.askedMcpTools(message.data)] }
-      case 'mcp-call.request':
-        return { ...old, entries: [...old.entries, t.askedMcpCall(message.data)] }
-      case 'mcp-move.request':
-        return { ...old, entries: [...old.entries, t.askedMcpMove(message.data)] }
-      case 'host.request':
-        return { ...old, entries: [...old.entries, t.askedHost(message.data)] }
-      // A server has up to a minute to answer its handshake, and the turn says nothing else
-      // while it waits, so the wait is named where the phase is.
-      case 'mcp.starting':
-        return { ...old, phase: 'starting-servers' }
-      case 'mcp.started':
-        return { ...old, phase: null, entries: [...old.entries, t.mcpStarted(message.data)] }
-      // A run is not a turn, so it adds no turn marker and no reply to the conversation.
-      case 'manifest.started':
-        return { ...old, running: true, phase: null, checking: null, hook: null, tokens: 0,
-          sandboxMode: message.data.sandbox ?? old.sandboxMode }
-      case 'manifest.done':
-        refresh()
-        return { ...old, running: false, phase: null, checking: null, hook: null, outcome: 'complete',
-          entries: [...old.entries, t.planReplied(message.data.reply, message.data.record)] }
-      case 'manifest.error':
-        refresh()
-        return { ...old, running: false, phase: null, checking: null, hook: null, queuePaused: true,
-          entries: [...t.interruptPending(old.entries), t.planEnded(message.data)] }
-      case 'vouch.request':
-        return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }
-      case 'ask.request':
-        return { ...old, entries: [...old.entries, t.askedQuestions(message.data)] }
-      case 'turn.done': {
-        refresh()
-        // A rise means compaction summarised part of this conversation away, and what it takes it
-        // takes from the front — so a briefing put at the top of the session is the first thing
-        // gone. Saying the bot is no longer grounded is what makes the next prompt carry it again.
-        const compacted = message.data.archived > old.archived
-        return {
-          ...old,
-          contextTokens: message.data.contextTokens,
-          summary: { ...old.summary, id: message.data.id ?? old.summary.id },
-          outcome: 'complete',
-          running: message.data.consolidating === true,
-          phase: null,
-          // A consolidating turn stays running, so a check whose end was never heard would stay drawn.
-          checking: null,
-          hook: null,
-          composing: null,
-          entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn)],
-          awaitingOrdinal: null,
-          archived: message.data.archived,
-          rewind: message.data.rewind ?? [],
-          bot: old.bot && compacted ? { ...old.bot, grounded: false } : old.bot,
-        }
-      }
-      case 'turn.error': {
-        refresh()
-        const { kind, message: detail } = message.data
-        return {
-          ...old,
-          contextTokens: message.data.contextTokens,
-          summary: { ...old.summary, id: message.data.id ?? old.summary.id },
-          running: false,
-          phase: null,
-          checking: null,
-          hook: null,
-          composing: null,
-          entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }],
-          awaitingOrdinal: null,
-          queuePaused: true,
-          rewind: message.data.rewind ?? [],
-        }
-      }
-      default:
-        return old
-    }
-  })
 }

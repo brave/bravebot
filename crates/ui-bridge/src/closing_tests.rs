@@ -11,19 +11,13 @@ use std::time::Duration;
 const PATIENCE: Duration = Duration::from_secs(10);
 
 fn open_session(bridge: &mut Bridge, project: &Path) -> String {
-    bridge.mint(Open {
-        project: project.to_path_buf(),
-        state: Arc::new(Mutex::new(State::fresh(TrustStore::new(project)))),
-        answered_trust: true,
-        keeping: None,
-        running: None,
-        model: None,
-        watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-        auto_vetting: false,
-        definition: None,
-        permission_mode: PermissionMode::Ask.into(),
-        sandbox: None,
-    })
+    bridge.mint(Open::opened(
+        project.to_path_buf(),
+        State::fresh(TrustStore::new(project)),
+        true,
+        None,
+        false,
+    ))
 }
 
 /// A close answers as soon as the work has been told to stop, because a turn blocked on a model

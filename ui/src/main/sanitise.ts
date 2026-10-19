@@ -1,4 +1,6 @@
+import { withDrops } from './drops'
 import { attachmentPaths } from './files'
+import { withPastes } from './pastes'
 
 /**
  * The params a method is allowed to have arrived with.
@@ -26,6 +28,15 @@ import { attachmentPaths } from './files'
  * person chose in a native picker, which this process resolves to `files`. It is never forwarded
  * under its own name, so an id list cannot become a list of paths the agent reads as bytes.
  *
+ * `drops` is the window's list of files a person dropped, again as ids: grants `drops.ts` minted
+ * from paths the preload took off a trusted drop event, which the page never saw. This process
+ * turns them into the agent's `dropped` and `attachments` after everything the window said under
+ * those names is gone, so the only paths in either are ones a drop put there.
+ *
+ * `pastes` is the window's list of pictures a person pasted, as ids `pastes.ts` minted for bytes
+ * this process read off the clipboard itself. They become the agent's `images` the same way, after
+ * whatever the window sent as `images` is gone, so the only bytes there are ones a paste put there.
+ *
  * Stripped silently. There is no legitimate caller to warn, and a message saying which key was
  * removed would be a message telling a compromised renderer what to try next.
  */
@@ -36,6 +47,14 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
   // task, as it does for `/manifest` in the terminal: a plan is fixed before anything is read.
   if (method === 'manifest.run') {
     return { session: held.session, task: held.task, model: held.model }
+  }
+  // A list is the one thing the window asks for that the agent answers with directories, and the
+  // main process offers those as folders a session may be opened in (TRUST-20). A `directory`
+  // here would let the window choose which store is read, so the list is always the whole one.
+  // The renderer never sends one.
+  if (method === 'session.list') {
+    const { directory: _directory, ...rest } = held
+    return rest
   }
   if (method !== 'turn.send') return held
   // `recall` and `definition` join the lists for a smaller reason than theirs. `recall` decides
@@ -50,7 +69,10 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
     recall: _recall,
     definition: _definition,
     attachments,
+    drops,
+    pastes,
     ...rest
   } = held
-  return { ...rest, files: attachmentPaths(typeof rest.session === 'string' ? rest.session : '', attachments) }
+  const session = typeof rest.session === 'string' ? rest.session : ''
+  return withPastes(session, pastes, withDrops(session, drops, { ...rest, files: attachmentPaths(session, attachments) }))
 }

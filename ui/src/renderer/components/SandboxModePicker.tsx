@@ -2,10 +2,15 @@ import { SANDBOX_MODES, type SandboxMode } from '../../shared/protocol'
 import { ModePicker, type ModeChoice } from './ModePicker'
 
 const MODES: Record<SandboxMode, ModeChoice> = {
-  standard: {
-    label: 'Standard',
+  'workspace-write': {
+    label: 'Workspace write',
     icon: 'shield',
     says: 'Programs can read the machine except credential locations, and write only in the session',
+  },
+  'read-only': {
+    label: 'Read only',
+    icon: 'eye-on',
+    says: 'Programs can read the machine except credential locations. Neither they nor the file tools write in the session',
   },
   strict: {
     label: 'Strict',
@@ -14,11 +19,28 @@ const MODES: Record<SandboxMode, ModeChoice> = {
   },
 }
 
+/** On Windows none of these modes reads the machine, and Strict gives what Workspace write does. */
+const ON_WINDOWS: Record<SandboxMode, ModeChoice> = {
+  'workspace-write': {
+    ...MODES['workspace-write'],
+    says: 'Programs read only the session, the system and what their command names, and write only in the session',
+  },
+  'read-only': {
+    ...MODES['read-only'],
+    says: 'Programs read only the session, the system and what their command names. Neither they nor the file tools write in the session',
+  },
+  strict: {
+    ...MODES.strict,
+    says: 'The same reach as Workspace write on Windows. Programs read only the session, the system and what their command names',
+  },
+}
+
 /**
  * What a program the agent runs is held to.
  *
- * Standard is the quiet resting state. Strict is drawn marked for as long as it holds. There is
- * no entry for turning the sandbox off: this window offers none, and the bridge refuses it.
+ * Workspace write is the quiet resting state. Read only and Strict are drawn by name for as long as they
+ * hold. There is no entry for turning the sandbox off: this window offers none, and the bridge refuses
+ * it.
  *
  * A change applies from the session's next turn, so it is not disabled while a turn runs: the
  * turn on screen keeps the mode it began with.
@@ -28,7 +50,8 @@ export function SandboxModePicker({ mode, onChoose }: {
   onChoose: (mode: SandboxMode) => void
 }): React.JSX.Element {
   return (
-    <ModePicker name="sandbox" testId="sandbox" noun="Sandbox mode" modes={MODES}
+    <ModePicker name="sandbox" testId="sandbox" noun="Sandbox mode"
+      modes={window.bravebot.platform === 'win32' ? ON_WINDOWS : MODES}
       choices={SANDBOX_MODES} mode={mode} onChoose={onChoose} />
   )
 }

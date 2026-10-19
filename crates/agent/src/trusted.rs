@@ -108,6 +108,103 @@ pub fn record_for(
     Some((Store::new(home, directory), identity))
 }
 
+/// The record a yes is kept in, where it may be kept and this session may write it.
+///
+/// [`record_for`] in a session that adds to `~/.bravebot`. An incognito session reads the record
+/// and writes nothing ([`may_be_written`]), so a yes given there is not offered as one that is
+/// kept. Every front end asks here when it puts the startup question, so none says a yes is kept
+/// where another would write nothing.
+pub fn record_to_keep(
+    home: Option<&Path>,
+    profile: Option<&Path>,
+    directory: &Path,
+) -> Option<(Store, Identity)> {
+    if !may_be_written() {
+        return None;
+    }
+    record_for(home, profile, directory)
+}
+
+/// The rule trusting the workspace records: the root, which covers everything beneath it.
+///
+/// Shared by every front end that turns a yes into a map, the terminal, a session in lines and the
+/// desktop's bridge, so none has a reading of TRUST-7 of its own.
+///
+/// One place, so the map reached without the question is the map a yes would have written. It does
+/// not say that confined lines run without asking ([`trusting_the_workspace_and_confined_lines`]):
+/// only a yes to a question that said so does, so a map reached any other way keeps asking about
+/// every line (RUN-5).
+pub fn trusting_the_workspace(directory: &Path) -> bravebot_core::trust::TrustStore {
+    let mut trust = crate::workspace::trust_store(directory);
+    trust.trust(".");
+    trust
+}
+
+/// [`trusting_the_workspace`] for a yes to the startup question as it is asked now, which says that
+/// confined lines in the directory run without asking, or for a kept answer whose entry says so
+/// ([`Kept::confined_lines`]).
+pub fn trusting_the_workspace_and_confined_lines(
+    directory: &Path,
+) -> bravebot_core::trust::TrustStore {
+    let mut trust = trusting_the_workspace(directory);
+    trust.allow_confined_lines();
+    trust
+}
+
+/// The map a kept answer starts a session with: the rule a yes writes, and the answer about
+/// confined lines only where the entry says the question said so.
+pub fn trusting_as_kept(directory: &Path, kept: &Kept) -> bravebot_core::trust::TrustStore {
+    // An entry about the root of the worktree is honoured for a package below it (TRUST-23), but its
+    // answer covers the root it was given for and not a directory beneath it (RUN-5).
+    let about_this_directory = kept.root == directory
+        || matches!(
+            (kept.root.canonicalize(), directory.canonicalize()),
+            (Ok(kept), Ok(here)) if kept == here
+        );
+    match kept.confined_lines && about_this_directory {
+        true => trusting_the_workspace_and_confined_lines(directory),
+        false => trusting_the_workspace(directory),
+    }
+}
+
+/// The sentence a startup question carries about what a yes grants beyond the files (RUN-5), in the
+/// words every front end shows, so the one a person reads in a window is the one a terminal draws.
+///
+/// A front end whose question carries it, and tells the session so, gets the answer about confined
+/// lines when the person says yes ([`trusting_the_workspace_and_confined_lines`]).
+pub fn confined_lines_notice() -> &'static str {
+    bravebot_i18n::t!(trust_directory_confined_lines)
+}
+
+/// Write a yes down in `record` for later sessions, and say whether it was written, or `None` where
+/// nothing is kept: a no, or a yes with no record to write it in ([`record_to_keep`]).
+///
+/// The step every front end takes when the startup question is answered, with the one clock that
+/// dates the entry, so each of them is left only to put the result into its own words. `session`
+/// names the session in the entry and decides nothing; it is empty where the session has no name.
+///
+/// `confined_lines` is whether the question this yes answered said that confined lines in the
+/// directory run without asking ([RUN-5]), which the entry then says for the sessions it answers
+/// for. A front end whose question does not say so passes false.
+///
+/// [RUN-5]: ../../../docs/specs/tools/run.md
+pub fn keep_a_yes(
+    record: Option<&(Store, Identity)>,
+    yes: bool,
+    session: &str,
+    confined_lines: bool,
+) -> Option<bool> {
+    let (store, identity) = record?;
+    yes.then(|| store.keep(identity, session, seconds_now(), confined_lines))
+}
+
+/// Seconds since the epoch, which is how a kept answer says when it was given.
+fn seconds_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
 /// A kept answer that settles a session, and the record it is in.
 ///
 /// [`Kept::root`] is the session's own directory where the answer was kept there, and the root of
@@ -225,6 +322,12 @@ pub struct Kept {
     pub at: u64,
     /// The directory the answer is about.
     pub root: PathBuf,
+    /// Whether the question this yes answered said that confined lines in the directory run
+    /// without asking ([RUN-5]). False for an answer kept before it did, which is what makes such a
+    /// directory ask about every line until the person answers again.
+    ///
+    /// [RUN-5]: ../../../docs/specs/tools/run.md
+    pub confined_lines: bool,
 }
 
 /// The record for one working directory.
@@ -283,6 +386,7 @@ impl Store {
                     session: written.session,
                     at: written.at,
                     root: self.directory.clone(),
+                    confined_lines: written.confined_lines,
                 });
             }
         }
@@ -293,7 +397,9 @@ impl Store {
     ///
     /// Appended, never rewritten. Best effort, and says whether it was written: a home that is full
     /// or read-only means the answer lasts this session, which is what a yes grants anyway.
-    pub fn keep(&self, identity: &Identity, session: &str, at: u64) -> bool {
+    ///
+    /// `confined_lines` is written into the entry only where it is true ([`keep_a_yes`]).
+    pub fn keep(&self, identity: &Identity, session: &str, at: u64, confined_lines: bool) -> bool {
         if !may_be_written() {
             return false;
         }
@@ -308,6 +414,7 @@ impl Store {
             identity: *identity,
             session: session.to_string(),
             at,
+            confined_lines,
         }) else {
             return false;
         };
@@ -390,6 +497,13 @@ struct Written {
     session: String,
     /// When, in seconds since the epoch. Decides nothing either.
     at: u64,
+    /// Whether the question said confined lines run without asking, which a session honouring this
+    /// entry reads and acts on ([RUN-5]). Left out of an entry that did not say so, so such an entry
+    /// is spelled as it was before the field existed.
+    ///
+    /// [RUN-5]: ../../../docs/specs/tools/run.md
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    confined_lines: bool,
 }
 
 #[cfg(test)]
@@ -429,6 +543,33 @@ mod tests {
         }
     }
 
+    /// RUN-5: an entry says whether the question said confined lines run without asking. One kept
+    /// before it did, which is a line with no such field, reads as not saying so, and the newest
+    /// entry decides, so a person who answers again is the one a directory asks no more.
+    #[test]
+    fn an_answer_kept_before_the_question_said_so_does_not_say_so_until_answered_again() {
+        let scratch = Scratch::new("trusted-confined-lines");
+        let store = scratch.store("/work");
+        assert!(store.keep(&identity(1), "before", 1, false));
+        let written = std::fs::read_to_string(store.path()).expect("the record");
+        assert!(
+            !written.contains("confined_lines"),
+            "an answer that did not say so was written differently from one kept before the field"
+        );
+        assert!(!store.kept(&identity(1)).expect("kept").confined_lines);
+
+        assert!(store.keep(&identity(1), "after", 2, true));
+        assert!(
+            store.kept(&identity(1)).expect("kept").confined_lines,
+            "the newest answer said so and was not read as saying so"
+        );
+        assert!(store.keep(&identity(1), "later", 3, false));
+        assert!(
+            !store.kept(&identity(1)).expect("kept").confined_lines,
+            "an older answer that said so outvoted the newest"
+        );
+    }
+
     /// TRUST-23: the answer outlives the session, which is the whole reason the file exists. One
     /// session keeps it and the next in that directory reads it back, with who gave it and when.
     #[test]
@@ -437,7 +578,7 @@ mod tests {
         assert!(
             scratch
                 .store("/work")
-                .keep(&identity(1), "the-first", 1_000)
+                .keep(&identity(1), "the-first", 1_000, false)
         );
 
         assert_eq!(
@@ -446,7 +587,55 @@ mod tests {
                 session: "the-first".to_string(),
                 at: 1_000,
                 root: PathBuf::from("/work"),
+                confined_lines: false,
             })
+        );
+    }
+
+    /// TRUST-23: a yes given to the question is the answer that is kept, dated by the clock the
+    /// helper owns, and the next session in the directory reads it back. Asked of the helper rather
+    /// than of `Store::keep`, since a helper that wrote nothing would pass a test that called the
+    /// store itself.
+    #[test]
+    fn a_yes_is_written_and_read_back_by_the_next_session_there() {
+        let scratch = Scratch::new("trusted-keep-a-yes");
+        let record = (scratch.store("/work"), identity(1));
+
+        assert_eq!(
+            keep_a_yes(Some(&record), true, "a-session", false),
+            Some(true)
+        );
+
+        let kept = record.0.kept(&identity(1)).expect("the yes was not kept");
+        assert_eq!(kept.session, "a-session");
+        assert!(kept.at > 0, "the entry carries no time");
+    }
+
+    /// TRUST-23: a no writes nothing, and neither does a yes with no record to write it in. The
+    /// regression it rejects is a no kept as a yes, which would trust a directory nobody vouched for.
+    #[test]
+    fn a_no_and_a_yes_with_no_record_write_nothing() {
+        let scratch = Scratch::new("trusted-keep-no");
+        let record = (scratch.store("/work"), identity(1));
+
+        assert_eq!(keep_a_yes(Some(&record), false, "a-session", false), None);
+        assert!(!record.0.path().exists(), "a no was written down");
+        assert_eq!(keep_a_yes(None, true, "a-session", false), None);
+    }
+
+    /// TRUST-23: a yes whose record cannot be written says so, so the front end can tell the person
+    /// the next session will ask. The state directory here is a file, which nothing can be created
+    /// inside.
+    #[test]
+    fn a_yes_that_cannot_be_written_says_so() {
+        let scratch = Scratch::new("trusted-keep-blocked");
+        let blocked = scratch.path.join("not-a-directory");
+        std::fs::write(&blocked, b"").expect("a file in the way");
+        let record = (Store::new(&blocked, Path::new("/work")), identity(1));
+
+        assert_eq!(
+            keep_a_yes(Some(&record), true, "a-session", false),
+            Some(false)
         );
     }
 
@@ -456,7 +645,9 @@ mod tests {
     #[test]
     fn an_answer_kept_about_one_directory_answers_for_no_other() {
         let scratch = Scratch::new("trusted-exact-directory");
-        scratch.store("/work").keep(&identity(1), "a-session", 1);
+        scratch
+            .store("/work")
+            .keep(&identity(1), "a-session", 1, false);
 
         for other in ["/work/inner", "/", "/other"] {
             assert_eq!(
@@ -479,7 +670,9 @@ mod tests {
             crate::home::key_for(Path::new(theirs)),
             "this test needs two paths that reduce to one key"
         );
-        scratch.store(theirs).keep(&identity(1), "a-session", 1);
+        scratch
+            .store(theirs)
+            .keep(&identity(1), "a-session", 1, false);
 
         assert_eq!(scratch.store(mine).kept(&identity(1)), None);
     }
@@ -489,7 +682,9 @@ mod tests {
     #[test]
     fn another_directory_at_the_same_path_is_asked_about() {
         let scratch = Scratch::new("trusted-remade");
-        scratch.store("/work").keep(&identity(1), "a-session", 1);
+        scratch
+            .store("/work")
+            .keep(&identity(1), "a-session", 1, false);
 
         assert_eq!(scratch.store("/work").kept(&identity(2)), None);
         assert_eq!(
@@ -646,8 +841,8 @@ mod tests {
     fn a_line_about_this_directory_this_build_cannot_read_stops_the_answer() {
         let scratch = Scratch::new("trusted-unknown-field");
         let store = scratch.store("/work");
-        store.keep(&identity(1), "an-earlier-session", 1);
-        store.keep(&identity(1), "a-later-build", 2);
+        store.keep(&identity(1), "an-earlier-session", 1, false);
+        store.keep(&identity(1), "a-later-build", 2, false);
 
         let written = std::fs::read_to_string(store.path()).expect("the record");
         let (first, second) = written.split_once('\n').expect("two lines");
@@ -675,7 +870,7 @@ mod tests {
     fn a_half_written_line_leaves_the_answer_before_it() {
         let scratch = Scratch::new("trusted-partial-line");
         let store = scratch.store("/work");
-        store.keep(&identity(1), "a-session", 1);
+        store.keep(&identity(1), "a-session", 1, false);
 
         let mut file = std::fs::OpenOptions::new()
             .append(true)
@@ -697,7 +892,7 @@ mod tests {
         std::fs::create_dir_all(store.path().parent().expect("a parent")).expect("made");
         std::fs::write(store.path(), "{\"directory\":\"/work\",\"sess").expect("written");
 
-        assert!(store.keep(&identity(1), "a-session", 1));
+        assert!(store.keep(&identity(1), "a-session", 1, false));
 
         assert!(
             store.kept(&identity(1)).is_some(),
@@ -712,7 +907,7 @@ mod tests {
     fn a_line_cut_inside_a_character_is_skipped_like_any_half_written_line() {
         let scratch = Scratch::new("trusted-cut-character");
         let store = scratch.store("/work");
-        store.keep(&identity(1), "a-session", 1);
+        store.keep(&identity(1), "a-session", 1, false);
         let cut = b"{\"directory\":\"/caf\xC3";
         let mut file = std::fs::OpenOptions::new()
             .append(true)
@@ -740,9 +935,9 @@ mod tests {
         let scratch = Scratch::new("trusted-forget");
         let mine = scratch.store("/a/b");
         let theirs = scratch.store("/a-b");
-        mine.keep(&identity(1), "one", 1);
-        theirs.keep(&identity(7), "two", 2);
-        mine.keep(&identity(2), "three", 3);
+        mine.keep(&identity(1), "one", 1, false);
+        theirs.keep(&identity(7), "two", 2, false);
+        mine.keep(&identity(2), "three", 3, false);
 
         assert!(mine.forget().expect("forgotten"), "nothing was withdrawn");
 
@@ -766,7 +961,7 @@ mod tests {
         let store = scratch.store("/work");
         assert!(!store.forget().expect("no record"));
 
-        store.keep(&identity(1), "a-session", 1);
+        store.keep(&identity(1), "a-session", 1, false);
         assert!(store.forget().expect("forgotten"));
         assert!(!store.path().exists(), "an empty record was left behind");
     }
@@ -797,7 +992,7 @@ mod tests {
         fn remember(&self, directory: &Path) -> Option<()> {
             let identity = Identity::of(directory)?;
             Store::new(&self.scratch.path.join("home"), directory)
-                .keep(&identity, "a-session", 5)
+                .keep(&identity, "a-session", 5, false)
                 .then_some(())
         }
 
@@ -875,7 +1070,7 @@ mod tests {
             made: identity.made.saturating_sub(10),
             ..identity
         };
-        assert!(Store::new(&home, &checkout.root).keep(&before, "an-earlier-clone", 1));
+        assert!(Store::new(&home, &checkout.root).keep(&before, "an-earlier-clone", 1, false));
 
         assert!(
             checkout.honoured(&checkout.package).is_none(),
@@ -937,7 +1132,7 @@ mod tests {
 
         for (answered, other) in [(&bytes, &lookalike), (&lookalike, &bytes)] {
             let identity = Identity::of(answered).expect("an identity");
-            assert!(Store::new(&home, answered).keep(&identity, "a-session", 1));
+            assert!(Store::new(&home, answered).keep(&identity, "a-session", 1, false));
 
             let found = super::honoured(Some(&home), None, &answered.join("pkg"))
                 .expect("a package of the repository answered about was asked");
@@ -965,7 +1160,7 @@ mod tests {
         let Some(identity) = Identity::of(&checkout.root) else {
             return;
         };
-        assert!(Store::new(&home, &checkout.root).keep(&identity, "a-session", 1));
+        assert!(Store::new(&home, &checkout.root).keep(&identity, "a-session", 1, false));
 
         assert!(
             super::honoured(Some(&home), Some(&checkout.root), &checkout.package).is_none(),

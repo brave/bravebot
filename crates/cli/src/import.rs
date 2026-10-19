@@ -65,14 +65,14 @@ impl Looked {
 /// service these sources configure would make the request, so every answer to the question would be
 /// refused, and the file that refused is not this person's to write (BACKEND-48).
 pub(crate) fn before_the_session(config: &mut Config) -> Option<ExitCode> {
-    let model = crate::model_for_this_run(None, config);
+    let model = crate::model::model_for_this_run(None, config);
     let (subscription, a_service_is_configured) =
         match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), &model) {
             bravebot_agent::backend::Serving::Configured => return None,
             bravebot_agent::backend::Serving::Refused { file, why } => {
                 return Some(fail(
                     Ending::Configuration,
-                    crate::managed_refusal(&model, &file, why),
+                    crate::model::managed_refusal(&model, &file, why),
                 ));
             }
             bravebot_agent::backend::Serving::NothingConfigured {
@@ -88,7 +88,7 @@ pub(crate) fn before_the_session(config: &mut Config) -> Option<ExitCode> {
         Start::Ended(code) => Some(code),
         Start::Refuse(looked) => Some(fail(
             Ending::Configuration,
-            crate::how_to_configure_a_model(
+            crate::model::how_to_configure_a_model(
                 subscription.as_deref(),
                 a_service_is_configured,
                 &looked,
@@ -171,7 +171,7 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
     // exported later, and ending here over it would refuse a service that works.
     let unset = unset_gateways(&config, &offered.gateways);
     let blocked = config
-        .provider_for(&crate::model_for_this_run(None, &config))
+        .provider_for(&crate::model::model_for_this_run(None, &config))
         .is_some_and(|(serving, _)| unset.iter().any(|provider| provider.id == serving.id));
     if blocked {
         let lines: Vec<String> = unset
@@ -183,14 +183,14 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
     for provider in &unset {
         asking.say(&unset_line(provider, &file, true));
     }
-    let model = crate::model_for_this_run(None, &config);
+    let model = crate::model::model_for_this_run(None, &config);
     match bravebot_agent::backend::serving(&config, &bravebot_net::Egress::new(), &model) {
         bravebot_agent::backend::Serving::NothingConfigured {
             subscription,
             a_service_is_configured,
         } => Start::Ended(fail(
             Ending::Configuration,
-            crate::how_to_configure_a_model(
+            crate::model::how_to_configure_a_model(
                 subscription.as_deref(),
                 a_service_is_configured,
                 &Looked::default(),
@@ -201,7 +201,7 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
         // (BACKEND-48).
         bravebot_agent::backend::Serving::Refused { file, why } => Start::Ended(fail(
             Ending::Configuration,
-            crate::managed_refusal(&model, &file, why),
+            crate::model::managed_refusal(&model, &file, why),
         )),
         bravebot_agent::backend::Serving::Configured => Start::Serving(Box::new(config)),
     }
@@ -456,6 +456,8 @@ struct Plan {
     source: Source,
     read: Vec<PathBuf>,
     running_at: Option<String>,
+    /// The window the running server holds the model loaded with.
+    window: Option<u64>,
     env: Vec<(String, String)>,
     model: Option<String>,
     gateways: Vec<Gateway>,
@@ -486,6 +488,7 @@ fn plan(
         source: found.source,
         read: found.read,
         running_at: found.running_at,
+        window: found.window,
         env: Vec::new(),
         model: None,
         gateways: Vec::new(),
@@ -604,6 +607,7 @@ fn shown(plan: &Plan, destination: &Path, managed: &Managed) -> Vec<String> {
     }
     if let Some(model) = &plan.model {
         lines.push(printable(&format!("  model: {}", import::quoted(model))));
+        lines.extend(window_lines(plan.window));
     }
     for gateway in &plan.gateways {
         lines.push(format!(
@@ -635,6 +639,32 @@ fn shown(plan: &Plan, destination: &Path, managed: &Managed) -> Vec<String> {
     lines.extend(named_lines(plan));
     lines.extend(pinned_lines(plan, managed));
     lines.extend(left_lines(plan.source, &plan.left));
+    lines
+}
+
+/// The window the server holds the chosen model loaded with, and where that is below what bravebot
+/// budgets a conversation against, that the server drops what does not fit.
+///
+/// Said only where the server stated a figure: a model that is not loaded has none, and guessing
+/// one would be worse than saying nothing. Shown only, since a `provider` block that lists no
+/// models has nowhere to keep a limit.
+fn window_lines(window: Option<u64>) -> Vec<String> {
+    let Some(window) = window else {
+        return Vec::new();
+    };
+    let mut lines = vec![format!(
+        "  {}",
+        t!(import_ollama_window, window = window as i64)
+    )];
+    if window < bravebot_config::provider::CONTEXT_WINDOW {
+        lines.push(format!(
+            "  {}",
+            t!(
+                import_ollama_window_small,
+                assumed = bravebot_config::provider::CONTEXT_WINDOW as i64
+            )
+        ));
+    }
     lines
 }
 
@@ -1390,7 +1420,7 @@ mod tests {
     /// configured ends a start as well, and that is the end a broken implementation would pass on.
     /// The allow list is empty rather than naming models, so the refusal does not depend on which
     /// model this machine has recorded; the record is read from the real home directory, which no
-    /// test can move. The sentence is read through [`crate::managed_refusal`], the function the start
+    /// test can move. The sentence is read through [`crate::model::managed_refusal`], the function the start
     /// ends with, because `fail` writes to the process's own stderr and no test can read that.
     #[test]
     fn a_start_on_a_model_the_managed_layer_refuses_is_ended() {
@@ -1416,11 +1446,11 @@ mod tests {
             "the start opened on a model the managed layer refuses"
         );
 
-        let model = crate::model_for_this_run(None, &config);
+        let model = crate::model::model_for_this_run(None, &config);
         let (file, why) = config
             .model_refused(&model)
             .expect("the layer refuses the model in force");
-        let said = crate::managed_refusal(&model, file, why);
+        let said = crate::model::managed_refusal(&model, file, why);
         assert!(
             said.contains(&refusing.display().to_string()),
             "the end did not name the file that refused: {said}"
@@ -1439,8 +1469,53 @@ mod tests {
                 name: "qwen3-coder:30b".to_string(),
                 modified_at: "2026-09-18T14:07:58-04:00".to_string(),
                 capabilities: Some(vec!["completion".to_string(), "tools".to_string()]),
+                window: None,
             }],
         )
+    }
+
+    /// What a running Ollama serves when its one model that can call tools is loaded with `window`.
+    fn ollama_loaded_with(window: Option<u64>) -> Found {
+        import::running(
+            "http://localhost:11434",
+            vec![import::Installed {
+                name: "qwen3-coder:30b".to_string(),
+                modified_at: "2026-09-18T14:07:58-04:00".to_string(),
+                capabilities: Some(vec!["completion".to_string(), "tools".to_string()]),
+                window,
+            }],
+        )
+    }
+
+    /// IMPORT-5: the question for a server whose model is loaded below the window a conversation is
+    /// budgeted against shows the figure and says the server drops earlier turns; a window at or
+    /// above that, or none stated, shows no warning, and none stated shows no figure either.
+    #[test]
+    fn a_window_below_the_assumed_one_is_shown_with_what_the_server_drops() {
+        let scratch = Scratch::new("cli-import-ollama-window");
+        let asked = |window| {
+            asked_about(
+                &scratch,
+                vec![ollama_loaded_with(window)],
+                "n\n",
+                &Managed::default(),
+                &|_| None,
+            )
+            .0
+        };
+
+        let small = asked(Some(4096));
+        assert!(small.contains("context window of 4096 tokens"), "{small}");
+        assert!(small.contains("drops the earliest turns"), "{small}");
+        assert!(small.contains("OLLAMA_CONTEXT_LENGTH"), "{small}");
+
+        let large = asked(Some(131_072));
+        assert!(large.contains("context window of 131072 tokens"), "{large}");
+        assert!(!large.contains("drops the earliest turns"), "{large}");
+
+        let unstated = asked(None);
+        assert!(!unstated.contains("context window"), "{unstated}");
+        assert!(!unstated.contains("OLLAMA_CONTEXT_LENGTH"), "{unstated}");
     }
 
     /// IMPORT-10: an entry for the same server under an id of its own already lists every model it

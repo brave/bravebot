@@ -418,10 +418,17 @@ pub fn ask<S: Sink>(
         Presentation::Quarantined(_) => None,
     };
 
-    let shown = completion.content.declassify(&as_written);
+    // Cut inside the kernel, on the answer while it is still labelled: the count and the trim
+    // are a reshape for the screen, and only the finished text is released. `kept` came back
+    // from `present` as visible, so it is words the planner could hold and is cut as such.
     let (shown, kept) = match limit {
-        Some(limit) => (capped(&shown, limit), kept.map(|body| capped(&body, limit))),
-        None => (shown, kept),
+        Some(limit) => (
+            policy
+                .render_in_place("btw", &completion.content, |text| capped(&text, limit))
+                .declassify(&as_written),
+            kept.map(|body| capped(&body, limit)),
+        ),
+        None => (completion.content.declassify(&as_written), kept),
     };
 
     Ok(Answered {

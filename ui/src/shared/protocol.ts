@@ -25,7 +25,7 @@ export type Hook = { moment: string; program: string }
 export type Checking = { lines: number } | { file: 'picture' | 'pdf' }
 export type Reach = 'not_the_planner' | 'no_model'
 export type Landing = 'context' | 'quarantined' | 'reserved'
-export type TodoStatus = 'pending' | 'active' | 'done'
+export type TodoStatus = 'pending' | 'active' | 'done' | 'cancelled'
 
 export type Change =
   | { kind: 'kept'; text: string }
@@ -102,6 +102,14 @@ export type Said =
    * agent's own: a reference name and a media type from its table of extensions.
    */
   | { kind: 'vetted'; reference: string; media: string }
+  /**
+   * A message between two background sessions, from this one's record (MSG-11). `direction` is
+   * `from` for one that reached this session's planner and `to` for one its planner sent. `text` is
+   * null where the planner was given a reference and not the words. `heading` and `kept` are the
+   * sentences the terminal draws for the same record, worded once in Rust; `kept` is null where
+   * `text` is not.
+   */
+  | { kind: 'session_message'; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
 
 export interface TodoRow {
   content: string
@@ -206,10 +214,12 @@ export interface OpenedSession {
   context: string
   todos: Record<string, TodoRow[]>
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
-  /** The yes an earlier session here was told to remember, where it and not `trust` settled the question (TRUST-23). */
+  /** The yes that was kept about this directory, where it and not `trust` settled the question (TRUST-23). */
   remembered?: KeptTrust | null
-  /** Where a remembered yes would be written, where the question is asked and remembering is offered. */
+  /** Where a yes would be kept, where the question is asked and the answer may be kept. */
   keeping?: string | null
+  /** What a yes also grants beyond the files, to show on the question (RUN-5); null where the question is not asked. */
+  confinedLines?: string | null
   branchNote: string | null
   buildNote: string | null
   /** Said when the other front end wrote the transcript above: it drew it, and this one will not draw it the same way. */
@@ -251,13 +261,13 @@ export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'acceptEdits'
 /**
  * What a program the agent runs is held to, as `session.sandbox` names it.
  *
- * Two of the agent's three. `off` starts a program with no profile, which a window has no way to
+ * Three of the agent's four. `off` starts a program with no profile, which a window has no way to
  * show, so the bridge refuses it from a window (SANDBOX-22).
  */
-export type SandboxMode = 'standard' | 'strict'
+export type SandboxMode = 'workspace-write' | 'read-only' | 'strict'
 
 /** The order the sandbox menu lists them. */
-export const SANDBOX_MODES: readonly SandboxMode[] = ['standard', 'strict']
+export const SANDBOX_MODES: readonly SandboxMode[] = ['workspace-write', 'read-only', 'strict']
 
 export function nextPermissionMode(mode: PermissionMode): PermissionMode {
   return PERMISSION_MODES[(PERMISSION_MODES.indexOf(mode) + 1) % PERMISSION_MODES.length]!
@@ -325,6 +335,7 @@ export interface ForkedSession {
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
   remembered?: KeptTrust | null
   keeping?: string | null
+  confinedLines?: string | null
   /** The parent's, as it opened: the child carries on its conversation. */
   autoVetting: boolean
   /** Always `ask`, whatever the parent was in: a fork opens as any session does (MODE-11). */
@@ -343,14 +354,14 @@ export interface ForkedSession {
   }
 }
 
-export interface Vetting { verdict: string; reason?: string | null; detail?: string | null }
+export interface Vetting { verdict: string; reason?: string | null; label?: string | null; detail?: string | null }
 /**
  * A picture or a PDF put to the person as a copy to open, since a transcript row cannot show what
  * the model would be shown. The copy is deleted once the question is answered.
  */
 export interface VetPicture { path: string; media: string; bytes: number }
 
-export interface VetRequest { request: number; origin: string; summary?: string; expects: string; content: string; lines: number; picture?: VetPicture | null; vetting: Vetting }
+export interface VetRequest { request: number; origin: string; summary?: string; expects: string; content: string; label?: string | null; lines: number; picture?: VetPicture | null; vetting: Vetting }
 
 export interface ConfirmRequest {
   remark?: { preview: string[]; lines: number; label: string } | null
@@ -651,15 +662,14 @@ export interface McpTool { name: string; arguments: string[]; description: strin
 
 /**
  * The tools an MCP server lists, put to the person before any is offered to the model
- * (SERVERS-8). `refused` counts tools the client would not draw, and `changed` says a different
- * list was approved under this declaration before. A yes is remembered for this exact list.
+ * (SERVERS-8). `refused` counts tools the client would not draw. A yes holds for the session
+ * and is not remembered.
  */
 export interface McpToolsRequest {
   request: number
   alias: string
   tools: McpTool[]
   refused: number
-  changed: boolean
   vetting: Vetting
 }
 
@@ -732,6 +742,8 @@ export interface RunRequest {
   releasesPrivate: boolean
   /** What the stages are confined to, or `null` where the turn does not confine them. */
   confinement?: { heading: string; directories: string[]; sentences: string[] } | null
+  /** The sentence for `confinement: null`, worded by the bridge in the person's language. */
+  notSandboxed?: string | null
   /**
    * Credential scopes and toolchain lists the planner asked this line to be lent, by name.
    *
@@ -780,6 +792,8 @@ export interface OutputRequest {
   reference: string
   lines: number
   output: string
+  /** The label the output was released under, as the trail writes it. */
+  label: string
   summary: string
 }
 
@@ -789,6 +803,8 @@ export interface VouchRequest {
   request: number
   path: string
   preview: string
+  /** The label the preview was released under, as the trail writes it. */
+  label: string
   /** Whether the preview is only part of the file. Load-bearing: a preview that stops
    *  without saying so reads as the whole thing. */
   truncated: boolean
@@ -840,7 +856,7 @@ export type AskAnswer = { chosen?: number[]; typed?: string }
 /** Every event the bridge emits, keyed by name. */
 export interface EventMap {
   'agent.ready': { build: string; version: string; home: string | null }
-  'trust.request': { directory: string; keeping?: string | null }
+  'trust.request': { directory: string; keeping?: string | null; confinedLines?: string | null }
   'turn.started': { turn: number; sandbox?: SandboxMode }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }

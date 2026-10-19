@@ -108,10 +108,10 @@ export const Context = memo(function Context({ live, audit, details }: {
             {live.todos.map((row, index) => (
               <li key={index} className={row.status}>
                 <span className="marker" aria-hidden="true">
-                  {row.status === 'done' ? <Icon name="check-circle-filled" /> : row.status === 'active' ? <ProgressRing mode="indeterminate" /> : <Icon name="radio-unchecked" />}
+                  {row.status === 'done' ? <Icon name="check-circle-filled" /> : row.status === 'cancelled' ? <Icon name="close" /> : row.status === 'active' ? <ProgressRing mode="indeterminate" /> : <Icon name="radio-unchecked" />}
                 </span>
                 <span className="todo-text">{row.content}</span>
-                <span className="visually-hidden">{row.status === 'done' ? ', done' : row.status === 'active' ? ', in progress' : ''}</span>
+                <span className="visually-hidden">{row.status === 'done' ? ', done' : row.status === 'cancelled' ? ', cancelled' : row.status === 'active' ? ', in progress' : ''}</span>
               </li>
             ))}
           </ul>

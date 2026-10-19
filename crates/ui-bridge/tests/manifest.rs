@@ -249,10 +249,19 @@ impl FrontEnd {
             json!({"directory": scratch.project().display().to_string()}),
         );
         let session = opened["session"].as_str().expect("a handle").to_string();
-        self.call(
-            "trust.reply",
-            json!({"session": session, "trusted": trusted}),
-        );
+        // A yes an earlier session here gave is kept, and settles the next one without asking.
+        // A test that wants a session with nothing trusted opens it before any yes is given.
+        if opened["remembered"].is_null() {
+            self.call(
+                "trust.reply",
+                json!({"session": session, "trusted": trusted}),
+            );
+        } else {
+            assert!(
+                trusted,
+                "a kept yes settled a session the test wanted untrusted"
+            );
+        }
         session
     }
 
@@ -685,6 +694,10 @@ fn a_session_is_busy_until_its_run_ends() {
             refused["error"]["code"], "turn_in_flight",
             "{method} was taken while a run was waiting: {refused}"
         );
+        assert_eq!(
+            refused["error"]["message"], "a turn is already running in this session",
+            "{method} was refused for another reason: {refused}"
+        );
     }
 
     front.reply("manifest.reply", &session, &question, "reject");
@@ -722,13 +735,23 @@ fn a_run_that_cannot_be_what_was_asked_for_is_refused() {
         );
     }
 
+    // In a directory nothing has been kept about: the yes above settles a session in the project.
+    let elsewhere = scratch.path.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("a second directory");
     let opened = front.call(
         "session.new",
-        json!({"directory": scratch.project().display().to_string()}),
+        json!({"directory": elsewhere.display().to_string()}),
     );
+    assert!(opened["remembered"].is_null(), "{opened}");
     let unanswered = opened["session"].as_str().expect("a handle");
     let refused = front.answered("manifest.run", json!({"session": unanswered, "task": TASK}));
     assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("send trust.reply first")),
+        "a run in an unasked session was refused for another reason: {refused}"
+    );
 
     assert_eq!(rounds.try_iter().count(), 0, "a refused run asked a model");
 }
@@ -1028,5 +1051,92 @@ fn ordinary_manifest_endings_keep_file_trust_in_the_bridge() {
             "resumed bridge planner saw quarantined write"
         );
         assert!(requests.last().unwrap().contains("quarantined"));
+    }
+}
+
+/// MANIFEST-11: a downgrade a run records is in the session's record when the run ends, so a
+/// session closed before any further turn resumes with it, whichever way the run ended.
+#[test]
+fn a_downgrade_a_run_records_survives_close_and_resume_without_another_turn() {
+    const SENTINEL: &str = "BRIDGE-CLOSED-BEFORE-NEXT-TURN-SENTINEL";
+    for ending in ["finished", "failed", "stopped"] {
+        let scratch = Scratch::new(&format!("bridge-manifest-close-{ending}"));
+        std::fs::write(scratch.project().join(TARGET), "old trusted notes").unwrap();
+        std::fs::write(scratch.project().join("blocked"), "second processor input").unwrap();
+        let steps = if ending == "finished" {
+            json!([
+                {"capability":"FILE_READ","args":{"path":TARGET,"out_slot":"raw"}},
+                {"capability":"TRANSFORM","args":{"reads":["raw"],"instruction":"produce a document","out_slot":"processed"}},
+                {"capability":"FILE_WRITE","args":{"path":TARGET,"from_slot":"processed"}},
+            ])
+        } else {
+            json!([
+                {"capability":"FILE_READ","args":{"path":TARGET,"out_slot":"raw"}},
+                {"capability":"FILE_READ","args":{"path":"blocked","out_slot":"raw2"}},
+                {"capability":"TRANSFORM","args":{"reads":["raw"],"instruction":"produce a document","out_slot":"processed"}},
+                {"capability":"TRANSFORM","args":{"reads":["raw2"],"instruction":"produce another document","out_slot":"processed2"}},
+                {"capability":"FILE_WRITE","args":{"path":TARGET,"from_slot":"processed"}},
+                {"capability":"FILE_WRITE","args":{"path":"blocked","from_slot":"processed2"}},
+            ])
+        };
+        let (endpoint, _rounds) = scripted_planner(vec![
+            json!({"content":"done"}),
+            json!({"content":"Read, transform, write"}),
+            json!({"content":json!({"steps":steps}).to_string()}),
+            json!({"content":format!("===== the document starts here =====\n{SENTINEL}")}),
+            json!({"content":"===== the document starts here =====\nsecond quarantined output"}),
+        ]);
+        let mut front = FrontEnd::start(&scratch, &endpoint);
+        let session = front.session(&scratch, true);
+
+        // One completed turn, so the session has a record holding the map from before the run.
+        front.send("turn.send", json!({"session":session,"prompt":"say done"}));
+        let turn = front.question_or_the_end();
+        assert_eq!(turn["event"], "turn.done", "{turn}");
+        let id = turn["data"]["id"].as_str().expect("a record").to_string();
+
+        let plan = front.plan(&session);
+        front.reply("manifest.reply", &session, &plan, "approve");
+        let write = front.question_or_the_end();
+        assert_eq!(write["event"], "confirm.request", "{write}");
+        assert_eq!(write["data"]["path"], TARGET);
+        if ending != "finished" {
+            std::fs::remove_file(scratch.project().join("blocked")).unwrap();
+            std::fs::create_dir(scratch.project().join("blocked")).unwrap();
+        }
+        front.reply("confirm.reply", &session, &write, "approve");
+        let ended = if ending == "finished" {
+            front.question_or_the_end()
+        } else {
+            let later = front.question_or_the_end();
+            assert_eq!(later["event"], "confirm.request", "{later}");
+            if ending == "stopped" {
+                front.call("turn.cancel", json!({"session":session}));
+            } else {
+                front.reply("confirm.reply", &session, &later, "approve");
+            }
+            front.question_or_the_end()
+        };
+        assert_eq!(
+            ended["event"],
+            if ending == "finished" {
+                "manifest.done"
+            } else {
+                "manifest.error"
+            },
+            "{ended}"
+        );
+
+        // No turn between the run and the close: only the run's own save can carry the decision.
+        front.call("session.close", json!({"session":session}));
+        let opened = front.record("session.open", &scratch, &id);
+        assert!(
+            opened["ok"]["trust"]["rules"]
+                .as_array()
+                .is_some_and(|rules| rules
+                    .iter()
+                    .any(|rule| rule["path"] == TARGET && rule["integrity"] == "untrusted")),
+            "the resumed session lost the downgrade the {ending} run recorded: {opened}"
+        );
     }
 }

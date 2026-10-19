@@ -61,6 +61,14 @@ impl Interjections {
         self.0.lock().ok()?.pop_front()
     }
 
+    /// Take every line, oldest first, leaving the buffer empty.
+    pub fn drain(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .map(|mut waiting| waiting.drain(..).collect())
+            .unwrap_or_default()
+    }
+
     /// Drop the newest, for a prompt the person is taking back off the queue.
     ///
     /// The newest rather than the oldest because that is the end Up takes from: the queue is taken
@@ -337,6 +345,14 @@ impl Confirmer for RemoteConfirmer {
             Some(Reply::Host(decision)) => decision,
             _ => Decision::Reject,
         }
+    }
+
+    /// Declined without asking: a session in a terminal is offered no way to send (MSG-3).
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
     }
 
     /// A yes to the call is not a yes to where its reply pointed.
@@ -654,7 +670,7 @@ mod tests {
             alias: "weather".into(),
             tools: Vec::new(),
             refused: 0,
-            changed: false,
+            withheld: 0,
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
         }
@@ -801,6 +817,8 @@ mod tests {
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
             picture: None,
+            label: None,
+            reason_label: None,
         }
     }
 

@@ -66,16 +66,18 @@ help:
 	@echo "  make write-untranslated    Write contrib/untranslated-messages.txt, which check-locales holds it to"
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes [BASE=ref]"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
-	@echo "  make check-npm             The installer test, the pnpm lockfiles in sync with their manifests, and their lint"
+	@echo "  make check-npm             The npm package tests, the pnpm lockfiles in sync with their manifests, and their lint"
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
 	@echo "  make check-ui              Build the desktop UI, run the tests pinning what it marks, drive it"
 	@echo "  make check-extension       Test the Brave extension's tools against a fake browser"
 	@echo "  make check-agent-client    Build and test the TypeScript session client against a real bravebot-rpc"
+	@echo "  make check-mobile          Type-check and test the React Native app (no device or simulator)"
 	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
+	@echo "  make review-ready          Open PRs that are mergeable, not draft, and without changes requested [REPO=owner/name]"
 	@echo "  make fmt                   Apply formatting"
 	@echo "  make aws-logout            End every cached AWS SSO session, to test signing in again"
 	@echo
@@ -189,6 +191,7 @@ check-spec:
 	@python3 contrib/terminal-screenshot.py --selftest
 	@python3 contrib/check-issue-posters.py --selftest
 	@python3 agents/issue_helper_selftest.py
+	@python3 agents/work_dir_selftest.py
 	@python3 contrib/check-issue-posters.py
 
 # The deterministic half of the security audit. It answers the questions check-spec cannot: whether
@@ -263,21 +266,21 @@ check-reviewdog-full: check-reviewdog-selftest
 
 # The npm-lockfile job. The published package is a thin wrapper that downloads the
 # release binary, and it has no dependencies, so that download is the whole supply chain surface
-# it has. The three projects with dependencies are ui/ (Electron's tree), docs/website and
-# packages/agent-client. Each has a pnpm lockfile of its own and none is a workspace of another
-# deliberately, so nothing else reaches them.
+# it has. The four projects with dependencies are ui/ (Electron's tree), docs/website,
+# packages/agent-client and mobile/. Each has a pnpm lockfile of its own and none is a workspace
+# of another deliberately, so nothing else reaches them.
 #
 # `install --frozen-lockfile --lockfile-only` fails when a lockfile does not satisfy its
 # package.json and fetches nothing. contrib/check-pnpm-lockfiles.py then holds each lockfile's
 # sources to the registry and the one git dependency its manifest names.
 #
-# The installer test is the download's half, and the only thing in this tree that runs any
-# of docs/specs/releases.md as code: it calls the origin the installer composes with an
-# environment set against it, so a release repository something outside the installer can
-# choose fails here rather than at somebody's install. It needs no dependency, so it runs
-# before the install rather than after it. `ls` precedes the run because `node --test` given
-# a pattern matching nothing exits 0 having run nothing, which would make a renamed-away pin
-# a passing gate.
+# The npm tests are the only thing in this tree that runs any of docs/specs/releases.md as
+# code: they call the origin the package script composes with an environment set against it,
+# so a release repository something outside the script can choose fails here rather than at a
+# publish, and they run the real launcher against a package that script builds. They need no
+# dependency, so they run before the install rather than after it. `ls` precedes the run
+# because `node --test` given a pattern matching nothing exits 0 having run nothing, which
+# would make a renamed-away pin a passing gate.
 .PHONY: check-npm
 check-npm:
 	ls npm/tests/*.test.mjs >/dev/null && node --test npm/tests/*.test.mjs
@@ -285,6 +288,7 @@ check-npm:
 	pnpm --dir ui install --frozen-lockfile --lockfile-only
 	pnpm --dir docs/website install --frozen-lockfile --lockfile-only
 	pnpm --dir packages/agent-client install --frozen-lockfile --lockfile-only
+	pnpm --dir mobile install --frozen-lockfile --lockfile-only
 	python3 contrib/check-pnpm-lockfiles.py
 
 # The dependency policy in deny.toml. CI runs this target rather than cargo-deny's action,
@@ -365,10 +369,20 @@ docs-changes:
 docs-updated-to-sha:
 	@python3 agents/skills/update-docs/docs-ref.py show
 
+# The pull requests a reviewer can pick up now: mergeable, not a draft, and with no review
+# asking for changes. REPO names another repository and LIMIT raises how many are read.
+REVIEW_REPO = brave/bravebot
+REVIEW_LIMIT = 500
+.PHONY: review-ready
+review-ready:
+	@gh pr list --repo $(or $(REPO),$(REVIEW_REPO)) --limit $(or $(LIMIT),$(REVIEW_LIMIT)) \
+	  --json number,title,url,mergeable,reviewDecision,isDraft \
+	  --jq '.[] | select(.mergeable == "MERGEABLE" and .reviewDecision != "CHANGES_REQUESTED" and .isDraft == false) | "\(.url)  \(.title)"'
+
 # All local checks before pushing, including the UI and Linux code paths.
 # Requires Docker and the desktop runtime dependencies described in checks.md.
 .PHONY: check-all-local check-all
-check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-agent-client check-reviewdog
+check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-agent-client check-mobile check-reviewdog
 check-all: check-all-local check-msrv check-windows check-linux
 
 # The gates this branch's changes need, against its merge base with BASE, which check-reviewdog
@@ -388,11 +402,11 @@ check-affected-containers:
 		{ [ -z "$$targets" ] || $(MAKE) --no-print-directory -k $$targets; }
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-release-preflight-selftest \
-	check-maintenance-selftest
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest \
+	check-maintenance-selftest check-session-review-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-release-preflight-selftest \
-	check-maintenance-selftest
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest \
+	check-maintenance-selftest check-session-review-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -415,8 +429,14 @@ check-peer-features-selftest:
 check-pr-fix-selftest:
 	python3 agents/skills/pr-fix/selftest.py
 
+check-pr-worktree-selftest:
+	python3 agents/pr_worktree_selftest.py
+
 check-maintenance-selftest:
 	python3 agents/skills/maintenance/selftest.py
+
+check-session-review-selftest:
+	python3 agents/skills/session-review/selftest.py
 
 check-release-preflight-selftest:
 	python3 contrib/release-preflight.py --selftest
@@ -453,6 +473,17 @@ check-agent-client:
 	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo build -p bravebot-ui-bridge --bin bravebot-rpc
 	pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts
 	pnpm --dir packages/agent-client run check
+
+# The React Native app under mobile/: its types and its tests, against the session client it links.
+# The client is built first because the app resolves it through its dist. Neither a device nor a
+# simulator is involved, so this is a check of the TypeScript only. The app has its own lockfile and
+# is not a pnpm workspace.
+.PHONY: check-mobile
+check-mobile:
+	pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts
+	pnpm --dir packages/agent-client run build
+	pnpm --dir mobile install --frozen-lockfile --ignore-scripts
+	pnpm --dir mobile run check
 
 # The install the desktop application's recipes start from: here, and for the two Windows packaging
 # steps below. Leo's build is cached in pnpm's store, which CI restores, so a warm install does

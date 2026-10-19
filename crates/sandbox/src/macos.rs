@@ -128,15 +128,19 @@ impl SeatbeltSandbox {
         // the parent or any other process, including another process in the same sandbox.
         out.push_str("(allow process-info-pidinfo (target self))\n");
         // CPU count and page size serve language runtimes (the numeric page-size query
-        // resolves to pagesize_compat). The remaining names are uname's fields, used by
-        // Python's package platform detection. No process arguments or environment query
-        // is in this list.
+        // resolves to pagesize_compat). hw.memsize is the physical memory size, which sort
+        // reads to size its buffer. kern.argmax is the one system-wide argument-size
+        // limit that xargs, find -exec {} + and getconf ARG_MAX read. The remaining names are
+        // uname's fields, used by Python's package platform detection. No process arguments or
+        // environment query is in this list.
         out.push_str("(allow sysctl-read");
         for name in [
             "hw.machine",
+            "hw.memsize",
             "hw.ncpu",
             "hw.pagesize",
             "hw.pagesize_compat",
+            "kern.argmax",
             "kern.hostname",
             "kern.osrelease",
             "kern.ostype",
@@ -198,7 +202,7 @@ impl SeatbeltSandbox {
             .chain(refused_writes.iter().map(|path| (path.as_path(), false)))
             .collect();
         writes.sort_by_key(|(path, allows)| (depth(path), *allows));
-        for (path, allows) in writes {
+        for &(path, allows) in &writes {
             out.push_str(&format!(
                 "({} file-write* (subpath {}))\n",
                 if allows { "allow" } else { "deny" },
@@ -224,13 +228,29 @@ impl SeatbeltSandbox {
         // Seatbelt counts a connect to a unix socket as network-outbound and no file rule covers
         // it, so an unfiltered rule reaches every socket the account can, a Docker daemon's
         // included. Egress is IP, and a socket is reached where a write row reaches it, as
-        // Landlock's ResolveUnix is granted. Host names resolve through the platform resolver's
-        // socket, where Linux resolves over IP.
+        // Landlock's ResolveUnix is granted. Linux spreads a write row around every refusal of a
+        // read or a write beneath it, so these are the write rows above, with a refusal of a read
+        // added as a refusal of the connect. Host names resolve through the platform resolver's
+        // socket, where Linux resolves over IP, and its row follows the refusals so that none of
+        // them takes it away.
         //
         // Egress limited to a port is to that port on the loopback address and to nothing else by
         // IP, and the resolver is left out: the proxy on that port resolves the names it is asked
         // for.
         if policy.allow_network {
+            let mut sockets: Vec<(&Path, bool)> = writes
+                .iter()
+                .copied()
+                .chain(refused_reads.iter().map(|path| (path.as_path(), false)))
+                .collect();
+            sockets.sort_by_key(|(path, allows)| (depth(path), *allows));
+            for (path, allows) in sockets {
+                out.push_str(&format!(
+                    "({} network-outbound (subpath {}))\n",
+                    if allows { "allow" } else { "deny" },
+                    quote(&path.to_string_lossy())
+                ));
+            }
             match policy.egress_only_to {
                 Some(port) => out.push_str(&format!(
                     "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
@@ -242,12 +262,6 @@ impl SeatbeltSandbox {
                         quote(RESOLVER)
                     ));
                 }
-            }
-            for row in &policy.writable {
-                out.push_str(&format!(
-                    "(allow network-outbound (subpath {}))\n",
-                    quote(&row.path.to_string_lossy())
-                ));
             }
         }
 
@@ -298,6 +312,40 @@ pub fn user_cache_directory() -> Option<std::path::PathBuf> {
     Path::new(OsStr::from_bytes(text.to_bytes()))
         .canonicalize()
         .ok()
+}
+
+/// The active developer directory `xcode-select -p` names, with its links followed, which is
+/// what [`crate::base::base`] takes as its developer directory. `None` where there is none or the
+/// tool does not answer.
+///
+/// Asked once for the life of the process, as the first session opens. `DEVELOPER_DIR` is removed
+/// from the question's environment: `xcode-select` answers with it where it is set, and a value
+/// this process holds, or a stage's own assignment, must not decide which directory the base
+/// reads.
+#[cfg(target_os = "macos")]
+pub fn developer_directory() -> Option<std::path::PathBuf> {
+    static DIRECTORY: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    DIRECTORY
+        .get_or_init(|| {
+            let mut command = std::process::Command::new("/usr/bin/xcode-select");
+            command
+                .arg("-p")
+                .env_remove("DEVELOPER_DIR")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null());
+            let selected = crate::process::starting_a_program(|| command.spawn())
+                .ok()?
+                .wait_with_output()
+                .ok()
+                .filter(|output| output.status.success())?;
+            let line = selected
+                .stdout
+                .strip_suffix(b"\n")
+                .unwrap_or(&selected.stdout);
+            Path::new(OsStr::from_bytes(line)).canonicalize().ok()
+        })
+        .clone()
 }
 
 /// How many names a path has, which is how far down the filesystem it is.
@@ -728,9 +776,11 @@ mod argument_tests {
                 concat!(
                     "(allow sysctl-read",
                     " (sysctl-name \"hw.machine\")",
+                    " (sysctl-name \"hw.memsize\")",
                     " (sysctl-name \"hw.ncpu\")",
                     " (sysctl-name \"hw.pagesize\")",
                     " (sysctl-name \"hw.pagesize_compat\")",
+                    " (sysctl-name \"kern.argmax\")",
                     " (sysctl-name \"kern.hostname\")",
                     " (sysctl-name \"kern.osrelease\")",
                     " (sysctl-name \"kern.ostype\")",
@@ -842,12 +892,12 @@ mod argument_tests {
 mod tests {
     use super::*;
     use crate::testutil::{
-        capturing_stdout, nothing_attached, printed_by, variable_names_received_by,
+        a_directory_for_sockets, arrived, capturing_stdout, listening_in, nothing_attached,
+        printed_by, variable_names_received_by,
     };
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::os::unix::fs::MetadataExt;
-    use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
 
     /// `CURLE_COULDNT_CONNECT`: curl reached the connection and was refused it. Any other code
@@ -2040,29 +2090,9 @@ int main(int argc, char **argv) {
     #[test]
     fn a_confined_process_granted_egress_cannot_reach_a_socket_outside_its_grants() {
         let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
-        // A socket path must fit in sun_path's 104 bytes, which a checkout's scratch directory
-        // need not leave room for. The policy names no part of the temporary directory.
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.subsec_nanos())
-            .unwrap_or_default();
-        // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        let scratch = std::env::temp_dir().join(format!("bb{}-{stamp}", std::process::id()));
-        std::fs::create_dir(&scratch).expect("the scratch directory is creatable");
-        for dir in ["none", "read", "write"] {
-            std::fs::create_dir(scratch.join(dir)).expect("the scratch directory is creatable");
-        }
-        let scratch = scratch
-            .canonicalize()
-            .expect("the scratch directory is there");
-        let listening = |dir: &str| {
-            let path = scratch.join(dir).join("s");
-            let listener = UnixListener::bind(&path).expect("a socket to connect to");
-            listener
-                .set_nonblocking(true)
-                .expect("the listener can be polled");
-            (path, listener)
-        };
+        // The policy names no part of the temporary directory.
+        let scratch = a_directory_for_sockets(&["none", "read", "write"]);
+        let listening = |dir: &str| listening_in(&scratch.join(dir));
         let (outside, outside_listener) = listening("none");
         let (readable, readable_listener) = listening("read");
         let (writable, writable_listener) = listening("write");
@@ -2077,11 +2107,6 @@ int main(int argc, char **argv) {
             .allow_read(scratch.join("read"))
             .allow_write(scratch.join("write"))
             .allow_network_egress();
-        let arrived = |listener: &UnixListener| match listener.accept() {
-            Ok(_) => true,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => false,
-            Err(error) => panic!("the listener failed: {error}"),
-        };
 
         nc_to_socket(&sandbox, &policy, &writable);
         assert!(
@@ -2107,6 +2132,75 @@ int main(int argc, char **argv) {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// A refusal beneath a write row holds for a connect as it does for a write, since Linux
+    /// leaves a refused path out of the rows that carry the connect. Without that, a session
+    /// opened on the home directory reaches a Docker daemon's socket under `~/.docker`, which
+    /// the base refuses, on macOS and not on Linux. A write row at a read refusal lifts it, and
+    /// a write row beneath a refusal is the narrower row and stands, as both do on Linux.
+    ///
+    /// The sockets reached are what make the refusals mean anything: each refusal sits beside
+    /// or above a socket the same policy reaches.
+    #[test]
+    fn a_write_grant_reaches_no_socket_inside_a_refusal() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        // Short names, since the temporary directory leaves little of sun_path's 104 bytes.
+        let scratch = a_directory_for_sockets(&["w/open", "w/nw/w", "w/nr", "withdrawn", "lifted"]);
+        let listening = |dir: &str| listening_in(&scratch.join(dir));
+        let (open, open_listener) = listening("w/open");
+        let (unwritable, unwritable_listener) = listening("w/nw");
+        let (narrower, narrower_listener) = listening("w/nw/w");
+        let (unreadable, unreadable_listener) = listening("w/nr");
+        let (withdrawn, withdrawn_listener) = listening("withdrawn");
+        let (lifted, lifted_listener) = listening("lifted");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&scratch)
+            .allow_write(scratch.join("w"))
+            .deny_write(scratch.join("w/nw"))
+            .allow_write(scratch.join("w/nw/w"))
+            .deny_read(scratch.join("w/nr"))
+            .allow_write(scratch.join("withdrawn"))
+            .deny_write(scratch.join("withdrawn"))
+            .allow_write(scratch.join("lifted"))
+            .deny_read(scratch.join("lifted"))
+            .allow_network_egress();
+
+        nc_to_socket(&sandbox, &policy, &open);
+        assert!(
+            arrived(&open_listener),
+            "a socket under a write grant was refused"
+        );
+        nc_to_socket(&sandbox, &policy, &unwritable);
+        assert!(
+            !arrived(&unwritable_listener),
+            "a socket inside a refusal of writes beneath a write grant was reached"
+        );
+        nc_to_socket(&sandbox, &policy, &unreadable);
+        assert!(
+            !arrived(&unreadable_listener),
+            "a socket inside a refusal of reads beneath a write grant was reached"
+        );
+        nc_to_socket(&sandbox, &policy, &withdrawn);
+        assert!(
+            !arrived(&withdrawn_listener),
+            "a socket under a write grant the policy refuses at its own path was reached"
+        );
+        nc_to_socket(&sandbox, &policy, &narrower);
+        assert!(
+            arrived(&narrower_listener),
+            "a socket under a write grant beneath a refusal was refused"
+        );
+        nc_to_socket(&sandbox, &policy, &lifted);
+        assert!(
+            arrived(&lifted_listener),
+            "a socket under a write grant at a refusal of reads was refused"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     /// A host name lookup on macOS is a message to the resolver's unix socket, so egress to IP
     /// addresses alone reaches no host by name: curl stops at "could not resolve" before it
     /// opens a connection. A lookup needs the network, so reaching the socket is what is
@@ -2117,6 +2211,28 @@ int main(int argc, char **argv) {
         let policy = SandboxPolicy::strict()
             .allow_read("/usr")
             .allow_read("/bin")
+            .allow_network_egress();
+        assert_eq!(
+            nc_to_socket(&sandbox, &policy, Path::new(RESOLVER)),
+            Some(0),
+            "the resolver's socket was refused, so no host name resolves"
+        );
+    }
+
+    /// Egress reaches the resolver whatever the policy refuses, since every host name lookup
+    /// goes through it. A refusal of the directory holding it denies a connect beneath it, and
+    /// the resolver's row follows that refusal.
+    #[test]
+    fn a_refusal_over_the_resolvers_directory_leaves_egress_the_resolver() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let directory = Path::new(RESOLVER)
+            .parent()
+            .expect("the resolver is in a directory");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(directory.parent().expect("that directory is in one"))
+            .deny_read(directory)
             .allow_network_egress();
         assert_eq!(
             nc_to_socket(&sandbox, &policy, Path::new(RESOLVER)),
@@ -2666,6 +2782,30 @@ int main(int argc, char **argv) {
                 exit_code_under(&policy, a_stage_for(&home), program, &[argument]),
                 Some(0),
                 "{program} did not start under the base"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// `xargs` and `getconf ARG_MAX` read the longest argument list a program may be given and
+    /// exit with an error that does not name the sandbox when the profile refuses that query.
+    /// `xargs` reads it before any input, so it is started with none. `find -exec {} +` reads the
+    /// same limit; it fails only with a large environment, so the usability suite holds it.
+    #[test]
+    fn a_program_that_asks_for_the_longest_argument_list_runs_under_the_base() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-base-starts-argmax");
+        let policy = crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home));
+
+        for (program, arguments) in [
+            ("/usr/bin/xargs", &["/usr/bin/true"][..]),
+            ("/usr/bin/getconf", &["ARG_MAX"][..]),
+        ] {
+            assert_eq!(
+                exit_code_under(&policy, a_stage_for(&home), program, arguments),
+                Some(0),
+                "{program} did not run under the base"
             );
         }
 

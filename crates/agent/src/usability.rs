@@ -943,6 +943,38 @@ fn search_and_edit_workflows() -> Vec<Workflow> {
             ))
             .stage(shell("cd tree && patch -s a.txt < ../change.patch"))
             .needing(&["sed", "awk", "diff", "patch"]),
+        Workflow::new("search", "xargs passes a list of files to one program")
+            .file("tree/a.txt", "one\ntwo\nthree\n")
+            .file("tree/sub/b.txt", "two\n")
+            .stage(shell(
+                "find tree -name '*.txt' | xargs grep -l two | grep -q tree/a.txt",
+            ))
+            .needing(&["find", "xargs", "grep"]),
+        // macOS sort sizes its buffer from the physical memory size. Under the profile this
+        // suite applies, a refused query is a warning on standard error and sort still exits
+        // zero, so each sort's standard error has to be empty for the stage to pass.
+        Workflow::new("search", "sort and uniq count lines")
+            .file("words.txt", "b\na\nb\n")
+            .stage(shell("test -z \"$(sort words.txt 2>&1 > sorted.txt)\""))
+            .stage(shell("uniq -c sorted.txt > counts.txt"))
+            .stage(shell(
+                "test -z \"$(sort -rn counts.txt 2>&1 > ranked.txt)\"",
+            ))
+            .stage(shell("head -n 1 ranked.txt | grep -q '2 b'"))
+            .needing(&["sort", "uniq", "head", "grep"]),
+        // macOS find treats an argument limit it cannot read as fatal only when its environment
+        // is over about 3 KB, so the stage sets a large variable as an account's own would be.
+        Workflow::new(
+            "search",
+            "find -exec {} + passes a list of files to one program",
+        )
+        .file("tree/a.txt", "one\ntwo\nthree\n")
+        .file("tree/sub/b.txt", "two\n")
+        .stage(shell(
+            "PAD=$(printf '%08000d' 0); export PAD; \
+                 find tree -name '*.txt' -exec grep -l two {} + | grep -q tree/a.txt",
+        ))
+        .needing(&["find", "grep"]),
         Workflow::new("editor", "vim edits a file and less shows it")
             .file("note.txt", "one\n")
             .stage(Stage::new(

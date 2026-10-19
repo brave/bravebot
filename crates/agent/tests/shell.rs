@@ -248,6 +248,10 @@ fn the_command_is_recorded_as_something_the_user_did() {
         .map(|m| m.message.role)
         .collect();
     assert_eq!(roles, vec![Role::User]);
+    assert_eq!(
+        conversation.messages()[0].composed,
+        Some(bravebot_agent::conversation::Composed::Written)
+    );
 }
 
 /// SHELL-2: nothing asks. The only things a command line is handed are the line, the directory it

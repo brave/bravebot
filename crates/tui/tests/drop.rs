@@ -3,7 +3,7 @@
 //! Real files in a real directory, because the whole question a drop asks is whether a path names
 //! something, and a fake filesystem would answer it for free.
 
-use bravebot_tui::dropped::Kind;
+use bravebot_filetype::by_name::Kind;
 use bravebot_tui::state::Session;
 use std::path::PathBuf;
 

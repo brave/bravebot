@@ -30,7 +30,7 @@ Choose how much to run:
 
 | Command | Coverage |
 |---|---|
-| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, narration, toolchain age, docs, pnpm lockfiles, dependency policy, desktop UI, the TypeScript session client and reviewdog. No Docker. |
+| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, narration, toolchain age, docs, pnpm lockfiles, dependency policy, desktop UI, the TypeScript session client, the mobile app's types and tests, and reviewdog. No Docker. |
 | `make check-all` | Everything in `check-all-local`, plus Docker checks for minimum Rust, Windows Clippy and Linux. |
 | `make check-affected` | Script selftests, specs, security rules, locales, versions, narration and reviewdog, plus each host check this branch's changes need, chosen the way CI chooses its jobs. No Docker. |
 | `make check-affected-containers` | The Docker checks this branch's changes need: minimum Rust, Windows Clippy and Linux for a change to Rust, and none otherwise. |
@@ -99,12 +99,18 @@ home and a scratch project, so they need no credentials and no desktop session. 
 job runs it, and the classifier gives it to any change under `packages/agent-client/` or to the bridge crates. Only a change to the wire contract file there also runs the Rust jobs, since a Rust test reads it.
 Run it for a change to the session view or the client.
 
+`make check-mobile` builds `packages/agent-client`, then installs, type-checks and tests the React
+Native app in `mobile/` against it. It needs no device, simulator or desktop session, and it does
+not build the Android or iOS projects. The Mobile app CI job runs it. The classifier gives it to any
+change under `mobile/` or `packages/agent-client/`, and a change under `mobile/` alone does not run
+the Front end job.
+
 `make check-scripts` checks that every required gate runs, that UI, installer and lockfile
 failures reach the caller, and that scanner failures cannot pass as empty scans. The installer
-half also holds `check-npm` to reaching the installer test and the lockfile lint's own cases before
-any lockfile is read, and to failing rather than passing when that test is no longer there. It runs
+half also holds `check-npm` to reaching the npm tests and the lockfile lint's own cases before
+any lockfile is read, and to failing rather than passing when those tests are no longer there. It runs
 `check-all-selftest`, `check-reviewdog-selftest`, `check-rebase-selftest`, `check-affected-selftest`,
-`check-peer-advisories-selftest`, `check-peer-features-selftest`, `check-pr-fix-selftest` and `check-maintenance-selftest`, which can also run separately. `check-affected-selftest` holds
+`check-peer-advisories-selftest`, `check-peer-features-selftest`, `check-pr-fix-selftest`, `check-pr-worktree-selftest`, `check-maintenance-selftest` and `check-session-review-selftest`, which can also run separately. `check-affected-selftest` holds
 each rule of the classifier, and holds every workflow condition reading it to running its job on
 anything but an explicit `false`.
 To also exercise the installed reviewdog binary, set `REVIEWDOG_TEST_BINARY` to its
@@ -129,11 +135,14 @@ names, the paths it governs, the call sites a guarded symbol pins, and the table
 [../specs/README.md](../specs/README.md). It also runs
 [../../contrib/check-issue-posters.py](../../contrib/check-issue-posters.py), which fails when
 [the issue-poster definition](../../agents/agents/issue-poster.md) would not load, writes a label
-[labelling-issues.md](labelling-issues.md) does not describe, or when a skill that files an issue
-does not name it. Its helper's selftest,
+[labelling-issues.md](labelling-issues.md) does not describe, or when a file under `agents/skills`
+runs `gh issue create` instead of handing the draft to the definition. Its helper's selftest,
 [../../agents/issue_helper_selftest.py](../../agents/issue_helper_selftest.py), runs beside it: the
-label and assignee checks every poster shares are in
-[../../agents/issue_helper.py](../../agents/issue_helper.py). CI runs it too, so a new use of a guarded symbol fails a
+label and assignee checks the definition's post command makes are in
+[../../agents/issue_helper.py](../../agents/issue_helper.py). The selftest of the manifest reader and
+writer the skill scripts share,
+[../../agents/work_dir_selftest.py](../../agents/work_dir_selftest.py), runs there too. CI runs it
+too, so a new use of a guarded symbol fails a
 pull request rather than waiting for somebody to notice it. It also holds
 [../../agents/unverified-clauses.txt](../../agents/unverified-clauses.txt) to the clauses that are
 `verified-by: none`, so giving a clause a test, or setting one to `none`, is a line in a diff
@@ -167,17 +176,29 @@ container image this tree runs
 names a digest rather than a tag its publisher can move, and whether a job holding `id-token: write`
 or a secret installs or runs an npm or pnpm dependency, which every step in that job could read the
 credential from, whether a checkout of this tree names a kind of ref rather than a bare name a
-branch and a tag can share, and whether the check contexts a merge is held to are written down,
-name jobs that exist, and cover every job whose purpose is running a check. CI runs it too, so a
-pull request that moves a workflow step or a build image onto a movable tag, that puts an install
-back beside the publish credential, that points a checkout at a name instead of a ref, that gives a
-crate a network client the egress register does not admit, that drops the entry pinning a
-constructor, or that adds a check nothing holds a merge to, fails rather than holding only for
-whoever remembers to run this. It is the deterministic half of the
+branch and a tag can share, whether the check contexts a merge is held to are written down,
+name jobs that exist, and cover every job whose purpose is running a check, and whether every
+method of the agent's confirmer, every remembered set the front ends hold in `Answers` and every
+question the terminal's trust prompts ask has a row in the register of kept answers in
+`docs/specs/prompting.md`, with each cell filled and each test it names one that exists. CI runs it
+too, so a pull request that moves a workflow step or a build image onto a movable tag, that puts an
+install back beside the publish credential, that points a checkout at a name instead of a ref, that
+gives a crate a network client the egress register does not admit, that drops the entry pinning a
+constructor, that adds a check nothing holds a merge to, or that adds a confirmer method, a
+remembered set or a trust question the register does not account for, fails rather than holding
+only for whoever remembers to run this. The register also has a table beneath it saying, for each
+answer, what a second checkout, a new session, a replaced file, another directory, a changed
+invocation, a changed declaration and an answer wider than its prompt do to it: this check fails a
+row, a cell or a cited test that is missing, and a case in `crates/agent/src/kept_answers.rs` that no
+cell cites. It is the deterministic half of the
 [security-audit skill](../../agents/skills/security-audit/SKILL.md); the lanes that read code are the
 other half, and a person runs those. Run it before a commit that touches a label,
 `.github/workflows`, a Dockerfile, the Makefile's containers, a crate's manifest, the required
-check contexts, or the trust specs.
+check contexts, the trust specs, the confirmer, the remembered answers
+(`crates/agent/src/answers.rs`), the cases that change the world under them
+(`crates/agent/src/kept_answers.rs`), or `docs/specs/prompting.md`. Claude Code runs the mechanical
+half itself when a task ends on a branch that changes a file where an answer is kept
+([agent-configuration.md](agent-configuration.md#checking-the-register-when-a-task-ends)).
 
 `make check-maintenance` lists candidates for cleanup: `pub` items, module-level Python definitions
 and TypeScript exports named nowhere but where they are defined or only from tests, allowances
@@ -233,11 +254,13 @@ base with `upstream/main`, or `origin/main` without one, or `BASE=<ref>`, and re
 only where `PR_TITLE` and `PR_BODY` are set. It carries a `--selftest`, which `make check-narration`
 runs first.
 
-`make check-npm` lints the pnpm lockfiles, as CI does, and runs the installer test
-under `npm/tests`, which holds the release origin the published package downloads from to this
-repository whatever the environment says. That test is the one thing in the tree that runs a
-clause of [../specs/releases.md](../specs/releases.md) as code, so run this target for a change to
-the published wrapper as well as to a lockfile. `make check-deps` decides
+`make check-npm` lints the pnpm lockfiles, as CI does, and runs the tests under `npm/tests`. They
+hold the release origin the script that builds the platform packages downloads from to this
+repository whatever the environment says, hold each platform package to its asset and to the
+machine npm installs it on, run the real launcher in a tree laid out the way npm lays one out, and
+hold the wrapper's manifest and the publish workflow to the same six platforms. They are the
+things in the tree that run clauses of [../specs/releases.md](../specs/releases.md) as code, so
+run this target for a change to the published wrapper as well as to a lockfile. `make check-deps` decides
 `deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
 build compiles at two versions without a recorded reason, a dependency from anywhere but
 crates.io, and a regex engine. It also fails an exception in `deny.toml` that has no `reason`,

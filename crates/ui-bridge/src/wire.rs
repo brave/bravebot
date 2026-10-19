@@ -7,7 +7,7 @@
 //! Two rules run through all of it.
 //!
 //! **Send the discriminant, not the prose.** [`Landing::describe`] and
-//! [`Reach::describe`] return sentences meant for a screen. They are wording, they will
+//! [`Reach::note`] return sentences meant for a screen. They are wording, they will
 //! change, and a client that matches on them is matching on prose — which is how a
 //! message that merely mentions a refusal becomes one. The tag is the contract; a
 //! front-end may render its own words from it.
@@ -86,6 +86,7 @@ pub fn status(status: Status) -> &'static str {
         Status::Pending => "pending",
         Status::Active => "active",
         Status::Done => "done",
+        Status::Cancelled => "cancelled",
     }
 }
 
@@ -125,14 +126,14 @@ pub fn permission_mode(value: &Value) -> Result<PermissionMode, Failure> {
 
 /// The sandbox mode a `session.sandbox` asks for.
 ///
-/// `strict` and `standard` only. `off` is refused, and so is any other word, because a window has no
-/// way to show that nothing confines a program (SANDBOX-22). Reading the word as `standard` instead
-/// would leave a client drawing a mode the session is not in.
+/// `strict`, `read-only` and `workspace-write` only. `off` is refused, and so is any other word, because a
+/// window has no way to show that nothing confines a program (SANDBOX-22). Reading the word as
+/// `workspace-write` instead would leave a client drawing a mode the session is not in.
 pub fn sandbox_mode(value: &Value) -> Result<SandboxMode, Failure> {
     match value.as_str().and_then(SandboxMode::parse) {
         Some(mode) if mode != SandboxMode::Off => Ok(mode),
         _ => Err(Failure::bad_request(format!(
-            "`mode` may be `strict` or `standard`, not {value}"
+            "`mode` may be `strict`, `read-only` or `workspace-write`, not {value}"
         ))),
     }
 }
@@ -144,9 +145,12 @@ pub fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> String {
     let asked = refused.asked.name();
     let pinned = refused.pinned.name();
     match refused.because {
-        Floor::Mode => format!(
-            "The sandbox mode {asked} is refused: {file} sets sandbox.mode to {pinned}, and a session may be stricter than that but not looser."
-        ),
+        Floor::Mode => {
+            let looser = bravebot_agent::sandbox_reason::looser(refused);
+            format!(
+                "The sandbox mode {asked} is refused: {file} sets sandbox.mode to {pinned}, and a session may read and write no more than that. {looser}"
+            )
+        }
         Floor::Network => format!(
             "The sandbox mode {asked} is refused: {file} pins run.network to closed, so the mode must be {pinned} or stricter."
         ),
@@ -278,9 +282,9 @@ pub fn submitted(text: &str, composed: Option<&Composed>) -> Value {
 /// The ordinal is counted here because it is the agent's own count of what the user said, and
 /// [`crate::fork::cut`] resolves it against that count. A client that counts instead holds a
 /// second copy of the rule, and the two agree only for as long as nobody adds a kind of user
-/// message: a turn nudged for spending its tool budget and a shell line a person ran themselves
-/// are both `Said::User` here, neither is drawn as a prompt by a window watching a live session,
-/// and a fork of anything after one of them arrives short and is refused.
+/// message: a kind added without a tag would be a `Said::User` here, drawn as a prompt by no
+/// window watching a live session, and a fork of anything after it would arrive short and be
+/// refused. Every message the agent composes is tagged, so none is.
 ///
 /// Sent beside each thing said rather than composed from the list, so that a client drawing one
 /// kind of user message differently costs nobody a working fork.
@@ -336,6 +340,44 @@ fn said(said: &Said) -> Value {
             why: Composed::Vetted { reference, media },
             ..
         } => json!({ "kind": "vetted", "reference": reference, "media": media }),
+        // Both fields and words of a message between sessions are driver-written or the sender's
+        // own, and cross as fields so the window draws a block marked as a message and never a
+        // prompt (MSG-11). `text` is null where the planner was given a reference, and no content
+        // is held for it.
+        Said::Composed {
+            why:
+                Composed::SessionMessage {
+                    from,
+                    name,
+                    label,
+                    text,
+                },
+            ..
+        } => json!({
+            "kind": "session_message",
+            "direction": "from",
+            "heading": bravebot_agent::messages::heading(true, from, name, label),
+            "kept": text.is_none().then(bravebot_agent::messages::kept),
+            "session": from,
+            "name": name,
+            "label": label,
+            "text": text,
+        }),
+        Said::Sent {
+            to,
+            name,
+            label,
+            text,
+        } => json!({
+            "kind": "session_message",
+            "direction": "to",
+            "heading": bravebot_agent::messages::heading(false, to, name, label),
+            "kept": null,
+            "session": to,
+            "name": name,
+            "label": label,
+            "text": text,
+        }),
         // Written for the planner and left out of a projection by `Conversation::recounted`, so
         // none reaches here. A tag added without a row is drawn as its words, never dropped.
         Said::Composed {
@@ -345,7 +387,10 @@ fn said(said: &Said) -> Value {
                 | Composed::Summary
                 | Composed::Imported
                 | Composed::Skill { .. }
-                | Composed::SkillKept { .. },
+                | Composed::SkillKept { .. }
+                | Composed::Notice
+                | Composed::MessageSent { .. }
+                | Composed::Written,
             text,
         } => json!({ "kind": "user", "text": text }),
     }
@@ -429,10 +474,10 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
         "existing": request.is_overwrite(),
         "added": diff.added(),
         "removed": diff.removed(),
-        // False when the diff had to give up on an exact answer, which happens on two
-        // large and wholly dissimilar files: the table it needs is quadratic and is
-        // bounded rather than allowed to allocate without limit. A reviewer is entitled
-        // to know they are reading an approximation of the change.
+        // False when the diff had to give up on an exact answer, which happens where a
+        // stretch of the two files is too large or too different to line up within the
+        // steps one diff may take. A reviewer is entitled to know they are reading an
+        // approximation of the change.
         "exact": diff.is_exact(),
         "changes": diff.condensed(CONTEXT_LINES).iter().map(change).collect::<Vec<_>>(),
     })
@@ -527,6 +572,8 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
                 .collect::<Vec<_>>(),
             "sentences": confined.sentences(),
         })),
+        // The sentence for that null, in the catalog's words and so in the person's language.
+        "notSandboxed": request.confined.is_none().then(bravebot_approval::not_sandboxed),
         "summary": request.summary(),
     })
 }
@@ -550,7 +597,8 @@ pub fn output_request(id: u64, request: &OutputRequest) -> Value {
         "reference": request.reference,
         "lines": request.lines,
         "output": request.output,
-        "vetting": vetting(request.verdict, request.reason.as_deref()),
+        "label": request.label,
+        "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()),
         "summary": request.summary(),
     })
 }
@@ -565,8 +613,9 @@ pub fn vouch_request(id: u64, request: &VouchRequest) -> Value {
         "request": id,
         "path": request.path,
         "preview": request.preview,
+        "label": request.label,
         "truncated": request.truncated,
-        "vetting": vetting(request.verdict, request.reason.as_deref()),
+        "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()),
     })
 }
 
@@ -716,8 +765,7 @@ pub fn mcp_server_request(id: u64, question: &Question<'_>) -> Value {
 /// Each tool as the client drew it: its name under the alias, each argument as one line, and the
 /// server's own sentence about it. That sentence is the server's text, and a front end draws it
 /// as text and nowhere a reader would take it for the application's own words. `refused` counts
-/// the tools the client would not draw, and `changed` says a list was vouched for under this
-/// declaration before and this is not it.
+/// the tools the client would not draw.
 pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
     let tools: Vec<Value> = request
         .tools
@@ -735,8 +783,8 @@ pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
         "alias": request.alias,
         "tools": tools,
         "refused": request.refused,
-        "changed": request.changed,
-        "vetting": vetting(request.verdict, request.reason.as_deref()),
+        "withheld": request.withheld,
+        "vetting": vetting(request.verdict, request.reason.as_deref(), None),
     })
 }
 
@@ -939,9 +987,14 @@ pub fn fitted(answers: Vec<Answer>, asking: &Asking) -> Vec<Answer> {
         .collect()
 }
 
-/// Advice for the person, never an approval or planner input.
-fn vetting(verdict: bravebot_core::vetting::Verdict, reason: Option<&str>) -> Value {
-    json!({ "verdict": verdict.word(), "reason": reason, "detail": match verdict {
+/// Advice for the person, never an approval or planner input. The reason carries the label it was
+/// released under (LABEL-10).
+fn vetting(
+    verdict: bravebot_core::vetting::Verdict,
+    reason: Option<&str>,
+    label: Option<&str>,
+) -> Value {
+    json!({ "verdict": verdict.word(), "reason": reason, "label": label, "detail": match verdict {
         bravebot_core::vetting::Verdict::Inconclusive(detail) => Some(detail), _ => None,
     } })
 }
@@ -955,6 +1008,6 @@ pub fn vet_request(id: u64, request: &VetRequest) -> Value {
             "bytes": picture.bytes })
     });
     json!({ "request": id, "origin": request.origin, "expects": request.expects,
-        "summary": request.summary(), "content": request.content, "lines": request.lines, "picture": picture,
-        "vetting": vetting(request.verdict, request.reason.as_deref()) })
+        "summary": request.summary(), "content": request.content, "label": request.label, "lines": request.lines, "picture": picture,
+        "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()) })
 }

@@ -28,6 +28,7 @@ fn opening_answers(
         state: Some(state.to_path_buf()),
         named: None,
         started: root.to_path_buf(),
+        managed: bravebot_config::Managed::default(),
     };
     let settings = sources.settings(root);
     let permissions = rules_from(

@@ -5,13 +5,16 @@
     python3 agents/skills/peer-features/peer-features.py verify --work-dir DIR
     python3 agents/skills/peer-features/peer-features.py merge --work-dir DIR
     python3 agents/skills/peer-features/peer-features.py draft --work-dir DIR
-    python3 agents/skills/peer-features/peer-features.py post --work-dir DIR [--dry-run]
-        [--assignee LOGIN] [--max N]
+    python3 agents/skills/peer-features/peer-features.py filed --work-dir DIR --id ID --issue N [--existing]
     python3 agents/skills/peer-features/peer-features.py record --work-dir DIR [--dry-run]
 
 A unit is one spec (`spec:HOOK`) or one other coding agent (`peer:codex`). docs/peer-features-reviewed
 holds one line per unit already reviewed and one per gap already decided, so a run reads only what is
 new. No model takes part in anything this script does.
+
+This script files nothing. Each draft in DIR/drafts.json is handed to the `issue-poster` definition
+(agents/agents/issue-poster.md). `filed` records the issue number it was given in DIR/filed.json,
+which `merge` and `record` read.
 """
 
 import argparse
@@ -35,9 +38,10 @@ def load(name, path):
 
 
 # The advisory skill owns the list of tools, the tracker listing, the title and body cleaning and the
-# posting, so a tool added there is compared here and a fix to the posting reaches both.
+# `filed` command, so a tool added there is compared here.
 pa = load("peer_advisories", HERE.parent / "peer-advisories" / "peer-advisories.py")
 specs = load("check_spec_specs", HERE.parent / "check-spec" / "specs.py")
+workdir = pa.workdir
 
 Problem = pa.Problem
 
@@ -138,18 +142,9 @@ def write_ledger(path, entries):
 
 def checked_commit(root):
     """The main commit this tree is, refusing a tree that differs from it anywhere but the ledger."""
-    ref = pa.main_ref(root)
-    tip = pa.git(root, "rev-parse", ref)
-    remedy = f"fetch, then review a tree at {ref}:\n  git worktree add --detach ../bravebot-peer-gaps {ref}"
-    if pa.run(["git", "-C", str(root), "merge-base", "--is-ancestor", tip, "HEAD"]).returncode != 0:
-        raise Problem(f"HEAD does not contain {ref} ({tip[:12]}); {remedy}")
-    changed = [p for p in pa.git(root, "diff", "--name-only", tip, "--").splitlines() if p != LEDGER]
-    if changed:
-        raise Problem(
-            f"this tree differs from {ref} in {len(changed)} file(s) besides the ledger, "
-            f"{changed[0]} first; what bravebot lacks has to be read off main, so {remedy}"
-        )
-    return ref, tip
+    return pa.checked_commit(
+        root, LEDGER, verb="review", worktree="peer-gaps", why="what bravebot lacks has to be read off main"
+    )
 
 
 # The units.
@@ -347,7 +342,7 @@ def pending(args):
         "units": research,
         "subjects": {u["unit"]: u for u in chosen},
     }
-    (work / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    workdir.write_manifest(work, manifest)
 
     reviewed = sum(1 for u in units if u["unit"] in ledger)
     print(
@@ -437,11 +432,7 @@ def load_verify(path, unit):
     return verdicts, None
 
 
-def manifest_of(work):
-    manifest = pa.read_json(Path(work) / "manifest.json")
-    if manifest is None:
-        raise Problem(f"{work} has no manifest.json; run pending first")
-    return manifest
+manifest_of = pa.manifest_of
 
 
 def verify_paths(work, unit):
@@ -896,13 +887,7 @@ def main(argv=None):
                        ("draft", "write an issue body per confirmed gap or group of them")):
         commands.add_parser(name, help=text).add_argument("--work-dir", required=True)
 
-    one = commands.add_parser("post", help="file the drafts the tracker does not hold")
-    one.add_argument("--work-dir", required=True)
-    one.add_argument("--repo", default=REPO)
-    one.add_argument("--dry-run", action="store_true")
-    one.add_argument("--assignee")
-    one.add_argument("--max", type=int, default=pa.MAX_POSTS)
-    one.add_argument("--pace", type=float, default=10.0)
+    pa.add_filed_command(commands)
 
     one = commands.add_parser("record", help="write the units reviewed and gaps decided into the ledger")
     one.add_argument("--work-dir", required=True)
@@ -910,7 +895,7 @@ def main(argv=None):
 
     args = parser.parse_args(argv)
     try:
-        return {"pending": pending, "verify": verify, "merge": merge, "draft": draft, "post": pa.post,
+        return {"pending": pending, "verify": verify, "merge": merge, "draft": draft, "filed": pa.filed,
                 "record": record}[args.command](args)
     except Problem as problem:
         print(f"peer-features: {problem}", file=sys.stderr)

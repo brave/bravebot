@@ -22,7 +22,7 @@ that is merely carried.
 | [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text`, `edits` | **yes, every time** |
 | [`apply_checkout`](#apply_checkout) | `checkout`, `paths` | none | **yes, for every file** |
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read`, `scopes` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
-| [`read_output`](#read_output) | `ref`, `offset` | none | **yes, unless the planner may already read it** |
+| [`read_output`](#read_output) | `ref`, `offset`, `pattern` | none | **yes, unless the planner may already read it** |
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
 | [`job_output`](#job_output) | `job`, `kill`, `wait_seconds` | none | no |
 | [`fetch_url`](#fetch_url) | `url` | none | **yes, unless a rule names the host** |
@@ -34,7 +34,7 @@ that is merely carried.
 | [`request_path`](#request_path) | `path`, `write` | none | **yes, unless you bypass permissions** |
 | [`todo_write`](#todo_write) | none | `todos` | no |
 
-Four more are offered only where they mean something.
+Five more are offered only where they mean something.
 [`request_path`](#request_path) goes wherever `run` is confined, so not to a delegate.
 [`schedule_next`](#schedule_next) goes to a turn that will be asked again: one inside a self-paced
 [`/loop`](commands.md#loop-interval-prompt), and one on a line you typed in a session that can send
@@ -44,6 +44,8 @@ will ask again, which is a one-shot run, the desktop application, or a line the 
 run or a planned run. [`advisor`](#advisor) goes to a session that named a model to consult with
 [`--advisor`](cli.md#--advisor-name), the [`advisorModel`](../customize/configuration.md#advisormodel)
 setting or [`/advisor`](commands.md#advisor-model--off), so not to one that did not, and not to a delegate.
+[`message_session`](#message_session) goes to a background session, so not to a session in a terminal, a
+delegate or a one-shot run.
 
 Every tool also takes `why`, one line from the planner saying what the call is for. It is content
 on every tool: it is drawn beside the call for you to read, and nothing reads it or decides on it.
@@ -57,6 +59,15 @@ than a path is bound to the context the planner named it in, so a turn whose con
 untrusted content can name no reference at all.
 
 An unknown tool is reported to the planner rather than ignored.
+
+When the planner asks for several calls in one reply, they run in the order it asked, except that two
+or more consecutive [`list_files`](#list_files) and [`search`](#search) calls are read at the same
+time, eight at most. Their results are added in the order the calls were asked, and what is
+quarantined, what the [audit trail](../security/audit-trail.md) records and what is drawn are what
+they would be if the calls had run one after another. Every other call, [`read_file`](#read_file)
+included, runs alone, after the calls before it and before the calls after it. So does a call that
+has a [`tool-finished` hook](../customize/hooks.md) declared for its tool, since the hook could
+change the files the next read looks at.
 
 There is **no shell tool**, and there never will be. Nothing the planner writes is handed to an
 interpreter. [`run`](#run) takes a command line, and bravebot compiles it itself. See
@@ -275,7 +286,7 @@ working tree, **without starting git**.
 |---|---|
 | `query` | `log`, `show`, `diff`, `status`, `tags` or `search` |
 | `repository` | workspace-relative directory holding `.git`, defaults to `.` |
-| `revision` | in git's syntax: a branch, a tag, `HEAD`, an id or its prefix, then `~N`, `^N` or `^{commit}`. `log` takes one or a range `A..B`; `show` takes one, or `<revision>:<path>` for a file or directory as it was; `diff` takes two, as `A..B` or `A B`; `tags` takes none, or one to list only the tags it reaches; `search` takes one and defaults to `HEAD` |
+| `revision` | in git's syntax: a branch, a tag, `HEAD`, an id or its prefix, then `~N`, `^N` or `^{commit}`. `log` takes one or a range `A..B`, or `A...B` for what either side has that the other lacks; `show` takes one, or `<revision>:<path>` for a file or directory as it was; `diff` takes two, as `A..B` or `A B`, or `A...B` to compare the merge base with B; `tags` takes none, or one to list only the tags it reaches; `search` takes one and defaults to `HEAD` |
 | `path` | relative to the repository's root. Limits `log` to commits that changed it, `show`, `diff` and `status` to changes under it, and `search` to files under it |
 | `pattern` | `search` only, and required there: the regular expression to look for, matched against each line |
 | `count` | commits a `log` lists, tags a `tags` lists or lines a `search` prints: 20 unless given, at most 200 |
@@ -317,7 +328,8 @@ so. A rule over `.git` or anything in it keeps the repository closed.
 
 What it would show is scanned for credentials as a file read is, and held back until you agree. A
 file's lines in a commit are scanned as that file, so agreeing to one file's key is not agreeing to
-another's. A `run` of git whose output the planner could not be shown mentions `read_git`.
+another's. A `run` of git whose output the planner could not be shown mentions `read_git`, unless `read_git` would
+decline the repository the command ran in.
 
 Blame, `--follow` and a diff against the working tree go through `run`. A repository laid out in a
 way that changes what a read means, such as borrowed objects, replace refs, an included
@@ -329,13 +341,13 @@ deadline says it was cut.
 ## `lsp`
 
 Asks a language server about a symbol: where it is defined, what refers to it, what implements it,
-what calls it. **Starting a server is put to you.**
+what calls it. It also asks what the server makes of a file. **Starting a server is put to you.**
 
 | Parameter | |
 |---|---|
-| `operation` | one of `goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`, `incomingCalls`, `outgoingCalls` |
-| `path` | workspace-relative file holding the symbol; required for every operation but `workspaceSymbol` |
-| `line`, `character` | 1-based position of the symbol, as a search or a read reported it |
+| `operation` | one of `goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`, `incomingCalls`, `outgoingCalls`, `diagnostics` |
+| `path` | workspace-relative file holding the symbol, or the file to check for `diagnostics`; required for every operation but `workspaceSymbol` |
+| `line`, `character` | 1-based position of the symbol, as a search or a read reported it; not used by `diagnostics` |
 | `query` | for `workspaceSymbol`, the name to look for |
 
 This answers what [`search`](#search) cannot. A search for a name finds every comment and string that
@@ -348,6 +360,35 @@ rather than an error, since a file changes under an agent and a stale line numbe
 The operation list is closed and every entry on it is a read. LSP is an open protocol and a server
 advertises methods of its own, one of which applies edits to your files, so forwarding a name would
 make what this tool can reach a property of whichever server you installed.
+
+### Checking a file with `diagnostics`
+
+`diagnostics` takes a path and no position. The agent uses it to learn whether a file still compiles
+before running a build. The server is sent the file as it is on disk and the notice it
+publishes in reply is the answer:
+
+```text
+language server: 2 errors at line 12, 40; 1 warning. Fix them before moving on
+```
+
+The agent is told how many errors the server found and the line each starts on, how many warnings
+and how many other notes. These are numbers the server reports, so they are given for a file in a
+tree you have not vouched for as for one you have. **The messages are not shown to the agent.** A
+message is a sentence the server composed out of your files, and it can quote a name defined in
+another file, so the file that was checked does not vouch for it. It comes back as a reference the
+agent hands to a processor or asks you to show it, as hover text does. While a `deny` rule covers
+reading any path, the messages are left out, and the agent is told so. A file that does not exist is
+reported as such before any server is started, so you are not asked about one.
+
+A server that publishes nothing about the file in a few seconds is reported as not having reported,
+which is not the same as a file with no errors, and a report with no errors says "no errors reported
+yet" because a server can refine a quick pass later. A server still indexing says the report may be
+short. A server that publishes late, or only when its diagnostics change, can stay silent about an
+edit, so a build is still the check that does not depend on the server.
+
+A `write_file` or `edit_file` result already carries the same counts and lines when a server for that
+file's language is running, and never starts one. `diagnostics` is the way to ask for them for a file
+that was not just written or edited, and it starts the server after you agree to it.
 
 ### Which server, and what starting one costs
 
@@ -519,6 +560,13 @@ since you are the only one who sees which file it is.
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
 
+Replacing a **trusted** file with `contents` keeps that file's line endings and its leading byte
+order mark, so a file using `\r\n` stays CRLF and a file that began with a mark still does. This
+happens before the diff you approve is built, so the approval shows the lines the write changes
+rather than every line in the file, and it says `line endings: CRLF kept`. A file nobody vouched for
+is not converted, because its terminators are untrusted bytes and nothing may be decided from
+those. A file written from a `contents_ref`, and a path with no file yet, are written as given.
+
 Where a language server for the file's language is **already running**, the result also says how many
 errors it found and on which lines, and how many warnings. A write never starts a server, and the
 server's own messages are never shown, only counts and line numbers. A server that has not finished
@@ -541,6 +589,16 @@ prefers this to rewriting a whole body.
 `edits` is applied in order, each pair to the text the one before it left, and all or nothing: if
 one pair fails, the agent is told which and the file is not changed. You are asked once, about one
 diff of the combined result.
+
+The result gives the agent back the changed lines with three lines either side. Those lines are
+scanned for credentials as a file read is. If they hold what looks like a credential and you have not
+agreed to the agent being shown that file, you are asked, and one answer covers the file for edits
+and reads alike. A no leaves the edit in place and the lines out of the result.
+
+Where a language server for the file's language is already running, the result also says how many
+errors it found and on which lines, and how many warnings, as a `write_file` result does
+([details](#checking-a-file-with-diagnostics)). An edit never starts a server, and the server's own
+messages are never shown.
 
 `old_text` must occur exactly once unless `replace_all` is set. An edit **refuses rather than
 guesses**.
@@ -603,6 +661,7 @@ the planner as text.
 |---|---|
 | `ref` | the reference a `run` handed back |
 | `offset` | for output the planner may read that was too long for one result, the byte to start from; defaults to 0 |
+| `pattern` | for output the planner may read, a regular expression (or a list of them) to search it for instead of paging it |
 
 It works only for output from `run`. A quarantined *file* is not readable this way. This is why
 `which`, `find` and `uname` tell the planner nothing until it asks. When you bypass permissions with no
@@ -620,6 +679,16 @@ hands back the rest a page at a time from `offset`. Each page is no longer than
 [`run.maxOutput`](../customize/configuration.md#runmaxoutput) and ends with the offset of the next.
 Nobody is asked, since there is nothing for you to decide: only the length kept it out. An `offset`
 on output the planner may not read is refused before you are asked anything.
+
+**A pattern searches that output rather than paging it.** On output the planner may already read,
+`pattern` answers with the lines matching the regular expression, each numbered with its line and
+with the byte it starts at, two lines of context either side. The planner passes one of those bytes
+as `offset` to read the page from there, so a long log is narrowed without running anything again.
+At most 100 matches come back, within the same output cap, and a closing line says how many matched
+and where the next undrawn one starts. A `pattern` on output the planner may not read is refused
+before you are asked anything, for the same reason an `offset` is: which lines matched and how many
+there are would be worked out from bytes nobody vouched for. `pattern` and `offset` together are
+refused.
 
 ## `vet_content`
 
@@ -812,8 +881,8 @@ only once the whole body has arrived, so a dropped connection, a stop or a body 
 leaves what was there and no partial file.
 
 The cap is 100 MiB per call and is the [`download.maxBytes`](../customize/configuration.md#downloadmaxbytes)
-setting. A delegate is never offered the tool, and plan mode
-refuses it, since it writes a file.
+setting. A delegate is never offered the tool, and plan mode and the
+[sandbox mode](../security/security.md#confinement) `read-only` refuse it, since it writes a file.
 
 ## `spawn_processor`
 
@@ -830,6 +899,14 @@ which the planner does not see either.
 An answer is for **one** document and may be written **only** to the file the call was about. Where the
 planner said nothing and there was more than one input, the answer belongs nowhere and may be written
 nowhere.
+
+**Refused once the model has been shown private content.** After [`read_output`](#read_output) or
+[`vet_content`](#vet_content) has shown it something private, or a delegate has reported something
+private, what it writes is private too, and a processor takes no private instruction, so every call
+is refused for the rest of the conversation. Quarantined results made from then on do not suggest a
+processor, and the refusal names what still works: a filter such as `grep` or `tail` run with
+`stdin_ref` set to the reference, then `read_output` on what it printed, or `vet_content` for a
+reference that holds no text.
 
 Everything before the document marker in a processor's reply is a remark for you: it reaches your
 screen and stops there, is part of no file, and cannot be another processor's input. An answer with no
@@ -848,6 +925,7 @@ of capabilities, and gets back one report.
 | `task` | the whole of what the delegate is told |
 | `each` | optional; starts one delegate per entry, each told `task` followed by its own entry |
 | `mcp_servers` | optional; the [MCP servers](../customize/mcp-servers.md) a `worker` keeps, out of the ones its parent may call. `[]` keeps none |
+| `budget` | optional; the most tokens each delegate may spend, as `500000`, `500k` or `2m`. It can only lower the budget a [definition](../customize/agents.md) sets |
 | `isolation` | optional; `checkout` gives each delegate [a checkout of its own](../customize/agents.md#a-checkout-of-its-own) to work in |
 
 | Kind | Holds | For |
@@ -884,6 +962,14 @@ mail server.
 A name is the server's part of its tools' names, as in `mcp__gmail__search`. A name the turn holds
 no grant for is refused and starts nothing, and the refusal lists the servers it holds. The list
 never adds a server.
+
+**`budget` stops a delegate at a spend.** A delegate that has used its budget in tokens loses its
+tools for its next request and answers with what it has, and the report arrives with a sentence
+saying the budget was spent and the work may not be finished. A call's figure never raises the
+budget its definition sets, and in a fan-out it applies to each delegate separately. A delegate that
+starts delegates of its own gives them at most what it has left, divided between the ones one call
+starts, and what a child spends counts against it. One with nothing left starts none. A request that has started finishes, so a delegate can pass its budget by one request.
+The figure is tokens only, never credits.
 
 **`isolation: checkout` keeps delegates out of your working tree.** Each delegate works in a new
 checkout of the last commit, so delegates writing at the same time do not edit or build in one tree.
@@ -999,7 +1085,8 @@ Records the task list for what the planner is doing.
 | `todos` | the complete list, each with `content` and `status` |
 
 The whole list every time: it replaces the previous one. There is no routing here, because nothing is
-touched. An unrecognised status reads as outstanding work.
+touched. An unrecognised status reads as outstanding work. A task marked `cancelled` is struck
+through and counted apart from the finished ones.
 
 ## `schedule_next`
 
@@ -1078,6 +1165,34 @@ like any other content nobody vouched for.
 A turn may ask at most three times, and a fourth call is refused without a request. Each call is
 counted in the turn's tokens and recorded in the trail with its model and cost. A call that fails is
 reported to the planner as a category of failure, without anything the service said.
+
+---
+
+## `message_session`
+
+Sends a message to another background session on this machine. The result says the message is queued in
+that session's process.
+
+| Parameter | |
+|---|---|
+| `target` | the name of the session, as you gave it to the planner |
+| `text` | what the planner wants that session's planner to be told, at most 4,000 characters |
+
+You are asked before the first message to a session in a turn. The question shows the session's name,
+its state and its working directory as the list of background sessions holds them, the whole text, and
+the label it is sent under. A background session holds the question until you attach. You can answer
+`y` to send that one, or `t` to send that one and the later ones to the same session until the turn
+ends. Nothing else sends, and no permission mode answers the question for you.
+
+The other session's planner is told the text is advice from another session, not your words. The text
+grants it no permission and answers nothing it is waiting on. A message starts no turn. It is read
+at the start of that planner's next request, so a session that is idle or waiting for you reads it later.
+The planner is not told whether it was read.
+
+The target is a name, so a name that no session has, that two sessions have, that is this session's own,
+or that belongs to a session no process is running is refused, and so is a text over the limit. A
+refusal does not ask you. A turn may put at most ten messages to one session, counting the ones you
+declined. A session that has met content nobody vouched for sends nothing at all.
 
 ---
 

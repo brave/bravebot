@@ -48,8 +48,8 @@ struct Open {
     /// default: defaulting either way answers on behalf of somebody who was never asked,
     /// which is the mistake the whole trust design exists to avoid.
     answered_trust: bool,
-    /// The record a "trust and remember" answer is kept in, while the question that offered it is
-    /// waiting (TRUST-23). `None` where no question is waiting or remembering is not on offer.
+    /// The record a yes is kept in, while the question is waiting (TRUST-23). `None` where no
+    /// question is waiting or the answer may not be kept.
     keeping: Option<(trusted::Store, trusted::Identity)>,
     /// The turn in flight, if there is one.
     running: Option<Running>,
@@ -76,6 +76,50 @@ struct Open {
     /// (SANDBOX-22), so a resume and a fork start with none. Read when a turn or a run is accepted
     /// and copied into it, so a choice applies from the next turn.
     sandbox: Option<SandboxMode>,
+}
+
+impl Open {
+    /// A session as it opens, with no turn in flight. The trust answer and the record that would
+    /// keep one are required, since a default either way answers for somebody who was never asked.
+    fn opened(
+        project: PathBuf,
+        state: State,
+        answered_trust: bool,
+        keeping: Option<(trusted::Store, trusted::Identity)>,
+        auto_vetting: bool,
+    ) -> Self {
+        Self {
+            project,
+            state: Arc::new(Mutex::new(state)),
+            answered_trust,
+            keeping,
+            running: None,
+            model: None,
+            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            auto_vetting,
+            definition: None,
+            permission_mode: LiveMode::default(),
+            sandbox: None,
+        }
+    }
+
+    /// Whether the session can take a turn or a manifest run now: the trust question is answered
+    /// and nothing is running.
+    fn ready_for_work(&self) -> Result<(), Failure> {
+        if !self.answered_trust {
+            return Err(Failure::bad_request(
+                "this session has not been asked whether the directory is trusted; \
+                 send trust.reply first",
+            ));
+        }
+        if self.running.is_some() {
+            return Err(Failure::new(
+                ErrorCode::TurnInFlight,
+                "a turn is already running in this session",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Drives the agent for a front-end.
@@ -193,6 +237,8 @@ impl Bridge {
                 let files = crate::mentions::named(&workspace, &request.string("prompt")?)?;
                 Ok(json!({ "files": files }))
             }
+            "drops.classify" => crate::attached::classified(request),
+            "pastes.check" => crate::attached::paste_check(request),
             "turn.cancel" => self.cancel_turn(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {
@@ -329,6 +375,15 @@ impl Bridge {
             )));
         }
 
+        // A running background session holds its record, and a second process writing it forks
+        // the conversation (BG-9). The terminal refuses it the same way.
+        if bravebot_session::jobs::is_running(&id) {
+            return Err(Failure::bad_request(bravebot_session::jobs::held_refusal(
+                &id,
+                usize::MAX,
+            )));
+        }
+
         // A record that recorded a trust map was answered for by the person now resuming
         // it, and inherits it. One that did not is asked again: nothing recorded is not
         // the same as nothing trusted, and reading an absent map as an empty one would
@@ -344,21 +399,23 @@ impl Bridge {
         let state = State::resumed(&directory, &record, opening.trust);
 
         let auto_vetting = self.auto_vetting(&directory);
-        let handle = self.mint(Open {
-            project: directory.clone(),
-            state: Arc::new(Mutex::new(state)),
-            answered_trust: opening.answered,
-            keeping: opening.keeping,
-            running: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            model: None,
+        let handle = self.mint(Open::opened(
+            directory.clone(),
+            state,
+            opening.answered,
+            opening.keeping,
             auto_vetting,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        ));
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
+        if let Some(open) = self
+            .open
+            .get(&handle)
+            .filter(|_| !record.checkouts.is_empty())
+        {
+            let settings = crate::settings::layers(Some(&directory), self.settings.as_deref());
+            take_back_checkouts(open, &record, &settings);
+        }
 
         let mut opened = self.recount(&handle, &directory, &record, auto_vetting);
         opened["settingsRules"] = rules;
@@ -396,7 +453,7 @@ impl Bridge {
         });
         let reported = rules.json();
         if let Ok(mut state) = open.state.lock() {
-            state.rules = rules;
+            state.answers.rules = rules;
         }
         reported
     }
@@ -415,6 +472,10 @@ impl Bridge {
             json!({
                 "directory": open.project.display().to_string(),
                 "keeping": open.keeping.as_ref().map(|(store, _)| store.path().display().to_string()),
+                // What a yes grants beyond the files (RUN-5), in the words every front end shows.
+                // A window that shows it answers with `confinedLines`, and a client that does not
+                // is not taken to have said it.
+                "confinedLines": trusted::confined_lines_notice(),
             }),
         ));
     }
@@ -537,24 +598,18 @@ impl Bridge {
 
         let branch = bravebot_session::sessions::branch_of(&directory);
         let auto_vetting = self.auto_vetting(&directory);
-        // Nothing carried in, whatever an earlier session here answered, unless the person said to
-        // remember that answer. Unanswered, the map is empty until they answer; nothing runs before
-        // then, so it is never the map a turn uses.
+        // Nothing carried in, whatever an earlier session here answered, unless a kept yes settles
+        // it. Unanswered, the map is empty until they answer; nothing runs before then, so it is
+        // never the map a turn uses.
         let opening = Opening::of(&directory, None);
         let reported = opening.json();
-        let handle = self.mint(Open {
-            project: directory.clone(),
-            state: Arc::new(Mutex::new(State::fresh(opening.trust))),
-            answered_trust: opening.answered,
-            keeping: opening.keeping,
-            running: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            model: None,
+        let handle = self.mint(Open::opened(
+            directory.clone(),
+            State::fresh(opening.trust),
+            opening.answered,
+            opening.keeping,
             auto_vetting,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        ));
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
         // leave no trace, which is also how `bravebot` behaves.
@@ -627,15 +682,18 @@ impl Bridge {
                     "this session has not been written down yet, so there is nothing to fork from",
                 ));
             };
+            // What the record keeps and nothing else: a server approved, a run prompt drawn and a
+            // file agreed to hold a secret were answers given to the parent.
+            let (trust, programs, rules) = state.answers.what_a_record_keeps();
             (
                 state.conversation.snapshot(),
                 state.conversation.recounted(),
-                state.trust.clone(),
-                state.programs.clone(),
+                trust.clone(),
+                programs.clone(),
                 state.directories.clone(),
                 state.todos.clone(),
                 parent.clone(),
-                state.rules.clone(),
+                rules.clone(),
             )
         };
 
@@ -689,9 +747,9 @@ impl Bridge {
         let parent_title = parent.title().to_string();
         let id = begun.id().to_string();
 
-        let child = self.mint(Open {
-            project: project.clone(),
-            state: Arc::new(Mutex::new(State::forked(
+        let child = self.mint(Open::opened(
+            project.clone(),
+            State::forked(
                 begun,
                 cut.before,
                 opening.trust,
@@ -700,22 +758,15 @@ impl Bridge {
                 ordinal,
                 todos.clone(),
                 first_prompt,
-            ))),
+            ),
             // Inherited along with the map itself: the same person, in the same directory, in
             // the same window, so asking again would be asking somebody to answer twice.
-            answered_trust: opening.answered,
-            keeping: opening.keeping,
-            running: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            model: None,
+            opening.answered,
+            opening.keeping,
             // The parent's, not read again: the child's transcript is the parent's up to the cut,
             // and the notice at its top says what the parent opened under.
             auto_vetting,
-            definition: None,
-            // Not the parent's. A fork is a session opened again, and opens asking as one does.
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        ));
         self.ask_about_trust(&child);
         // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
         // session it was cut from.
@@ -970,7 +1021,7 @@ impl Bridge {
 
     /// Choose the sandbox mode the session's next turn runs its programs under.
     ///
-    /// `strict` or `standard`: a window has no way to show that nothing confines a program, so
+    /// `strict` or `workspace-write`: a window has no way to show that nothing confines a program, so
     /// `off` is refused here whatever the settings say (SANDBOX-22). The managed file is a floor, and
     /// is read again when the turn starts. A turn already running keeps the mode it began with.
     fn set_sandbox_mode(&mut self, request: &Request) -> Result<Value, Failure> {
@@ -1080,18 +1131,7 @@ impl Bridge {
             .get(&handle)
             .ok_or_else(Failure::no_such_session)?;
 
-        if !open.answered_trust {
-            return Err(Failure::bad_request(
-                "this session has not been asked whether the directory is trusted; \
-                 send trust.reply first",
-            ));
-        }
-        if open.running.is_some() {
-            return Err(Failure::new(
-                ErrorCode::TurnInFlight,
-                "a turn is already running in this session",
-            ));
-        }
+        open.ready_for_work()?;
         // The name the session was given, kept so a turn with no request behind it is addressed
         // too.
         let addressing = named.or_else(|| open.definition.clone());
@@ -1102,7 +1142,7 @@ impl Bridge {
         // writes may carry (BACKEND-30), and the caps a search this turn makes runs under
         // (SEARCH-9).
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
-        let workspace = session_workspace(open, &settings)?;
+        let workspace = with_session_checkouts(open, session_workspace(open, &settings)?);
         // The files the prompt names with `@` (NAME-9), read out of the prompt here rather than
         // taken from the front end, and each one surveyed by the read the turn will make, so a
         // name that would end the turn refuses the send before anything starts. A prompt nobody
@@ -1148,21 +1188,14 @@ impl Bridge {
         let watches = Arc::clone(&open.watches);
         let turn_number = state.lock().map(|s| s.turns + 1).unwrap_or(1);
 
-        // A fresh token and a fresh channel per turn. Reusing either could cancel a turn
-        // before it started, or deliver yesterday's answer to today's question.
-        let cancel = Cancel::new();
-        let (answers_tx, answers_rx) = mpsc::channel();
-        let pending: crate::turn::Pending = Arc::new(Mutex::new(None));
-
-        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let target = crate::running::next_target();
-        let running = Running {
-            cancel: cancel.clone(),
-            answers: answers_tx,
-            pending: Arc::clone(&pending),
+        let crate::running::Started {
+            running,
+            cancel,
+            pending,
+            answers: answers_rx,
+            finished,
             target,
-            finished: Arc::clone(&finished),
-        };
+        } = Running::start();
 
         let emitter = self.emitter.clone();
         let session = handle.clone();
@@ -1270,18 +1303,7 @@ impl Bridge {
             .open
             .get(&handle)
             .ok_or_else(Failure::no_such_session)?;
-        if !open.answered_trust {
-            return Err(Failure::bad_request(
-                "this session has not been asked whether the directory is trusted; \
-                 send trust.reply first",
-            ));
-        }
-        if open.running.is_some() {
-            return Err(Failure::new(
-                ErrorCode::TurnInFlight,
-                "a turn is already running in this session",
-            ));
-        }
+        open.ready_for_work()?;
 
         let model = requested_model.or_else(|| open.model.clone());
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
@@ -1317,18 +1339,14 @@ impl Bridge {
             })
             .unwrap_or(1);
 
-        let cancel = Cancel::new();
-        let (answers_tx, answers_rx) = mpsc::channel();
-        let pending: crate::turn::Pending = Arc::new(Mutex::new(None));
-        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let target = crate::running::next_target();
-        let running = Running {
-            cancel: cancel.clone(),
-            answers: answers_tx,
-            pending: Arc::clone(&pending),
+        let crate::running::Started {
+            running,
+            cancel,
+            pending,
+            answers: answers_rx,
+            finished,
             target,
-            finished: Arc::clone(&finished),
-        };
+        } = Running::start();
 
         self.emitter.send(Event::new(
             "manifest.started",
@@ -1425,12 +1443,13 @@ impl Bridge {
         }
         let gaps = point.coverage.gaps();
         let snapshot = point.snapshot;
+        let (trust, programs, servers) = state.answers.what_a_rewind_takes_back();
         let refused = bravebot_agent::rewind::restore(
             &workspace,
             point.backups,
-            &mut state.trust,
+            trust,
             &snapshot.trust,
-            &mut state.servers,
+            servers,
             bravebot_agent::home::directory().as_deref(),
         );
         if !refused.is_empty() {
@@ -1445,16 +1464,16 @@ impl Bridge {
         // The snapshot's approvals that are still held. The terminal takes the snapshot's whole,
         // which is the same set there, since its approvals only grow; here one can be revoked
         // after the turn that is being undone, and a rewind must not hand it back.
-        let mut programs = snapshot.programs;
-        let revoked: Vec<_> = programs
+        let mut restored = snapshot.programs;
+        let revoked: Vec<_> = restored
             .iter()
-            .filter(|command| !state.programs.iter().any(|held| held == *command))
+            .filter(|command| !programs.iter().any(|held| held == *command))
             .cloned()
             .collect();
         for command in &revoked {
-            programs.forget(command);
+            restored.forget(command);
         }
-        state.programs = programs;
+        *programs = restored;
         if let Some(history) = state.history.as_mut() {
             history.retain(|turn| turn.number <= snapshot.turns);
         }
@@ -1464,7 +1483,7 @@ impl Bridge {
             && !snapshot.was_wrote
             && refused.is_empty()
             && gaps.is_empty()
-            && state.trust == snapshot.trust;
+            && state.answers.trust == snapshot.trust;
         if let Some(stored) = state.handle.as_mut() {
             stored.truncate_audit(snapshot.turns + 1);
             if discard {
@@ -1500,7 +1519,7 @@ impl Bridge {
             "contextTokens": standing.measured,
             "archived": standing.archive.len(),
             "todos": todos_json(&state.todos),
-            "trust": { "rules": rules_json(&state.trust) },
+            "trust": { "rules": rules_json(&state.answers.trust) },
             "rewind": rewind_json(state, &project),
         }))
     }
@@ -1519,9 +1538,9 @@ impl Bridge {
             ));
         }
         // What the caller meant to stop (RPCVIEW-6). Absent, the request means whatever is
-        // running, as it always has. Present, it stops that turn or run and no other.
+        // running, as it always has. Present, even as null, it stops that turn or run and no other.
         let expected = match request.params.get("target") {
-            None | Some(Value::Null) => None,
+            None => None,
             Some(value) => Some(
                 value
                     .as_u64()
@@ -1643,6 +1662,9 @@ impl Bridge {
     }
 
     /// Record what the user answered about trusting the directory.
+    ///
+    /// A yes is kept for later sessions wherever the question offered to keep it (TRUST-23), and a
+    /// no never is.
     fn reply_trust(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let trusted = request
@@ -1650,15 +1672,16 @@ impl Bridge {
             .get("trusted")
             .and_then(Value::as_bool)
             .ok_or_else(|| Failure::bad_request("`trusted` must be a boolean"))?;
-        let remember = match request.params.get("remember") {
-            None | Some(Value::Null) => false,
-            Some(value) => value
-                .as_bool()
-                .ok_or_else(|| Failure::bad_request("`remember` must be a boolean"))?,
-        };
-        if remember && !trusted {
-            return Err(Failure::bad_request("only a yes can be remembered"));
-        }
+
+        // Whether the question the person answered said that confined lines run without asking
+        // (RUN-5). Said by the client that drew it, which is the only one that knows: an absent
+        // field is a question that did not, so a client that never learned of the sentence keeps
+        // asking about every line.
+        let said_confined_lines = request
+            .params
+            .get("confinedLines")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
         let open = self
             .open
@@ -1672,40 +1695,27 @@ impl Bridge {
                 "the trust question is not waiting for an answer",
             ));
         }
-        // Kept only where the question offered it, so an answer the window was never shown the
-        // record for, or one given where it may not be kept, writes nothing (TRUST-23).
-        if remember && open.keeping.is_none() {
-            return Err(Failure::bad_request(
-                "remembering this answer was not offered for this session",
-            ));
-        }
-
         // Trusting records the workspace root, which covers everything beneath it.
         // Declining records nothing, leaving a map in which no path is trusted. The same
         // outcomes the terminal offers, so an answer means the same in both.
-        let mut trust = bravebot_agent::workspace::trust_store(&open.project);
-        if trusted {
-            trust.trust(".");
-        }
+        let trust = map_for_an_answer(&open.project, trusted, said_confined_lines);
         // A session that has not had a turn has no name yet, and the name a line carries decides
         // nothing, so such a line names none.
         let mut named = String::new();
         if let Ok(mut state) = open.state.lock() {
-            state.trust = trust;
+            state.answers.trust = trust;
             if let Some(handle) = state.handle.as_ref() {
                 named = handle.id().to_string();
             }
         }
         open.answered_trust = true;
         self.emitter.view_trusted(&handle);
-        // The question is answered, so what it offered is spent.
+        // The question is answered, so what it offered is spent. Offered only where the answer may
+        // be written and later honoured, so a directory it may not be kept about writes nothing.
         let keeping = open.keeping.take();
-        let kept = match keeping {
-            Some((store, identity)) if remember => {
-                Some(store.keep(&identity, &named, seconds_now()))
-            }
-            _ => None,
-        };
+        // The entry says what the question said (RUN-5): a yes to a window that did not show the
+        // sentence is kept without it.
+        let kept = trusted::keep_a_yes(keeping.as_ref(), trusted, &named, said_confined_lines);
 
         Ok(json!({ "trusted": trusted, "kept": kept }))
     }
@@ -1733,14 +1743,14 @@ impl Bridge {
             match kind.as_str() {
                 "path" => {
                     let path = request.string("path")?;
-                    if !state.trust.rules().any(|(held, integrity)| {
+                    if !state.answers.trust.rules().any(|(held, integrity)| {
                         held == path && integrity == Some(bravebot_core::label::Integrity::Trusted)
                     }) {
                         return Err(Failure::bad_request(
                             "This path grant is no longer present.",
                         ));
                     }
-                    state.trust.distrust(&path);
+                    state.answers.trust.distrust(&path);
                 }
                 "command" => {
                     let selected = request
@@ -1748,6 +1758,7 @@ impl Bridge {
                         .get("command")
                         .ok_or_else(|| Failure::bad_request("Missing command"))?;
                     let command = state
+                        .answers
                         .programs
                         .iter()
                         .find(|command| {
@@ -1758,7 +1769,7 @@ impl Bridge {
                         .ok_or_else(|| {
                             Failure::bad_request("This command grant is no longer present.")
                         })?;
-                    state.programs.forget(&command);
+                    state.answers.programs.forget(&command);
                 }
                 // Withdrawn for the directory rather than this session, which keeps the map it
                 // has: the next session started there asks (TRUST-24).
@@ -1777,14 +1788,14 @@ impl Bridge {
             }
         }
         Ok(json!({
-            "paths": rules_json(&state.trust),
-            "commands": state.programs.iter().map(|command| json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
+            "paths": rules_json(&state.answers.trust),
+            "commands": state.answers.programs.iter().map(|command| json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
             // Read now rather than when the session opened: the record belongs to every session
             // begun in the directory, and another may have kept or withdrawn the answer since.
             "remembered": remembered_json(&open.project),
             // The rules this session opened under. They are read from settings files and
             // cannot be revoked here: editing the file changes them for the next session.
-            "settingsRules": state.rules.json(),
+            "settingsRules": state.answers.rules.json(),
         }))
     }
 
@@ -2111,6 +2122,35 @@ fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Fail
     Ok(workspace)
 }
 
+/// `workspace`, the one a turn is about to run in, given the checkouts the session keeps, or
+/// the session's record of them begun from it (CHECKOUT-16).
+fn with_session_checkouts(open: &Open, workspace: Workspace) -> Workspace {
+    let Ok(mut state) = open.state.lock() else {
+        return workspace;
+    };
+    match &state.kept {
+        Some(kept) => workspace.with_kept_between_turns(kept),
+        None => {
+            state.kept = Some(workspace.kept_between_turns());
+            workspace
+        }
+    }
+}
+
+/// As a session is opened again, place the checkouts its record lists as the terminal does, so the
+/// ones that cannot be placed stay in the record and the rest are the session's (CHECKOUT-16).
+fn take_back_checkouts(open: &Open, record: &Record, settings: &Settings) {
+    let Ok(workspace) = session_workspace(open, settings) else {
+        return;
+    };
+    if let Ok(mut state) = open.state.lock() {
+        if let Some(handle) = state.handle.as_mut() {
+            record.restore_checkouts(&workspace, handle);
+        }
+        state.kept = Some(workspace.kept_between_turns());
+    }
+}
+
 /// Everything a worker needs to run one turn.
 ///
 /// A struct rather than a dozen arguments, because the list was the kind that grows one
@@ -2243,7 +2283,7 @@ fn work(work: Work) {
         session,
         project,
         state,
-        config,
+        mut config,
         attribution,
         output_cap,
         download_cap,
@@ -2270,6 +2310,9 @@ fn work(work: Work) {
         answers,
         finished,
     } = work;
+    // The model that answers is the one this turn names, and the configuration was built without
+    // asking which. Taken here, on the worker, because the roster may be a request away.
+    crate::models::adopt_window(&mut config, model.as_deref());
 
     // Held for the length of the turn. Nothing else contends for it: a session with a
     // turn in flight refuses another one.
@@ -2310,8 +2353,8 @@ fn work(work: Work) {
         Mcp::Unstarted => None,
     };
     let mut task = Task::new(&prompt)
-        .already_asked_about(state.asked_about.clone())
-        .already_exposed(state.exposed.clone())
+        .already_asked_about(state.answers.asked_about.clone())
+        .already_exposed(state.answers.exposed.clone())
         .with_home(bravebot_agent::home::directory())
         // What a leading `~` in a run line stands for, which is the home directory and not the
         // state directory above (CMDLINE-4). Without it the line is refused as having no home.
@@ -2331,7 +2374,7 @@ fn work(work: Work) {
         .with_auto_vetting(auto_vetting)
         .with_permission_mode(permission_mode.clone())
         // The rules the session opened under, and not the files as they are now (PERM-12).
-        .with_permissions(state.rules.permissions.clone())
+        .with_permissions(state.answers.rules.permissions.clone())
         .with_mcp(mcp)
         // A turn in a bot's conversation is addressed to the bot's definition whatever composed
         // it (MEMORY-10). The name is the session's, set from the bot's row, so nothing the turn
@@ -2368,14 +2411,14 @@ fn work(work: Work) {
 
     // Cloned out before the call, because the conversation is borrowed mutably for the
     // duration and both of these are passed by value.
-    let trust = state.trust.clone();
+    let trust = state.answers.trust.clone();
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
-    let programs = state.programs.clone();
+    let programs = state.answers.programs.clone();
     // The session's language servers (LSP-8), taken for this turn and put back after it. The
     // first turn builds the set. Building it starts no server: one starts on the first question
     // that needs it, after the person approves.
-    let mut servers = state.servers.take().unwrap_or_else(|| {
+    let mut servers = state.answers.servers.take().unwrap_or_else(|| {
         // Use the task's home so the index is cached with the rest of the session's state.
         bravebot_agent::lsp::LanguageServers::new(workspace.root().to_path_buf(), task.home.clone())
     });
@@ -2387,6 +2430,7 @@ fn work(work: Work) {
     // in a verdict read the same answer.
     let mut confirmer = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
     open_rewind_point(&mut state, &workspace, &prompt);
+    let began_at = std::time::Instant::now();
     let completed = agent_turn::resume(
         &config,
         &egress,
@@ -2403,23 +2447,12 @@ fn work(work: Work) {
     );
     // Put the set back even if the turn failed or was cancelled. Otherwise its servers would
     // stop here, and the next turn would ask about the same language again.
-    state.servers = Some(servers);
+    state.answers.servers = Some(servers);
     // Kept whatever the outcome: a failed or cancelled turn may still have written.
     state.rewind.keep_backups(workspace.take_backups());
 
     // Cleanup has finished on every return, including cancellation and request errors.
-    // Taken apart with no `..`, so an answer a turn learns to remember does not build until this
-    // front-end says what becomes of it.
-    let agent_turn::Decisions {
-        trust,
-        programs,
-        asked_about,
-        exposed,
-    } = completed.decisions;
-    state.trust = trust;
-    state.programs = programs;
-    state.asked_about = asked_about;
-    state.exposed = exposed;
+    state.answers.adopt(completed.decisions);
     let outcome = completed.outcome;
 
     // The prompt joins the history the terminal also reads, so recall works across both
@@ -2450,17 +2483,22 @@ fn work(work: Work) {
     if state.first_prompt.is_none() && recall {
         state.first_prompt = Some(prompt.clone());
     }
+    // Whichever way the turn ended: a plan a stopped or failed turn had written is still what it
+    // set out to do (SESSION-23).
+    if !reporter.task_list().is_empty() {
+        state.todos.insert(turn, reporter.task_list().to_vec());
+    }
 
     let event = match outcome {
         Ok(outcome) => {
             if let Ok(mut watches) = watches.lock() {
-                for path in &outcome.watches {
-                    if !watches.live().iter().any(|w| w.path() == path) {
+                for armed in &outcome.watches {
+                    if !watches.live().iter().any(|w| w.path() == armed.path) {
                         let _ = watches.arm(
-                            path.clone(),
+                            armed.path.clone(),
                             workspace.root().to_path_buf(),
                             turn,
-                            workspace.look(path, workspace.root()),
+                            armed.looked.clone(),
                             std::time::Instant::now(),
                         );
                     }
@@ -2479,7 +2517,7 @@ fn work(work: Work) {
 
             let archived = save(&project, &mut state, turn, sink.trail());
 
-            let rules = rules_json(&state.trust);
+            let rules = rules_json(&state.answers.trust);
 
             Event::new(
                 "turn.done",
@@ -2522,6 +2560,15 @@ fn work(work: Work) {
             )
         }
         Err(error) => {
+            let charged = &mut *state;
+            bravebot_session::sessions::charge_failed_turn(
+                &mut charged.tokens,
+                &mut charged.spend,
+                &mut charged.timing,
+                turn,
+                reporter.spent().unwrap_or_default(),
+                began_at.elapsed(),
+            );
             let _ = save(&project, &mut state, turn, sink.trail());
 
             let chosen = task.model.as_deref().unwrap_or(&config.default_model);
@@ -2674,11 +2721,11 @@ fn open_rewind_point(state: &mut State, workspace: &Workspace, prompt: &str) {
         // With the record's rules, so a yes this turn gives to a recorded memory does not outlive
         // rewinding past it.
         trust: bravebot_agent::memory::with_recorded(
-            &state.trust,
+            &state.answers.trust,
             workspace,
             bravebot_agent::home::directory().as_deref(),
         ),
-        programs: state.programs.clone(),
+        programs: state.answers.programs.clone(),
         // A terminal index the desktop has no transcript for. Not stored; a terminal resuming the
         // record places each point again.
         transcript_len: 0,
@@ -2732,7 +2779,7 @@ fn record_turn(
 /// The same `Handle` the terminal uses, so a session written here is one `bravebot --resume`
 /// can pick up. Created on the first turn rather than when the window opened: an
 /// abandoned window should leave nothing behind.
-fn save(
+pub(crate) fn save(
     project: &std::path::Path,
     state: &mut State,
     turn: usize,
@@ -2742,6 +2789,11 @@ fn save(
         .handle
         .get_or_insert_with(|| Handle::begin(project, crate::FRONT, crate::agent_build()));
 
+    let checkouts = state
+        .kept
+        .as_ref()
+        .map(bravebot_agent::workspace::KeptBetweenTurns::checkouts)
+        .unwrap_or_default();
     let first = state.first_prompt.clone().unwrap_or_default();
     // Taken once and lent to both readers below. A snapshot copies the whole conversation, and
     // the archive count wanted for `turn.done` is a field of the one being written down anyway —
@@ -2761,16 +2813,14 @@ fn save(
             todos: &state.todos,
             asides: &state.asides,
             rewind: state.rewind.points(),
-            trust: &state.trust,
-            programs: &state.programs,
+            trust: &state.answers.trust,
+            programs: &state.answers.programs,
             directories: &state.directories,
             // Every session this window writes is a turn session. `Standing` carries the
             // manifest so the picker can mark a run that may be read and not continued, and
             // marking one of ours would be a claim about a session nobody can resume.
             manifest: None,
-            // The desktop lists, resumes and applies no checkout yet, so it holds none itself;
-            // the ones a resumed record carries are written back by `Handle` (CHECKOUT-16).
-            checkouts: &[],
+            checkouts: &checkouts,
         },
     );
     handle.append_audit(turn, trail.events());
@@ -2813,8 +2863,19 @@ struct Opening {
     answered: bool,
     /// The kept answer that settled it, and the file it is kept in.
     remembered: Option<(trusted::Kept, PathBuf)>,
-    /// Where the question is put, the record a "trust and remember" answer would be kept in.
+    /// Where the question is put, the record a yes would be kept in.
     keeping: Option<(trusted::Store, trusted::Identity)>,
+}
+
+/// The map the window's answer starts a session with: the rule a yes writes, and the answer about
+/// confined lines only for a yes to a question that said so (RUN-5). A no is a map with nothing
+/// trusted, whatever the client said it showed.
+fn map_for_an_answer(project: &Path, trusted: bool, said_confined_lines: bool) -> TrustStore {
+    match (trusted, said_confined_lines) {
+        (false, _) => bravebot_agent::workspace::trust_store(project),
+        (true, false) => trusted::trusting_the_workspace(project),
+        (true, true) => trusted::trusting_the_workspace_and_confined_lines(project),
+    }
 }
 
 impl Opening {
@@ -2822,9 +2883,9 @@ impl Opening {
     /// or `None` where it carries none.
     ///
     /// What it carries answers first, since that is the answer this conversation's own user gave.
-    /// Then an answer the person said to remember about this exact directory (TRUST-23), which starts
-    /// the session from the rule a yes writes and nothing else. Then the question, offering to keep
-    /// its answer only where it may be written and later honoured.
+    /// Then a yes that was kept about this directory or the git worktree root around it (TRUST-23),
+    /// which starts the session from the rule a yes writes and nothing else. Then the question, whose
+    /// yes is kept only where it may be written and later honoured.
     fn of(project: &Path, carried: Option<TrustStore>) -> Self {
         if let Some(trust) = carried {
             return Self {
@@ -2834,13 +2895,20 @@ impl Opening {
                 keeping: None,
             };
         }
-        let record = remembering(project);
-        let kept =
-            honoured(project).map(|honoured| (honoured.kept, honoured.store.path().to_path_buf()));
+        Self::settled_by(
+            project,
+            honoured(project).map(|honoured| (honoured.kept, honoured.store.path().to_path_buf())),
+        )
+    }
+
+    /// [`Opening::of`] for a session carrying no map, given the kept answer that settles it, if any.
+    fn settled_by(project: &Path, kept: Option<(trusted::Kept, PathBuf)>) -> Self {
         let mut trust = bravebot_agent::workspace::trust_store(project);
         match kept {
             Some(remembered) => {
-                trust.trust(".");
+                // The answer about confined lines comes with the entry only where it says so, and
+                // for the root it was given for, as in every front end (RUN-5).
+                trust = trusted::trusting_as_kept(project, &remembered.0);
                 Self {
                     trust,
                     answered: true,
@@ -2853,7 +2921,7 @@ impl Opening {
                 trust,
                 answered: false,
                 remembered: None,
-                keeping: record.filter(|_| trusted::may_be_written()),
+                keeping: to_keep(project),
             },
         }
     }
@@ -2863,6 +2931,7 @@ impl Opening {
         json!({
             "remembered": self.remembered.as_ref().map(|(kept, path)| kept_json(kept, path)),
             "keeping": self.keeping.as_ref().map(|(store, _)| store.path().display().to_string()),
+            "confinedLines": (!self.answered).then(trusted::confined_lines_notice),
         })
     }
 }
@@ -2874,13 +2943,13 @@ pub(crate) fn merge(into: &mut Value, extra: Value) {
     }
 }
 
-/// The record of the answer kept about `project` (TRUST-23), or `None` where none may be kept or
-/// honoured.
+/// The record a yes about `project` is kept in (TRUST-23), or `None` where none may be kept, honoured
+/// or written.
 ///
 /// Read under the name a turn there resolves the directory to, which is the name the terminal
 /// reads it under, so one directory has one record whichever front end answered.
-fn remembering(project: &Path) -> Option<(trusted::Store, trusted::Identity)> {
-    trusted::record_for(
+fn to_keep(project: &Path) -> Option<(trusted::Store, trusted::Identity)> {
+    trusted::record_to_keep(
         bravebot_agent::home::directory().as_deref(),
         bravebot_agent::home::profile().as_deref(),
         &project.canonicalize().ok()?,
@@ -2948,13 +3017,6 @@ fn forget_trust(project: &Path) -> Result<(), Failure> {
     }
 }
 
-/// Seconds since the epoch, which is how a kept answer says when it was given.
-fn seconds_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
-}
-
 #[cfg(test)]
 #[path = "../../session/test-support/profile.rs"]
 mod test_profile;
@@ -2974,23 +3036,11 @@ mod coverage_tests {
         std::fs::create_dir_all(&directory).unwrap();
         let command = bravebot_core::programs::Command::new("/bin/ls", Vec::new(), &directory);
         let mut state = State::fresh(TrustStore::new(&directory));
-        state.programs.trust(command.clone());
+        state.answers.programs.trust(command.clone());
         let workspace = Workspace::new(&directory).unwrap();
         open_rewind_point(&mut state, &workspace, "list the files");
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let handle = bridge.mint(Open {
-            project: directory.clone(),
-            state: Arc::new(Mutex::new(state)),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        let handle = bridge.mint(Open::opened(directory.clone(), state, true, None, false));
         let call = |bridge: &mut Bridge, method: &str, params: Value| {
             let line = json!({"id": 1, "method": method, "params": params}).to_string();
             bridge.dispatch(&Request::parse(&line).unwrap()).unwrap()
@@ -3015,6 +3065,148 @@ mod coverage_tests {
             json!([]),
             "the revoked command came back"
         );
+    }
+
+    /// SESSION-19: undoing a turn takes back the program vouched for in it and stops the servers,
+    /// as the terminal's undo does. A file agreed to be shown or to hold a secret keeps the
+    /// session's lifetime (CRED-13, CRED-15) and a run prompt drawn grants nothing, and no point
+    /// holds either, so both are still there afterwards.
+    #[test]
+    fn undoing_a_turn_stops_the_servers_and_keeps_the_files_agreed_to() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("rewind-answers");
+        std::fs::create_dir_all(&directory).unwrap();
+        let command = bravebot_core::programs::Command::new("/bin/ls", Vec::new(), &directory);
+        let key = directory.join("deploy/key.pem");
+        let mut state = State::fresh(TrustStore::new(&directory));
+        let workspace = Workspace::new(&directory).unwrap();
+        open_rewind_point(&mut state, &workspace, "list the files");
+        state.answers.programs.trust(command.clone());
+        state.answers.asked_about.record(command);
+        state.answers.exposed.allow(".env");
+        state.answers.exposed.allow_creating(&key);
+        state.answers.servers = Some(bravebot_agent::lsp::LanguageServers::new(&directory, None));
+        let asked_about = state.answers.asked_about.clone();
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open::opened(directory.clone(), state, true, None, false));
+
+        let line = json!({"id": 1, "method": "session.rewind", "params": {
+            "session": handle, "steps": 1
+        }})
+        .to_string();
+        bridge.dispatch(&Request::parse(&line).unwrap()).unwrap();
+
+        let open = bridge.open.get(&handle).unwrap();
+        let state = open.state.lock().unwrap();
+        assert!(
+            state.answers.programs.is_empty(),
+            "the undo kept a program vouched for in the turn it took back"
+        );
+        assert!(
+            state.answers.servers.is_none(),
+            "the undo left the language servers running"
+        );
+        assert!(
+            state.answers.exposed.holds(".env"),
+            "the undo forgot a file agreed to be shown"
+        );
+        assert!(
+            state.answers.exposed.allows_creating(&key),
+            "the undo forgot a file agreed to hold a secret"
+        );
+        assert_eq!(
+            state.answers.asked_about, asked_about,
+            "the undo forgot the run prompts drawn"
+        );
+    }
+
+    /// A fork opens from what the record keeps: the map, the programs vouched for and the rules.
+    /// A server approved, a run prompt drawn and a file agreed to be shown or to hold a secret were
+    /// answers given to the parent, so the fork is asked again about each and the parent keeps
+    /// them.
+    #[test]
+    fn a_desktop_fork_asks_again_about_what_only_the_parent_was_asked() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("fork-answers");
+        std::fs::create_dir_all(&directory).unwrap();
+        let root = directory.as_path();
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("work"));
+        let record: Record = serde_json::from_value(json!({
+            "id": "answers-parent", "directory": root, "title": "work",
+            "started": 1, "updated": 1,
+            "conversation": conversation.snapshot()
+        }))
+        .unwrap();
+        let command = bravebot_core::programs::Command::new("/bin/ls", Vec::new(), root);
+        let key = root.join("deploy/key.pem");
+        let mut trust = TrustStore::new(root);
+        trust.trust("notes.md");
+        let mut parent_state = State::resumed(root, &record, trust);
+        parent_state.answers.programs.trust(command.clone());
+        parent_state.answers.asked_about.record(command.clone());
+        parent_state.answers.exposed.allow(".env");
+        parent_state.answers.exposed.allow_creating(&key);
+        parent_state.answers.servers = Some(bravebot_agent::lsp::LanguageServers::new(root, None));
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let parent = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            parent_state,
+            true,
+            None,
+            false,
+        ));
+
+        let request = Request::parse(
+            &json!({"id": 1, "method": "session.fork", "params": {
+                "session": parent, "prompt": 0, "text": "work"
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let forked = bridge.dispatch(&request).unwrap();
+
+        let child = bridge
+            .open
+            .get(forked["session"].as_str().unwrap())
+            .unwrap();
+        let state = child.state.lock().unwrap();
+        assert!(
+            state.answers.trust.is_trusted("notes.md"),
+            "the fork lost the map"
+        );
+        assert!(
+            state.answers.programs.iter().any(|held| *held == command),
+            "the fork lost a program vouched for"
+        );
+        assert!(
+            state.answers.servers.is_none(),
+            "the fork inherited the parent's language servers"
+        );
+        assert_eq!(
+            state.answers.asked_about,
+            bravebot_core::programs::AskedAbout::new(),
+            "the fork inherited the parent's run prompts"
+        );
+        assert!(
+            !state.answers.exposed.holds(".env"),
+            "the fork inherited a file the parent agreed to be shown"
+        );
+        assert!(
+            !state.answers.exposed.allows_creating(&key),
+            "the fork inherited a file the parent agreed to hold a secret"
+        );
+        drop(state);
+        let parent_state = bridge.open.get(&parent).unwrap().state.lock().unwrap();
+        assert!(
+            parent_state.answers.exposed.holds(".env"),
+            "forking took the parent's answers away"
+        );
+        assert!(parent_state.answers.servers.is_some());
     }
 
     /// A turn's workspace is new, so the server warning the record kept has to reach the point a
@@ -3071,23 +3263,13 @@ mod coverage_tests {
         }))
         .unwrap();
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let parent = bridge.mint(Open {
-            project: root.to_path_buf(),
-            state: Arc::new(Mutex::new(State::resumed(
-                root,
-                &record,
-                TrustStore::new(root),
-            ))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        let parent = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            State::resumed(root, &record, TrustStore::new(root)),
+            true,
+            None,
+            false,
+        ));
         let request = Request::parse(
             &json!({"id": 1, "method": "session.fork", "params": {
                 "session": parent, "prompt": 0, "text": "work"
@@ -3157,21 +3339,9 @@ mod permissions_tests {
             bravebot_core::programs::Command::new("/usr/bin/python3", vec!["-V".into()], "/work");
         let link = file.clone().started_as("/work/.venv/bin/python");
         let mut state = State::fresh(TrustStore::new("/work"));
-        state.programs = bravebot_core::programs::TrustedPrograms::from_iter([file, link]);
+        state.answers.programs = bravebot_core::programs::TrustedPrograms::from_iter([file, link]);
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let handle = bridge.mint(Open {
-            project: "/work".into(),
-            state: Arc::new(Mutex::new(state)),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        let handle = bridge.mint(Open::opened("/work".into(), state, true, None, false));
         let revoke = Request::parse(
             &json!({"id": 1, "method": "permissions.revoke", "params": {
                 "session": handle, "kind": "command", "command": {
@@ -3201,19 +3371,13 @@ mod permissions_tests {
         trust.distrust("vendor");
         trust.undecide("vendor/ours");
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let handle = bridge.mint(Open {
-            project: "/work".into(),
-            state: Arc::new(Mutex::new(State::fresh(trust))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        let handle = bridge.mint(Open::opened(
+            "/work".into(),
+            State::fresh(trust),
+            true,
+            None,
+            false,
+        ));
         let list = Request::parse(
             &json!({"id": 1, "method": "permissions.list", "params": {"session": handle}})
                 .to_string(),
@@ -3247,28 +3411,22 @@ mod sandbox_tests {
     use super::*;
 
     /// SANDBOX-22: a managed `strict` pin is a floor a window cannot choose under. `strict` is
-    /// accepted, `standard` is a bad request, and the session keeps `strict`. The failure this
+    /// accepted, `workspace-write` is a bad request, and the session keeps `strict`. The failure this
     /// rejects is a window's choice that the managed file does not bind.
     #[test]
-    fn a_managed_strict_pin_refuses_a_window_choosing_standard() {
+    fn a_managed_strict_pin_refuses_a_window_choosing_workspace_write() {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("managed.json");
         std::fs::write(&file, r#"{"sandbox": {"mode": "strict"}}"#).unwrap();
         let managed = bravebot_config::Managed::at(&file);
         let mut bridge = Bridge::new(Box::new(|_| {}));
-        let handle = bridge.mint(Open {
-            project: "/work".into(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new("/work")))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
-            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
-        });
+        let handle = bridge.mint(Open::opened(
+            "/work".into(),
+            State::fresh(TrustStore::new("/work")),
+            true,
+            None,
+            false,
+        ));
         let choose = |mode: &str| {
             Request::parse(
                 &json!({"id": 1, "method": "session.sandbox", "params": {
@@ -3286,7 +3444,7 @@ mod sandbox_tests {
             json!({"sandboxMode": "strict"})
         );
         let refused = bridge
-            .set_sandbox_mode_under(&choose("standard"), &managed)
+            .set_sandbox_mode_under(&choose("workspace-write"), &managed)
             .unwrap_err();
         assert_eq!(refused.code, ErrorCode::BadRequest, "{}", refused.message);
         assert_eq!(
@@ -3333,17 +3491,14 @@ mod watch_tests {
             .unwrap();
         let watches = Arc::new(Mutex::new(watches));
         let handle = bridge.mint(Open {
-            project: root.clone(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
             watches: Arc::clone(&watches),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
+            ..Open::opened(
+                root.clone(),
+                State::fresh(TrustStore::new(&root)),
+                true,
+                None,
+                false,
+            )
         });
         std::fs::write(
             root.join("watched"),
@@ -3397,17 +3552,14 @@ mod watch_tests {
             )
             .unwrap();
         bridge.mint(Open {
-            project: root.clone(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
             watches: Arc::new(Mutex::new(watches)),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
+            ..Open::opened(
+                root.clone(),
+                State::fresh(TrustStore::new(&root)),
+                true,
+                None,
+                false,
+            )
         });
         change(&root);
         bridge.poll_watches_at(now + Duration::from_secs(6));
@@ -3485,17 +3637,15 @@ mod watch_tests {
         };
         let mut bridge = Bridge::new(Box::new(|_| {}));
         let handle = bridge.mint(Open {
-            project: project.clone(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&project)))),
-            answered_trust: true,
-            keeping: None,
             running: Some(running),
-            model: None,
             watches: Arc::clone(&watches),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
+            ..Open::opened(
+                project.clone(),
+                State::fresh(TrustStore::new(&project)),
+                true,
+                None,
+                false,
+            )
         });
         let request = Request::parse(
             &json!({"id": 1, "method": "turn.cancel", "params": {"session": handle}}).to_string(),
@@ -3537,17 +3687,14 @@ mod watch_tests {
         let held = Arc::clone(&events);
         let mut bridge = Bridge::new(Box::new(move |e| held.lock().unwrap().push(e)));
         bridge.mint(Open {
-            project: root.clone(),
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
-            answered_trust: true,
-            keeping: None,
-            running: None,
-            model: None,
             watches: Arc::clone(&watches),
-            auto_vetting: false,
-            definition: None,
-            permission_mode: LiveMode::default(),
-            sandbox: None,
+            ..Open::opened(
+                root.clone(),
+                State::fresh(TrustStore::new(&root)),
+                true,
+                None,
+                false,
+            )
         });
         bridge.poll_watches_at(now + Duration::from_secs(7 * 24 * 60 * 60));
         assert!(watches.lock().unwrap().is_empty());
@@ -3574,3 +3721,7 @@ mod retention_tests;
 #[cfg(test)]
 #[path = "control_tests.rs"]
 mod control_tests;
+
+#[cfg(test)]
+#[path = "opening_tests.rs"]
+mod opening_tests;

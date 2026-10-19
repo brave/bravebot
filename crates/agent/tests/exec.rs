@@ -279,7 +279,7 @@ fn a_failing_stage_reports_its_code_and_its_message() {
     )
     .expect("ls runs even when it fails");
     assert!(!ran.succeeded());
-    assert_eq!(ran.failures().len(), 1);
+    assert_eq!(ran.codes.iter().filter(|code| **code != Some(0)).count(), 1);
     assert!(
         !ran.stderr.is_empty(),
         "a stage explained itself and the explanation was dropped"
@@ -379,7 +379,7 @@ fn an_early_stage_failing_makes_the_whole_pipeline_fail() {
         !ran.succeeded(),
         "an early failure was hidden by a later success"
     );
-    assert_eq!(ran.failures().first().map(|(at, _)| *at), Some(1));
+    assert_eq!(ran.codes.iter().position(|code| *code != Some(0)), Some(0));
 }
 
 /// A program that is not installed is a refusal to report, not a panic. The name is safe to say
@@ -405,16 +405,56 @@ fn a_program_that_does_not_exist_is_reported_by_name() {
 
 /// Nothing is typed at a program bravebot started, so a stage that reads stdin gets an empty one.
 /// Inheriting the terminal's would hang the turn on input nobody is going to provide.
+///
+/// The run happens in a child of this test binary whose own stdin holds a line, which is what a
+/// terminal is: a spawner that inherited the descriptor would hand `cat` that line, where one run
+/// with a closed or `/dev/null` stdin (CI, nextest) could not tell the difference.
 #[test]
 fn a_stage_that_reads_stdin_is_given_nothing_rather_than_the_terminal() {
-    let scratch = Scratch::new("stdin");
-    let ran = run(
-        Pipeline::new(vec![Stage::new("cat", Vec::new())]),
-        &scratch.path,
-    )
-    .expect("cat runs and ends");
-    assert_eq!(ran.stdout, "", "something was fed in that nobody approved");
-    assert!(ran.succeeded());
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    const TEST: &str = "a_stage_that_reads_stdin_is_given_nothing_rather_than_the_terminal";
+    const CHILD: &str = "BRAVEBOT_TEST_STDIN_CHILD";
+    const TYPED: &str = "typed at the terminal";
+
+    if std::env::var_os(CHILD).is_some() {
+        let scratch = Scratch::new("stdin-child");
+        let ran = run(
+            Pipeline::new(vec![Stage::new("cat", Vec::new())]),
+            &scratch.path,
+        )
+        .expect("cat runs and ends");
+        assert_eq!(ran.stdout, "", "something was fed in that nobody approved");
+        assert!(ran.succeeded());
+        return;
+    }
+
+    // nosemgrep: rust.lang.security.current-exe.current-exe
+    let mut child = Command::new(std::env::current_exe().expect("test binary"))
+        .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+        .env(CHILD, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("child starts");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(format!("{TYPED}\n").as_bytes())
+        .expect("a line is typed");
+    let output = child.wait_with_output().expect("child ends");
+    let report = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "a stage was handed the terminal's stdin: {report}"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "the child did not run the test: {report}"
+    );
 }
 
 /// The weakness this closes: a person approving a run reads the binary, the argv and the

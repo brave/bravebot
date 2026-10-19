@@ -2,48 +2,138 @@
 
 use std::fmt;
 
+/// What `workspace-write` was called before it was renamed.
+const RENAMED_WORKSPACE_WRITE: &str = "standard";
+
 /// The bundle of rows a confined program runs under.
 ///
-/// Ordered by what it lets a program reach, strictest first, so that "no looser than" is the
-/// comparison `<=` and a caller never spells the order out a second time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+/// The modes are not a line. `strict` reads less than `read-only` and writes the session's
+/// directories, which `read-only` does not, so neither is the stricter of the two. A caller asks
+/// [`SandboxMode::is_looser_than`] and never compares two modes by position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SandboxMode {
     /// The deny-by-default profile: the base, the list the program's binary brings, and the scope
     /// its argv names. The machine is not read.
     Strict,
-    /// The machine except the credential table (SANDBOX-12). What a session runs under unless a
-    /// person chose otherwise.
+    /// The machine except the credential table (SANDBOX-12), read, with nothing in the session's
+    /// directories or the toolchain caches written.
+    ReadOnly,
+    /// The machine except the credential table (SANDBOX-12), with the session's directories
+    /// writable. What a session runs under unless a person chose otherwise.
     #[default]
-    Standard,
+    WorkspaceWrite,
     /// No confinement.
     Off,
 }
 
 impl SandboxMode {
+    /// Every mode, in the order they are listed to a person.
+    pub const ALL: [Self; 4] = [
+        Self::Strict,
+        Self::ReadOnly,
+        Self::WorkspaceWrite,
+        Self::Off,
+    ];
+
     /// The word a person types for this mode, which is also how every report spells it.
     pub fn name(self) -> &'static str {
         match self {
             Self::Strict => "strict",
-            Self::Standard => "standard",
+            Self::ReadOnly => "read-only",
+            Self::WorkspaceWrite => "workspace-write",
             Self::Off => "off",
+        }
+    }
+
+    /// The network a stage under this mode is held to, given the session's setting: `read-only`
+    /// closes it whatever the setting says, because it holds back what a program changes off this
+    /// machine as well as on it (SANDBOX-22). The one place that rule is decided, so what the
+    /// sandbox enforces and what the screens report cannot drift apart.
+    pub fn network_in_force(self, setting: crate::network::Network) -> crate::network::Network {
+        match self {
+            Self::ReadOnly => crate::network::Network::Closed,
+            _ => setting,
         }
     }
 
     /// The mode a word names, or `None`.
     ///
     /// Exact and lower case, as the permission modes are read: a value that is almost a mode is
-    /// not obeyed as one, because the three differ in what a program may reach and a guess would
-    /// choose for the person.
+    /// not obeyed as one, because the modes differ in what a program may reach and a guess would
+    /// choose for the person. `standard`, the word `workspace-write` replaced, still names it, so a
+    /// settings file or a managed pin written before the rename keeps its meaning.
     pub fn parse(word: &str) -> Option<Self> {
-        [Self::Strict, Self::Standard, Self::Off]
-            .into_iter()
-            .find(|mode| mode.name() == word)
+        if word == RENAMED_WORKSPACE_WRITE {
+            return Some(Self::WorkspaceWrite);
+        }
+        Self::ALL.into_iter().find(|mode| mode.name() == word)
     }
 
-    /// Whether this lets a program reach more than `other` does.
+    /// Whether a program under this mode can read or write more than under `other`.
+    ///
+    /// On Linux and macOS `strict` and `read-only` are each looser than the other: `read-only`
+    /// reads the machine, and `strict` writes the session's directories. A managed pin of one
+    /// therefore refuses the other. On Windows no mode but `off` reads the machine, so `read-only`
+    /// is no looser than `strict` and a pin of `strict` keeps it.
     pub fn is_looser_than(self, other: Self) -> bool {
-        self > other
+        self.looser_than(other).is_some()
     }
+
+    /// Which of reading and writing a program under this mode does more of than under `other`, or
+    /// `None` where it does no more of either.
+    ///
+    /// What a refusal under a managed pin gives as its reason. The modes are not a line, so
+    /// "looser" alone does not tell a person under a `strict` pin why `read-only` is refused.
+    pub fn looser_than(self, other: Self) -> Option<Looser> {
+        self.looser_than_on(other, cfg!(windows))
+    }
+
+    /// [`Self::looser_than`] for a named platform, so the Windows ranking is testable on a host
+    /// that is not Windows.
+    pub fn looser_than_on(self, other: Self, windows: bool) -> Option<Looser> {
+        match (
+            self.reads(windows) > other.reads(windows),
+            self.writes() > other.writes(),
+        ) {
+            (true, true) => Some(Looser::Both),
+            (true, false) => Some(Looser::Reads),
+            (false, true) => Some(Looser::Writes),
+            (false, false) => None,
+        }
+    }
+
+    /// How much of the machine a program can read, as a rank. On Windows only `off` reads it: the
+    /// other three build a policy that grants no read of the machine.
+    fn reads(self, windows: bool) -> u8 {
+        match (self, windows) {
+            (Self::Off, true) => 1,
+            (_, true) => 0,
+            (Self::Strict, false) => 0,
+            (Self::ReadOnly | Self::WorkspaceWrite, false) => 1,
+            (Self::Off, false) => 2,
+        }
+    }
+
+    /// How much a program can write, as a rank.
+    fn writes(self) -> u8 {
+        match self {
+            Self::ReadOnly => 0,
+            Self::Strict => 1,
+            Self::WorkspaceWrite => 2,
+            Self::Off => 3,
+        }
+    }
+}
+
+/// What one mode does more of than another ([`SandboxMode::looser_than`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Looser {
+    /// It reads more of the machine and writes no more.
+    Reads,
+    /// It writes more and reads no more of the machine.
+    Writes,
+    /// It reads more of the machine and writes more.
+    Both,
 }
 
 impl fmt::Display for SandboxMode {
@@ -58,23 +148,120 @@ mod tests {
 
     #[test]
     fn a_mode_is_read_only_from_its_exact_word() {
-        for mode in [SandboxMode::Strict, SandboxMode::Standard, SandboxMode::Off] {
+        for mode in SandboxMode::ALL {
             assert_eq!(SandboxMode::parse(mode.name()), Some(mode));
         }
         for word in [
-            "", "Strict", "OFF", " off", "off ", "default", "none", "root",
+            "",
+            "Strict",
+            "OFF",
+            " off",
+            "off ",
+            "Standard",
+            "Read-Only",
+            "read_only",
+            "readonly",
+            "workspace_write",
+            "default",
+            "none",
+            "root",
         ] {
             assert_eq!(SandboxMode::parse(word), None, "{word:?}");
         }
     }
 
     #[test]
-    fn strict_is_the_tightest_and_off_the_loosest() {
-        assert!(SandboxMode::Standard.is_looser_than(SandboxMode::Strict));
-        assert!(SandboxMode::Off.is_looser_than(SandboxMode::Standard));
-        assert!(SandboxMode::Off.is_looser_than(SandboxMode::Strict));
-        assert!(!SandboxMode::Strict.is_looser_than(SandboxMode::Standard));
-        assert!(!SandboxMode::Standard.is_looser_than(SandboxMode::Standard));
-        assert_eq!(SandboxMode::default(), SandboxMode::Standard);
+    fn the_word_workspace_write_replaced_still_names_it() {
+        assert_eq!(
+            SandboxMode::parse("standard"),
+            Some(SandboxMode::WorkspaceWrite)
+        );
+        assert_eq!(SandboxMode::WorkspaceWrite.name(), "workspace-write");
+    }
+
+    #[test]
+    fn off_is_the_loosest_and_workspace_write_writes_more_than_read_only() {
+        use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+        for mode in [Strict, ReadOnly, WorkspaceWrite] {
+            assert!(Off.is_looser_than(mode), "{mode}");
+            assert!(!mode.is_looser_than(Off), "{mode}");
+        }
+        assert!(WorkspaceWrite.is_looser_than(ReadOnly));
+        assert!(!ReadOnly.is_looser_than(WorkspaceWrite));
+        assert!(WorkspaceWrite.is_looser_than(Strict));
+        assert!(!Strict.is_looser_than(WorkspaceWrite));
+        for mode in SandboxMode::ALL {
+            assert!(!mode.is_looser_than(mode), "{mode}");
+        }
+    }
+
+    #[test]
+    fn strict_and_read_only_are_each_looser_than_the_other() {
+        use SandboxMode::{ReadOnly, Strict};
+        assert!(
+            ReadOnly.looser_than_on(Strict, false).is_some(),
+            "read-only reads the machine"
+        );
+        assert!(
+            Strict.looser_than_on(ReadOnly, false).is_some(),
+            "strict writes the session's directories"
+        );
+    }
+
+    /// On Windows no mode but `off` reads the machine, so `read-only` writes less than `strict`
+    /// and reads no more: a `strict` pin keeps it, and a `read-only` pin still refuses `strict`.
+    /// The fault it rejects is the Linux ranking applied there, which refuses `read-only` under
+    /// `strict`.
+    #[test]
+    fn on_windows_read_only_is_no_looser_than_strict() {
+        use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+        assert_eq!(ReadOnly.looser_than_on(Strict, true), None);
+        assert_eq!(Strict.looser_than_on(ReadOnly, true), Some(Looser::Writes));
+        assert_eq!(
+            WorkspaceWrite.looser_than_on(Strict, true),
+            Some(Looser::Writes)
+        );
+        assert_eq!(Strict.looser_than_on(WorkspaceWrite, true), None);
+        assert_eq!(Off.looser_than_on(WorkspaceWrite, true), Some(Looser::Both));
+        assert_eq!(ReadOnly.looser_than_on(Strict, false), Some(Looser::Reads));
+    }
+
+    /// A refusal under a pin says which of reading and writing the asked mode does more of, so the
+    /// answer for each pair has to be the one the ranks give and not merely "looser". The fault it
+    /// rejects is an answer that names one side for every pair, or swaps the two. Ranked as Linux
+    /// and macOS do; the Windows ranking is the one above.
+    #[test]
+    fn a_looser_mode_reads_more_writes_more_or_both() {
+        use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+        for (asked, pinned, looser) in [
+            (ReadOnly, Strict, Looser::Reads),
+            (WorkspaceWrite, Strict, Looser::Both),
+            (Off, Strict, Looser::Both),
+            (Strict, ReadOnly, Looser::Writes),
+            (WorkspaceWrite, ReadOnly, Looser::Writes),
+            (Off, ReadOnly, Looser::Both),
+            (Off, WorkspaceWrite, Looser::Both),
+        ] {
+            assert_eq!(
+                asked.looser_than_on(pinned, false),
+                Some(looser),
+                "{asked} under {pinned}"
+            );
+        }
+        for (asked, pinned) in [(Strict, WorkspaceWrite), (ReadOnly, WorkspaceWrite)] {
+            assert_eq!(
+                asked.looser_than_on(pinned, false),
+                None,
+                "{asked} under {pinned}"
+            );
+        }
+        for mode in SandboxMode::ALL {
+            assert_eq!(mode.looser_than_on(mode, false), None, "{mode}");
+        }
+    }
+
+    #[test]
+    fn the_default_mode_is_workspace_write() {
+        assert_eq!(SandboxMode::default(), SandboxMode::WorkspaceWrite);
     }
 }

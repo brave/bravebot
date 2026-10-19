@@ -6,6 +6,12 @@ governs:
   - crates/config/src/hooks.rs
   - crates/agent/src/hooks.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
+  - crates/agent/src/turn/setup.rs
+  - crates/agent/src/turn/round_steps.rs
+  - crates/agent/src/turn/prompts.rs
+  - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/agent/src/delegate.rs
   - crates/ui-bridge/src/hooks.rs
   - crates/ui-files/src/main.rs
@@ -240,6 +246,8 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_config::hooks::an_unusable_entry_leaves_the_others_firing`
 `verified-by: bravebot_config::hooks::an_unparseable_file_declares_no_hooks`
 `verified-by: bravebot_config::hooks::an_oversized_file_declares_no_hooks`
+`verified-by: bravebot_config::hooks::a_hooks_file_is_read_up_to_64_kb_and_not_a_byte_past_it`
+`verified-by: bravebot_agent::hooks::the_default_bound_is_thirty_seconds`
 
 <a id="HOOK-8"></a>
 ### HOOK-8: one reader decides what a hook is, and what it read is what is shown

@@ -23,10 +23,14 @@ pub const QUARANTINE_BAR: &str = "\u{2503}";
 
 /// How many lines of what a question is about are shown before the rest is counted instead.
 ///
-/// A write is approved from the change it would make and a read from the bytes it would release,
-/// so the content is what the question is; and the whole of a generated file is not readable as
-/// one. A person scrolled past a thousand lines is answering whatever was in front of them at the
-/// end of it, which is not the question that was asked.
+/// A write is approved from the change it would make, so the change is what the question is; and
+/// the whole of a generated file is not readable as one. A person scrolled past a thousand lines is
+/// answering whatever was in front of them at the end of it, which is not the question that was
+/// asked.
+///
+/// A command's output and the text of a vetted read are not capped ([`output_lines`],
+/// [`vet_lines`]), since a yes releases every byte of either to the planner and a line counted
+/// rather than shown would be approved unread.
 pub const MOST_CONTENT_LINES: usize = 40;
 
 /// Replace control characters, so shown text cannot move the cursor or recolour the screen.
@@ -53,18 +57,27 @@ pub fn printable(text: &str) -> String {
 /// The margin is on every row, for the reason [`QUARANTINE_BAR`] is on every row of a block: a
 /// caption above the block could be imitated by the block's own first line, and a margin cannot.
 /// The cap is because a question has to be readable as one: a person scrolled past a thousand
-/// lines of output is answering whatever is in front of them at the end of it.
+/// lines is answering whatever is in front of them at the end of it.
 pub fn quarantined(content: &str) -> Vec<String> {
     let mut rows = Vec::new();
     let mut counted = content.lines();
     for line in counted.by_ref().take(MOST_CONTENT_LINES) {
-        rows.push(format!("{QUARANTINE_BAR} {}", printable(line)));
+        rows.push(behind_the_margin(line));
     }
     let left_out = counted.count();
     if left_out > 0 {
         rows.push(t!(transcript_more_lines, count = left_out).to_string());
     }
     rows
+}
+
+/// Quarantined content as rows, each behind a margin, and none of it left out.
+fn quarantined_in_full(content: &str) -> Vec<String> {
+    content.lines().map(behind_the_margin).collect()
+}
+
+fn behind_the_margin(line: &str) -> String {
+    format!("{QUARANTINE_BAR} {}", printable(line))
 }
 
 /// What a write's approval holds besides the sentence naming it.
@@ -221,6 +234,12 @@ pub struct Run<'a> {
     pub releases_private: bool,
 }
 
+/// The sentence for a run the turn does not confine, in the catalog's words, so a front end that
+/// draws it carries no copy of its own (SHARE-001).
+pub fn not_sandboxed() -> String {
+    t!(run_not_sandboxed).to_string()
+}
+
 /// The lines a run is read before approving: every step as the line wrote it, the binary each name
 /// resolved to, what it would write, and what it is not confined to.
 ///
@@ -247,7 +266,7 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
             }
             lines.extend(confined.sentences.iter().cloned());
         }
-        None => lines.push(t!(run_not_sandboxed).to_string()),
+        None => lines.push(not_sandboxed()),
     }
     // Which access in particular a yes hands over, where the line reaches one nothing here holds.
     // The line above says what confinement there is and is said every time; this says what is
@@ -281,14 +300,17 @@ pub fn fetch_lines(host: &str, url: &str, metadata_service: bool) -> Vec<String>
 }
 
 /// The lines a command's output is read before the planner may: what it is, what was made of it,
-/// then the output behind the margin.
+/// then every line of the output behind the margin.
+///
+/// None of the output is left out, because a yes releases all of it to the planner (OUTPUT-1).
+/// The terminal's panel and the desktop card show all of it too.
 pub fn output_lines(summary: &str, check: Check, output: &str) -> Vec<String> {
     let mut lines = vec![
         printable(summary),
         t!(output_unseen).to_string(),
         checked(check),
     ];
-    lines.extend(quarantined(output));
+    lines.extend(quarantined_in_full(output));
     lines
 }
 
@@ -315,6 +337,9 @@ pub struct Vet<'a> {
 }
 
 /// The lines a vetted read is read before approving.
+///
+/// Every line of the text, because a yes releases all of it to the planner (VET-1), as it does a
+/// command's output.
 pub fn vet_lines(vet: &Vet<'_>) -> Vec<String> {
     let mut lines = vec![
         printable(vet.summary),
@@ -337,7 +362,7 @@ pub fn vet_lines(vet: &Vet<'_>) -> Vec<String> {
                 lines.push(t!(vet_pdf_hidden_text).to_string());
             }
         }
-        None => lines.extend(quarantined(vet.content)),
+        None => lines.extend(quarantined_in_full(vet.content)),
     }
     lines
 }
@@ -388,6 +413,41 @@ pub fn host_lines(hosts: &[String]) -> Vec<String> {
             .map(|host| t!(host_row, host = printable(host).as_str()).to_string()),
     );
     lines.push(t!(host_explained).to_string());
+    lines
+}
+
+/// A message the planner wants to send to another background session (MSG-3).
+pub struct Message<'a> {
+    /// The target's name, as the roster holds it.
+    pub name: &'a str,
+    /// The roster's word for what the target is doing.
+    pub state: &'a str,
+    /// Where the target works.
+    pub directory: &'a str,
+    /// The whole text, which is what the receiving planner will be told.
+    pub text: &'a str,
+    /// The label the text is sent under, in its own form.
+    pub label: &'a str,
+}
+
+/// The lines a message is read before it is sent: who it goes to, the whole text behind the margin,
+/// the label, and what a yes does and does not do.
+///
+/// Nothing of the text is left out. A yes sends every byte of it into another planner's context, so
+/// a line counted instead of shown would be approved unread.
+pub fn message_lines(message: &Message<'_>) -> Vec<String> {
+    let mut lines = vec![
+        t!(
+            message_to,
+            name = printable(message.name),
+            state = printable(message.state),
+            directory = printable(message.directory)
+        )
+        .to_string(),
+    ];
+    lines.extend(quarantined_in_full(message.text));
+    lines.push(t!(message_label, label = printable(message.label)).to_string());
+    lines.push(t!(message_explained).to_string());
     lines
 }
 
@@ -451,16 +511,15 @@ pub struct Tools<'a> {
     pub tools: &'a [Tool<'a>],
     /// How many the client would not draw.
     pub refused: usize,
-    /// A list was vouched for under this declaration before and this is not it.
-    pub changed: bool,
+    /// How many tools were withheld by the server's allow or deny list.
+    pub withheld: usize,
     /// What the check made of the list.
     pub check: Check,
 }
 
 /// The whole list, each description behind the margin and none of it cut.
 ///
-/// A yes puts exactly this text in front of the planner for every session the list stays the
-/// same, so what is read here has to be all of it. The description is behind the margin because it
+/// A yes puts exactly this text in front of the planner, so what is read here has to be all of it. The description is behind the margin because it
 /// is the server's words, and the names and arguments are not because the client drew them from a
 /// fixed alphabet.
 pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
@@ -472,9 +531,6 @@ pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
             count = list.tools.len()
         ),
     }];
-    if list.changed {
-        lines.push(t!(mcp_tools_changed).to_string());
-    }
     lines.push(checked(list.check));
     for tool in list.tools {
         lines.push(format!("  {}", printable(tool.name)));
@@ -491,6 +547,9 @@ pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
     }
     if list.refused > 0 {
         lines.push(t!(mcp_tools_not_listed, count = list.refused));
+    }
+    if list.withheld > 0 {
+        lines.push(t!(mcp_tools_withheld, count = list.withheld));
     }
     lines.push(t!(mcp_tools_explained).to_string());
     lines
@@ -579,6 +638,32 @@ pub fn manifest_lines(task: &str, steps: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MSG-3: a message is shown whole behind the margin, however long, with its control characters
+    /// pictured. A yes sends every byte of it into another planner's context, so a row counted and
+    /// left out would be approved unread.
+    #[test]
+    fn a_message_is_shown_in_full_behind_the_margin() {
+        let text: String = (0..MOST_CONTENT_LINES * 3)
+            .map(|n| format!("row {n}\u{1b}[31m\n"))
+            .collect();
+        let lines = message_lines(&Message {
+            name: "build",
+            state: "idle",
+            directory: "/work",
+            text: &text,
+            label: "(T,pub)",
+        });
+        let rows: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.starts_with(QUARANTINE_BAR))
+            .collect();
+        assert_eq!(rows.len(), MOST_CONTENT_LINES * 3);
+        assert_eq!(rows[0], "\u{2503} row 0\u{241b}[31m");
+        assert!(lines.iter().all(|line| !line.contains('\u{1b}')));
+        assert!(lines.first().is_some_and(|line| line.contains("build")));
+        assert!(lines.iter().any(|line| line.contains("(T,pub)")));
+    }
 
     #[test]
     fn a_word_that_names_no_check_reassures_least() {
@@ -722,5 +807,23 @@ mod tests {
                 "line endings: LF kept".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn a_tool_list_with_withheld_tools_reports_them() {
+        let tool = Tool {
+            name: "weather:get_forecast",
+            arguments: &[],
+            description: None,
+        };
+        let lines = tools_lines(&Tools {
+            alias: "weather",
+            tools: &[tool],
+            refused: 1,
+            withheld: 2,
+            check: Check::Safe,
+        });
+        assert!(lines.contains(&t!(mcp_tools_not_listed, count = 1).to_string()));
+        assert!(lines.contains(&t!(mcp_tools_withheld, count = 2).to_string()));
     }
 }

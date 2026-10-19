@@ -94,6 +94,17 @@ impl PermissionMode {
         self == Self::Bypass
     }
 
+    /// Whether this request's prompt is answered yes without being drawn.
+    ///
+    /// A line that asked to start with no sandbox is the exception: the permission mode never
+    /// widens the sandbox mode (SANDBOX-22), and an approved request is the mode `off` for that
+    /// line, so it goes to the person in this mode as in every other. [`Confining::confirm_run`]
+    /// and the trail's record of who answered both ask this, so the record cannot credit the mode
+    /// with a prompt it passed on (TRACE-7).
+    pub fn answers_this_run_unasked(self, request: &RunRequest) -> bool {
+        self.answers_a_run_unasked() && !request.unconfined
+    }
+
     /// Whether a write the policy would ask about is answered without drawing a prompt.
     ///
     /// A write that would create a credential is the exception in accept-edits: the diff shows the
@@ -195,19 +206,34 @@ impl PermissionMode {
 /// Cloning gives another handle on the same mode, so the key that sets it, the confirmer that
 /// answers under it, the tools that refuse under it and a delegate's turn all read what the person
 /// chose last (MODE-8). A value made from a [`PermissionMode`] is a handle nobody else holds.
+///
+/// It also says whether anybody is there to ask. That is a fact about the run and not a choice the
+/// person makes while it goes, so it is fixed when the handle is made and no key reaches it.
 #[derive(Debug, Clone)]
-pub struct LiveMode(std::sync::Arc<std::sync::atomic::AtomicU8>);
+pub struct LiveMode {
+    mode: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    nobody_to_ask: bool,
+}
 
 impl LiveMode {
     pub fn new(mode: PermissionMode) -> Self {
-        Self(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
-            mode as u8,
-        )))
+        Self {
+            mode: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(mode as u8)),
+            nobody_to_ask: false,
+        }
+    }
+
+    /// A mode for a run nobody is watching, a one-shot command or a pipeline (CLI-1).
+    pub fn unattended(mode: PermissionMode) -> Self {
+        Self {
+            nobody_to_ask: true,
+            ..Self::new(mode)
+        }
     }
 
     /// The mode in force now. Read once per decision: two reads in one decision can disagree.
     pub fn get(&self) -> PermissionMode {
-        match self.0.load(std::sync::atomic::Ordering::Acquire) {
+        match self.mode.load(std::sync::atomic::Ordering::Acquire) {
             x if x == PermissionMode::AcceptEdits as u8 => PermissionMode::AcceptEdits,
             x if x == PermissionMode::Plan as u8 => PermissionMode::Plan,
             x if x == PermissionMode::Bypass as u8 => PermissionMode::Bypass,
@@ -216,8 +242,18 @@ impl LiveMode {
     }
 
     pub fn set(&self, mode: PermissionMode) {
-        self.0
+        self.mode
             .store(mode as u8, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Whether every write is put to the confirmer, whatever the trust map says about its path.
+    ///
+    /// A run with nobody to ask holds a trust map its own command line wrote, and what that vouches
+    /// for is what the tree's files say, never a write the planner composed: trusting a directory
+    /// opens reads, and the one thing that may lift the refusal of a write is the flag that selects
+    /// the bypass mode, where the confirmer answers for the person who typed it (CLI-1).
+    pub fn writes_are_always_asked(&self) -> bool {
+        self.nobody_to_ask && self.get() != PermissionMode::Bypass
     }
 }
 
@@ -328,10 +364,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// Accepting edits does not accept runs. A write lands in a tree that `git diff` will show in
     /// full afterwards; a command runs with everything the user's shell has and leaves no diff.
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
-        // Not a line that asked to start with no sandbox: the permission mode never widens the
-        // sandbox mode (SANDBOX-22), and an approved request is the mode `off` for that line, so it
-        // goes to the person in this mode as in every other.
-        if self.mode.get().answers_a_run_unasked() && !request.unconfined {
+        if self.mode.get().answers_this_run_unasked(request) {
             RunDecision::approve()
         } else {
             self.inner.confirm_run(request)
@@ -514,6 +547,24 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    /// Declined where every check is being bypassed, and asked in every other.
+    ///
+    /// No mode answers this one yes: a yes puts words into another planner's context, and the mode
+    /// that answers every other question in a person's place has nothing to say about where those
+    /// words go (MSG-3). Bypassing is refused for a background session, the only kind that sends, so
+    /// the arm that declines is the one a session that could send never reaches.
+    fn confirm_message(
+        &mut self,
+        request: &crate::confirm::MessageRequest,
+    ) -> crate::confirm::MessageDecision {
+        match self.mode.get() {
+            PermissionMode::Bypass => crate::confirm::MessageDecision::Decline,
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.inner.confirm_message(request)
+            }
+        }
+    }
+
     /// Refused where every check is being bypassed, the one prompt that mode answers no, and asked
     /// in every other. SERVERS-13.
     ///
@@ -634,6 +685,13 @@ mod tests {
             Decision::Reject
         }
 
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
+        }
+
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
             Unattended.confirm_move(request)
         }
@@ -655,6 +713,12 @@ mod tests {
         fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
             self.0 += 1;
             Decision::Approve
+        }
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
         }
         fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
             Unattended.confirm_write(request)
@@ -709,6 +773,99 @@ mod tests {
         }
     }
 
+    /// Says yes to a message question and counts the times it was asked; refuses everything else.
+    struct YesToMessages(usize);
+
+    impl Confirmer for YesToMessages {
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            self.0 += 1;
+            crate::confirm::MessageDecision::ForTheTurn
+        }
+        fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+            Unattended.confirm_write(request)
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            Unattended.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            Unattended.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            Unattended.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+            Unattended.confirm_server(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+            Unattended.confirm_vouch(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
+            Unattended.confirm_path(request)
+        }
+        fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
+            Unattended.confirm_host(request)
+        }
+        fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            Unattended.interjection()
+        }
+    }
+
+    /// MSG-3: a message question is put to the person in every mode but bypass, which declines it
+    /// without asking, and no mode answers it. The regressions it rejects: a mode that answers
+    /// runs and writes in the person's place also sending words into another planner, and a
+    /// confirmer that dropped the question before it reached the person.
+    #[test]
+    fn a_message_question_is_asked_in_every_mode_but_bypass_which_declines_it() {
+        use crate::confirm::{MessageDecision, MessageRequest};
+        let request = MessageRequest {
+            name: "build".to_string(),
+            state: "idle".to_string(),
+            directory: "/work".to_string(),
+            text: "rotate the key".to_string(),
+            label: bravebot_core::label::Label::trusted_public(),
+        };
+        for (mode, asked, answer) in [
+            (PermissionMode::Ask, 1, MessageDecision::ForTheTurn),
+            (PermissionMode::AcceptEdits, 1, MessageDecision::ForTheTurn),
+            (PermissionMode::Plan, 1, MessageDecision::ForTheTurn),
+            (PermissionMode::Bypass, 0, MessageDecision::Decline),
+        ] {
+            let mut yes = YesToMessages(0);
+            let decided = Confining::new(&mut yes, mode, false).confirm_message(&request);
+            assert_eq!((yes.0, decided), (asked, answer), "{mode:?}");
+        }
+    }
+
     /// SANDBOX-24: a host question is put to the person in every mode but bypass, which refuses it
     /// without asking. The regression it rejects: a bypassed session answering yes to hosts a
     /// program chose, which opens the network for every later command, or one that asks.
@@ -759,6 +916,8 @@ mod tests {
             reference: "ref:1".to_string(),
             verdict,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 
@@ -771,6 +930,8 @@ mod tests {
             verdict,
             reason: None,
             picture: None,
+            label: None,
+            reason_label: None,
         }
     }
 
@@ -781,6 +942,8 @@ mod tests {
             truncated: false,
             verdict,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }
     }
 
@@ -981,6 +1144,13 @@ mod tests {
             Decision::Reject
         }
 
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
+        }
+
         fn confirm_move(&mut self, _request: &crate::confirm::MoveRequest) -> Decision {
             self.0 += 1;
             Decision::Approve
@@ -1044,6 +1214,12 @@ mod tests {
         }
         fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
             Unattended.confirm_host(request)
+        }
+        fn confirm_message(
+            &mut self,
+            request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            Unattended.confirm_message(request)
         }
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
             Unattended.confirm_move(request)
@@ -1475,6 +1651,13 @@ mod tests {
 
         fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
             Decision::Reject
+        }
+
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
         }
 
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {

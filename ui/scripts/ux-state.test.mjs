@@ -364,7 +364,7 @@ test('starting and revisiting bot conversations preserves all earlier IDs across
 
 // The events the agent sends, folded by the window's own reducer, read by the word both places draw.
 function liveSession() {
-  const { apply } = load('src/renderer/App.tsx')
+  const { apply } = load('src/renderer/apply.ts')
   const { workingWord } = load('src/renderer/components/Transcript.tsx')
   const session = {
     live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
@@ -489,8 +489,9 @@ test('a call that waited on a model of its own says how long, and one that asked
 
 // A window shows every call and, without this, nothing of what it was for. Rendered through the
 // real row for live and replayed calls alike, because the reason arriving and going undrawn is the
-// fault, and a resumed session is read for exactly this.
-test('a call is drawn with the reason the planner gave for it', () => {
+// fault, and a resumed session is read for exactly this. The reason comes after the call, since a
+// reason drawn ahead of it reads as a heading over the row rather than as part of the call.
+test('a call is drawn with the reason the planner gave for it, after the call', () => {
   const React = require('react')
   const { renderToStaticMarkup } = require('react-dom/server')
   const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
@@ -499,12 +500,18 @@ test('a call is drawn with the reason the planner gave for it', () => {
   const { Row } = module.exports
   const draw = (entry) => renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
 
+  // True when the reason is drawn and its markup comes after the call's last piece of text.
+  const afterTheCall = (markup, call) => {
+    const reason = markup.search(/<span class="why"[^>]*>see the entry point<\/span>/)
+    return markup.includes(`>${call}<`) && reason > markup.indexOf(`>${call}<`)
+  }
+
   const read = { verb: 'Read', target: 'src/main.rs', why: 'see the entry point', note: '3 lines', failed: false, untrusted: false, changes: [], waitedSeconds: null }
-  assert.match(draw({ kind: 'tool', id: 'row', activity: read, landing: null }), /<span class="why">see the entry point<\/span>/)
-  assert.match(draw({ kind: 'tool', id: 'row', activity: { ...read, note: null }, landing: null }), /<span class="why">see the entry point<\/span>/, 'a running call lost its reason')
+  assert.ok(afterTheCall(draw({ kind: 'tool', id: 'row', activity: read, landing: null }), 'src/main.rs'), 'a finished call lost its reason or drew it ahead of the call')
+  assert.ok(afterTheCall(draw({ kind: 'tool', id: 'row', activity: { ...read, note: null }, landing: null }), 'src/main.rs'), 'a running call lost its reason or drew it ahead of the call')
   assert.doesNotMatch(draw({ kind: 'tool', id: 'row', activity: { ...read, why: '' }, landing: null }), /class="why"/)
 
-  assert.match(draw({ kind: 'replayed-tool', id: 'row', text: 'Read(src/main.rs)', why: 'see the entry point' }), /<span class="why">see the entry point<\/span>/)
+  assert.ok(afterTheCall(draw({ kind: 'replayed-tool', id: 'row', text: 'Read(src/main.rs)', why: 'see the entry point' }), 'Read(src/main.rs)'), 'a replayed call lost its reason or drew it ahead of the call')
   assert.doesNotMatch(draw({ kind: 'replayed-tool', id: 'row', text: 'Read(src/main.rs)', why: '' }), /class="why"/)
 })
 
@@ -558,4 +565,127 @@ test('a turn the output limit ended says the limit and what the reply was writin
 
   // The fields describe a stop at the limit and nothing else, so they move no other card.
   assert.doesNotMatch(failed('unavailable', { ceiling: 8192, call: null, thought: false }), /tokens/)
+})
+
+test('Send is allowed once the trust question has been answered', () => {
+  const { canSend } = load('src/renderer/can-send.ts')
+  const asking = { running: false, askingTrust: '/work/project' }
+  const answered = { ...asking, askingTrust: null }
+  assert.equal(canSend(asking, true, 'hello'), false, 'the trust question blocks Send')
+  assert.equal(canSend(answered, true, 'hello'), true, 'answering it releases Send with the draft unchanged')
+  assert.equal(canSend(answered, true, '  \n'), false, 'a blank draft is not sent')
+  assert.equal(canSend({ ...answered, running: true }, true, 'hello'), false, 'a running turn blocks Send')
+  assert.equal(canSend(answered, false, 'hello'), false, 'a backend known unready blocks Send')
+  assert.equal(canSend(answered, undefined, 'hello'), true, 'an unknown backend does not')
+  assert.equal(canSend(null, true, 'hello'), false, 'no open session')
+})
+
+test('submit and the run-plan callback list every field they test', () => {
+  const source = readFileSync('src/renderer/App.tsx', 'utf8')
+  for (const name of ['submit', 'submitPlan']) {
+    const body = source.slice(source.indexOf(`const ${name} = useCallback(`))
+    const deps = body.slice(0, body.indexOf('\n  }, [')+ 200).match(/\n  \}, \[([^\]]*)\]/)[1]
+    assert.match(deps, /live\?\.askingTrust/, `${name} must depend on live?.askingTrust`)
+    assert.match(deps, /live\?\.running/, `${name} must depend on live?.running`)
+  }
+})
+
+// The window builds a session in three places (resumed, new, forked) from three different bridge
+// answers; the eight fields that start the same everywhere are written once.
+function bridgeFields(over = {}) {
+  return {
+    handle: 's-9', model: 'm', summary: { id: null, title: 'T', project: 'p', branch: null, directory: '/d' },
+    entries: [], todos: [], askingTrust: '/d', keepingTrust: null, trustRemembered: null, forkedFrom: null,
+    focus: 4, bot: null, archived: 2, autoVetting: true, permissionMode: 'ask', sandboxMode: 'on', rules: null,
+    ...over,
+  }
+}
+
+test('a new session starts with the eight starting values and keeps every field it was given', () => {
+  const { newLive } = load('src/renderer/live.ts')
+  const fields = bridgeFields()
+  const live = newLive(fields)
+  assert.deepEqual(
+    { turns: live.turns, quarantine: live.quarantine, phase: live.phase, checking: live.checking, hook: live.hook, composing: live.composing, tokens: live.tokens, running: live.running },
+    { turns: {}, quarantine: [], phase: null, checking: null, hook: null, composing: null, tokens: 0, running: false },
+  )
+  for (const [key, value] of Object.entries(fields)) assert.deepEqual(live[key], value, `${key} lands unchanged`)
+  assert.notEqual(newLive(fields).turns, live.turns, 'two sessions do not share one turns object')
+  assert.notEqual(newLive(fields).quarantine, live.quarantine, 'or one quarantine list')
+})
+
+test('a session is keyed by its record id once it has one, and by its draft or handle before', () => {
+  const { liveKey, preIdKey } = load('src/renderer/live.ts')
+  const key = (id) => JSON.stringify(['/d', id])
+  const draft = { handle: 'h', draftId: 'draft:1', summary: { id: null, directory: '/d' } }
+  const bare = { handle: 'h', summary: { id: null, directory: '/d' } }
+  const saved = { handle: 'h', draftId: 'draft:1', summary: { id: 'rec', directory: '/d' } }
+  assert.equal(liveKey(draft), key('draft:1'))
+  assert.equal(liveKey(bare), key('h'), 'no draft falls back to the handle')
+  assert.equal(liveKey(saved), key('rec'), 'the record id wins over the draft')
+  assert.equal(preIdKey(saved), key('draft:1'), 'the pre-id key ignores the record id')
+  assert.equal(preIdKey(bare), key('h'))
+})
+
+test('a draft moves to the record id once the session has one, and only then', () => {
+  const written = []
+  globalThis.window = { bravebot: { writeExperience: async (key, value) => { written.push([key, value]) } } }
+  try {
+    const { promoteDraft } = load('src/renderer/live.ts')
+    const old = { handle: 'h', draftId: 'draft:1', summary: { id: null, directory: '/d' } }
+    const next = { ...old, summary: { id: 'rec', directory: '/d' } }
+    promoteDraft(old, next)
+    const keys = written.map(([key]) => key)
+    assert.deepEqual(keys, [JSON.stringify(['/d', 'rec']), JSON.stringify(['/d', 'draft:1'])])
+    assert.equal(written[1][1].draft, '', 'the old key forgets its draft')
+    written.length = 0
+    promoteDraft(next, next)
+    promoteDraft(old, old)
+    assert.deepEqual(written, [], 'a session that already had an id, or still has none, moves nothing')
+  } finally { delete globalThis.window }
+})
+
+test('the sidebar lists sessions from the record, the open windows and unsent drafts, and says which ask something', () => {
+  const { listSessions, NO_PROJECT } = load('src/renderer/session-list.ts')
+  const key = (directory, id) => JSON.stringify([directory, id])
+  const summary = (id, directory = '/p') => ({ id, directory, title: id, project: 'p', branch: 'main', updated: 1, bytes: 5 })
+  const bot = { slug: 'review', name: 'Review', avatar: 'a', home: '/home/review', conversations: [{ id: 'bot-chat', directory: '/p' }] }
+  const open = (id, over = {}) => ({ handle: `h-${id}`, summary: { ...summary(id), title: 'Renamed' }, entries: [], running: false, bot: null, ...over })
+  const asking = { kind: 'ask', id: 'q', request: { request: 1 }, answers: null }
+  const list = (over = {}) => listSessions({ sessions: [], opened: [], conversations: {}, bots: [], now: 600, currentKey: '', ...over })
+
+  // A bot's home folder is not a project.
+  const homed = list({ sessions: [summary('in-home', '/home/review'), summary('in-project')], bots: [bot] }).ownSessions
+  assert.equal(homed[0].project, NO_PROJECT)
+  assert.equal(homed[0].branch, null)
+  assert.equal(homed[1].project, 'p')
+
+  // An open window's title wins over the record's, and a window with no record yet is listed first, stamped with the clock.
+  const merged = list({ sessions: [summary('a')], opened: [open('a'), { ...open('b'), summary: { ...summary(null), title: 'New' }, draftId: 'draft:9' }] }).ownSessions
+  assert.deepEqual(merged.map((each) => [each.id, each.title, each.updated]), [['draft:9', 'New', 600], ['a', 'Renamed', 1]])
+
+  // A draft somebody typed is listed once, a blank one and a key that is not a draft key are not, and a key that is not JSON is skipped.
+  const drafts = list({ conversations: {
+    [key('/p', 'draft:1')]: { draft: 'hello' }, [key('/p', 'draft:2')]: { draft: '  ' }, [key('/p', 'real')]: { draft: 'x' }, 'not json': { draft: 'y' },
+  } }).ownSessions
+  assert.deepEqual(drafts.map((each) => [each.id, each.title, each.updated]), [['draft:1', 'Draft · hello', 600]])
+
+  // What a row says: only what asks something of the reader, and the bot found by record, by owner, or by the open window.
+  const listing = list({
+    sessions: [summary('bot-chat'), summary('owned'), summary('asks'), summary('runs'), summary('failed'), summary('quiet'), summary('windowed')],
+    conversations: { [key('/p', 'owned')]: { draft: '', botSlug: 'review' } },
+    bots: [bot],
+    opened: [open('asks', { entries: [asking] }), open('runs', { running: true }), open('failed', { entries: [{ kind: 'error' }] }), open('quiet'), open('windowed', { bot: { slug: 'review' } })],
+    currentKey: key('/p', 'runs'),
+  })
+  const face = { name: 'Review', avatar: 'a' }
+  assert.deepEqual(listing.info[key('/p', 'bot-chat')], { bot: face, status: undefined })
+  assert.deepEqual(listing.info[key('/p', 'owned')], { bot: face, status: undefined })
+  assert.deepEqual(listing.info[key('/p', 'windowed')], { bot: face, status: undefined })
+  assert.deepEqual(listing.info[key('/p', 'asks')], { bot: undefined, status: 'answer' })
+  assert.equal(listing.info[key('/p', 'runs')].status, 'working')
+  assert.equal(listing.info[key('/p', 'failed')].status, 'failed')
+  assert.equal(key('/p', 'quiet') in listing.info, false, 'a row with neither a bot nor a status has no entry')
+  assert.equal(listing.attention, 1)
+  assert.equal(list({ ...{ sessions: [summary('asks')], opened: [open('asks', { entries: [asking] })] }, currentKey: key('/p', 'asks') }).attention, 0, 'the session on screen does not ask for attention')
 })

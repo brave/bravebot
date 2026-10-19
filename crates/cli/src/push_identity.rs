@@ -74,19 +74,35 @@ pub struct Row {
     pub key: PathBuf,
     pub fingerprint: Option<String>,
     pub greeting: Greeting,
-    /// Whether `git.identities` names this key for the owner asked about.
-    pub chosen: bool,
+    /// Who chose this key for the owner asked about, where anybody did.
+    pub chosen: Option<ChosenBy>,
 }
 
-/// Ask about each key. `chosen` is the key the person's settings name for the owner, judged as a
-/// stage judges it.
-pub fn probe(ssh: &dyn Ssh, keys: &[PathBuf], host: &str, chosen: Option<&Path>) -> Vec<Row> {
+/// Who chose the key a push to the owner offers first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChosenBy {
+    /// The person's `git.identities`.
+    Settings,
+    /// The person, at a run prompt that numbered the keys.
+    Prompt,
+}
+
+/// Ask about each key. `chosen` is the key a push to the owner offers first and who chose it,
+/// judged as a stage judges it.
+pub fn probe(
+    ssh: &dyn Ssh,
+    keys: &[PathBuf],
+    host: &str,
+    chosen: Option<(&Path, ChosenBy)>,
+) -> Vec<Row> {
     keys.iter()
         .map(|key| Row {
             key: key.clone(),
             fingerprint: ssh.fingerprint(key),
             greeting: ssh.greeting(key, host),
-            chosen: chosen == Some(key.as_path()),
+            chosen: chosen
+                .filter(|(path, _)| *path == key.as_path())
+                .map(|(_, by)| by),
         })
         .collect()
 }
@@ -128,10 +144,14 @@ pub fn facts(host: &str, owner: Option<&str>, rows: &[Row]) -> Vec<(String, Stri
             Greeting::Unanswered => t!(doctor_push_unanswered, host = host).to_string(),
         };
         lines.push((name, format!("{fingerprint}, {login}")));
-        if row.chosen {
+        if let Some(by) = row.chosen {
             lines.push((
                 t!(doctor_push_chosen).to_string(),
-                t!(doctor_push_chosen_by).to_string(),
+                match by {
+                    ChosenBy::Settings => t!(doctor_push_chosen_by),
+                    ChosenBy::Prompt => t!(doctor_push_chosen_at_prompt),
+                }
+                .to_string(),
             ));
         }
     }
@@ -174,11 +194,47 @@ impl Ssh for Machine {
     }
 }
 
+/// The directories a confined stage opened here could have written: the one this command ran in
+/// and the checkout holding it, which is the nearest ancestor with a `.git`.
+///
+/// This is a new process, so [`bravebot_sandbox::programs`] knows of no session. A checkout's
+/// `bin` first on `PATH` would otherwise be searched for the programs started below.
+fn checkout(cwd: &Path) -> Vec<PathBuf> {
+    let mut directories = vec![cwd.to_path_buf()];
+    if let Some(root) = cwd
+        .ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
+        && root != cwd
+    {
+        directories.push(root.to_path_buf());
+    }
+    directories
+}
+
+/// A command for `program`, with this agent's own credentials taken off it.
+///
+/// Every program this file starts is built here: they run unconfined with the person's access to
+/// `~/.ssh`, and [CRED-14](../../../docs/specs/credential-protection.md#CRED-14) keeps what this
+/// agent authenticates with out of reach of such a program.
+fn started(program: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    for name in bravebot_config::scrub::own_credentials() {
+        command.env_remove(name);
+    }
+    command
+}
+
 /// Standard output and standard error of `program`, run to completion within [`WAIT`].
+///
+/// `program` is found as [SANDBOX-30] says, and one found only where a stage could have written is
+/// not started: it reads as absent.
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
 fn run(program: &str, args: &[&std::ffi::OsStr]) -> Option<String> {
     use std::io::Read;
-    use std::process::{Command, Stdio};
-    let mut child = Command::new(program)
+    use std::process::Stdio;
+    let found = bravebot_sandbox::programs::find(std::ffi::OsStr::new(program))?;
+    let mut child = started(&found)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -243,11 +299,7 @@ fn origin() -> Option<Address> {
 fn named(argument: Option<&str>) -> Result<Option<Address>, ()> {
     match argument {
         None => Ok(None),
-        Some(text) => text
-            .split_once('/')
-            .and_then(|(host, owner)| Address::spelled(host, owner))
-            .map(Some)
-            .ok_or(()),
+        Some(text) => Address::from_entry_name(text).map(Some).ok_or(()),
     }
 }
 
@@ -256,12 +308,12 @@ pub fn report(
     ssh: &dyn Ssh,
     keys: &[PathBuf],
     remote: Option<&Address>,
-    chosen: Option<&Path>,
+    chosen: Option<(&Path, ChosenBy)>,
 ) -> Ending {
     let host = remote.map_or(DEFAULT_HOST, |address| address.host.as_str());
     let rows = probe(ssh, keys, host, chosen);
     for (name, value) in facts(host, remote.map(|address| address.owner.as_str()), &rows) {
-        crate::fact(name, value);
+        crate::doctor::fact(name, value);
     }
     Ending::Done
 }
@@ -270,6 +322,11 @@ pub fn run_command(argument: Option<&str>) -> ExitCode {
     let Ok(argument) = named(argument) else {
         return fail(Ending::Argument, t!(cli_doctor_push_identity_argument));
     };
+    if let Ok(cwd) = std::env::current_dir() {
+        for directory in checkout(&cwd) {
+            bravebot_sandbox::programs::keep_out(&directory);
+        }
+    }
     let Some(home) = bravebot_agent::home::profile() else {
         return fail(Ending::Failed, t!(doctor_push_no_home));
     };
@@ -281,9 +338,35 @@ pub fn run_command(argument: Option<&str>) -> ExitCode {
     let settings = bravebot_config::Settings::load();
     let chosen = remote
         .as_ref()
-        .and_then(|address| settings.git_identities().for_address(address))
-        .and_then(|entry| bravebot_sandbox::scope::identity_key(&entry.key, &home));
-    report(&Machine, &keys, remote.as_ref(), chosen.as_deref()).code()
+        .and_then(|address| chosen_for(address, &settings, &home));
+    report(
+        &Machine,
+        &keys,
+        remote.as_ref(),
+        chosen.as_ref().map(|(key, by)| (key.as_path(), *by)),
+    )
+    .code()
+}
+
+/// The key a push to `address` offers first and who chose it: the key the person's `git.identities`
+/// entry names where there is one, and otherwise the one they chose at a run prompt, each judged
+/// as a stage judges it.
+fn chosen_for(
+    address: &Address,
+    settings: &bravebot_config::Settings,
+    home: &Path,
+) -> Option<(PathBuf, ChosenBy)> {
+    if let Some(entry) = settings.git_identities().for_address(address) {
+        return bravebot_sandbox::scope::identity_key(&entry.key, home)
+            .map(|key| (key, ChosenBy::Settings));
+    }
+    let state = bravebot_agent::home::directory()?;
+    let chosen = bravebot_agent::reach::Store::new(&state)
+        .chosen_keys()
+        .into_iter()
+        .find(|held| held.address.same_as(address))?;
+    bravebot_sandbox::scope::identity_key(chosen.key?.to_str()?, home)
+        .map(|key| (key, ChosenBy::Prompt))
 }
 
 #[cfg(test)]
@@ -423,12 +506,88 @@ mod tests {
     fn the_chosen_key_is_the_one_the_settings_named_not_the_one_that_greeted() {
         let ssh = Canned(vec![("bot.pub", GREETING)]);
         let chosen = PathBuf::from("/h/.ssh/work.pub");
-        let rows = probe(&ssh, &keys(), "github.com", Some(&chosen));
+        let rows = probe(
+            &ssh,
+            &keys(),
+            "github.com",
+            Some((&chosen, ChosenBy::Settings)),
+        );
 
         assert_eq!(
             rows.iter().map(|row| row.chosen).collect::<Vec<_>>(),
-            [true, false]
+            [Some(ChosenBy::Settings), None]
         );
+    }
+
+    /// A key chosen at a run prompt is marked as chosen there, not as named by the settings. Rejects
+    /// a report that credits `git.identities` with a choice the person made at a prompt, which sends
+    /// them to edit a setting they never wrote.
+    #[test]
+    fn a_key_chosen_at_a_run_prompt_is_marked_as_chosen_there() {
+        let ssh = Canned(vec![("bot.pub", GREETING)]);
+        let chosen = PathBuf::from("/h/.ssh/work.pub");
+        let rows = probe(
+            &ssh,
+            &keys(),
+            "github.com",
+            Some((&chosen, ChosenBy::Prompt)),
+        );
+        let shown = text(&facts("github.com", Some("netzenbot"), &rows));
+        assert!(
+            shown.contains(&t!(doctor_push_chosen_at_prompt).to_string()),
+            "{shown}"
+        );
+        assert!(
+            !shown.contains(&t!(doctor_push_chosen_by).to_string()),
+            "{shown}"
+        );
+    }
+
+    /// What a command was told to unset, which is how `env_remove` reads back: a name a child will
+    /// not be handed is present here with no value, and one left alone is absent altogether.
+    fn withheld_from(command: &std::process::Command) -> Vec<String> {
+        let mut names: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Every program this command starts is built by [`started`], so the one place that removes this
+    /// agent's own credentials covers all three. Rejects a command built without `env_remove`,
+    /// which hands the signing key to whatever `ssh-keygen` resolves to.
+    #[test]
+    fn a_program_started_here_is_not_handed_this_agents_own_credentials() {
+        let mut expected = bravebot_config::scrub::own_credentials();
+        expected.sort();
+
+        assert_eq!(withheld_from(&started(Path::new("/usr/bin/ssh"))), expected);
+    }
+
+    /// The directory the command ran in and the checkout holding it are both left out of the lookup.
+    /// Rejects a lookup that leaves out only the directory itself, which finds a repository's
+    /// `bin` when the command runs in a subdirectory.
+    #[test]
+    fn the_checkout_holding_the_directory_is_left_out_with_it() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/push-identity-checkout");
+        let _ = std::fs::remove_dir_all(&root);
+        let here = root.join("crates").join("cli");
+        std::fs::create_dir_all(&here).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+
+        assert_eq!(checkout(&here), [here.clone(), root]);
+    }
+
+    /// A directory under no checkout is left out by itself. Rejects a lookup that leaves out the
+    /// checkout alone, which finds the `bin` of a project that has no `.git`.
+    #[test]
+    fn a_directory_under_no_checkout_is_left_out_by_itself() {
+        let here = Path::new("/bravebot-no-such-directory/project");
+
+        assert_eq!(checkout(here), [here.to_path_buf()]);
     }
 
     /// The argument is `<host>/<owner>` and nothing else.

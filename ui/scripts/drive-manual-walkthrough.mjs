@@ -2,11 +2,11 @@
 // Only the model server and the OS file-picker result are substituted.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { _electron as electron } from 'playwright-core'
+import { inheritedEnv, launchWorld, listening } from './drive-world.mjs'
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 const root = mkdtempSync(join(tmpdir(), 'bravebot-walkthrough-'))
@@ -43,23 +43,21 @@ const server = createServer(async (req, res) => {
     res.end(`data: ${JSON.stringify({ model: 'test', choices: [{ index: 0, delta, finish_reason: delta.tool_calls ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 12, completion_tokens: 9, total_tokens: 21 } })}\n\ndata: [DONE]\n\n`)
   } catch (error) { failures.push(String(error)); res.writeHead(500); res.end('Fixture assertion failed') }
 })
-await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+await listening(server)
 function writeFixtureSettings(model) {
   writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({ provider: { local: { options: { baseURL: `http://127.0.0.1:${server.address().port}/v1`, apiKey: fixtureToken }, models: { test: {} } } }, model }))
 }
 writeFixtureSettings('local/test')
-const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter(k => process.env[k]).map(k => [k, process.env[k]]))
-Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost' })
+const env = Object.assign(inheritedEnv(), { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost' })
 async function until(predicate, label) {
   const deadline = Date.now() + 20000
   while (!await predicate()) { assert(Date.now() < deadline, `${label} timed out; fixture errors: ${failures}`); await delay(50) }
 }
 try {
   // Under xvfb the GPU process's GL start can hold the hidden window's first paint past a click's timeout on a fresh runner.
-  app = await electron.launch({ args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11', '--disable-gpu'] : []), `--user-data-dir=${profile}`], env, timeout: 40000 })
-  page = await app.firstWindow(); page.setDefaultTimeout(15000)
-  await page.setViewportSize({ width: 1350, height: 900 })
-  const uiErrors = []; page.on('pageerror', error => uiErrors.push(error.message))
+  const world = await launchWorld({ profile, env, linuxArgs: ['--disable-gpu'], timeout: 15000, viewport: { width: 1350, height: 900 } })
+  app = world.app; page = world.page
+  const uiErrors = world.errors
   await app.evaluate(({ dialog }, project) => {
     globalThis.walkthroughPicker = { path: project, calls: [] }
     dialog.showOpenDialog = async (_window, options) => {
@@ -340,6 +338,48 @@ try {
     await page.setViewportSize({ width: 1350, height: 900 })
   }
   console.log('PASS: processor remarks and real rejected/approved file writes')
+
+  // 7b: Open in default app asks about a file the system may run, through the real IPC handler. The
+  // dialog and the shell are replaced first, since an unanswered question or a launched app would
+  // land on the screen of whoever runs this.
+  writeFileSync(join(project, 'tool.command'), '#!/bin/sh\ntouch ran\n')
+  await app.evaluate(({ dialog, shell }) => {
+    const probe = globalThis.openProbe = { asked: [], opened: [], shown: [], answer: 'Cancel' }
+    probe.dialog = dialog.showMessageBox = async (...args) => {
+      const options = args.at(-1)
+      probe.asked.push({ parented: args.length === 2 && typeof args[0]?.id === 'number', buttons: options.buttons, detail: options.detail })
+      return { response: options.buttons.indexOf(probe.answer), checkboxChecked: false }
+    }
+    probe.openPath = shell.openPath = async path => { probe.opened.push(path); return '' }
+    probe.showItemInFolder = shell.showItemInFolder = path => { probe.shown.push(path) }
+  })
+  assert(await app.evaluate(({ dialog, shell }) => dialog.showMessageBox === globalThis.openProbe.dialog && shell.openPath === globalThis.openProbe.openPath && shell.showItemInFolder === globalThis.openProbe.showItemInFolder), 'the dialog and the shell are replaced')
+  if (await page.locator('.fold-toggle.right').getAttribute('aria-expanded') === 'false') await page.locator('.fold-toggle.right').click()
+  await page.getByRole('tab', { name: 'Files', exact: true }).click()
+  await page.getByRole('button', { name: 'Read the folder again' }).click()
+  const openFromFiles = async (name, answer, settled) => {
+    await app.evaluate((_, answer) => { globalThis.openProbe.answer = answer }, answer)
+    await page.locator('.tree-list[role="tree"] > li > .tree-row').filter({ has: page.getByText(name, { exact: true }) }).dblclick()
+    const preview = page.getByRole('dialog', { name: `Preview ${name}` })
+    await preview.getByRole('button', { name: 'Open in default app' }).click()
+    await until(async () => settled(await app.evaluate(() => globalThis.openProbe)), `Open in default app on ${name}`)
+    await preview.getByRole('button', { name: 'Done', exact: true }).click()
+    await preview.waitFor({ state: 'hidden' })
+    return app.evaluate(() => globalThis.openProbe)
+  }
+  const target = name => realpathSync(join(project, name))
+  let probe = await openFromFiles('tool.command', 'Cancel', p => p.asked.length === 1)
+  assert.equal(probe.asked[0].parented, true)
+  assert.deepEqual(probe.asked[0].buttons, ['Open', 'Show in folder', 'Cancel'])
+  assert.match(probe.asked[0].detail, /^"tool\.command" .* outside the sandbox\./)
+  probe = await openFromFiles('tool.command', 'Open', p => p.opened.length === 1)
+  assert.equal(probe.asked.length, 2)
+  probe = await openFromFiles('notes.txt', 'Cancel', p => p.opened.length === 2)
+  // Cancel is silent in the window, so what it reached is read once the later answers have run: a
+  // Cancel that opened or showed the file would have left a third entry.
+  assert.equal(probe.asked.length, 2, 'a text file is not asked about')
+  assert.deepEqual([probe.opened, probe.shown], [[target('tool.command'), target('notes.txt')], []])
+  console.log('PASS: Open in default app asks about a program, and opens a document without asking')
 
   // 8: settings narrow layout and cleanup assertions.
   await page.setViewportSize({ width: 560, height: 780 })

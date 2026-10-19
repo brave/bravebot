@@ -481,6 +481,7 @@
   text-overflow: ellipsis;
   font: var(--type-code);
 }
+.quarantine-head .reach { flex: none; font: var(--type-caption); color: var(--ink-tertiary); }
 .quarantine-head .label { flex: none; font: var(--type-caption); font-family: var(--font-mono); color: var(--ink-tertiary); }
 .quarantine > pre.preview { background: var(--surface-raised); }
 .quarantine-foot {

@@ -35,6 +35,7 @@ pub mod scrub;
 mod settings;
 #[cfg(test)]
 mod testutil;
+pub mod time;
 
 pub use managed::{Managed, ModelRefusal, Models, Refusal, Rule, Server, managed_file};
 pub use run_network::{
@@ -1466,6 +1467,22 @@ impl Config {
         changed
     }
 
+    /// Take the window of the model that answers a request: `model` where one is named, otherwise
+    /// the configured default, which is what a request naming none asks for. `advertised` is given
+    /// that model's name and reports the window its roster states, or `None` where the roster does
+    /// not describe it or could not be fetched, which leaves the default budget in place.
+    ///
+    /// The rule both clients apply, so the roster each one reads is the only part that differs
+    /// between them. Returns whether the budget changed, as [`Config::adopt_window`] does.
+    pub fn adopt_window_of_model_in_force(
+        &mut self,
+        model: Option<&str>,
+        advertised: impl FnOnce(&str) -> Option<u64>,
+    ) -> bool {
+        let in_force = model.unwrap_or(&self.default_model).to_string();
+        self.adopt_window(advertised(&in_force))
+    }
+
     /// The gateway serving `model`, and the name to ask it for.
     ///
     /// The model names the service, so this is the whole of how a request reaches a gateway. Two
@@ -1661,7 +1678,14 @@ impl Config {
     /// [`Config::model_named`] is shared: a name means the same model wherever it was written down,
     /// and an answer that differed per route would be an answer per route to get wrong.
     pub fn model_refused(&self, name: &str) -> Option<(&std::path::Path, managed::ModelRefusal)> {
-        self.models.refuses(&self.model_named(name))
+        let name = self.model_named(name);
+        // A gateway model has two spellings, the qualified one and the one the gateway is sent, and
+        // an entry may name either whichever the model was asked for as.
+        let Some((provider, wire)) = self.provider_for(&name) else {
+            return self.models.refuses(&name);
+        };
+        let qualified = format!("{}/{wire}", provider.id);
+        self.models.refuses_any(&[&name, wire, &qualified])
     }
 
     /// What to write down for a chosen model: the tier word where a tier variable named it, so the
@@ -1770,6 +1794,25 @@ mod tests {
         let mut config = Config::from_lookup(complete_env).unwrap();
         assert!(config.adopt_window(Some(102_400)));
         assert_eq!(config.context_budget, 102_400);
+    }
+
+    /// The model in force is the one named, or the configured default where none is: the roster is
+    /// asked about that name. Asking about the pick alone, or about the first row, is the fault.
+    #[test]
+    fn the_window_taken_is_that_of_the_named_model_or_else_the_default() {
+        let mut config = Config::from_lookup(complete_env).unwrap();
+        config.default_model = "the-default".into();
+        let mut asked = Vec::new();
+        assert!(config.adopt_window_of_model_in_force(Some("named"), |m| {
+            asked.push(m.to_string());
+            Some(102_400)
+        }));
+        config.adopt_window_of_model_in_force(None, |m| {
+            asked.push(m.to_string());
+            None
+        });
+        assert_eq!(asked, ["named", "the-default"]);
+        assert_eq!(config.context_budget, DEFAULT_CONTEXT_BUDGET);
     }
 
     /// A cramped window is taken at its word. Raising it to something more comfortable would put
@@ -3231,6 +3274,55 @@ mod tests {
         let config =
             resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
         assert!(config.providers.is_empty());
+    }
+
+    /// BACKEND-48: a gateway model is asked for as `openrouter/z-ai/glm-4.6` and sent as
+    /// `z-ai/glm-4.6`, and a list entry written either way answers for the one model.
+    ///
+    /// Each list in each spelling, and a model of the same gateway that no entry names, because a
+    /// build that matched only the asked-for name lets the denied model through and one that
+    /// matched only the wire name refuses what an allow entry in the qualified form permits.
+    #[test]
+    fn a_gateway_model_is_matched_by_either_of_its_spellings() {
+        let settings = Settings::parse(
+            r#"{"model": "openrouter/z-ai/glm-4.6",
+                "provider": {"openrouter": {"options": {"apiKey": "test-token"},
+                    "models": {"z-ai/glm-4.6": {}, "z-ai/other": {}}}}}"#,
+        );
+        let resolved = |name: &str, list: &str| {
+            let managed = managed::scratch(name, &format!(r#"{{"models": {{{list}}}}}"#));
+            let config =
+                resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
+            (config, managed)
+        };
+        for entry in ["z-ai/glm-4.6", "openrouter/z-ai/glm-4.6"] {
+            let (config, _) = resolved("gateway-spelling-deny", &format!(r#""deny": ["{entry}"]"#));
+            for asked in ["z-ai/glm-4.6", "openrouter/z-ai/glm-4.6"] {
+                assert_eq!(
+                    config.model_refused(asked).map(|(_, why)| why),
+                    Some(ModelRefusal::Denied),
+                    "deny {entry}, asked {asked}"
+                );
+            }
+            let (config, _) = resolved(
+                "gateway-spelling-allow",
+                &format!(r#""allow": ["{entry}"]"#),
+            );
+            for asked in ["z-ai/glm-4.6", "openrouter/z-ai/glm-4.6"] {
+                assert_eq!(
+                    config.model_refused(asked),
+                    None,
+                    "allow {entry}, asked {asked}"
+                );
+            }
+            assert_eq!(
+                config
+                    .model_refused("openrouter/z-ai/other")
+                    .map(|(_, why)| why),
+                Some(ModelRefusal::NotAllowed),
+                "allow {entry}"
+            );
+        }
     }
 
     /// BACKEND-48, and the whole reason the check is placed after tier resolution: `opus` is not a

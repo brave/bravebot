@@ -840,16 +840,22 @@ fn start(
              refusing rather than starting a program whose children would outlive it"
         ),
     })?;
-    started(
-        sid,
-        capabilities,
-        program,
-        args,
-        wiring,
-        environment,
-        directory,
-        job,
-    )
+    // Under the gate every start of a program takes. The copies of the streams the process is
+    // given are inheritable until it exists, and a program the standard library starts on another
+    // thread meanwhile inherits every inheritable handle this process holds, so it would hold this
+    // stage's input and keep its output from ending.
+    crate::process::starting_a_program(|| {
+        started(
+            sid,
+            capabilities,
+            program,
+            args,
+            wiring,
+            environment,
+            directory,
+            job,
+        )
+    })
     .map_err(SandboxError::SpawnFailed)
 }
 

@@ -17,10 +17,13 @@ governs:
   - crates/core/src/permissions.rs
   - crates/core/src/policy.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/mcp.rs
   - crates/agent/src/permission_mode.rs
   - crates/cli/src/plain.rs
   - crates/tui/src/confirm.rs
+  - crates/tui/src/confirm/mcp.rs
+  - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/status.rs
   - crates/ui-bridge/src/connectors.rs
   - crates/ui-bridge/src/turn.rs
@@ -69,9 +72,8 @@ terminal.
 
 At the first turn a person asks for, each started server's list of tools is put to them as the
 client drew it, every description whole and behind the margin, and nothing of the list reaches the
-planner until they say yes ([SERVERS-8](#SERVERS-8)). A yes offers each tool under the alias and
-records a digest of the list, so the same list is offered unasked in a later session and a changed
-one is asked about again. Each call is then put to them with three answers, after any permission
+planner until they say yes ([SERVERS-8](#SERVERS-8)). A yes offers each tool under the alias for the session
+and records nothing, so a later session asks again. Each call is then put to them with three answers, after any permission
 rule naming the server or the tool ([SERVERS-7](#SERVERS-7)). Bypassing answers both questions and
 records neither ([SERVERS-13](#SERVERS-13)).
 
@@ -86,8 +88,7 @@ Issue #83 is where the unwired client was written down, and it names the four th
 decided first: where a server is declared, what a name and an argv is trusted for, how the untrusted
 label [mcp.md](mcp.md) puts on a result reaches a slot, and whether servers are confined. Every
 clause below answers one of them. Whether a server's description reaches the planner at all was
-settled there too: the person vouches for the tool list after the handshake, and its digest is
-recorded beside the server's approval.
+settled there too: the person vouches for the tool list after the handshake, every session.
 
 Every clause names the tests that pin it. Where a built clause has an unbuilt half, the clause says
 which, and that sentence is what keeps a reader from taking the present tense as a claim about the
@@ -167,7 +168,7 @@ machine asks again, and a deliberate `rm -rf` of the workspace no longer forgets
 
 ```
 bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--stdio] -- <program> [args...]
-bravebot mcp add <alias> [-s <scope>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] --http <url>
+bravebot mcp add <alias> [-s <scope>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--bearer-env <name>] [--header-env <header>=<name>...] --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
 bravebot mcp approve <alias>
@@ -220,7 +221,7 @@ was recorded, and leaves every other project's as it was. An incognito session w
 | `claude mcp add brave-search -e BRAVE_API_KEY_FILE=/path/to/key -- npx -y @brave/brave-search-mcp-server` | the same line | The value is stored in `~/.bravebot/mcp.json`. The key file it names is one the server may read, and the question shows it as `may read`. |
 | `claude mcp add gmail -e WORKSPACE_FEATURE_OVERRIDES=... -- node ~/google-workspace-mcp/dist/index.js` | `bravebot mcp add gmail -e GEMINI_CLI_WORKSPACE_FORCE_FILE_STORAGE=true -e WORKSPACE_FEATURE_OVERRIDES=... -e BROWSER=www-browser --dir ~/google-workspace-mcp -- node ~/google-workspace-mcp/dist/index.js` | Google's Workspace server. Claude Code runs it with the person's `HOME`. Here `HOME` is the server's own ([SERVERS-10](#SERVERS-10)), so the server keeps its token in a file in its own directory, and `--dir` makes that directory writable. The sign-in, `node dist/headless-login.js`, is run first and outside bravebot. What the server returns is private ([MCP-1](mcp.md#MCP-1)). |
 | `claude mcp add calendar -e WORKSPACE_FEATURE_OVERRIDES=... -- node ~/google-workspace-calendar-mcp/dist/index.js` | `bravebot mcp add calendar -e GEMINI_CLI_WORKSPACE_FORCE_FILE_STORAGE=true -e WORKSPACE_FEATURE_OVERRIDES=... -e BROWSER=www-browser --dir ~/google-workspace-calendar-mcp -- node ~/google-workspace-calendar-mcp/dist/index.js` | The same server as the Gmail row, with the Calendar read group left on and every other group off, in a directory of its own so each token has one. The sign-in, `node dist/headless-login.js`, is run first and outside bravebot. What the server returns is private ([MCP-1](mcp.md#MCP-1)). |
-| `claude mcp add github -e GITHUB_PERSONAL_ACCESS_TOKEN=... -- docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server` | `bravebot mcp add github -e GITHUB_PERSONAL_ACCESS_TOKEN=... -- ~/github-mcp-server/github-mcp-server stdio --read-only --lockdown-mode --toolsets issues,pull_requests` | GitHub's own server, run as its released binary. The Docker line does not work here, because a confined server does not reach the Docker daemon, and the hosted server needs an `Authorization` header that `--http` does not send. The flags are part of the declaration, so they show at the question. What the server returns is private ([MCP-1](mcp.md#MCP-1)). |
+| `claude mcp add github --http https://api.githubcopilot.com/mcp -e GITHUB_PERSONAL_ACCESS_TOKEN=...` | `bravebot mcp add github --http https://api.githubcopilot.com/mcp --bearer-env GITHUB_PERSONAL_ACCESS_TOKEN` | GitHub's remote MCP endpoint. `--bearer-env` reads `GITHUB_PERSONAL_ACCESS_TOKEN` from the environment at launch and sends it as `Authorization: Bearer <token>` to `api.githubcopilot.com` only ([SERVERS-18](#SERVERS-18)). What the server returns is private ([MCP-1](mcp.md#MCP-1)). |
 | `claude mcp add weather -s user -- ...` | `bravebot mcp add weather -s user -- ...` | The declaration goes in `~/.bravebot/mcp.json` whatever the scope. The request goes in `~/.bravebot/settings.json`, so every session starts it. |
 | `claude mcp add weather -s project -- ...` | `bravebot mcp add weather -s project -- ...` | [SERVERS-1](#SERVERS-1). The checkout's `.bravebot/settings.json` gets the alias and not the argv. |
 | `claude mcp get weather` | `bravebot mcp get weather` | Also prints the digest, which is what an approval is against. |
@@ -231,9 +232,8 @@ was recorded, and leaves every other project's as it was. An incognito session w
 
 | What | Where | Scope | Lifetime |
 |---|---|---|---|
-| A declaration: alias, transport, argv or url, the variable names it needs, the values it stores, the files it may read, its directory, its startup and call bounds | `~/.bravebot/mcp.json` | the person's own directory | until they change it |
+| A declaration: alias, transport, argv or url, the variable names it needs, the values it stores, the files it may read, its directory, its startup and call bounds, and the HTTP headers read from environment variables | `~/.bravebot/mcp.json` | the person's own directory | until they change it |
 | An approval of a server, one digest and the alias it was given about per line, and a `changed` line per alias whose approved declaration changed since | `~/.bravebot/mcp-approved` | the person's own directory | until the declaration changes |
-| The list of tools a person vouched for, a `tools` line holding the declaration's digest and the list's | `~/.bravebot/mcp-approved` | the person's own directory | until another list is vouched for under that declaration, or no declaration resolves to it |
 | "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` |
 | "stop asking for this tool here", one alias, tool and project path per line | `~/.bravebot/mcp-tools` | the person's own directory | until `mcp forget` |
 | What a local server writes in its own home, such as a runner's cache ([SERVERS-10](#SERVERS-10)) | `~/.bravebot/mcp-home/<digest>` | one declaration | until somebody removes it |
@@ -241,7 +241,7 @@ was recorded, and leaves every other project's as it was. An incognito session w
 | What may start, `"mcp": { "allow": [{ "host": "*.corp.example" }], "deny": [{ "command": ["/opt/weather-mcp"] }] }` | the managed layer | the machine | as long as it is pinned |
 | A declaration, an argv, a url, or a variable's value | `.bravebot/settings.json` or `.bravebot/settings.local.json` | **nothing.** [SERVERS-1](#SERVERS-1) | n/a |
 | A variable's value given at `add` as `-e NAME=value` | `~/.bravebot/mcp.json`, under `env` | the person's own directory | until they change it |
-| A variable's value given by name | nowhere. The value is the person's own environment at launch | n/a | n/a |
+| A variable's value given by name, or an HTTP header variable | nowhere. The value is the person's own environment at launch | n/a | n/a |
 
 `~/.bravebot` is the state directory, which on Unix is readable only by the user
 ([STATE-1](state-directory.md#STATE-1)), and a machine naming no profile directory has no state
@@ -495,7 +495,11 @@ asks nobody and says so on stderr, naming `bravebot mcp approve <alias>` as the 
 terminal, and a session with no terminal says the same. A delegate asks nobody, and holds a
 server's grant only where the turn that spawned it holds one ([SERVERS-9](#SERVERS-9)), so it
 reaches no server the session did not start. An incognito session asks, and a yes there
-starts the server for that session and records nothing.
+starts the server for that session and records nothing. A session in lines
+([CLI-14](cli.md#CLI-14)) asks as it asks every question: the lines above, then `Use this MCP
+server? [y/N]`. Only `y` starts the server for that session; `1`, `2`, any other line and the end
+of the input decline. It offers no answer that records, and it records nothing about a server, a
+move or a tool the person answered, as an incognito session does.
 
 A yes whose record cannot be written still starts the server, since the person said yes and a file
 that would not take the answer does not unsay it, and a line says which record was not kept.
@@ -505,6 +509,7 @@ that would not take the answer does not unsay it, and a line says which record w
 `verified-by: bravebot_agent::servers::nobody_to_ask_leaves_the_server_absent_says_why_and_records_nothing`
 `verified-by: bravebot_agent::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
 `verified-by: bravebot_agent::servers::an_incognito_yes_is_for_this_session_and_writes_nothing`
+`verified-by: bravebot_agent::servers::a_yes_whose_record_cannot_be_written_still_starts_the_server_and_says_which_record`
 `verified-by: bravebot_config::mcp::a_project_reads_back_as_the_path_it_was_recorded_as`
 `verified-by: bravebot_config::mcp::forgetting_a_project_drops_it_and_no_other`
 `verified-by: bravebot_cli::mcp::forget_drops_a_projects_standing_answers_and_nobody_elses`
@@ -790,10 +795,11 @@ drawn above the list.
 
 A yes is the person vouching for the list, and it is the one road by which the list is promoted
 ([LABEL-8](labels.md#LABEL-8)). A no offers none of its tools for the rest of the session and is not
-asked again. A turn stopped at the question has not answered it, so the next turn asks again. The list's digest is recorded as a `tools` line in `mcp-approved`, beside the digest of
-the declaration it was listed under. A later session whose server sends the same list offers it with
-nobody asked. One whose list changed says so, and asks again. A project path that
-[SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a server and not for its list.
+asked again. A turn stopped at the question has not answered it, so the next turn asks again. Nothing is recorded, so a later session asks again about a list that is the
+same: the driver has no way to tell that it is, short of deciding from the server's bytes, and a
+decision taken from them is the one thing the driver may not do ([LABEL-8](labels.md#LABEL-8)). A
+`tools` line in `mcp-approved` is passed over and dropped the next time the file is written. A project path that [SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a
+server and not for its list.
 
 Each tool is offered as a function named `mcp__{alias}__{tool}`, which is what a backend's function
 names allow. Its description is a sentence this process writes, naming the alias and saying every
@@ -823,18 +829,15 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_mcp::stdio::a_confined_server_completes_the_handshake_and_lists_tools`
 `verified-by: bravebot_mcp::http::a_handshake_and_tool_list_round_trip`
 `verified-by: bravebot_config::mcp::a_tool_word_is_what_a_function_name_may_be`
-`verified-by: bravebot_config::mcp::a_vouched_list_reads_back_beside_the_approval_it_was_listed_by`
-`verified-by: bravebot_config::mcp::a_vouched_list_lasts_as_long_as_its_declaration_resolves`
-`verified-by: bravebot_config::mcp::a_line_that_is_not_a_vouch_is_passed_over`
+`verified-by: bravebot_config::mcp::a_tools_line_an_earlier_version_wrote_is_passed_over_and_dropped`
 `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement`
-`verified-by: bravebot_core::policy::a_recorded_tool_list_is_promoted_only_where_it_is_the_one_vouched_for`
 `verified-by: bravebot_core::policy::a_check_before_a_tool_list_reads_the_list_it_is_about`
 `verified-by: bravebot_agent::mcp::a_vouched_list_offers_its_tool_and_a_call_answers_quarantined`
 `verified-by: bravebot_agent::mcp::a_servers_tool_named_like_a_built_in_one_shadows_nothing`
 `verified-by: bravebot_agent::mcp::two_servers_composing_one_name_offer_neither_under_it`
 `verified-by: bravebot_agent::mcp::a_declined_list_offers_nothing_and_is_not_asked_again`
 `verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_leaves_it_to_be_asked_again`
-`verified-by: bravebot_agent::mcp::a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again`
+`verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
 `verified-by: bravebot_tui::confirm::a_tool_list_draws_every_description_row_behind_the_margin`
@@ -950,7 +953,13 @@ The process is confined under [MCP-3](mcp.md#MCP-3), and what it may reach is bu
 - The sandbox's base rows for this platform, which allow egress and children, with no home
   directory given, so the git configuration in it is not among them either, and no developer
   directory, so on macOS a server whose program is a `/usr/bin` shim such as `python3` does not
-  start. Egress is to IP
+  start. The session's network decision then applies to the server as it does to a stage
+  ([SANDBOX-20](sandboxing.md#SANDBOX-20), [SANDBOX-24](sandboxing.md#SANDBOX-24)): a closed
+  session gives it no egress, a runner's fetch included, since a server carries none of the
+  reasons a stage keeps the network for, and a session with `allowedHosts` holds it to the proxy
+  that applies the list, with the registry hosts of the toolchain its program is. A platform that
+  cannot apply the decision does not start the server, and the note names the setting. Egress
+  otherwise is to IP
   addresses, and a unix socket is reached only under a path the server may write
   ([SANDBOX-3](sandboxing.md#SANDBOX-3)), the temporary directory among them. A server that runs
   `docker` against the daemon's usual socket does not reach it, and one reaching a daemon on a
@@ -1017,9 +1026,15 @@ directory instead, on the terms [incognito.md](incognito.md#INCOG-8) states for 
 than adopted, readable by nobody else, and removed once the server has stopped. A runner there
 fetches its package again each session, which is the trade incognito already makes.
 
-A platform with no confinement for this, which is Windows today, starts no stdio server and says
-so, and asks nobody about one it could not start. Where the sandbox cannot be built, the server is
-not started either, and the line says why.
+A platform with no confinement for this starts no stdio server and says so, and asks nobody about
+one it could not start. On Windows the confinement is the AppContainer, and a program named without
+an extension is looked for as `.com` and `.exe` first, the `%PATHEXT%` spellings a container starts
+directly, and only then as written, so the extensionless shim beside `npx.exe` does not shadow it;
+`.bat` and `.cmd` are not, since they start through `cmd.exe`. Where the sandbox cannot be built,
+the server is not started either, and the line says why.
+
+`verified-by: bravebot_agent::servers::a_name_with_no_extension_is_found_under_the_extension_windows_would_add`
+`verified-by: bravebot_agent::servers::only_the_extensions_a_program_starts_under_directly_are_added`
 
 `verified-by: bravebot_config::mcp::a_value_is_stored_under_its_name_and_one_written_as_a_name_is_refused_unrepeated`
 `verified-by: bravebot_config::mcp::an_env_block_is_stored_values_and_an_object_of_variables_is_not_a_list_of_names`
@@ -1055,6 +1070,9 @@ not started either, and the line says why.
 `verified-by: bravebot_agent::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`
 `verified-by: bravebot_agent::mcp::a_servers_throwaway_home_lasts_as_long_as_the_session_holding_it`
 `verified-by: bravebot_mcp::stdio::a_server_receives_the_variables_it_was_handed_and_no_others`
+`verified-by: bravebot_agent::servers::a_closed_session_takes_the_network_from_a_local_server_or_refuses_it`
+`verified-by: bravebot_agent::servers::a_host_list_holds_a_local_server_to_the_proxy_or_refuses_it`
+`verified-by: bravebot_agent::servers::a_closed_session_starts_no_local_server_where_the_network_cannot_be_denied`
 `verified-by: bravebot_agent::servers::a_declared_directory_holding_a_repository_is_refused`
 `verified-by: bravebot_cli::mcp::add_declares_no_directory_inside_a_repository`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
@@ -1315,7 +1333,7 @@ Each call from then on is asked.
 **How it is built.** A requested server nothing approved is started without
 [SERVERS-4](#SERVERS-4)'s question being drawn, and nothing is written to `mcp-approved` or
 `mcp-projects`. A server's list is offered without [SERVERS-8](#SERVERS-8)'s question being drawn or
-a check being made, since nobody would read the check's verdict, and no `tools` line is written. A
+a check being made, since nobody would read the check's verdict. A
 call is made without [SERVERS-7](#SERVERS-7)'s question being drawn, as answer 1 and never answer 2,
 so nothing is written to `mcp-tools`, and out of the mode the next call is asked whatever was
 offered in it. A hop off a remote server's declaration is refused without
@@ -1484,6 +1502,75 @@ text is shown and decides nothing from it.
 `verified-by: bravebot_agent::mcp::an_addressed_worker_with_a_tools_line_is_offered_no_loader_unless_it_names_the_server`
 `verified-by: bravebot_cli::running::a_tools_list_offers_no_loader_for_deferred_server_tools`
 `verified-by: bravebot_config::settings::only_a_positive_size_sets_the_mcp_deferral_threshold`
+
+<a id="SERVERS-17"></a>
+### SERVERS-17: a declaration may name tool allow and deny lists that filter what is offered
+
+A declaration may name `tools` (an allow list) and `exclude_tools` (a deny list) of tool names.
+Tool names are either bare words (`get_forecast`) or qualified by server alias (`weather:get_forecast`).
+Each name must be a valid tool identifier under the format rules.
+
+When a server completes its handshake and lists its tools, filtering is applied before the tools
+are offered to the model or recorded in approvals:
+1. Deny list precedence: if a tool matches any entry in `exclude_tools`, it is withheld.
+2. Allow list restriction: if `tools` is non-empty and the tool matches no entry in `tools`, it is withheld.
+
+A qualified filter `alias:word` matches only when the server's alias matches `alias` and the tool name
+matches `word`. A bare filter `word` matches any tool named `word` on that server.
+
+Withheld tools are not offered to the planner, cannot be called, and are counted under `withheld`.
+The count of withheld tools is distinct from tools refused by format or protocol errors, and is
+reported to the user alongside the active tool count during confirmation prompts.
+
+Where either filter is specified, both lists are included in the declaration digest so any change
+requires renewed approval. An existing declaration without filters produces the identical digest.
+
+**Why.** A general-purpose MCP server often provides dozens of tools, many of which are irrelevant,
+redundant, or dangerous in specific environments. Filtering unwanted tools at the boundary prevents
+unnecessary context consumption and eliminates unwanted tool invocation surface while ensuring
+full user visibility into withheld tools.
+
+`verified-by: bravebot_mcp::protocol::tool_filtering_filters_by_allow_and_deny_lists`
+`verified-by: bravebot_config::mcp::a_tool_filter_name_is_a_tool_word_or_alias_qualified`
+`verified-by: bravebot_config::mcp::a_digest_covers_tool_filters_and_order_does_not_matter`
+`verified-by: bravebot_config::mcp::a_declaration_with_no_tool_filters_digests_as_it_did_before`
+`verified-by: bravebot_config::mcp::tool_filters_are_read_written_and_roundtripped`
+`verified-by: bravebot_config::mcp::tool_filter_changes_are_named_by_field`
+`verified-by: bravebot_config::mcp::tools_and_exclude_tools_require_lists_of_valid_tool_names`
+`verified-by: bravebot_agent::servers::handshake_local_filters_tools_by_allow_and_deny_lists`
+`verified-by: bravebot_agent::mcp::withheld_mcp_tools_are_not_offered_and_reported_in_confirmation`
+`verified-by: bravebot_cli::mcp::the_tool_filter_flags_set_allow_and_deny_lists_and_refuse_invalid_inputs`
+`verified-by: bravebot_cli::mcp::the_question_shows_tool_allow_and_deny_filters`
+
+<a id="SERVERS-18"></a>
+### SERVERS-18: an HTTP server declaration may read authorization and custom headers from named environment variables
+
+An HTTP server declaration may carry `--bearer-env <name>` and `--header-env <header>=<name>` flags
+naming environment variables to read when the server starts. The bearer flag is shorthand for
+sending `Authorization: Bearer <token>`. The values are read from the person's own environment at
+launch and are never written to `~/.bravebot/mcp.json`, never stored in any settings file, and
+never displayed in prompts, `get`, or `list` output. Those surfaces display the header names and
+the variable names (for example, `Authorization: Bearer $TOKEN`), ensuring secrets are never shown
+or stored.
+
+The header names and variable names are covered by the declaration's digest, so altering or adding
+a header requires re-approval. The environment variable values are attached inside `bravebot-net`
+only to requests matching the declared socket (scheme, host, and port). Any redirect hop that leaves
+the declared socket strips socket headers and `Authorization`, and a cross-socket hop is refused
+at the egress gate and put to the person as a server move ([SERVERS-11](#SERVERS-11)) before any
+credentialed request is sent. The planner never sees the credential values. Storing static values or
+using header flags with a stdio transport is refused.
+
+**Why.** Hosted MCP servers (such as GitHub's Copilot MCP endpoint) require authentication headers.
+Reading tokens from named environment variables allows using hosted servers securely without
+persisting secrets in configuration files or leaking them to other origins across redirects.
+
+`verified-by: bravebot_config::mcp::http_headers_and_bearer_env_are_validated_digested_and_roundtripped`
+`verified-by: bravebot_net::egress::socket_scoped_headers_and_authorization_are_dropped_across_different_sockets_on_redirect`
+`verified-by: bravebot_net::egress::socket_scoped_headers_are_kept_on_same_socket_redirect`
+`verified-by: bravebot_mcp::http::configured_headers_are_attached_to_requests`
+`verified-by: bravebot_cli::mcp::http_bearer_and_header_env_flags_are_parsed_and_refused_for_stdio`
+`verified-by: bravebot_agent::servers::a_declarations_headers_are_drawn_with_variable_names_and_without_secrets`
 
 ## Testing this with the weather server
 
@@ -1659,6 +1746,12 @@ This spec cannot land without these. Each is named by what the clause says rathe
   of the instructions and inside a margin, and a planner that reads them has still read text somebody
   else wrote, which a person read before saying yes. The margin is a boundary for a person looking at a screen; for a model it is a
   convention, and conventions are what injection attacks are made of.
+- **A standing answer to a tool outlives a change to the server it was given for.** It is filed under
+  the alias, the tool and the project, and read whatever the alias is declared as. After the
+  declaration changes and the person answers [SERVERS-4](#SERVERS-4)'s question about the new list,
+  a tool answered about before goes unasked to a server that is no longer the one the answer was
+  given to, and the same holds when the server redefines the tool under its name. A call carrying the
+  person's private data still asks.
 - **The standing answers do not travel.** Recording them outside the checkout means a second machine
   asks again and a wiped workspace does not forget. `mcp forget` is the deliberate road; there is no
   accidental one.
@@ -1700,9 +1793,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
 - **A server's line is read whole.** The client reads each line a server writes to its end before
   looking at it, with no bound, so a started server that writes one line without end holds this
   process's memory while it does.
-- **No stdio server starts on Windows.** The sandbox there has no base rows to build a server's
-  policy on, so the line says the platform has no confinement for one yet, which is
-  [MCP-3](mcp.md#MCP-3) holding rather than failing.
+- **A Windows server's grants are changes to the filesystem.** A grant for the server's home, its
+  directory and the directories its program is found in changes the access list of each, so a run
+  that ends without cleanup leaves the entries behind. A server there may also start a
+  subprocess, since the container has no mechanism to deny one ([SANDBOX-5](sandboxing.md#SANDBOX-5)).
 - **Only the directories above a server's directory are searched for a repository.** A directory
   holding checkouts is not refused, so the server may write their work trees, a hook a relative
   `core.hooksPath` points at among them, on every platform.

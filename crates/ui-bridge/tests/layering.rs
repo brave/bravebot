@@ -277,7 +277,8 @@ fn every_program_the_bridge_process_starts_goes_through_the_spawn_gate() {
             {
                 return;
             }
-            // Windows has no fork, so a handle is not inherited by a program started elsewhere.
+            // The Windows backend creates its process with `CreateProcessW` rather than a `Command`,
+            // and takes the gate around the whole of that in a caller this reading cannot follow.
             if path.components().any(|part| part.as_os_str() == "windows") {
                 return;
             }

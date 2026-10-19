@@ -10,7 +10,7 @@ screen can be an attacker's.
 
 The clause is `PROMPT-4` in `docs/specs/prompting.md`, and `VIEW-5` in
 `docs/specs/terminal-transcript.md` is the small terminal. The layout is `pinned::draw` in
-`crates/tui/src/confirm.rs`, which counts the deciding rows a `Seen` has had drawn, and
+`crates/tui/src/confirm/pinned.rs`, which counts the deciding rows a `Seen` has had drawn, and
 `Drawn::take` is where a key that approves is turned away. The table test
 `no_question_takes_a_yes_before_every_row_deciding_it_has_been_drawn` draws each kind of question
 with oversized content. The trust prompts in `crates/tui/src/trust_prompt.rs` have a layout of their

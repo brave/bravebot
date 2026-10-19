@@ -56,6 +56,10 @@ enum Chat {
     Refuses,
     /// Answers "done", except to a conversation holding [`HELD`], which it never answers.
     Holds,
+    /// Writes a task list in its first round, using 107 tokens, then refuses the credentials.
+    PlansThenRefuses,
+    /// Writes a task list in its first round, using 107 tokens, then never answers the next.
+    PlansThenHolds,
 }
 
 /// What the refusing service says, which is the backend's words and not the interface's.
@@ -109,7 +113,27 @@ fn answer(mut stream: std::net::TcpStream, chat: Chat, held: &mpsc::Sender<()>) 
                                 "long_conversation_warning_character_limit": 400_000}}])
             .to_string(),
         )
-    } else if matches!(chat, Chat::Refuses) {
+    } else if matches!(chat, Chat::PlansThenRefuses | Chat::PlansThenHolds)
+        && !String::from_utf8_lossy(&body).contains("\"role\":\"tool\"")
+    {
+        let plan = json!({"todos": [{"content": "write the plan", "status": "in_progress"}]});
+        let delta = json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "t1",
+            "type": "function",
+            "function": {"name": "todo_write", "arguments": plan.to_string()}}]});
+        let chunk = json!({"id": "c1", "object": "chat.completion.chunk",
+            "model": "stub-model",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": "tool_calls"}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 7}});
+        (
+            "200 OK",
+            "text/event-stream",
+            format!("data: {chunk}\n\ndata: [DONE]\n\n"),
+        )
+    } else if matches!(chat, Chat::PlansThenHolds) {
+        let _ = held.send(());
+        let _ = stream.read(&mut [0u8; 1]);
+        return;
+    } else if matches!(chat, Chat::Refuses | Chat::PlansThenRefuses) {
         (
             "401 Unauthorized",
             "application/json",
@@ -441,6 +465,62 @@ fn a_stopped_turn_is_recorded_as_cancelled_under_its_own_number() {
                 &json!({"kind": "cancelled", "reason": "turn 2 cancelled"})
             ),
         ],
+        "{saved}"
+    );
+}
+
+/// A turn that fails after a request completed keeps what that request cost and the task list it
+/// wrote, under its own number (SESSION-11, SESSION-23, TURN-5).
+///
+/// The faults this rejects: charging only a turn that answered, so the failed turn's 107 tokens are
+/// in neither the total nor the breakdown, and dropping the task list of a turn without a reply.
+#[test]
+fn a_failed_turn_keeps_its_spend_and_its_task_list() {
+    let scratch = Scratch::new("bridge-history-failed-spend");
+    let (endpoint, _) = stub_service(Chat::PlansThenRefuses);
+
+    let ended =
+        Window::open(&scratch.home(), &scratch.project(), &endpoint, None).turn("first question");
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+
+    let saved = record(&scratch.home());
+    assert_eq!(saved["tokens"], 107, "{saved}");
+    assert_eq!(saved["spend"], json!({"1": 107}), "{saved}");
+    assert_eq!(
+        saved["todos"]["1"][0]["content"], "write the plan",
+        "{saved}"
+    );
+}
+
+/// A turn that is stopped after a request completed keeps its spend, the wall time it took and
+/// its task list (SESSION-11, SESSION-12, SESSION-23, TURN-5).
+///
+/// The faults this rejects: charging nothing to a stopped turn, and recording no wall time for it.
+#[test]
+fn a_stopped_turn_keeps_its_spend_its_wall_time_and_its_task_list() {
+    let scratch = Scratch::new("bridge-history-stopped-spend");
+    let (endpoint, holding) = stub_service(Chat::PlansThenHolds);
+
+    let mut window = Window::open(&scratch.home(), &scratch.project(), &endpoint, None);
+    window.start("first question");
+    holding
+        .recv_timeout(PATIENCE)
+        .expect("the turn never reached its second request");
+    // The held request is the one a stop interrupts, so some time has passed in the turn.
+    std::thread::sleep(Duration::from_millis(50));
+    let session = window.session.clone();
+    window.call("turn.cancel", json!({"session": session}));
+    let stopped = window.ended();
+    assert_eq!(stopped["data"]["kind"], "cancelled", "{stopped}");
+    drop(window);
+
+    let saved = record(&scratch.home());
+    assert_eq!(saved["tokens"], 107, "{saved}");
+    assert_eq!(saved["spend"], json!({"1": 107}), "{saved}");
+    let wall = saved["timing"]["1"]["wall_ms"].as_u64().unwrap_or(0);
+    assert!(wall >= 50, "no wall time was recorded: {saved}");
+    assert_eq!(
+        saved["todos"]["1"][0]["content"], "write the plan",
         "{saved}"
     );
 }

@@ -39,7 +39,7 @@ use bravebot_core::label::Label;
 use bravebot_core::policy::{Denial, Policy};
 use bravebot_core::value::Labelled;
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Response bodies are truncated past this size.
 pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -137,7 +137,17 @@ pub enum EgressError {
     /// from which of the transport's bounds ended the read, never from anything a server sent.
     OutOfTime { url: String },
     /// The server returned a non-success status.
-    Status { url: String, status: u16 },
+    Status {
+        url: String,
+        status: u16,
+        /// How long the server asked for the next request to wait, where its `Retry-After` header
+        /// parsed.
+        ///
+        /// A number of seconds read out of the header and clamped to [`LONGEST_RETRY_AFTER`],
+        /// never the header's text. It only ever sets a timer, so a server that writes nonsense
+        /// there gets the caller's own backoff and one that writes a huge figure gets an hour.
+        retry_after: Option<Duration>,
+    },
     /// The caller asked to stop while the request was still being waited on.
     Stopped { url: String },
 }
@@ -168,7 +178,7 @@ impl fmt::Display for EgressError {
             Self::OutOfTime { url } => {
                 write!(f, "the reply from {url} ran past the time it was given")
             }
-            Self::Status { url, status } => write!(f, "{url} returned HTTP {status}"),
+            Self::Status { url, status, .. } => write!(f, "{url} returned HTTP {status}"),
             Self::Stopped { url } => write!(f, "the request to {url} was stopped"),
         }
     }
@@ -219,7 +229,15 @@ impl EgressError {
             Self::MissingLocation { .. } => Self::MissingLocation { url },
             Self::Stopped { .. } => Self::Stopped { url },
             Self::OutOfTime { .. } => Self::OutOfTime { url },
-            Self::Status { status, .. } => Self::Status { url, status },
+            Self::Status {
+                status,
+                retry_after,
+                ..
+            } => Self::Status {
+                url,
+                status,
+                retry_after,
+            },
             // The detail here is this crate's own sentence about a shape, so it survives.
             Self::InvalidUrl { detail, .. } => Self::InvalidUrl { url, detail },
             Self::InsecureRedirect { .. } => Self::InsecureRedirect { url },
@@ -237,6 +255,70 @@ impl EgressError {
             },
         }
     }
+}
+
+/// The longest wait a `Retry-After` header is taken to ask for.
+///
+/// Whatever a server writes is clamped to this, so the number a caller sets a timer from is bounded
+/// by this program rather than by the server. The caller decides how much of it to wait out.
+pub const LONGEST_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
+
+/// The wait a `Retry-After` value asks for, as of `now`.
+///
+/// Either whole seconds or an HTTP date in the IMF-fixdate form (`Sun, 06 Nov 1994 08:49:37 GMT`),
+/// the two forms RFC 9110 gives it. A date already past asks for no wait. Anything else, including
+/// a sign, a fraction, or one of the obsolete date forms, is not a figure and reads as absent.
+fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
+    let value = value.trim();
+    let asked = if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) {
+        // A figure too large for a u64 is still a long wait, so it clamps rather than vanishes.
+        Duration::from_secs(value.parse().unwrap_or(u64::MAX))
+    } else {
+        let at = UNIX_EPOCH + Duration::from_secs(http_date_seconds(value)?);
+        at.duration_since(now).unwrap_or(Duration::ZERO)
+    };
+    Some(asked.min(LONGEST_RETRY_AFTER))
+}
+
+/// Seconds since the epoch of an IMF-fixdate, or `None` where `value` is not one.
+fn http_date_seconds(value: &str) -> Option<u64> {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let parts: Vec<&str> = value.split(' ').collect();
+    let [day_name, day, month, year, time, zone] = parts[..] else {
+        return None;
+    };
+    if !DAYS.iter().any(|d| day_name.strip_suffix(',') == Some(d)) || zone != "GMT" {
+        return None;
+    }
+    let day: u64 = day.parse().ok().filter(|d| (1..=31).contains(d))?;
+    let month = MONTHS.iter().position(|m| *m == month)? as u64 + 1;
+    let year: u64 = year.parse().ok().filter(|y| (1970..=9999).contains(y))?;
+    let clock: Vec<u64> = time
+        .split(':')
+        .map(|n| n.parse().ok())
+        .collect::<Option<_>>()?;
+    let [hour, minute, second] = clock[..] else {
+        return None;
+    };
+    if hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    // Days from the epoch to the civil date, counting March as the first month so the leap day
+    // is the last day of the year.
+    let (y, m) = if month <= 2 {
+        (year - 1, month + 9)
+    } else {
+        (year, month - 3)
+    };
+    let era = y / 400;
+    let year_of_era = y % 400;
+    let day_of_year = (153 * m + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
 /// Statuses a server uses to say "not now" rather than "no".
@@ -348,6 +430,15 @@ impl Streamed<'_> {
         }
     }
 
+    /// How many bytes [`Streamed::next_chunk`] has handed back so far.
+    ///
+    /// The stream's own count of what it moved, so a caller reporting a size reads a number and
+    /// not the released bytes. The one byte past the cap that is read to learn the body was cut is
+    /// never handed back and so is not counted.
+    pub fn handed_back(&self) -> usize {
+        self.read.min(self.cap)
+    }
+
     /// Whether the cap stopped the read before the body ended.
     pub fn truncated(&self) -> bool {
         self.truncated
@@ -379,6 +470,8 @@ pub struct Request {
     pub method: Method,
     pub url: String,
     pub headers: Vec<(String, String)>,
+    /// Headers attached only when the request target matches the socket of [`Request::url`].
+    pub socket_headers: Vec<(String, String)>,
     pub body: Option<Vec<u8>>,
     /// How long the reply may take, where the request says. Otherwise [`Timeouts::reply`].
     pub reply: Option<ReplyBound>,
@@ -411,6 +504,7 @@ impl Request {
             method: Method::Get,
             url: url.into(),
             headers: Vec::new(),
+            socket_headers: Vec::new(),
             body: None,
             reply: None,
             patient_on_this_machine: false,
@@ -422,6 +516,7 @@ impl Request {
             method: Method::Post,
             url: url.into(),
             headers: Vec::new(),
+            socket_headers: Vec::new(),
             body: Some(body),
             reply: None,
             patient_on_this_machine: false,
@@ -430,6 +525,15 @@ impl Request {
 
     pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.push((name.into(), value.into()));
+        self
+    }
+
+    /// Add a header that is only sent when the target URL matches the socket of [`Request::url`].
+    ///
+    /// If a redirect hop leaves that socket, these headers are not sent, so credentials
+    /// or server-scoped headers never leak to an unintended destination.
+    pub fn socket_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.socket_headers.push((name.into(), value.into()));
         self
     }
 
@@ -747,7 +851,11 @@ impl Egress {
             }
 
             if !(200..300).contains(&status) {
-                return Err(EgressError::Status { url, status });
+                return Err(EgressError::Status {
+                    url,
+                    status,
+                    retry_after: response.4,
+                });
             }
 
             return Ok((status, response.2, response.3));
@@ -809,12 +917,14 @@ impl Egress {
     }
 }
 
-/// What one hop answers with: status, location, content-type, and the body reader.
+/// What one hop answers with: status, location, content-type, the body reader, and the wait the
+/// server asked for.
 type Sent = (
     u16,
     Option<String>,
     Option<String>,
     Box<dyn std::io::Read + Send>,
+    Option<Duration>,
 );
 
 /// One hop, on whichever thread calls it.
@@ -828,19 +938,29 @@ fn send(
     url: &str,
     patient: bool,
 ) -> Result<Sent, EgressError> {
+    let declared_socket = bravebot_core::url::socket_of(&request.url);
+    let current_socket = bravebot_core::url::socket_of(url);
+    let on_declared_socket = declared_socket.is_some() && declared_socket == current_socket;
+
+    let headers = request
+        .headers
+        .iter()
+        .filter(|(name, _)| on_declared_socket || !name.eq_ignore_ascii_case("authorization"))
+        .chain(request.socket_headers.iter().filter(|_| on_declared_socket));
+
     // GET and POST builders have different types in ureq, so the header loop is
     // repeated rather than abstracted over them.
     let result = match request.method {
         Method::Get => {
             let mut builder = agent.get(url);
-            for (name, value) in &request.headers {
+            for (name, value) in headers {
                 builder = builder.header(name, value);
             }
             within(builder, timeouts, request.reply, patient).call()
         }
         Method::Post => {
             let mut builder = agent.post(url);
-            for (name, value) in &request.headers {
+            for (name, value) in headers {
                 builder = builder.header(name, value);
             }
             let builder = within(builder, timeouts, request.reply, patient);
@@ -873,7 +993,7 @@ fn send(
         Err(e) => {
             return Err(EgressError::Transport {
                 url: url.to_string(),
-                detail: e.to_string(),
+                detail: call_failure(&e).to_string(),
                 transient: is_transient_call(&e),
             });
         }
@@ -889,12 +1009,15 @@ fn send(
     };
     let location = header("location");
     let content_type = header("content-type");
+    let retry_after =
+        header("retry-after").and_then(|value| retry_after(&value, SystemTime::now()));
 
     Ok((
         status,
         location,
         content_type,
         Box::new(response.into_body().into_reader()),
+        retry_after,
     ))
 }
 
@@ -1014,8 +1137,45 @@ fn body_failure(url: &str, error: std::io::Error) -> EgressError {
     }
     EgressError::Transport {
         url: url.to_string(),
-        detail: error.to_string(),
+        detail: cause
+            .map_or_else(|| io_failure(&error), call_failure)
+            .to_string(),
         transient: is_transient_io(&error),
+    }
+}
+
+/// The sentence a failed call is reported as, chosen by which failure it was.
+///
+/// The transport's own text for a failure is never used: a TLS handshake that fails on the name
+/// prints every name the server's certificate presented, and ureq quotes back a URI it could not
+/// use, so that text is the server's, and a failure's text reaches the planner as the driver's own
+/// words. Matching on the variant reads nothing a server wrote.
+fn call_failure(error: &ureq::Error) -> &'static str {
+    match error {
+        ureq::Error::Timeout(_) => "the request timed out",
+        ureq::Error::HostNotFound => "the host could not be found",
+        ureq::Error::ConnectionFailed => "the connection could not be made",
+        ureq::Error::Tls(_) | ureq::Error::Rustls(_) | ureq::Error::Pem(_) => {
+            "the TLS handshake failed"
+        }
+        ureq::Error::Io(e) => io_failure(e),
+        _ => "the request did not complete",
+    }
+}
+
+/// The same for a failure of the connection, by the kind of I/O error and never its message.
+///
+/// A rustls error that reaches the caller as an I/O error is `InvalidData`, which is also what a
+/// reply that could not be parsed is, so that kind says only that what came back was unusable.
+fn io_failure(error: &std::io::Error) -> &'static str {
+    use std::io::ErrorKind::*;
+    match error.kind() {
+        TimedOut => "the request timed out",
+        ConnectionRefused => "the connection was refused",
+        ConnectionReset | ConnectionAborted | BrokenPipe => "the connection was reset",
+        UnexpectedEof => "the connection closed before the reply was complete",
+        InvalidData => "the reply could not be used, or the TLS handshake failed",
+        _ => "the connection failed",
     }
 }
 
@@ -1292,6 +1452,49 @@ mod tests {
         );
     }
 
+    /// A failure's text is the part of it a caller formats into a message the planner reads, so
+    /// it is chosen by which failure it was. A TLS handshake that fails on the name prints every
+    /// name the server's certificate presented, and the transport quotes back a URI it could
+    /// not use, so neither text may survive, and no kind of failure may fall back to the
+    /// transport's own words.
+    #[test]
+    fn a_call_failure_is_worded_by_its_kind_and_never_by_the_transport() {
+        let sentinel = "SENTINEL-CERTIFICATE-NAME";
+        let tls_as_io = || {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid peer certificate: only valid for {sentinel}"),
+            )
+        };
+        let failures = [
+            (ureq::Error::Io(tls_as_io()), "TLS handshake"),
+            (ureq::Error::BadUri(sentinel.into()), "did not complete"),
+            (
+                ureq::Error::Tls("SENTINEL-CERTIFICATE-NAME"),
+                "TLS handshake",
+            ),
+            (
+                ureq::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    sentinel,
+                )),
+                "refused",
+            ),
+            (ureq::Error::HostNotFound, "could not be found"),
+        ];
+        for (error, wording) in failures {
+            let said = call_failure(&error);
+            assert!(!said.contains(sentinel), "{error:?} was worded as {said}");
+            assert!(said.contains(wording), "{error:?} was worded as {said}");
+        }
+
+        let body = body_failure("https://example.com/", tls_as_io());
+        assert!(
+            !body.to_string().contains(sentinel),
+            "a body failure carried the I/O error's message: {body}"
+        );
+    }
+
     /// The classification a retry rests on. Getting it wrong in one direction repeats a request
     /// that will fail identically, and in the other abandons one that would have worked.
     #[test]
@@ -1327,6 +1530,78 @@ mod tests {
         );
     }
 
+    /// `Retry-After` is whole seconds or an HTTP date, bounded, and a figure only: a value that
+    /// is neither is absent, so the caller's own backoff applies rather than a guess.
+    #[test]
+    fn a_retry_after_is_read_as_seconds_or_a_date_and_bounded() {
+        let now = UNIX_EPOCH + Duration::from_secs(784_111_777); // Sun, 06 Nov 1994 08:49:37 GMT
+        let read = |value: &str| retry_after(value, now);
+
+        assert_eq!(read("2"), Some(Duration::from_secs(2)));
+        assert_eq!(read(" 120 "), Some(Duration::from_secs(120)));
+        assert_eq!(read("0"), Some(Duration::ZERO));
+        assert_eq!(
+            read("Sun, 06 Nov 1994 08:50:37 GMT"),
+            Some(Duration::from_secs(60)),
+            "a date is the wait until it"
+        );
+        assert_eq!(
+            read("Sun, 06 Nov 1994 08:49:00 GMT"),
+            Some(Duration::ZERO),
+            "a date already past asks for no wait"
+        );
+        // Larger than anything a caller should set a timer from, including one too large to parse.
+        assert_eq!(read("86400"), Some(LONGEST_RETRY_AFTER));
+        assert_eq!(read("99999999999999999999999"), Some(LONGEST_RETRY_AFTER));
+
+        for not_a_figure in [
+            "",
+            "soon",
+            "-5",
+            "+5",
+            "1.5",
+            "2 seconds",
+            "Sunday, 06-Nov-94 08:50:37 GMT",
+            "Sun Nov  6 08:50:37 1994",
+            "Sun, 06 Nov 1994 08:50:37 PST",
+            "Sun, 31 Foo 1994 08:50:37 GMT",
+            "Sun, 06 Nov 1994 25:50:37 GMT",
+        ] {
+            assert_eq!(
+                read(not_a_figure),
+                None,
+                "{not_a_figure:?} was taken as a wait"
+            );
+        }
+    }
+
+    /// The header reaches the failure as a number, from the answer to the request that was sent.
+    #[test]
+    fn a_status_carries_the_wait_the_server_asked_for_and_nothing_it_wrote() {
+        let status = |header: &str| {
+            let (port, _) = serve_counting(vec![format!(
+                "HTTP/1.1 429 Too Many Requests\r\n{header}Content-Length: 0\r\nConnection: close\r\n\r\n"
+            )]);
+            let outcome = fetched(
+                &Egress::new(),
+                Request::get(format!("http://127.0.0.1:{port}/")),
+            );
+            match outcome {
+                Err(EgressError::Status {
+                    status: 429,
+                    retry_after,
+                    ..
+                }) => retry_after,
+                other => panic!("expected a 429, got {other:?}"),
+            }
+        };
+
+        assert_eq!(status("Retry-After: 7\r\n"), Some(Duration::from_secs(7)));
+        assert_eq!(status("Retry-After: 999999\r\n"), Some(LONGEST_RETRY_AFTER));
+        assert_eq!(status("Retry-After: later\r\n"), None);
+        assert_eq!(status(""), None);
+    }
+
     /// A server saying "not now" is temporary; a server saying "no" is not.
     #[test]
     fn only_the_statuses_that_mean_not_now_are_worth_another_attempt() {
@@ -1334,6 +1609,7 @@ mod tests {
             EgressError::Status {
                 url: "https://example.com".into(),
                 status,
+                retry_after: None,
             }
             .is_transient()
         };
@@ -1356,6 +1632,7 @@ mod tests {
         let refused = EgressError::Status {
             url: "https://example.com/".to_string(),
             status: 503,
+            retry_after: None,
         };
         assert!(failure_fields("https://example.com/", &refused, Duration::ZERO).is_some());
     }
@@ -1388,8 +1665,8 @@ mod tests {
         });
 
         let tmp = tempfile::tempdir().expect("a scratch directory");
-        let dir = tmp.path().to_path_buf();
-        bravebot_diag::configure(bravebot_diag::Level::Error, Some(dir.clone()));
+        let dir = tmp.path().join(bravebot_diag::DIRECTORY);
+        bravebot_diag::configure(bravebot_diag::Level::Error, Some(tmp.path().to_path_buf()));
 
         let mut routing = bravebot_core::policy::Routing::new();
         routing.insert_trusted("task", "fetch a page");
@@ -1555,6 +1832,12 @@ mod tests {
     /// bytes inside one. Nothing about the gate is under test here; it is how the caller under
     /// test reads a chunk too.
     fn drain(mut stream: Streamed<'_>) -> (usize, bool) {
+        let total = drain_by_ref(&mut stream);
+        (total, stream.truncated())
+    }
+
+    /// The same, leaving the stream for the caller to ask about afterwards.
+    fn drain_by_ref(stream: &mut Streamed<'_>) -> usize {
         let mut routing = bravebot_core::policy::Routing::new();
         routing.insert_trusted("task", "read a stream");
         let mut sink = bravebot_core::event::NullSink;
@@ -1571,7 +1854,24 @@ mod tests {
         while let Some(chunk) = stream.next_chunk().expect("the read succeeds") {
             total += decoding.decode(chunk).0.len();
         }
-        (total, stream.truncated())
+        total
+    }
+
+    /// The size a download reports is the stream's own count, so it has to be the bytes handed
+    /// back: all of a body that ended at the cap, the cap's worth of one that was cut, and not
+    /// the one extra byte read to learn it was cut.
+    #[test]
+    fn a_stream_counts_the_bytes_it_handed_back_and_not_the_one_it_read_to_find_the_cut() {
+        for (body, cap) in [(5000, 3000), (3000, 3000), (2000, 3000)] {
+            let mut stream = streamed(vec![b'x'; body]).capped_at(cap);
+            let released = drain_by_ref(&mut stream);
+            assert_eq!(released, body.min(cap));
+            assert_eq!(
+                stream.handed_back(),
+                released,
+                "a {body}-byte body under a cap of {cap}"
+            );
+        }
     }
 
     fn streamed(body: Vec<u8>) -> Streamed<'static> {

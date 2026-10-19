@@ -82,7 +82,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace ([`lsp`](../reference/tools.md#the-index-is-cached-and-it-is-not-small)) |
 | `~/.bravebot/findings/<workspace>.jsonl` | the credentials a turn's own writes were found to hold, one per workspace |
 | `~/.bravebot/granted/<directory>.jsonl` | the permission rules a checkout proposed that you granted, one file per directory ([`permissions`](#permissions)) |
-| `~/.bravebot/trusted/<directory>.jsonl` | the answer to the startup question you pressed `r` for, one per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
+| `~/.bravebot/trusted/<directory>.jsonl` | the yes to the startup question, one file per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
 | `~/.bravebot/untrusted/<directory>.jsonl` | the [delegate definitions' memories](agents.md#memory) a write left untrusted, one per directory |
 | `~/.bravebot/history` | prompts you have sent |
 | `~/.bravebot/model` | the model chosen with `/model` |
@@ -404,10 +404,10 @@ one thing leaves everything else in force:
 
 | What | How the files combine |
 |---|---|
-| `env`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
+| `env`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `agent` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `agent`, `style`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
 | `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and a `--settings` file outside the project; a project or local file's are ignored and reported |
@@ -453,6 +453,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `promptCacheTtl` | how long a gateway or an AWS account keeps a cached prompt, `5m` or `1h` ([below](#promptcachettl)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
+| `style` | the output style a session starts in: `concise`, `explanatory`, `proactive` or a file in `~/.bravebot/styles`. Read from your own file and the file `--settings` names only |
 | `limit` | the most tokens or Leo Premium credits a session may spend before it asks ([below](#limit)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
@@ -469,6 +470,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `search` | how large a tree a search may walk ([below](#search)) |
 | `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
 | `awaySummaryEnabled` | whether a session is recapped by itself after you have been away ([below](#awaysummaryenabled)) |
+| `awaySummaryIdleSeconds` | how long after a turn finishes the automatic recap waits ([below](#awaysummaryidleseconds)) |
 | `suggestions` | whether the empty box offers a suggested next prompt ([below](#suggestions)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
@@ -743,7 +745,7 @@ stop, to go on without a limit or to go on under a new one. A whole number of to
 `k` or `m` after it for thousands or millions. Put `credits` after the figure, as in `"200 credits"`,
 to count the credentials a Leo Premium subscription spends, one per request, instead. A value that is
 none of these, and zero, sets no limit. The nearest settings file that names it wins, and
-[`/limit`](../reference/commands.md#limit-tokens--credits--off) changes it for one session. Tokens are
+[`/limit`](../reference/commands.md#limit-amount--off) changes it for one session. Tokens are
 the usage the model service reports, so a limit in tokens is a bound on tokens and not on money. The
 one-shot `-p` run and the desktop app do not apply it.
 
@@ -767,11 +769,23 @@ default. It lasts a turn, so a later turn loads again.
 { "awaySummaryEnabled": false }
 ```
 
-After the terminal has been unfocused for five minutes since the last turn finished, a session of at
-least three turns recaps itself once, as `/recap` does, and not again until another turn finishes.
+After the terminal has been unfocused for five minutes (or the
+[`awaySummaryIdleSeconds`](#awaysummaryidleseconds) you set) since the last turn finished, a session
+of at least three turns recaps itself once, as `/recap` does, and not again until another turn finishes.
 It needs a terminal that reports when it is left. `false` turns the automatic recap off, and `/recap`
 still works. Only the boolean `false` turns it off: `"false"` in quotes, or any other value, leaves it
 on.
+
+### `awaySummaryIdleSeconds`
+
+```json
+{ "awaySummaryIdleSeconds": 120 }
+```
+
+How many seconds the terminal has to have been unfocused since the last turn finished before
+[`awaySummaryEnabled`](#awaysummaryenabled)'s automatic recap is made. Without this key it is 300.
+A whole number above zero; zero, a negative or fractional number, or a number in quotes leaves it at
+300. It changes nothing else about the recap, and `/recap` is not delayed by it.
 
 ### `suggestions`
 
@@ -883,7 +897,7 @@ thing to switch off by near-miss.
 `open` is the default: every program the agent runs keeps the network. `closed` takes it from every
 program except those that carry a reason to have it: a package manager that fetches (`cargo`, `npm`,
 `pip`, `go`, `mvn`, `gradle`), a `git` or `gh` command that talks to a remote, `curl`, `ssh`, and
-a command that was lent a credential (remote, cloud, cluster or container). A program the agent could have written itself, under a directory it may write to, gets nothing by being named `curl`. `cat`, `grep`, `make`, `python3` and a test
+a command that was lent a credential (remote, cloud, cluster or container). A program the agent could have written itself, under a directory it may write to, gets nothing by being named `curl`. Those directories include the toolchain caches and every path you let programs write. `cat`, `grep`, `make`, `python3` and a test
 run get none, so what they read cannot be sent anywhere.
 
 `--run-network closed` sets it for one run, and a machine-level file can pin it, which no other
@@ -970,6 +984,16 @@ file's is ignored, and `bravebot doctor` names it, an entry it cannot read, and 
 lend: a path that is not a regular `*.pub` file, one inside another credential location such as
 `~/.aws`, or one holding `'`, `%` or `$`. A key inside a directory the session writes is not lent
 either.
+
+Without an entry for the owner, the terminal interface asks instead. Where a `git` command such as a
+push names an ssh address of an owner nothing has chosen a key for, and ssh could offer two to nine
+of your public keys (the ones at ssh's default names and the ones an `IdentityFile` line in
+`~/.ssh/config` names), the run prompt numbers them. Press a key's number to run the command with
+that key offered first, or `0` to leave the key to ssh. Either answer is kept in
+`~/.bravebot/reach.jsonl` and decides every later `git` command that reaches that owner over ssh, in
+every session, as an entry would; `y` runs the command without choosing, and the next prompt asks
+again. An entry in your settings decides over a kept answer. `/reach keys` lists the answers kept,
+and `/reach keys remove <number>` forgets one. The plain interface and the desktop app do not ask.
 
 ### `download.maxBytes`
 
@@ -1114,25 +1138,28 @@ pattern begins:
 |---|---|
 | `//x` | the filesystem root |
 | `~/x` | your home directory |
-| `/x` | the directory the settings file is in |
+| `/x` | the workspace, in `.bravebot/settings.json` and `.bravebot/settings.local.json`; the directory the settings file is in, in `~/.bravebot/settings.json` and a file `--settings` names |
 | `x` or `./x` | the workspace |
 
 So a single leading slash is **not** the filesystem root. A specifier with no slash in it is a name
-and matches at any depth, which makes `Read(.env)` and `Read(**/.env)` one rule. Relative and
-absolute patterns are separate namespaces and neither reaches into the other.
+and matches at any depth, which makes `Read(.env)` and `Read(**/.env)` one rule; one written from
+`./` stays at the top of the workspace. Relative and
+absolute patterns are separate namespaces and neither reaches into the other. A `/x` rule that
+starts inside the workspace is a relative one, so `Read(/secrets/**)` in a project's
+`.bravebot/settings.json` is the same rule as `Read(./secrets/**)`.
 
 On Windows a path on a drive is a full path, with the drive as its first segment:
 `Read(//D:/work/secrets/**)` covers `D:\work\secrets\key` whichever separator the path is written
 with, and whichever case the drive letter is in. A rule written from the drive letter is the same
 rule, though in a JSON file each backslash is doubled, `"Read(D:\\work\\secrets\\**)"`, so the
 forward-slash form is easier to write. `~/x` starts at your home directory on its drive in the same
-way. `Read(/D:/work/**)`, with one slash, is still about the settings file's directory. A workspace
+way. `Read(/D:/work/**)`, with one slash, still starts where any `/x` rule does. A workspace
 rule such as `Read(.env)` does not cover a file on a drive outside the workspace.
 
 **A one-segment relative pattern floats where it restricts and not where it grants.** `Edit(src/**)`
 in `deny` or `ask` covers a `src` directory at any depth, including a copy under `vendor`; the same
-pattern in `allow` covers only the `src` at the top. Anchor it as `Edit(/src/**)` to pin it to one
-place in either list.
+pattern in `allow` covers only the `src` at the top. Anchor it as `Edit(./src/**)` to pin it to the
+top of the workspace in either list.
 
 A **command** specifier matches a step's program and arguments, with `*` standing in for any text:
 
@@ -1226,8 +1253,8 @@ whoever writes the commit. Anything that is not a string reads as absence.
 
 What you set here is stated to the model in front of every round of every turn, and a destination you
 did not name is not mentioned to it at all. A value is quoted as text to copy rather than written in
-as a sentence addressed to it, since the block resolves through a file in the checkout as well as your
-own.
+as a sentence addressed to it. The block is read from your own file and the file `--settings` names
+only; a project or local file that sets it is ignored and reported by `bravebot doctor`.
 
 ### `keybindings`
 
@@ -1370,8 +1397,23 @@ working directory or putting the mode that asks about nothing out of reach is so
 have a legitimate say in. Neither is pinned in the sense the variables are. A name in the list above is
 answered by this file and nothing else is consulted for it; these two take the strictest answer any
 file gave, so somebody may ask for either where this file did not, and no file of theirs can lift it
-where it did. The rules themselves are not read here: a rule names a path, a program or a host, which
-is deciding what a session may work on rather than whether it may leave the tree at all.
+where it did.
+
+`"permissions": { "deny": [...], "ask": [...] }` are rules, written as they are in any settings file, and
+they are added to the rules every other file wrote. A deny rule here refuses on every session on the
+machine in every mode, and nothing in a checkout or in a person's own file removes it:
+
+```json
+{
+  "permissions": {
+    "deny": ["Read(.env)", "Bash(git push *)"],
+    "ask": ["WebFetch"]
+  }
+}
+```
+
+A refusal names this file. A line that is not a rule is reported by `doctor` and in the session, and the
+rest of the list still applies. `allow` is never read from here, because a grant is the person's own.
 
 A layer that can pin a preference is a layer somebody uses to pin one. What two parties have a
 legitimate say in is where a request goes, whose account pays for it, and what a session on the machine
@@ -1490,6 +1532,10 @@ A `provider` block in a settings file names a gateway, the models it offers and 
 holds its credential. It is opencode's block, so one copied from `opencode.json` works unedited, and
 a local Ollama needs no key. [Reaching an OpenAI-compatible gateway](providers/openai-compatible.md)
 has the fields, the credential, which models are offered, and how to name one.
+
+OpenAI is reached with an API key by a block keyed `openai` naming `OPENAI_API_KEY` in `env`, and
+needs no `baseURL`. [OpenAI](providers/openai-compatible.md#openai) has the details, including which
+models `/model` offers.
 
 Google Vertex AI is reached by a block keyed `google-vertex`, or with no block by exporting
 `GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT`. It has no model listing a key can call, so `/model`

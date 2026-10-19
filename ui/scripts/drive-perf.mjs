@@ -14,6 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
+import { agentInfo, threeModelList } from './acceptance-fixture.mjs'
 
 const tolerance = Number(process.env.PERF_TOLERANCE) || 1
 const SESSIONS = 1000
@@ -79,7 +80,7 @@ try {
   page.setDefaultTimeout(15000)
   page.on('pageerror', (e) => { errors.push(e.message); console.error('RENDERER', e.message) })
 
-  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, id, entries, sessions }) => {
+  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, id, entries, sessions, info, models }) => {
     // The long conversation is the newest; the rest are spread over eight checkouts, older by ten
     // minutes each, the way a sidebar looks after a few months of use.
     const now = Math.floor(Date.now() / 1000)
@@ -103,13 +104,9 @@ try {
     }
     said.length = entries - 3
     replace('bravebot:request', async (_, method, p = {}) => {
-      if (method === 'agent.info') return { ok: { configured: true, build: '0.9.0 (abc1234)', version: '1' } }
+      if (method === 'agent.info') return { ok: info }
       if (method === 'session.list') return { ok: { sessions: rows } }
-      if (method === 'models.list') return { ok: { defaultModel: 'sample/fast', warnings: [], models: [
-        { id: 'sample/fast', name: 'Fast model', provider: 'Sample', premium: false, contextWindow: 200000, capabilities: ['text', 'tools'] },
-        { id: 'sample/deep', name: 'Deep model', provider: 'Sample', premium: true, contextWindow: 1000000, capabilities: ['text', 'tools'] },
-        { id: 'other/small', name: 'Small model', provider: 'Other', premium: false, contextWindow: 32000, capabilities: ['text'] },
-      ] } }
+      if (method === 'models.list') return { ok: models }
       if (method === 'session.open') return { ok: { session: 's-' + p.id, model: 'sample/fast', record: { ...rows[0], started: 1, turns: 1, tokens: 100, build: 'fixture' }, said, todos: {}, context: '', trust: { known: true, rules: [] }, archived: 0, branchNote: null, buildNote: null, frontNote: null } }
       if (method === 'turn.send') return { ok: { turn: 2 } }
       if (method === 'permissions.list') return { ok: { paths: [], commands: [] } }
@@ -117,7 +114,7 @@ try {
       return { ok: {} }
     })
     replace('bravebot:files:list', (_, session, path) => ({ path, rows: [], truncated: false }))
-  }, { directory, id, entries: ENTRIES, sessions: SESSIONS })
+  }, { directory, id, entries: ENTRIES, sessions: SESSIONS, info: agentInfo, models: threeModelList })
 
   // 0. Opening the window. Watched from before the page's own script runs: every long task, and
   // the moment the first sidebar row is painted (a rAF callback, then a message delivered once

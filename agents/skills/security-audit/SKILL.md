@@ -3,8 +3,9 @@ name: security-audit
 description:
   'Audit this repository against the rule that untrusted content never enters the
   driver or the planner. Enumerates the label surface mechanically, then reads the
-  code in nine lanes, tries to disprove every candidate, and files one issue per
-  finding that survives, skipping anything the tracker already holds.
+  code in ten lanes, tries to disprove every candidate, and files one issue per
+  finding that survives, through the issue-poster definition, skipping anything the tracker
+  already holds.
   Triggers on: security audit, /security-audit, make check-security, find security
   issues, audit the trust boundary, is the rule still holding, prompt injection
   review, file security issues.'
@@ -19,7 +20,7 @@ untrusted content in their context.** The driver is `bravebot-core` and `bravebo
 The planner is the model. This skill answers one question about that: **does the guarantee
 hold?**
 
-- **Full run** (default): all nine lanes.
+- **Full run** (default): all ten lanes.
 - **Scoped run** (`/security-audit laundering gates`): named lanes only.
 - **Branch run** (`/security-audit changed`): the lanes a branch's diff touches. This is the
   one to run before asking for review on a diff that touches a label.
@@ -53,14 +54,12 @@ the issue asks for the check.
 
 ## Two things a run must not do
 
-**A run never posts by hand.** It posts, and `post-issues.py` is the only thing in here that
-does. Everything keeping that safe is in the script rather than in this file, because a model
-cannot be relied on to pace itself, to compare a title against forty existing ones, or to stop
-at a cap it read about several thousand tokens ago. So `gh` is deliberately absent from this
-skill's `allowed-tools`: a `gh issue create` typed out here asks first, and the script's calls
-do not. That is on purpose, and reaching for `gh` to work around the script is the one move that
-loses the dedup, the pacing and the cap at once. An issue that is not a finding of this audit goes
-through the [issue-poster](../../agents/issue-poster.md) definition.
+**A run never posts any other way than the poster.** No script in this skill files an issue.
+Every issue goes through the [issue-poster](../../agents/issue-poster.md) definition, which
+searches open and closed issues for the same finding, applies the labels, posts and reads the
+issue back. `gh` is deliberately absent from this skill's `allowed-tools`: a `gh` call that files
+an issue typed out here asks first, and so does every call the poster makes. That is the gate, and
+reaching for `gh` to work around the poster loses the search and the label check.
 
 **A run never fixes anything.** It reports, it drafts, it files. Fixing is a separate task the
 user asks for afterwards, because a pass that decides what to change should not also be the pass
@@ -81,8 +80,7 @@ The heavy data goes through files, never through this session's context:
 4. **Verifiers** (subagent tokens only) each try to kill one candidate.
 5. **collect-findings.py** (zero model tokens) merges, renders the report, sets the exit code.
 6. **draft-issues.py** (zero model tokens) writes one issue body per confirmed finding.
-7. **post-issues.py** (zero model tokens) files the ones the tracker does not already hold, one
-   every ten seconds or so.
+7. **issue-poster** files the ones the tracker does not already hold, one delegate per draft.
 
 This session orchestrates. It reads no source file, no candidate, no verdict and no issue
 body. Every one of those is a path passed between steps. `{work_dir}/surface.json` holds every
@@ -216,32 +214,30 @@ draft that got one shows it and a draft that did not is unchanged.
 
 ### Step 9: file them
 
-```bash
-python3 agents/skills/security-audit/post-issues.py --work-dir "$WORK_DIR" [--dry-run] [--assignee LOGIN]
-```
+Hand each draft to the [issue-poster](../../agents/issue-poster.md) definition, one delegate at a
+time and no more than twelve in a run, with the draft's title, its body file, the labels the
+draft names, the assignee only where the user named somebody, and this instruction: the issue is
+a finding nobody has read, so apply no `importance`, `urgency` or `size`. A lane that
+malfunctions malfunctions at scale and a shared tracker is the wrong place to find that out, so
+stop at twelve and list the titles left.
 
-Print its output. One line per draft saying `filed` with the URL, or `skip` with the number of
-the issue that says it already. Three things are the script's and not yours to redo:
+The poster does what no model can be relied on to do here:
 
 - **A finding the tracker already holds is skipped**, open or closed. Somebody who read a
   finding and closed it has answered it, and filing it again next week is arguing with them by
   machine.
-- **One issue every ten seconds**, plus one to five more so the gap is not a constant. Six
-  issues in the same second read as a script having got loose.
-- **A cap.** A lane that malfunctions malfunctions at scale, and a shared tracker is the wrong
-  place to find that out. What the cap left is printed by title.
+- **A label the repository lacks refuses the post** and prints the `gh label create` line for a
+  person to run.
 
-The labels are the ones on the draft. Every issue carries `security`, `needs-security-review`,
+Print each report: the issue URL, or the number of the issue that says it already. The labels are
+the ones on the draft. Every issue carries `security`, `needs-security-review`,
 its kind label, a `severity/*` and an `area/*` where the finding has one. `importance`,
 `urgency` and `size` are the [triage-issues skill](../triage-issues/SKILL.md)'s to judge, and
 guessing at one here would put a finding nobody has read into somebody's queue.
 
-A label the repository does not have stops the whole step before anything is posted, and the
-output names the `gh label create` for each one. Creating a label changes what everybody sees,
-so it is the user's to run, not this skill's. `--assignee` is checked the same way and for the
-same reason: a login the repository would refuse fails the create it is passed to, and finding
-that out partway through leaves half a report filed. Pass it only where the user named somebody,
-since an issue assigned to a person nobody asked for is in their queue either way.
+Creating a label changes what everybody sees, so it is the user's to run, not this skill's. Pass
+an assignee only where the user named somebody, since an issue assigned to a person nobody asked
+for is in their queue either way.
 
 ### Step 10: say what happened
 
@@ -251,7 +247,7 @@ Nothing else. The report is the deliverable.
 
 ---
 
-## The nine lanes
+## The ten lanes
 
 Each is a prompt file with the sites it starts from already filled in, so no lane is a vague
 instruction to go and look at things. The first four are the four shapes a violation takes in a
@@ -268,6 +264,7 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 | `unpinned-guarantee` | what holds today that nothing would fail on if it stopped? | `verified-by: none` clauses, the `by-construction` brackets that answered the rest, and label-touching code no spec governs |
 | `supply-chain` | what executes with this tree checked out or gets linked into the binary, and who decides what that is? | the workflows, the lock file, and the second network client |
 | `shown-before-answered` | for each prompt, what does the person need to see to decide, who controls its length, and is the approving key gated on it having been drawn? | every `ask` function in the files the prompting spec governs |
+| `approval-binding` | can a kept answer's key match an effect the person was never shown, now or after a transition or a change to the tree? | each row of the register of kept answers in `docs/specs/prompting.md`, and the questions and sets its `kept_in` list maps to them |
 
 ---
 
@@ -293,6 +290,9 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 | A checkout of a bare name a branch and a tag can share, rather than a `refs/` ref | mechanical | error |
 | A required context naming no job, or a job running a check that no context requires | mechanical | error |
 | A clause at `verified-by: none` | mechanical | warning |
+| A confirmer method, a remembered set or a trust question with no row in the register, an entry naming a row the table lacks, one member listed twice or a list in another spec, a cell left empty, or a row naming no test or a test that does not exist | mechanical | error |
+| A register entry for a question or a set that is no longer declared | mechanical | warning |
+| A kept answer whose key matches an effect its prompt never showed | lane, then verifier | error |
 | A label built with more trust than its inputs had | lane, then verifier | error |
 | A decision taken from a released value | lane, then verifier | error |
 | A clause a conforming implementation can satisfy and still break the rule | lane, then verifier | error |

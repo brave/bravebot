@@ -249,6 +249,7 @@ Brave's own profile directory, and a channel other than stable has its own.
 
 `verified-by: bravebot_browser::relay::installing_writes_one_manifest_for_our_extension_alone`
 `verified-by: bravebot_browser::relay::installing_with_no_id_records_the_extension_in_this_repository`
+`verified-by: bravebot_browser::relay::installing_with_no_manifest_directory_uses_the_location_brave_reads`
 `verified-by: bravebot_browser::relay::installing_refuses_what_is_not_an_extension_id`
 `verified-by: bravebot_browser::relay::installing_with_a_flag_missing_its_value_prints_the_usage`
 `verified-by: bravebot_browser::install::the_manifest_goes_where_brave_reads_it`
@@ -266,8 +267,8 @@ frame by its exact URL, and `open_tab` names the HTTP or HTTPS URL to open. `get
 runs on, and nothing else, so a person can see the extension answer without it telling anything
 about them.
 
-**Why.** A person vouches for a server's tool list once and BraveBot records a digest of it. A list
-that changed with whether the extension was connected would be put to them again each time it did.
+**Why.** A person answers for a server's tool list at the start of a session. A list
+that changed with whether the extension was connected would offer tools they were not shown.
 A name off the list reaching the extension would be a tool nobody vouched for. The question before
 each call shows its arguments, and a URL is one a person can judge there where a tab id is not.
 
@@ -306,6 +307,7 @@ JSON carries an unpaired surrogate as an escape the host refuses to parse, so an
 would leave the call waiting out its timeout.
 
 `verified-by: bravebot_browser::extension::the_extension_answers_every_tool_the_server_offers_and_no_other`
+`verified-by: bravebot_browser::extension::the_options_page_labels_every_tool_the_server_offers_and_no_other`
 `verified-by: bravebot_browser::extension::the_extension_connects_to_the_host_install_names`
 `verified-by: bravebot_browser::extension::the_extension_has_each_permission_its_tools_require`
 `verified-by: bravebot_browser::extension::the_id_install_records_is_the_one_the_extensions_key_gives`
@@ -393,7 +395,7 @@ hand the planner a server's bytes as the driver's words, as [FETCH-6](tools/fetc
 describes. The reply goes through [MCP-1](mcp.md#MCP-1), so the final URL is untrusted and private.
 
 `verified-by: bravebot_browser::tools::a_tab_is_opened_by_its_url_alone`
-`verified-by: by-construction (extension/tests/tools.test.mjs asserts that open_tab creates one background tab at the URL asked for and replies with the committed URL alone, that a commit on another host, a different port or a browser error page, a load error and a commit that never comes each close the tab and fail naming the URL asked for, that a same-host redirect is kept, that only the tab's own top frame is read, and that a non-web scheme or no URL reaches no tab; it runs where the test under BROWSER-13 runs)`
+`verified-by: by-construction (extension/tests/tools.test.mjs asserts that open_tab creates one background tab at the URL asked for and replies with the committed URL alone, that a commit on another host, a different port or a browser error page, a load error and a commit that never comes within twenty seconds, and not before, each close the tab and fail naming the URL asked for and not the one the tab went to, that a same-host redirect is kept, that only the tab's own top frame is read, and that a non-web scheme or no URL reaches no tab; it runs where the test under BROWSER-13 runs)`
 
 ## Known costs
 

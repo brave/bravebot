@@ -1,6 +1,6 @@
 //! The sandbox mode in the desktop front end, as SANDBOX-22 in docs/specs/sandboxing.md has it. A
-//! window chooses `strict` or `standard` for a session with `session.sandbox`, never `off`, and the
-//! choice holds from the session's next turn.
+//! window chooses `strict`, `read-only` or `workspace-write` for a session with `session.sandbox`,
+//! never `off`, and the choice holds from the session's next turn.
 //!
 //! Driven through the binary against a model service of the test's own. Whether a program was held
 //! to its profile is read off what the tool handed back to the model.
@@ -261,10 +261,19 @@ impl FrontEnd {
             json!({"directory": scratch.project().display().to_string()}),
         );
         let session = opened["session"].as_str().expect("a handle").to_string();
-        self.call(
-            "trust.reply",
-            json!({"session": session, "trusted": trusted}),
-        );
+        // A yes an earlier session here gave is kept, and settles the next one without asking.
+        // A test that wants a session with nothing trusted opens it before any yes is given.
+        if opened["remembered"].is_null() {
+            self.call(
+                "trust.reply",
+                json!({"session": session, "trusted": trusted}),
+            );
+        } else {
+            assert!(
+                trusted,
+                "a kept yes settled a session the test wanted untrusted"
+            );
+        }
         (session, opened)
     }
 
@@ -347,17 +356,24 @@ fn settings(scratch: &Scratch, text: &str) {
     std::fs::write(scratch.home().join(".bravebot/settings.json"), text).expect("a home layer");
 }
 
-/// SANDBOX-22: a window chooses `strict` or `standard`, a turn reports the mode it runs under, and
-/// a choice holds for the turns after it. The failures this rejects are a choice acknowledged and
-/// then not applied, and a window drawing a mode the turn is not under.
+/// SANDBOX-22: a window chooses `strict`, `read-only` or `workspace-write`, a turn reports the mode
+/// it runs under, and a choice holds for the turns after it. The failures this rejects are a choice
+/// acknowledged and then not applied, and a window drawing a mode the turn is not under.
 #[test]
 fn a_window_chooses_the_mode_the_next_turn_runs_under() {
     let scratch = Scratch::new("bridge-sandbox-chooses");
     let (endpoint, _rounds) = a_planner(|_, _| None);
     let mut front = FrontEnd::start(&scratch, &endpoint);
     let (session, made) = front.session(&scratch, true);
-    assert_eq!(made["sandboxMode"], "standard", "{made}");
-    assert_eq!(front.ask(&session), "standard");
+    assert_eq!(made["sandboxMode"], "workspace-write", "{made}");
+    assert_eq!(front.ask(&session), "workspace-write");
+    assert_eq!(front.question_or_the_end()["event"], "turn.done");
+
+    assert_eq!(
+        front.sandbox(&session, json!("read-only"))["ok"],
+        json!({"sandboxMode": "read-only"})
+    );
+    assert_eq!(front.ask(&session), "read-only");
     assert_eq!(front.question_or_the_end()["event"], "turn.done");
 
     assert_eq!(
@@ -370,10 +386,10 @@ fn a_window_chooses_the_mode_the_next_turn_runs_under() {
     assert_eq!(front.question_or_the_end()["event"], "turn.done");
 
     assert_eq!(
-        front.sandbox(&session, json!("standard"))["ok"],
-        json!({"sandboxMode": "standard"})
+        front.sandbox(&session, json!("workspace-write"))["ok"],
+        json!({"sandboxMode": "workspace-write"})
     );
-    assert_eq!(front.ask(&session), "standard");
+    assert_eq!(front.ask(&session), "workspace-write");
 }
 
 /// SANDBOX-22: a manifest run started from a session runs under the mode the window chose for it,
@@ -385,13 +401,108 @@ fn a_manifest_run_runs_under_the_mode_the_window_chose() {
     let (endpoint, _rounds) = a_planner(|_, _| None);
     let mut front = FrontEnd::start(&scratch, &endpoint);
     let (session, _) = front.session(&scratch, true);
-    assert_eq!(front.plan(&session), "standard");
+    assert_eq!(front.plan(&session), "workspace-write");
 
     front.sandbox(&session, json!("strict"));
     assert_eq!(
         front.plan(&session),
         "strict",
         "the run did not take the choice"
+    );
+}
+
+/// SANDBOX-22: the selected mode reaches tool dispatch, even when the window accepts edits.
+/// Reporting read-only without passing it to the task would write the file in the first turn.
+#[test]
+fn a_read_only_window_refuses_file_writes_before_accepting_edits() {
+    let scratch = Scratch::new("bridge-sandbox-file-write");
+    let (endpoint, rounds) = a_planner(|_, this_turn| {
+        (this_turn == 0).then(|| {
+            (
+                "write_file",
+                json!({"path": "notes.txt", "contents": "hi", "why": "write notes"}),
+            )
+        })
+    });
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, true);
+    front.call(
+        "session.mode",
+        json!({"session": session, "mode": "acceptEdits"}),
+    );
+    assert!(front.sandbox(&session, json!("read-only"))["ok"].is_object());
+    assert_eq!(front.ask(&session), "read-only");
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "turn.done", "{ended}");
+    assert!(!scratch.project().join("notes.txt").exists());
+    let requests: Vec<_> = rounds.try_iter().collect();
+    let result = tool_results(requests.last().expect("the refusal reaches the planner"));
+    assert!(result.contains("the sandbox mode is read-only"), "{result}");
+
+    assert!(front.sandbox(&session, json!("workspace-write"))["ok"].is_object());
+    assert_eq!(front.ask(&session), "workspace-write");
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "turn.done", "{ended}");
+    assert_eq!(
+        std::fs::read_to_string(scratch.project().join("notes.txt")).unwrap(),
+        "hi"
+    );
+}
+
+/// SANDBOX-22: a manifest worker receives the window's mode before presenting a writing plan.
+/// The workspace-write control establishes that the same plan can be approved and executed.
+#[test]
+fn a_read_only_window_refuses_a_writing_manifest_before_approval() {
+    let scratch = Scratch::new("bridge-sandbox-manifest-write");
+    let replies = Mutex::new(std::collections::VecDeque::from([
+        json!({"role": "assistant", "content": "Write notes.txt containing hi."}),
+        json!({"role": "assistant", "content": json!({"steps": [
+            {"capability": "FILE_WRITE", "args": {"path": "notes.txt", "contents": "hi"}}
+        ]}).to_string()}),
+        json!({"role": "assistant", "content": "Write notes.txt containing hi."}),
+        json!({"role": "assistant", "content": json!({"steps": [
+            {"capability": "FILE_WRITE", "args": {"path": "notes.txt", "contents": "hi"}}
+        ]}).to_string()}),
+    ]));
+    let (endpoint, _rounds) = a_model_service(move |_| {
+        replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("four planning requests")
+    });
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _) = front.session(&scratch, true);
+    front.call(
+        "session.mode",
+        json!({"session": session, "mode": "acceptEdits"}),
+    );
+    assert!(front.sandbox(&session, json!("read-only"))["ok"].is_object());
+    front.call(
+        "manifest.run",
+        json!({"session": session, "task": "write notes"}),
+    );
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "manifest.error", "{ended}");
+    assert!(
+        ended.to_string().contains("the sandbox mode is read-only"),
+        "{ended}"
+    );
+    assert!(!scratch.project().join("notes.txt").exists());
+
+    assert!(front.sandbox(&session, json!("workspace-write"))["ok"].is_object());
+    front.call(
+        "manifest.run",
+        json!({"session": session, "task": "write notes"}),
+    );
+    let question = front.question_or_the_end();
+    assert_eq!(question["event"], "manifest.request", "{question}");
+    front.reply("manifest.reply", &session, &question, "approve");
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "manifest.done", "{ended}");
+    assert_eq!(
+        std::fs::read_to_string(scratch.project().join("notes.txt")).unwrap(),
+        "hi"
     );
 }
 
@@ -409,6 +520,7 @@ fn a_window_cannot_choose_to_turn_the_sandbox_off() {
     for word in [
         json!("off"),
         json!("Strict"),
+        json!("Read-only"),
         json!("bypass"),
         json!(null),
         json!(1),
@@ -422,6 +534,11 @@ fn a_window_cannot_choose_to_turn_the_sandbox_off() {
     let unknown = front.sandbox("no-such-session", json!("strict"));
     assert_eq!(unknown["error"]["code"], "no_such_session", "{unknown}");
     assert_eq!(front.ask(&session), "strict");
+    assert_eq!(
+        front.sandbox(&session, json!("read-only"))["ok"],
+        json!({"sandboxMode": "read-only"}),
+        "read-only is a mode a window may name"
+    );
 }
 
 /// SANDBOX-22: a choice is the session's own. The failure this rejects is a choice kept for the
@@ -435,7 +552,11 @@ fn a_choice_made_in_one_session_does_not_reach_another_open_beside_it() {
     let (second, _) = front.session(&scratch, true);
 
     front.sandbox(&first, json!("strict"));
-    assert_eq!(front.ask(&second), "standard", "the other session took it");
+    assert_eq!(
+        front.ask(&second),
+        "workspace-write",
+        "the other session took it"
+    );
     assert_eq!(front.question_or_the_end()["event"], "turn.done");
     assert_eq!(front.ask(&first), "strict");
 }
@@ -452,8 +573,8 @@ fn another_session_opens_under_the_settings_and_not_the_choice() {
     let (session, made) = front.session(&scratch, true);
     assert_eq!(made["sandboxMode"], "strict", "{made}");
 
-    front.sandbox(&session, json!("standard"));
-    assert_eq!(front.ask(&session), "standard");
+    front.sandbox(&session, json!("workspace-write"));
+    assert_eq!(front.ask(&session), "workspace-write");
     let ended = front.question_or_the_end();
     assert_eq!(ended["event"], "turn.done", "{ended}");
 
@@ -484,8 +605,34 @@ fn another_session_opens_under_the_settings_and_not_the_choice() {
     assert_eq!(front.ask(resumed), "strict", "a resume took a choice");
 }
 
+/// SANDBOX-22: a project's `strict` writes the session's directories, so it does not replace the
+/// person's `read-only` in a window either: the session opens and its turn runs at `read-only`.
+/// The failure this rejects is a cloned repository giving the programs a window runs the writes
+/// the person withheld.
+#[test]
+fn a_projects_strict_does_not_lift_the_persons_read_only() {
+    let scratch = Scratch::new("bridge-sandbox-project-strict");
+    settings(&scratch, r#"{"sandbox": {"mode": "read-only"}}"#);
+    let project_layer = scratch.project().join(".bravebot");
+    std::fs::create_dir_all(&project_layer).expect("a project layer");
+    std::fs::write(
+        project_layer.join("settings.json"),
+        r#"{"sandbox": {"mode": "strict"}}"#,
+    )
+    .expect("a project layer");
+    let (endpoint, _rounds) = a_planner(|_, _| None);
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, made) = front.session(&scratch, true);
+    assert_eq!(made["sandboxMode"], "read-only", "{made}");
+    assert_eq!(
+        front.ask(&session),
+        "read-only",
+        "the project's strict replaced the person's read-only"
+    );
+}
+
 /// SANDBOX-22: a program a person approved is held to the mode chosen for that turn. `cat` reads a
-/// file outside the project: `standard` reads the machine and `strict` does not. The failure this
+/// file outside the project: `workspace-write` reads the machine and `strict` does not. The failure this
 /// rejects is the mode reported and not enforced, or enforced for the first turn only.
 #[test]
 fn a_chosen_mode_is_what_the_next_turns_program_is_held_to() {
@@ -505,7 +652,7 @@ fn a_chosen_mode_is_what_the_next_turns_program_is_held_to() {
     let (session, _) = front.session(&scratch, true);
 
     let mut read = Vec::new();
-    for mode in [None, Some("strict"), Some("standard")] {
+    for mode in [None, Some("strict"), Some("workspace-write")] {
         if let Some(mode) = mode {
             front.sandbox(&session, json!(mode));
         }
@@ -524,6 +671,6 @@ fn a_chosen_mode_is_what_the_next_turns_program_is_held_to() {
     assert_eq!(
         read,
         [true, false, true],
-        "standard reads the file, strict does not, and standard reads it again"
+        "workspace-write reads the file, strict does not, and workspace-write reads it again"
     );
 }

@@ -28,7 +28,14 @@ it interactively, or say so on the command line:
 bravebot --dangerously-skip-permissions -p "fix the failing test"
 ```
 
-That flag lifts the refusal of effects, because a flag you typed is an instruction rather than a guess
+If the run only needs to edit files, `--accept-edits` is the narrower grant: writes go through, and
+commands, fetches and a write that would create a credential are still refused.
+
+```sh
+bravebot --accept-edits -p "apply the lint fixes"
+```
+
+`--dangerously-skip-permissions` lifts the refusal of every effect, because a flag you typed is an instruction rather than a guess
 made in your name. It does not lift the second half: the planner's questions are declined in that mode
 too, since they are not permissions. It is a mode for a container with no network and nothing in it
 worth losing. See [modes](../security/permissions.md#answering-in-advance-modes).
@@ -63,9 +70,10 @@ for this run, as answering yes to the startup question does, and nothing else: d
 bravebot --trust-workspace -p "summarise what src/ does"
 ```
 
-A run in a directory where a session once kept the answer (`r` at the startup question), or inside
-the git worktree whose root it was kept about, opens trusting the directory without the flag, and says so on stderr with how to take it back. The flag is read from
-the command line only, so a settings file or a checkout cannot turn it on.
+A run in a directory where a session once kept a yes (`y` at the startup question), or inside the
+git worktree whose root it was kept about, opens trusting the directory without the flag, and says so
+on stderr with how to take it back. The flag is read from the command line only, so a settings file
+or a checkout cannot turn it on.
 
 ## Piped input is untrusted and private, always
 

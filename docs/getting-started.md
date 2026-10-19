@@ -8,8 +8,9 @@ Installing bravebot, running it, and what it asks you before and during work on 
 npm install -g @brave/bravebot
 ```
 
-This downloads the release binary for your platform and verifies its checksum. macOS, Linux,
-and Windows on both x86_64 and arm64 are supported.
+npm installs the binary for your platform from its own package, `@brave/bravebot-<platform>-<arch>`,
+and runs no install script. `--omit=optional` leaves that package out, and then `bravebot` exits
+saying the binary is missing. macOS, Linux, and Windows on both x86_64 and arm64 are supported.
 
 On macOS and Linux there is an install script, for a machine with no npm on it:
 
@@ -192,10 +193,10 @@ and the models to offer:
 }
 ```
 
-`openrouter` needs no endpoint written down, its own being compiled in. Any other gateway names one
-in `options.baseURL`, and a gateway naming no models at all is asked what it serves. The block is
-read in the shape another tool already reads, so one copied out of that tool's configuration works
-here unedited.
+`openrouter` and `openai` need no endpoint written down, their own being compiled in. Any other
+gateway names one in `options.baseURL`, and a gateway naming no models at all is asked what it
+serves. The block is read in the shape another tool already reads, so one copied out of that tool's
+configuration works here unedited.
 
 ### A local Ollama, or another gateway that wants no key
 

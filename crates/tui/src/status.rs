@@ -216,8 +216,8 @@ pub struct Facts<'a> {
     /// The paths the person let programs reach for this session, one row each as `/reach paths`
     /// lists it (SANDBOX-28). Empty says nothing.
     pub requested_paths: &'a [String],
-    /// The answer about this directory a session was told to remember, where one is kept and
-    /// would settle the next session started here (TRUST-23).
+    /// The yes about this directory a session kept, where one is kept and would settle the next
+    /// session started here (TRUST-23).
     pub kept_trust: Option<KeptTrust<'a>>,
 }
 
@@ -264,17 +264,16 @@ pub fn named_mode(
     }
 }
 
-/// The confinement line with the sandbox mode beside it, where the mode is not the one a session
-/// runs under unless somebody chose otherwise.
+/// The confinement line with the sandbox mode beside it, where the mode is not `workspace-write`.
 ///
-/// Said for `strict` and for `off`: the first changes what a program can read, and the second is the
-/// one a person has to be able to see without asking, since nothing else on the screen shows that a
-/// program `run` starts is not confined at all (SANDBOX-22).
+/// Said for `strict` and `read-only`, which change what a program can read or write, and for `off`,
+/// the one a person has to be able to see without asking, since nothing else on the screen shows
+/// that a program `run` starts is not confined at all (SANDBOX-22).
 pub fn with_the_sandbox_mode(confinement: &str, mode: bravebot_sandbox::SandboxMode) -> String {
     use bravebot_sandbox::SandboxMode;
     match mode {
-        SandboxMode::Standard => confinement.to_string(),
-        SandboxMode::Strict => t!(
+        SandboxMode::WorkspaceWrite => confinement.to_string(),
+        SandboxMode::Strict | SandboxMode::ReadOnly => t!(
             confinement_with_mode,
             level = confinement,
             mode = mode.name()
@@ -284,7 +283,6 @@ pub fn with_the_sandbox_mode(confinement: &str, mode: bravebot_sandbox::SandboxM
     }
 }
 
-/// Compose the report.
 /// The line for the network the programs `run` starts have, where it is closed.
 fn network_line(
     settled: Option<&bravebot_config::RunNetwork>,
@@ -292,20 +290,30 @@ fn network_line(
 ) -> Option<Line> {
     // Not under `off`: nothing confines a program then, so a closed network would be a claim about
     // a boundary that is not there. The confinement line says the programs are unconfined.
-    let settled = settled.filter(|settled| {
-        settled.network.is_closed() && mode != bravebot_sandbox::SandboxMode::Off
-    })?;
+    if mode == bravebot_sandbox::SandboxMode::Off {
+        return None;
+    }
+    // `read-only` closes it whatever the setting says (SANDBOX-22); the confinement line names the
+    // mode that did.
+    let setting = settled.map_or(bravebot_sandbox::network::Network::Open, |s| s.network);
+    if !mode.network_in_force(setting).is_closed() {
+        return None;
+    }
+    let line = Line::new(t!(status_network), t!(status_network_closed));
     Some(
-        Line::new(t!(status_network), t!(status_network_closed))
-            .with_note(run_network_source(&settled.decided)),
+        match settled.filter(|settled| settled.network.is_closed()) {
+            Some(settled) => line.with_note(run_network_source(&settled.decided)),
+            None => line,
+        },
     )
 }
 
 /// Whether a stage the next turn starts reaches every unix socket that has a path: where the kernel
-/// does not govern them and the mode is `standard`. `strict` refuses such a stage, and under `off`
-/// the confinement line already says nothing is confined (SANDBOX-3).
+/// does not govern them and the mode is `read-only` or `workspace-write`. `strict` refuses such a
+/// stage, and under `off` the confinement line already says nothing is confined (SANDBOX-3).
 pub fn sockets_with_a_path_open(reachable: bool, mode: bravebot_sandbox::SandboxMode) -> bool {
-    reachable && mode == bravebot_sandbox::SandboxMode::Standard
+    use bravebot_sandbox::SandboxMode;
+    reachable && matches!(mode, SandboxMode::ReadOnly | SandboxMode::WorkspaceWrite)
 }
 
 /// The line for the unix sockets the programs `run` starts can reach, where every one that has a
@@ -334,28 +342,42 @@ pub fn programs_write_unasked(
     })
 }
 
+/// The files that wrote a list's entries, each once, in the order they are first seen. An entry no
+/// file wrote is named `unnamed`.
+fn sources<'a>(
+    by: impl Iterator<Item = &'a Option<std::path::PathBuf>>,
+    unnamed: &str,
+) -> Vec<String> {
+    let mut sources: Vec<String> = Vec::new();
+    for by in by {
+        let source = match by {
+            Some(path) => path.display().to_string(),
+            None => unnamed.to_string(),
+        };
+        if !sources.contains(&source) {
+            sources.push(source);
+        }
+    }
+    sources
+}
+
 /// The line for the person's own filesystem lists, where any has an entry: how many each holds and
 /// the files that wrote them, never an entry, since a path is for `doctor` and a glob's matches are
 /// the machine's.
 fn filesystem_line(settled: Option<&bravebot_config::Filesystem>) -> Option<Line> {
     let lists = &settled.filter(|settled| !settled.lists.is_empty())?.lists;
-    let mut sources: Vec<String> = Vec::new();
-    for list in [
-        &lists.allow_read,
-        &lists.deny_read,
-        &lists.allow_write,
-        &lists.deny_write,
-    ] {
-        for entry in list {
-            let source = match &entry.by {
-                Some(path) => path.display().to_string(),
-                None => t!(status_sandbox_filesystem_flags).to_string(),
-            };
-            if !sources.contains(&source) {
-                sources.push(source);
-            }
-        }
-    }
+    let sources = sources(
+        [
+            &lists.allow_read,
+            &lists.deny_read,
+            &lists.allow_write,
+            &lists.deny_write,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|entry| &entry.by),
+        t!(status_sandbox_filesystem_flags),
+    );
     Some(
         Line::new(
             t!(status_sandbox_filesystem),
@@ -387,16 +409,10 @@ fn hosts_line(
     if mode == bravebot_sandbox::SandboxMode::Off {
         return None;
     }
-    let mut sources: Vec<String> = Vec::new();
-    for entry in allowed.iter().chain(&hosts.denied) {
-        let source = match &entry.by {
-            Some(path) => path.display().to_string(),
-            None => t!(status_hosts_managed).to_string(),
-        };
-        if !sources.contains(&source) {
-            sources.push(source);
-        }
-    }
+    let sources = sources(
+        allowed.iter().chain(&hosts.denied).map(|entry| &entry.by),
+        t!(status_hosts_managed),
+    );
     let counts = t!(
         status_hosts_counts,
         allowed = allowed.len(),
@@ -438,6 +454,7 @@ pub fn run_network_source(decided: &bravebot_config::Decided) -> String {
     }
 }
 
+/// Compose the report.
 pub fn report(facts: &Facts<'_>) -> Report {
     let mut lines = Vec::new();
 
@@ -508,6 +525,105 @@ pub fn report(facts: &Facts<'_>) -> Report {
         );
     }
 
+    lines.extend(model_and_agent_lines(facts));
+
+    lines.extend(choice_lines(facts));
+
+    lines.extend(sandbox_lines(facts));
+
+    lines.extend(standing_lines(facts));
+
+    lines.extend(running_lines(facts));
+
+    lines.extend(usage_lines(facts));
+
+    // Last because it is the part that grows. What a write recorded is the thing nothing else
+    // reports: a file an earlier turn marked untrusted is invisible until it refuses to be read.
+    let remembered = facts.remembered.filter(|record| !record.lines.is_empty());
+    // The turn in flight owns the trust map and the vouched programs and answers into them as it
+    // goes, so a copy taken when it began would be a claim about an earlier moment, and the line
+    // above about every run being asked is the one this report must not get wrong.
+    if facts.turn_holds_rules {
+        lines.push(Line::new(t!(status_trust), t!(status_held_by_the_turn)));
+    } else {
+        let rules: Vec<(&str, Option<Integrity>)> = facts.trust.rules().collect();
+        if rules.is_empty() {
+            lines.push(Line::new(t!(status_trust), t!(status_nothing_vouched_for)));
+        } else {
+            lines.push(Line::new(
+                t!(status_trust),
+                t!(count_rules, count = rules.len()),
+            ));
+            for (path, integrity) in rules.iter() {
+                let shown = if path.is_empty() { "." } else { path };
+                lines.push(match integrity {
+                    Some(Integrity::Trusted) => Line::new("", shown).with_note(t!(status_trusted)),
+                    Some(Integrity::Untrusted) => {
+                        Line::new("", shown).with_note(t!(status_untrusted))
+                    }
+                    None => Line::new("", shown).with_note(t!(status_undecided)),
+                });
+            }
+        }
+
+        // A standing permission the user gave earlier and cannot otherwise see. Every other prompt in
+        // this session announces itself by appearing; this is the one that stops appearing, so without
+        // a line here there is nothing to tell them a command now runs unasked and that what it prints
+        // is being read as trusted.
+        let vouched: Vec<&bravebot_core::programs::Command> = facts.programs.iter().collect();
+
+        if vouched.is_empty() {
+            // Two different true things, and the wider one is only true where the record is empty as
+            // well. A session that has vouched for nothing but carries a remembered line does not put
+            // every run to the person, and this is the screen responsible for saying what they are
+            // carrying: a flat "every run is put to you" above a list of lines that run unasked is the
+            // one claim this report must not make.
+            lines.push(Line::new(
+                t!(status_programs),
+                match remembered.is_some() {
+                    true => t!(status_nothing_vouched_this_session),
+                    false => t!(status_every_run_is_asked),
+                },
+            ));
+        } else {
+            lines.push(
+                Line::new(
+                    t!(status_trusted_commands),
+                    t!(count_commands, count = vouched.len()),
+                )
+                .with_note(t!(status_trusted_commands_note)),
+            );
+            // Every one of them, however many there are: a vouched command that the report will not
+            // show is a permission with nothing anywhere to say it is held, since the prompt it
+            // answers is the thing that has stopped appearing.
+            //
+            // With the tree it was given in, because that is part of what the entry covers (RUN-8) and
+            // the entry is what this report exists to read back: two entries for one command in two
+            // directories would otherwise draw as one line twice, and a reader could not tell which
+            // grant they hold. Relative to the workspace where it is inside it, the way every other
+            // path on this screen is written.
+            for command in vouched.iter() {
+                lines.push(Line::new("", command.display()).with_note(t!(
+                    status_command_in,
+                    directory = within(facts.directory, &command.directory)
+                )));
+            }
+        }
+    }
+
+    if let Some(record) = remembered {
+        lines.extend(remembered_lines(facts, record));
+    }
+
+    lines.extend(grant_lines(facts));
+
+    Report { lines }
+}
+
+/// The model, the agent and the model that answered, where it is not the one asked for.
+fn model_and_agent_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
+
     // The definition's model where it names one, since `/model` was not what chose it.
     let definitions = facts
         .agent
@@ -554,6 +670,13 @@ pub fn report(facts: &Facts<'_>) -> Report {
         );
     }
 
+    lines
+}
+
+/// The effort level, the theme and the endpoint: what a person chose, and what it reaches.
+fn choice_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
+
     // Beside the model, because the two together are what a turn costs: the same question asked of
     // the same model bills differently at either end of this range.
     lines.push(match (facts.effort, facts.model_reads_effort) {
@@ -591,6 +714,13 @@ pub fn report(facts: &Facts<'_>) -> Report {
             },
         ),
     );
+
+    lines
+}
+
+/// The confinement level and the network, sockets, filesystem and host lists that qualify it.
+fn sandbox_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
 
     // The level is what the platform can enforce over a process running code we did not write, and
     // a session is inside no such boundary. Reported with the note rather than dropped, because
@@ -633,6 +763,13 @@ pub fn report(facts: &Facts<'_>) -> Report {
         bravebot_config::sandbox_network::settled(),
         facts.sandbox_mode,
     ));
+
+    lines
+}
+
+/// The standing answers that hold the session back: MCP servers, permission mode, programs write and auto-vetting.
+fn standing_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
 
     // Named rather than counted, since the question is which of them this session can reach, and
     // said where there are none, since a checkout that asked for one is where somebody looks. The
@@ -678,6 +815,13 @@ pub fn report(facts: &Facts<'_>) -> Report {
                 .with_note(t!(status_vetting_where)),
         );
     }
+
+    lines
+}
+
+/// What happens without anybody typing: the loop, the goal, the watches and the jobs.
+fn running_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
 
     // What is going to happen without anybody typing anything, which is the one thing about a
     // session that a person cannot read off the transcript.
@@ -755,6 +899,13 @@ pub fn report(facts: &Facts<'_>) -> Report {
             origin = origin
         )));
     }
+
+    lines
+}
+
+/// What the session has cost: turns and tokens, time, and the cache.
+fn usage_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
 
     lines.push(Line::new(
         t!(status_this_session),
@@ -842,157 +993,93 @@ pub fn report(facts: &Facts<'_>) -> Report {
         );
     }
 
-    // Last because it is the part that grows. What a write recorded is the thing nothing else
-    // reports: a file an earlier turn marked untrusted is invisible until it refuses to be read.
-    let remembered = facts.remembered.filter(|record| !record.lines.is_empty());
-    // The turn in flight owns the trust map and the vouched programs and answers into them as it
-    // goes, so a copy taken when it began would be a claim about an earlier moment, and the line
-    // above about every run being asked is the one this report must not get wrong.
-    if facts.turn_holds_rules {
-        lines.push(Line::new(t!(status_trust), t!(status_held_by_the_turn)));
-    } else {
-        let rules: Vec<(&str, Option<Integrity>)> = facts.trust.rules().collect();
-        if rules.is_empty() {
-            lines.push(Line::new(t!(status_trust), t!(status_nothing_vouched_for)));
-        } else {
-            lines.push(Line::new(
-                t!(status_trust),
-                t!(count_rules, count = rules.len()),
-            ));
-            for (path, integrity) in rules.iter() {
-                let shown = if path.is_empty() { "." } else { path };
-                lines.push(match integrity {
-                    Some(Integrity::Trusted) => Line::new("", shown).with_note(t!(status_trusted)),
-                    Some(Integrity::Untrusted) => {
-                        Line::new("", shown).with_note(t!(status_untrusted))
-                    }
-                    None => Line::new("", shown).with_note(t!(status_undecided)),
-                });
-            }
-        }
+    lines
+}
 
-        // A standing permission the user gave earlier and cannot otherwise see. Every other prompt in
-        // this session announces itself by appearing; this is the one that stops appearing, so without
-        // a line here there is nothing to tell them a command now runs unasked and that what it prints
-        // is being read as trusted.
-        let vouched: Vec<&bravebot_core::programs::Command> = facts.programs.iter().collect();
-
-        if vouched.is_empty() {
-            // Two different true things, and the wider one is only true where the record is empty as
-            // well. A session that has vouched for nothing but carries a remembered line does not put
-            // every run to the person, and this is the screen responsible for saying what they are
-            // carrying: a flat "every run is put to you" above a list of lines that run unasked is the
-            // one claim this report must not make.
-            lines.push(Line::new(
-                t!(status_programs),
-                match remembered.is_some() {
-                    true => t!(status_nothing_vouched_this_session),
-                    false => t!(status_every_run_is_asked),
-                },
-            ));
-        } else {
-            lines.push(
-                Line::new(
-                    t!(status_trusted_commands),
-                    t!(count_commands, count = vouched.len()),
-                )
-                .with_note(t!(status_trusted_commands_note)),
-            );
-            // Every one of them, however many there are: a vouched command that the report will not
-            // show is a permission with nothing anywhere to say it is held, since the prompt it
-            // answers is the thing that has stopped appearing.
-            //
-            // With the tree it was given in, because that is part of what the entry covers (RUN-8) and
-            // the entry is what this report exists to read back: two entries for one command in two
-            // directories would otherwise draw as one line twice, and a reader could not tell which
-            // grant they hold. Relative to the workspace where it is inside it, the way every other
-            // path on this screen is written.
-            for command in vouched.iter() {
-                lines.push(Line::new("", command.display()).with_note(t!(
-                    status_command_in,
-                    directory = within(facts.directory, &command.directory)
-                )));
-            }
-        }
-    }
-
-    // The other standing answer that stops a prompt appearing, and the one a person is least able
-    // to account for from memory: it was given in a session that has ended, possibly last week, and
-    // nothing on the screen since has mentioned it. So each line says which of the two lifetimes it
-    // is carrying, and the report says where the file is, since deleting a line from it is the way
-    // back. Said only where there is something to say: a session that has remembered nothing learns
-    // nothing from a line about it, and the programs line above already says every run is asked.
-    if let Some(record) = remembered {
-        let entries: Vec<&bravebot_core::remembered::Entry> = record.lines.iter().collect();
-        lines.push(
-            Line::new(
-                t!(status_remembered),
-                t!(count_commands, count = entries.len()),
-            )
-            .with_note(t!(status_remembered_note)),
-        );
-        for entry in entries.iter().take(MAX_REMEMBERED) {
-            lines.push(Line::new("", entry.line.display()).with_note(
-                match entry.answered_in == facts.session_id {
-                    true => t!(status_remembered_this_session),
-                    false => t!(status_remembered_earlier),
-                },
-            ));
-        }
-        if entries.len() > MAX_REMEMBERED {
-            // How many of each was left out, not just how many: the two lifetimes are the point,
-            // and a person deciding what to delete cannot tell from a bare count which answers
-            // they are still carrying from another session.
-            let left_out = &entries[MAX_REMEMBERED..];
-            let earlier = left_out
-                .iter()
-                .filter(|entry| entry.answered_in != facts.session_id)
-                .count();
-            lines.push(Line::new(
-                "",
-                t!(
-                    status_remembered_and_more,
-                    count = left_out.len(),
-                    earlier = earlier
-                ),
-            ));
-        }
-        lines.push(Line::new(
-            "",
-            t!(status_remembered_where, path = record.path.display()),
+/// The other standing answer that stops a prompt appearing, and the one a person is least able
+/// to account for from memory: it was given in a session that has ended, possibly last week, and
+/// nothing on the screen since has mentioned it. So each line says which of the two lifetimes it
+/// is carrying, and the report says where the file is, since deleting a line from it is the way
+/// back. Said only where there is something to say: a session that has remembered nothing learns
+/// nothing from a line about it, and the programs line above already says every run is asked.
+fn remembered_lines(facts: &Facts<'_>, record: Remembered<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
+    let entries: Vec<&bravebot_core::remembered::Entry> = record.lines.iter().collect();
+    lines.push(
+        Line::new(
+            t!(status_remembered),
+            t!(count_commands, count = entries.len()),
+        )
+        .with_note(t!(status_remembered_note)),
+    );
+    for entry in entries.iter().take(MAX_REMEMBERED) {
+        lines.push(Line::new("", entry.line.display()).with_note(
+            match entry.answered_in == facts.session_id {
+                true => t!(status_remembered_this_session),
+                false => t!(status_remembered_earlier),
+            },
         ));
     }
+    if entries.len() > MAX_REMEMBERED {
+        // How many of each was left out, not just how many: the two lifetimes are the point,
+        // and a person deciding what to delete cannot tell from a bare count which answers
+        // they are still carrying from another session.
+        let left_out = &entries[MAX_REMEMBERED..];
+        let earlier = left_out
+            .iter()
+            .filter(|entry| entry.answered_in != facts.session_id)
+            .count();
+        lines.push(Line::new(
+            "",
+            t!(
+                status_remembered_and_more,
+                count = left_out.len(),
+                earlier = earlier
+            ),
+        ));
+    }
+    lines.push(Line::new(
+        "",
+        t!(status_remembered_where, path = record.path.display()),
+    ));
 
-    // The third standing answer, and the one that changes a plan a person is shown: a command's
-    // plan carries a row they did not see requested. The rows are `/reach`'s own, so the number on
-    // each is the one `/reach remove` takes.
+    lines
+}
+
+/// The third standing answer, and the one that changes a plan a person is shown: a command's
+/// plan carries a row they did not see requested. The rows are `/reach`'s own, so the number on
+/// each is the one `/reach remove` takes.
+fn grant_lines(facts: &Facts<'_>) -> Vec<Line> {
+    let mut lines = Vec::new();
     if !facts.reach.is_empty() {
-        lines.push(
+        lines.extend(rows(
             Line::new(
                 t!(status_reach),
                 t!(count_reach_grants, count = facts.reach.len()),
             )
             .with_note(t!(status_reach_note)),
-        );
-        for row in facts.reach {
-            lines.push(Line::new("", row.as_str()));
-        }
+            facts.reach,
+        ));
     }
 
     if !facts.requested_paths.is_empty() {
-        lines.push(
+        lines.extend(rows(
             Line::new(
                 t!(status_requested_paths),
                 t!(count_requested_paths, count = facts.requested_paths.len()),
             )
             .with_note(t!(status_requested_paths_note)),
-        );
-        for row in facts.requested_paths {
-            lines.push(Line::new("", row.as_str()));
-        }
+            facts.requested_paths,
+        ));
     }
+    lines
+}
 
-    Report { lines }
+/// A heading line, then one line under it for each row.
+fn rows(heading: Line, rows: &[String]) -> Vec<Line> {
+    let mut lines = vec![heading];
+    lines.extend(rows.iter().map(|row| Line::new("", row.as_str())));
+    lines
 }
 
 /// What can be said about the tier before a request has settled it.
@@ -1161,27 +1248,37 @@ mod tests {
         trust
     }
 
-    /// SANDBOX-22: the line names `strict` and `off` and says nothing for `standard`, and the
-    /// report draws the mode its facts carry. The regressions it rejects are `off` shown as the
-    /// platform's level alone, which reads as a session whose programs are confined, and a report
-    /// that reads the mode start-up settled and so ignores `/sandbox`.
+    /// SANDBOX-22: the line names `strict`, `read-only` and `off` and says nothing for
+    /// `workspace-write`, and the report draws the mode its facts carry. The regressions it rejects
+    /// are `off` shown as the platform's level alone, which reads as a session whose programs are
+    /// confined, `read-only` shown as `workspace-write`, which hides that a program cannot write the
+    /// project, and a report that reads the mode start-up settled and so ignores `/sandbox`.
     #[test]
-    fn the_confinement_line_names_the_mode_unless_it_is_standard() {
+    fn the_confinement_line_names_the_mode_unless_it_is_workspace_write() {
         use bravebot_sandbox::SandboxMode;
         let level = "kernel-enforced";
-        assert_eq!(with_the_sandbox_mode(level, SandboxMode::Standard), level);
+        assert_eq!(
+            with_the_sandbox_mode(level, SandboxMode::WorkspaceWrite),
+            level
+        );
         let strict = with_the_sandbox_mode(level, SandboxMode::Strict);
         assert!(
             strict.starts_with(level) && strict.contains("strict"),
             "{strict}"
         );
+        let read_only = with_the_sandbox_mode(level, SandboxMode::ReadOnly);
+        assert!(
+            read_only.starts_with(level) && read_only.contains("read-only"),
+            "{read_only}"
+        );
         let off = with_the_sandbox_mode(level, SandboxMode::Off);
         assert!(off.starts_with(level) && off.contains("off"), "{off}");
         assert_ne!(off, strict);
+        assert_ne!(read_only, strict);
 
         let config = config_for("https://ai-chat.bsg.brave.com", None);
         let trust = TrustStore::new("/work");
-        for mode in [SandboxMode::Strict, SandboxMode::Off] {
+        for mode in [SandboxMode::Strict, SandboxMode::ReadOnly, SandboxMode::Off] {
             let mut facts = facts(&config, &trust);
             facts.sandbox_mode = mode;
             let shown = report(&facts)
@@ -1195,11 +1292,12 @@ mod tests {
     }
 
     /// SANDBOX-3: `/status` says a session's programs reach every unix socket that has a path where
-    /// the kernel leaves them open, under `standard` alone, with why beside it. The regressions it
-    /// rejects: no line on such a kernel, a line where the kernel governs the sockets, and a line
-    /// under `strict`, which refuses the stage, or under `off`, which confines nothing.
+    /// the kernel leaves them open, under `read-only` and `workspace-write`, with why beside it. The
+    /// regressions it rejects: no line on such a kernel, a line under `read-only` that is missing
+    /// because only `workspace-write` was listed, a line where the kernel governs the sockets, and a
+    /// line under `strict`, which refuses the stage, or under `off`, which confines nothing.
     #[test]
-    fn reachable_sockets_with_a_path_are_reported_under_standard_alone() {
+    fn reachable_sockets_with_a_path_are_reported_under_read_only_and_workspace_write() {
         use bravebot_sandbox::SandboxMode;
         let config = config_for("https://ai-chat.bsg.brave.com", None);
         let trust = TrustStore::new("/work");
@@ -1213,11 +1311,15 @@ mod tests {
                 .find(|line| line.label.trim() == t!(status_path_sockets))
         };
 
-        let line = shown(SandboxMode::Standard, true).expect("the sockets are on the report");
-        assert_eq!(line.value, t!(status_path_sockets_reachable));
-        assert_eq!(line.note, t!(status_path_sockets_why));
+        for mode in [SandboxMode::WorkspaceWrite, SandboxMode::ReadOnly] {
+            let line = shown(mode, true)
+                .unwrap_or_else(|| panic!("{mode}: the sockets are on the report"));
+            assert_eq!(line.value, t!(status_path_sockets_reachable), "{mode}");
+            assert_eq!(line.note, t!(status_path_sockets_why), "{mode}");
+        }
         for (mode, reachable) in [
-            (SandboxMode::Standard, false),
+            (SandboxMode::WorkspaceWrite, false),
+            (SandboxMode::ReadOnly, false),
             (SandboxMode::Strict, true),
             (SandboxMode::Off, true),
         ] {
@@ -1254,7 +1356,7 @@ mod tests {
             // Governed, which is what every platform but a Linux kernel below Landlock ABI 9
             // reports. The test about the line sets it itself.
             sockets_with_a_path_reachable: false,
-            sandbox_mode: bravebot_sandbox::SandboxMode::Standard,
+            sandbox_mode: bravebot_sandbox::SandboxMode::WorkspaceWrite,
             servers: &NO_SERVERS,
             // Asking, which is what every session does unless somebody changed it. The tests about
             // the line set this themselves.
@@ -1351,6 +1453,39 @@ mod tests {
             .expect("the watch is on the report");
         assert_eq!(line.value, "notes/plan.md");
         assert!(line.note.contains('3'), "{:?}", line.note);
+    }
+
+    /// The time on the line is what the watch has left of its week, which is when it stops
+    /// itself. A watch armed ninety seconds ago has just under seven days left, where a line that
+    /// reported how long the watch had been on would show a minute and a half.
+    #[test]
+    fn the_report_says_how_long_a_watch_has_left() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let armed_ninety_seconds_ago = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(90))
+            .expect("the clock has run for ninety seconds");
+        let mut watches = watch::Watches::new();
+        watches
+            .arm(
+                "notes/plan.md".to_string(),
+                std::path::PathBuf::from("/work"),
+                3,
+                watch::Looked::Saw("first".to_string()),
+                armed_ninety_seconds_ago,
+            )
+            .expect("a watch");
+
+        let mut facts = facts(&config, &trust);
+        facts.watches = watches.live();
+        let report = report(&facts);
+
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_watch, number = 1))
+            .expect("the watch is on the report");
+        assert!(line.note.contains("6d 23h left"), "{:?}", line.note);
     }
 
     /// A line saying a thing is not happening is a line on every report for the sake of the few
@@ -1506,7 +1641,7 @@ mod tests {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
         let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
-        goal.not_met("nothing above runs the tests".to_string());
+        goal.not_met("nothing above runs the tests".to_string(), 1);
 
         let mut facts = facts(&config, &trust);
         facts.goal = Some(&goal);
@@ -1750,7 +1885,7 @@ mod tests {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
         let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
-        goal.not_met("nothing above runs the tests".to_string());
+        goal.not_met("nothing above runs the tests".to_string(), 1);
         goal.pause();
 
         let mut facts = facts(&config, &trust);
@@ -2016,7 +2151,7 @@ mod tests {
 
     /// TRUST-12: a yes kept past a session stops the only screen that would have shown it, so the
     /// report says it is held, when it was given, where it is written and how to take it back.
-    /// Nothing is said where none is kept, which is every directory nobody said to remember.
+    /// Nothing is said where none is kept, which is every directory nobody answered yes about.
     #[test]
     fn the_report_says_a_directory_is_trusted_by_a_remembered_answer() {
         let config = config_for("http://127.0.0.1:1", None);
@@ -2336,18 +2471,18 @@ mod tests {
     #[test]
     fn the_report_says_programs_write_what_a_request_would_be_granted_only_where_they_do() {
         use bravebot_agent::PermissionMode::{AcceptEdits, Ask, Bypass};
-        use bravebot_sandbox::SandboxMode::{Off, Standard, Strict};
+        use bravebot_sandbox::SandboxMode::{Off, Strict, WorkspaceWrite};
         let home = std::env::temp_dir();
         let home = Some(home.as_path());
 
         assert_eq!(
-            programs_write_unasked(Standard, Bypass, home),
+            programs_write_unasked(WorkspaceWrite, Bypass, home),
             cfg!(any(target_os = "linux", target_os = "macos"))
         );
         for (mode, permission, home) in [
-            (Standard, Bypass, None),
-            (Standard, Ask, home),
-            (Standard, AcceptEdits, home),
+            (WorkspaceWrite, Bypass, None),
+            (WorkspaceWrite, Ask, home),
+            (WorkspaceWrite, AcceptEdits, home),
             (Strict, Bypass, home),
             (Off, Bypass, home),
         ] {
@@ -2518,14 +2653,19 @@ mod tests {
     #[test]
     fn a_closed_network_is_reported_with_who_closed_it_and_an_open_one_is_not() {
         use bravebot_config::{Decided, RunNetwork};
-        use bravebot_sandbox::SandboxMode::{self, Standard};
+        use bravebot_sandbox::SandboxMode::{self, WorkspaceWrite};
         use bravebot_sandbox::network::Network;
         let settled = |network, decided| RunNetwork { network, decided };
 
-        assert!(network_line(None, Standard).is_none());
-        assert!(network_line(Some(&settled(Network::Open, Decided::Flag)), Standard).is_none());
-        let flag =
-            network_line(Some(&settled(Network::Closed, Decided::Flag)), Standard).expect("a line");
+        assert!(network_line(None, WorkspaceWrite).is_none());
+        assert!(
+            network_line(Some(&settled(Network::Open, Decided::Flag)), WorkspaceWrite).is_none()
+        );
+        let flag = network_line(
+            Some(&settled(Network::Closed, Decided::Flag)),
+            WorkspaceWrite,
+        )
+        .expect("a line");
         assert!(
             network_line(
                 Some(&settled(Network::Closed, Decided::Flag)),
@@ -2534,6 +2674,12 @@ mod tests {
             .is_none(),
             "a closed network was claimed for programs nothing confines"
         );
+        // `read-only` closes it whatever the session settled, or did not settle (SANDBOX-22).
+        for open in [None, Some(settled(Network::Open, Decided::Flag))] {
+            let closed = network_line(open.as_ref(), SandboxMode::ReadOnly)
+                .expect("read-only closes the network");
+            assert_eq!(closed.value, t!(status_network_closed));
+        }
         assert_eq!(flag.label.trim(), t!(status_network));
         assert!(flag.note.contains("--run-network"));
         let pinned = network_line(
@@ -2541,7 +2687,7 @@ mod tests {
                 Network::Closed,
                 Decided::Managed(Some("/etc/bravebot/managed.json".into())),
             )),
-            Standard,
+            WorkspaceWrite,
         )
         .expect("a line");
         let note = pinned.note.as_str();
@@ -2589,13 +2735,82 @@ mod tests {
         assert!(line.note.contains(t!(status_sandbox_filesystem_flags)));
     }
 
+    /// The files that wrote a list are named once each, in the order they are first met, and an
+    /// entry no file wrote is named by the caller's own words. The faults it rejects are a file
+    /// named once per entry, a sort, and a nameless entry dropped or named for the wrong line.
+    #[test]
+    fn sources_are_listed_once_each_in_first_seen_order() {
+        let by = |path: Option<&str>| path.map(std::path::PathBuf::from);
+        let entries = [
+            by(Some("/b.json")),
+            by(None),
+            by(Some("/a.json")),
+            by(Some("/b.json")),
+            by(None),
+        ];
+
+        assert_eq!(
+            sources(entries.iter(), "managed"),
+            ["/b.json", "managed", "/a.json"]
+        );
+        assert!(sources([].iter(), "managed").is_empty());
+    }
+
+    /// Two paths that differ only in a byte no UTF-8 name holds print the same, so the note names
+    /// them once: a list of what the person sees has no use for two identical words. The fault it
+    /// rejects is a dedup keyed on the path, which would print the same file twice.
+    #[cfg(unix)]
+    #[test]
+    fn sources_that_print_alike_are_named_once() {
+        use std::os::unix::ffi::OsStrExt;
+        let raw = Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
+            b"/tool-\xff",
+        )));
+        let lossy = Some(std::path::PathBuf::from("/tool-\u{FFFD}"));
+        assert_ne!(raw, lossy);
+
+        assert_eq!(sources([raw, lossy].iter(), "managed"), ["/tool-\u{FFFD}"]);
+    }
+
+    /// The four filesystem lists are read in the order `allow_read`, `deny_read`, `allow_write`,
+    /// `deny_write`, so the files in the note come in that order, not sorted and not by list size.
+    #[test]
+    fn filesystem_files_are_named_in_list_order() {
+        use bravebot_sandbox::rules::{Entry, Lists};
+        let entry = |by: &str| Entry {
+            path: "~/p".into(),
+            by: Some(by.into()),
+            pinned: false,
+        };
+        let line = filesystem_line(Some(&bravebot_config::Filesystem {
+            lists: Lists {
+                allow_read: vec![entry("/4.json")],
+                deny_read: vec![entry("/3.json")],
+                allow_write: vec![entry("/2.json"), entry("/4.json")],
+                deny_write: vec![entry("/1.json")],
+            },
+            ..Default::default()
+        }))
+        .expect("a line");
+
+        let at = |file: &str| line.note.find(file).expect(file);
+        assert!(
+            at("/4.json") < at("/3.json")
+                && at("/3.json") < at("/2.json")
+                && at("/2.json") < at("/1.json"),
+            "{}",
+            line.note
+        );
+        assert_eq!(line.note.matches("/4.json").count(), 1, "{}", line.note);
+    }
+
     /// The host list is on the report with how many entries each list holds and the files that
     /// wrote them, never a host, and a session with no `allowedHosts` or none under `off` says
     /// nothing. The regression it rejects is a list in force that the screen never mentions.
     #[test]
     fn host_lists_are_reported_by_count_and_file_and_never_by_host() {
         use bravebot_config::sandbox_network::{HostEntry, Hosts, Resolved};
-        use bravebot_sandbox::SandboxMode::{Off, Standard};
+        use bravebot_sandbox::SandboxMode::{Off, WorkspaceWrite};
         let entry = |host: &str, by: Option<&str>| HostEntry {
             entry: host.to_string(),
             by: by.map(Into::into),
@@ -2609,11 +2824,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(hosts_line(None, Standard).is_none());
+        assert!(hosts_line(None, WorkspaceWrite).is_none());
         assert!(
             hosts_line(
                 Some(&settled(None, vec![entry("a.example", None)])),
-                Standard
+                WorkspaceWrite
             )
             .is_none()
         );
@@ -2628,7 +2843,7 @@ mod tests {
             vec![entry("bad.example", None)],
         );
         assert!(hosts_line(Some(&listed), Off).is_none());
-        let line = hosts_line(Some(&listed), Standard).expect("a line");
+        let line = hosts_line(Some(&listed), WorkspaceWrite).expect("a line");
 
         assert_eq!(line.label.trim(), t!(status_hosts));
         assert!(
@@ -2643,7 +2858,8 @@ mod tests {
         );
         assert!(line.note.contains("/home/a/.bravebot/settings.json"));
         assert!(line.note.contains(t!(status_hosts_managed)));
-        let empty = hosts_line(Some(&settled(Some(vec![]), vec![])), Standard).expect("a line");
+        let empty =
+            hosts_line(Some(&settled(Some(vec![]), vec![])), WorkspaceWrite).expect("a line");
         assert!(empty.value.contains("0 allowed"), "{}", empty.value);
         assert_eq!(empty.note, t!(status_hosts_refused));
 
@@ -2654,7 +2870,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let asked = hosts_line(Some(&asking), Standard).expect("a line");
+        let asked = hosts_line(Some(&asking), WorkspaceWrite).expect("a line");
         assert_eq!(asked.note, t!(status_hosts_asked));
 
         let asking_with_files = Resolved {
@@ -2664,7 +2880,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let asked_files = hosts_line(Some(&asking_with_files), Standard).expect("a line");
+        let asked_files = hosts_line(Some(&asking_with_files), WorkspaceWrite).expect("a line");
         assert!(
             asked_files.note.contains("/home/a/.bravebot/settings.json")
                 && asked_files.note != line.note,
@@ -3099,6 +3315,53 @@ mod tests {
                 commit = "fedcba9876",
                 delegate = "d2.1"
             )
+        );
+    }
+
+    /// The groups `report` is built from keep the order the rows have always had when every one of
+    /// them has something to say: what was chosen (model, effort, theme, endpoint), then what
+    /// holds the session back, what runs unattended, what the session cost, and the trust rules
+    /// last. A group drawn out of turn, or a call dropped from `report`, moves one of the
+    /// boundaries below.
+    #[test]
+    fn the_groups_of_rows_keep_their_order_when_every_group_has_rows() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
+        goal.not_met("nothing above runs the tests".to_string(), 1);
+        let mut mixed = facts(&config, &trust);
+        mixed.goal = Some(&goal);
+        mixed.auto_vetting = true;
+        mixed.timing = bravebot_agent::timing::Timing {
+            wall_ms: 30_000,
+            inference_ms: 20_000,
+            tools_ms: 5_000,
+            stalled_ms: 0,
+        };
+
+        let lines = report(&mixed).lines;
+        let at = |label: String| {
+            lines
+                .iter()
+                .position(|line| line.label == label)
+                .unwrap_or_else(|| panic!("no row labelled {label:?}: {lines:?}"))
+        };
+        let order = [
+            at(t!(status_model).to_string()),
+            at(t!(status_effort).to_string()),
+            at(t!(status_theme).to_string()),
+            at(t!(status_endpoint).to_string()),
+            at(t!(status_confinement).to_string()),
+            at(t!(status_mcp_servers).to_string()),
+            at(t!(status_vetting).to_string()),
+            at(t!(status_goal).to_string()),
+            at(t!(status_this_session).to_string()),
+            at(t!(status_time).to_string()),
+            at(t!(status_trust).to_string()),
+        ];
+        assert!(
+            order.windows(2).all(|pair| pair[0] < pair[1]),
+            "the groups are out of order: {order:?}"
         );
     }
 

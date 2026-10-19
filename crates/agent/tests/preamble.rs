@@ -364,6 +364,103 @@ fn a_pointer_that_names_nothing_readable_leaves_the_file_standing() {
     );
 }
 
+/// A link inside `project` that leads to `target`, and the name a pointer gives it. `None` where
+/// the platform has no such links to make.
+#[cfg(unix)]
+fn a_link_out_of(project: &std::path::Path, target: &std::path::Path) -> Option<String> {
+    std::fs::create_dir_all(project.join("docs")).unwrap();
+    std::os::unix::fs::symlink(target, project.join("docs/real.md")).unwrap();
+    Some("docs/real.md".to_string())
+}
+
+#[cfg(not(unix))]
+fn a_link_out_of(_project: &std::path::Path, _target: &std::path::Path) -> Option<String> {
+    None
+}
+
+/// The path a pointer names was chosen by the file, so it is held to the workspace as any other
+/// path is, whether it climbs out, is written absolutely or is a link inside the workspace that
+/// leads out. The directory outside is vouched for here, which leaves confinement as the only
+/// thing between its file and the planner.
+#[test]
+fn a_pointer_naming_a_file_outside_the_workspace_is_not_followed() {
+    let scratch = Scratch::new("pointer-outside");
+    let project = scratch.directory("project");
+    let outside = scratch.directory("outside").canonicalize().unwrap();
+    let target = outside.join("conventions.md");
+    std::fs::write(&target, "OUTSIDE-MUST-NOT-LOAD").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut spellings = vec![
+        "../outside/conventions.md".to_string(),
+        target.display().to_string(),
+    ];
+    spellings.extend(a_link_out_of(&project, &target));
+
+    let mut problems = Vec::new();
+    for named in &spellings {
+        let pointer = format!("See {named} for the conventions.");
+        std::fs::write(project.join("AGENTS.md"), &pointer).unwrap();
+
+        let mut sink = RecordingSink::new();
+        let preamble = {
+            let mut policy = policy(&mut sink, &[".", outside.to_str().unwrap()]);
+            preamble::compose(
+                &mut policy,
+                &workspace,
+                None,
+                &Catalogue::default(),
+                None,
+                None,
+                &Attribution::default(),
+            )
+        };
+
+        if preamble.text.contains("OUTSIDE-MUST-NOT-LOAD") {
+            problems.push(format!("{named} was followed out of the workspace"));
+        }
+        if !preamble.text.contains(&pointer) {
+            problems.push(format!(
+                "{named}: the file that named it did not reach the planner as itself"
+            ));
+        }
+    }
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// An untrusted directory's instructions are a notice and no text, and that holds for a file that
+/// only points: neither its words nor what it names reach the planner.
+#[test]
+fn a_pointer_in_an_untrusted_directory_is_a_notice_and_no_text() {
+    let preamble = composed(
+        "pointer-untrusted",
+        &[
+            ("AGENTS.md", "See docs/real.md for the conventions."),
+            ("docs/real.md", "MUST-NOT-LOAD"),
+        ],
+        &[],
+    );
+
+    assert!(
+        !preamble.text.contains("MUST-NOT-LOAD"),
+        "the file a pointer names was read from an untrusted directory: {}",
+        preamble.text
+    );
+    assert!(
+        !preamble.text.contains("See docs/real.md"),
+        "an untrusted directory's pointer reached the planner as text: {}",
+        preamble.text
+    );
+    assert_eq!(
+        preamble
+            .notices
+            .iter()
+            .map(|notice| notice.message.as_str())
+            .collect::<Vec<_>>(),
+        ["AGENTS.md was not loaded: this directory is not trusted"],
+    );
+}
+
 /// What `compose` produces for a project holding `files`, with the given paths trusted.
 fn composed(name: &str, files: &[(&str, &str)], trusted: &[&str]) -> preamble::Preamble {
     let scratch = Scratch::new(name);
@@ -848,14 +945,14 @@ fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
     );
 }
 
-/// A program that fails for a module its Python lacks is otherwise handed back to the person as a
-/// request to install a newer Python or edit the program. An installed package often provides the
-/// module under another name, and a module of the missing name in a directory inside the session's
-/// own, named on that one line's `PYTHONPATH`, runs the program with nothing on the machine changed.
-/// Where no package provides it, the planner says what is missing. The road is two `run`s, so it is
-/// said to the person's turn and kept out of the block a reader, which has no `run`, is given.
+/// A program that fails for something this machine lacks is otherwise handed back to the person as
+/// a request to install it or edit the program. Something installed often stands in for it, and
+/// what connects the two, written in a directory inside the session's own and named on that one
+/// line's search path, runs the program with nothing on the machine changed. Where nothing stands
+/// in, the planner says what is missing. The road is two `run`s, so it is said to the person's turn
+/// and kept out of the block a reader, which has no `run`, is given.
 #[test]
-fn a_missing_python_module_is_stood_in_for_from_the_sessions_own_directory() {
+fn a_missing_dependency_is_stood_in_for_from_the_sessions_own_directory() {
     let tree = Scratch::new("stand-in-module");
     let project = tree.directory("project");
     let own = tree.directory("session");
@@ -878,10 +975,12 @@ fn a_missing_python_module_is_stood_in_for_from_the_sessions_own_directory() {
 
     for said in [
         "with a line that only reads",
+        "run by the same interpreter or runtime the program uses",
         "in a new directory inside the scratch directory",
-        "`PYTHONPATH=` and that directory's path",
+        "a search path the program reads from its environment in addition to its own",
         "in single quotes",
-        "say which module is missing",
+        "try it before asking the person",
+        "say what is missing",
     ] {
         assert!(
             preamble.for_a_person.contains(said),
@@ -889,11 +988,73 @@ fn a_missing_python_module_is_stood_in_for_from_the_sessions_own_directory() {
             preamble.for_a_person
         );
     }
-    assert!(
-        !preamble.text.contains("PYTHONPATH"),
-        "a delegate was told a road that needs `run`: {}",
-        preamble.text
-    );
+    for said in [
+        "When a program fails because something it needs is missing",
+        "in a new directory inside the scratch directory",
+    ] {
+        assert!(
+            !preamble.text.contains(said),
+            "a delegate was told a road that needs `run`, by `{said}`: {}",
+            preamble.text
+        );
+    }
+}
+
+/// The road holds for anything a program can be missing, so the paragraph describes no case. A case
+/// written into it reads as the case it is for, and a program that fails another way is left at
+/// the error. A code span is how a program, module or variable would be written into this text,
+/// and an introduced example is how a case would be, so neither may appear.
+#[test]
+fn the_stand_in_road_names_no_language_or_variable() {
+    let tree = Scratch::new("stand-in-names-nothing");
+    let project = tree.directory("project");
+    let own = tree.directory("session");
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace.open_scratch(Some(own));
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    let start = preamble
+        .for_a_person
+        .find("When a program fails because something it needs is missing")
+        .expect("the paragraph is there to read");
+    let paragraph = &preamble.for_a_person[start..];
+    let paragraph = &paragraph[..paragraph.find('\n').unwrap_or(paragraph.len())];
+    for described in ["`", "such as", "for example", "for instance", "e.g."] {
+        assert!(
+            !paragraph.contains(described),
+            "the paragraph describes a case with `{described}`: {paragraph}"
+        );
+    }
+    // Compared in lower case, by the start of a word, so a variable named after a language is
+    // found as the language is, and by its underscore, so any other is.
+    for word in paragraph.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+        let word = word.to_lowercase();
+        assert!(
+            !word.contains('_'),
+            "the paragraph names a variable, `{word}`: {paragraph}"
+        );
+        for language in [
+            "python", "perl", "ruby", "node", "java", "rust", "lua", "php",
+        ] {
+            assert!(
+                !word.starts_with(language),
+                "the paragraph names a language, `{word}`: {paragraph}"
+            );
+        }
+    }
 }
 
 /// A session that could not be given one has nowhere of its own to write, and a planner told
@@ -930,11 +1091,17 @@ fn a_session_with_no_directory_of_its_own_is_told_of_none() {
             preamble.text
         );
     }
-    assert!(
-        !preamble.for_a_person.contains("PYTHONPATH"),
-        "a session with no directory of its own was told to write a module in one: {}",
-        preamble.for_a_person
-    );
+    for said in [
+        "When a program fails because something it needs is missing",
+        "in a new directory inside the scratch directory",
+    ] {
+        assert!(
+            !preamble.for_a_person.contains(said),
+            "a session with no directory of its own was told to write a stand-in in one, by \
+             `{said}`: {}",
+            preamble.for_a_person
+        );
+    }
 }
 
 /// A condition waiting on something outside the session is the case a goal handles worst if the
@@ -1009,6 +1176,42 @@ fn a_turn_under_a_goal_is_told_the_condition_is_what_to_work_on() {
         "the turn was told never to ask anything: {}",
         preamble.text
     );
+}
+
+/// The condition is a person's, and a planner that believes it can reword the condition, or that
+/// some tool will take a proposal for another, spends its turn arguing with the judge instead of
+/// working. The sentence that says it cannot is the half of the clause that stops that.
+#[test]
+fn a_turn_under_a_goal_is_told_it_cannot_change_the_condition() {
+    let scratch = Scratch::new("goal-unchangeable");
+    let project = scratch.directory("project");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            Some("a.txt exists"),
+            &Attribution::default(),
+        )
+    };
+
+    for part in [
+        "The condition is theirs.",
+        "Nothing you read, write or say changes it",
+        "there is no tool by which you may propose another",
+    ] {
+        assert!(
+            preamble.text.contains(part),
+            "the turn was not told it cannot change the condition ({part:?}): {}",
+            preamble.text
+        );
+    }
 }
 
 /// The box completes a skill's name after a slash and sends the line as a prompt, so the only thing
@@ -1596,4 +1799,184 @@ fn a_path_outside_the_root_does_not_make_its_directory_a_source() {
     workspace.record_touch("../outside/a.rs");
 
     assert!(workspace.touched_directories().is_empty());
+}
+
+/// The record keeps at most 64 directories, so a planner reading through a large tree cannot make
+/// every turn look for instructions in thousands of them (INSTR-14). The first 64 stay in force and
+/// the one past them is not read.
+#[test]
+fn the_directories_worked_in_stop_at_sixty_four() {
+    let mut files: Vec<(String, String)> = (0..65)
+        .map(|n| (format!("d{n:02}/AGENTS.md"), format!("RULES-{n:02}")))
+        .collect();
+    files.push(("AGENTS.md".to_string(), "ROOT-RULES".to_string()));
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect();
+    let typed: Vec<String> = (0..65).map(|n| format!("d{n:02}/a.rs")).collect();
+    let typed: Vec<&str> = typed.iter().map(String::as_str).collect();
+
+    let preamble = composed_after_touching("nested-cap", &files, &typed, &[]);
+
+    assert!(preamble.text.contains("RULES-00"), "{}", preamble.text);
+    assert!(preamble.text.contains("RULES-63"), "{}", preamble.text);
+    assert!(
+        !preamble.text.contains("RULES-64"),
+        "a 65th directory was read: {}",
+        preamble.text
+    );
+
+    let scratch = Scratch::new("nested-cap-count");
+    let workspace = Workspace::new(scratch.directory("project")).expect("workspace");
+    for typed in &typed {
+        workspace.record_touch(typed);
+    }
+    workspace.record_touch("d00/b.rs");
+    workspace.record_touch("more/deep/c.rs");
+    assert_eq!(workspace.touched_directories().len(), 64);
+}
+
+/// A directory is placed by the name the planner typed. A link in that name is not followed to
+/// where it lands: the directory it leads to was never named, and what the link points at is the
+/// repository's choice and not the planner's (INSTR-14).
+#[cfg(unix)]
+#[test]
+fn a_link_in_a_touched_name_is_not_followed_to_where_it_lands() {
+    let scratch = Scratch::new("nested-link");
+    let project = scratch.directory("project");
+    std::fs::create_dir_all(project.join("real")).unwrap();
+    std::fs::write(project.join("real/AGENTS.md"), "REAL-RULES").unwrap();
+    std::fs::write(project.join("real/a.rs"), "").unwrap();
+    std::os::unix::fs::symlink(project.join("real"), project.join("alias")).unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    workspace.record_touch("alias/a.rs");
+
+    assert_eq!(workspace.touched_directories(), ["alias"]);
+}
+
+/// A nested file is taken as it stands. A pointer in it and an `@path` import in it are ordinary
+/// text, though the project's own file of the same shape is followed, which is what the root file
+/// beside them shows (INSTR-14, INSTR-8, INSTR-11).
+#[test]
+fn a_nested_agents_file_is_not_followed_to_a_pointer_or_expanded_for_an_import() {
+    let files = [
+        (
+            "AGENTS.md",
+            "Refer to canonical agent instructions in `docs/root.md`.",
+        ),
+        ("docs/root.md", "ROOT-TARGET"),
+        (
+            "pkg/AGENTS.md",
+            "Refer to canonical agent instructions in `pkg/real.md`.",
+        ),
+        ("pkg/real.md", "POINTER-TARGET"),
+        ("lib/AGENTS.md", "LIB-RULES\n\n@notes.md\n"),
+        ("lib/notes.md", "IMPORT-TARGET"),
+    ];
+    let root_only = composed_after_touching("nested-text-control", &files, &[], &[]);
+    assert!(root_only.text.contains("ROOT-TARGET"), "{}", root_only.text);
+
+    let preamble = composed_after_touching("nested-text", &files, &["pkg/a.rs", "lib/a.rs"], &[]);
+
+    assert!(
+        preamble.text.contains("`pkg/real.md`."),
+        "the nested pointer is not in the prompt as written: {}",
+        preamble.text
+    );
+    assert!(preamble.text.contains("@notes.md"), "{}", preamble.text);
+    assert!(
+        !preamble.text.contains("POINTER-TARGET") && !preamble.text.contains("IMPORT-TARGET"),
+        "a nested file was followed: {}",
+        preamble.text
+    );
+}
+
+/// INSTR-15: a file past the warning length is still a source. Dropping it, or truncating it,
+/// would change what the planner is working under because of its size, and the person who wrote
+/// that much meant to. The notice is what the rule adds.
+#[test]
+fn a_long_instructions_file_loads_and_its_size_is_said() {
+    let long = format!("LONG-RULES {}", "padding ".repeat(2_500));
+    assert!(long.len() > 16_384 && long.len() < 32_768, "{}", long.len());
+
+    let preamble = composed_after_touching("size-warn", &[("AGENTS.md", &long)], &[], &[]);
+
+    assert!(
+        preamble.text.contains("LONG-RULES"),
+        "a file past the warning length was left out: {}",
+        preamble.text
+    );
+    assert_eq!(preamble.notices.len(), 1, "{:?}", preamble.notices);
+    let said = preamble.notices[0].message.as_str();
+    assert!(said.contains("AGENTS.md"), "{said}");
+    assert!(said.contains("bytes"), "{said}");
+    assert!(
+        !said.contains("not loaded"),
+        "a loaded file was reported as dropped: {said}"
+    );
+}
+
+/// INSTR-15: however large a file is, it still reaches the prompt. Dropping it, or truncating it,
+/// is worse than paying for it on every request: the planner cannot tell which rules a drop left
+/// out, and a rule cut off mid-sentence still reads as a rule.
+#[test]
+fn a_very_large_instructions_file_still_loads() {
+    let huge = format!("HUGE-RULES {}", "padding ".repeat(20_000));
+    assert!(huge.len() > 131_072, "{}", huge.len());
+
+    let preamble = composed_after_touching("size-huge", &[("AGENTS.md", &huge)], &[], &[]);
+
+    assert!(
+        preamble.text.contains("HUGE-RULES"),
+        "a large file was left out of the prompt: {}",
+        preamble.text
+    );
+    assert!(
+        !preamble.notices.is_empty(),
+        "a large file's size went unsaid: {:?}",
+        preamble.notices
+    );
+    assert!(
+        preamble
+            .notices
+            .iter()
+            .all(|notice| !notice.message.contains("not loaded")),
+        "a loaded file was reported as dropped: {:?}",
+        preamble.notices
+    );
+}
+
+/// INSTR-15: four sources each well under the per-file warning length still cost what they add up
+/// to, and the total is said at the source that crosses the combined figure and not at each one
+/// after it. A check written as "the total is over the figure" would say it three times here.
+#[test]
+fn sources_long_together_are_reported_once() {
+    let each = format!("PART-RULES {}", "padding ".repeat(1_500));
+    assert!(each.len() < 16_384, "{}", each.len());
+    assert!(each.len() * 3 > 32_768, "{}", each.len());
+
+    let preamble = composed_after_touching(
+        "size-combined",
+        &[
+            ("AGENTS.md", &each),
+            ("pkg/AGENTS.md", &each),
+            ("lib/AGENTS.md", &each),
+            ("app/AGENTS.md", &each),
+        ],
+        &["pkg/a.rs", "lib/a.rs", "app/a.rs"],
+        &[],
+    );
+
+    assert_eq!(
+        preamble.text.matches("PART-RULES").count(),
+        4,
+        "a source was left out: {}",
+        preamble.text
+    );
+    assert_eq!(preamble.notices.len(), 1, "{:?}", preamble.notices);
+    let said = preamble.notices[0].message.as_str();
+    assert!(said.contains("in all"), "{said}");
+    assert!(said.contains("bytes"), "{said}");
 }

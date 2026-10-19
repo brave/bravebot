@@ -127,7 +127,7 @@ Print its output. One body per finding is now on disk: what is wrong, the code a
 it names, every `file:line` the reviewer cited, the specs a change there has to keep true, and the
 fix. Read none of them.
 
-The table names each draft's labels: `maintenance`, or `bug` where the reviewer found a defect
+The table names each draft's labels: `refactor`, or `bug` where the reviewer found a defect
 rather than a cleanup, and an `area/*` or `infrastructure` where one is clear. It marks any title
 over GitHub's 256-character cap as needing a shorter one, which is a person's job in step 6.
 
@@ -146,10 +146,9 @@ to judge.
 Where the table said a title needs shortening, rewrite it before posting rather than posting a
 title GitHub will refuse.
 
-`maintenance` is a label a person creates, since netzenbot cannot.
-[labelling-issues.md](../../../docs/development/labelling-issues.md) has the command. Until it
-exists the poster refuses a draft carrying it and prints that command; pass it on rather than
-posting under a different label.
+Use the existing `refactor` label for cleanup. If a required label is missing, the poster refuses
+and prints a creation command for a person; pass it on rather than creating a label or posting
+under a different one. Do not create or use a `maintenance` label.
 
 `gh` is deliberately not in this skill's `allowed-tools`, so every call the poster makes asks
 first. Do not work around it.

@@ -218,8 +218,12 @@ flag bravebot does not know comes before the package, the line says which packag
 known, since that flag may take the next word as its value.
 
 In the full-screen interface the question is asked on the terminal before the interface opens. In
-`--plain` it is asked after the question about trusting the directory, or, where you told bravebot
-to [remember that answer](../security/trust.md#remembering-the-answer), after the line saying so.
+`--plain` it is asked after the question about trusting the directory, or, where an earlier yes was
+[kept](../security/trust.md#remembering-the-answer), after the line saying so.
+
+In `--plain` the question has one answer: `y` starts the server for that session, and any other line,
+including `1` and `2`, and the end of the input decline. It offers no answer that records, and what is
+answered there is not written to the state directory.
 
 ### Where nobody can be asked
 
@@ -274,11 +278,10 @@ scrolls a list longer than the screen.
 
 | Answer | What happens |
 |---|---|
-| 1 | the tools are offered, and a digest of the list is written as a `tools` line in `~/.bravebot/mcp-approved` beside the server's, so a later session whose server sends the same list asks nothing |
+| 1 | the tools are offered in this session, nothing is recorded, and the next session asks again |
 | 2 | none of its tools is offered in this session, nothing is recorded, and the next session asks again |
 
-A list that is not the one you said yes to says so, and asks again. Answer 2 at the server
-question answers for the server and not for its list.
+Answer 2 at the server question answers for the server and not for its list.
 
 The model sees each tool under a name like `mcp__weather__get_current_conditions`, with a sentence
 bravebot writes, saying which server it belongs to and that every call is put to you, before the

@@ -17,7 +17,6 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
-use unicode_width::UnicodeWidthChar;
 
 use crate::state::{Delegate, Laid, Session};
 use crate::theme;
@@ -33,7 +32,7 @@ mod watching;
 
 pub use self::export::{as_last_drawn, as_markdown, as_text};
 pub(crate) use self::hint::{cache_hit_rate, context_reading};
-pub(crate) use self::transcript::{opening_screen, rows_of};
+pub(crate) use self::transcript::{EntryLines, ReplyLines, opening_screen, rows_of};
 
 use self::beneath::lines_beneath_the_box;
 use self::hint::draw_hint;
@@ -51,7 +50,9 @@ use self::prompt::input_text_width;
 #[cfg(test)]
 use self::scroller::needle_that_fits;
 #[cfg(test)]
-use self::transcript::{lay_out, transcript_lines};
+use self::transcript::{counted, lay_out, transcript_lines};
+#[cfg(test)]
+use self::watching::padded;
 #[cfg(test)]
 use crate::keybindings::Keybindings;
 #[cfg(test)]
@@ -81,8 +82,10 @@ fn dim() -> Style {
 /// Draw a task list beneath whatever it belongs to.
 ///
 /// The first row carries a branch so the block attaches to the line above rather than floating.
-/// Finished tasks are struck through and dimmed, which is what makes progress legible at a
-/// glance: the eye finds the unstruck lines.
+/// Tasks no longer outstanding are struck through and dimmed, which is what makes progress
+/// legible at a glance: the eye finds the unstruck lines. A cancelled one is struck too, with its
+/// marker in the muted colour rather than the success one, so dropped work does not read as
+/// finished work.
 fn todo_lines(todos: &[bravebot_core::todo::Row]) -> Vec<Line<'static>> {
     todos
         .iter()
@@ -93,7 +96,9 @@ fn todo_lines(todos: &[bravebot_core::todo::Row]) -> Vec<Line<'static>> {
             } else {
                 "    ".to_string()
             };
-            let (marker, text) = if row.struck() {
+            let (marker, text) = if row.status == bravebot_core::todo::Status::Cancelled {
+                (dim(), dim().add_modifier(Modifier::CROSSED_OUT))
+            } else if row.struck() {
                 (
                     Style::default().fg(theme::ok()),
                     dim().add_modifier(Modifier::CROSSED_OUT),
@@ -243,18 +248,20 @@ fn pieces(text: &str) -> Vec<String> {
     out
 }
 
-/// `text` cut where it reaches `width` display columns, taking at least one character.
+/// `text` cut where it reaches `width` display columns, taking at least one grapheme cluster.
 ///
 /// At least one, or a wide character in a one-column row would cut nothing and the caller would
-/// break the same word forever.
+/// break the same word forever. Cut between clusters and measured as the paragraph measures them,
+/// so a row built from the head is never wider than `width` when it is drawn.
 fn split_at_width(text: &str, width: usize) -> (String, String) {
     let mut used = 0usize;
-    for (index, c) in text.char_indices() {
-        let reached = c.width().unwrap_or(0);
+    let mut index = 0usize;
+    for (bytes, reached) in wrap::clusters(text) {
         if index > 0 && used + reached > width {
             return (text[..index].to_string(), text[index..].to_string());
         }
         used += reached;
+        index += bytes;
     }
     (text.to_string(), String::new())
 }
@@ -496,21 +503,18 @@ pub(crate) fn quarantined_rows(
     // The heading goes through [`marked_rows`] like the content does, because the origin is not
     // the renderer's text: it can be a filename read out of a quarantined listing. So it is
     // neutralised, and a long one continues on another marked row rather than outside the block.
-    let mut lines = marked_rows(
-        margin,
-        &[
-            Span::styled(
-                t!(
-                    quarantined_heading,
-                    origin = &shown.origin,
-                    label = &shown.label
-                ),
-                marked.add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!("  {}", shown.reach.describe()), dim()),
-        ],
-        width,
-    );
+    let mut heading = vec![Span::styled(
+        t!(
+            quarantined_heading,
+            origin = &shown.origin,
+            label = &shown.label
+        ),
+        marked.add_modifier(Modifier::BOLD),
+    )];
+    if let Some(note) = shown.reach.note() {
+        heading.push(Span::styled(format!("  {note}"), dim()));
+    }
+    let mut lines = marked_rows(margin, &heading, width);
 
     for line in &shown.preview {
         lines.extend(marked_rows(
@@ -652,10 +656,16 @@ fn diff_lines(
 /// worth jumping to are, are both answers about a paragraph wrapped at a particular width.
 pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
     let columns = frame.area().width;
-    Laid {
+    let laid = Laid {
         columns,
         ..draw_frame(frame, session)
+    };
+    // Over whatever the frame holds, as it is at rest: the panel is a question about the session
+    // behind it, and a turn goes on being drawn there.
+    if let Some(picking) = session.picking() {
+        picking.draw(frame);
     }
+    laid
 }
 
 fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
@@ -767,11 +777,16 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
 
     // Last, over everything: the selection is of the screen rather than of any one widget, and
     // the user swept it over whatever happened to be there.
+    highlight_selection(frame, session);
+
+    laid
+}
+
+/// Paint the selection, where there is one, over what the frame already holds.
+fn highlight_selection(frame: &mut Frame, session: &Session) {
     if let Some(selection) = &session.selection {
         crate::select::highlight(frame.buffer_mut(), selection);
     }
-
-    laid
 }
 
 /// Draw the thumbnails side by side, leftmost first, each only where it fits whole.
@@ -1074,6 +1089,78 @@ mod tests {
                 rendered(&session).contains("has read this"),
                 "the view did not say the output reached the planner"
             );
+        }
+
+        /// One list holds asides, a delegate and a command, and the keys that step through it do
+        /// not ask what a row is. What changes as they step is the header and the footer, each
+        /// naming its own kind: a delegate by kind and number, a command as a command beside the
+        /// line that ran, an aside as an aside with whether the record keeps its answer.
+        #[test]
+        fn stepping_from_one_kind_of_row_to_another_changes_the_header_and_the_footer() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "checker", "run the build");
+            ran(&mut session, "cargo test --workspace", true, &["ok"], 1);
+            asked(&mut session, "and the base case?", "it is a leaf", true);
+            asked(&mut session, "why recursive?", "because of nesting", false);
+            let delegate = format!("checker delegate {id}");
+            let screen = |session: &Session| {
+                let rows = rows_at(session, 90, 24);
+                let footer = rows.last().expect("a footer").trim_start().to_string();
+                (rows, footer)
+            };
+
+            let (rows, footer) = screen(&session);
+            assert!(
+                rows[0].contains("a question asked beside the work"),
+                "{rows:?}"
+            );
+            assert!(rows[1].contains("on your screen only"), "{rows:?}");
+            assert!(
+                footer.starts_with("aside  ·  screen only  ·  2 of 4"),
+                "{footer}"
+            );
+
+            session.watch_previous();
+            let (rows, footer) = screen(&session);
+            assert!(
+                rows[0].contains("a question asked beside the work"),
+                "{rows:?}"
+            );
+            assert!(
+                rows[1].contains("the answer, which the conversation has not read"),
+                "{rows:?}"
+            );
+            assert!(footer.starts_with("aside  ·  kept  ·  1 of 4"), "{footer}");
+
+            session.watch_next();
+            session.watch_next();
+            let (rows, footer) = screen(&session);
+            assert!(rows[0].contains(&delegate), "{rows:?}");
+            assert!(rows[1].contains("run the build"), "{rows:?}");
+            assert!(
+                footer.starts_with(&format!("{delegate}  ·  working  ·  3 of 4")),
+                "{footer}"
+            );
+
+            session.watch_next();
+            let (rows, footer) = screen(&session);
+            assert!(rows[0].contains("what this command printed"), "{rows:?}");
+            assert!(rows[0].contains("the model has read this"), "{rows:?}");
+            assert!(rows[1].contains("cargo test --workspace"), "{rows:?}");
+            assert!(
+                footer.starts_with("command  ·  the model has read this  ·  4 of 4"),
+                "{footer}"
+            );
+
+            for _ in 0..3 {
+                session.watch_previous();
+            }
+            let (rows, footer) = screen(&session);
+            assert!(
+                rows[0].contains("a question asked beside the work"),
+                "{rows:?}"
+            );
+            assert!(footer.starts_with("aside  ·  kept  ·  1 of 4"), "{footer}");
         }
 
         /// Marked the way every other block the planner was kept from is marked, and marked
@@ -1779,6 +1866,25 @@ mod tests {
             );
         }
 
+        /// The counts down the right edge of the list line up only if the column before them is
+        /// exactly as wide on every row, so a short task is padded out to its room and a long one
+        /// is cut to it. A cut one ends in an ellipsis, so it does not read as the whole task. The
+        /// room is counted in characters, as the rest of the row's columns are.
+        #[test]
+        fn a_list_column_is_cut_with_an_ellipsis_or_padded_to_its_room() {
+            assert_eq!(padded("", 0), "");
+            assert_eq!(
+                padded("run the build", 0),
+                "…",
+                "a row with no room still says something was cut"
+            );
+            assert_eq!(padded("run", 6), "run   ");
+            assert_eq!(padded("run the", 7), "run the");
+            assert_eq!(padded("run the build", 7), "run th…");
+            assert_eq!(padded("héllo", 6), "héllo ");
+            assert_eq!(padded("ééééé", 3), "éé…");
+        }
+
         /// The mark invites a prompt, and a delegate takes none. A delegate that has not made a
         /// call yet satisfies "nothing has been said" vacuously, which is how it came to be drawn
         /// as an empty session.
@@ -2288,49 +2394,215 @@ mod tests {
         /// scroller is open. It has to stay in proportion to the drawing the interface already does,
         /// since the alternative is a mode that gets slower the more there is to read back through.
         ///
-        /// A ratio rather than a wall clock, because what matters is that the pass is of the same
-        /// order as the one beside it and not that either takes a particular number of milliseconds.
+        /// Drawing wraps every line of the transcript once. The pass is in proportion to that when
+        /// it asks about each line once and wraps only the lines that do not fit on a row, since a
+        /// line that fits is answered from its width. The test counts exactly those two things.
+        /// Elapsed time includes the load on the machine during each pass, so a bound on the ratio
+        /// of two passes fails on a busy machine with code that did no more work.
         ///
-        /// The shortest of several passes, and the two interleaved. A pass that lost the processor to
-        /// something else on the machine only ever reads long, so one sample of each compares the
-        /// contention of one moment against that of another, and a loaded machine fails this on the
-        /// draw it happened to interrupt. Three passes because the load measured here stalled about
-        /// one sample in fifteen, and each pass costs laying the transcript out twice.
+        /// The rows measured are also held to the rows the drawing counts, since a pass that
+        /// answered without wrapping would pass the counts.
         #[test]
         fn measuring_where_the_rows_are_stays_in_proportion_to_drawing_them() {
             let at_rest = a_long_session();
             let mut scrolling = a_long_session();
             scrolling.open_scroller();
 
-            let mut drawing = std::time::Duration::MAX;
-            let mut measuring = std::time::Duration::MAX;
-            let mut rows = 0;
-            let mut measured = 0;
+            let ((_, plain), idle) = counted::during(|| lay_out(&at_rest, 90, 24));
+            assert_eq!(plain.rows, 0, "the rows were counted with nobody asking");
+            assert_eq!(
+                idle,
+                counted::Work::default(),
+                "a line was measured with nobody asking"
+            );
 
-            for _ in 0..3 {
-                let started = std::time::Instant::now();
-                let (lines, plain) = lay_out(&at_rest, 90, 24);
-                // The wrap a frame at rest already pays for, and the one this is in proportion to.
-                // Laying the lines out is the cheaper half of drawing them, and measuring against it
-                // alone compares the new pass with something no frame has ever consisted of.
-                rows = Paragraph::new(lines)
-                    .wrap(Wrap { trim: false })
-                    .line_count(90);
-                drawing = drawing.min(started.elapsed());
-                assert_eq!(plain.rows, 0, "the rows were counted with nobody asking");
-
-                let started = std::time::Instant::now();
-                let (_, laid) = lay_out(&scrolling, 90, 24);
-                measuring = measuring.min(started.elapsed());
-                measured = laid.rows;
-            }
+            let ((lines, laid), work) = counted::during(|| lay_out(&scrolling, 90, 24));
+            let too_wide = lines.iter().filter(|line| line.width() > 90).count();
+            let rows = Paragraph::new(lines.clone())
+                .wrap(Wrap { trim: false })
+                .line_count(90);
 
             assert!(rows > 2000, "the transcript is not long: {rows}");
-            assert!(measured > 2000, "the transcript is not long: {measured}");
             assert!(
-                measuring < drawing * 4,
-                "measuring took {measuring:?} against {drawing:?} to draw, which is out of proportion"
+                laid.rows > 2000,
+                "the transcript is not long: {}",
+                laid.rows
             );
+            assert!(
+                too_wide > 0,
+                "no line needs wrapping, so the count of wraps proves nothing"
+            );
+            assert_eq!(
+                usize::from(laid.rows),
+                rows,
+                "the rows measured are not the rows drawn"
+            );
+            assert_eq!(
+                work.asked,
+                lines.len(),
+                "{} lines were measured in a transcript of {}",
+                work.asked,
+                lines.len()
+            );
+            assert_eq!(
+                work.wrapped, too_wide,
+                "{} lines were wrapped to measure them, and {too_wide} do not fit on a row",
+                work.wrapped
+            );
+        }
+
+        /// What a terminal shows after one frame of `session`, as the cells' symbols.
+        fn frame_of(session: &Session, width: u16, height: u16) -> (String, Laid) {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+            let mut laid = Laid::default();
+            terminal
+                .draw(|frame| laid = draw(frame, session))
+                .expect("draw succeeds");
+            let drawn = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            (drawn, laid)
+        }
+
+        /// A typed character is drawn without laying the conversation out again. The first frame
+        /// pays for every line; the frame after a keystroke asks about the few lines that are not
+        /// kept (the reply still arriving) and nothing else, however long the transcript is.
+        #[test]
+        fn a_keystroke_is_drawn_without_measuring_the_transcript_again() {
+            let mut session = a_long_session();
+            session.streaming("and a reply still arriving");
+
+            let ((_, laid), first) = counted::during(|| frame_of(&session, 90, 24));
+            assert!(
+                laid.rows > 1000,
+                "the transcript is not long: {}",
+                laid.rows
+            );
+            assert!(
+                first.asked >= 1000,
+                "the first frame measured {} lines, so the count observes nothing",
+                first.asked
+            );
+
+            session.type_char('x');
+            let ((drawn, _), typed) = counted::during(|| frame_of(&session, 90, 24));
+            assert!(drawn.contains("and a reply still arriving"));
+            assert!(
+                typed.asked <= 4,
+                "a keystroke measured {} lines of the transcript",
+                typed.asked
+            );
+        }
+
+        /// What the kept lines stand for is the entries, so an entry changed in place is drawn as
+        /// it now reads and not as it did when the lines were kept.
+        #[test]
+        fn an_entry_edited_after_a_frame_is_drawn_as_edited() {
+            let mut session = a_long_session();
+            let _ = frame_of(&session, 90, 24);
+
+            let last = session.transcript.last_mut().expect("an entry");
+            last.text = "REWRITTEN after the frame".to_string();
+
+            let (drawn, _) = frame_of(&session, 90, 24);
+            assert!(drawn.contains("REWRITTEN after the frame"), "{drawn}");
+        }
+
+        /// The width, the trail and the palette each change how an entry is drawn, so each is a
+        /// reason the kept lines no longer answer.
+        #[test]
+        fn a_change_of_width_or_trail_is_not_answered_from_the_lines_kept_before_it() {
+            let mut session = a_long_session();
+            let narrow = frame_of(&session, 40, 24).1;
+            let wide = frame_of(&session, 120, 24).1;
+            assert!(
+                narrow.rows > wide.rows,
+                "{} rows at 40 columns, {} at 120: the lines were not laid out again",
+                narrow.rows,
+                wide.rows
+            );
+
+            let before = frame_of(&session, 90, 24).1.rows;
+            session.transcript.last_mut().expect("an entry").trail.push(
+                bravebot_session::audit::TrailLine {
+                    text: "a gate passed".to_string(),
+                    blocked: false,
+                },
+            );
+            session.show_trail = true;
+            assert_eq!(frame_of(&session, 90, 24).1.rows, before + 1);
+            session.show_trail = false;
+            assert_eq!(frame_of(&session, 90, 24).1.rows, before);
+        }
+
+        /// Drawing only the rows on the screen is the same picture as wrapping the whole
+        /// transcript and scrolling it, from the bottom and from every row held above it, at a
+        /// width where lines wrap and one where they do not.
+        #[test]
+        fn drawing_the_visible_slice_matches_wrapping_the_whole_transcript() {
+            let reference = |session: &Session, width: u16, height: u16| -> String {
+                let (lines, _) = lay_out(session, width, height);
+                let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+                let total = paragraph.line_count(width) as u16;
+                let max = total.saturating_sub(height);
+                let offset = if session.scroll > 0 {
+                    session.top_row().min(max)
+                } else {
+                    max
+                };
+                let mut terminal =
+                    Terminal::new(TestBackend::new(width, height)).expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        frame.render_widget(paragraph.scroll((offset, 0)), frame.area());
+                    })
+                    .expect("draw succeeds");
+                terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect()
+            };
+            let mut session = a_long_session();
+            session.streaming("a reply still arriving that is long enough to wrap onto a second row at forty columns");
+            for width in [40u16, 90] {
+                let height = 12;
+                let area = |session: &Session| {
+                    let mut terminal =
+                        Terminal::new(TestBackend::new(width, height)).expect("terminal");
+                    let mut laid = Laid::default();
+                    terminal
+                        .draw(|frame| laid = draw_transcript(frame, frame.area(), session))
+                        .expect("draw succeeds");
+                    let drawn: String = terminal
+                        .backend()
+                        .buffer()
+                        .content()
+                        .iter()
+                        .map(|cell| cell.symbol())
+                        .collect();
+                    (drawn, laid)
+                };
+                let (bottom, laid) = area(&session);
+                assert_eq!(bottom, reference(&session, width, height), "at the bottom");
+                session.note_layout(laid);
+                for held in [1u16, 2, 3, 7, 40, 301, 999] {
+                    session.scroll = held;
+                    let (drawn, _) = area(&session);
+                    assert_eq!(
+                        drawn,
+                        reference(&session, width, height),
+                        "held {held} rows up at {width} columns"
+                    );
+                }
+                session.scroll = 0;
+            }
         }
 
         /// Nothing has been drawn yet, so the width is zero. Laying out against it must not panic.
@@ -3808,6 +4080,36 @@ mod tests {
                 all.contains("38 more lines"),
                 "what was left out was not said"
             );
+        }
+
+        /// Content kept from the planner is what every block holds, and the heading's `untrusted`
+        /// and the margin already say it, so a sentence on each block says nothing new. Content in
+        /// no model's context is the exception and still says so.
+        #[test]
+        fn a_block_states_its_reach_only_where_that_is_the_exception() {
+            let text = |shown: &Shown| -> String {
+                quarantined_lines(shown, 200)
+                    .iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            let mut shown = Shown {
+                origin: "notes.md".to_string(),
+                reach: bravebot_agent::report::Reach::NotThePlanner,
+                label: "(U,priv)".to_string(),
+                preview: vec!["first line".to_string()],
+                lines: 1,
+            };
+
+            let ordinary = text(&shown);
+            assert!(ordinary.contains("untrusted"), "{ordinary}");
+            assert!(!ordinary.contains("planner"), "{ordinary}");
+            assert!(!ordinary.contains("no model"), "{ordinary}");
+
+            shown.reach = bravebot_agent::report::Reach::NoModel;
+            let unread = text(&shown);
+            assert!(unread.contains("in no model's context"), "{unread}");
         }
 
         fn glimpse(lines: &[&str], total: usize, from_the_end: bool) -> Returned {
@@ -5341,7 +5643,7 @@ mod tests {
     }
 
     /// Rejects: a label taken from somewhere other than the command's own column of the table, or
-    /// one shared by every row, either of which tells a person `/model` runs now when it waits.
+    /// one shared by every row, either of which tells a person `/compact` runs now when it waits.
     #[test]
     fn each_command_row_says_whether_it_runs_now_or_waits_while_a_turn_runs() {
         let mut session = Session::new("none");
@@ -5352,7 +5654,8 @@ mod tests {
         let output = rendered_at(&session, 120, 40);
 
         assert!(labelled(&row_for(&output, 120, "/cost"), "now"));
-        assert!(labelled(&row_for(&output, 120, "/model"), "queued"));
+        assert!(labelled(&row_for(&output, 120, "/compact"), "queued"));
+        assert!(labelled(&row_for(&output, 120, "/model"), "now/queued"));
         assert!(labelled(
             &row_for(&output, 120, "/theme [name]"),
             "now/queued"
@@ -5420,6 +5723,84 @@ mod tests {
         assert!(
             output.contains("no loop is running"),
             "the answer was not drawn: {output}"
+        );
+    }
+
+    /// A picker opened while a turn runs is drawn over the frame, with the turn still drawn behind
+    /// it, and only while it is open.
+    #[test]
+    fn a_picker_opened_mid_turn_is_drawn_over_the_turn() {
+        let mut session = Session::new("none");
+        for c in "refactor the parser".chars() {
+            session.type_char(c);
+        }
+        session.submit().expect("the prompt is sent");
+        let title = t!(effort_picker_title);
+        assert!(!rendered_at(&session, 120, 40).contains(title));
+
+        session.open_picking(crate::picking::Picking::Effort(
+            crate::effort_prompt::Picker::new(None),
+        ));
+
+        let output = rendered_at(&session, 120, 40);
+        assert!(output.contains(title), "the picker was not drawn: {output}");
+        assert!(
+            output.contains("refactor the parser"),
+            "the turn was not drawn behind it: {output}"
+        );
+    }
+
+    /// The theme picker opened mid-turn is a panel over the session, and the session behind it is
+    /// drawn again, in the theme under the cursor, each time the cursor moves (VIEW-12). The
+    /// regressions it rejects are a picker that blanks the transcript while it is open and one that
+    /// leaves the transcript painted in the theme the picker opened on.
+    #[test]
+    fn moving_the_theme_cursor_repaints_the_session_behind_the_panel() {
+        use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+        let _held = crate::theme::exclusive();
+        crate::theme::apply_brave();
+
+        let mut session = Session::new("none");
+        for c in "refactor the parser".chars() {
+            session.type_char(c);
+        }
+        session.submit().expect("the prompt is sent");
+        session.open_picking(crate::picking::Picking::Theme(crate::theme_prompt::opened(
+            crate::theme::builtins(),
+            crate::theme::BRAVE,
+        )));
+
+        // The cell of the first letter of the prompt, found in the frame rather than assumed.
+        let ink_of_the_prompt = |session: &Session| {
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
+            terminal
+                .draw(|frame| {
+                    draw(frame, session);
+                })
+                .expect("draw succeeds");
+            let buffer = terminal.backend().buffer().clone();
+            let text: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+            assert!(
+                text.contains("refactor the parser"),
+                "the session was not drawn behind the panel: {text}"
+            );
+            assert!(text.contains(t!(theme_picker_title)), "{text}");
+            let at = buffer
+                .content()
+                .iter()
+                .position(|cell| cell.symbol() == "r")
+                .expect("the prompt is on screen");
+            buffer.content()[at].fg
+        };
+
+        let before = ink_of_the_prompt(&session);
+        session.press_in_picking(KeyCode::Down, KeyModifiers::NONE);
+        let after = ink_of_the_prompt(&session);
+        crate::theme::apply_brave();
+
+        assert_ne!(
+            before, after,
+            "the transcript was not repainted in the theme under the cursor"
         );
     }
 
@@ -5570,7 +5951,7 @@ mod tests {
         session.submit().expect("the prompt is sent");
         session.complete("ok", Vec::new(), 0);
         session.recall_older();
-        session.narrow_history();
+        session.cycle_history_scope();
         let position = t!(
             input_history_position,
             scope = t!(input_history_this_session),
@@ -5616,12 +5997,51 @@ mod tests {
             "{wide}"
         );
 
-        session.narrow_history();
+        session.cycle_history_scope();
         let narrow = rendered_at(&session, 120, 12);
         assert!(narrow.contains("This session 1/1"), "{narrow}");
         assert!(
             narrow.contains(&t!(input_history_widen, chord = "ctrl-n")),
             "{narrow}"
+        );
+    }
+
+    /// All, This project and This session each name themselves in the border with the position,
+    /// and the chord names the scope it moves to next.
+    #[test]
+    fn the_border_names_all_three_scopes_and_the_one_the_chord_moves_to() {
+        let mut session = Session::new("none").in_workspace("/work/here");
+        session.history = crate::history::History::from_entries(vec![
+            bravebot_session::store::Entry::sent("elsewhere", Some("/work/elsewhere".to_string())),
+            bravebot_session::store::Entry::sent("here", Some("/work/here".to_string())),
+        ]);
+        session.history.set_project(Some("/work/here".to_string()));
+        session.type_char('x');
+        session.submit().expect("the prompt is sent");
+        session.complete("ok", Vec::new(), 0);
+        session.recall_older();
+
+        let all = rendered_at(&session, 140, 12);
+        assert!(all.contains("All 3/3"), "{all}");
+        assert!(
+            all.contains(&t!(input_history_project, chord = "ctrl-n")),
+            "{all}"
+        );
+
+        session.cycle_history_scope();
+        let project = rendered_at(&session, 140, 12);
+        assert!(project.contains("This project 2/2"), "{project}");
+        assert!(
+            project.contains(&t!(input_history_narrow, chord = "ctrl-n")),
+            "{project}"
+        );
+
+        session.cycle_history_scope();
+        let this_session = rendered_at(&session, 140, 12);
+        assert!(this_session.contains("This session 1/1"), "{this_session}");
+        assert!(
+            this_session.contains(&t!(input_history_widen, chord = "ctrl-n")),
+            "{this_session}"
         );
     }
 
@@ -5649,7 +6069,7 @@ mod tests {
         );
         assert!(!wide.contains("ctrl-n"), "{wide}");
 
-        session.narrow_history();
+        session.cycle_history_scope();
         let narrow = rendered_at(&session, 120, 12);
         assert!(
             narrow.contains(&t!(input_history_widen, chord = "alt-n")),
@@ -5742,10 +6162,10 @@ mod tests {
         // Tall enough for the whole list. A screen with no room for it drops rows from the
         // bottom, so a fixed height would turn this into a test of how many commands fit on a
         // terminal of that size.
-        let height = crate::app::commands().len() as u16 + 6;
+        let height = crate::command_table::commands().len() as u16 + 6;
         let output = rendered_at(&session, 120, height);
 
-        for command in crate::app::commands() {
+        for command in crate::command_table::commands() {
             assert!(output.contains(command.name), "{} missing", command.name);
             assert!(
                 output.contains(command.description),
@@ -5967,6 +6387,16 @@ mod tests {
         );
     }
 
+    /// `/sandbox` spells out the modes it takes once the word is typed.
+    #[test]
+    fn the_sandbox_command_offers_its_modes_after_its_word() {
+        let row = input_row(&typed("/sandbox "), 90);
+        assert!(
+            row.ends_with("/sandbox  [strict | read-only | workspace-write | off]"),
+            "{row}"
+        );
+    }
+
     /// The hint is one row however narrow the terminal is, cut where it reaches the edge with an
     /// ellipsis, and a file's own escape in it is drawn as a glyph.
     #[test]
@@ -6181,6 +6611,27 @@ mod tests {
             !narrow.contains("output"),
             "a part was cut rather than dropped: {narrow}"
         );
+    }
+
+    /// The parts below the accent count draw as one accented span and the rest as one dim span, with
+    /// the line's own two spaces before the first drawn part and `  ·  ` between. The faults it
+    /// rejects are an accent on a part past the boundary and a dim span opening on a separator
+    /// with nothing before it.
+    #[test]
+    fn the_hint_spans_split_at_the_accent_count_and_join_with_separators() {
+        let parts: Vec<String> = ["one", "two", "three", "four"].map(String::from).to_vec();
+        let text = |spans: &[ratatui::text::Span<'_>]| -> Vec<String> {
+            spans.iter().map(|span| span.content.to_string()).collect()
+        };
+
+        let both = hint::hint_spans(&parts, &[0, 1, 3], 2);
+        assert_eq!(text(&both), ["  one  ·  two", "  ·  four"]);
+        assert_eq!(both[0].style.fg, Some(theme::accent()));
+        assert_ne!(both[1].style.fg, Some(theme::accent()));
+
+        let rest_only = hint::hint_spans(&parts, &[2, 3], 2);
+        assert_eq!(text(&rest_only), ["  three  ·  four"]);
+        assert!(hint::hint_spans(&parts, &[], 2).is_empty());
     }
 
     /// After compaction the line reports that the context was compacted.
@@ -7270,35 +7721,41 @@ mod tests {
     /// have drawn from the start: the hint row sits on the new bottom row and is fitted to the new
     /// width, nothing left from the old layout. Both directions, since a narrowing leaves a row too
     /// wide behind and a widening leaves one too short.
+    ///
+    /// The opening screen draws a face that blinks on the process clock, so the face is held still:
+    /// a blink between two draws would differ in the eye cells and say nothing about the layout.
     #[test]
     fn a_frame_drawn_after_a_resize_is_the_frame_of_a_terminal_that_size_from_the_start() {
         let session = typed("a line in the box");
-        for (from, to) in [((100, 30), (40, 12)), ((40, 12), (100, 30))] {
-            let mut terminal = Terminal::new(TestBackend::new(from.0, from.1)).expect("terminal");
-            terminal
-                .draw(|frame| {
-                    draw(frame, &session);
-                })
-                .expect("first draw succeeds");
-            terminal.backend_mut().resize(to.0, to.1);
-            terminal
-                .draw(|frame| {
-                    draw(frame, &session);
-                })
-                .expect("draw after the resize succeeds");
+        crate::avatar::with_face_held(crate::avatar::Look::default(), || {
+            for (from, to) in [((100, 30), (40, 12)), ((40, 12), (100, 30))] {
+                let mut terminal =
+                    Terminal::new(TestBackend::new(from.0, from.1)).expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        draw(frame, &session);
+                    })
+                    .expect("first draw succeeds");
+                terminal.backend_mut().resize(to.0, to.1);
+                terminal
+                    .draw(|frame| {
+                        draw(frame, &session);
+                    })
+                    .expect("draw after the resize succeeds");
 
-            let mut fresh = Terminal::new(TestBackend::new(to.0, to.1)).expect("terminal");
-            fresh
-                .draw(|frame| {
-                    draw(frame, &session);
-                })
-                .expect("fresh draw succeeds");
-            assert_eq!(
-                terminal.backend().buffer(),
-                fresh.backend().buffer(),
-                "{from:?} to {to:?} left the old layout on the screen"
-            );
-        }
+                let mut fresh = Terminal::new(TestBackend::new(to.0, to.1)).expect("terminal");
+                fresh
+                    .draw(|frame| {
+                        draw(frame, &session);
+                    })
+                    .expect("fresh draw succeeds");
+                assert_eq!(
+                    terminal.backend().buffer(),
+                    fresh.backend().buffer(),
+                    "{from:?} to {to:?} left the old layout on the screen"
+                );
+            }
+        });
     }
 
     fn typed(text: &str) -> Session {
@@ -7856,6 +8313,60 @@ mod tests {
                 .iter()
                 .any(|cell| cell.modifier.contains(Modifier::CROSSED_OUT));
             assert!(!struck, "an unfinished task was drawn struck through");
+        }
+
+        /// TODO-3. A dropped task is struck, because it is no longer outstanding, and neither its
+        /// marker nor its colour is the one finished work gets: those two are the whole of what
+        /// the states can be told apart by on a terminal.
+        #[test]
+        fn a_cancelled_task_is_struck_without_the_finished_colour() {
+            let drawn = |status| {
+                let session = working_with(list(&[("rewrite the parser", status)]));
+                let mut terminal = Terminal::new(TestBackend::new(60, 16)).expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        draw(frame, &session);
+                    })
+                    .expect("draw succeeds");
+                let buffer = terminal.backend().buffer().clone();
+                let struck = buffer
+                    .content()
+                    .iter()
+                    .any(|cell| cell.modifier.contains(Modifier::CROSSED_OUT));
+                // The marker is the cell before the task's text on the row the task is drawn on.
+                let width = buffer.area.width as usize;
+                let row: Vec<_> = buffer
+                    .content()
+                    .chunks(width)
+                    .find(|row| {
+                        row.iter()
+                            .map(|cell| cell.symbol())
+                            .collect::<String>()
+                            .contains("rewrite the parser")
+                    })
+                    .expect("the task was drawn")
+                    .to_vec();
+                let text_at = row
+                    .iter()
+                    .position(|cell| cell.symbol() == "r")
+                    .expect("the text starts somewhere");
+                let marker = &row[text_at - 2];
+                (struck, marker.symbol().to_string(), marker.fg)
+            };
+
+            let (done_struck, done_marker, done_colour) = drawn(Status::Done);
+            let (gone_struck, gone_marker, gone_colour) = drawn(Status::Cancelled);
+
+            assert!(done_struck, "a finished task was not struck through");
+            assert!(gone_struck, "a cancelled task was not struck through");
+            assert_ne!(
+                gone_marker, done_marker,
+                "a cancelled task carries the marker finished work gets"
+            );
+            assert_ne!(
+                gone_colour, done_colour,
+                "a cancelled task was drawn in the colour finished work gets"
+            );
         }
 
         /// The list stays visible after the turn, attached to the reply it belongs to.

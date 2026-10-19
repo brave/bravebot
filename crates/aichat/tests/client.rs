@@ -239,6 +239,8 @@ enum Attempt {
     Dropped,
     /// Answer with a status and nothing else.
     Status(u16),
+    /// Answer with a status and a `Retry-After` header of this text.
+    StatusAfter(u16, &'static str),
     /// Answer 200 with this body as JSON.
     Json(String),
     /// Answer properly, with these SSE frames.
@@ -304,6 +306,13 @@ fn serve_attempts(attempts: Vec<Attempt>) -> (String, mpsc::Receiver<Captured>) 
                 Attempt::Status(status) => {
                     let _ = stream.write_all(
                         format!("HTTP/1.1 {status} Nope\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                            .as_bytes(),
+                    );
+                    let _ = stream.flush();
+                }
+                Attempt::StatusAfter(status, after) => {
+                    let _ = stream.write_all(
+                        format!("HTTP/1.1 {status} Nope\r\nRetry-After: {after}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                             .as_bytes(),
                     );
                     let _ = stream.flush();
@@ -2022,7 +2031,7 @@ static DIAG_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn a_retry_is_written_to_the_diagnostic_log() {
     let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().expect("a scratch directory");
-    bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().join("logs")));
+    bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().to_path_buf()));
 
     for (streaming, base_ms) in [(false, 7), (true, 11)] {
         let reply = if streaming {
@@ -2233,6 +2242,41 @@ fn a_gateway_with_a_credential_is_asked_what_that_account_may_reach() {
     assert_eq!(captured.header("authorization"), Some("Bearer a-token"));
 }
 
+/// What a third-party service is sent is the shape it documents. A roster request that named this
+/// product would tell a gateway something it cannot act on, and the header is the one thing Brave's
+/// own listing carries that a gateway's must not, whether or not a credential goes with it.
+#[test]
+fn a_gateways_roster_request_carries_no_brave_product_header() {
+    for token in [None, Some("a-token")] {
+        let (endpoint, received) = serve(GATEWAY_ROSTER);
+        let provider = gateway_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy");
+
+        bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &egress)
+            .expect("the roster was fetched");
+
+        let captured = received.recv().expect("request captured");
+        assert!(
+            captured.request_line.starts_with("GET /v1/models"),
+            "the roster was not what was asked: {}",
+            captured.request_line
+        );
+        assert_eq!(
+            captured.header("Brave-Product"),
+            None,
+            "a gateway's roster request named this product (credential: {token:?})"
+        );
+    }
+}
+
 /// The account-scoped route is a gateway's own extension, so a gateway without it still has to end
 /// up with a roster. A 404 and a 200 nobody can decode are the two ways such a gateway answers, and
 /// each is followed by the service-wide question rather than by an empty roster or an error.
@@ -2271,6 +2315,80 @@ fn a_gateway_that_cannot_answer_the_account_question_is_asked_for_its_whole_rost
             ["GET /v1/models/user HTTP/1.1", "GET /v1/models HTTP/1.1"],
             "{name}"
         );
+    }
+}
+
+/// An OpenAI entry is pointed at the local server by a stated endpoint, which is the one way to
+/// reach anything but OpenAI from it.
+fn openai_at(endpoint: &str) -> bravebot_config::provider::Provider {
+    let text = format!(
+        r#"{{"provider": {{"openai": {{"env": ["OPENAI_API_KEY"], "options": {{"baseURL": "{endpoint}/v1"}}}}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+/// What the listing at `/v1/models` is documented to hold for each model: an id, an object type, a
+/// creation time and an owner, and nothing saying what the model can do. Chat, embedding and
+/// speech models arrive in the same shape.
+const OPENAI_LISTING: &str = r#"{"object":"list","data":[
+    {"id":"a-chat-model","object":"model","created":1,"owned_by":"system"},
+    {"id":"an-embedding-model","object":"model","created":2,"owned_by":"system"},
+    {"id":"a-speech-model","object":"model","created":3,"owned_by":"openai-internal"}
+]}"#;
+
+/// The listing says nothing of what a model can do, so nothing here can tell a chat model from an
+/// embedding one, and a roster that dropped the rows it could not vouch for would drop all of them.
+/// Every row is offered, qualified so the pick names the service, and the key travels as a bearer
+/// token to the route the account question is asked at before the whole listing.
+#[test]
+fn an_openai_listing_that_reports_no_capabilities_offers_every_model_it_lists() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(404),
+        Attempt::Json(OPENAI_LISTING.into()),
+    ]);
+    let provider = openai_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let models = bravebot_aichat::models::list_from_gateway(
+        &mut policy,
+        &provider,
+        Some("a-token"),
+        &egress,
+    )
+    .expect("the roster was fetched");
+
+    let mut keys: Vec<&str> = models.iter().map(|model| model.key.as_str()).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "openai/a-chat-model",
+            "openai/a-speech-model",
+            "openai/an-embedding-model"
+        ]
+    );
+    let asked: Vec<_> = received.try_iter().collect();
+    let lines: Vec<&str> = asked.iter().map(|c| c.request_line.as_str()).collect();
+    assert_eq!(
+        lines,
+        ["GET /v1/models/user HTTP/1.1", "GET /v1/models HTTP/1.1"]
+    );
+    for captured in &asked {
+        assert_eq!(captured.header("authorization"), Some("Bearer a-token"));
+        assert_eq!(captured.header("x-goog-api-key"), None);
     }
 }
 
@@ -2712,5 +2830,253 @@ fn a_whole_reply_gives_up_a_lifetime_a_gateway_refuses_before_the_breakpoints() 
         mark(&second.body),
         Some(serde_json::json!({"type": "ephemeral"})),
         "the retry gave up the breakpoints with the lifetime, or kept the lifetime"
+    );
+}
+
+fn a_reply() -> Attempt {
+    Attempt::Frames(vec![
+        frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hello"}}]}"#),
+        frame("[DONE]"),
+    ])
+}
+
+/// What a person at the keyboard sees of a rate limit that lifts in seconds: the request is held
+/// for as long as the service asked and then goes through, instead of being sent again after the
+/// fixed second and given up on after three of them.
+#[test]
+fn a_rate_limit_is_waited_out_for_as_long_as_the_service_asked() {
+    let (endpoint, received) = serve_attempts(vec![Attempt::StatusAfter(429, "2"), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let completion = client.complete_streaming(&mut policy, &request, |_| {});
+    let waited = started.elapsed();
+
+    assert!(completion.is_ok(), "{completion:?}");
+    assert_eq!(client.attempts(), 2);
+    assert!(
+        waited >= Duration::from_secs(2),
+        "it asked again after {waited:?}, before the two seconds the service asked for"
+    );
+    assert_eq!(received.try_iter().count(), 2);
+}
+
+/// The same wait on the whole-reply path, which has its own loop.
+#[test]
+fn a_rate_limit_is_waited_out_before_a_whole_reply_is_asked_for_again() {
+    let (endpoint, _received) = serve_attempts(vec![
+        Attempt::StatusAfter(429, "2"),
+        Attempt::Json(
+            r#"{"model":"served-model","choices":[{"message":{"content":"hello"}}]}"#.into(),
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let completion = client.complete(&mut policy, &request);
+
+    assert!(completion.is_ok(), "{completion:?}");
+    assert!(started.elapsed() >= Duration::from_secs(2));
+}
+
+/// A wait past the ceiling is not sat through. The failure comes at once, with the figure on it
+/// for the line that tells the person when to ask again.
+#[test]
+fn a_wait_past_the_ceiling_fails_at_once_and_carries_the_figure() {
+    let (endpoint, received) = serve_attempts(vec![Attempt::StatusAfter(429, "600"), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    // A client that did sit through ten minutes is stopped after five seconds, so the failure is an
+    // assertion below and not a test that never ends.
+    let cancel = Cancel::new();
+    let watchdog = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(5));
+        watchdog.cancel();
+    });
+    let mut client = AichatClient::new(&config, &egress).with_cancel(cancel);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let error = client
+        .complete_streaming(&mut policy, &request, |_| {})
+        .expect_err("a ten minute wait was sat through");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(client.attempts(), 1);
+    assert_eq!(received.try_iter().count(), 1, "the request was sent again");
+    match error {
+        ChatError::Egress(bravebot_net::EgressError::Status {
+            status: 429,
+            retry_after: Some(asked),
+            ..
+        }) => assert_eq!(asked, Duration::from_secs(600)),
+        other => panic!("expected the 429 with its wait, got {other:?}"),
+    }
+}
+
+/// A value that is not a figure leaves the doubling from the client's own backoff in force.
+#[test]
+fn a_retry_after_that_does_not_parse_falls_back_to_the_backoff() {
+    let (endpoint, _received) = serve_attempts(vec![
+        Attempt::StatusAfter(429, "when it suits"),
+        Attempt::StatusAfter(503, "-1"),
+        a_reply(),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress).with_backoff(Duration::from_millis(100));
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let completion = client.complete_streaming(&mut policy, &request, |_| {});
+
+    assert!(completion.is_ok(), "{completion:?}");
+    assert_eq!(client.attempts(), 3);
+    let waited = started.elapsed();
+    assert!(
+        waited >= Duration::from_millis(300),
+        "the 100ms then 200ms backoff was skipped: {waited:?}"
+    );
+    assert!(
+        waited < Duration::from_secs(5),
+        "an unread header was waited on: {waited:?}"
+    );
+}
+
+/// Only a 429's header is read as a rate limit's: another status keeps the doubling, and a long
+/// figure on it neither is waited out nor ends the call.
+#[test]
+fn a_retry_after_on_another_status_is_not_waited_for_or_refused() {
+    let (endpoint, _received) = serve_attempts(vec![Attempt::StatusAfter(503, "600"), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress).with_backoff(Duration::from_millis(100));
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let completion = client.complete_streaming(&mut policy, &request, |_| {});
+
+    assert!(completion.is_ok(), "{completion:?}");
+    assert_eq!(client.attempts(), 2);
+    let waited = started.elapsed();
+    assert!(
+        waited < Duration::from_secs(5),
+        "a 503's header was waited on: {waited:?}"
+    );
+}
+
+/// Stopping while the service's wait is running ends it, however long it was asked to be.
+#[test]
+fn a_stop_does_not_wait_out_the_pause_a_service_asked_for() {
+    let (endpoint, _received) = serve_attempts(vec![Attempt::StatusAfter(429, "100"), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let cancel = Cancel::new();
+    let mut client = AichatClient::new(&config, &egress).with_cancel(cancel.clone());
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let error = client
+        .complete_streaming(&mut policy, &request, |progress| {
+            if progress.attempt > 1 {
+                cancel.cancel();
+            }
+        })
+        .expect_err("a stopped request produced a completion");
+
+    assert!(matches!(error, ChatError::Cancelled), "{error}");
+    assert_eq!(client.attempts(), 1);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// A service that says no wait is needed is still given the pause the client would have taken, so a
+/// header of zero cannot turn the retries into a burst.
+#[test]
+fn a_retry_after_of_zero_still_takes_the_backoff() {
+    let (endpoint, _received) = serve_attempts(vec![Attempt::StatusAfter(429, "0"), a_reply()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress).with_backoff(Duration::from_millis(400));
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let started = std::time::Instant::now();
+    let completion = client.complete_streaming(&mut policy, &request, |_| {});
+
+    assert!(completion.is_ok(), "{completion:?}");
+    assert!(
+        started.elapsed() >= Duration::from_millis(400),
+        "a zero wait was taken at its word: {:?}",
+        started.elapsed()
     );
 }

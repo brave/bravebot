@@ -253,10 +253,15 @@ pub enum Reach {
 }
 
 impl Reach {
-    pub fn describe(self) -> &'static str {
+    /// The sentence a block's heading adds to "untrusted", where it adds one.
+    ///
+    /// Content kept from the planner is the ordinary reason for a block, and the heading and the
+    /// landing line under the call already say it, so repeating it on every block says nothing
+    /// new. Content in no model's context is the exception and states it.
+    pub fn note(self) -> Option<&'static str> {
         match self {
-            Self::NotThePlanner => t!(reach_not_the_planner),
-            Self::NoModel => t!(reach_no_model),
+            Self::NotThePlanner => None,
+            Self::NoModel => Some(t!(reach_no_model)),
         }
     }
 }
@@ -573,6 +578,40 @@ pub struct Delegation {
     pub stop: bravebot_core::cancel::DelegateStop,
 }
 
+/// A message from another session, as it reached the planner of this one (MSG-11).
+///
+/// Drawn apart from the person's own prompts. The sender's id and name are the roster's and the
+/// label is the one the policy layer gave the message, so none of the three is the sender's word;
+/// the text is the sender's, released for a screen only where the planner was given it, and kept
+/// in the marked block every quarantined thing is drawn in where it was not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeardMessage {
+    pub from: String,
+    /// The sender's name, as the roster holds it.
+    pub name: String,
+    /// The label the message was given.
+    pub label: String,
+    /// The words, or the block that stands for them.
+    pub body: Reported,
+}
+
+/// A message this session's planner put to another session (MSG-11).
+///
+/// Drawn where the person reads the transcript, and drawn for every message, so one sent under a
+/// standing answer is seen as it goes. The target's id and name are the roster's, the label is the
+/// one the policy layer gave the words, and the words are the planner's own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentMessage {
+    /// The receiver's id.
+    pub to: String,
+    /// The receiver's name, as the roster holds it.
+    pub name: String,
+    /// The label the message was sent under.
+    pub label: String,
+    /// What the planner wrote.
+    pub text: String,
+}
+
 pub trait Reporter {
     /// A measured model call, including retries and their waits, even on failure or stop.
     fn inference_interval(&mut self, _interval: crate::timing::Interval) {}
@@ -755,6 +794,19 @@ pub trait Reporter {
     /// its mind unprompted.
     fn interjected(&mut self, _said: String) {}
 
+    /// A message another session sent has reached the planner.
+    ///
+    /// Sent at the moment it goes in, for the reason [`Reporter::interjected`] is: a planner that
+    /// changes course on a message nobody saw arrive reads as one that changed its mind unprompted.
+    fn session_message(&mut self, _heard: HeardMessage) {}
+
+    /// A message this session's planner sent to another session has gone.
+    ///
+    /// Said once it is queued in the other session's process, and for every message: the person is
+    /// asked about the first to a session in a turn and may have said to send the rest, so this is
+    /// the only place the later ones are seen.
+    fn message_sent(&mut self, _sent: SentMessage) {}
+
     /// Whose work the reports that follow describe: one delegate, or the turn itself.
     ///
     /// Set by the driver immediately before each report, and the only thing that says where a
@@ -844,6 +896,10 @@ pub struct RecordingReporter {
     pub landed: Vec<Landing>,
     /// Everything the person said mid-turn, in the order it reached the planner.
     pub interjected: Vec<String>,
+    /// Every message from another session, in the order it reached the planner.
+    pub heard: Vec<HeardMessage>,
+    /// Every message this session's planner sent to another session, in the order it was sent.
+    pub sent: Vec<SentMessage>,
     /// Every delegate announced as starting, in order.
     pub delegated: Vec<Delegation>,
     /// How each delegate ended, in the order they finished.
@@ -953,6 +1009,14 @@ impl Reporter for RecordingReporter {
         self.interjected.push(said);
     }
 
+    fn session_message(&mut self, heard: HeardMessage) {
+        self.heard.push(heard);
+    }
+
+    fn message_sent(&mut self, sent: SentMessage) {
+        self.sent.push(sent);
+    }
+
     fn reporting_for(&mut self, delegate: Option<DelegateId>) {
         self.attributed_to = delegate;
     }
@@ -1010,6 +1074,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "schedule_next" => t!(verb_schedule_next),
         "watch_file" => t!(verb_watch_file),
         "advisor" => t!(verb_advisor),
+        "message_session" => t!(verb_message_session),
         // Every server's tool is offered under a wire name of this shape, and no built-in is.
         server if server.starts_with("mcp__") => t!(verb_mcp_call),
         _ => t!(verb_unknown),
@@ -1157,7 +1222,13 @@ mod tests {
             crate::watch::Arming::Allowed { free: 1 },
             crate::exec::Deadlines::BUILT_IN,
             crate::tools::Running::Offered,
-        )) {
+        ))
+        .chain({
+            let mut added = Vec::new();
+            crate::tools::offer_advisor(&mut added);
+            crate::tools::offer_message_session(&mut added);
+            added
+        }) {
             let name = &tool.function.name;
             assert_ne!(
                 verb_for(name),

@@ -5,10 +5,16 @@ status: normative
 governs:
   - crates/tui/src/watch_command.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/entry.rs
+  - crates/tui/src/state/standing.rs
+  - crates/tui/src/state/watching.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
+  - crates/tui/src/app/keys.rs
   - crates/tui/src/status.rs
   - crates/agent/src/watch.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/workspace.rs
 documented-by: docs/website/docs/using/watches.md
 ---
@@ -85,6 +91,7 @@ to watch it.
 `verified-by: bravebot_agent::watch::a_look_that_sees_what_the_last_one_saw_fires_nothing`
 `verified-by: bravebot_agent::watch::a_look_is_measured_against_the_one_before_it_rather_than_against_the_first`
 `verified-by: bravebot_agent::watch::the_look_taken_when_a_watch_is_armed_is_what_the_next_one_is_measured_against`
+`verified-by: bravebot_agent::tools::the_first_look_is_taken_at_the_call_and_not_after_the_turn`
 `verified-by: bravebot_tui::state::a_change_begins_a_turn_with_no_turn_running_to_notice_it`
 
 <a id="FSWATCH-2"></a>
@@ -144,6 +151,7 @@ and [tools/read-file.md](tools/read-file.md) states them for the read that share
 `verified-by: bravebot_agent::watch::a_path_that_is_gone_fires_with_the_removal_and_does_not_end_its_watch`
 `verified-by: bravebot_agent::watch::a_delete_and_recreate_between_two_fires_is_one_write`
 `verified-by: bravebot_agent::watch::a_file_that_came_and_went_unreported_fires_nothing`
+`verified-by: bravebot_agent::workspace::a_look_observes_size_time_and_presence_and_nothing_inside_the_file`
 
 ## What a firing does
 
@@ -369,6 +377,8 @@ they asked for it.
 
 `verified-by: bravebot_tui::status::the_report_lists_every_live_watch_with_the_turn_that_armed_it`
 `verified-by: bravebot_tui::status::a_session_watching_nothing_says_nothing_about_watches`
+`verified-by: bravebot_tui::status::the_report_says_how_long_a_watch_has_left`
+`verified-by: bravebot_tui::state::a_fire_announces_the_watch_it_came_from`
 `verified-by: bravebot_agent::watch::a_number_is_not_reused_when_the_watch_it_named_ends`
 `verified-by: bravebot_agent::watch::a_live_watch_reports_its_path_the_turn_that_armed_it_and_what_is_left`
 `verified-by: bravebot_tui::state::a_session_with_no_watch_says_so_when_asked`
