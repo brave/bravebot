@@ -87,7 +87,8 @@ description: Notes about commits.
 Type `/` and the skills this session has are listed beneath the commands, each with its description
 and where it was found: `(project)`, `(user)` or `(built-in)`. After other words, as in
 `this is /release-no`, the list holds skills alone. Tab takes the highlighted one and writes
-`/release-notes ` into the line.
+`/release-notes ` into the line. A word that is already a command in full still lists the skills
+whose names extend it, so `/pr` shows `pr-fix` as well as the `/pr` command.
 
 A name typed in full is drawn in the prompt's colour, so you can see it was recognised. With a space
 after it, the skill's `argument-hint` appears dimly where the argument goes, and goes as soon as you
@@ -119,10 +120,15 @@ reads one with `read_file`, naming the directory and the file.
 For a skill in `~/.bravebot/skills` that read is allowed once the skill has been loaded, for the rest
 of the turn, and the file is trusted as the skill is: it is your own directory. Nothing else there
 opens up: a write is refused, a path that climbs out of the skill's directory or leaves it through a
-link is refused, and a setting that keeps the file tools inside the project still does. A skill in a
+link is refused, and a setting that keeps the file tools inside the project still does. A link that
+stays inside the skill's directory still reads; one that lands in a directory you added with
+`/add-dir` or in the session's scratch directory is refused, so a file from there is never read
+under the skill's trust. A skill in a
 project is read through the trust map like any other file of the project, so a file you have not
 vouched for is not named, and one a `deny` rule covers is not named either. A link in the skill's
-directory is never listed. Running a script kept there is not part of this; `run` has its own gate.
+directory is never listed. Directories that are generated (`__pycache__`, `node_modules`) and compiled
+`.pyc` files are left out of the list too, so a skill whose scripts have been run still names its real
+files. Running a script kept there is not part of this; `run` has its own gate.
 
 ## Trust
 

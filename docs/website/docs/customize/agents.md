@@ -153,7 +153,9 @@ for. A name no skill goes by picks nothing, and the turn says so:
 
 **`rounds` sets how long the delegate may work.** Nobody is watching a delegate, so each kind stops
 one after a set number of rounds and makes it answer with what it has: 60 for a `reader`, 80 for a
-`checker` and 120 for a `worker`. A definition written for a long job, a staged refactor say, can
+`checker` and 120 for a `worker`. When a delegate reaches its bound, the planner and you are told in
+the delegate's report how many rounds it spent and that it may not be finished. The same is said when
+it spent the bound and then failed to answer, so the planner does not start the identical task again. A definition written for a long job, a staged refactor say, can
 ask for more, up to its kind's ceiling: 120 for a `reader`, 160 for a `checker` and 200 for a
 `worker`, which is the bound on a one-shot run nobody is watching. Asking for more than that gives
 the delegate the ceiling, and the turn says so:

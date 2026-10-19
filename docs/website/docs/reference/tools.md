@@ -299,7 +299,7 @@ author and its subject. With `messages`, the rest of each commit's message follo
 indented. A log that stopped with commits left names the `skip` that lists the next page, and a page
 holds whole commits. `show` prints a commit
 with its message and diff, a tag with its message and then its commit, or a file or directory at a
-revision. `diff` compares two commits. A merge is shown without a diff and says which diff to ask for.
+revision. `diff` compares two commits. Two edits far apart in a file show as two hunks. Where a stretch of a file cannot be lined up, the answer says which line ranges differ and gives the lines removed and added as upper limits. A merge is shown without a diff and says which diff to ask for.
 `tags` lists tags newest version first, as `git tag --sort=-v:refname` does, and given a revision
 only those it reaches, as `--merged` does. `search` prints the lines `pattern` matches in the files
 at a revision, as `git grep -n` does. Both page with `skip` as a log does.
@@ -342,6 +342,8 @@ deadline says it was cut.
 
 Asks a language server about a symbol: where it is defined, what refers to it, what implements it,
 what calls it. It also asks what the server makes of a file. **Starting a server is put to you.**
+That holds in every permission mode, bypass included, and a start is refused where nobody can be
+asked, as in a one-shot run.
 
 | Parameter | |
 |---|---|
@@ -378,7 +380,9 @@ message is a sentence the server composed out of your files, and it can quote a 
 another file, so the file that was checked does not vouch for it. It comes back as a reference the
 agent hands to a processor or asks you to show it, as hover text does. While a `deny` rule covers
 reading any path, the messages are left out, and the agent is told so. A file that does not exist is
-reported as such before any server is started, so you are not asked about one.
+reported as such before any server is started, so you are not asked about one. A location in a file a
+`deny` rule covers is left out of any answer, and the answer does not say how many were left out.
+While a `deny` rule covers reading any path, hover text is withheld.
 
 A server that publishes nothing about the file in a few seconds is reported as not having reported,
 which is not the same as a file with no errors, and a report with no errors says "no errors reported
@@ -399,7 +403,10 @@ that was not just written or edited, and it starts the server after you agree to
 | Python | `pyright-langserver` |
 | Go | `gopls` |
 
-The binary has to be installed and on your `PATH`. A language not in the table has no server until
+The binary has to be installed and on your `PATH`, in a directory that a program the agent runs cannot
+write. A server found only in the session's own directory, such as a `.venv/bin/pyright-langserver`
+or a `node_modules/.bin` entry, is reported as not installed. A command written with a path in it is
+your own choice and is not looked up. A language not in the table has no server until
 you declare one, [below](#declaring-a-server-of-your-own).
 
 **A server runs with the access your own shell would give it, and is not confined.** The prompt says
@@ -678,7 +685,9 @@ planner may read and too long for one result, it saw the beginning and the end, 
 hands back the rest a page at a time from `offset`. Each page is no longer than
 [`run.maxOutput`](../customize/configuration.md#runmaxoutput) and ends with the offset of the next.
 Nobody is asked, since there is nothing for you to decide: only the length kept it out. An `offset`
-on output the planner may not read is refused before you are asked anything.
+on output the planner may not read is refused before you are asked anything. The refusal says you are
+asked only where one answers: otherwise the output comes back as text, or is kept back when output is
+vetted automatically. A `pattern` on such output is refused the same way.
 
 **A pattern searches that output rather than paging it.** On output the planner may already read,
 `pattern` answers with the lines matching the regular expression, each numbered with its line and
@@ -740,7 +749,9 @@ so a line arriving on one does not hide what arrived on the other, and text from
 marked as such.
 
 A `job` naming a [delegate](#spawn_agent) rather than a job is answered as that: `job_output` neither
-reads nor stops a delegate, and its report reaches the planner on its own when it finishes. Only a
+reads nor stops a delegate, and its report reaches the planner on its own when it finishes. The refusal
+tells the planner to end the round with one line saying what is outstanding, and the turn asks it again
+once the report arrives. Only a
 name that is neither is reported as no job.
 
 **A finished job reaches the turn without being asked about.** Between rounds the turn checks whether
@@ -1060,21 +1071,28 @@ session was opened on is the usual cause.
 | `write` | `true` to let programs write it as well as read it; defaults to `false` |
 
 You are shown the path, whether it is to be read or written, and the planner's reason, and you
-answer yes or no. A yes lasts for this session, is not saved, and does **not** mark the directory
+answer yes or no. A call with no reason, or a blank one, is still put to you. A yes lasts for this session, is not saved, and does **not** mark the directory
 trusted, as [`/add-dir`](commands.md) does. It does not let `read_file`, `write_file`, `edit_file`,
-`list_files` or `search` reach the path either: those are opened with `/add-dir`. `/reach paths` lists what you have allowed and
+`list_files` or `search` reach the path either: those are opened with `/add-dir`, and a refusal from one of them for a path outside the workspace names `/add-dir` alone. `/reach paths` lists what you have allowed and
 `/reach paths remove <number>` takes one back; `/status` lists them too. With permissions bypassed
 the answer is yes without a question, and the directory is also opened for those five tools and
-trusted, as `/add-dir` would: `/add-dir close` and `/clear` close it, and `--resume` carries it. A
+trusted, as `/add-dir` would, and the result tells the planner whether they now reach it (a refusal from a file tool then mentions `request_path` as well): `/add-dir close` and `/clear` close it, and `--resume` carries it. On macOS and Linux with the sandbox mode `workspace-write`, the programs the lead session's
+`run` starts are also given those paths, minus your home directory as a whole, the credential
+locations and your `denyRead` and `denyWrite` paths, so a sibling of the working directory does not
+fail with `Operation not permitted`. A
 directory inside the working directory, or one that `/add-dir` would otherwise refuse, is not opened,
 and the planner is told so. One that holds the working directory ends checkouts while it is open.
 
 The same paths are refused as an `allowWrite` entry would be, whatever you would answer, and you are
 not asked: `~`, `/`, a drive root, your home directory and any directory above it, `~/.ssh`,
-`~/.bravebot`, the credential locations and any directory that holds one, such as `~/.config`. A path your `denyRead` or `denyWrite` entries cover is
+`~/.bravebot`, the credential locations and any directory that holds one, such as `~/.config`. A request to read `~/.bravebot/sessions` or a path inside it is the one exception, and a request to write there is refused like the rest of `~/.bravebot`. A path your `denyRead` or `denyWrite` entries cover is
 refused as well. Nothing is accepted under the sandbox mode `off`, in a workspace you have not
 trusted, in a run with nobody to ask, or in the desktop app, which has no question for it yet. No
-settings file can allow one in advance.
+settings file can allow one in advance. A request to write is also refused, whatever the mode, under
+the sandbox mode `read-only`, and for the shell startup files, the user job directories and git's
+global configuration that [the security page](../security/security.md#confinement) lists. A refused
+request to write says what is true of the path: it holds credentials, a write there could leave code
+that runs later, it is too broad, or your deny list covers it. It does not say which setting decided.
 
 ## `todo_write`
 
@@ -1093,7 +1111,9 @@ through and counted apart from the finished ones.
 Says when this turn should be asked again: the pace of the next tick of a self-paced
 [`/loop`](commands.md#loop-interval-prompt), or, outside a loop, the first later look at something,
 which starts a loop over the line you typed. It is offered only where that later look can actually
-happen; a call from any other turn is answered the way any unoffered name is.
+happen; a call from any other turn is answered the way any unoffered name is. A turn that runs a prompt
+bravebot wrote for a command, as [`/init`](commands.md#init) and [`/review`](commands.md#review-target-focus)
+do, is not offered it, so those cannot start a loop that repeats the fixed prompt.
 
 | Parameter | |
 |---|---|
@@ -1187,7 +1207,9 @@ ends. Nothing else sends, and no permission mode answers the question for you.
 The other session's planner is told the text is advice from another session, not your words. The text
 grants it no permission and answers nothing it is waiting on. A message starts no turn. It is read
 at the start of that planner's next request, so a session that is idle or waiting for you reads it later.
-The planner is not told whether it was read.
+The planner is not told whether it was read. A session holds eight waiting messages at most and
+refuses a ninth as full. A message sent from a private context makes the receiving session's context
+private. A message that is not labelled trusted reaches the receiving planner as a reference.
 
 The target is a name, so a name that no session has, that two sessions have, that is this session's own,
 or that belongs to a session no process is running is refused, and so is a text over the limit. A
