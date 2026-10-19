@@ -235,6 +235,29 @@ settled here.
 `verified-by: bravebot_agent::skills::the_loop_skill_is_advertised_for_a_tick_and_for_nothing_else`
 `verified-by: bravebot_agent::skills::the_loop_skill_description_names_one_condition_and_ends_with_it`
 
+<a id="SKILL-17"></a>
+### SKILL-17: the documentation is a built-in skill whose pages load one at a time
+
+The published documentation under `docs/website/docs` is compiled into the program as the built-in
+skill `bravebot-help`, so a session answers a question about using bravebot from the version that
+is running and not from the planner's memory. Its description names one condition, per
+[SKILL-13](#SKILL-13): the user asks a question about using bravebot itself.
+
+The skill's body is an index with one line per page. A page is loaded with `load_skill` by the name
+on its line, `bravebot-help/<place of the page>`, and a question costs the pages it needs and not the
+whole site. The name is matched exactly against the table compiled into the program, so it is never
+a path ([SKILL-8](#SKILL-8)), and a page is trusted for the reason the skill is: it is this
+program's own text ([SKILL-12](#SKILL-12)). A skill of the user's own named `bravebot-help` shadows
+the built-in, and the pages go with it.
+
+**What this clause does not do.** The clause headings of `docs/specs/` are not carried, and there
+is no `/help` command: the planner decides from the description when to load the skill.
+
+`verified-by: bravebot_agent::skills::the_help_skill_is_offered_everywhere_for_a_question_about_bravebot_and_nothing_else`
+`verified-by: bravebot_agent::help::every_published_page_is_carried_in_the_binary`
+`verified-by: bravebot_agent::tools::a_documentation_page_loads_by_the_name_the_index_gives_it`
+`verified-by: bravebot_agent::tools::a_users_skill_of_the_help_name_takes_the_pages_with_it`
+
 <a id="SKILL-14"></a>
 ### SKILL-14: an interface listing skills is shown the set a turn would advertise, read the same way
 

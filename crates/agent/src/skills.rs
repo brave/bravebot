@@ -574,6 +574,32 @@ const BUILT_IN: [BuiltIn; 1] = [BuiltIn {
     body: LOOP,
 }];
 
+/// What the planner is told about the documentation skill, ending in the one condition it is for.
+const HELP_DESCRIPTION: &str = "The documentation of this version of bravebot: its commands, \
+                                keys, settings, modes and safety rules. Load it when the user \
+                                asks a question about using bravebot itself.";
+
+/// A skill made of text written into this program, which passes no gate and has no file.
+fn built_in_skill(name: &str, description: &str, body: &str) -> Skill {
+    Skill {
+        name: name.to_string(),
+        description: description.to_string(),
+        argument_hint: None,
+        // A string literal in this file, derived from nothing that arrived from anywhere. It
+        // is trusted for being this program's own words, which is what the label says.
+        body: Labelled::trusted(body.to_string()),
+        origin: "built-in".to_string(),
+        directory: None,
+        files: Vec::new(),
+        reach: None,
+        source: Source::BuiltIn,
+        // A built-in is this program's own text, so there is no file to have named a model or
+        // an effort and no key nothing reads: it runs as the session does.
+        runs_as: RunsAs::default(),
+        unread: Vec::new(),
+    }
+}
+
 /// What the planner is told about being inside a loop.
 const LOOP: &str = "\
 A loop repeats one prompt: the line the user typed when they started it. Every tick sends that \
@@ -680,24 +706,18 @@ fn discover_listing<S: Sink>(
     // nothing to vouch for: this is the program's own text, not a source somebody supplied, so it
     // can neither be refused nor be missing, and there is never a notice about it.
     for built_in in BUILT_IN {
-        catalogue.insert(Skill {
-            name: built_in.name.to_string(),
-            description: built_in.description.to_string(),
-            argument_hint: None,
-            // A string literal in this file, derived from nothing that arrived from anywhere. It
-            // is trusted for being this program's own words, which is what the label says.
-            body: Labelled::trusted(built_in.body.to_string()),
-            origin: "built-in".to_string(),
-            directory: None,
-            files: Vec::new(),
-            reach: None,
-            source: Source::BuiltIn,
-            // A built-in is this program's own text, so there is no file to have named a model or
-            // an effort and no key nothing reads: it runs as the session does.
-            runs_as: RunsAs::default(),
-            unread: Vec::new(),
-        });
+        catalogue.insert(built_in_skill(
+            built_in.name,
+            built_in.description,
+            built_in.body,
+        ));
     }
+    // The documentation compiled into this program, offered the same way (SKILL-17).
+    catalogue.insert(built_in_skill(
+        crate::help::SKILL,
+        HELP_DESCRIPTION,
+        crate::help::body(),
+    ));
 
     // The program's own skills above are not customizations and stay. Everything below is a file
     // somebody wrote.

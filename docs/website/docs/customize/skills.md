@@ -156,7 +156,10 @@ A few skills are written into bravebot itself rather than found on disk. They pa
 are offered in every session, including one in a directory nobody trusts, because there is no file and
 no directory behind them. They are the least specific source, so a skill of your own with the same
 name shadows one. The skill that tells a
-[`/loop`](../reference/commands.md#loop-interval-prompt) tick how to pace itself is one.
+[`/loop`](../reference/commands.md#loop-interval-prompt) tick how to pace itself is one,
+and `bravebot-help` is another: it carries these documentation pages, so asking how to use bravebot
+is answered from the version you are running. Its pages are loaded one at a time, only the ones the
+question needs.
 
 :::caution
 A skill downloaded into `~/.bravebot/skills` is trusted exactly as far as a config file you pasted

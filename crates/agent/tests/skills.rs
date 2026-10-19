@@ -1933,3 +1933,38 @@ fn a_nested_skill_on_the_list_covers_a_distrusted_project_entry_of_its_name() {
         "an entry the nested skill covered was counted: {notices:?}"
     );
 }
+
+/// The documentation skill is offered in a directory nobody vouched for with no home, and the
+/// description is the whole of when the planner loads it, so it names one condition and ends with it.
+#[test]
+fn the_help_skill_is_offered_everywhere_for_a_question_about_bravebot_and_nothing_else() {
+    let scratch = Scratch::new("help-skill-offered");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    let skill = catalogue.get("bravebot-help").expect("the help skill");
+    assert_eq!(skill.source, skills::Source::BuiltIn);
+    assert!(notices.is_empty(), "a notice about a built-in: {notices:?}");
+    assert!(
+        skill
+            .description
+            .ends_with("Load it when the user asks a question about using bravebot itself."),
+        "something follows the condition: {}",
+        skill.description
+    );
+    assert_eq!(
+        skill.description.to_lowercase().matches("load").count(),
+        1,
+        "the description invites a load more than once: {}",
+        skill.description
+    );
+    assert!(
+        !catalogue.describe_for_prompt().contains("using/watches"),
+        "the pages are advertised with the skill instead of waiting for load_skill"
+    );
+}
