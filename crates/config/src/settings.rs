@@ -351,6 +351,9 @@ pub struct Settings {
     sandbox_ignored: Vec<(PathBuf, SandboxMode)>,
     /// The layers that named `sandbox.mode` as something that is not a mode.
     sandbox_unreadable: Vec<PathBuf>,
+    /// Whether an entitled layer set `sandbox.holdBackTemporaryDirectory` (SANDBOX-22). A
+    /// checkout's file that sets it is reported as an unread key and not obeyed.
+    sandbox_hold_back_temporary: bool,
     /// The `allow` entries a layer not entitled to grant one wrote, with the file each came from.
     ///
     /// Kept for the reason `vetting_ignored` is kept, and it matters more: an `allow` entry is the
@@ -849,6 +852,7 @@ impl Settings {
         let mut sandbox_asked_strict = Vec::new();
         let mut sandbox_ignored = Vec::new();
         let mut sandbox_unreadable = Vec::new();
+        let mut sandbox_hold_back_temporary = false;
         // Settled per layer for the same reason as `vetting`: a provider block or a `model` key a
         // checkout wrote picks where a request is sent and which of the person's variables are read
         // as its credential, so the merge must never see it. `model` and `provider` are removed
@@ -1003,6 +1007,9 @@ impl Settings {
                 Stated::Mode(SandboxMode::Strict) => sandbox_asked_strict.push(path.clone()),
                 Stated::Mode(mode) => sandbox_ignored.push((path.clone(), mode)),
             }
+            if granting && crate::sandbox::holds_back_temporary_directory(&root) {
+                sandbox_hold_back_temporary = true;
+            }
             for list in FILESYSTEM_LISTS {
                 match filesystem_list(&root, list) {
                     ListStated::Absent => {}
@@ -1076,7 +1083,7 @@ impl Settings {
             // Read off this layer's own root rather than the merged one: the merge keeps every key a
             // layer set, so a key two files wrote would be reported once against whichever of them
             // spoke last, and the other file would go unnamed.
-            for key in unread_keys(&root) {
+            for key in unread_keys(&root, granting) {
                 unread.push((path.clone(), key));
             }
             let written = permission_lists(&root);
@@ -1126,6 +1133,7 @@ impl Settings {
         settings.sandbox_asked_strict = sandbox_asked_strict;
         settings.sandbox_ignored = sandbox_ignored;
         settings.sandbox_unreadable = sandbox_unreadable;
+        settings.sandbox_hold_back_temporary = sandbox_hold_back_temporary;
         settings.sandbox_filesystem = sandbox_filesystem;
         settings.sandbox_filesystem_ignored = sandbox_filesystem_ignored;
         settings.sandbox_filesystem_misshapen = sandbox_filesystem_misshapen;
@@ -1273,6 +1281,7 @@ impl Settings {
             sandbox_asked_strict: Vec::new(),
             sandbox_ignored: Vec::new(),
             sandbox_unreadable: Vec::new(),
+            sandbox_hold_back_temporary: false,
             // Empty here, and filled by [`Settings::layered`] for the same reason: one root does
             // not say which file it was read out of, and that is the whole of what decides whether
             // an `allow` entry in it grants anything.
@@ -1795,6 +1804,12 @@ impl Settings {
         &self.sandbox_filesystem
     }
 
+    /// Whether the person's own file, or the file `--settings` names outside the workspace, holds
+    /// the temporary directory back from every stage (SANDBOX-22).
+    pub fn sandbox_holds_back_temporary_directory(&self) -> bool {
+        self.sandbox_hold_back_temporary
+    }
+
     /// The layers that wrote `allowRead` or `allowWrite` and were not obeyed, with the key.
     pub fn sandbox_filesystem_ignored(&self) -> impl Iterator<Item = (&Path, &'static str)> {
         self.sandbox_filesystem_ignored
@@ -1890,6 +1905,7 @@ impl Settings {
             && self.sandbox_asked_strict.is_empty()
             && self.sandbox_ignored.is_empty()
             && self.sandbox_unreadable.is_empty()
+            && !self.sandbox_hold_back_temporary
             && self.keybindings.is_empty()
             && self.attribution.is_empty()
             && self.search.is_empty()
@@ -2588,7 +2604,7 @@ fn env_names(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
 /// Every key, however it is spelled. A block spelled as the wrong type is a key this build reads and
 /// is reported for that by [`Settings::misshapen_rule_lists`] instead, so the shape of a value never
 /// reaches this.
-fn unread_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+fn unread_keys(root: &serde_json::Map<String, serde_json::Value>, granting: bool) -> Vec<String> {
     // `sandbox` is a block other tools write more keys into, and a person who pasted one believes
     // a sandbox is configured, so what sits beside `mode` is named.
     let beside_the_mode = match root.get(SANDBOX_BLOCK) {
@@ -2598,7 +2614,7 @@ fn unread_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String>
                 !matches!(
                     key.as_str(),
                     crate::sandbox::MODE_KEY | "filesystem" | crate::sandbox_network::BLOCK
-                )
+                ) && !(granting && key.as_str() == crate::sandbox::HOLD_BACK_KEY)
             })
             .map(|key| format!("{SANDBOX_BLOCK}.{key}"))
             .chain(crate::sandbox_network::unread_inside(root))
@@ -7564,6 +7580,36 @@ mod tests {
             layers.read().sandbox().map(|(mode, _)| mode),
             Some(SandboxMode::WorkspaceWrite)
         );
+    }
+
+    /// SANDBOX-22: the person's own file and a named file outside the workspace hold the temporary
+    /// directory back, and a checkout's project or local file that asks for it is not obeyed and
+    /// is reported as an unread key. The regression it rejects: a repository the person cloned
+    /// choosing what its own programs may write, or its line obeyed in silence.
+    #[test]
+    fn only_the_persons_own_files_hold_the_temporary_directory_back() {
+        let held = r#"{"sandbox": {"holdBackTemporaryDirectory": true}}"#;
+        let layers = |name: &str| Layers::new(&format!("hold-back-{name}"));
+
+        for (name, settings) in [
+            ("home", layers("home").global(held).read()),
+            ("named", layers("named").named(held).read()),
+        ] {
+            assert!(settings.sandbox_holds_back_temporary_directory(), "{name}");
+            assert_eq!(settings.unread_keys().count(), 0, "{name}");
+        }
+        for (name, settings) in [
+            ("project", layers("project").project(held).read()),
+            ("local", layers("local").local(held).read()),
+            ("none", layers("none").read()),
+        ] {
+            assert!(!settings.sandbox_holds_back_temporary_directory(), "{name}");
+            assert_eq!(
+                settings.unread_keys().count(),
+                usize::from(name != "none"),
+                "{name}"
+            );
+        }
     }
 
     /// SANDBOX-22: a checkout's `strict` writes the session's directories, so it does not replace a

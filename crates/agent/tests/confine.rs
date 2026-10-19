@@ -450,6 +450,38 @@ fn a_confined_program_cannot_write_outside_the_session() {
     assert!(!target.exists());
 }
 
+/// SANDBOX-22: the temporary directory is written by every stage unless the person held it back,
+/// and then it is read and not written, so a file a stage leaves there for a later program does
+/// not exist. The regressions it rejects: a setting that changes nothing, which leaves the file
+/// written, and one that takes the session's own directory with it, which refuses the control. The
+/// same line without the setting is the control that the refusal is the setting's.
+#[cfg(unix)]
+#[test]
+fn holding_the_temporary_directory_back_refuses_a_write_there_and_nothing_else() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("held-back-temporary");
+    let planted = std::env::temp_dir().join(format!("bravebot-held-back-{}", std::process::id()));
+    let _ = std::fs::remove_file(&planted);
+
+    let open = places.run(&touch(planted.display()), Some(&places.confinement()));
+    let written = planted.exists();
+    let _ = std::fs::remove_file(&planted);
+    let held = places.confinement().with_temporary_held_back(true);
+    let refused = places.run(&touch(planted.display()), Some(&held));
+    let refused_wrote = planted.exists();
+    let _ = std::fs::remove_file(&planted);
+    let inside = places.run(&touch("made.txt"), Some(&held));
+
+    assert!(open.ended_well && written, "{open:?}");
+    assert!(!refused.ended_well && !refused_wrote, "{refused:?}");
+    assert!(
+        inside.ended_well && places.session.join("made.txt").exists(),
+        "{inside:?}"
+    );
+}
+
 /// SANDBOX-14, SANDBOX-18: on macOS a stage whose program is not git cannot write a repository's
 /// hooks or configuration, a submodule's configuration under `.git/modules` or a `.git` file that
 /// names a gitdir, and neither can git when a script starts it, while a stage whose program is git

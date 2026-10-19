@@ -517,6 +517,7 @@ impl<'a> Tools<'a> {
                 .with_network(bravebot_config::run_network())
                 .with_hosts(hosts)
                 .with_mode(self.sandbox)
+                .with_temporary_held_back(bravebot_config::holds_back_temporary_directory())
                 .with_filesystem(&bravebot_config::sandbox_filesystem())
                 .with_path_reach(&self.workspace.path_reach())
                 .with_unasked_writes(

@@ -80,6 +80,9 @@ pub struct Confinement {
     /// in that mode builds none ([`Confinement::here`] is not asked), so the rows below are the
     /// two modes that confine.
     mode: SandboxMode,
+    /// Whether the person asked for the temporary directory to be read and not written by every
+    /// stage (`sandbox.holdBackTemporaryDirectory`, SANDBOX-22).
+    temporary_held_back: bool,
     /// The reach a person remembered for commands, which attaches to the steps its shape names.
     grants: Vec<Grant>,
     /// The person's own filesystem lists, resolved against this session's directories.
@@ -160,6 +163,7 @@ impl Confinement {
             network: Network::Open,
             hosts: None,
             mode: SandboxMode::WorkspaceWrite,
+            temporary_held_back: false,
             grants: Vec::new(),
             filesystem: Rules::none(),
             path_reach: Rules::none(),
@@ -285,6 +289,14 @@ impl Confinement {
             self.home.as_deref(),
             &base,
         );
+        self
+    }
+
+    /// This confinement with the temporary directory written by no stage where `held_back`, which
+    /// is read as before (SANDBOX-22). The scratch directory, a person's own `allowWrite` entries
+    /// and the grants beneath the temporary directory are rows of their own and stay.
+    pub fn with_temporary_held_back(mut self, held_back: bool) -> Self {
+        self.temporary_held_back = held_back;
         self
     }
 
@@ -1131,6 +1143,9 @@ impl Confinement {
         {
             policy = with_security_cache(policy, cache);
         }
+        if self.temporary_held_back {
+            policy.writable.retain(|row| row.path != self.temporary);
+        }
         policy
     }
 
@@ -1271,6 +1286,15 @@ impl Confinement {
             policy = policy.allow_write_listed(row);
         }
         let mut policy = self.filesystem.apply(policy);
+        // The rows bypass gives are every path the account can write, which the temporary
+        // directory is one of, so holding it back there is a refusal inside a row and not a row
+        // left out (SANDBOX-22).
+        if self.temporary_held_back
+            && !unasked.is_empty()
+            && !policy.unwritable.contains(&self.temporary)
+        {
+            policy = policy.deny_write(self.temporary.clone());
+        }
         // Seatbelt's refusal of a read does not stop a write, so a read refusal inside a writable
         // row is a write refusal too: a row given without a request, or on macOS any row, a
         // session directory at or above the home among them (SANDBOX-12, SANDBOX-18). The places
@@ -1980,13 +2004,25 @@ impl Container {
 ///
 /// The `off` mode says nothing either, for the same reason: the programs have no boundary to state.
 pub fn stated_to_the_planner(confine_runs: bool, mode: SandboxMode) -> Option<String> {
-    stated(
+    let said = stated(
         confine_runs,
         Prelude::current(),
         bravebot_config::run_network(),
         mode,
+    )?;
+    Some(
+        match Prelude::current().is_some() && bravebot_config::holds_back_temporary_directory() {
+            true => format!("{said}{TEMPORARY_DIRECTORY_HELD_BACK_SENTENCE}"),
+            false => said,
+        },
     )
 }
+
+/// Said after the description where the person holds the temporary directory back, which makes
+/// the sentence above that names it as written untrue (SANDBOX-22).
+const TEMPORARY_DIRECTORY_HELD_BACK_SENTENCE: &str = " The person holds the temporary directory \
+     back in this session: it is read and not written, so a program that makes a scratch file \
+     there (a shell heredoc, `mktemp`, a compiler's intermediate files) is refused.";
 
 /// Fixed text that ends every profile line, so the line is the same for every failure.
 const CREDENTIAL_LOCATIONS_SENTENCE: &str = " A credential location such as `~/.ssh`, `~/.aws` \
@@ -3702,6 +3738,37 @@ mod tests {
                     && *path != HOME),
                 "{written:?}"
             );
+        }
+    }
+
+    /// SANDBOX-22: a person who holds the temporary directory back has it read and not written by
+    /// every stage, in every mode, while every other write row is kept.
+    /// The regressions it rejects: a setting that drops no row, and one that drops the session's.
+    #[test]
+    fn holding_the_temporary_directory_back_drops_its_write_row_alone() {
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            for mode in [
+                SandboxMode::Strict,
+                SandboxMode::ReadOnly,
+                SandboxMode::WorkspaceWrite,
+            ] {
+                let open = reading_confinement(prelude, &["/work/project"]).with_mode(mode);
+                let held = reading_confinement(prelude, &["/work/project"])
+                    .with_mode(mode)
+                    .with_temporary_held_back(true);
+                let at = |confined: &Confinement| {
+                    confined.policy(&step("/usr/bin/make", &[]), Path::new("/work"), &[])
+                };
+                let (open, held) = (at(&open), at(&held));
+
+                assert!(writes(&open, "/tmp"), "{prelude:?} {mode:?}");
+                assert!(!writes(&held, "/tmp"), "{prelude:?} {mode:?}");
+                assert_eq!(
+                    held.writable.len() + 1,
+                    open.writable.len(),
+                    "{prelude:?} {mode:?}: only the one row is dropped"
+                );
+            }
         }
     }
 
@@ -7837,6 +7904,25 @@ mod tests {
                 .contains("every path a request_path"),
             "the line says it without bypass"
         );
+    }
+
+    /// SANDBOX-22: the rows bypass gives without a request are every path the account can write,
+    /// so holding the temporary directory back there is a refusal of it. The regression it rejects
+    /// is a setting that drops the base's row and leaves bypass's rows covering the directory. The
+    /// same confinement without the setting is the control that nothing refuses it.
+    #[test]
+    fn a_bypass_stage_is_refused_the_temporary_directory_a_person_held_back() {
+        let (home, beside) = unasked_places("held-back");
+        let root = beside.join("project");
+        let step = step("/bin/cat", &["f"]);
+
+        let open = bypass_confinement(Prelude::Linux, &home, &root).policy(&step, &root, &[]);
+        let held = bypass_confinement(Prelude::Linux, &home, &root)
+            .with_temporary_held_back(true)
+            .policy(&step, &root, &[]);
+
+        assert!(!open.unwritable.contains(&PathBuf::from("/tmp")));
+        assert!(held.unwritable.contains(&PathBuf::from("/tmp")));
     }
 
     /// A home holding the public halves of two keys and the private half of one, and a session
