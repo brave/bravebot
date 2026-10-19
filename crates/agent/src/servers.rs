@@ -174,8 +174,59 @@ pub fn reconnect<A: Asker + ?Sized>(
     asker: &mut A,
     diagnostics: Stream,
 ) -> Reached {
+    reconnect_on(
+        settings,
+        root,
+        aliases,
+        &Machine::current(),
+        asking,
+        asker,
+        diagnostics,
+    )
+}
+
+/// As [`reconnect`], on the state directory and managed settings `machine` names, so a caller
+/// that is not the person's own session can point it at a directory of its own.
+pub fn reconnect_on<A: Asker + ?Sized>(
+    settings: &bravebot_config::Settings,
+    root: &Path,
+    aliases: &[String],
+    machine: &Machine,
+    asking: Asking,
+    asker: &mut A,
+    diagnostics: Stream,
+) -> Reached {
     let wanted = only_named(requested_by(settings), aliases);
-    reach_requested(wanted, root, asking, asker, diagnostics)
+    let project = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    reach(
+        &wanted,
+        &project,
+        &machine.home,
+        &machine.managed,
+        asking,
+        asker,
+        diagnostics,
+    )
+}
+
+/// What a start reads of the machine it runs on: the state directory and the administrator's
+/// settings.
+pub struct Machine {
+    pub home: Home,
+    pub managed: Managed,
+}
+
+impl Machine {
+    /// The person's own state directory and this machine's managed settings.
+    pub fn current() -> Self {
+        Self {
+            home: Home {
+                directory: crate::home::directory(),
+                writable: crate::home::writable().is_some(),
+            },
+            managed: Managed::load(),
+        }
+    }
 }
 
 /// The requests among `requested` for the servers called `aliases`, in the order they were made.
@@ -194,15 +245,12 @@ fn reach_requested<A: Asker + ?Sized>(
     diagnostics: Stream,
 ) -> Reached {
     let project = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let home = Home {
-        directory: crate::home::directory(),
-        writable: crate::home::writable().is_some(),
-    };
+    let machine = Machine::current();
     reach(
         &requested,
         &project,
-        &home,
-        &Managed::load(),
+        &machine.home,
+        &machine.managed,
         asking,
         asker,
         diagnostics,

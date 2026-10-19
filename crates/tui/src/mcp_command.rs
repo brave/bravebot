@@ -6,7 +6,7 @@
 //! a session takes as it opens, so a question that road asks is asked here and by the same asker.
 
 use bravebot_agent::mcp::Offering;
-use bravebot_agent::servers::{self, Asker, Asking};
+use bravebot_agent::servers::{self, Asker, Asking, Machine};
 use bravebot_config::Settings;
 use bravebot_i18n::t;
 use ratatui::Terminal;
@@ -48,13 +48,36 @@ pub fn run<A: Asker + ?Sized>(
     asking: Asking,
     asker: &mut A,
 ) {
+    run_on(
+        session,
+        settings,
+        root,
+        argument,
+        asking,
+        asker,
+        &Machine::current(),
+    );
+}
+
+/// As [`run`], reading the declarations and approvals `machine` holds.
+fn run_on<A: Asker + ?Sized>(
+    session: &mut Session,
+    settings: &Settings,
+    root: &Path,
+    argument: &str,
+    asking: Asking,
+    asker: &mut A,
+    machine: &Machine,
+) {
     let words: Vec<&str> = argument.split_whitespace().collect();
     match words.as_slice() {
         [] => list(session, settings),
         [word] if *word == MCP_LIST => list(session, settings),
-        [word] if *word == MCP_RECONNECT => reconnect(session, settings, root, None, asking, asker),
+        [word] if *word == MCP_RECONNECT => {
+            reconnect(session, settings, root, None, asking, asker, machine)
+        }
         [word, alias] if *word == MCP_RECONNECT => {
-            reconnect(session, settings, root, Some(alias), asking, asker)
+            reconnect(session, settings, root, Some(alias), asking, asker, machine)
         }
         [word] if *word == MCP_DISABLE => {
             session.note(t!(mcp_command_needs_an_alias, command = MCP_DISABLE))
@@ -141,6 +164,7 @@ fn reconnect<A: Asker + ?Sized>(
     named: Option<&str>,
     asking: Asking,
     asker: &mut A,
+    machine: &Machine,
 ) {
     let running = held(session);
     let wanted = requested(settings);
@@ -168,10 +192,11 @@ fn reconnect<A: Asker + ?Sized>(
         .disabled
         .retain(|off| !targets.contains(off));
 
-    let reached = servers::reconnect(
+    let reached = servers::reconnect_on(
         settings,
         root,
         &targets,
+        machine,
         asking,
         asker,
         bravebot_sandbox::Stream::Null,
@@ -346,9 +371,9 @@ mod tests {
         }
     }
 
-    /// Turning off a requested server that is not running keeps `reconnect` from starting it, says
-    /// nothing was written, and `reconnect` naming it clears that. Turning it off twice says it is
-    /// already off.
+    /// Turning off a requested server that is not running keeps a bare `reconnect` from starting
+    /// it, and turning it off twice says it is already off. Naming it to `reconnect` clears the
+    /// turn-off in `a_start_the_person_refuses_joins_nothing_and_clears_the_turn_off`.
     #[test]
     fn a_server_turned_off_stays_off_until_it_is_named() {
         let (settings, root) = requesting("mcp-off", &["weather"]);
@@ -367,5 +392,249 @@ mod tests {
             ]
         );
         assert_eq!(session.servers.disabled, vec!["weather".to_string()]);
+    }
+
+    /// What a start put to the person, answered with `answer` each time.
+    struct Answering {
+        answer: servers::Answer,
+        asked: usize,
+    }
+
+    impl Asker for Answering {
+        fn anybody_there(&self) -> bool {
+            true
+        }
+        fn ask_to_start(&mut self, _: &servers::Question<'_>) -> servers::Answer {
+            self.asked += 1;
+            self.answer
+        }
+        fn ask_to_move(&mut self, _: &bravebot_agent::confirm::MoveRequest) -> bool {
+            false
+        }
+    }
+
+    /// A server answering the handshake and the list, for as long as the test runs.
+    fn serve(alias: &'static str) -> String {
+        use std::io::{BufRead, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let url = format!(
+            "http://127.0.0.1:{}",
+            listener.local_addr().expect("addr").port()
+        );
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut reader = std::io::BufReader::new(stream.try_clone().expect("clone"));
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let request: serde_json::Value =
+                    serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+                let result = match request.get("method").and_then(serde_json::Value::as_str) {
+                    Some("initialize") => serde_json::json!({
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "serverInfo": {"name": alias, "version": "1"},
+                    }),
+                    Some("tools/list") => serde_json::json!({"tools": [{
+                        "name": "lookup",
+                        "description": "Look something up.",
+                        "inputSchema": {"type": "object", "properties": {}},
+                    }]}),
+                    _ => serde_json::json!({}),
+                };
+                let reply = serde_json::json!({
+                    "jsonrpc": "2.0", "id": request.get("id"), "result": result
+                })
+                .to_string();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        url
+    }
+
+    /// `alias` after its handshake and its list, as a session that started it holds it.
+    fn reached(alias: &'static str) -> bravebot_agent::mcp::Reached {
+        use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{Policy, ReleasePlan, Routing};
+        let mut server = bravebot_mcp::HttpServer::new(alias, serve(alias));
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "reach an MCP server");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([
+                Capability::WebFetch,
+                Capability::McpCall(ServerAlias::new(alias)),
+            ]),
+            &mut sink,
+        )
+        .expect("policy");
+        server
+            .initialize(&mut policy, &egress, "bravebot", "0")
+            .expect("handshake");
+        let listing = server.list_tools(&mut policy, &egress).expect("listed");
+        let digest = bravebot_config::mcp::Digest::parse(&"d".repeat(64)).expect("a digest");
+        bravebot_agent::mcp::Reached::new(
+            bravebot_agent::mcp::Connection::Http(server),
+            listing,
+            digest,
+        )
+    }
+
+    /// A session holding each of `aliases` as running, with `servers` reading it.
+    fn holding(aliases: &[&'static str]) -> Session {
+        let mut session = Session::new("none");
+        session.servers.session = Some(bravebot_agent::mcp::Session::new(
+            aliases.iter().map(|alias| reached(alias)).collect(),
+            std::env::temp_dir(),
+            None,
+            false,
+            bravebot_config::Managed::default(),
+        ));
+        refresh(&mut session.servers);
+        session
+    }
+
+    /// A machine whose state directory declares `weather` as a remote server nobody approved.
+    fn declaring_weather(name: &str) -> Machine {
+        use bravebot_config::mcp::{Declaration, Declarations};
+        let home = tempfile::Builder::new()
+            .prefix(name)
+            .tempdir()
+            .expect("directory")
+            .keep();
+        let mut declarations = Declarations::default();
+        declarations.insert(
+            "weather",
+            &Declaration::http("https://weather.example/mcp".to_string()).expect("declaration"),
+        );
+        std::fs::write(
+            bravebot_config::mcp::declarations_file(&home),
+            declarations.to_text(),
+        )
+        .expect("mcp.json");
+        Machine {
+            managed: bravebot_config::Managed::at(&home.join("managed.json")),
+            home: servers::Home {
+                directory: Some(home),
+                writable: false,
+            },
+        }
+    }
+
+    /// A start the person answers No joins nothing, says it was declined and not that it was
+    /// reached, and the server is asked about again on the next `reconnect`. Naming the alias also
+    /// clears a turn-off, and the refused start does not put it back.
+    #[test]
+    fn a_start_the_person_refuses_joins_nothing_and_clears_the_turn_off() {
+        let (settings, root) = requesting("mcp-refused", &["weather"]);
+        let machine = declaring_weather("mcp-refused-home");
+        let mut session = Session::new("none");
+        let mut asker = Answering {
+            answer: servers::Answer::No,
+            asked: 0,
+        };
+
+        run_on(
+            &mut session,
+            &settings,
+            &root,
+            "disable weather",
+            Asking::Person,
+            &mut asker,
+            &machine,
+        );
+        assert_eq!(asker.asked, 0, "turning a server off put a question");
+        run_on(
+            &mut session,
+            &settings,
+            &root,
+            "reconnect",
+            Asking::Person,
+            &mut asker,
+            &machine,
+        );
+        assert_eq!(asker.asked, 0, "a server that is off was started");
+        run_on(
+            &mut session,
+            &settings,
+            &root,
+            "reconnect weather",
+            Asking::Person,
+            &mut asker,
+            &machine,
+        );
+
+        assert_eq!(asker.asked, 1);
+        let said = said(&session);
+        assert!(
+            said.contains(&t!(servers_declined, alias = "weather").to_string()),
+            "{said:?}"
+        );
+        assert!(
+            !said.contains(&t!(mcp_command_reconnected, alias = "weather").to_string()),
+            "{said:?}"
+        );
+        assert!(session.servers.session.is_none());
+        assert!(session.servers.started.is_empty());
+        assert!(session.servers.disabled.is_empty(), "naming it left it off");
+    }
+
+    /// Naming a server that is running starts nothing and asks nothing.
+    #[test]
+    fn reconnecting_a_running_server_says_so_and_changes_nothing() {
+        let (settings, root) = requesting("mcp-running", &["weather"]);
+        let mut session = holding(&["weather"]);
+
+        typed(&mut session, &settings, &root, "reconnect weather");
+
+        assert_eq!(
+            said(&session),
+            vec![t!(mcp_command_already_running, alias = "weather").to_string()]
+        );
+        assert_eq!(session.servers.started, vec!["weather".to_string()]);
+    }
+
+    /// Turning off a running server stops it and says so, and the last one leaves the session with
+    /// none rather than an empty one. Another that is running stays.
+    #[test]
+    fn turning_off_a_running_server_removes_it_and_the_last_leaves_none() {
+        let (settings, root) = requesting("mcp-disable", &["weather", "docs"]);
+        let mut session = holding(&["weather", "docs"]);
+
+        typed(&mut session, &settings, &root, "disable weather");
+
+        assert_eq!(session.servers.started, vec!["docs".to_string()]);
+        assert_eq!(held(&session), vec!["docs".to_string()]);
+        assert_eq!(session.servers.disabled, vec!["weather".to_string()]);
+
+        typed(&mut session, &settings, &root, "disable docs");
+
+        assert!(session.servers.session.is_none());
+        assert!(session.servers.started.is_empty());
+        assert!(!session.servers.confined);
+        assert_eq!(
+            said(&session),
+            vec![
+                t!(mcp_command_disabled, alias = "weather").to_string(),
+                t!(mcp_command_disabled, alias = "docs").to_string(),
+            ]
+        );
     }
 }

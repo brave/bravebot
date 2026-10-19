@@ -41,5 +41,6 @@ unicode-width = { workspace = true }
 rustix = { workspace = true, features = ["event", "fs"] }
 
 [dev-dependencies]
+bravebot-mcp = { path = "../mcp" }
 bravebot-ui-bridge = { path = "../ui-bridge" }
 tempfile = { workspace = true }
