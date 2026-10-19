@@ -36,6 +36,7 @@ kept_in:
   - Confirmer::ask_user: answers to the planner's questions
   - Confirmer::interjection: nothing
   - Confirmer::alert_when_asking: nothing
+  - Confirmer::asks_a_person: nothing
   - Answers::trust: the trust map
   - Answers::programs: programs vouched for
   - Answers::servers: language servers started
