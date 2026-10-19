@@ -8244,6 +8244,88 @@ fn the_sandbox_flag_reaches_what_the_planner_is_told_of_a_run() {
     );
 }
 
+/// MODE-13: `--dangerously-bypass-approvals-and-sandbox` is bypass with the sandbox mode `off`. The
+/// run it opens is told what `--sandbox off` tells it, and a `--sandbox off` beside it changes
+/// nothing. The failure this rejects is a flag that skips permissions and leaves the programs in
+/// the default `workspace-write`, which gives the planner the sentence that mode gets.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn the_bypass_and_unconfine_flag_opens_a_run_with_the_sandbox_off() {
+    for (name, extra) in [("alone", &[][..]), ("with-off", &["--sandbox", "off"][..])] {
+        let gateway = a_gateway_asking_for_a_run();
+        let scratch = Scratch::new(&format!("cli-running-bypass-unconfine-{name}"))
+            .with_settings(&settings_for(&gateway));
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let mut arguments = vec!["--dangerously-bypass-approvals-and-sandbox"];
+        arguments.extend_from_slice(extra);
+        arguments.extend(["-p", "say hello"]);
+        bravebot_started_in(&scratch.path, &scratch.path, &environment, &arguments);
+        let asked = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        assert!(
+            !asked.contains("Programs this tool starts"),
+            "{name}: {asked}"
+        );
+        assert!(
+            !asked.contains("may read this machine"),
+            "{name}: the sandbox was not off: {asked}"
+        );
+        assert!(
+            asked.contains("\"name\":\"run\""),
+            "{name}: the run tool was dropped: {asked}"
+        );
+    }
+}
+
+/// MODE-13: the flag is refused where `--dangerously-skip-permissions` is, by its own name, and
+/// beside a `--sandbox` that asks for a confining mode. A run that read the flag as only the
+/// permission half would carry on in `strict` here with nothing asked.
+#[test]
+fn the_bypass_and_unconfine_flag_is_refused_where_the_bypass_flag_is_and_beside_a_sandbox_mode() {
+    let flag = "--dangerously-bypass-approvals-and-sandbox";
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch =
+        Scratch::new("cli-running-bypass-unconfine-refused").with_settings(&settings_for(&gateway));
+    for (arguments, wanted) in [
+        (vec!["--locked", flag, "-p", "hi"], flag),
+        (
+            vec![flag, "--sandbox", "strict", "-p", "hi"],
+            "--sandbox strict",
+        ),
+        (vec!["--bg", flag, "a task"], flag),
+    ] {
+        let output = bravebot(&scratch.path, AT_A_GATEWAY, &arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(stdout.is_empty(), "{arguments:?}: {stdout}");
+        assert!(stderr.contains(wanted), "{arguments:?}: {stderr}");
+    }
+    assert!(
+        gateway
+            .asked
+            .recv_timeout(Duration::from_millis(300))
+            .is_err(),
+        "a refused run still reached the model"
+    );
+
+    let unreachable = Scratch::new("cli-running-bypass-unconfine-unreachable")
+        .with_settings(r#"{"permissions": {"bypassUnreachable": true}}"#);
+    let output = bravebot(
+        &unreachable.path,
+        CONFIGURED,
+        &[flag, "-p", "say something"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert!(
+        stderr.contains(flag) && stderr.contains("permissions.bypassUnreachable"),
+        "the refusal did not name the flag and the key: {stderr}"
+    );
+}
+
 /// PERM-16 through the process that assembles a session: a layer asking for the file tools to stay
 /// inside the workspace refuses `--add-dir`, with the key named, and the run stops rather than
 /// starting with a directory the key was asked to keep shut.

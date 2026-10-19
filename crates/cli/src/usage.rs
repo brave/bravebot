@@ -9,9 +9,10 @@ pub(crate) fn print_help() {
     const FORM: usize = 39;
     /// The same, for the key column and the option column.
     const KEY: usize = 22;
-    /// Wide enough for `--dangerously-skip-permissions` and a gap. A narrower column would leave
-    /// that one flag touching its own description, since the padding below cannot go negative.
-    const OPTION: usize = 32;
+    /// Wide enough for `--dangerously-bypass-approvals-and-sandbox` and a gap. A narrower column
+    /// would leave that one flag touching its own description, since the padding below cannot go
+    /// negative.
+    const OPTION: usize = 44;
 
     println!("{}", t!(cli_tagline, version = VERSION));
     println!();
@@ -165,6 +166,10 @@ pub(crate) fn print_help() {
         (
             "--dangerously-skip-permissions",
             t!(cli_option_dangerously_skip_permissions),
+        ),
+        (
+            "--dangerously-bypass-approvals-and-sandbox",
+            t!(cli_option_dangerously_bypass_approvals_and_sandbox),
         ),
         ("-h, --help", t!(cli_option_help)),
         ("-V, --version", t!(cli_option_version)),

@@ -10,6 +10,9 @@ pub(crate) const SAFE: &str = "--safe";
 pub(crate) const VET: &str = "--vet";
 /// `--dangerously-skip-permissions`, which answers every question the permission modes ask.
 pub(crate) const SKIP_PERMISSIONS: &str = "--dangerously-skip-permissions";
+/// `--dangerously-bypass-approvals-and-sandbox`, which is `--dangerously-skip-permissions` with
+/// `--sandbox off`.
+pub(crate) const BYPASS_APPROVALS_AND_SANDBOX: &str = "--dangerously-bypass-approvals-and-sandbox";
 
 /// The commands that start neither a session nor a task, so a flag that shapes one is refused
 /// beside them rather than taken and ignored, for the reason CLI-13 gives about a settings file.

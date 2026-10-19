@@ -42,8 +42,8 @@ use crate::finish::{
     stopped_before_the_turn, what_ran,
 };
 use crate::flags::{
-    INCOGNITO, SAFE, SKIP_PERMISSIONS, VET, starts_neither_a_session_nor_a_task, take_flag,
-    take_valued,
+    BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, SAFE, SKIP_PERMISSIONS, VET,
+    starts_neither_a_session_nor_a_task, take_flag, take_valued,
 };
 use crate::model::{
     model_asked_for, model_for_this_run, model_not_served, nothing_serves, resolve_advisor,
@@ -105,6 +105,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
                     | "--settings"
                     | "--run-network"
                     | "--sandbox"
+                    | "--dangerously-bypass-approvals-and-sandbox"
                     | "--sandbox-allow-read"
                     | "--sandbox-deny-read"
                     | "--sandbox-allow-write"
@@ -172,12 +173,22 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // See [`bravebot_agent::PermissionMode`] for what giving it up costs. Deny rules from the
     // settings file are not part of it: they refuse before there is anything to prompt about, so
     // the flag means "stop asking me" rather than "forget what I wrote down".
-    let skip_permissions = take_flag(args, SKIP_PERMISSIONS);
+    //
+    // `--dangerously-bypass-approvals-and-sandbox` is that flag and `--sandbox off` given together,
+    // so everything below that refuses or reads the first reads this one too. Which of the two was
+    // typed is kept only to name it in a refusal.
+    let bypass_and_unconfine = take_flag(args, BYPASS_APPROVALS_AND_SANDBOX);
+    let skip_permissions = take_flag(args, SKIP_PERMISSIONS) || bypass_and_unconfine;
+    let bypass_flag = if bypass_and_unconfine {
+        BYPASS_APPROVALS_AND_SANDBOX
+    } else {
+        SKIP_PERMISSIONS
+    };
     if locked && skip_permissions {
         return Err(stopped_before_the_turn(
             wants_json(args),
             Ending::Argument,
-            t!(cli_locked_refuses_bypass).to_string(),
+            t!(cli_locked_refuses_bypass, flag = bypass_flag).to_string(),
         ));
     }
 
@@ -335,7 +346,11 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
         return Err(stopped_before_the_turn(
             as_json,
             Ending::Argument,
-            t!(cli_bypass_unreachable, path = path.display().to_string()),
+            t!(
+                cli_bypass_unreachable,
+                flag = bypass_flag,
+                path = path.display().to_string()
+            ),
         ));
     }
 
@@ -352,6 +367,19 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
                 complaint,
             ));
         }
+    };
+    // Refused rather than resolved in favour of one of the two: a line that names a confining mode
+    // beside a flag that says nothing is confined has two authors' worth of intent in it.
+    let sandbox_flag = match sandbox_flag {
+        Some(mode) if bypass_and_unconfine && mode != SandboxMode::Off => {
+            return Err(stopped_before_the_turn(
+                as_json,
+                Ending::Argument,
+                t!(cli_bypass_and_sandbox_disagree, mode = mode.name()).to_string(),
+            ));
+        }
+        _ if bypass_and_unconfine => Some(SandboxMode::Off),
+        flag => flag,
     };
     if let Some(mode) = sandbox_flag {
         bravebot_config::sandbox::note_flag(mode);

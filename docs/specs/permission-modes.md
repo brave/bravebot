@@ -465,6 +465,36 @@ word for bypassing would let a session reach the one mode MODE-5 keeps to the co
 `verified-by: bravebot_tui::app::the_plan_command_sets_plan_mode_rather_than_cycling_to_the_next`
 `verified-by: bravebot_tui::app::the_plan_command_waits_for_the_turn_in_flight`
 
+<a id="MODE-13"></a>
+### MODE-13: `--dangerously-bypass-approvals-and-sandbox` is the bypass flag and the sandbox mode `off`, given together
+
+The flag opens the session in bypassing (MODE-5) and settles the sandbox mode as `off`
+([SANDBOX-22](sandboxing.md#SANDBOX-22)), as `--dangerously-skip-permissions --sandbox off` does. Nothing
+is asked and no program is confined, so a `run` line that asks for `unconfined` is refused by the mode
+and is not put to the person ([SANDBOX-29](sandboxing.md#SANDBOX-29)). It is read from the command
+line only, as the flag in MODE-5 is, so no settings file, recorded session or command inside a session
+turns it on, and a resumed session or a background session must be given it again, or refuses it as
+MODE-5 says.
+
+It is refused wherever `--dangerously-skip-permissions` is refused: with `--locked` and where a layer
+wrote `permissions.bypassUnreachable`, and the refusal names this flag. It is refused beside a
+`--sandbox` that names a mode other than `off`, because the two disagree about whether programs are
+confined. A managed floor on the sandbox mode refuses it as it refuses `--sandbox off`.
+
+The two settings stay separate afterwards. The mode key moves between modes as MODE-5 says and
+leaves the sandbox mode as it was settled, so a session that leaves bypassing is still unconfined.
+The trail records the sandbox mode the programs ran in, so a session started with this flag can be told
+from one that ran in bypassing with a sandbox. The session record does not keep either setting.
+
+**Why.** A permission mode never widens a sandbox mode, so bypassing alone still puts every
+`unconfined` request to the person. A person who has decided to answer nothing and confine nothing
+says it once, on the command line, where no content can say it for them.
+
+**Known cost.** The desktop does not offer it, because it has no command line (MODE-11).
+
+`verified-by: bravebot_cli::running::the_bypass_and_unconfine_flag_opens_a_run_with_the_sandbox_off`
+`verified-by: bravebot_cli::running::the_bypass_and_unconfine_flag_is_refused_where_the_bypass_flag_is_and_beside_a_sandbox_mode`
+
 ## Known costs
 
 - **Bypassing is one key press past planning.** The ladder ends there, so a person leaving plan mode

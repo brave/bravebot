@@ -379,7 +379,7 @@ directory, which is the worktree itself.
 
 `--worktree` composes with the flags that apply to every way of starting a session, which are taken
 out of the line before the way of starting is chosen, such as `--settings`, `--agent`, `--safe`,
-`--locked`, `--vet` and `--dangerously-skip-permissions`, except `--incognito` and `--sandbox read-only`,
+`--locked`, `--vet`, `--dangerously-skip-permissions` and `--dangerously-bypass-approvals-and-sandbox`, except `--incognito` and `--sandbox read-only`,
 which [WORKTREE-3](#WORKTREE-3) refuses. It is refused, naming the other word,
 wherever it stands on the line, with `--resume` and
 `-r`, `--continue` and `-c`, `--fork` and `-f`, `--from-pr`, `--bg`, `--plain`, `-i` and

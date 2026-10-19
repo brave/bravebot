@@ -179,7 +179,7 @@ cli-option-safe =
 cli-option-locked =
     Like --safe, and also read no project or local settings file, and refuse --dangerously-skip-permissions
 cli-locked-refuses-bypass =
-    --dangerously-skip-permissions is refused with --locked: a locked run never opens the bypass mode
+    { $flag } is refused with --locked: a locked run never opens the bypass mode
 cli-option-vet =
     For this run, let a check answer: content it finds nothing in is promoted without asking you,
     and where nobody can be asked, anything else is kept back
@@ -188,6 +188,11 @@ cli-option-sandbox =
     floor this cannot go below
 cli-option-dangerously-skip-permissions =
     Bypass all permission checks. Recommended only for sandboxes with no internet access
+cli-option-dangerously-bypass-approvals-and-sandbox =
+    Bypass all permission checks and confine no program, as --dangerously-skip-permissions with --sandbox off.
+    Recommended only for machines you can lose
+cli-bypass-and-sandbox-disagree =
+    --dangerously-bypass-approvals-and-sandbox turns the sandbox off, and --sandbox { $mode } asks for it on. Give one of them
 cli-option-help = Show this message
 cli-option-version = Show the version
 
@@ -260,7 +265,7 @@ cli-plain-working-under-model = every prompt is addressed to { $definition }, wh
 # The file is named because the flag is documented and works everywhere else, so a refusal without
 # it sends somebody looking for a fault in the program.
 cli-bypass-unreachable =
-    --dangerously-skip-permissions is refused: permissions.bypassUnreachable in { $path } makes
+    { $flag } is refused: permissions.bypassUnreachable in { $path } makes
     that mode unreachable here. Remove it there, or run without the flag.
 cli-sandbox-needs-a-mode = --sandbox requires one of { $names }
 # The file that holds the floor is named, and the file that asked when there was one, because a
