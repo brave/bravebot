@@ -94,6 +94,7 @@ help:
 	@echo "  make bump-version BUMP=bugfix|minor|major   Set the next version"
 	@echo "  make github-release                         Tag it; Jenkins and npm publish are later"
 	@echo "  make publish-npm [TAG=v<version>]           Publish npm for TAG, or the latest GitHub release"
+	@echo "  make package-manifests TAG=v<version>       Write the Homebrew cask and WinGet manifests into dist/packages"
 	@echo "  make app-bundle                             Package the desktop application, release build"
 	@echo "  make app-release                            Its disk images for both Mac architectures, unsigned"
 	@echo "  make app-release-linux                      Its .deb and .rpm for both Linux architectures, unsigned"
@@ -404,10 +405,10 @@ check-affected-containers:
 		{ [ -z "$$targets" ] || $(MAKE) --no-print-directory -k $$targets; }
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest \
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
 	check-maintenance-selftest check-session-review-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest \
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
 	check-maintenance-selftest check-session-review-selftest
 
 check-all-selftest:
@@ -442,6 +443,9 @@ check-session-review-selftest:
 
 check-release-preflight-selftest:
 	python3 contrib/release-preflight.py --selftest
+
+check-package-manifests-selftest:
+	python3 contrib/package-manifests.py --selftest
 
 # CI and local runs share the same desktop checks. Linux uses a virtual display;
 # macOS uses the logged-in desktop session.
@@ -1005,6 +1009,15 @@ publish-npm:
 	echo "dispatching publish-npm.yml for $$tag"; \
 	gh workflow run publish-npm.yml --repo brave/bravebot --ref "$$tag" -f tag="$$tag"; \
 	echo "watch it with: gh run watch --repo brave/bravebot"
+
+.PHONY: package-manifests
+package-manifests:
+	@set -eu; \
+	[ "$(origin TAG)" = "command line" ] || { echo "error: name the release: make package-manifests TAG=v<version>" >&2; exit 1; }; \
+	checksums="$$(mktemp -d)"; trap 'rm -rf "$$checksums"' EXIT INT TERM; \
+	gh release download "$(TAG)" --repo brave/bravebot --dir "$$checksums" \
+		--pattern 'bravebot-darwin-*.sha256' --pattern 'bravebot-windows-*.sha256'; \
+	python3 contrib/package-manifests.py "$(TAG)" "$$checksums" dist/packages
 
 .PHONY: clean
 clean:
