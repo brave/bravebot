@@ -8,7 +8,6 @@ import { ChatScreen } from './screens/ChatScreen'
 import { SessionController, describeError } from './session/controller'
 import { NoTargetScreen } from './screens/NoTargetScreen'
 import type { Target } from './targets'
-import { displayString } from './text/displayText'
 import { workspaceName } from './workspaces'
 import { space, useTheme } from './theme'
 
@@ -20,8 +19,7 @@ function rowFacts(view: ViewState): string {
 function Shell({ target }: { target: Target }) {
   const theme = useTheme()
   const client = useMemo(() => target.create(), [target])
-  // Names are drawn as plain text in several places, so characters that hide or reorder text are written out once, here.
-  const workspaces = useMemo(() => client.workspaces().map((candidate) => ({ id: candidate.id, name: displayString(candidate.name) })), [client])
+  const workspaces = useMemo(() => client.workspaces(), [client])
   const [sessions, setSessions] = useState<readonly SessionSummary[]>([])
   const [current, setCurrent] = useState<SessionController | null>(null)
   const [drawer, setDrawer] = useState(false)
