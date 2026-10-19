@@ -2430,6 +2430,7 @@ fn work(work: Work) {
     // in a verdict read the same answer.
     let mut confirmer = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
     open_rewind_point(&mut state, &workspace, &prompt);
+    let began_at = std::time::Instant::now();
     let completed = agent_turn::resume(
         &config,
         &egress,
@@ -2481,6 +2482,11 @@ fn work(work: Work) {
     );
     if state.first_prompt.is_none() && recall {
         state.first_prompt = Some(prompt.clone());
+    }
+    // Whichever way the turn ended: a plan a stopped or failed turn had written is still what it
+    // set out to do (SESSION-23).
+    if !reporter.task_list().is_empty() {
+        state.todos.insert(turn, reporter.task_list().to_vec());
     }
 
     let event = match outcome {
@@ -2554,6 +2560,15 @@ fn work(work: Work) {
             )
         }
         Err(error) => {
+            let charged = &mut *state;
+            bravebot_session::sessions::charge_failed_turn(
+                &mut charged.tokens,
+                &mut charged.spend,
+                &mut charged.timing,
+                turn,
+                reporter.spent().unwrap_or_default(),
+                began_at.elapsed(),
+            );
             let _ = save(&project, &mut state, turn, sink.trail());
 
             let chosen = task.model.as_deref().unwrap_or(&config.default_model);

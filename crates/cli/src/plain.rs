@@ -719,6 +719,9 @@ struct Kept {
     turns: usize,
     tokens: u64,
     spend: std::collections::BTreeMap<usize, u64>,
+    timing: std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
+    /// The model that last answered, kept across a turn that failed before any server did.
+    model: Option<String>,
 }
 
 impl Kept {
@@ -735,6 +738,8 @@ impl Kept {
                 turns: record.turns,
                 tokens: record.tokens,
                 spend: record.spend.clone(),
+                timing: record.timing.clone(),
+                model: record.model.clone(),
             },
             None => Self {
                 handle: Handle::begin_as(
@@ -746,6 +751,8 @@ impl Kept {
                 turns: 0,
                 tokens: 0,
                 spend: std::collections::BTreeMap::new(),
+                timing: std::collections::BTreeMap::new(),
+                model: None,
             },
         };
         // What this session's turns are addressed to, not what the record it resumed was under:
@@ -765,6 +772,56 @@ impl Kept {
         self.turns += 1;
         self.tokens += outcome.tokens;
         *self.spend.entry(self.turns).or_insert(0) += outcome.tokens;
+        self.timing
+            .entry(self.turns)
+            .or_default()
+            .add(outcome.timing);
+        if !outcome.model.is_empty() {
+            self.model = Some(outcome.model.clone());
+        }
+        self.write(prompt, conversation, trust, programs);
+    }
+
+    /// Charge a turn that failed for what its completed requests cost, and say whether there was
+    /// anything to charge (SESSION-11, SESSION-12, TURN-5).
+    fn charge_failure(&mut self, spent: bravebot_agent::Spent, took: std::time::Duration) -> bool {
+        let turn = self.turns + 1;
+        let charged = bravebot_session::sessions::charge_failed_turn(
+            &mut self.tokens,
+            &mut self.spend,
+            &mut self.timing,
+            turn,
+            spent,
+            took,
+        );
+        if charged {
+            self.turns = turn;
+        }
+        charged
+    }
+
+    /// Write down a turn that failed, with what its completed requests cost.
+    fn after_a_failed_turn(
+        &mut self,
+        prompt: &str,
+        spent: bravebot_agent::Spent,
+        took: std::time::Duration,
+        conversation: &bravebot_agent::conversation::Conversation,
+        trust: &TrustStore,
+        programs: &TrustedPrograms,
+    ) {
+        if self.charge_failure(spent, took) {
+            self.write(prompt, conversation, trust, programs);
+        }
+    }
+
+    fn write(
+        &mut self,
+        prompt: &str,
+        conversation: &bravebot_agent::conversation::Conversation,
+        trust: &TrustStore,
+        programs: &TrustedPrograms,
+    ) {
         self.handle.save(
             prompt,
             bravebot_session::sessions::Standing {
@@ -773,8 +830,8 @@ impl Kept {
                 turns: self.turns,
                 tokens: self.tokens,
                 spend: &self.spend,
-                timing: &std::collections::BTreeMap::new(),
-                model: Some(&outcome.model),
+                timing: &self.timing,
+                model: self.model.as_deref(),
                 todos: &std::collections::BTreeMap::new(),
                 asides: &[],
                 trust,
@@ -840,6 +897,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             )
         });
 
+        let began = std::time::Instant::now();
         let completed = turn::resume(
             self.config,
             &self.egress,
@@ -861,14 +919,24 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
         // index of the same tree.
         self.answers.servers = Some(servers);
         self.answers.adopt(completed.decisions);
-        if let (Ok(outcome), Some(kept)) = (&completed.outcome, &mut self.kept) {
-            kept.after_a_turn(
-                prompt,
-                outcome,
-                &self.conversation,
-                &self.answers.trust,
-                &self.answers.programs,
-            );
+        if let Some(kept) = &mut self.kept {
+            match &completed.outcome {
+                Ok(outcome) => kept.after_a_turn(
+                    prompt,
+                    outcome,
+                    &self.conversation,
+                    &self.answers.trust,
+                    &self.answers.programs,
+                ),
+                Err(_) => kept.after_a_failed_turn(
+                    prompt,
+                    reporter.spent(),
+                    began.elapsed(),
+                    &self.conversation,
+                    &self.answers.trust,
+                    &self.answers.programs,
+                ),
+            }
         }
         let mut said = match completed.outcome {
             Ok(outcome) => Said {
@@ -1631,6 +1699,47 @@ mod tests {
         assert_eq!(
             checked(Verdict::Inconclusive("timed out")),
             Check::Inconclusive
+        );
+    }
+
+    /// SESSION-11, SESSION-12, TURN-5: a failed turn that completed a request is charged what it
+    /// spent, once, under a number of its own, with this side's wall clock and the measured parts.
+    ///
+    /// The faults this rejects: charging nothing to a failed turn, charging the report's own wall
+    /// figure, and charging a turn that completed no request.
+    #[test]
+    fn a_failed_turn_is_charged_what_its_completed_requests_cost() {
+        use bravebot_agent::timing::Timing;
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("plain-failed-{}", std::process::id()));
+        let mut kept = Kept::opening(&root, "id", None, None);
+        let spent = bravebot_agent::Spent {
+            tokens: 107,
+            timing: Timing {
+                wall_ms: 999_999,
+                inference_ms: 11,
+                tools_ms: 22,
+                stalled_ms: 33,
+            },
+            ..Default::default()
+        };
+
+        assert!(!kept.charge_failure(Default::default(), std::time::Duration::ZERO));
+        assert_eq!((kept.turns, kept.tokens), (0, 0));
+
+        assert!(kept.charge_failure(spent, std::time::Duration::from_millis(500)));
+        assert_eq!((kept.turns, kept.tokens), (1, 107));
+        assert_eq!(kept.spend.get(&1), Some(&107));
+        assert_eq!(
+            kept.timing.get(&1),
+            Some(&Timing {
+                wall_ms: 500,
+                inference_ms: 11,
+                tools_ms: 22,
+                stalled_ms: 33,
+            })
         );
     }
 
