@@ -63,9 +63,9 @@ pub fn hooks_file(directory: &Path) -> PathBuf {
 /// A moment a hook can be attached to, in a person's terms.
 ///
 /// Deliberately short. Each is something somebody can point at in a session that has happened:
-/// the turn began, a call finished, the turn is over. The audit trail's events are a different
-/// vocabulary answering a different question, and a person writing a hook should not have to learn
-/// what a gate or a slot is.
+/// the turn began, a call finished, the turn is over, a question is waiting on them. The audit
+/// trail's events are a different vocabulary answering a different question, and a person writing a
+/// hook should not have to learn what a gate or a slot is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Moment {
     /// The turn a person asked for has begun, before anything is sent.
@@ -74,6 +74,8 @@ pub enum Moment {
     ToolFinished,
     /// The turn a person asked for is over, however it ended.
     TurnFinished,
+    /// A prompt or a question is about to be put to a person who can answer it.
+    PromptShown,
 }
 
 impl Moment {
@@ -86,6 +88,7 @@ impl Moment {
             "turn-started" => Some(Self::TurnStarted),
             "tool-finished" => Some(Self::ToolFinished),
             "turn-finished" => Some(Self::TurnFinished),
+            "prompt-shown" => Some(Self::PromptShown),
             _ => None,
         }
     }
@@ -96,6 +99,7 @@ impl Moment {
             Self::TurnStarted => "turn-started",
             Self::ToolFinished => "tool-finished",
             Self::TurnFinished => "turn-finished",
+            Self::PromptShown => "prompt-shown",
         }
     }
 }
@@ -391,13 +395,14 @@ mod tests {
             .collect()
     }
 
-    /// HOOK-2: the three moments are the vocabulary, and each is spelled the way the file spells it.
+    /// HOOK-2: the four moments are the vocabulary, and each is spelled the way the file spells it.
     #[test]
     fn each_moment_is_named_by_the_word_a_file_spells_it_with() {
         for moment in [
             Moment::TurnStarted,
             Moment::ToolFinished,
             Moment::TurnFinished,
+            Moment::PromptShown,
         ] {
             assert_eq!(Moment::parse(moment.as_str()), Some(moment));
         }

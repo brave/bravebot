@@ -46804,6 +46804,157 @@ fn a_turn_whose_hook_failed_still_answers() {
     );
 }
 
+/// The one question the prompt-shown tests put to a person.
+#[cfg(unix)]
+const A_BRANCH_QUESTION: &str = r#"{"questions":[{"header":"Branch","question":"Which branch?","options":[{"label":"main"}]}]}"#;
+
+/// HOOK-2, HOOK-5: a question drawn for a person fires `prompt-shown`, and the hook is handed the
+/// moment and nothing else: not the header, the question or the options.
+#[cfg(unix)]
+#[test]
+fn a_hook_fires_when_a_question_is_put_to_a_person() {
+    let scratch = Scratch::new("hooks-prompt-shown");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(&scratch.path, "note", "#!/bin/sh\ncat >> fired.txt\n");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"prompt-shown\", \"run\": [{note}]}}"),
+    );
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("ask_user", A_BRANCH_QUESTION),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut asked = AnswersWith::new(vec![bravebot_core::ask::Answer::Chosen(vec![0])]);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut asked, bravebot_agent::PermissionMode::Ask, false);
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("push the change").with_home(Some(home)),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt")).expect("the hook ran");
+    assert_eq!(fired, "{\"event\":\"prompt-shown\"}\n");
+}
+
+/// HOOK-2, PROMPT-9: where nobody can be asked there is no prompt to be waiting on, so nothing
+/// fires. A hook fired for a question an unattended run declines would ring a person up about a
+/// question nobody put to them.
+#[cfg(unix)]
+#[test]
+fn an_unattended_run_fires_no_prompt_hook() {
+    let scratch = Scratch::new("hooks-prompt-unattended");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho fired >> fired.txt\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"prompt-shown\", \"run\": [{note}]}}"),
+    );
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("ask_user", A_BRANCH_QUESTION),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("push the change").with_home(Some(home)),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("declined to answer"),
+        "the question was not put, so this says nothing: {second}"
+    );
+    assert!(
+        !scratch.path.join("fired.txt").exists(),
+        "a hook fired for a question nobody was asked"
+    );
+}
+
+/// HOOK-6, HOOK-7: a `prompt-shown` hook that fails is said out loud and changes nothing about the
+/// question: the person's answer still reaches the planner.
+#[cfg(unix)]
+#[test]
+fn a_failing_prompt_hook_leaves_the_question_alone() {
+    let scratch = Scratch::new("hooks-prompt-failed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let failing = a_hook_script(&scratch.path, "no", "#!/bin/sh\nexit 3\n");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"prompt-shown\", \"run\": [{failing}]}}"),
+    );
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("ask_user", A_BRANCH_QUESTION),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut asked = AnswersWith::new(vec![bravebot_core::ask::Answer::Chosen(vec![0])]);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut asked, bravebot_agent::PermissionMode::Ask, false);
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("push the change").with_home(Some(home)),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("a failing hook does not fail the turn");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(second.contains("The user chose: main"), "{second}");
+    assert!(
+        reporter
+            .notices
+            .iter()
+            .any(|said| said.contains("prompt-shown")),
+        "nobody watching was told the hook failed: {:?}",
+        reporter.notices
+    );
+    assert!(
+        outcome
+            .notices
+            .iter()
+            .any(|said| said.contains("prompt-shown")),
+        "a caller with nowhere to draw was not told the hook failed: {:?}",
+        outcome.notices
+    );
+}
+
 /// HOOK-2: a delegate is a run inside the turn rather than a turn of its own, so the moments at
 /// the two ends of the turn fire once however many delegates it starts.
 #[cfg(unix)]

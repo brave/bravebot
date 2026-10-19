@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Hooks
-description: Run a command of your own when a turn starts, when a tool call finishes, or when a turn is over.
+description: Run a command of your own when a turn starts, when a tool call finishes, when a turn is over, or when a question is waiting on you.
 ---
 
 # Hooks
@@ -30,7 +30,7 @@ inside a checkout, so a command named in one would be a command that arrived wit
 }
 ```
 
-## The three moments
+## The four moments
 
 Each entry names one moment in `on`:
 
@@ -39,13 +39,14 @@ Each entry names one moment in `on`:
 | `turn-started` | before the turn you asked for sends anything |
 | `tool-finished` | after one tool call has finished, whatever came of it |
 | `turn-finished` | when the turn you asked for is over, however it ended |
+| `prompt-shown` | just before a prompt or a question is put to you |
 
 `turn-finished` fires even when the turn was cancelled or failed on its first request, because the
 commonest thing to attach to it is telling somebody who walked away, and a turn that died is exactly
 when they want telling.
 
 A `tool-finished` entry may add `"tool": "write_file"` to fire for calls of that name alone. An entry
-naming no tool fires for every call. A `tool` on either of the turn moments is about a call that does
+naming no tool fires for every call. A `tool` on any other moment is about a call that does
 not happen there, so that entry fires for nothing.
 
 Two entries on one moment are two commands, run one after the other in the order the file lists them.
@@ -54,6 +55,13 @@ A word this build does not fire declares no hook and leaves the rest of the file
 The turn moments belong to the turn *you* asked for. A delegate is a run inside that turn, so a turn
 that spawns three delegates still fires `turn-started` once. A call a delegate made is a call, and
 fires `tool-finished` like any other.
+
+`prompt-shown` is how a notifier calls you back when you have switched windows: the turn is waiting
+on an approval or a question, and `turn-finished` will not fire until you answer. It is told that
+the session is waiting and not what for, like every hook. It fires only for a prompt that reaches
+you: not in a one-shot run where nobody can be asked, and not for one your permission mode answered
+in advance. It cannot answer the prompt, and the hook runs before the prompt is drawn, so a slow one
+delays it up to its timeout.
 
 ## A hook is a program and its arguments
 

@@ -35,6 +35,7 @@ kept_in:
   - Confirmer::confirm_message: one effect; messages covered for the turn
   - Confirmer::ask_user: answers to the planner's questions
   - Confirmer::interjection: nothing
+  - Confirmer::alert_when_asking: nothing
   - Answers::trust: the trust map
   - Answers::programs: programs vouched for
   - Answers::servers: language servers started
