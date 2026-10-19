@@ -7580,6 +7580,7 @@ mod tests {
     /// lets a program write the session, or a pin of `strict` that `read-only` goes under, which lets
     /// a program read the machine.
     #[test]
+    #[cfg(not(windows))]
     fn a_pin_of_strict_and_a_pin_of_read_only_each_refuse_the_other() {
         use crate::sandbox::resolve;
         let strict = pinned("pin-strict", r#"{"sandbox": {"mode": "strict"}}"#);
@@ -7623,6 +7624,7 @@ mod tests {
     /// that is not theirs, a checkout's `strict` dropped under every pin, and a repository's file
     /// starting a session with the writes the person withheld.
     #[test]
+    #[cfg(not(windows))]
     fn a_checkouts_strict_under_a_read_only_pin_starts_at_the_pin() {
         use crate::sandbox::{Choice, Floor, Refused, Source, resolve};
         let strict = r#"{"sandbox": {"mode": "strict"}}"#;

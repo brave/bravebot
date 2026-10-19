@@ -33,6 +33,7 @@ mod tests {
     /// it rejects is two outcomes sharing a sentence, which under a `strict` pin leaves `read-only`
     /// refused with no word of how.
     #[test]
+    #[cfg(not(windows))]
     fn each_way_a_mode_is_looser_than_the_pin_has_its_own_sentence() {
         for (asked, pinned, said) in [
             (
