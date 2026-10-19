@@ -143,6 +143,10 @@ going to a path the person vouched for, raises no write prompt at all, so a refu
 one would let the whole run through. A plan that writes nothing runs, since there is nothing in it
 for this clause to refuse.
 
+A run the person moves into plan mode after approving its plan ([MODE-8](#MODE-8)) is refused at the
+step: the step reads the mode when it is reached, so a write step that has not run yet is refused
+before any prompt, and a step that already ran is not undone.
+
 The planner is told, in the system prompt, that writing is refused for the turn and why.
 
 **Why.** A mode whose only difference was that somebody keeps saying no is a session where the
@@ -168,6 +172,7 @@ made from less than the person can see themselves.
 `verified-by: bravebot_agent::turn::plan_mode_refuses_a_write_a_settings_rule_would_have_let_through`
 `verified-by: bravebot_agent::manifest::plan_mode_refuses_a_plan_that_writes`
 `verified-by: bravebot_agent::manifest::plan_mode_runs_a_plan_that_writes_nothing`
+`verified-by: bravebot_agent::manifest::plan_mode_chosen_while_the_run_walks_refuses_a_later_write`
 `verified-by: bravebot_ui_bridge::manifest::a_session_in_plan_mode_refuses_a_plan_that_writes`
 
 <a id="MODE-4"></a>

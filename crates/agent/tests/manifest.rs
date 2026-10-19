@@ -934,6 +934,63 @@ fn a_plan_refused_by_plan_mode_is_recorded_as_a_refusal() {
     );
 }
 
+/// MODE-3, MODE-8: plan mode chosen after the plan was approved refuses the write the plan
+/// carried into a path no prompt would have been raised for.
+///
+/// The confirmer approves every write it is asked about, so a write that lands is the mode not
+/// being read at the step, and nobody being asked is the refusal coming before the prompt.
+#[test]
+fn plan_mode_chosen_while_the_run_walks_refuses_a_later_write() {
+    let scratch = Scratch::new("plan-mode-chosen-midrun");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_WRITE", "args": {"path": "out.md", "contents": "a body the plan carried"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Ask);
+    let mut person = RecordsEveryQuestion {
+        chooses_after_approving: Some((live.clone(), bravebot_agent::PermissionMode::Plan)),
+        ..RecordsEveryQuestion::default()
+    };
+
+    let _ = manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("write a summary").with_permission_mode(live),
+        &mut person,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(
+        !scratch.path.join("out.md").exists(),
+        "a write landed after the person chose plan mode"
+    );
+    assert!(
+        person.writes.is_empty(),
+        "plan mode was left to a prompt instead of refusing the write"
+    );
+    assert!(
+        sink.blocked().any(|event| matches!(
+            event,
+            Event::GateBlocked {
+                gate: "permission_mode",
+                ..
+            }
+        )),
+        "the refusal was not recorded: {:?}",
+        sink.events()
+    );
+}
+
 /// The other half of the same clause: the mode refuses writes and nothing else, so a plan that
 /// reads and answers is a plan plan mode has no business stopping. Refusing every run would make
 /// the mode mean "no manifest runs", which is not what it says.
@@ -1669,6 +1726,9 @@ struct RecordsEveryQuestion {
     always: bool,
     /// Words typed beside a write's answer, where a test needs the front end to have sent some.
     note: Option<&'static str>,
+    /// Chooses this mode on the session's handle as it approves the plan, the way a person
+    /// pressing the mode key while the run walks does.
+    chooses_after_approving: Option<(bravebot_agent::LiveMode, bravebot_agent::PermissionMode)>,
 }
 
 impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
@@ -1676,6 +1736,9 @@ impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
         &mut self,
         _request: &bravebot_agent::confirm::ManifestRequest,
     ) -> bravebot_agent::Decision {
+        if let Some((live, mode)) = &self.chooses_after_approving {
+            live.set(*mode);
+        }
         bravebot_agent::Decision::Approve
     }
 
