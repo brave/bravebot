@@ -745,6 +745,96 @@ fn a_foreign_skills_directory_below_the_root_is_not_a_source() {
     );
 }
 
+/// INSTR-13 with INSTR-14's record: working in a directory adds its `.bravebot/skills` and nothing
+/// else. A `.claude/skills` or `.agents/skills` under a directory the session has worked in is
+/// still an ordinary directory, at every level down to the file, while the root's own are read.
+#[test]
+fn a_foreign_skills_directory_under_a_touched_directory_is_not_a_source() {
+    let scratch = Scratch::new("foreign-touched");
+    let project = scratch.workspace();
+    write_skill(&project.join(".claude"), "rootc", "rootc", "root", "ROOT-C");
+    write_skill(&project.join(".agents"), "roota", "roota", "root", "ROOT-A");
+    let pkg = project.join("pkg");
+    let inner = pkg.join("inner");
+    write_skill(&pkg.join(".bravebot"), "own", "own", "native", "OWN-BODY");
+    write_skill(&pkg.join(".claude"), "pkgc", "pkgc", "foreign", "PKG-C");
+    write_skill(&pkg.join(".agents"), "pkga", "pkga", "foreign", "PKG-A");
+    write_skill(
+        &inner.join(".claude"),
+        "innerc",
+        "innerc",
+        "foreign",
+        "IN-C",
+    );
+    write_skill(
+        &inner.join(".agents"),
+        "innera",
+        "innera",
+        "foreign",
+        "IN-A",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+    workspace.record_touch("pkg/inner/a.rs");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    let mut offered = from_disk(&catalogue);
+    offered.sort_unstable();
+    assert_eq!(offered, ["own", "roota", "rootc"]);
+    assert!(notices.is_empty(), "{notices:?}");
+}
+
+/// Two levels of nested skills shadow one another deepest last (INSTR-14), whatever order the
+/// session worked in them, and a package's own skill the deeper one does not name stays offered.
+#[test]
+fn a_deeper_nested_skill_shadows_a_shallower_one_of_its_name() {
+    let scratch = Scratch::new("nested-two-levels");
+    let project = scratch.workspace();
+    let pkg = project.join("pkg");
+    let inner = pkg.join("inner");
+    write_skill(
+        &project.join(".bravebot"),
+        "fmt",
+        "fmt",
+        "root",
+        "ROOT-BODY",
+    );
+    write_skill(&pkg.join(".bravebot"), "fmt", "fmt", "package", "PKG-BODY");
+    write_skill(
+        &pkg.join(".bravebot"),
+        "lint",
+        "lint",
+        "package",
+        "PKG-LINT",
+    );
+    write_skill(
+        &inner.join(".bravebot"),
+        "fmt",
+        "fmt",
+        "inner",
+        "INNER-BODY",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+    let discover = |workspace: &Workspace| {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, workspace, None).0
+    };
+
+    workspace.record_touch("pkg/a.rs");
+    assert_eq!(body_of(&discover(&workspace), "fmt"), "PKG-BODY");
+
+    // The deeper directory is named first, so an order of touching would put it the wrong way.
+    workspace.record_touch("pkg/inner/b.rs");
+    let both = discover(&workspace);
+    assert_eq!(body_of(&both, "fmt"), "INNER-BODY");
+    assert_eq!(body_of(&both, "lint"), "PKG-LINT");
+}
+
 /// The trust map's rules are workspace-relative, so a rule about the project must not decide
 /// anything about the user's own directory. Declining the working directory says nothing about
 /// the skills someone installed globally, and they must still load.
