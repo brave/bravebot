@@ -1606,6 +1606,31 @@ pub struct Summary {
     pub manifest: bool,
 }
 
+/// Charge a turn that failed or was stopped for what its completed requests cost, and say whether
+/// there was anything to charge (SESSION-11, SESSION-12, TURN-5).
+///
+/// A turn that completed no request leaves the record as it was. `spent` is the latest cumulative
+/// report, so it is added once. The wall time is the caller's own clock, and the report's own wall
+/// figure is left out. The terminal and the desktop window both charge through here.
+pub fn charge_failed_turn(
+    tokens: &mut u64,
+    spend: &mut std::collections::BTreeMap<usize, u64>,
+    timing: &mut std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
+    turn: usize,
+    spent: bravebot_agent::Spent,
+    took: std::time::Duration,
+) -> bool {
+    if spent.tokens == 0 {
+        return false;
+    }
+    *tokens += spent.tokens;
+    *spend.entry(turn).or_insert(0) += spent.tokens;
+    let timing = timing.entry(turn).or_default();
+    timing.wall_ms += u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
+    timing.add_measured(spent.timing);
+    true
+}
+
 /// What a session amounts to at the moment it is written down.
 ///
 /// A value rather than a row of arguments, because everything a resume needs restored ends up
@@ -2958,6 +2983,58 @@ pub fn fork(project: &Path, source_id: &str) -> Option<Record> {
 mod tests {
     use super::*;
     use crate::test_profile::in_isolated_profile;
+
+    /// SESSION-11, SESSION-12, TURN-5: both clients charge a failed turn through one function, so
+    /// a turn that completed no request is skipped in both and one that did is charged once, with
+    /// the caller's wall clock and the report's measured parts.
+    #[test]
+    fn a_failed_turn_is_charged_once_and_a_turn_with_no_request_not_at_all() {
+        use bravebot_agent::timing::Timing;
+
+        let (mut tokens, mut spend, mut timing) = Default::default();
+        let spent = bravebot_agent::Spent {
+            tokens: 107,
+            timing: Timing {
+                wall_ms: 999_999,
+                inference_ms: 11,
+                tools_ms: 22,
+                stalled_ms: 33,
+            },
+            ..Default::default()
+        };
+        let took = std::time::Duration::from_millis(500);
+
+        assert!(!charge_failed_turn(
+            &mut tokens,
+            &mut spend,
+            &mut timing,
+            1,
+            Default::default(),
+            took
+        ));
+        assert_eq!(tokens, 0);
+        assert!(spend.is_empty() && timing.is_empty());
+
+        assert!(charge_failed_turn(
+            &mut tokens,
+            &mut spend,
+            &mut timing,
+            1,
+            spent,
+            took
+        ));
+        assert_eq!(tokens, 107);
+        assert_eq!(spend.get(&1), Some(&107));
+        assert_eq!(
+            timing.get(&1),
+            Some(&Timing {
+                wall_ms: 500,
+                inference_ms: 11,
+                tools_ms: 22,
+                stalled_ms: 33,
+            })
+        );
+    }
 
     /// "the model reached its output limit" leaves somebody guessing a budget nothing shows them.
     /// The figure is what names the setting to raise, and it is this program's own configured

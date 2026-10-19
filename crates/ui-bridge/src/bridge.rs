@@ -2560,7 +2560,15 @@ fn work(work: Work) {
             )
         }
         Err(error) => {
-            charge_failed_turn(&mut state, turn, reporter.spent(), began_at.elapsed());
+            let charged = &mut *state;
+            bravebot_session::sessions::charge_failed_turn(
+                &mut charged.tokens,
+                &mut charged.spend,
+                &mut charged.timing,
+                turn,
+                reporter.spent().unwrap_or_default(),
+                began_at.elapsed(),
+            );
             let _ = save(&project, &mut state, turn, sink.trail());
 
             let chosen = task.model.as_deref().unwrap_or(&config.default_model);
@@ -2590,26 +2598,6 @@ fn work(work: Work) {
     }
     drop(state);
     emitter.finish(event, &finished);
-}
-
-/// Charge a turn that failed or was stopped for the work it had completed (SESSION-11, SESSION-12).
-///
-/// `spent` is the latest cumulative report the turn made, which replaces the ones before it, so it
-/// is added once. The wall time is this side's own clock, as the terminal's is, and the report's
-/// own wall figure is left out.
-fn charge_failed_turn(
-    state: &mut State,
-    turn: usize,
-    spent: Option<bravebot_agent::Spent>,
-    took: std::time::Duration,
-) {
-    let timing = state.timing.entry(turn).or_default();
-    timing.wall_ms += u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
-    if let Some(spent) = spent {
-        state.tokens += spent.tokens;
-        *state.spend.entry(turn).or_insert(0) += spent.tokens;
-        timing.add_measured(spent.timing);
-    }
 }
 
 /// Start the MCP servers `requested` names, putting the questions about them to the window.

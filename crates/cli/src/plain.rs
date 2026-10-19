@@ -784,21 +784,20 @@ impl Kept {
 
     /// Charge a turn that failed for what its completed requests cost, and say whether there was
     /// anything to charge (SESSION-11, SESSION-12, TURN-5).
-    ///
-    /// A turn that completed no request leaves the record as it was. `spent` is the latest
-    /// cumulative report, so it is charged once; the wall time is this side's own clock and the
-    /// report's own wall figure is left out.
     fn charge_failure(&mut self, spent: bravebot_agent::Spent, took: std::time::Duration) -> bool {
-        if spent.tokens == 0 {
-            return false;
+        let turn = self.turns + 1;
+        let charged = bravebot_session::sessions::charge_failed_turn(
+            &mut self.tokens,
+            &mut self.spend,
+            &mut self.timing,
+            turn,
+            spent,
+            took,
+        );
+        if charged {
+            self.turns = turn;
         }
-        self.turns += 1;
-        self.tokens += spent.tokens;
-        *self.spend.entry(self.turns).or_insert(0) += spent.tokens;
-        let timing = self.timing.entry(self.turns).or_default();
-        timing.wall_ms += u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
-        timing.add_measured(spent.timing);
-        true
+        charged
     }
 
     /// Write down a turn that failed, with what its completed requests cost.
