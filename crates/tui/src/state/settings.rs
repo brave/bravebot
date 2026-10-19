@@ -446,6 +446,18 @@ impl Session {
         self.wheel_rows = rows.clamp(WHEEL_ROWS_FLOOR, WHEEL_ROWS_CEILING);
     }
 
+    /// Record whether the interface captures the mouse, from `tui.mouse`. Only a `false` turns it
+    /// off, so an absent key leaves the capture on.
+    pub fn adopt_mouse(&mut self, configured: Option<bool>) {
+        self.mouse = configured != Some(false);
+    }
+
+    /// Whether the interface asks the terminal to report the mouse. Where it does not, the
+    /// terminal's own selection and wheel work as they do outside a session.
+    pub fn mouse_captured(&self) -> bool {
+        self.mouse
+    }
+
     /// Name the directory a line's first word is looked up in. Left unset, no line is one (CMD-17).
     pub fn adopt_prompt_files(&mut self, directory: Option<std::path::PathBuf>) {
         self.prompt_files = directory;

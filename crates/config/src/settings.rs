@@ -547,6 +547,9 @@ pub struct Settings {
     /// this crate the second place it is written down. The bound a configured count is held to is
     /// the interface's too, since what a sane number of rows is depends on the screen.
     wheel_rows: Option<usize>,
+    /// What `tui.mouse` said, if it said a boolean. `Some(false)` is the interface leaving the
+    /// mouse to the terminal.
+    tui_mouse: Option<bool>,
     providers: Vec<crate::provider::Provider>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
@@ -1379,6 +1382,7 @@ impl Settings {
             download_max: download_max_bytes(root),
             run_deadlines: run_deadlines(root),
             wheel_rows: wheel_rows(root),
+            tui_mouse: tui_mouse(root),
             // The word one root states, there being no file to name. [`Settings::layered`]
             // overwrites it with what the layers come to.
             run_network: match network_word(root) {
@@ -1965,6 +1969,16 @@ impl Settings {
         self.wheel_rows
     }
 
+    /// Whether `tui.mouse` said anything: `Some(false)` asks the interface not to capture the
+    /// mouse, so the terminal's own selection and wheel keep working.
+    ///
+    /// A boolean and nothing else, for the reason [`Settings::terminal_title`] gives: the key
+    /// exists to turn something off, so only a real `false` may do it and a quoted `"false"` is
+    /// absence.
+    pub fn tui_mouse(&self) -> Option<bool> {
+        self.tui_mouse
+    }
+
     /// Whether anything was set at all.
     pub fn is_empty(&self) -> bool {
         self.env.is_empty()
@@ -2001,6 +2015,7 @@ impl Settings {
             && self.download_max.is_none()
             && self.run_deadlines.is_empty()
             && self.wheel_rows.is_none()
+            && self.tui_mouse.is_none()
             && self.run_network.is_none()
             && self.run_network_ignored.is_empty()
             && self.run_network_unreadable.is_empty()
@@ -2254,6 +2269,7 @@ impl Settings {
             )
             .chain(self.sandbox_hosts.keys())
             .chain(self.wheel_rows.is_some().then_some("tui.wheelRows"))
+            .chain(self.tui_mouse.is_some().then_some("tui.mouse"))
             .chain(self.env.keys().map(String::as_str))
     }
 
@@ -3263,6 +3279,14 @@ fn wheel_rows(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize
         .and_then(|rows| usize::try_from(rows).ok())
 }
 
+/// The `tui.mouse` switch, read the way the top-level booleans are: only a real boolean counts.
+fn tui_mouse(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
+    let serde_json::Value::Object(tui) = root.get("tui")? else {
+        return None;
+    };
+    tui.get("mouse").and_then(serde_json::Value::as_bool)
+}
+
 /// Whether `character` separates one segment of a path from the next on this host.
 fn separates(character: char) -> bool {
     character == '/' || (std::path::MAIN_SEPARATOR == '\\' && character == '\\')
@@ -4243,6 +4267,43 @@ mod tests {
             0,
             "the block was reported as a key nothing reads"
         );
+    }
+
+    /// MOUSE-4: only a real `false` turns mouse capture off, so a quoted `"false"` or a misplaced key
+    /// leaves the wheel and the drag working, and the nearest layer that named it wins.
+    #[test]
+    fn only_a_boolean_turns_mouse_capture_off() {
+        let settings = Settings::parse(r#"{"tui": {"mouse": false}}"#);
+        assert_eq!(settings.tui_mouse(), Some(false));
+        assert!(!settings.is_empty());
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["tui.mouse"]);
+
+        assert_eq!(
+            Settings::parse(r#"{"tui": {"mouse": true}}"#).tui_mouse(),
+            Some(true)
+        );
+        for text in [
+            r#"{"tui": {"mouse": "false"}}"#,
+            r#"{"tui": {"mouse": 0}}"#,
+            r#"{"tui": {"mouse": null}}"#,
+            r#"{"tui": {}}"#,
+            r#"{"tui": false}"#,
+            r#"{"mouse": false}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).tui_mouse(),
+                None,
+                "{text:?} turned the mouse off"
+            );
+        }
+
+        let layered = Layers::new("tui-mouse-layers")
+            .global(r#"{"tui": {"mouse": true}}"#)
+            .project(r#"{"tui": {"mouse": false}}"#)
+            .read();
+        assert_eq!(layered.tui_mouse(), Some(false));
+        assert_eq!(layered.unread_keys().count(), 0);
     }
 
     /// A build a person runs every day outlasts the built-in default on some trees, and the figure

@@ -12,7 +12,7 @@ documented-by: docs/website/docs/using/transcript.md
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
 drag selects is spelled out here. Clicking things on the screen, a context menu, edge scrolling,
-word and line selection and turning mouse capture off are proposed in
+word and line selection are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
 ## Clauses
@@ -56,3 +56,17 @@ the cells it named then hold other text.
 `verified-by: bravebot_tui::app::closing_the_panel_drops_a_selection_inside_it`
 `verified-by: bravebot_tui::app::a_width_change_drops_the_selection`
 `verified-by: bravebot_tui::app::a_height_change_drops_the_selection`
+
+<a id="MOUSE-4"></a>
+### MOUSE-4: mouse capture can be turned off
+
+`tui.mouse` set to the boolean `false`, in any settings file, stops the interface asking the terminal
+to report the mouse: the wheel and a drag are the terminal's own, and the interface does no selecting
+of its own. Any other value, including the string `"false"`, leaves capture on. The `?` list names
+the terminal's bypass modifier (shift-drag; option on macOS iTerm2 and Terminal.app) for the
+terminals that still report the mouse.
+
+`verified-by: bravebot_config::settings::only_a_boolean_turns_mouse_capture_off`
+`verified-by: bravebot_tui::app::a_session_with_the_mouse_off_never_asks_for_mouse_reporting`
+`verified-by: bravebot_tui::app::the_mouse_is_captured_unless_the_settings_turn_it_off`
+`verified-by: bravebot_tui::render::the_shortcuts_name_the_terminals_own_selection`

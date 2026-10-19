@@ -642,6 +642,8 @@ pub struct Session {
     /// and nothing the program can measure says which. Held on the session because the wheel is
     /// answered against it on every event.
     wheel_rows: u16,
+    /// Whether the mouse is captured, from `tui.mouse`. On unless the settings turned it off.
+    mouse: bool,
     /// Which vi mode the box is in, where vi is the style.
     ///
     /// Every session opens in INSERT, where a typed character is a typed character. Opening in NORMAL
@@ -1363,6 +1365,7 @@ impl Session {
             vetting: false,
             bindings: crate::keybindings::Keybindings::default(),
             wheel_rows: WHEEL_ROWS,
+            mouse: true,
             mode: crate::vim::Mode::default(),
             half_typed: None,
             count: None,
