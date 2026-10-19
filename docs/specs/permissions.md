@@ -159,7 +159,8 @@ files start a `/x` rule at the workspace however they were reached, `--settings`
 included. Relative and
 absolute patterns are separate namespaces and neither reaches into the other: a pattern is matched
 against the path as a gate holds it, which is relative for a file in the project and in full for one
-outside, and a rule written one way says nothing about the other. A `/x` rule is in the namespace of
+outside, and a rule written one way says nothing about the other, except that [PERM-7](#PERM-7) has a `deny` or `ask` rule
+written in full also cover a place inside the workspace by its relative name. A `/x` rule is in the namespace of
 the place it starts: one that starts at the workspace or a directory inside it is written and matched
 as the relative pattern from the workspace, so `Read(/x)` in `.bravebot/settings.json` is
 `Read(./x)`, and one that starts anywhere else is the full path. A pattern whose anchor is unknown, such as `~/` on a machine with no home
@@ -367,8 +368,10 @@ name a gate holds that place by ([PERM-3](#PERM-3)): with `linked` a link to `re
 `Read(linked/**)` refuses `real/secret.txt` asked for by that name, in a call or in a walk, and a
 `//` rule written through a link to an added directory covers the files in it. A name is a place
 at the top of the workspace too, so with `.env` a link, `Read(.env)` covers the file it reaches. A
-rule whose spelling passes through no link is left as written, so a full path to a project file
-still says nothing about the name the project holds it by. The rule stays one rule, and the name it
+`deny` or `ask` rule written as a full path, or from `~/`, that lies inside the workspace also
+covers the place under the workspace-relative name the file tools ask by, so with a session opened
+in the home directory `Read(~/.ssh/**)` refuses `.ssh/id_ed25519`; a rule about a place outside the
+workspace is left as written. The rule stays one rule, and the name it
 reaches is covered at that place only, not wherever it appears as the written pattern may be
 ([PERM-4](#PERM-4)). An `allow` rule is matched as written, so a grant does not reach further than
 the spelling the person approved.
@@ -470,7 +473,9 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::permissions::a_rule_through_a_link_covers_its_target_on_whichever_side_of_the_root_it_is`
 `verified-by: bravebot_agent::permissions::a_rule_under_a_linked_home_directory_covers_the_directory_it_reaches`
 `verified-by: bravebot_agent::permissions::a_rule_naming_a_link_covers_the_file_it_reaches`
-`verified-by: bravebot_agent::permissions::a_full_path_rule_with_no_link_in_it_says_nothing_about_a_project_file`
+`verified-by: bravebot_agent::permissions::a_full_path_rule_with_no_link_in_it_covers_a_project_file_by_its_relative_name`
+`verified-by: bravebot_agent::permissions::a_home_rule_covers_the_relative_name_in_a_session_opened_in_the_home_directory`
+`verified-by: bravebot_agent::tools::a_home_rule_refuses_the_relative_name_in_a_session_opened_in_the_home_directory`
 `verified-by: bravebot_core::permissions::a_restricting_path_rule_is_followed_from_the_segments_before_its_first_star`
 `verified-by: bravebot_core::permissions::a_landing_is_read_in_the_spelling_a_path_is_matched_in`
 `verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
