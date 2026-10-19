@@ -17,7 +17,6 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
-use unicode_width::UnicodeWidthChar;
 
 use crate::state::{Delegate, Laid, Session};
 use crate::theme;
@@ -249,18 +248,20 @@ fn pieces(text: &str) -> Vec<String> {
     out
 }
 
-/// `text` cut where it reaches `width` display columns, taking at least one character.
+/// `text` cut where it reaches `width` display columns, taking at least one grapheme cluster.
 ///
 /// At least one, or a wide character in a one-column row would cut nothing and the caller would
-/// break the same word forever.
+/// break the same word forever. Cut between clusters and measured as the paragraph measures them,
+/// so a row built from the head is never wider than `width` when it is drawn.
 fn split_at_width(text: &str, width: usize) -> (String, String) {
     let mut used = 0usize;
-    for (index, c) in text.char_indices() {
-        let reached = c.width().unwrap_or(0);
+    let mut index = 0usize;
+    for (bytes, reached) in wrap::clusters(text) {
         if index > 0 && used + reached > width {
             return (text[..index].to_string(), text[index..].to_string());
         }
         used += reached;
+        index += bytes;
     }
     (text.to_string(), String::new())
 }

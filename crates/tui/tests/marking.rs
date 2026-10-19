@@ -167,6 +167,24 @@ fn wrapped_content_cannot_paint_a_bar_in_the_margin_column() {
     assert_marked_on_every_row(&drawn, "PADDING");
 }
 
+/// A cluster the paragraph draws wider than its characters sum to. U+2764 U+FE0F is one column by
+/// character and two by cluster, so a row measured by character fitted the block and was then
+/// broken by the paragraph, which put the rest of the line at column 0 with no margin.
+#[test]
+fn a_row_of_emoji_sequences_is_marked_on_every_row_it_reaches() {
+    for cluster in ["\u{2764}\u{fe0f}", "\u{2714}\u{fe0f}", "\u{ff76}\u{ff9e}"] {
+        let session = quarantining(vec![format!("{}TAIL", cluster.repeat(20))]);
+        let drawn = rows(&session, 30, 24);
+
+        assert_marked_on_every_row(&drawn, cluster);
+        assert!(
+            drawn.iter().any(|row| row.contains("TAIL")),
+            "the tail of the line was dropped:\n{}",
+            drawn.join("\n")
+        );
+    }
+}
+
 /// The heading is not the renderer's text either: the origin can be a filename read out of a
 /// quarantined listing, so a long one must not push the rest of the heading outside the block.
 #[test]
