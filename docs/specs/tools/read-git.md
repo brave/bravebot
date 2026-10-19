@@ -59,8 +59,13 @@ being one comparison of two lines or one line read, and a search for a shortest 
 past a thousand edits. A file that exceeds the bound is described by a notice in place of hunks. The
 notice names the lines the sides differ between, the lines within those that could not be matched,
 and the most lines they could have removed and added. Revisions are read in git's syntax, as git
-resolves them: names, ids and their prefixes, `~N`, `^N`, `^{commit}` and ranges. Loose and packed
-objects, deltas included, read the same.
+resolves them: names, ids and their prefixes, `~N`, `^N`, `^{commit}` and ranges. `A...B` is what
+each side has that the other lacks: a diff compares the merge base of the two with B, as `git diff
+A...B` does, and a log lists the commits reachable from either and not from both, as `git log
+A...B` does. Where the two have several merge bases, a diff measures from the most recent one,
+and a log leaves out what every one of them reaches. Two
+histories with no commit in common are refused by name. Loose and packed objects, deltas included,
+read the same.
 
 What each question means is fixed by this reader. No key in the repository's configuration names a
 program it runs, a driver it applies or a filter it passes bytes through, and no remote URL is ever
@@ -91,6 +96,9 @@ the gix crates that start one.
 `verified-by: bravebot_agent::git::ranges_and_pairs_are_read_as_git_reads_them`
 `verified-by: bravebot_agent::git::a_range_leaves_out_what_its_start_already_reaches`
 `verified-by: bravebot_agent::git::a_range_leaves_out_its_start_whatever_the_commit_times`
+`verified-by: bravebot_agent::git::a_symmetric_range_measures_from_the_merge_base`
+`verified-by: bravebot_agent::git::a_symmetric_range_over_a_criss_cross_history_is_read_as_git_reads_it`
+`verified-by: bravebot_agent::git::a_symmetric_range_with_no_common_ancestor_is_refused_by_name`
 `verified-by: bravebot_agent::git::a_path_after_a_revision_is_read_as_a_name_whatever_it_holds`
 `verified-by: bravebot_agent::git::a_path_keeps_only_the_commits_that_changed_it`
 `verified-by: bravebot_agent::git::a_log_narrowed_to_a_path_follows_the_side_a_merge_kept_it_from`
@@ -190,16 +198,15 @@ which object a file holds is not known until it is read.
 <a id="GIT-5"></a>
 ### GIT-5: the question is log, show, diff, status, tags or search, and anything else is refused by name
 
-A word off the list is refused and the planner is told to use `run`, where the turn is offered one. A revision form this reader does not implement, `A...B` or `HEAD^@`
-among them, is refused by name, and a query given the other shape of revision, one where it takes
+A word off the list is refused and the planner is told to use `run`, where the turn is offered one. A revision form this reader does not implement,
+`HEAD^@` or `@{upstream}` among them, is refused by name, and a query given the other shape of revision, one where it takes
 two or two where it takes one, is told which query takes it. A status given a revision is told to
 use diff. A pattern given to anything but search, a search given none, an empty one or one that is
 not a regular expression, and a list of tags given a path are each refused by name.
 
-**Why.** A guess answers a question the planner did not ask as though it had. `A...B` read as the
-forms this reader knows is the range from `A.` to `.B`, and `HEAD^@` is `HEAD^`, so each would
-come back as a confident answer to something else. A pattern or a path dropped without a word is
-the same guess: a log with its pattern dropped is every commit, read as the ones that matched.
+**Why.** A guess answers a question the planner did not ask as though it had. `HEAD^@` read as the
+forms this reader knows is `HEAD^`, so it would come back as a confident answer to something else.
+A pattern or a path dropped without a word is the same guess: a log with its pattern dropped is every commit, read as the ones that matched.
 
 `verified-by: bravebot_agent::tools::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`

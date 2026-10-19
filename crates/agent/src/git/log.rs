@@ -23,6 +23,16 @@ impl Repository {
         let (tips, hidden_tips) = match spec(request.revision.unwrap_or("HEAD"))? {
             Spec::One(one) => (vec![self.commit_of(one, out)?], Vec::new()),
             Spec::Range(a, b) => (vec![self.commit_of(b, out)?], vec![self.commit_of(a, out)?]),
+            Spec::Symmetric(a, b) => {
+                let (a, b) = (self.commit_of(a, out)?, self.commit_of(b, out)?);
+                let bases = self.merge_bases(out, a, b)?;
+                if bases.is_empty() {
+                    return Err(Declined::NoMergeBase(
+                        request.revision.unwrap_or_default().trim().to_owned(),
+                    ));
+                }
+                (vec![a, b], bases)
+            }
             Spec::Pair(..) => {
                 return Err(Declined::PairIsForDiff(
                     request.revision.unwrap_or_default().trim().to_owned(),
@@ -105,6 +115,98 @@ impl Repository {
             nothing_past(out, request.skip, "commits match");
         }
         Ok(None)
+    }
+
+    /// The best common ancestors of `a` and `b`, newest first, as `git merge-base --all` finds
+    /// them: a commit both reach and no other common ancestor descends from. Empty where the two
+    /// histories share nothing.
+    pub(super) fn merge_bases(
+        &self,
+        out: &mut Out<'_>,
+        a: ObjectId,
+        b: ObjectId,
+    ) -> Result<Vec<ObjectId>, Declined> {
+        const FROM_A: u8 = 1;
+        const FROM_B: u8 = 2;
+        const STALE: u8 = 4;
+        const FOUND: u8 = 8;
+        if a == b {
+            return Ok(vec![a]);
+        }
+        let mut walk = Walk::default();
+        let mut flags: HashMap<ObjectId, u8> = HashMap::new();
+        let mut found = Vec::new();
+        for (id, flag) in [(a, FROM_A), (b, FROM_B)] {
+            *flags.entry(id).or_default() |= flag;
+            walk.ensure(self, id)?;
+            walk.order += 1;
+            let time = walk.infos[&id].time;
+            walk.queue.push(Queued {
+                time,
+                order: walk.order,
+                id,
+            });
+        }
+        // Paint down from both sides in date order until only commits already known to be
+        // reachable from a common one remain, as git's `paint_down_to_common` does.
+        while walk.queue.iter().any(|q| flags[&q.id] & STALE == 0) {
+            if out.late() {
+                return Err(Declined::TooSlow);
+            }
+            let Some(next) = walk.queue.pop() else { break };
+            let mut carried = flags[&next.id] & (FROM_A | FROM_B | STALE);
+            if carried == FROM_A | FROM_B {
+                let entry = flags.entry(next.id).or_default();
+                if *entry & FOUND == 0 {
+                    *entry |= FOUND;
+                    found.push(next.id);
+                }
+                carried |= STALE;
+            }
+            for parent in walk.infos[&next.id].parents.clone() {
+                let have = flags.get(&parent).copied().unwrap_or(0);
+                if have & carried == carried {
+                    continue;
+                }
+                *flags.entry(parent).or_default() |= carried;
+                walk.ensure(self, parent)?;
+                walk.order += 1;
+                let time = walk.infos[&parent].time;
+                walk.queue.push(Queued {
+                    time,
+                    order: walk.order,
+                    id: parent,
+                });
+            }
+        }
+        let mut bases: Vec<ObjectId> = found
+            .into_iter()
+            .filter(|id| flags[id] & STALE == 0)
+            .collect();
+        if bases.len() > 1 {
+            // A candidate another one descends from is not the best, only a common ancestor.
+            let mut dominated = HashSet::new();
+            for &candidate in &bases {
+                let mut pending = walk.infos[&candidate].parents.clone();
+                let mut seen = HashSet::new();
+                while let Some(id) = pending.pop() {
+                    if out.late() {
+                        return Err(Declined::TooSlow);
+                    }
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    if bases.contains(&id) {
+                        dominated.insert(id);
+                    }
+                    walk.ensure(self, id)?;
+                    pending.extend(walk.infos[&id].parents.iter().copied());
+                }
+            }
+            bases.retain(|id| !dominated.contains(id));
+        }
+        bases.sort_by_key(|id| std::cmp::Reverse(walk.infos[id].time));
+        Ok(bases)
     }
 
     /// List `id`, a commit the log matched, unless it is among the first `skip`. `Some` with the

@@ -8,6 +8,8 @@ pub(super) enum Spec<'a> {
     One(&'a str),
     Pair(&'a str, &'a str),
     Range(&'a str, &'a str),
+    /// `A...B`: what each side has that the other lacks, measured from their merge base.
+    Symmetric(&'a str, &'a str),
 }
 
 /// The one revision a query takes: a range or a pair is declined, as the query it was given to
@@ -15,7 +17,9 @@ pub(super) enum Spec<'a> {
 pub(super) fn single(query: Query, text: &str) -> Result<&str, Declined> {
     match spec(text)? {
         Spec::One(one) => Ok(one),
-        Spec::Range(..) => Err(Declined::TakesOne(query, text.trim().to_owned())),
+        Spec::Range(..) | Spec::Symmetric(..) => {
+            Err(Declined::TakesOne(query, text.trim().to_owned()))
+        }
         Spec::Pair(..) => Err(Declined::PairIsForDiff(text.trim().to_owned())),
     }
 }
@@ -30,7 +34,6 @@ pub(super) fn spec(revision: &str) -> Result<Spec<'_>, Declined> {
     };
     let unsupported = |what| Err(Declined::Unsupported(text.trim_end().to_owned(), what));
     for (needle, what) in [
-        ("...", "a symmetric difference (A...B)"),
         ("@{", "a reflog or upstream selector (@{...})"),
         ("^{/", "a message search (^{/...})"),
         ("^@", "the parents selector (^@)"),
@@ -59,6 +62,16 @@ pub(super) fn spec(revision: &str) -> Result<Spec<'_>, Declined> {
         };
     }
     match words.as_slice() {
+        [one] if one.contains("...") => {
+            let (a, b) = one.split_once("...").unwrap_or((one, ""));
+            if a.contains("..") || b.contains("..") || a.ends_with('.') || b.starts_with('.') {
+                return unsupported("more than one range operator in a revision");
+            }
+            Ok(Spec::Symmetric(
+                if a.is_empty() { "HEAD" } else { a },
+                if b.is_empty() { "HEAD" } else { b },
+            ))
+        }
         [one] => match one.split_once("..") {
             Some((a, b)) => Ok(Spec::Range(
                 if a.is_empty() { "HEAD" } else { a },

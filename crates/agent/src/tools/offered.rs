@@ -593,10 +593,12 @@ fn table(
                         "type": "string",
                         "description": "In git's syntax: a branch, tag, HEAD or an id or its \
                                         prefix, followed by ~N, ^N or ^{commit}. log takes one \
-                                        revision or a range A..B and defaults to HEAD. show takes \
+                                        revision or a range A..B and defaults to HEAD; A...B lists \
+                                        what either side has that the other lacks. show takes \
                                         one and defaults to HEAD; <revision>:<path> shows a file \
                                         or directory as it was. diff needs two, written A..B or \
-                                        \"A B\". tags takes none, or one to list only the tags \
+                                        \"A B\"; A...B compares the merge base of the two with \
+                                        B, which is a branch's own changes. tags takes none, or one to list only the tags \
                                         it reaches. search takes one and defaults to HEAD."
                     },
                     "path": {
