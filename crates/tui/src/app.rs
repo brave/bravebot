@@ -229,8 +229,8 @@ struct Beside<'a> {
 /// turn has ended, as it would have after any turn.
 ///
 /// A command the key handler carried out as it was typed, but which needs more than the session to
-/// finish, is finished here, and what it says is held under the turn as the key handler holds its
-/// own (CMD-8).
+/// finish, is finished here, and what it says goes into the transcript as the key handler's own
+/// does (CMD-8).
 fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut Beside<'_>) {
     let action = handle_key_while_working(session, key);
     carry_out_held_pick(session, beside.config);
@@ -19696,24 +19696,24 @@ mod tests {
     /// answers when it is typed, because the turn holds none of those, and so does a word that
     /// lists the jobs or asks for one to be stopped, which sets a token the turn reads later. Ahead
     /// of a prompt already waiting, too, which is left where it was and still within the turn's
-    /// reach, while the command is never handed to the turn and its answer is kept out of the
-    /// turn's transcript.
+    /// reach, while the command is never handed to the turn and its answer is the only thing it
+    /// adds to the turn's transcript.
     #[test]
     fn a_command_that_reads_or_ends_what_the_session_keeps_answers_mid_turn() {
-        for line in [
-            "/cost",
-            "/copy",
-            "/copy two",
-            "/watch",
-            "/watch stop 1",
-            "/watch everything",
-            "/jobs",
-            "/jobs stop job:1",
-            "/jobs everything",
-            "/loop",
-            "/loop stop",
-            "/goal",
-            "/goal clear",
+        for (line, said) in [
+            ("/cost", 1),
+            ("/copy", 1),
+            ("/copy two", 1),
+            ("/watch", 1),
+            ("/watch stop 1", 1),
+            ("/watch everything", 1),
+            ("/jobs", 1),
+            ("/jobs stop job:1", 1),
+            ("/jobs everything", 1),
+            ("/loop", 1),
+            ("/loop stop", 1),
+            ("/goal", 1),
+            ("/goal clear", 1),
         ] {
             let mut session = a_turn_running_on("first");
             type_while_working(&mut session, "second");
@@ -19721,14 +19721,15 @@ mod tests {
 
             assert_eq!(type_while_working(&mut session, line), Action::Redraw);
 
-            assert!(
-                !session.said_while_working().is_empty(),
-                "{line} said nothing while the turn ran"
+            assert_eq!(
+                session.said_while_working().len(),
+                said,
+                "{line} did not say exactly what it should while the turn ran"
             );
             assert_eq!(
                 session.transcript.len(),
-                transcript + session.said_while_working().len(),
-                "{line} wrote more than what it said into the transcript"
+                transcript + said,
+                "{line} wrote something besides its answer into the transcript"
             );
             let waiting: Vec<&str> = session
                 .queued
@@ -19997,7 +19998,7 @@ mod tests {
 
     /// `/rename` mid-turn names the session as it is typed. The turn was handed only the record's
     /// id, and the record is written after the turn under whatever name the session has by then, so
-    /// nothing the turn does reads the name. What it says is held under the turn.
+    /// nothing the turn does reads the name. What it says goes into the transcript as it is said.
     #[test]
     fn a_session_renamed_mid_turn_is_renamed_as_it_is_typed() {
         if !crate::test_profile::in_isolated_profile() {
@@ -20033,8 +20034,8 @@ mod tests {
         );
         assert_eq!(
             session.transcript.len(),
-            transcript + session.said_while_working().len(),
-            "/rename wrote more than what it said into the transcript"
+            transcript + 1,
+            "/rename wrote something besides its answer into the transcript"
         );
         assert!(session.queued.is_empty(), "/rename waited");
         assert_eq!(session.input(), "", "/rename was left in the box");
@@ -20057,7 +20058,7 @@ mod tests {
     /// The turn holds neither the transcript nor the name the file goes under, and the moment a
     /// person wants the file is while the turn is still going. The file says its last prompt was
     /// still running, neither the prompt waiting behind the turn nor the reply half written is in
-    /// it, and where it went is said under the turn without joining the transcript.
+    /// it, and where it went is said in the transcript after the line was written.
     #[test]
     fn export_typed_mid_turn_writes_the_transcript_as_it_stands() {
         if !crate::test_profile::in_isolated_profile() {
@@ -20110,8 +20111,8 @@ mod tests {
         );
         assert_eq!(
             session.transcript.len(),
-            transcript + session.said_while_working().len(),
-            "/export wrote more than what it said into the transcript"
+            transcript + 1,
+            "/export wrote something besides its answer into the transcript"
         );
         assert_eq!(waiting_prompts(&session), vec!["second"], "/export waited");
         assert_eq!(session.input(), "", "/export was left in the box");
@@ -20748,10 +20749,17 @@ mod tests {
                 "the report stated {stated:?}: {said}"
             );
         }
+        // The report is one note per line, so the transcript grows by exactly its lines.
+        const STATUS_REPORT_LINES: usize = 11;
         assert_eq!(
             session.transcript.len(),
-            transcript + session.said_while_working().len(),
-            "wrote more than what it said into the transcript"
+            transcript + STATUS_REPORT_LINES,
+            "/status wrote something besides its report into the transcript"
+        );
+        assert_eq!(
+            session.said_while_working().len(),
+            STATUS_REPORT_LINES,
+            "the report is not all of what /status said"
         );
         assert!(session.queued.is_empty(), "/status waited");
         assert_eq!(session.input(), "", "/status was left in the box");
@@ -20904,9 +20912,9 @@ mod tests {
     }
 
     /// While a picker opened mid-turn is open it takes the keys, and a row taken is carried out as
-    /// any command mid-turn is: kept for the next turn, said under this one, and nothing written
-    /// into the transcript the turn will be folded into. The regressions it rejects are a letter
-    /// reaching the box under the picker, and the pick joining the transcript.
+    /// any command mid-turn is: kept for the next turn, and said in the transcript as it is said.
+    /// The regressions it rejects are a letter
+    /// reaching the box under the picker, and the pick writing anything but its own answer.
     #[test]
     fn a_level_picked_in_a_picker_opened_mid_turn_is_kept_and_said_under_the_turn() {
         use bravebot_aichat::protocol::Effort;
@@ -20934,8 +20942,13 @@ mod tests {
         );
         assert_eq!(
             session.transcript.len(),
-            transcript + session.said_while_working().len(),
-            "wrote more than what it said into the transcript"
+            transcript + 1,
+            "the pick wrote something besides its answer into the transcript"
+        );
+        assert_eq!(
+            session.said_while_working().len(),
+            1,
+            "the pick said more than one thing"
         );
         assert!(!cancel.is_cancelled());
     }
@@ -21188,8 +21201,13 @@ mod tests {
         assert!(!said_under_the_turn(&session).is_empty());
         assert_eq!(
             session.transcript.len(),
-            transcript + session.said_while_working().len(),
-            "wrote more than what it said into the transcript"
+            transcript + 2,
+            "the pick wrote something besides its answer into the transcript"
+        );
+        assert_eq!(
+            session.said_while_working().len(),
+            2,
+            "the pick said something other than its two lines"
         );
         assert_eq!(session.input(), "", "a letter reached the box");
         assert!(session.picking().is_none());
