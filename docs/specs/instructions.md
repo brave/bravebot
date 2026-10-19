@@ -498,6 +498,7 @@ here.
 
 `verified-by: bravebot_agent::skills::a_bravebot_skill_shadows_a_foreign_one_of_the_same_name`
 `verified-by: bravebot_agent::skills::a_foreign_skills_directory_below_the_root_is_not_a_source`
+`verified-by: bravebot_agent::skills::a_foreign_skills_directory_under_a_touched_directory_is_not_a_source`
 `verified-by: bravebot_agent::skills::a_foreign_skill_in_an_untrusted_project_is_counted_and_not_named`
 `verified-by: bravebot_agent::skills::a_skill_a_vouched_root_offers_is_not_also_reported_as_not_loaded`
 `verified-by: bravebot_agent::skills::an_untrusted_entry_named_like_a_vouched_skill_is_still_counted`
@@ -541,7 +542,12 @@ which file is read.
 `verified-by: bravebot_agent::preamble::a_distrusted_nested_agents_file_never_reaches_the_prompt`
 `verified-by: bravebot_agent::preamble::a_nested_agents_file_a_deny_rule_covers_never_reaches_the_prompt`
 `verified-by: bravebot_agent::preamble::a_path_outside_the_root_does_not_make_its_directory_a_source`
+`verified-by: bravebot_agent::preamble::the_directories_worked_in_stop_at_sixty_four`
+`verified-by: bravebot_agent::preamble::a_link_in_a_touched_name_is_not_followed_to_where_it_lands`
+`verified-by: bravebot_agent::preamble::a_nested_agents_file_is_not_followed_to_a_pointer_or_expanded_for_an_import`
 `verified-by: bravebot_agent::skills::a_nested_skill_is_offered_after_the_session_works_in_its_directory`
+`verified-by: bravebot_agent::skills::a_deeper_nested_skill_shadows_a_shallower_one_of_its_name`
+`verified-by: bravebot_agent::skills::a_foreign_skills_directory_under_a_touched_directory_is_not_a_source`
 `verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_and_not_named`
 `verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_beside_a_shallower_one_of_its_name`
 `verified-by: bravebot_agent::skills::a_nested_skill_on_the_list_covers_a_distrusted_project_entry_of_its_name`

@@ -1801,6 +1801,98 @@ fn a_path_outside_the_root_does_not_make_its_directory_a_source() {
     assert!(workspace.touched_directories().is_empty());
 }
 
+/// The record keeps at most 64 directories, so a planner reading through a large tree cannot make
+/// every turn look for instructions in thousands of them (INSTR-14). The first 64 stay in force and
+/// the one past them is not read.
+#[test]
+fn the_directories_worked_in_stop_at_sixty_four() {
+    let mut files: Vec<(String, String)> = (0..65)
+        .map(|n| (format!("d{n:02}/AGENTS.md"), format!("RULES-{n:02}")))
+        .collect();
+    files.push(("AGENTS.md".to_string(), "ROOT-RULES".to_string()));
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect();
+    let typed: Vec<String> = (0..65).map(|n| format!("d{n:02}/a.rs")).collect();
+    let typed: Vec<&str> = typed.iter().map(String::as_str).collect();
+
+    let preamble = composed_after_touching("nested-cap", &files, &typed, &[]);
+
+    assert!(preamble.text.contains("RULES-00"), "{}", preamble.text);
+    assert!(preamble.text.contains("RULES-63"), "{}", preamble.text);
+    assert!(
+        !preamble.text.contains("RULES-64"),
+        "a 65th directory was read: {}",
+        preamble.text
+    );
+
+    let scratch = Scratch::new("nested-cap-count");
+    let workspace = Workspace::new(scratch.directory("project")).expect("workspace");
+    for typed in &typed {
+        workspace.record_touch(typed);
+    }
+    workspace.record_touch("d00/b.rs");
+    workspace.record_touch("more/deep/c.rs");
+    assert_eq!(workspace.touched_directories().len(), 64);
+}
+
+/// A directory is placed by the name the planner typed. A link in that name is not followed to
+/// where it lands: the directory it leads to was never named, and what the link points at is the
+/// repository's choice and not the planner's (INSTR-14).
+#[cfg(unix)]
+#[test]
+fn a_link_in_a_touched_name_is_not_followed_to_where_it_lands() {
+    let scratch = Scratch::new("nested-link");
+    let project = scratch.directory("project");
+    std::fs::create_dir_all(project.join("real")).unwrap();
+    std::fs::write(project.join("real/AGENTS.md"), "REAL-RULES").unwrap();
+    std::fs::write(project.join("real/a.rs"), "").unwrap();
+    std::os::unix::fs::symlink(project.join("real"), project.join("alias")).unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    workspace.record_touch("alias/a.rs");
+
+    assert_eq!(workspace.touched_directories(), ["alias"]);
+}
+
+/// A nested file is taken as it stands. A pointer in it and an `@path` import in it are ordinary
+/// text, though the project's own file of the same shape is followed, which is what the root file
+/// beside them shows (INSTR-14, INSTR-8, INSTR-11).
+#[test]
+fn a_nested_agents_file_is_not_followed_to_a_pointer_or_expanded_for_an_import() {
+    let files = [
+        (
+            "AGENTS.md",
+            "Refer to canonical agent instructions in `docs/root.md`.",
+        ),
+        ("docs/root.md", "ROOT-TARGET"),
+        (
+            "pkg/AGENTS.md",
+            "Refer to canonical agent instructions in `pkg/real.md`.",
+        ),
+        ("pkg/real.md", "POINTER-TARGET"),
+        ("lib/AGENTS.md", "LIB-RULES\n\n@notes.md\n"),
+        ("lib/notes.md", "IMPORT-TARGET"),
+    ];
+    let root_only = composed_after_touching("nested-text-control", &files, &[], &[]);
+    assert!(root_only.text.contains("ROOT-TARGET"), "{}", root_only.text);
+
+    let preamble = composed_after_touching("nested-text", &files, &["pkg/a.rs", "lib/a.rs"], &[]);
+
+    assert!(
+        preamble.text.contains("`pkg/real.md`."),
+        "the nested pointer is not in the prompt as written: {}",
+        preamble.text
+    );
+    assert!(preamble.text.contains("@notes.md"), "{}", preamble.text);
+    assert!(
+        !preamble.text.contains("POINTER-TARGET") && !preamble.text.contains("IMPORT-TARGET"),
+        "a nested file was followed: {}",
+        preamble.text
+    );
+}
+
 /// INSTR-15: a file past the warning length is still a source. Dropping it, or truncating it,
 /// would change what the planner is working under because of its size, and the person who wrote
 /// that much meant to. The notice is what the rule adds.
