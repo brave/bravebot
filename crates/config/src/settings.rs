@@ -4467,6 +4467,32 @@ mod tests {
             self
         }
 
+        /// The same file as [`Layers::naming_the_project_layer`], reached through a symbolic link
+        /// that sits outside every layer directory.
+        #[cfg(unix)]
+        fn naming_the_project_layer_by_a_link(mut self) -> Self {
+            let link = self.cwd.join("project-settings-link.json");
+            std::os::unix::fs::symlink(self.cwd.join(PROJECT_DIR).join(SETTINGS_FILE), &link)
+                .expect("link to the project layer");
+            self.named = Some(link);
+            self
+        }
+
+        /// The same file as [`Layers::naming_the_project_layer`], as a name relative to the
+        /// process's working directory, which is where a `--settings` argument is resolved.
+        fn naming_the_project_layer_by_a_relative_name(mut self) -> Self {
+            let here = std::env::current_dir().expect("working directory");
+            let file = self.cwd.join(PROJECT_DIR).join(SETTINGS_FILE);
+            let mut relative = PathBuf::new();
+            for _ in here.components().skip(1) {
+                relative.push("..");
+            }
+            relative.extend(file.components().skip(1));
+            assert!(relative.is_relative());
+            self.named = Some(relative);
+            self
+        }
+
         /// A file the command line named that nobody wrote, for the failure case.
         fn naming_nothing(mut self) -> Self {
             self.named = Some(
@@ -5208,6 +5234,38 @@ mod tests {
             .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
             .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
             .naming_the_project_layer_by_another_spelling()
+            .read();
+
+        assert_eq!(settings.layers().count(), 2);
+        assert_eq!(settings.overridden().count(), 0);
+        assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["A_TOKEN"]);
+    }
+
+    /// [`resolved`] merges the spellings `canonicalize` can: a `..`, a link and a relative name. It
+    /// does not merge a hard link, which is a second directory entry for one inode and not a
+    /// path that leads to the first, nor a spelling that differs only in case on a case-sensitive
+    /// filesystem, where it is another file. Those stay a second read of the same bytes
+    /// (TRUST-2), which costs a layer counted twice and no more reach.
+    #[cfg(unix)]
+    #[test]
+    fn a_command_line_link_to_a_layer_is_read_once() {
+        let settings = Layers::new("named-twice-linked")
+            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .naming_the_project_layer_by_a_link()
+            .read();
+
+        assert_eq!(settings.layers().count(), 2);
+        assert_eq!(settings.overridden().count(), 0);
+        assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["A_TOKEN"]);
+    }
+
+    #[test]
+    fn a_command_line_relative_name_for_a_layer_is_read_once() {
+        let settings = Layers::new("named-twice-relative")
+            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .naming_the_project_layer_by_a_relative_name()
             .read();
 
         assert_eq!(settings.layers().count(), 2);
