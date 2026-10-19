@@ -3035,6 +3035,94 @@ refuse the path.
 `verified-by: bravebot_tui::confirm::a_run_asking_to_be_unconfined_says_so_and_binds_no_lasting_key`
 `verified-by: bravebot_ui_bridge::refusal::the_window_refuses_an_unconfined_run_without_asking`
 
+<a id="SANDBOX-32"></a>
+### SANDBOX-32: a person may remember a reviewed prefix for an unconfined line, for programs on a hand-written list only
+
+Not built. Until it is, [SANDBOX-29](#SANDBOX-29) holds as written and every unconfined request is
+asked about. Once built, this clause amends SANDBOX-29's "asked every time", the list of answers
+[RUN-5](tools/run.md#RUN-5) names, and the exception [RUN-20](tools/run.md#RUN-20) makes, and those
+three change in the same pull request that builds it.
+
+A person who approves the same kind of line repeatedly, such as `git pull` in each of several
+checkouts, may answer the prompt for an `unconfined` line with `p`, which remembers a prefix: one
+program and the leading arguments the person read. A later `unconfined` line is covered when every
+condition below holds, and in no other case it is asked about as [SANDBOX-29](#SANDBOX-29) says.
+
+- **The key is bytes.** The binary the program name resolved to and the path that started it, each as
+  the path's own bytes ([RUN-8](tools/run.md#RUN-8)); the name that started it; the leading arguments,
+  each its own field; and the tree the answer was given in, by its path's bytes and the identity the
+  filesystem gives the directory ([TRUST-23](trust-map.md#TRUST-23)). An entry holding a rendering of a
+  path covers nothing, as [RUN-19](tools/run.md#RUN-19) says of a line.
+- **The line is a single stage with nothing else the exact key refuses.** One program with no
+  assignment, no redirection, no `stdin_ref`, no private input, no credential scope or toolchain list
+  and no other tree ([RUN-5](tools/run.md#RUN-5)). A pipeline, join or group is not covered.
+- **Nothing follows the prefix unless the entry names it.** The entry is a row in a table in the
+  source, written by hand and never built from a line a person answered or from anything a program
+  printed. A row names a program, its leading arguments and every further argument it covers, each as
+  a literal. Any other argument after the prefix makes the line ask again, a positional one as well as
+  a flag: `git pull --upload-pack=<command>` and `git pull ext::<command>` are not covered by
+  `git pull`. A row is checked by hand against the program's full option list, and the program has no
+  flag, environment variable or configuration key that makes it run another program, short of ones the
+  row excludes by naming the whole line it covers.
+- **The program is on the list, and the list is an allowance.** A program that runs other programs
+  (`env`, `xargs`, `find -exec`, `make`, `uv run`, `git -c`, a shell, an interpreter of any version) is
+  not on it, and a program absent from the table is asked about. A program whose behaviour reads a file
+  a confined stage could have written, as `git` reads `.git/config` and `.git/hooks`, is listed only on
+  a platform that holds that file back from every stage ([SANDBOX-14](#SANDBOX-14)), which is macOS.
+  No stage's program is a file under a directory the plan may write to ([RUN-5](tools/run.md#RUN-5)).
+- **Every condition [SANDBOX-29](#SANDBOX-29) puts on accepting `unconfined` still holds.** The mode
+  is not `strict`, `read-only` or `off`, the workspace is trusted, a managed `run.network` is not
+  `closed`, and the caller is not a delegate. A rule that says ask, or deny, decides first
+  ([PERM-14](permissions.md#PERM-14)). A front end that cannot ask refuses the request, so a prefix on file is never read by a run with nobody to ask or by the desktop. The mode that
+  asks nothing does not accept the request either.
+- **The answer is for one tree.** A prefix remembered for the session is forgotten by `/cd`, `/clear`
+  and `/branch`. A prefix remembered past the session is written to the record of that directory, in a
+  file apart from [RUN-19](tools/run.md#RUN-19)'s so that a build that does not know it reads no
+  exact line out of one, and is read only where the directory's path and identity both match: `/cd`
+  into another checkout, a resume at a path that holds another checkout, and a copy or a re-clone ask
+  again ([KEPT-001](../best-practices/carried-grants.md#KEPT-001)).
+
+**What the prompt shows.** The prompt draws the prefix as it will be held, one argument per field, and
+a sentence saying that a later line starting with it runs with no sandbox and no question in this
+tree, that nothing after the prefix is covered, and where the answer is recorded. `p` is offered next
+to `y` and `n` only for a line the table covers, and takes no answer until both the prefix and the
+sentence are on the screen. A prompt whose prefix or sentence does not fit is not offered `p`.
+`a`, `r`, `f`, `m` and `e` are not offered for an `unconfined` line ([SANDBOX-29](#SANDBOX-29)).
+
+**What it prints is quarantined** as the output of a line the person did not read as written:
+untrusted and private ([RUN-4](tools/run.md#RUN-4)), and the transcript says the line ran under a
+remembered prefix. `p` vouches for no line and does not make a later line's output readable.
+
+**Recorded.** The `sandbox` gate's detail names `unconfined` and says the line was covered by a prefix
+([TRACE-1](trace.md#TRACE-1)).
+
+**Why.** The exact key asks for a line a person read whole. A prefix is a looser key, and a looser key
+covers more than the line the person read whenever it leaves something out. A prefix that ignores a
+redirection, `stdin_ref`, an assignment or another tree runs a line whose input or output the person
+never saw, which the single-stage condition rules out. One that ignores the directory covers the same
+words in a checkout the person did not read, which the one-tree condition rules out. One that ignores
+a step's environment, a credential scope or a toolchain list runs with access the person did not
+grant, which the same single-stage condition rules out. One that holds a reference, or a path
+rendered lossily, covers whatever the reference or the rendering later stands for, which the
+bytes-only key rules out. One that matches an open-ended list of spellings covers the spelling nobody
+listed, which the literal table rules out, as it does an argument after the prefix that makes the
+program run another program. One whose deciding rows are pushed off the screen by a long value is
+approved unread, which the rule that `p` takes no answer until the prefix and the sentence are shown
+rules out. What a person gets in return is one answer for the line they repeat.
+
+**What it costs.** A covered line runs with the person's own access and no sandbox, and with no
+question, as often as the planner asks, including at a moment the person did not expect. The prefix
+is a standing permission for that program in that tree. A program on the list that a later version
+makes run something by another route is covered until the row is changed. A binary replaced at the
+same path is not told from the original, which is also true of [RUN-19](tools/run.md#RUN-19). A
+person who wants every unconfined line asked about again writes `Bash(*)` in `permissions.ask`.
+
+**Not decided.** Which rows the first table holds, and whether `git pull` is among them given that a
+workspace stage on Linux and Windows can write `.git/config`; whether the first build offers `p` for
+the session only; and whether a covered line is announced in the transcript before it runs.
+
+`verified-by: none`
+
 <a id="SANDBOX-30"></a>
 ### SANDBOX-30: a program bravebot starts itself is never one a confined stage could have written
 
