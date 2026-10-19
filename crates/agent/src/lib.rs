@@ -68,6 +68,7 @@ pub mod subscription;
 mod testutil;
 pub mod timing;
 pub mod tools;
+pub mod transport;
 pub mod trusted;
 pub mod turn;
 #[cfg(unix)]

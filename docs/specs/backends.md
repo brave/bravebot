@@ -1354,7 +1354,7 @@ sent.
 `verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
 
 <a id="BACKEND-33"></a>
-### BACKEND-33: an `env` block names these sixteen variables
+### BACKEND-33: an `env` block names these twenty-two variables
 
 The `env` block of a settings file sets variables under their own names, and these are the names
 something reads:
@@ -1377,6 +1377,22 @@ something reads:
 | `GOOGLE_API_KEY` | the key a request to Google Vertex AI is sent with |
 | `GOOGLE_CLOUD_PROJECT` | the Google Cloud project that request is made under |
 | `VERTEX_LOCATION` | the location it is made in, where that is not `global` |
+| `SSL_CERT_FILE` | a bundle of certificate authorities to trust in place of the built-in set |
+| `SSL_CERT_DIR` | a directory of them |
+| `ALL_PROXY` | the proxy every request is routed through, ahead of the two below |
+| `HTTPS_PROXY` | the proxy, where `ALL_PROXY` is not set |
+| `HTTP_PROXY` | the proxy, where neither is set |
+| `NO_PROXY` | the hosts the proxy is not used for |
+
+The last six are the network names, and they are read from the person's own layers alone: the
+user's settings file and a file the command line named that is not inside the checkout. The project
+and local files arrive with a clone, and a proxy or an authority they chose would decide where
+conversation content is sent and who may read it, so a network name in either is reported by
+`doctor` with the file that wrote it and decides nothing, and it does not displace what a layer
+entitled to state it said. An exported variable still wins, as for every name here, and each of the
+two answers comes whole from one place: [NET-7](network-egress.md#NET-7) and
+[NET-8](network-egress.md#NET-8) say how. The names are spelled as the environment spells them in
+upper case, and a lower-case spelling is not read from a file.
 
 A gateway is not configured from this block: it is a `provider` entry, whose shape BACKEND-13
 states and whose credential BACKEND-16 names. The three Google names are the one exception, and only
@@ -1387,7 +1403,7 @@ choice rather than a variable, and BACKEND-11 is what ranks it.
 reading the source. Anything written *about* this system (the site somebody installs it from, a
 message telling a person what to set) is written from what is stated here, so a backend whose
 variables are named nowhere is a backend that reaches people undocumented however completely its
-behaviour is specified. Naming them is also what makes the set reviewable: a seventeenth variable is
+behaviour is specified. Naming them is also what makes the set reviewable: a twenty-third variable is
 a change to this table, which a person reads, rather than a constant added to a file nobody is
 asked to look at.
 
@@ -1398,6 +1414,13 @@ belongs to this program and must not collide with whatever else a shared shell p
 
 `verified-by: bravebot_config::lib::every_name_a_settings_block_may_set_reaches_the_configuration`
 `verified-by: bravebot_config::settings::an_env_block_is_read`
+`verified-by: bravebot_config::settings::a_proxy_and_an_authority_in_the_persons_own_file_are_handed_over`
+`verified-by: bravebot_config::settings::a_checkouts_proxy_and_authority_are_reported_and_never_handed_over`
+`verified-by: bravebot_config::settings::a_checkouts_proxy_alone_leaves_nothing_handed_over_and_its_other_names_alone`
+`verified-by: bravebot_config::settings::a_named_file_states_the_network_unless_it_sits_in_the_checkout`
+`verified-by: bravebot_config::settings::a_blank_or_non_string_network_value_states_nothing`
+`verified-by: bravebot_agent::transport::the_settings_and_the_transport_name_the_same_variables`
+`verified-by: bravebot_agent::transport::a_proxy_in_the_persons_file_is_the_one_a_client_carries_and_a_checkouts_is_not`
 
 <a id="BACKEND-34"></a>
 ### BACKEND-34: a settings value is a string, and anything else is not a value

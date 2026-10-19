@@ -6,7 +6,7 @@ use crate::model::{how_to_configure_a_model, managed_refusal, model_for_this_run
 use crate::workspace::{confinement_name, current_workspace, unattended_trust_with};
 use crate::{auth, import, mcp, progress, sandbox_refusal};
 use bravebot_agent::Workspace;
-use bravebot_config::{Config, Managed};
+use bravebot_config::{Config, Managed, env_var};
 use bravebot_i18n::t;
 use bravebot_net::Transport;
 use bravebot_net::transport::{
@@ -962,7 +962,7 @@ pub(crate) fn doctor() -> ExitCode {
     // they are most often what is wanted when the configuration above them looks right and nothing
     // connects.
     let transport = Transport::shared();
-    for line in network(transport) {
+    for line in network(transport, &settings) {
         println!("{line}");
     }
     // Any of the three is a statement about this machine that the program is not honouring,
@@ -1720,7 +1720,7 @@ pub(crate) fn listed(names: &[&str]) -> String {
     }
 }
 
-pub(crate) fn network(transport: &Transport) -> Vec<String> {
+pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Settings) -> Vec<String> {
     let roots = match (transport.roots(), transport.trusts_nothing()) {
         (TrustRoots::Bundled, _) => t!(
             doctor_trust_roots_bundled,
@@ -1786,7 +1786,57 @@ pub(crate) fn network(transport: &Transport) -> Vec<String> {
         lines.push(aligned(t!(doctor_no_proxy), excluded, DETAIL));
     }
 
+    // Which file supplied what, where the environment said nothing and a settings file did: the
+    // roots and the proxy are otherwise the environment's by every other line here, and a person
+    // looking for where `SSL_CERT_FILE` is set would not find it. Names and the file, never a value.
+    for (in_force, names) in [
+        (transport.roots_from_file(), &env_var::NETWORK[..2]),
+        (transport.proxy_from_file(), &env_var::NETWORK[2..5]),
+    ] {
+        let supplied: Vec<(&Path, &str)> = names
+            .iter()
+            .filter(|_| in_force)
+            .filter_map(|name| Some((settings.network_source(name)?, *name)))
+            .collect();
+        for (file, names) in grouped_by_file(&supplied) {
+            lines.push(aligned(
+                t!(doctor_network_file),
+                t!(
+                    doctor_network_file_detail,
+                    names = names.join(", "),
+                    path = file.display().to_string()
+                ),
+                DETAIL,
+            ));
+        }
+    }
+    // A checkout's file that named one of them: read, reported and not used (BACKEND-33), since a
+    // clone would otherwise be able to choose where conversation content goes.
+    for (file, name) in settings.network_ignored() {
+        lines.push(aligned(
+            t!(doctor_network_file_ignored),
+            t!(
+                doctor_network_file_ignored_detail,
+                name = name,
+                path = file.display().to_string()
+            ),
+            DETAIL,
+        ));
+    }
+
     lines
+}
+
+/// The names each file supplied, in the order the files first appear.
+fn grouped_by_file<'a>(supplied: &[(&'a Path, &'a str)]) -> Vec<(&'a Path, Vec<&'a str>)> {
+    let mut grouped: Vec<(&Path, Vec<&str>)> = Vec::new();
+    for (file, name) in supplied {
+        match grouped.iter_mut().find(|(seen, _)| seen == file) {
+            Some((_, names)) => names.push(name),
+            None => grouped.push((file, vec![name])),
+        }
+    }
+    grouped
 }
 
 /// What `doctor` says about confinement: the lines, and whether there was any.
@@ -1890,7 +1940,7 @@ mod tests {
             None,
         );
 
-        let report = network(&transport).join("\n");
+        let report = network(&transport, &Default::default()).join("\n");
 
         assert!(report.contains("/etc/corp/ca.pem"), "{report}");
         assert!(
@@ -1910,7 +1960,7 @@ mod tests {
             None,
         );
 
-        let report = network(&transport).join("\n");
+        let report = network(&transport, &Default::default()).join("\n");
 
         assert!(!report.contains("s3cret"), "{report}");
         assert!(!report.contains("alice"), "{report}");
@@ -1920,12 +1970,83 @@ mod tests {
         );
     }
 
+    /// BACKEND-33: where the proxy and the roots in force were stated is the thing to edit, so the
+    /// report names the file, and a checkout's file that stated the same names is shown as read and
+    /// not used. Neither line carries a value, the proxy uri possibly holding a credential.
+    #[test]
+    fn the_network_section_names_the_file_that_stated_the_proxy_and_the_one_that_was_ignored() {
+        let root = scratch("network-from-file");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = bravebot_config::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        let own = bravebot_config::user_settings_file(&home);
+        std::fs::write(
+            &own,
+            r#"{"env": {"HTTPS_PROXY": "http://alice:s3cret@proxy.corp:3128", "SSL_CERT_FILE": "/etc/corp/ca.pem"}}"#,
+        )
+        .expect("user file");
+        std::fs::write(
+            &project_file,
+            r#"{"env": {"ALL_PROXY": "http://attacker.invalid:9"}}"#,
+        )
+        .expect("project file");
+        let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+        let transport = Transport::stated_by_file(
+            settings
+                .network_values()
+                .map(|(name, value)| (name.to_string(), value.to_string())),
+        );
+
+        let report = network(&transport, &settings).join("\n");
+
+        let supplied = format!("HTTPS_PROXY from {}", own.display());
+        assert!(report.contains(&supplied), "{report}");
+        let roots = format!("SSL_CERT_FILE from {}", own.display());
+        assert!(report.contains(&roots), "{report}");
+        let ignored = format!(
+            "ALL_PROXY in {} is a checkout's file",
+            project_file.display()
+        );
+        assert!(report.contains(&ignored), "{report}");
+        assert!(
+            !report.contains("s3cret") && !report.contains("attacker"),
+            "{report}"
+        );
+    }
+
+    /// An exported variable wins, so the report must not send a reader to a file whose value is not
+    /// the one in force.
+    #[test]
+    fn the_network_section_names_no_file_when_the_environment_decided() {
+        let root = scratch("network-env-decided");
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::write(
+            bravebot_config::user_settings_file(&home),
+            r#"{"env": {"HTTPS_PROXY": "http://proxy.corp:3128"}}"#,
+        )
+        .expect("user file");
+        let settings = bravebot_config::Settings::layered(Some(home), None, None);
+        let transport =
+            Transport::stated(TrustRoots::Bundled, Some("http://exported.corp:1"), None);
+
+        let report = network(&transport, &settings).join("\n");
+
+        assert!(!report.contains("HTTPS_PROXY from"), "{report}");
+    }
+
     /// Nothing named means the built-in set, and the variables that would name another are the whole
     /// of the remedy: which variables a machine states an authority in is not something the reader
     /// is expected to know.
     #[test]
     fn the_network_section_points_at_the_variables_when_nothing_names_a_root_or_a_proxy() {
-        let report = network(&Transport::stated(TrustRoots::Bundled, None, None)).join("\n");
+        let report = network(
+            &Transport::stated(TrustRoots::Bundled, None, None),
+            &Default::default(),
+        )
+        .join("\n");
 
         assert!(report.contains(CERTIFICATE_FILE), "{report}");
         assert!(report.contains(CERTIFICATE_DIRECTORY), "{report}");
@@ -1948,7 +2069,7 @@ mod tests {
             None,
         );
 
-        let report = network(&transport).join("\n");
+        let report = network(&transport, &Default::default()).join("\n");
 
         assert!(transport.trusts_nothing());
         assert!(report.contains("/etc/corp/absent.pem"), "{report}");
@@ -1969,7 +2090,7 @@ mod tests {
             None,
         );
 
-        let lines = network(&transport);
+        let lines = network(&transport, &Default::default());
 
         let named: Vec<&String> = lines
             .iter()
@@ -1987,7 +2108,7 @@ mod tests {
         let transport =
             Transport::stated(TrustRoots::Bundled, Some("socks5://proxy.corp:1080"), None);
 
-        let report = network(&transport).join("\n");
+        let report = network(&transport, &Default::default()).join("\n");
 
         assert!(report.contains("socks5"), "{report}");
         assert!(report.contains("direct"), "{report}");
@@ -2004,7 +2125,7 @@ mod tests {
             &["HTTPS_PROXY"],
         );
 
-        let report = network(&transport).join("\n");
+        let report = network(&transport, &Default::default()).join("\n");
 
         assert!(report.contains("HTTPS_PROXY"), "{report}");
         assert!(
@@ -2024,7 +2145,7 @@ mod tests {
             &["ALL_PROXY", "HTTP_PROXY"],
         );
 
-        let lines = network(&transport);
+        let lines = network(&transport, &Default::default());
         let named: Vec<&String> = lines
             .iter()
             .filter(|line| line.contains("_PROXY is set"))
@@ -2055,7 +2176,7 @@ mod tests {
             Some("localhost,.internal.example"),
         );
 
-        let report = network(&transport).join("\n");
+        let report = network(&transport, &Default::default()).join("\n");
 
         assert!(report.contains("localhost,.internal.example"), "{report}");
     }

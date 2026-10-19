@@ -780,6 +780,10 @@ doctor-proxy-unsupported = { $protocol } is not supported by this build, so requ
 doctor-proxy-unparseable = not a proxy
 doctor-proxy-unparseable-detail = { $variable } is set to something that cannot be read as a proxy address, so it is not the route (its value is never printed)
 doctor-no-proxy = not proxied
+doctor-network-file = stated in
+doctor-network-file-detail = { $names } from { $path }
+doctor-network-file-ignored = ignored
+doctor-network-file-ignored-detail = { $name } in { $path } is a checkout's file, so it decides nothing
 
 
 ## A permission rule this build could not act on
