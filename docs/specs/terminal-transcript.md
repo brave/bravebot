@@ -3,7 +3,10 @@ id: VIEW
 title: The transcript
 status: normative
 governs:
+  - crates/tui/src/avatar.rs
+  - crates/tui/src/blocks.rs
   - crates/tui/src/indicator.rs
+  - crates/tui/src/logo.rs
   - crates/tui/src/reasoning.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/watching.rs
@@ -758,3 +761,43 @@ holds no bytes of what the rows contain and the rule is kept ([SCROLL-5](scrolle
 
 `verified-by: bravebot_tui::render::a_held_view_says_how_many_rows_arrived_below_and_the_key_back`
 `verified-by: bravebot_tui::render::a_held_view_on_a_narrow_terminal_drops_the_cue_and_keeps_the_mode`
+
+
+<a id="VIEW-28"></a>
+### VIEW-28: block art is drawn from cell backgrounds in a terminal that leaves gaps between rows
+
+The wordmark and the face beside it on the opening screen are drawn in `█`, `▀` and `▄`. Where
+`TERM_PROGRAM` is `Apple_Terminal`, each cell is drawn from its background instead, so that no row
+of the art is cut by a stripe:
+
+- A full block is a space on the colour, or a space in reverse video where the colour is the
+  terminal's own ink.
+- An upper half block is a lower half block in reverse video.
+- A cell with two colours is a lower half block in the lower colour on a background of the upper
+  one.
+- A lower half block, the shadow and a blank cell are drawn as they were.
+
+Each cell shows the same colours in both forms. Every other terminal is drawn the block characters.
+
+**Why.** Apple's Terminal draws block characters from the font, in a band that starts a few pixels
+below the top of the cell. Stacked rows of `█` are separated by a stripe of the window's background,
+and a half block over a background colour shows that colour in the stripe, which makes the face look
+striped. A cell's background fills the whole cell and a lower half block is flush with the bottom of
+it, so a cell drawn from those two has no stripe. The size of the band depends on the font and the
+line spacing, which this program cannot read, so the choice is made by terminal and not by
+measuring.
+
+Other terminals keep the characters because reverse video fills the half it empties with the
+terminal's opaque background colour, which shows against a window the person made translucent.
+Inside tmux `TERM_PROGRAM` names tmux, so the characters are drawn there.
+
+Reverse video adds no colour, so `NO_COLOR` ([VIEW-20](#VIEW-20)) holds: the wordmark under it is
+drawn in the terminal's own ink.
+
+`verified-by: bravebot_tui::blocks::a_painted_cell_shows_the_same_two_halves_as_the_block_it_replaces`
+`verified-by: bravebot_tui::blocks::a_painted_cell_is_a_space_or_a_lower_half_block`
+`verified-by: bravebot_tui::blocks::the_terminals_own_ink_is_painted_by_reversing_the_cell`
+`verified-by: bravebot_tui::avatar::a_face_drawn_from_backgrounds_is_the_same_picture`
+`verified-by: bravebot_tui::logo::a_mark_drawn_from_backgrounds_is_the_same_picture`
+`verified-by: bravebot_tui::lib::only_the_name_apple_terminal_sets_is_apple_terminal`
+
