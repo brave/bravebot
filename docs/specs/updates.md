@@ -79,6 +79,7 @@ startup line: a presentation crate may not reach another one
 
 `verified-by: bravebot_tui::update::a_newer_version_is_announced_along_with_the_command_that_installs_it`
 `verified-by: bravebot_tui::update::a_script_install_is_given_the_script_again`
+`verified-by: bravebot_tui::update::a_package_manager_install_is_given_its_managers_upgrade_command`
 `verified-by: by-construction (each command is one of four literals chosen by matching on the installation, so no value composes one)`
 
 <a id="UPDATE-4"></a>
