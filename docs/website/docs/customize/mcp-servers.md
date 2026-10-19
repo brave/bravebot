@@ -221,6 +221,10 @@ In the full-screen interface the question is asked on the terminal before the in
 `--plain` it is asked after the question about trusting the directory, or, where an earlier yes was
 [kept](../security/trust.md#remembering-the-answer), after the line saying so.
 
+In `--plain` the question has one answer: `y` starts the server for that session, and any other line,
+including `1` and `2`, and the end of the input decline. It offers no answer that records, and what is
+answered there is not written to the state directory.
+
 ### Where nobody can be asked
 
 A [one-shot run](../using/headless.md), `bravebot "..."`, asks nobody. A requested server nothing approved is left out, and

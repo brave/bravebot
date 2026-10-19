@@ -718,6 +718,9 @@ needs the terminal put in a state a session in lines does not put it in.
 `verified-by: bravebot_cli::plain::a_yes_in_lines_is_kept_and_settles_the_next_session_without_asking`
 `verified-by: bravebot_cli::plain::a_no_or_the_end_of_the_input_in_lines_keeps_nothing`
 `verified-by: bravebot_cli::plain::the_question_in_lines_names_the_file_a_yes_is_kept_in`
+`verified-by: bravebot_cli::plain::a_server_question_is_held_as_its_own_kind_and_has_one_answer`
+`verified-by: bravebot_cli::plain::the_server_asker_in_lines_records_nothing`
+`verified-by: bravebot_agent::servers::an_asker_that_records_nothing_keeps_neither_a_yes_to_a_server_nor_to_a_move`
 `verified-by: bravebot_cli::plain::a_yes_in_lines_where_nothing_can_be_kept_trusts_the_session_only_and_says_so`
 `verified-by: bravebot_cli::plain::a_yes_in_lines_whose_record_cannot_be_written_trusts_the_session_only_and_says_so`
 `verified-by: bravebot_cli::running::a_session_in_lines_is_refused_where_its_input_is_not_a_terminal`

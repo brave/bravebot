@@ -495,7 +495,11 @@ asks nobody and says so on stderr, naming `bravebot mcp approve <alias>` as the 
 terminal, and a session with no terminal says the same. A delegate asks nobody, and holds a
 server's grant only where the turn that spawned it holds one ([SERVERS-9](#SERVERS-9)), so it
 reaches no server the session did not start. An incognito session asks, and a yes there
-starts the server for that session and records nothing.
+starts the server for that session and records nothing. A session in lines
+([CLI-14](cli.md#CLI-14)) asks as it asks every question: the lines above, then `Use this MCP
+server? [y/N]`. Only `y` starts the server for that session; `1`, `2`, any other line and the end
+of the input decline. It offers no answer that records, and it records nothing about a server, a
+move or a tool the person answered, as an incognito session does.
 
 A yes whose record cannot be written still starts the server, since the person said yes and a file
 that would not take the answer does not unsay it, and a line says which record was not kept.
