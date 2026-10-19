@@ -2087,6 +2087,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_agent::confine::a_bypass_stage_is_refused_the_temporary_directory_a_person_held_back`
 `verified-by: bravebot_agent::confine::the_planner_is_told_the_temporary_directory_a_person_held_back`
 `verified-by: bravebot_agent::confine::holding_the_temporary_directory_back_refuses_a_write_there_and_nothing_else`
+`verified-by: bravebot_agent::held_back_temporary_directory::the_settled_setting_holds_the_temporary_directory_back_from_run_and_is_told_to_the_planner`
 `verified-by: bravebot_config::settings::a_checkouts_strict_does_not_lift_the_persons_read_only`
 `verified-by: bravebot_config::settings::a_checkouts_strict_under_a_read_only_pin_starts_at_the_pin`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_strict_does_not_lift_the_persons_read_only`
