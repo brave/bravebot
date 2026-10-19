@@ -4199,6 +4199,9 @@ fn compact_animated(
     });
 
     loop {
+        // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
+        // turned off then, not at the next pass of the outer loop (CMD-12).
+        session.keep_awake();
         redraw(terminal, session)?;
 
         // Input is still read, so a long summary does not leave the interface deaf, and the
@@ -4453,6 +4456,9 @@ fn ask_animated(
     });
 
     loop {
+        // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
+        // turned off then, not at the next pass of the outer loop (CMD-12).
+        session.keep_awake();
         redraw(terminal, session)?;
 
         // Input is still read for the reason a summary reads it: a long answer must not leave the
@@ -4727,6 +4733,9 @@ fn manifest_animated(
 
     let mut run = crate::manifest_run::Run::default();
     loop {
+        // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
+        // turned off then, not at the next pass of the outer loop (CMD-12).
+        session.keep_awake();
         redraw(terminal, session)?;
 
         // Read here rather than in the outer loop, which is blocked for the duration, and for the
@@ -5033,6 +5042,9 @@ fn goal_check_animated(
     });
 
     loop {
+        // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
+        // turned off then, not at the next pass of the outer loop (CMD-12).
+        session.keep_awake();
         redraw(terminal, session)?;
 
         // Input is still read for the reason an aside reads it: a slow answer must not leave the
@@ -5385,6 +5397,9 @@ fn run_turn_animated(
 
     // Redraw until the turn finishes, answering approvals and watching for a cancel on the way.
     loop {
+        // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
+        // turned off then, not at the next pass of the outer loop (CMD-12).
+        session.keep_awake();
         redraw(terminal, session)?;
 
         // Input is polled here rather than in the outer loop, which is blocked for the duration
