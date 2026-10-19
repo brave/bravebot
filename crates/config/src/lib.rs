@@ -1046,6 +1046,11 @@ pub struct Config {
     /// `None` leaves both on the session's own model. [`Config::summary`] resolves a tier word in
     /// it.
     pub summary_model: Option<String>,
+    /// The model the settings in force name for processors to run on, as the file spelled it.
+    ///
+    /// `None`, and `inherit`, leave a processor on the turn's own model. [`Config::processor`]
+    /// resolves a tier word in it.
+    pub processor_model: Option<String>,
     /// The cache lifetime the settings in force chose for requests to a gateway, if they chose one.
     ///
     /// `None` sends no lifetime, so every service keeps its own default. Bedrock accounts carry the
@@ -1288,6 +1293,7 @@ impl Config {
         config.defer_mcp_tools_above = settings.defer_mcp_tools_above();
         config.fallback_model = settings.fallback_model().map(str::to_string);
         config.summary_model = settings.summary_model().map(str::to_string);
+        config.processor_model = settings.processor_model().map(str::to_string);
         let ttl = settings.prompt_cache_ttl();
         config.prompt_cache_ttl = ttl;
         config.bedrock = config.bedrock.map(|account| account.with_cache_ttl(ttl));
@@ -1417,6 +1423,7 @@ impl Config {
             defer_mcp_tools_above: None,
             fallback_model: None,
             summary_model: None,
+            processor_model: None,
             prompt_cache_ttl: None,
             context_budget,
             budget_was_chosen,
@@ -1663,6 +1670,19 @@ impl Config {
     /// sign-in question and for BACKEND-48's reason.
     pub fn summary(&self) -> Option<String> {
         self.summary_model
+            .as_deref()
+            .map(|name| self.model_named(name))
+    }
+
+    /// The model an isolated processor runs on, resolved like `--model`.
+    ///
+    /// `None` where the settings name none, which leaves a processor on the turn's own model.
+    ///
+    /// A model the machine-level layer refuses is still returned, as it is by [`Config::summary`]
+    /// and for the same reason: the setting is a cost boundary, so a name that cannot be used stops
+    /// the call and the refusal is the caller's to make (PROC-13).
+    pub fn processor(&self) -> Option<String> {
+        self.processor_model
             .as_deref()
             .map(|name| self.model_named(name))
     }
@@ -3985,6 +4005,26 @@ mod tests {
             let settings = Settings::parse(&format!(r#"{{"summaryModel": "{written}"}}"#));
             let config = resolved(&settings, bedrock, complete_env).expect("configured");
             assert_eq!(config.summary().as_deref(), Some(expected), "{written}");
+        }
+    }
+
+    /// PROC-13: `processorModel` is resolved as `model` is, so a tier word means that tier's
+    /// configured model and nothing named leaves a processor on the turn's own model.
+    #[test]
+    fn the_processor_model_is_resolved_like_a_model_name() {
+        let bedrock = |key: &str| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+            other => complete_env(other),
+        };
+        let unset = resolved(&Settings::default(), bedrock, complete_env).expect("configured");
+        assert_eq!(unset.processor(), None);
+
+        for (written, expected) in [("haiku", "haiku-arn"), ("some-model", "some-model")] {
+            let settings = Settings::parse(&format!(r#"{{"processorModel": "{written}"}}"#));
+            let config = resolved(&settings, bedrock, complete_env).expect("configured");
+            assert_eq!(config.processor().as_deref(), Some(expected), "{written}");
         }
     }
 

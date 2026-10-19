@@ -154,6 +154,7 @@ const READ_KEYS: &[&str] = &[
     "mcpServers",
     "model",
     PERMISSIONS_BLOCK,
+    "processorModel",
     "promptCacheTtl",
     PROVIDER_BLOCK,
     REFERENCES_BLOCK,
@@ -255,6 +256,10 @@ pub struct Settings {
     ///
     /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
     summary_model: Option<String>,
+    /// What the top-level `processorModel` key named, if it named anything but `inherit`.
+    ///
+    /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
+    processor_model: Option<String>,
     /// What the top-level `agent` key named, if it named anything.
     ///
     /// The name as the file spelled it. Matching it against the definitions a session resolved is
@@ -395,6 +400,11 @@ pub struct Settings {
     /// Kept for the same reason: the model it names is sent the conversation to summarise and the
     /// exchange to judge, which makes it a destination, and a checkout cannot choose one.
     summary_ignored: Vec<PathBuf>,
+    /// The layers that named `processorModel` and were not obeyed, weakest first.
+    ///
+    /// Kept for the same reason: the model it names is sent the files a processor reads, which
+    /// makes it a destination, and a checkout cannot choose one.
+    processor_ignored: Vec<PathBuf>,
     /// The layers that named `agent` and were not obeyed, weakest first.
     ///
     /// Kept because a definition chosen for every turn is a prompt and a narrowing nobody vouched
@@ -858,6 +868,7 @@ impl Settings {
         let mut advisor_ignored = Vec::new();
         let mut fallback_ignored = Vec::new();
         let mut summary_ignored = Vec::new();
+        let mut processor_ignored = Vec::new();
         let mut agent_ignored = Vec::new();
         let mut style_ignored = Vec::new();
         let mut references_ignored = Vec::new();
@@ -930,6 +941,9 @@ impl Settings {
                 }
                 if root.remove("summaryModel") {
                     summary_ignored.push(path.clone());
+                }
+                if root.remove("processorModel") {
+                    processor_ignored.push(path.clone());
                 }
                 if root.remove("agent") {
                     agent_ignored.push(path.clone());
@@ -1156,6 +1170,7 @@ impl Settings {
         settings.advisor_ignored = advisor_ignored;
         settings.fallback_ignored = fallback_ignored;
         settings.summary_ignored = summary_ignored;
+        settings.processor_ignored = processor_ignored;
         settings.agent_ignored = agent_ignored;
         settings.style_ignored = style_ignored;
         settings.references_ignored = references_ignored;
@@ -1207,6 +1222,10 @@ impl Settings {
             advisor_model: word(root, "advisorModel"),
             fallback_model: word(root, "fallbackModel"),
             summary_model: word(root, "summaryModel"),
+            // `inherit` is how other agents' definitions name no model, so it reads back as none,
+            // as it does in a definition (DELEGATE-22).
+            processor_model: word(root, "processorModel")
+                .filter(|name| !name.eq_ignore_ascii_case("inherit")),
             agent: word(root, "agent"),
             references_ignored: Vec::new(),
             attribution_ignored: Vec::new(),
@@ -1329,6 +1348,7 @@ impl Settings {
             advisor_ignored: Vec::new(),
             fallback_ignored: Vec::new(),
             summary_ignored: Vec::new(),
+            processor_ignored: Vec::new(),
             agent_ignored: Vec::new(),
             style: word(root, "style"),
             style_ignored: Vec::new(),
@@ -1395,6 +1415,14 @@ impl Settings {
     /// [`Settings::model`] is.
     pub fn summary_model(&self) -> Option<&str> {
         self.summary_model.as_deref()
+    }
+
+    /// The model the settings in force name for isolated processors, if they name one.
+    ///
+    /// Read from the person's own file and the file `--settings` names only, for the reason
+    /// [`Settings::model`] is.
+    pub fn processor_model(&self) -> Option<&str> {
+        self.processor_model.as_deref()
     }
     /// The definition the settings in force name for every turn of a session to be addressed to,
     /// where `--agent` did not name one (ADDRESS-13).
@@ -1933,6 +1961,7 @@ impl Settings {
             && self.advisor_ignored.is_empty()
             && self.fallback_ignored.is_empty()
             && self.summary_ignored.is_empty()
+            && self.processor_ignored.is_empty()
             && self.agent_ignored.is_empty()
             && self.style_ignored.is_empty()
             && self.style.is_none()
@@ -1978,6 +2007,11 @@ impl Settings {
     pub fn summary_ignored(&self) -> impl Iterator<Item = &Path> {
         self.summary_ignored.iter().map(PathBuf::as_path)
     }
+    /// The files that named `processorModel` from a layer not entitled to, weakest first.
+    pub fn processor_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.processor_ignored.iter().map(PathBuf::as_path)
+    }
+
     /// The output style the settings in force named, as the file spelled it (INSTR-12).
     pub fn style(&self) -> Option<&str> {
         self.style.as_deref()
@@ -2055,6 +2089,7 @@ impl Settings {
             .chain(self.advisor_model.is_some().then_some("advisorModel"))
             .chain(self.fallback_model.is_some().then_some("fallbackModel"))
             .chain(self.summary_model.is_some().then_some("summaryModel"))
+            .chain(self.processor_model.is_some().then_some("processorModel"))
             .chain(self.agent.is_some().then_some("agent"))
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.style.is_some().then_some("style"))
@@ -7011,6 +7046,38 @@ mod tests {
         assert_eq!(named.summary_model(), Some("named-summary"));
         assert_eq!(named.summary_ignored().count(), 0);
     }
+    /// PROC-13: the processor model is a destination for the files a processor reads, so a
+    /// checkout's layers cannot name it, the layers that can are reported for the ones that could
+    /// not, and `inherit` names none.
+    #[test]
+    fn a_project_layer_cannot_name_the_processor_model() {
+        let settings = Layers::new("processor-layers")
+            .global(r#"{"processorModel": "  personal-processor "}"#)
+            .project(r#"{"processorModel": "this-checkout"}"#)
+            .local(r#"{"processorModel": "also-this-checkout"}"#)
+            .read();
+        assert_eq!(settings.processor_model(), Some("personal-processor"));
+        assert_eq!(settings.processor_ignored().count(), 2);
+
+        let only_project = Layers::new("processor-only-project")
+            .project(r#"{"processorModel": "this-checkout"}"#)
+            .read();
+        assert_eq!(only_project.processor_model(), None);
+        assert_eq!(only_project.processor_ignored().count(), 1);
+
+        let named = Layers::new("processor-named")
+            .global(r#"{"processorModel": "personal-processor"}"#)
+            .named(r#"{"processorModel": "named-processor"}"#)
+            .read();
+        assert_eq!(named.processor_model(), Some("named-processor"));
+        assert_eq!(named.processor_ignored().count(), 0);
+
+        let inherit = Layers::new("processor-inherit")
+            .global(r#"{"processorModel": "Inherit"}"#)
+            .read();
+        assert_eq!(inherit.processor_model(), None);
+    }
+
     /// ADDRESS-13: a definition chosen for every turn narrows and prompts them all, so a checkout's
     /// layers cannot choose one, and the layers that can are reported for the ones that could not.
     #[test]

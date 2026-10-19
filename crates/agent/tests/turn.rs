@@ -16418,6 +16418,256 @@ fn a_tool_call_from_a_processor_does_nothing() {
     );
 }
 
+/// The `model` field of every request a turn made, split into the processor's (no tool list) and
+/// the planner's rounds.
+fn models_of_a_processor_turn(requests: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut processor = Vec::new();
+    let mut planner = Vec::new();
+    for body in requests {
+        // A check on the write is a request of its own, with no tool list either.
+        if body.contains(A_CHECK_ASKING) {
+            continue;
+        }
+        let Ok(serde_json::Value::Object(request)) = serde_json::from_str(body) else {
+            continue;
+        };
+        let model = request
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let tools = request
+            .get("tools")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|tools| !tools.is_empty());
+        match tools {
+            true => planner.push(model),
+            false => processor.push(model),
+        }
+    }
+    (processor, planner)
+}
+
+/// PROC-13: `processorModel` moves the processor's request onto that model and leaves the planner's
+/// rounds on the turn's own.
+#[test]
+fn a_processor_request_carries_the_configured_model_while_the_planner_keeps_the_turns() {
+    let scratch = Scratch::new("processor-model-configured");
+    std::fs::write(scratch.path.join("config.py"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"config.py"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"rewrite it"}"#,
+        ),
+        processor_reply("REWRITTEN").replace("test-model", "a-cheap-processor-model"),
+        tool_request(
+            "write_file",
+            r#"{"path":"config.py","contents_ref":"ref:3"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.processor_model = Some("a-cheap-processor-model".to_string());
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("rewrite the config").with_model(Some("the-planners-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let (processor, planner) = models_of_a_processor_turn(&requests);
+    assert_eq!(processor, ["a-cheap-processor-model"], "{requests:?}");
+    assert!(
+        !planner.is_empty() && planner.iter().all(|model| model == "the-planners-model"),
+        "the planner's rounds left the turn's model: {planner:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("config.py")).unwrap(),
+        "REWRITTEN\n"
+    );
+    assert!(
+        !reporter
+            .notices
+            .iter()
+            .any(|notice| notice.contains("processor")),
+        "a processor answered by the model it named was reported as substituted: {:?}",
+        reporter.notices
+    );
+}
+
+/// PROC-13: with no `processorModel`, and with `inherit`, which reads back as none, the processor's
+/// request names the turn's own model as it did before the setting existed.
+#[test]
+fn a_processor_with_no_configured_model_runs_on_the_turns_own() {
+    let scratch = Scratch::new("processor-model-unconfigured");
+    std::fs::write(scratch.path.join("config.py"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"config.py"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"rewrite it"}"#,
+        ),
+        processor_reply("REWRITTEN").replace("test-model", "the-planners-model"),
+        tool_request(
+            "write_file",
+            r#"{"path":"config.py","contents_ref":"ref:3"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    assert_eq!(config.processor(), None);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("rewrite the config").with_model(Some("the-planners-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let (processor, _) = models_of_a_processor_turn(&requests);
+    assert_eq!(processor, ["the-planners-model"], "{requests:?}");
+}
+
+/// PROC-13: a `processorModel` that needs a sign-in this machine has not made refuses the call. No
+/// request goes to the model and none to the turn's model in its place, the file is left as it was,
+/// and the person is told which model and which setting.
+#[test]
+fn a_processor_model_needing_a_sign_in_sends_nothing_and_says_so() {
+    let scratch = Scratch::new("processor-model-sign-in");
+    std::fs::write(scratch.path.join("config.py"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"config.py"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"rewrite it"}"#,
+        ),
+        reply_with("could not rewrite it"),
+    ]);
+    let mut config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+        bravebot_config::env_var::USE_BEDROCK => Some("1".into()),
+        bravebot_config::env_var::AWS_REGION => Some("us-west-2".into()),
+        bravebot_config::env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+        // A profile no machine has, so no session exists whoever runs this.
+        bravebot_config::env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+        _ => None,
+    })
+    .expect("config");
+    config.processor_model = Some("haiku".to_string());
+    assert!(
+        bravebot_agent::backend::Backend::needs_sign_in(&config, &config.processor().unwrap()),
+        "the processor model would not have needed a sign-in"
+    );
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("rewrite the config").with_model(Some("the-planners-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let (processor, _) = models_of_a_processor_turn(&requests);
+    assert!(
+        processor.is_empty(),
+        "a processor request was sent on some model: {processor:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("config.py")).unwrap(),
+        "original\n"
+    );
+    let shown = format!("{:?}", reporter.finished);
+    assert!(
+        shown.contains("haiku-arn") && shown.contains("sign-in"),
+        "the person was not told which model needed a sign-in: {shown}"
+    );
+}
+
+/// PROC-13: a processor answered by a model other than the one `processorModel` named says so,
+/// naming the model as the setting wrote it.
+#[test]
+fn a_processor_answered_by_another_model_than_the_configured_one_says_so() {
+    let scratch = Scratch::new("processor-model-substituted");
+    std::fs::write(scratch.path.join("config.py"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"config.py"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"rewrite it"}"#,
+        ),
+        // The mock answers as `test-model`, which is not the name that was asked for.
+        processor_reply("REWRITTEN"),
+        tool_request(
+            "write_file",
+            r#"{"path":"config.py","contents_ref":"ref:3"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.processor_model = Some("a-model-the-service-does-not-hold".to_string());
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("rewrite the config"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let said = "A processor asked for a-model-the-service-does-not-hold and was answered by a \
+                different model";
+    assert!(
+        reporter.notices.iter().any(|notice| notice == said),
+        "nobody watching was told the processor was answered by another model: {:?}",
+        reporter.notices
+    );
+}
+
 /// The home directory is the caller's to name, and a task that has not named one has none. This
 /// pins the default: a library that read `$HOME` here would make every test in this file depend
 /// on whatever the developer happened to have installed under it.

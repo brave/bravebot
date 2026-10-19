@@ -1520,7 +1520,15 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                 }
                 accounting.publish(reporter);
                 let mut processed = match processed {
-                    Ok(done) => done,
+                    Ok(done) => {
+                        if let Some(written) = &done.substituted {
+                            reporter.notice(
+                                bravebot_i18n::t!(processor_model_substituted, model = written)
+                                    .to_string(),
+                            );
+                        }
+                        done
+                    }
                     Err(crate::processor::ProcessorError::Chat(error))
                         if error.is_empty_reply() && !retried =>
                     {

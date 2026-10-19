@@ -240,11 +240,54 @@ holds the fuller preview.
 `verified-by: bravebot_core::policy::a_document_nobody_said_anything_about_has_nothing_to_show`
 `verified-by: bravebot_tui::confirm::what_a_processor_said_is_drawn_beside_the_diff_it_describes`
 
+<a id="PROC-13"></a>
+### PROC-13: the `processorModel` setting names the model a processor runs on
+
+`processorModel` holds one model name. A processor runs on it, resolved the way `--model` is, so a
+tier word means that tier's configured model and anything else is sent as written. Absent, empty or
+`inherit`, a processor runs on the model of the turn that started it. The planner's own rounds, and
+vetting and compaction, are not affected: compaction and goal checks have `summaryModel`
+([COMPACT-15](compaction.md#COMPACT-15)).
+
+The name is configuration, not content. It is read from the person's own settings file and from the
+file `--settings` names, and from no project or local layer ([BACKEND-24](backends.md#BACKEND-24)):
+a layer that names it is dropped and `doctor` names the file. No tool argument, planner word or
+file content chooses it, so the destination of a processor's input stays the one the person
+configured.
+
+A model that needs a sign-in this machine has not made, that the managed layer refuses
+([BACKEND-48](backends.md#BACKEND-48)), or that no configured service answers for is not swapped
+for the turn's model. The call does not run, nothing is sent, and the person is told which model
+the setting named. The planner is told only that the call did not run.
+
+A processor answered by a model other than the one the setting named says so, naming the model as
+the setting wrote it. It is compared as [DELEGATE-22](delegation.md#DELEGATE-22) compares a
+delegate's: against the name that was sent, and not where the name is a handle the reply resolves.
+The name that answered is left out of the sentence, which is the driver's own words.
+
+**Why refuse rather than fall back.** A person naming a cheaper model for bulk rewrites is drawing a
+cost boundary, and running the call on the turn's model would spend past it without anybody
+choosing to.
+
+**Why this does not change PROC-1 to PROC-3.** The model name is a request field. The processor
+still holds no tools and no memory, makes one request, and has its output label fixed before the
+call. A weaker model may rewrite a file worse, and a write is approved from the diff of the real
+bytes ([PROC-12](#PROC-12)).
+
+`verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_processor_model`
+`verified-by: bravebot_config::lib::the_processor_model_is_resolved_like_a_model_name`
+`verified-by: bravebot_agent::turn::a_processor_request_carries_the_configured_model_while_the_planner_keeps_the_turns`
+`verified-by: bravebot_agent::turn::a_processor_with_no_configured_model_runs_on_the_turns_own`
+`verified-by: bravebot_agent::turn::a_processor_model_needing_a_sign_in_sends_nothing_and_says_so`
+`verified-by: bravebot_agent::turn::a_processor_answered_by_another_model_than_the_configured_one_says_so`
+`verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_processor_model_that_is_not_obeyed`
+
 ## Known costs
 
 - **An untrusted file's contents reach the backend.** A processor is a model call, so working on
   a file nobody vouched for sends it where before it would have stayed on the machine. The
-  destination is the one a trusted directory has always sent its files to. What is new is only
+  destination is the one a trusted directory has always sent its files to, or the one
+  [PROC-13](#PROC-13) names where the person configured a model for processors. What is new is only
   that the reader holds nothing.
 - **One approval per candidate, not per change.** Where several files could be the one, each is
   read into its own slot, transformed with the same instruction, and written back to the path it
