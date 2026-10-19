@@ -39,6 +39,10 @@ question and ends the turn.
 A view that has `ended` is the last state received. It is not recovered: version 1 has no
 reconnect, so start a new session.
 
+## Listing and opening sessions
+
+`listSessions()` and `openSession(id)` are part of `AgentClient` for a target that keeps sessions a person can come back to. `describe()` reports whether a target has them as `sessionList`. `RpcAgentClient` does not: it reports `sessionList: false` and rejects both with `UnsupportedError`, sending nothing.
+
 ## Try it from a terminal
 
 ```sh

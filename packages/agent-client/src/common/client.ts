@@ -1,7 +1,7 @@
 import { describeThrown, isolate } from './isolate.js'
 import { CapabilityError, ProtocolError, RpcError, UnsupportedError } from './errors.js'
 import { RpcConnection, type Deadlines, type LineSink, type Outcome } from './connection.js'
-import type { AgentClient, AgentSession, AskAnswer, CancelResult, CloseOutcome, SendResult, TargetInfo, ViewListener } from './interface.js'
+import type { AgentClient, AgentSession, AskAnswer, CancelResult, CloseOutcome, SendResult, SessionSummary, TargetInfo, ViewListener } from './interface.js'
 import { applyUpdate, endView, startView, type ViewState } from './view.js'
 import {
   SESSION_VIEW_START,
@@ -342,11 +342,20 @@ export class RpcAgentClient implements AgentClient {
       defaultModel: typeof record.defaultModel === 'string' ? record.defaultModel : null,
       sessionView: view,
       actionTargets: readActionTargets(info),
+      sessionList: false,
     }
   }
 
   workspaces(): readonly { id: string; name: string }[] {
     return this.configured.map(({ id, name }) => ({ id, name }))
+  }
+
+  listSessions(): Promise<readonly SessionSummary[]> {
+    return Promise.reject(new UnsupportedError('listing sessions is unavailable on the local stdio client'))
+  }
+
+  openSession(_id: string): Promise<AgentSession> {
+    return Promise.reject(new UnsupportedError('opening a listed session is unavailable on the local stdio client'))
   }
 
   unsupported(operation: 'attach' | 'takeControl' | 'messageStatus'): Promise<never> {

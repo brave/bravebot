@@ -77,6 +77,7 @@ These are not accepted risks or implementation details that can be skipped. The 
   Existing CLI/TUI marking helpers inspect text and produce terminal output; importing them into
   bridge dispatch would violate its boundary. Extract a narrow allowed presentation module or
   crate when the first rendering caller needs shared transforms, with its layering entry and tests.
+- **First rendering caller:** the mobile app renders released content before any Rust binding exists. It shows content as plain text with its label and escapes control, format, separator and bidirectional characters with a TypeScript function named and documented as a placeholder (`mobile/src/text/displayText.ts`). It is display-only. The app cannot call the Rust implementation until the stage-2b binding exists, so the shared helper, its layering entry and its tests arrive with that caller, in a narrow allowed presentation module chosen then. Until it does the TypeScript function is the only copy outside the Rust renderers, and a change to either is checked against the other. See [the app's rendering rules](app-shell.md#rendering-untrusted-text).
 - **Remaining:** native rendering and marking. See [implemented scope](client-contract.md#implemented-typescript-client).
   The TypeScript client library carries payloads as received and reads none of them. Its terminal
   program escapes control, zero-width and bidirectional characters locally in a diagnostic dump and renders
@@ -107,8 +108,35 @@ These are not accepted risks or implementation details that can be skipped. The 
 - **Evidence needed:** direct/transitive dependency inventory, licences, scripts and native-code review, reproducible builds, and advisory/check coverage for the selected managers under the [dependency plan](decisions-and-tradeoffs.md#9-mobile-dependencies-and-builds).
 - **Before:** landing the additions in stage 1 or the first app work in 2b/3d; reassess the cost at Q1's UI checkpoint.
 
+### Q6. How does a tool finish name the call it ends?
+
+- **Status:** unresolved. Arrival order is used meanwhile.
+- **Question and reason:** the engine gives a call no identity. The session view pairs a tool finish with the latest call still running, because no content of a call may decide the row: a call's target can be content from outside. When two calls are in flight and finish out of order, each row shows the other call's verb, target and note until the turn ends, and the Calls made list and the transcript are wrong for that time. Pairing by verb and target was tried and removed, because it branches on content.
+- **Current assumption:** a review of the engine's call sites found calls running one at a time, so the swap needs overlapping calls. This is not yet confirmed by a test of the engine.
+- **Evidence needed:** an id the engine assigns to a call and carries on both events, the change to the session view's wire shape and its spec, and a test with overlapping calls that finish in either order.
+- **Before:** any engine work that runs calls in parallel, and before the Calls made list is relied on as a record of what touched content from outside.
+- **Issue to file:** "Give tool calls an id so a finish lands on the row of its own call".
+
+### Q7. When does the mobile app close a session it opened?
+
+- **Status:** unresolved.
+- **Question and reason:** the app keeps every session it has opened, so a person can switch back with the draft and answers intact, and it does not close one when the person switches session, changes target or leaves. A listed session that arrives after a newer pick is dropped without being closed, because closing it could release something the target shares. On a target with real sessions this holds a session and a connection for each past one.
+- **Current assumption:** acceptable while the only target is a test fake.
+- **Evidence needed:** what close, detach and take-over mean on the first real target, which of them the app may call for a session it opened, what to do with a result that arrives late, and a bound on the sessions kept. Tests for switching, a target change and exit.
+- **Before:** the first target with real sessions.
+- **Issue to file:** "Release the sessions the mobile app opens when it switches, changes target or exits".
+
+### Q8. How does the app know a target can list its sessions?
+
+- **Status:** unresolved.
+- **Question and reason:** the app asks for the session list on every change and does not read `TargetInfo.sessionList`. A client that reports `false`, such as the stdio client, rejects every request, the rejection is dropped, and the drawer says "No sessions yet." while a session is open. A failed request on a target that does list keeps the last list without saying so.
+- **Current assumption:** the first target implements listing, so no gate is needed yet.
+- **Evidence needed:** read `sessionList` once from `describe()`, which can itself reject; hide the list or explain its absence when it is `false`; show a failed load differently from an empty list. Tests with a client that reports `false` and one whose list fails.
+- **Before:** a target built on the stdio client, or any target without listing.
+- **Issue to file:** "Show the sessions drawer by capability, and tell a person when listing fails".
+
 ## Keeping this record current
 
-Update an entry when its assumption, evidence, or required checkpoint changes. When resolved, mark it resolved and replace the open discussion with a link to the decision and its evidence. Update the affected architecture, contract, and stages in the same change. Keep U1–U4 and Q1–Q5 identifiers stable so existing references continue to work.
+Update an entry when its assumption, evidence, or required checkpoint changes. When resolved, mark it resolved and replace the open discussion with a link to the decision and its evidence. Update the affected architecture, contract, and stages in the same change. Keep U1–U4 and Q1–Q8 identifiers stable so existing references continue to work.
 
 Add a question when it affects a capability, security boundary, or delivery choice. Routine names, numerical limits, and libraries can be chosen during implementation and recorded with their tests. Keep checkpoints and scope cuts in the [implementation plan](implementation-plan.md#checkpoints-and-scope-cuts); review remaining work there as these questions are answered.

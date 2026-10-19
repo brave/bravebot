@@ -25,3 +25,12 @@ const concrete = new RpcAgentClient({ write: () => undefined })
 void concrete.raw
 // @ts-expect-error `connection` is private to the client.
 void concrete.connection
+
+async function listing(): Promise<readonly string[]> {
+  const info = await connection.client.describe()
+  if (!info.sessionList) return []
+  const rows = await connection.client.listSessions()
+  const opened: AgentSession = await connection.client.openSession(rows[0]?.id ?? '')
+  return [opened.id, ...rows.map((row) => `${row.workspace}:${row.status}:${String(row.waiting)}:${String(row.ended)}:${String(row.firstPrompt)}`)]
+}
+void listing()

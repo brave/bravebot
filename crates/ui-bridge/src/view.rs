@@ -74,6 +74,8 @@ pub(crate) struct View {
     status: Status,
     next_row: u64,
     pending: Option<Pending>,
+    /// Rows of calls that have started and not finished, oldest first.
+    running_calls: Vec<u64>,
 }
 
 impl View {
@@ -89,6 +91,7 @@ impl View {
             },
             next_row: 0,
             pending: None,
+            running_calls: Vec::new(),
         }
     }
 
@@ -114,13 +117,25 @@ impl View {
 
     fn row(&mut self, kind: RowKind, event: Option<&str>, data: Value) -> Row {
         self.next_row += 1;
+        self.row_with(self.next_row, kind, event, data, false)
+    }
+
+    /// A row with an id already assigned, for a later state of a row that exists.
+    fn row_with(
+        &self,
+        id: u64,
+        kind: RowKind,
+        event: Option<&str>,
+        data: Value,
+        resolved: bool,
+    ) -> Row {
         Row {
-            id: self.next_row,
+            id,
             turn: self.turn,
             kind,
             event: event.map(str::to_string),
             data,
-            resolved: false,
+            resolved,
         }
     }
 
@@ -128,6 +143,7 @@ impl View {
         self.turn = turn;
         self.target = target;
         self.status = Status::Running;
+        self.running_calls.clear();
         let row = self.row(RowKind::Prompt, None, prompt);
         self.changed(vec![row])
     }
@@ -143,13 +159,9 @@ impl View {
     fn resolve(&mut self) -> Vec<Row> {
         self.pending
             .take()
-            .map(|p| Row {
-                id: p.row,
-                turn: self.turn,
-                kind: RowKind::Approval,
-                event: Some(format!("{}.request", p.kind)),
-                data: p.data,
-                resolved: true,
+            .map(|p| {
+                let event = format!("{}.request", p.kind);
+                self.row_with(p.row, RowKind::Approval, Some(&event), p.data, true)
             })
             .into_iter()
             .collect()
@@ -174,8 +186,30 @@ impl View {
         let kind = match event.name {
             "narration" => RowKind::Narration,
             "quarantined" => RowKind::Quarantined,
-            "tool.started" | "tool.finished" => RowKind::Activity,
+            "tool.started" => {
+                let row = self.row(RowKind::Activity, Some(event.name), event.data.clone());
+                self.running_calls.push(row.id);
+                return Some(self.changed(vec![row]));
+            }
+            "tool.finished" => {
+                // The engine gives calls no identity, so a finish belongs to the latest call still
+                // running, as the desktop transcript pairs them. Nothing in a call's content decides
+                // the row, because a call's target can be content from outside. A finish with none
+                // running is a row of its own.
+                let row = match self.running_calls.pop() {
+                    Some(id) => self.row_with(
+                        id,
+                        RowKind::Activity,
+                        Some(event.name),
+                        event.data.clone(),
+                        false,
+                    ),
+                    None => self.row(RowKind::Activity, Some(event.name), event.data.clone()),
+                };
+                return Some(self.changed(vec![row]));
+            }
             "turn.done" | "turn.error" => {
+                self.running_calls.clear();
                 let mut rows = self.resolve();
                 self.status = match event.name {
                     "turn.done" => Status::Completed,
@@ -367,6 +401,58 @@ mod tests {
             actual, expected,
             "the Rust view types changed; regenerate {path:?} and update packages/agent-client"
         );
+    }
+
+    /// One call is one row: the finish replaces the row of the call it ends, and a finish with
+    /// nothing running stands alone.
+    #[test]
+    fn a_finished_call_replaces_the_row_of_the_call_it_ends() {
+        let mut view = View::new(true);
+        view.started(1, 1, json!({"text": "prompt"}));
+        let started = |view: &mut View, target: &str| {
+            let data = json!({"verb": "read", "target": target, "note": null});
+            view.event(&Event::new("tool.started", "s1", data))
+                .unwrap()
+                .rows[0]
+                .id
+        };
+        let finish = |view: &mut View, target: &str| {
+            let data = json!({"verb": "read", "target": target, "note": "2 lines"});
+            view.event(&Event::new("tool.finished", "s1", data))
+                .unwrap()
+        };
+
+        let first = started(&mut view, "a.rs");
+        let finished = finish(&mut view, "a.rs");
+        assert_eq!(finished.rows.len(), 1);
+        assert_eq!(finished.rows[0].id, first);
+        assert_eq!(finished.rows[0].event.as_deref(), Some("tool.finished"));
+        assert_eq!(finished.rows[0].data["note"], "2 lines");
+
+        // Two calls in flight: a finish ends the later one, as the desktop transcript pairs them.
+        let outer = started(&mut view, "b.rs");
+        let inner = started(&mut view, "c.rs");
+        assert_eq!(finish(&mut view, "c.rs").rows[0].id, inner);
+        assert_eq!(finish(&mut view, "b.rs").rows[0].id, outer);
+
+        // Nothing is running, so the finish gets a row of its own, after every earlier one.
+        let alone = finish(&mut view, "d.rs");
+        assert!(alone.rows[0].id > inner);
+
+        // A turn that ends with a call unfinished forgets it, so a finish after the end is a row of
+        // its own and does not reuse the row of the call the turn left running.
+        let unfinished = started(&mut view, "e.rs");
+        view.event(&Event::new("turn.done", "s1", json!({"reply": "ok"})));
+        let after_end = finish(&mut view, "f.rs");
+        assert!(after_end.rows[0].id > unfinished);
+
+        // A new turn forgets a call the earlier one left running, even when that turn never
+        // reported an end.
+        view.started(2, 2, json!({"text": "again"}));
+        let left = started(&mut view, "g.rs");
+        view.started(3, 3, json!({"text": "once more"}));
+        let after_start = finish(&mut view, "h.rs");
+        assert!(after_start.rows[0].id > left);
     }
 
     /// A failed model request must not leave a client showing a running turn.
