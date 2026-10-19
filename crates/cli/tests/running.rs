@@ -2111,6 +2111,50 @@ fn accept_edits_is_refused_with_the_bypass_flag_and_outside_a_one_shot_run() {
     assert!(!scratch.path.join("out.txt").exists());
 }
 
+/// CLI-6: a write nobody could approve is an effect a gate refused, so the run exits on status 4
+/// and says `BB1004`, however calmly the planner then reports it. The reply still reaches stdout.
+///
+/// The tool answers a declined question with a problem for the planner and never calls the
+/// policy, so a run that read only the policy's refusals ended on 0 with `"refusals":[]`: what a
+/// script piping this command into the next saw was a success with no file.
+#[test]
+fn a_write_nobody_could_approve_exits_on_the_refused_status_and_says_so() {
+    let gateway = a_gateway_asking_for_a_write();
+    let scratch =
+        Scratch::new("cli-running-unapproved-write").with_settings(&settings_for(&gateway));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["-p", "write out.txt"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    assert!(
+        stderr.contains("BB1004"),
+        "no identifier on stderr: {stderr}"
+    );
+    assert!(stdout.contains("all done"), "the reply was lost: {stdout}");
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "the write happened without approval"
+    );
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--json", "-p", "write out.txt"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    let object: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(object["ok"], false, "{stdout}");
+    assert_eq!(object["status"], 4, "{stdout}");
+    assert_eq!(object["refusals"][0]["gate"], "file_write", "{stdout}");
+}
+
 /// CLI-24: a run that is refused a write writes its events while it goes and ends on the result
 /// object. Streaming a gate's refusal is covered in `json.rs`: the approval a one-shot run lacks
 /// ends the call without a gate event.

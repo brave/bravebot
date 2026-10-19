@@ -3,7 +3,7 @@
 use crate::exit::{Ending, fail};
 use crate::json;
 use crate::usage::print_help;
-use bravebot_core::event::{Event, RecordingSink, Role};
+use bravebot_core::event::{Event, Principle, RecordingSink, Role};
 use bravebot_i18n::t;
 use std::io::Write;
 use std::process::ExitCode;
@@ -201,6 +201,22 @@ pub(crate) fn refusals(sink: &RecordingSink) -> Vec<json::Refusal> {
             _ => None,
         })
         .collect()
+}
+
+/// The refusals a trail holds, then the questions nobody could be asked.
+///
+/// Those never reached the policy, so the trail has no entry for them, and a result object that
+/// said `"ok":false,"status":4` with nothing to point at would be a refusal a script cannot read.
+pub(crate) fn with_declined(
+    mut refused: Vec<json::Refusal>,
+    declined: &[crate::one_shot::Declined],
+) -> Vec<json::Refusal> {
+    refused.extend(declined.iter().map(|d| json::Refusal {
+        gate: d.gate,
+        principle: Principle::Capability.name(),
+        reason: d.reason.to_string(),
+    }));
+    refused
 }
 
 /// The result object for a run with no reply to report.
