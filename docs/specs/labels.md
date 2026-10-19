@@ -37,7 +37,7 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 36
+      - crates/agent/src/tools.rs: 37
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
@@ -135,7 +135,7 @@ guards:
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 35
+      - crates/agent/src/tools.rs: 38
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
@@ -149,7 +149,7 @@ guards:
   - symbol: Policy::label_model_output
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 5
+      - crates/agent/src/tools.rs: 6
       - crates/core/src/policy.rs: 22
   - symbol: Policy::adopt_model_output
     sites:

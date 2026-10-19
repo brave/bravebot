@@ -1107,6 +1107,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "schedule_next" => t!(verb_schedule_next),
         "watch_file" => t!(verb_watch_file),
         "advisor" => t!(verb_advisor),
+        "propose_plan" => t!(verb_propose_plan),
         "message_session" => t!(verb_message_session),
         // Every server's tool is offered under a wire name of this shape, and no built-in is.
         server if server.starts_with("mcp__") => t!(verb_mcp_call),

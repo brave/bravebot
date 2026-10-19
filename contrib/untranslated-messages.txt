@@ -7,6 +7,12 @@
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
 
+fr:agent-plan-approval-accept-edits
+fr:agent-plan-approval-accept-edits-detail
+fr:agent-plan-approval-ask
+fr:agent-plan-approval-ask-detail
+fr:agent-plan-approval-header
+fr:agent-plan-approval-keep-planning
 fr:auth-status-bedrock-lapsed
 fr:auth-status-bedrock-no-cli
 fr:auth-status-bedrock-no-profile
@@ -65,3 +71,4 @@ fr:sessions-purge-question
 fr:sessions-purge-row
 fr:source-is-large
 fr:sources-large-together
+fr:verb-propose-plan

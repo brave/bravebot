@@ -4,6 +4,7 @@ title: How much a session asks before it acts
 status: normative
 governs:
   - crates/agent/src/permission_mode.rs
+  - crates/agent/src/plan_approval.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/manifest.rs
   - crates/cli/src/main.rs
@@ -525,6 +526,38 @@ says it once, on the command line, where no content can say it for them.
 
 `verified-by: bravebot_cli::running::the_bypass_and_unconfine_flag_opens_a_run_with_the_sandbox_off`
 `verified-by: bravebot_cli::running::the_bypass_and_unconfine_flag_is_refused_where_the_bypass_flag_is_and_beside_a_sandbox_mode`
+
+<a id="MODE-14"></a>
+### MODE-14: a finished plan is put to the person, who chooses the mode the work continues in
+
+In plan mode the planner is offered `propose_plan`, which takes the plan text and shows it to the
+person with three answers: accept edits, ask before each edit, and keep planning. The two approving
+answers end plan mode for the mode they name, and the planner is told the plan was approved. Any
+other answer, including a typed reply or a skip, leaves the session in plan mode and tells the
+planner it was not approved. A call outside plan mode, from a delegate, or where nobody can be
+asked, asks nobody and changes nothing. Bypassing is not offered (MODE-5).
+
+The mode applies to the rest of the turn as any change of mode does (MODE-8), so the planner starts
+the work in the same turn and the person types nothing.
+
+**Why.** Without it the planner cannot say a plan is finished, and the person has to press the mode
+key and type a request to carry it out. The routing field is the mode, picked from a list of fixed
+choices drawn by the driver and shown in full, so a person can approve it alone. The plan is the
+planner's own text and goes through the same gate as a question
+([ASK-3](tools/ask-user.md#ASK-3)): once the planner's context has met something untrusted the
+plan is refused rather than shown.
+
+**Known cost.** The prompt is a permission to change mode, not an answer to a question the planner
+invented (MODE-7), so no mode answers it for the person.
+
+`verified-by: bravebot_agent::tools::approving_a_plan_leaves_plan_mode_for_the_mode_chosen`
+`verified-by: bravebot_agent::tools::a_plan_not_approved_leaves_plan_mode_in_force`
+`verified-by: bravebot_agent::tools::a_plan_proposed_outside_plan_mode_asks_nobody`
+`verified-by: bravebot_agent::tools::a_plan_from_an_untrusted_context_is_refused_and_changes_no_mode`
+`verified-by: bravebot_agent::tools::propose_plan_takes_a_plan_and_a_reason_and_is_not_in_the_table`
+`verified-by: bravebot_agent::tools::a_delegate_dispatching_propose_plan_asks_nobody_and_changes_no_mode`
+`verified-by: bravebot_agent::turn::propose_plan_is_offered_to_the_planner_in_plan_mode_only`
+`verified-by: bravebot_agent::plan_approval::no_answer_selects_bypassing_or_leaves_plan_mode_without_a_choice`
 
 ## Known costs
 

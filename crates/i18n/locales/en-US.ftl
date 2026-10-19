@@ -3471,6 +3471,7 @@ verb-spawn-agent = Delegate
 verb-schedule-next = Schedule
 verb-watch-file = Watch
 verb-advisor = Advise
+verb-propose-plan = Plan
 verb-message-session = Message
 verb-mcp-call = MCP
 verb-unknown = Tool
@@ -3819,3 +3820,11 @@ doctor-push-unanswered = { $host } gave no answer for this key
 doctor-push-chosen = Chosen
 doctor-push-chosen-by = git.identities names this key for the owner
 doctor-push-chosen-at-prompt = you chose this key for the owner at a run prompt; /reach keys in the terminal client lists and forgets it
+
+## The prompt that offers a finished plan in plan mode
+agent-plan-approval-header = Plan
+agent-plan-approval-accept-edits = Yes, accept edits
+agent-plan-approval-accept-edits-detail = Leave plan mode and carry the plan out. Writes go through unasked; commands are still asked about.
+agent-plan-approval-ask = Yes, ask before each edit
+agent-plan-approval-ask-detail = Leave plan mode and carry the plan out, asking before every write and command.
+agent-plan-approval-keep-planning = No, keep planning

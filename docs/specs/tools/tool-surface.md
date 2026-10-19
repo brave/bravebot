@@ -8,7 +8,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 236
+      - crates/agent/src/tools.rs: 240
       - crates/agent/src/tools/message.rs: 14
   - symbol: Produced::refused_with_a_note
     sites:
@@ -57,6 +57,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`message_session`](../session-messages.md#MSG-1) | `target` | `text` | confirmation that the message is queued in the other session's process |
 | [`ask_user`](ask-user.md) | `questions` | none | what the user answered |
 | [`request_path`](request-path.md) | `path`, `write` | none | what the person answered |
+| [`propose_plan`](../permission-modes.md#MODE-14) | `plan` | none | what the person answered, and whether plan mode ended |
 
 Every tool also takes `why`, which is content on every one of them and is left out of the table for
 that reason. [TOOL-5](#TOOL-5) is where that is settled.
