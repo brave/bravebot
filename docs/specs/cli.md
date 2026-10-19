@@ -1770,8 +1770,12 @@ from adding to what is on disk, and removing leaves less behind, which is the gr
 deleted, and the only way to delete one from a terminal was to find the file by hand.
 
 **Known cost.** A session another process has open in a terminal is not seen, and its next save
-writes its record back, as for the desktop ([SESSION-30](sessions.md#SESSION-30)). The `--resume`
-picker has no key to delete a row yet.
+writes its record back, as for the desktop ([SESSION-30](sessions.md#SESSION-30)).
+
+The `--resume` picker deletes the highlighted row on Delete. It asks first, naming the title, and
+only `y` removes the record; any other key, Escape included, keeps it and stays in the list. A
+record a background session is running is refused with a note and no question. A record that cannot
+be removed stays listed. Like `sessions delete`, it is allowed under `--incognito`.
 
 `verified-by: bravebot_cli::session_delete::delete_takes_one_id_and_purge_takes_its_two_flags`
 `verified-by: bravebot_cli::session_delete::a_muddled_request_is_refused_rather_than_guessed_at`
@@ -1782,5 +1786,9 @@ picker has no key to delete a row yet.
 `verified-by: bravebot_cli::running::purge_without_a_terminal_or_yes_is_refused_and_deletes_nothing`
 `verified-by: bravebot_cli::running::a_dry_run_lists_the_records_and_deletes_nothing`
 `verified-by: bravebot_cli::running::purge_with_yes_removes_this_directorys_sessions_and_leaves_a_running_one`
+`verified-by: bravebot_tui::resume::delete_asks_and_only_y_confirms_it`
+`verified-by: bravebot_tui::resume::any_other_key_than_y_keeps_the_record`
+`verified-by: bravebot_tui::resume::delete_on_a_held_session_is_refused_without_asking`
+`verified-by: bravebot_tui::resume::a_deleted_row_leaves_the_list_and_a_failed_one_stays`
 `verified-by: bravebot_session::sessions::purging_a_project_removes_its_sessions_and_not_another_directorys`
 `verified-by: bravebot_session::sessions::purging_leaves_a_session_something_is_running`
