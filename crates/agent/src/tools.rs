@@ -17918,6 +17918,10 @@ mod tests {
             }
         }
 
+        /// SANDBOX-29: each failed line earns exactly one request for no sandbox, and spending it
+        /// leaves none until another line fails. The regression it rejects is a failure that earns
+        /// unlimited requests, which would make the gate that accepts one only after a failure do
+        /// nothing.
         #[test]
         fn each_confined_failure_earns_one_request_for_no_sandbox() {
             let mut failures = ConfinedFailures::default();
