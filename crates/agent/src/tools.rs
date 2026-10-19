@@ -15266,6 +15266,55 @@ mod tests {
             assert!(told.starts_with("refused:"), "{told}");
             assert!(seen.is_empty());
         }
+
+        /// MODE-14: a call a delegate makes through dispatch is answered as an unknown name, asks
+        /// nobody and leaves the mode as it was. The control is the same call from a planner, which
+        /// is asked, so a dispatch that refused every call would not pass. The regression it rejects
+        /// is a dispatch arm that drops the delegate guard.
+        #[test]
+        fn a_delegate_dispatching_propose_plan_asks_nobody_and_changes_no_mode() {
+            let scratch = super::arguments::Scratch::new("propose-plan-delegated");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let call: ToolCall = serde_json::from_value(json!({
+                "id": "1",
+                "function": {"name": "propose_plan", "arguments": r#"{"plan": "1. edit a.rs"}"#}
+            }))
+            .expect("a call");
+            for (delegated, asked, mode) in [
+                (true, 0, crate::PermissionMode::Plan),
+                (false, 1, crate::PermissionMode::AcceptEdits),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let mut confirmer = Watching {
+                    seen: Vec::new(),
+                    reply: vec![Answer::Chosen(vec![0])],
+                };
+                let (after, told) = super::arguments::with_tools(&workspace, |tools| {
+                    tools.delegated = delegated;
+                    tools.permission_mode = crate::LiveMode::new(crate::PermissionMode::Plan);
+                    let output = dispatch(
+                        &mut policy,
+                        tools,
+                        &mut confirmer,
+                        &mut crate::report::IgnoreReports,
+                        &call,
+                    );
+                    (tools.permission_mode.get(), released(&output.text))
+                });
+                assert_eq!(confirmer.seen.len(), asked, "delegated {delegated}: {told}");
+                assert_eq!(after, mode, "delegated {delegated}: {told}");
+                if delegated {
+                    assert!(told.starts_with("error: no such tool"), "{told}");
+                }
+            }
+        }
     }
 
     mod scheduling {
