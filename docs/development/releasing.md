@@ -9,8 +9,8 @@ make all-platforms
 
 ## Publishing a version
 
-Two steps to name the version, then two manual publishes: Jenkins for signed binaries, then
-GitHub Actions for the npm package. Either can wait days after the tag.
+Two steps to name the version, then manual publishes: Jenkins for signed binaries, then
+GitHub Actions for the npm package, then the package manifests. Each can wait days after the tag.
 
 ```sh
 make bump-version BUMP=bugfix   # or minor, major
@@ -18,6 +18,7 @@ make bump-version BUMP=bugfix   # or minor, major
 make github-release
 # later: Jenkins job bravebot-build with UPLOAD and RELEASE
 # later: make publish-npm TAG=v<version>
+# later: make package-manifests TAG=v<version>
 ```
 
 Before it changes anything, `bump-version` warns and asks whether to go on when any of these hold:
@@ -84,6 +85,15 @@ then its signature: the `.sha256` on Linux, the code signature on macOS and Wind
 does the same when it runs, except on Windows, which it does not install. Installing the npm
 package runs no script and checks nothing itself. A dispatch after a partial failure publishes
 the packages that are missing and skips the ones the registry already has.
+
+After Jenkins has created that GitHub release, `make package-manifests TAG=v<version>` downloads
+the macOS and Windows `.sha256` files from it and runs `contrib/package-manifests.py`, which writes
+`dist/packages/Casks/bravebot.rb` and the three WinGet manifests under
+`dist/packages/manifests/b/Brave/Bravebot/<version>/`. It refuses a tag that is not `v` plus the
+tree's version and any missing or malformed digest, and writes nothing then. Opening the change
+against the Homebrew tap and `microsoft/winget-pkgs` is done by hand with those files; nothing here
+holds a credential for either, and neither package verifies a signature when it installs
+([RELEASE-18](../specs/releases.md#RELEASE-18)).
 
 `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD` is set in GitHub Actions so forks and PRs compile without
 secrets. Jenkins does not set it on an upload, so a missing credential fails the release

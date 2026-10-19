@@ -71,7 +71,7 @@ class CheckTargets(unittest.TestCase):
             for gate in sorted(gates)
         ) + '\ncheck-ui-build check-extension check-all-selftest check-reviewdog-selftest'
           ' check-rebase-selftest'
-          ' check-affected-selftest check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest'
+          ' check-affected-selftest check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest'
           ' check-maintenance-selftest check-session-review-selftest:\n\t@true\n')
         for target, expected in (("check-all-local", local), ("check-all", gates)):
             for failing in ("", *sorted(expected)):
@@ -92,6 +92,7 @@ class CheckTargets(unittest.TestCase):
                     "python3 agents/skills/pr-fix/selftest.py",
                     "python3 agents/pr_worktree_selftest.py",
                     "python3 contrib/release-preflight.py --selftest",
+                    "python3 contrib/package-manifests.py --selftest",
                     "python3 agents/skills/maintenance/selftest.py",
                     "python3 agents/skills/session-review/selftest.py"]
         for failing in ("", *commands):

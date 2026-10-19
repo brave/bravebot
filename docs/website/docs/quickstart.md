@@ -129,8 +129,11 @@ serve it. `doctor` says the same and fails. See
 A session that opens on a version something newer has replaced says so, once, under the trust
 question, and gives the line that updates the copy you are running. The notice names the version you
 are running rather than the newer one, which may have moved by the time you update: the npm command for an npm
-install, the script again for a script install. A build from source is told nothing, since neither
-line would update one.
+install, the script again for a script install, `brew upgrade --cask bravebot` for a copy a Homebrew
+cask installed and `winget upgrade Brave.Bravebot` for one WinGet installed. A package manager's
+copy is recognised by the directory the manager keeps it in. A build from source is told nothing,
+since none of those lines would update one. A package can arrive after the release it follows, and
+until it does the manager says there is nothing to upgrade.
 
 Nothing about it waits. The notice comes from an answer an earlier launch wrote down, and the
 request that refreshes it, at most one an hour whether or not it learned anything, runs behind the session

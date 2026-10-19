@@ -1,7 +1,9 @@
 //! How this copy of bravebot was installed, and the command that updates it.
 //!
-//! Two ways of installing have an update command this program can name: the npm package, whose
-//! launcher says which it is, and the install script, which writes down where it put the binary.
+//! Four ways of installing have an update command this program can name: the npm package, whose
+//! launcher says which it is, the install script, which writes down where it put the binary, and
+//! the Homebrew cask and the WinGet package, each of which keeps the binary under a directory only
+//! that package manager creates.
 //! Everything else, a build from source above all, has no command here. Naming one for a copy
 //! nobody can account for would send somebody a line that replaces a binary that is not theirs.
 //!
@@ -14,6 +16,7 @@
 //! Nothing here asks a registry anything. The command is a literal per installation, and which
 //! installation this is comes from the launcher's word and a path on disk.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 /// What the npm launcher sets [`crate::env_var::INSTALLED_VIA`] to.
@@ -21,6 +24,12 @@ const NPM: &str = "npm";
 
 /// What updates an npm install.
 const NPM_COMMAND: &str = "npm install -g @brave/bravebot@latest";
+
+/// What updates a Homebrew cask install.
+const HOMEBREW_COMMAND: &str = "brew upgrade --cask bravebot";
+
+/// What updates a WinGet install.
+const WINGET_COMMAND: &str = "winget upgrade Brave.Bravebot";
 
 /// What updates a script install: the same line that installed it, which takes the newest release
 /// and puts it where this one already is.
@@ -37,6 +46,10 @@ pub enum Install {
     Npm,
     /// The install script, which recorded where it put the binary.
     Script,
+    /// The Homebrew cask, which keeps the binary under `Caskroom/bravebot/`.
+    Homebrew,
+    /// The WinGet package, which keeps the binary under `WinGet/Packages/Brave.Bravebot_*/`.
+    Winget,
 }
 
 impl Install {
@@ -48,6 +61,8 @@ impl Install {
         match self {
             Self::Npm => NPM_COMMAND,
             Self::Script => SCRIPT_COMMAND,
+            Self::Homebrew => HOMEBREW_COMMAND,
+            Self::Winget => WINGET_COMMAND,
         }
     }
 }
@@ -75,10 +90,44 @@ fn method(via: Option<&str>, running: Option<&Path>, recorded: Option<&Path>) ->
     if via == Some(NPM) {
         return Some(Install::Npm);
     }
+    if let Some(manager) = running.and_then(package_manager) {
+        return Some(manager);
+    }
     match (running, recorded) {
         (Some(running), Some(recorded)) if same_file(running, recorded) => Some(Install::Script),
         _ => None,
     }
+}
+
+/// The package manager whose directory holds this binary, once links are followed.
+///
+/// A cask or a portable WinGet package is one binary the manager unpacked into a directory of its
+/// own and linked onto the `PATH`, so the link is what runs and the directory it resolves into is
+/// what says which manager put it there. A copy built from source, or one the script wrote, is
+/// under neither and is not told to ask a package manager for an update it did not come from.
+fn package_manager(running: &Path) -> Option<Install> {
+    let resolved = std::fs::canonicalize(running).unwrap_or_else(|_| running.to_path_buf());
+    let names: Vec<&OsStr> = resolved.components().map(|part| part.as_os_str()).collect();
+    let below = |parent: &str, name: &dyn Fn(&OsStr) -> bool| {
+        names
+            .windows(2)
+            .any(|pair| pair[0].eq_ignore_ascii_case(parent) && name(pair[1]))
+    };
+    // Homebrew's own directory for casks, then the package's name: another cask's binary under it
+    // is not this one's.
+    if below("Caskroom", &|name| name == "bravebot") {
+        return Some(Install::Homebrew);
+    }
+    // WinGet names a portable package's directory `<identifier>_<source>`.
+    if below("Packages", &|name| {
+        name.as_encoded_bytes()
+            .get(..15)
+            .is_some_and(|head| head.eq_ignore_ascii_case(b"Brave.Bravebot_"))
+    }) && names.iter().any(|part| part.eq_ignore_ascii_case("WinGet"))
+    {
+        return Some(Install::Winget);
+    }
+    None
 }
 
 /// Whether two paths name the same binary, following symlinks where they resolve.
@@ -150,6 +199,49 @@ mod tests {
         assert_eq!(method(None, Some(Path::new("/tmp/bravebot")), None), None);
     }
 
+    /// A package manager's directory is what says it installed the binary, and only that package's
+    /// directory: another cask's binary, or a copy beside them, is nobody's to upgrade from here.
+    #[test]
+    fn a_binary_under_a_package_managers_directory_is_that_managers_install() {
+        let under = |path: &str| method(None, Some(Path::new(path)), None);
+        assert_eq!(
+            under("/opt/homebrew/Caskroom/bravebot/0.9.0/bravebot-darwin-arm64"),
+            Some(Install::Homebrew)
+        );
+        assert_eq!(
+            under("/opt/homebrew/Caskroom/other/1.0/bravebot"),
+            None,
+            "another cask's binary was taken for this one's"
+        );
+        assert_eq!(
+            under("/home/a/Caskroom-copy/bravebot"),
+            None,
+            "a directory that only resembles Homebrew's was believed"
+        );
+        assert_eq!(
+            under(
+                "/home/a/WinGet/Packages/Brave.Bravebot_Microsoft.Winget.Source_8wekyb3d8bbwe/bravebot"
+            ),
+            Some(Install::Winget)
+        );
+        assert_eq!(
+            under("/home/a/Packages/Brave.Bravebot_x/bravebot"),
+            None,
+            "a Packages directory with no WinGet above it was believed"
+        );
+    }
+
+    /// A binary the manager unpacked is its install even when the script's record names the same
+    /// path, since the record can only be stale there.
+    #[test]
+    fn a_package_manager_directory_wins_over_a_script_record() {
+        let path = Path::new("/opt/homebrew/Caskroom/bravebot/0.9.0/bravebot-darwin-arm64");
+        assert_eq!(
+            method(None, Some(path), Some(path)),
+            Some(Install::Homebrew)
+        );
+    }
+
     /// Each installation is told to update the way it was installed. An npm copy sent the script
     /// would gain a second binary and update the one that is not running, and a script copy sent
     /// the npm line would be told to install a package manager's copy instead of replacing itself.
@@ -163,6 +255,14 @@ mod tests {
             Install::Script.update_command().contains("install.sh"),
             "{}",
             Install::Script.update_command()
+        );
+        assert_eq!(
+            Install::Homebrew.update_command(),
+            "brew upgrade --cask bravebot"
+        );
+        assert_eq!(
+            Install::Winget.update_command(),
+            "winget upgrade Brave.Bravebot"
         );
         assert!(
             !Install::Script.update_command().contains("npm install"),

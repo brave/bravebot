@@ -16,6 +16,7 @@ governs:
   - ui/package.json
   - contrib/check-versions.py
   - contrib/release-preflight.py
+  - contrib/package-manifests.py
   - contrib/check-pnpm-lockfiles.py
 documented-by: docs/website/docs/quickstart.md
 ---
@@ -29,9 +30,10 @@ Building for a platform is not this topic. Reproducible cross-builds are ordinar
 in [../development/releasing.md](../development/releasing.md). This file governs only the path from a version to a
 published asset, and the checks along it.
 
-Two routes carry what is published: the npm packages, which hold the binaries themselves and are
-built from the GitHub release when they are published, and the shell script served from the trunk
-of this repository, which fetches the release when it runs. Both are governed here. Learning from
+Three routes carry what is published: the npm packages, which hold the binaries themselves and are
+built from the GitHub release when they are published, the shell script served from the trunk
+of this repository, which fetches the release when it runs, and the Homebrew cask and the WinGet
+package, whose manifests name the release's assets and their digests. All are governed here. Learning from
 a running copy that a newer release exists is [updates.md](updates.md).
 
 GitHub Actions compiles and tests. It does not create a GitHub release. Signed, configured
@@ -412,6 +414,45 @@ variable itself.
 
 `verified-by: by-construction (npm/tests/launcher.test.mjs lays out a node_modules tree and runs the real launcher in it: it runs the package of its own platform with its arguments and its exit status, never another platform's, finds a package installed beside the wrapper or beneath it, names the missing package when there is none or no binary, reads no environment value except to hand it on, and runs a package built by the real publish step. make check-npm runs it)`
 
+<a id="RELEASE-18"></a>
+### RELEASE-18: the Homebrew cask and the WinGet package name the release that was published, and nothing else
+
+`contrib/package-manifests.py` writes both from a tag and the `.sha256` files of that GitHub
+release. The tag has to be `v` plus the version in the tree, each asset URL is the fixed
+repository's release URL for that tag, and each digest is the published `.sha256` value of the
+asset the URL names. It writes nothing and fails when the tag is anything else, when a digest file
+is missing, or when one is not 64 hex digits: a package with a digest it did not read would
+install whatever was served.
+
+**Why.** The package manager's check is the digest in its manifest, so the manifest decides what
+is installed. The origin is the same literal [RELEASE-13](#RELEASE-13) requires, for the same reason:
+a URL and a digest both chosen from outside agree with each other whatever the bytes are.
+
+Only the macOS and Windows binaries have a package, and what the package manager checks is weaker
+than the installers' checks. Homebrew and WinGet compare the downloaded bytes to the digest in the
+manifest and no more, so [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15) are not repeated:
+no signature is verified at install, and the team and the signer are not compared. That is
+accepted because both packages are portable single binaries that the cask's tap and the WinGet
+repository publish from digests taken after Jenkins signed the asset, and Gatekeeper and SmartScreen
+still assess a signed binary when it runs. Someone who can change the manifest, which is a pull
+request reviewed in another repository, can change what installs.
+
+`verified-by: by-construction (the script states the repository as a literal and composes every URL from it and the tag; its selftest, which make check-scripts runs, writes both packages from made-up digests and pins that each digest and URL lands in the manifest, and that a tag that is not the tree's version, a missing digest file for each of the four assets, and a digest that is empty, short, long or not hex each fail having written nothing)`
+
+<a id="RELEASE-19"></a>
+### RELEASE-19: the packages are written by hand, after that version's GitHub release exists
+
+`make package-manifests TAG=v<version>` downloads the macOS and Windows `.sha256` files of that
+release and runs the script into `dist/packages/`. Nothing in this tree opens the change against
+the tap or the WinGet community repository, and no workflow does.
+
+**Why.** Both repositories are somebody else's and take a pull request from an account that is
+not this one's workflow, so there is no token here to grant and none to leak. The release must
+exist first because the digests are the ones Jenkins published, so a run before it fails at the
+download rather than writing a package for a version nobody can fetch.
+
+`verified-by: by-construction (the target requires TAG on the command line and has no step that pushes, tags or opens a pull request; gh release download fails before the script runs when the release or a checksum asset does not exist)`
+
 ## Known costs
 
 - **The signature checks are pinned by a Rust test, and the package script and launcher by Node
@@ -433,6 +474,13 @@ variable itself.
   supplies, and [RELEASE-17](#RELEASE-17) when the launcher and the publish step stop agreeing. It
   reaches the package script alone, and the shell script beside it is read by nothing. It does not
   run `publish-npm.yml`, whose platform jobs run for the first time at a release.
+
+- **Opening the package changes is manual, and a package lags its release.** Between a GitHub
+  release and the tap and WinGet repository taking the change, the startup notice
+  ([UPDATE-2](updates.md#UPDATE-2)) can offer `brew upgrade --cask bravebot` or `winget upgrade
+  Brave.Bravebot` for a version neither can install yet. The command then says there is nothing to
+  upgrade, and a later launch is told again. The tap repository this cask belongs in is not named anywhere in
+  this tree, so who creates it, and what `brew install` names, is decided where it is published.
 
 - **Publication lives outside this repository.** `bravebot-build` in devops is what signs and
   attaches assets. A change there can break RELEASE-6 through RELEASE-8 without this tree

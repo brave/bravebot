@@ -39,20 +39,26 @@ question keeps the first thing on the screen the question that grants standing p
 <a id="UPDATE-2"></a>
 ### UPDATE-2: only an installation there is a command for is told anything
 
-Two are: the npm package, which its launcher names when it starts the binary, and an install made
-by the install script, which is the binary that script recorded. Any other copy, one built from
+Four are: the npm package, which its launcher names when it starts the binary, an install made
+by the install script, which is the binary that script recorded, and the Homebrew cask and the
+WinGet package, which are a binary that resolves into a directory only that package manager makes:
+`Caskroom/bravebot/` for the cask, `WinGet/Packages/Brave.Bravebot_*/` for WinGet. Any other copy, one built from
 source above all, is told nothing and asks nothing.
 
 **Why.** The line exists for the command in it. Telling somebody a release is out without a line
 that would install it is noise, and a build from source is updated by the tree it was built from.
 The recorded path has to be the binary that is running, since a checkout on a machine that also
 has a script install is not a script install: the command would replace the other copy rather
-than theirs.
+than theirs. A package manager's directory wins over a script record naming the same path: the record can
+only be stale there. Another cask's directory, or one that only resembles the name, is not this
+package's.
 
 `verified-by: bravebot_config::install::the_launcher_saying_npm_is_what_makes_it_an_npm_install`
 `verified-by: bravebot_config::install::the_binary_the_script_recorded_is_a_script_install`
 `verified-by: bravebot_config::install::a_binary_other_than_the_recorded_one_is_not_a_script_install`
 `verified-by: bravebot_config::install::an_installation_nothing_recorded_is_left_alone`
+`verified-by: bravebot_config::install::a_binary_under_a_package_managers_directory_is_that_managers_install`
+`verified-by: bravebot_config::install::a_package_manager_directory_wins_over_a_script_record`
 
 <a id="UPDATE-3"></a>
 ### UPDATE-3: the command offered updates the copy that is running
@@ -61,17 +67,20 @@ One fixed line per installation, composed from nothing: not from the answer, not
 not from the environment.
 
 **Why.** This is a line somebody pastes into a shell, so no part of it may come from anywhere a
-value arrives from. Offering the wrong one of the two is its own harm and not a smaller one: the
-npm command against a script install puts a second copy on the machine and updates neither.
+value arrives from. Offering the wrong one of the four is its own harm and not a smaller one: the
+npm command against a script install puts a second copy on the machine and updates neither. A
+package manager's own line is the same: `brew upgrade --cask bravebot` and `winget upgrade
+Brave.Bravebot`, which update only what that manager installed.
 
-The same two literals answer `bravebot update` ([CLI-29](cli.md#CLI-29)), which is why they and
+The same four literals answer `bravebot update` ([CLI-29](cli.md#CLI-29)), which is why they and
 the installation they are chosen by sit in the configuration surface rather than beside the
 startup line: a presentation crate may not reach another one
-([LAYER-1](layering.md#LAYER-1)), and two copies of the pair would be two commands to keep in step.
+([LAYER-1](layering.md#LAYER-1)), and two copies of the four would be four commands to keep in step.
 
 `verified-by: bravebot_tui::update::a_newer_version_is_announced_along_with_the_command_that_installs_it`
 `verified-by: bravebot_tui::update::a_script_install_is_given_the_script_again`
-`verified-by: by-construction (each command is one of two literals chosen by matching on the installation, so no value composes one)`
+`verified-by: bravebot_tui::update::a_package_manager_install_is_given_its_managers_upgrade_command`
+`verified-by: by-construction (each command is one of four literals chosen by matching on the installation, so no value composes one)`
 
 <a id="UPDATE-4"></a>
 ### UPDATE-4: a version is three numbers, compared as numbers
