@@ -9110,6 +9110,25 @@ fn the_usage_tables() -> (Vec<String>, Vec<String>) {
     (commands, flags)
 }
 
+/// The words the usage lines put after `bravebot <command>`, for a command that takes subcommands:
+/// `login` and `status` for `auth`. A word that opens with `[`, `<` or `-` is an argument or a flag.
+fn usage_words_after(command: &str) -> Vec<String> {
+    let scratch = Scratch::new(&format!("cli-running-usage-after-{command}"));
+    let output = bravebot(&scratch.path, &[], &["--help"]);
+    let (stdout, _) = said(&output);
+    let prefix = format!("bravebot {command} ");
+    let mut words: Vec<String> = stdout
+        .lines()
+        .filter_map(|line| line.trim_start().split("  ").next()?.strip_prefix(&prefix))
+        .filter_map(|rest| rest.split(' ').next())
+        .filter(|word| word.chars().all(|c| c.is_ascii_lowercase()))
+        .map(str::to_string)
+        .collect();
+    words.sort();
+    words.dedup();
+    words
+}
+
 /// The script `bravebot completion <shell>` prints.
 fn a_completion_script(home: &Path, shell: &str) -> String {
     let output = bravebot(home, &[], &["completion", shell]);
@@ -9230,6 +9249,32 @@ fn a_completion_with_no_script_to_print_is_refused_with_the_argument_status() {
     }
 }
 
+/// CLI-20. `--agent`, `--system-prompt` and `--append-system-prompt` are refused with `completion`
+/// wherever `--sandbox <mode>` stands: a check that read the first argument before the sandbox flag
+/// was taken out saw `--sandbox`, not the command, and printed the script.
+#[test]
+fn completion_refuses_the_agent_and_prompt_flags_behind_a_leading_sandbox_flag() {
+    let scratch = Scratch::new("cli-running-completion-sandbox-first");
+    for flags in [
+        &["--agent", "x"][..],
+        &["--system-prompt", "x"][..],
+        &["--append-system-prompt", "x"][..],
+    ] {
+        for lead in [&[][..], &["--sandbox", "strict"][..]] {
+            let arguments: Vec<&str> = lead
+                .iter()
+                .copied()
+                .chain(["completion", "bash"])
+                .chain(flags.iter().copied())
+                .collect();
+            let output = bravebot(&scratch.path, &[], &arguments);
+            let (stdout, stderr) = said(&output);
+            assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+            assert_eq!(stdout, "", "{arguments:?} printed on stdout");
+        }
+    }
+}
+
 /// CLI-20. The bash script is run rather than read: sourced into a shell that is then asked what
 /// it would complete, at a command, after `auth` and `completion`, and at a flag. A script that
 /// names the right words and wires them to the wrong position fails here and passes the test that
@@ -9268,6 +9313,18 @@ fn the_bash_script_completes_commands_subcommands_and_flags_by_position() {
 
     assert_eq!(completes(&["bravebot", "au"]), ["auth"]);
     assert_eq!(completes(&["bravebot", "auth", "lo"]), ["login", "logout"]);
+    // The whole list, and the one the usage table gives, because a prefix cannot show a word
+    // missing from the end and a list written beside the table drifts from it.
+    let after_auth = completes(&["bravebot", "auth", ""]);
+    assert_eq!(after_auth, ["login", "logout", "status"]);
+    let mut sorted = after_auth.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        usage_words_after("auth"),
+        "the words after auth are not the ones the usage table lists"
+    );
+    assert_eq!(completes(&["bravebot", "auth", "st"]), ["status"]);
     assert_eq!(completes(&["bravebot", "sessions", "li"]), ["list"]);
     assert_eq!(
         completes(&["bravebot", "completion", ""]),
