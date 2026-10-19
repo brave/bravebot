@@ -2971,9 +2971,9 @@ none to add to.
   spends it. The failed line need not be the line the request names. A request with none earned is
   refused before anybody is asked, with a sentence that says to run the line with the sandbox
   first, and the trail records the refusal under `sandbox` naming that cause. The count comes from
-  exit codes and whether the person stopped the line, and nothing a program printed is read. A line
-  stopped by the person, a line that ran with no sandbox and a line moved to the background earn
-  nothing. A line whose own redirection leaves the workspace is accepted without one, since the
+  exit codes and whether the deadline stopped the line, and nothing a program printed is read. A line
+  stopped at its deadline or by the person, a line that ran with no sandbox and a line moved to the
+  background earn nothing. A line whose own redirection leaves the workspace is accepted without one, since the
   sandbox refuses it before anything runs and so no run can fail at it.
 - **Recorded.** The `sandbox` gate's detail names `unconfined` for that run, where it names the
   session's mode for every other ([TRACE-1](trace.md#TRACE-1)).
@@ -2995,6 +2995,8 @@ refuse the path.
 `verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
 `verified-by: bravebot_agent::tools::a_request_for_no_sandbox_is_accepted_only_after_a_confined_line_failed`
 `verified-by: bravebot_agent::tools::each_confined_failure_earns_one_request_for_no_sandbox`
+`verified-by: bravebot_agent::tools::a_redirection_out_of_the_workspace_is_accepted_with_no_failure_counted`
+`verified-by: bravebot_agent::turn::a_line_stopped_at_its_deadline_earns_no_request_for_no_sandbox`
 `verified-by: bravebot_agent::turn::a_request_for_no_sandbox_before_a_confined_line_failed_is_refused_unasked`
 `verified-by: bravebot_agent::tools::only_a_managed_closed_network_refuses_an_unconfined_request`
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`

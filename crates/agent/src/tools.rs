@@ -8217,7 +8217,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             let text = crate::exec::both_streams(&ran.stdout, &ran.stderr);
 
             // A line with a sandbox that did not exit zero earns one request for a line with none.
-            // Read off the exit codes and whether the person stopped it, not off what it printed.
+            // Read off the exit codes and whether the deadline stopped it, not off what it printed.
             if confinement.is_some()
                 && ran.stopped.is_none()
                 && ran.codes.iter().any(|code| *code != Some(0))
@@ -17825,6 +17825,33 @@ mod tests {
                 "the request after a failed line did not reach the confirmer: {said}"
             );
             assert_eq!(sandbox_refusals(&refused), Vec::<&str>::new(), "{said}");
+        }
+
+        /// SANDBOX-29: a line whose own redirection leaves the workspace is accepted with no failure
+        /// counted, since the sandbox refuses it before anything runs. It reaches the confirmer, and
+        /// the count is left where it was, so the exemption earns no request for a later line. The
+        /// regressions it rejects are the exemption removed, which refuses the only route to the
+        /// file, and one that spends or adds to the count.
+        #[test]
+        fn a_redirection_out_of_the_workspace_is_accepted_with_no_failure_counted() {
+            use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+            let (said, refused, _) = run_in(
+                "run-unconfined-redirect",
+                &json!({"command": "echo hi > /bravebot-outside/hello.txt", "unconfined": true}),
+                session_under(WorkspaceWrite),
+            );
+            assert!(
+                said.starts_with("refused: the user did not approve running this"),
+                "the redirection did not reach the confirmer: {said}"
+            );
+            assert_eq!(sandbox_refusals(&refused), Vec::<&str>::new(), "{said}");
+
+            let (said, _, _) = run_in(
+                "run-unconfined-after-redirect",
+                &json!({"command": "echo hi", "unconfined": true}),
+                session_under(WorkspaceWrite),
+            );
+            assert_eq!(said, UNCONFINED_BEFORE_A_FAILURE);
         }
 
         #[test]

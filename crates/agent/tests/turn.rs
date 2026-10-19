@@ -22897,6 +22897,56 @@ fn a_request_for_no_sandbox_before_a_confined_line_failed_is_refused_unasked() {
     );
 }
 
+/// SANDBOX-29: a line stopped at its deadline earns no request for no sandbox, since it was cut
+/// short and did not fail for lack of access. A request after it is refused before anybody is asked
+/// and the line does not run. The regression it rejects is counting a line the clock stopped as a
+/// failure, which would let a planner earn the request by running anything slow.
+#[test]
+fn a_line_stopped_at_its_deadline_earns_no_request_for_no_sandbox() {
+    if cannot_confine_here() {
+        return;
+    }
+    let name = "unconfined-after-stopped";
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+    let result = runs(
+        name,
+        vec![
+            serde_json::json!({ "command": "sleep 5", "deadline_seconds": 1 }),
+            serde_json::json!({ "command": writing_the_marker(name, "first"), "unconfined": true }),
+        ],
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut confirmer,
+    );
+    let wrote = result.first_wrote;
+    clear_the_markers(name);
+    assert!(
+        result.third.contains("stopped"),
+        "the first line was not stopped at its deadline: {}",
+        result.third
+    );
+    assert!(
+        !wrote,
+        "the request after a stopped line ran with no sandbox"
+    );
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|request| !request.unconfined),
+        "the person was asked about a request no failure had earned"
+    );
+    let last = result.third.rfind("Result of run").expect("a result");
+    let said = message_from(&result.third[last..], "Result of run");
+    assert!(
+        said.contains("run the line with the sandbox first"),
+        "the request was not refused for want of a failure: {said}"
+    );
+}
+
 /// A line redirecting into the marker `tag` of the test `name`, outside every directory the session
 /// holds. The redirection is opened by this process and not by the program, so it is the harness's
 /// own confinement that decides it and not the profile.
