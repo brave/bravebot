@@ -451,6 +451,60 @@ fn cmd_and_a_compiler_start_under_the_empty_base() {
     assert_eq!(code, Some(0), "{printed}");
 }
 
+/// The regression it rejects: a stdio server's streams not reaching a program in the container, so
+/// a line written to its input never comes back on its output. A local MCP server is a program of
+/// this shape: it reads lines from its input, answers on its output, and ends when its input does.
+/// `findstr` is one, answering each line with itself, and starts under the empty base like `cmd.exe`
+/// does, with a directory of its own granted the way a server's home is.
+#[test]
+fn a_program_answering_lines_on_its_streams_starts_under_the_base_and_ends_with_its_input() {
+    let sandbox = sandbox();
+    let home = scratch("stdio-server-home");
+    let policy = the_base("stdio-server")
+        .allow_read(&home)
+        .allow_write(&home)
+        .starting_in(&home);
+    let streams = Streams {
+        stdin: Stream::Piped,
+        stdout: Stream::Piped,
+        stderr: Stream::Null,
+    };
+    let mut child = sandbox
+        .spawn(
+            "findstr.exe".as_ref(),
+            &[OsString::from("^")],
+            &policy,
+            streams,
+            Environment::Inherited,
+        )
+        .expect("the server starts");
+    let mut input = child.take_stdin().expect("a stdin that was piped");
+    let mut output = child.take_stdout().expect("a stdout that was piped");
+
+    // `findstr` holds its output back while it is a pipe, so the answers are read once the input
+    // ends rather than line by line.
+    input
+        .write_all(b"first\r\nsecond\r\n")
+        .expect("the server is handed its lines");
+    drop(input);
+    let mut answered = String::new();
+    output
+        .read_to_string(&mut answered)
+        .expect("the server answers");
+    assert_eq!(
+        answered.lines().collect::<Vec<_>>(),
+        ["first", "second"],
+        "the server did not answer each line with itself"
+    );
+
+    let status = child.wait().expect("the server ends");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "the server did not end with its input"
+    );
+}
+
 /// The regression it rejects: an empty base that leaves `git` unable to start. `git` opens
 /// `/dev/null` as `NUL` before it reads its arguments, so the base starts it only where the device
 /// lets a container open it. On Windows Server 2025 the device's access list names no ALL
