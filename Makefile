@@ -390,7 +390,7 @@ CLEAN_WORKTREES_JOBS ?= 16
 clean-worktrees:
 	@here=$$(git rev-parse --show-toplevel) && \
 	git worktree list --porcelain | sed -n 's/^worktree //p' | tail -n +2 | grep -vxF "$$here" | tr '\n' '\0' \
-	  | xargs -0 -n 1 -P $(CLEAN_WORKTREES_JOBS) sh -c \
+	  | xargs -0 -r -n 1 -P $(CLEAN_WORKTREES_JOBS) sh -c \
 	    'git worktree unlock "$$0" 2>/dev/null; \
 	     if git worktree remove --force "$$0"; then echo "removed $$0"; else echo "kept $$0"; exit 1; fi'; \
 	status=$$?; git worktree prune; exit $$status
