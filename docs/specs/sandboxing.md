@@ -2036,8 +2036,8 @@ mode answers it.
 not name; the person reads the refusal sentence ([SANDBOX-19](#SANDBOX-19)) and chooses `workspace-write` or
 adds the directory. `off` is the whole of the confinement removed: a window never offers it, and
 the command line prints it on its opening line. On Windows, where `read-only` reads no more than
-`strict` and writes less, a pin of `strict` still refuses `read-only`, and the refusal says
-`read-only` reads more of the machine, since the ranking is the one Linux and macOS give. Under
+`strict` and writes less, a pin of `strict` keeps `read-only`, while a pin of `read-only` still
+refuses `strict`, which writes the session's directories. Under
 bypass, a `workspace-write` stage of the lead
 session writes every path outside the refusals [SANDBOX-28](#SANDBOX-28) lists, which includes
 shell start-up files and other repositories on the machine. Under `read-only`, a program that writes
