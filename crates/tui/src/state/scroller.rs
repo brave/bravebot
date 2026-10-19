@@ -34,6 +34,20 @@ pub struct Laid {
     /// The first row, the last row and the transcript index of each call that has more to show
     /// than it draws, top to bottom. Empty unless the scroller is open.
     pub expandable: Vec<(u16, u16, usize)>,
+    /// The regions of the screen a selection can begin in, empty for a view that has none.
+    pub panes: Vec<(crate::select::Pane, ratatui::layout::Rect)>,
+}
+
+impl Laid {
+    /// Rows of the screen the recorded panes reach down to, which changes with the terminal's height
+    /// and not with the box growing.
+    fn screen_rows(&self) -> u16 {
+        self.panes
+            .iter()
+            .map(|(_, rect)| rect.bottom())
+            .max()
+            .unwrap_or(0)
+    }
 }
 
 /// The scroller, while it is open.
@@ -313,7 +327,30 @@ impl Session {
             let furthest = laid.rows.saturating_sub(laid.height);
             self.scroll = furthest.saturating_sub(top);
         }
+        self.keep_selection_within(&laid);
         self.laid = laid;
+    }
+
+    /// Hold a selection to the region it began in as that region is now drawn, and drop it when
+    /// the region is gone or the terminal changed width, since cells then mean something else.
+    fn keep_selection_within(&mut self, laid: &Laid) {
+        let Some(selection) = &mut self.selection else {
+            return;
+        };
+        let pane = selection.pane();
+        let region = laid.panes.iter().find(|(kind, _)| *kind == pane);
+        let alive = if pane == crate::select::Pane::Screen {
+            laid.panes.is_empty()
+        } else {
+            region.is_some()
+        };
+        let resized = self.laid.columns != 0
+            && (self.laid.columns != laid.columns || self.laid.screen_rows() != laid.screen_rows());
+        if !alive || resized {
+            self.selection = None;
+        } else if let Some((_, rect)) = region {
+            selection.rebound(*rect);
+        }
     }
 
     /// How far back the view can go before it is looking at the first row.

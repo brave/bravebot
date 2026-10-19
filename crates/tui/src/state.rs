@@ -2402,7 +2402,9 @@ impl Session {
     /// Allowed while a turn runs: reading and copying what is already on the screen changes
     /// nothing about the turn, and a long turn is exactly when someone wants to.
     pub fn begin_selection(&mut self, row: u16, column: u16) {
-        self.selection = Some(crate::select::Selection::started_at(row, column));
+        // A press between regions belongs to none and starts nothing.
+        self.selection = crate::select::pane_at(&self.laid.panes, row, column)
+            .map(|(pane, bounds)| crate::select::Selection::in_pane(row, column, pane, bounds));
         self.copied = None;
     }
 

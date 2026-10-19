@@ -765,7 +765,18 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         ])
         .split(left);
 
-    let laid = draw_transcript(frame, areas[0], session);
+    let mut laid = draw_transcript(frame, areas[0], session);
+    laid.panes = [
+        (crate::select::Pane::Transcript, areas[0]),
+        (crate::select::Pane::Status, areas[1]),
+        (crate::select::Pane::Input, areas[2]),
+        (crate::select::Pane::Offered, areas[4]),
+        (crate::select::Pane::Hint, hint_row),
+    ]
+    .into_iter()
+    .chain(panel.map(|rect| (crate::select::Pane::Panel, rect)))
+    .filter(|(_, rect)| !rect.is_empty())
+    .collect();
     draw_status(frame, areas[1], session);
     draw_input(frame, areas[2], session);
     draw_previews(frame, areas[3], &thumbs);

@@ -8065,6 +8065,7 @@ mod tests {
                 prompts: Vec::new(),
                 matches: Vec::new(),
                 expandable: Vec::new(),
+                panes: Vec::new(),
             });
 
             handle_key_while_working(&mut session, ctrl('u'));
@@ -8669,6 +8670,7 @@ mod tests {
                 prompts: vec![0, 30, 60],
                 matches: Vec::new(),
                 expandable: Vec::new(),
+                panes: Vec::new(),
             });
             session
         }
@@ -9221,6 +9223,7 @@ mod tests {
                 prompts: Vec::new(),
                 matches: Vec::new(),
                 expandable: Vec::new(),
+                panes: Vec::new(),
             });
             session.open_scroller();
             type_keys(&mut session, "1000b");
@@ -9245,6 +9248,7 @@ mod tests {
                 prompts: vec![10, 40, 70],
                 matches: Vec::new(),
                 expandable: Vec::new(),
+                panes: Vec::new(),
             });
             session.open_scroller();
 
@@ -9277,6 +9281,7 @@ mod tests {
                 prompts: Vec::new(),
                 matches: vec![20, 50, 80],
                 expandable: Vec::new(),
+                panes: Vec::new(),
             });
             session.open_scroller();
             session.scroller_to_first_row();
@@ -10491,6 +10496,154 @@ mod tests {
             selection.covers(3, 10),
             "the sweep did not cover its middle"
         );
+    }
+
+    /// A frame with the transcript and the info panel side by side, drawn and recorded the way
+    /// a redraw does, with a marker word in each so a copy shows which one it took from.
+    fn two_panes() -> (Session, ratatui::buffer::Buffer) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut session = Session::new("none");
+        session.laid.columns = 120;
+        session.toggle_panel();
+        session.identify("PANELMARK", "/work/dir".to_string(), None);
+        session
+            .transcript
+            .push(crate::state::Entry::user("TRANSCRIPTMARK one two three"));
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = render::draw(frame, &session))
+            .expect("draw");
+        session.note_layout(laid);
+        let mut buffer = ratatui::buffer::Buffer::empty(terminal.backend().buffer().area);
+        terminal
+            .draw(|frame| {
+                render::draw(frame, &session);
+            })
+            .expect("draw");
+        buffer.clone_from(terminal.backend().buffer());
+        (session, buffer)
+    }
+
+    fn swept(session: &mut Session, from: (u16, u16), to: (u16, u16)) {
+        handle_mouse(
+            session,
+            drag(MouseEventKind::Down(MouseButton::Left), from.0, from.1),
+        );
+        handle_mouse(
+            session,
+            drag(MouseEventKind::Drag(MouseButton::Left), to.0, to.1),
+        );
+    }
+
+    /// A drag that starts in the transcript and sweeps right across the panel must not take the
+    /// panel's text on the rows it passes.
+    #[test]
+    fn a_drag_from_the_transcript_never_copies_the_panel() {
+        let (mut session, buffer) = two_panes();
+        swept(&mut session, (0, 0), (20, 119));
+        let selection = session.selection.expect("selection");
+        let text = crate::select::text(&buffer, &selection);
+        assert!(text.contains("TRANSCRIPTMARK"), "copied {text:?}");
+        assert!(!text.contains("PANELMARK"), "copied {text:?}");
+    }
+
+    /// The other direction: a drag that starts in the panel and sweeps left stops at the panel's
+    /// edge instead of taking the transcript.
+    #[test]
+    fn a_drag_from_the_panel_never_copies_the_transcript() {
+        let (mut session, buffer) = two_panes();
+        let panel = session
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+            .expect("panel recorded")
+            .1;
+        swept(&mut session, (20, panel.left() + 1), (0, 0));
+        let selection = session.selection.expect("selection");
+        let text = crate::select::text(&buffer, &selection);
+        assert!(text.contains("PANELMARK"), "copied {text:?}");
+        assert!(!text.contains("TRANSCRIPTMARK"), "copied {text:?}");
+    }
+
+    /// Dragging past the bottom of the transcript stops at its last row, which is above the box.
+    #[test]
+    fn a_drag_past_the_bottom_stops_at_the_last_row_of_the_pane() {
+        let (mut session, _) = two_panes();
+        swept(&mut session, (0, 0), (23, 10));
+        let transcript = session.laid.panes[0].1;
+        let selection = session.selection.expect("selection");
+        assert!(selection.covers(transcript.bottom() - 1, 0));
+        assert!(!selection.covers(transcript.bottom(), 0));
+    }
+
+    /// Closing the panel while a selection of it is held leaves nothing selected.
+    #[test]
+    fn closing_the_panel_drops_a_selection_inside_it() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (mut session, _) = two_panes();
+        let panel = session.laid.panes.last().expect("panel").1;
+        swept(
+            &mut session,
+            (panel.top(), panel.left()),
+            (panel.top() + 1, panel.left() + 5),
+        );
+        assert!(session.selection.is_some());
+        session.toggle_panel();
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = render::draw(frame, &session))
+            .expect("draw");
+        session.note_layout(laid);
+        assert!(session.selection.is_none());
+    }
+
+    /// The cells a selection named hold other text once the terminal changes width.
+    #[test]
+    fn a_width_change_drops_the_selection() {
+        let (mut session, _) = two_panes();
+        swept(&mut session, (0, 0), (0, 10));
+        assert!(session.selection.is_some());
+        let mut laid = session.laid.clone();
+        laid.columns = 110;
+        session.note_layout(laid);
+        assert!(session.selection.is_none());
+    }
+
+    #[test]
+    fn a_height_change_drops_the_selection() {
+        let (mut session, _) = two_panes();
+        swept(&mut session, (0, 0), (0, 10));
+        assert!(session.selection.is_some());
+        let mut laid = session.laid.clone();
+        for (_, rect) in &mut laid.panes {
+            rect.height = rect.height.saturating_sub(1);
+            rect.y = rect.y.saturating_sub(1);
+        }
+        session.note_layout(laid);
+        assert!(session.selection.is_none());
+    }
+
+    /// A press where the layout recorded no region starts nothing.
+    #[test]
+    fn a_press_outside_every_pane_starts_no_selection() {
+        let (mut session, _) = two_panes();
+        session
+            .laid
+            .panes
+            .retain(|(pane, _)| *pane != crate::select::Pane::Hint);
+        let row = 23;
+        handle_mouse(
+            &mut session,
+            drag(MouseEventKind::Down(MouseButton::Left), row, 3),
+        );
+        assert!(session.selection.is_none());
     }
 
     /// The sequence has to leave a terminal that keeps one tracking state in the mode that
