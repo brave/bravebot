@@ -1330,9 +1330,13 @@ impl Confinement {
         let (signs, refused) = self.signing_state(steps);
         let source = match (signs, unconfined_offered) {
             (false, _) => String::new(),
-            (true, false) => format!("{SIGNING_KEY_SOURCE_SENTENCE}{SIGNING_AGENT_SENTENCE}."),
+            (true, false) => format!(
+                "{SIGNING_KEY_SOURCE_SENTENCE}{SIGNING_AGENT_SENTENCE}{}.",
+                self.signing_agent_sentence(steps, environment)
+            ),
             (true, true) => format!(
-                "{SIGNING_KEY_SOURCE_SENTENCE}{SIGNING_AGENT_SENTENCE}{SIGNING_UNCONFINED_WAY_OUT}."
+                "{SIGNING_KEY_SOURCE_SENTENCE}{SIGNING_AGENT_SENTENCE}{}{SIGNING_UNCONFINED_WAY_OUT}.",
+                self.signing_agent_sentence(steps, environment)
             ),
         };
         let refusal = if refused {
@@ -1486,6 +1490,45 @@ impl Confinement {
             true,
             signing.enabled && signing.key == signing::Key::Refused,
         )
+    }
+
+    /// Whether the agent socket was lent to a step of `steps` that signs, and so what a signature
+    /// that fails for want of a private key has to mean.
+    ///
+    /// Decided where [`Confinement::policy`] decides the rows: a step lends the socket the stage
+    /// starts with where it carries or was asked for the remote scope, or the signing scope for a
+    /// person whose git signs with ssh. Read from that and the person's own configuration, and
+    /// never from what a program printed.
+    fn signing_agent_sentence(&self, steps: &[&Step], environment: &[(String, String)]) -> String {
+        let enabled = self
+            .home
+            .as_deref()
+            .is_some_and(|home| signing::read(home, &self.place).enabled);
+        let lends = |scope: Scope| {
+            self.lends(scope)
+                && match scope {
+                    Scope::Remote => true,
+                    Scope::Signing => enabled,
+                    _ => false,
+                }
+        };
+        let reaches_the_socket = steps.iter().any(|step| {
+            self.scope_of(step).is_some_and(lends)
+                || self
+                    .requested_for(step)
+                    .iter()
+                    .any(|request| matches!(request, Requested::Scope(scope) if lends(*scope)))
+        });
+        match (
+            reaches_the_socket,
+            variable(environment, "SSH_AUTH_SOCK").is_some(),
+        ) {
+            (true, true) => SIGNING_AGENT_LENT_SENTENCE.to_string(),
+            (true, false) => SIGNING_NO_AGENT_SENTENCE.to_string(),
+            // `read-only` lends no remote scope, so it is not offered as the way to the socket.
+            (false, _) if !self.lends(Scope::Remote) => SIGNING_NOT_SSH_SENTENCE.to_string(),
+            (false, _) => format!("{SIGNING_NOT_SSH_SENTENCE}{SIGNING_REMOTE_CLAUSE}"),
+        }
     }
 
     /// What the programs of `steps` could reach, by name, without the closing fixed sentence.
@@ -2030,16 +2073,37 @@ const SIGNING_KEY_SOURCE_SENTENCE: &str = " A step that signs a commit is lent t
      neither of these fails with \"Couldn't load public key\" until the person adds that key to \
      the agent or sets it in one of those places.";
 
-/// Said after [`SIGNING_KEY_SOURCE_SENTENCE`], so that the other way a signature fails, which
-/// prints "No private key found", is told from it. Fixed text: it does not branch on what the
-/// program printed.
-const SIGNING_AGENT_SENTENCE: &str = " A step that signs never reads a private key: it signs \
-     through the person's ssh agent. A signature that fails with \"No private key found\" means \
-     the configured public key was lent but the agent does not hold its private key, not that the \
-     key is missing or that the sandbox hides it, and it is solved by the person loading the key \
-     with `ssh-add`";
+/// Said after [`SIGNING_KEY_SOURCE_SENTENCE`], ahead of one of the three sentences that say
+/// whether the agent socket was lent. Fixed text: it does not branch on what the program printed.
+const SIGNING_AGENT_SENTENCE: &str =
+    " A step that signs never reads a private key: it signs through the person's ssh agent.";
 
-/// The way through [`SIGNING_AGENT_SENTENCE`] names where the session accepts a request for a line
+/// Said when the step was lent the agent socket, so that "No private key found" is told from a
+/// socket the sandbox hid.
+const SIGNING_AGENT_LENT_SENTENCE: &str = " The session's ssh agent socket was lent to that step, so \
+     a signature that fails with \"No private key found\" means the configured public key was lent \
+     but the agent does not hold its private key, not that the key is missing or that the sandbox \
+     hides it, and it is solved by the person loading the key with `ssh-add`";
+
+/// Said when the step asked for the socket and the session has none to lend.
+const SIGNING_NO_AGENT_SENTENCE: &str = " No ssh agent socket was lent to that step, because the \
+     session has none, so a signature that fails with \"No private key found\" means there was no \
+     agent to sign through, and it is solved by the person starting an ssh agent that holds the \
+     key before the session";
+
+/// Said when no scope of the step lends the socket, because the person's own configuration does
+/// not sign with ssh. It names the setting.
+const SIGNING_NOT_SSH_SENTENCE: &str = " No ssh agent socket was lent to that step, because \
+     `gpg.format` is not `ssh` in the person's `~/.gitconfig` or `~/.config/git/config`, and a \
+     repository's own configuration is not read. A signature that fails with \"No private key \
+     found\" there means the sandbox hid the agent, not that the agent lacks the key, and it is \
+     solved by the person setting `gpg.format` to `ssh` in one of those files";
+
+/// Added to [`SIGNING_NOT_SSH_SENTENCE`] where the mode lends the remote scope.
+const SIGNING_REMOTE_CLAUSE: &str = ", or by a line that asks for the `remote` scope, which \
+     lends the socket whatever those files say";
+
+/// The way through the sentences above names where the session accepts a request for a line
 /// with no sandbox, ending without a full stop so the caller can end the sentence.
 const SIGNING_UNCONFINED_WAY_OUT: &str = ", or, once a confined run of that one commit line \
      failed because the sandbox refused it access, by running it again with 'unconfined': true, \
@@ -7245,6 +7309,64 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
+    /// SANDBOX-16: what a signature that fails with "No private key found" means depends on
+    /// whether the stage was lent the agent socket, so the line says which, from the stage's
+    /// environment and the person's configuration. A person whose own configuration does not sign
+    /// with ssh is lent no socket by a request for `signing`, and is told the setting and the
+    /// `remote` scope that would lend it rather that the agent lacks the key.
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_signature_says_whether_the_agent_socket_was_lent() {
+        use bravebot_sandbox::scope::Requested;
+        let socket = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let script = step("/bin/sh", &["-c", "git rebase main"]);
+        let said = |confined: &Confinement, environment: &[(String, String)]| {
+            confined.profile_offering_in(&[&script], false, environment)
+        };
+        let signing = [Requested::Scope(Scope::Signing)];
+
+        let (home, confined) =
+            a_confinement_over_a_home_that("lent", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
+        let asked = confined.with_requested(&signing);
+        let line = said(&asked, &socket);
+        assert!(line.contains(SIGNING_AGENT_LENT_SENTENCE), "{line}");
+        assert!(!line.contains(SIGNING_NOT_SSH_SENTENCE), "{line}");
+        assert!(!line.contains(SIGNING_NO_AGENT_SENTENCE), "{line}");
+        let line = said(&asked, &[]);
+        assert!(line.contains(SIGNING_NO_AGENT_SENTENCE), "{line}");
+        assert!(!line.contains(SIGNING_AGENT_LENT_SENTENCE), "{line}");
+        std::fs::remove_dir_all(&home).unwrap();
+
+        let (home, confined) = a_confinement_over_a_home_that(
+            "not-lent",
+            "[user]\nsigningkey = ~/keys/work.pub\n",
+            &["keys/work.pub"],
+        );
+        let asked = confined.clone().with_requested(&signing);
+        let line = said(&asked, &socket);
+        assert!(line.contains(SIGNING_NOT_SSH_SENTENCE), "{line}");
+        assert!(!line.contains(SIGNING_AGENT_LENT_SENTENCE), "{line}");
+        assert!(!line.contains("`ssh-add`"), "{line}");
+
+        let read_only = confined
+            .clone()
+            .with_mode(SandboxMode::ReadOnly)
+            .with_requested(&signing);
+        let line = said(&read_only, &socket);
+        assert!(line.contains(SIGNING_NOT_SSH_SENTENCE), "{line}");
+        assert!(!line.contains(SIGNING_REMOTE_CLAUSE), "{line}");
+        assert!(said(&asked, &socket).contains(SIGNING_REMOTE_CLAUSE));
+
+        let remote = confined.with_requested(&[
+            Requested::Scope(Scope::Signing),
+            Requested::Scope(Scope::Remote),
+        ]);
+        let line = said(&remote, &socket);
+        assert!(line.contains(SIGNING_AGENT_LENT_SENTENCE), "{line}");
+        assert!(!line.contains(SIGNING_NOT_SSH_SENTENCE), "{line}");
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
     /// SANDBOX-16: a stage that carries the signing scope is always told where the key comes from
     /// and that a repository's own `user.signingkey` is not read, so a signature that fails with
     /// "Couldn't load public key" can be traced to the setting. The text is fixed: it is the same
@@ -7297,18 +7419,19 @@ mod tests {
         let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
         let status = step("/usr/bin/git", &["status"]);
 
-        let plain = confined.profile(&[&commit]);
+        let socket = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let plain = confined.profile_offering_in(&[&commit], false, &socket);
         assert!(plain.contains("No private key found"), "{plain}");
         assert!(plain.contains("never reads a private key"), "{plain}");
         assert!(plain.contains("`ssh-add`"), "{plain}");
         assert!(!plain.contains("unconfined"), "{plain}");
 
-        let offered = confined.profile_offering(&[&commit], true);
+        let offered = confined.profile_offering_in(&[&commit], true, &socket);
         assert!(offered.contains("No private key found"), "{offered}");
         assert!(offered.contains("'unconfined': true"), "{offered}");
         assert!(offered.contains("`ssh-add`"), "{offered}");
 
-        let none = confined.profile_offering(&[&status], true);
+        let none = confined.profile_offering_in(&[&status], true, &socket);
         assert!(!none.contains("No private key found"), "{none}");
         assert!(!none.contains("unconfined"), "{none}");
         std::fs::remove_dir_all(&home).unwrap();

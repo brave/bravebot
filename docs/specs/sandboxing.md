@@ -1038,8 +1038,15 @@ directory, and that a `user.signingkey` set in a repository's own configuration 
 configuration and does not change with the repository, so that a signature which fails with "Couldn't
 load public key" is traced to the setting by the planner without reading anything it was not lent.
 It also says that a step that signs never reads a private key and signs through the person's ssh
-agent, that a signature failing with "No private key found" means the configured key was lent but
-the agent does not hold it, and that the person solves it by loading the key with `ssh-add`. Where
+agent, and whether the agent's socket was lent to the step, decided from the stage's environment and
+the person's own configuration and never from what a program printed. Where the socket was lent, a
+signature failing with "No private key found" means the configured key was lent but the agent does
+not hold it, and the person solves it by loading the key with `ssh-add`. Where the step asked for a
+scope that lends it and the session has no socket, the line says so and that the person solves it by
+starting an agent that holds the key. Where no scope of the step lends it because `gpg.format` is
+not `ssh` in the person's own configuration, the line says that the sandbox hid the agent, names
+that setting, and names the `remote` scope, which lends the socket whatever the configuration says.
+Where
 the session would accept `'unconfined': true` for the line (the condition under which a refused
 write names it, [SANDBOX-29](#SANDBOX-29)) it adds that the one commit line may be run with it, the
 person being asked to approve it; otherwise it names no such argument.
@@ -1248,6 +1255,7 @@ and under the default `ask` a person at a terminal is asked again on every push.
 `verified-by: bravebot_agent::confine::a_stage_that_does_not_sign_is_not_lent_the_agent`
 `verified-by: bravebot_agent::confine::a_signing_key_no_scope_reads_is_explained_to_the_planner_without_its_path`
 `verified-by: bravebot_agent::confine::a_stage_that_signs_is_always_told_where_the_key_comes_from`
+`verified-by: bravebot_agent::confine::a_failed_signature_says_whether_the_agent_socket_was_lent`
 `verified-by: bravebot_agent::confine::a_stage_that_asked_for_signing_is_lent_the_key_and_the_agent`
 `verified-by: bravebot_agent::confine::a_stage_that_signs_is_lent_the_key_an_include_if_supplies_for_its_directory`
 `verified-by: bravebot_sandbox::macos::a_stage_that_signs_loads_the_public_key_and_reaches_the_agent_never_the_private_key`
