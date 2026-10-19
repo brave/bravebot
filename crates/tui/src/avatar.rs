@@ -740,7 +740,10 @@ fn held(seed: &str, seconds: f64, still: bool) -> Look {
 
 /// The face a seed describes, painted from `stops`, as terminal rows of [`WIDTH`] columns, held as
 /// `look` says.
-pub fn rows(seed: &str, look: Look, stops: &[Rgb; 3]) -> Vec<Vec<Span<'static>>> {
+///
+/// `painted` draws each cell from its background where the terminal leaves a gap between rows of
+/// blocks ([`crate::blocks`]), and with block characters otherwise.
+pub fn rows(seed: &str, look: Look, stops: &[Rgb; 3], painted: bool) -> Vec<Vec<Span<'static>>> {
     let face = build(seed, &mark(stops));
     let mut pixels: [[Option<Rgb>; GRID]; GRID] = [[None; GRID]; GRID];
     for (x, y, fill) in &face.cells {
@@ -761,13 +764,21 @@ pub fn rows(seed: &str, look: Look, stops: &[Rgb; 3]) -> Vec<Vec<Span<'static>>>
         .map(|row| {
             let (upper, lower) = (1 + lift + 2 * row, 2 + lift + 2 * row);
             (1..=WIDTH)
-                .map(|x| match (pixels[upper][x], pixels[lower][x]) {
-                    (None, None) => Span::raw(" "),
-                    (Some(top), None) => Span::styled("▀", Style::default().fg(colour(top))),
-                    (None, Some(bottom)) => Span::styled("▄", Style::default().fg(colour(bottom))),
-                    (Some(top), Some(bottom)) => {
-                        Span::styled("▀", Style::default().fg(colour(top)).bg(colour(bottom)))
-                    }
+                .map(|x| {
+                    let (character, style) = match (pixels[upper][x], pixels[lower][x]) {
+                        (None, None) => return Span::raw(" "),
+                        (Some(top), None) => ('▀', Style::default().fg(colour(top))),
+                        (None, Some(bottom)) => ('▄', Style::default().fg(colour(bottom))),
+                        (Some(top), Some(bottom)) => {
+                            ('▀', Style::default().fg(colour(top)).bg(colour(bottom)))
+                        }
+                    };
+                    let (character, style) = if painted {
+                        crate::blocks::painted(character, style)
+                    } else {
+                        (character, style)
+                    };
+                    Span::styled(character.to_string(), style)
                 })
                 .collect()
         })
@@ -949,7 +960,7 @@ mod tests {
 
     #[test]
     fn a_face_is_five_rows_of_ten_columns_with_the_eyes_on_it() {
-        let drawn = rows("v2:example-0", Look::default(), &BRAND_STOPS);
+        let drawn = rows("v2:example-0", Look::default(), &BRAND_STOPS, false);
         assert_eq!(drawn.len(), ROWS);
         assert!(drawn.iter().all(|row| row.len() == WIDTH));
         let eyes = drawn
@@ -979,6 +990,7 @@ mod tests {
                     blink: i % 3 == 0,
                 },
                 &BRAND_STOPS,
+                false,
             )
             .iter()
             .flatten()
@@ -993,6 +1005,42 @@ mod tests {
                 build(&seed, &mark(&BRAND_STOPS)).cells.len(),
                 "{seed}"
             );
+        }
+    }
+
+    /// Drawn from cell backgrounds for a terminal that leaves a gap between rows of blocks, a face
+    /// is the same picture: every cell shows the colours it showed as block characters, and none of
+    /// them is a character that leaves the gap.
+    #[test]
+    fn a_face_drawn_from_backgrounds_is_the_same_picture() {
+        use crate::blocks::shown::halves;
+        let cell = |span: &Span<'static>| {
+            let character = span.content.chars().next().expect("a cell has a character");
+            halves(character, span.style)
+        };
+        for i in 0..100 {
+            let seed = format!("v2:paint-{i}");
+            let look = Look {
+                away: i % 2 == 0,
+                blink: i % 3 == 0,
+            };
+            let blocks = rows(&seed, look, &BRAND_STOPS, false);
+            let painted = rows(&seed, look, &BRAND_STOPS, true);
+            assert_eq!(blocks.len(), painted.len(), "{seed}");
+            for (blocks, painted) in blocks.iter().zip(&painted) {
+                assert_eq!(blocks.len(), painted.len(), "{seed}");
+                for (before, after) in blocks.iter().zip(painted) {
+                    assert_eq!(
+                        cell(before),
+                        cell(after),
+                        "{seed}: {before:?} became {after:?}"
+                    );
+                    assert!(
+                        matches!(after.content.as_ref(), " " | "▄"),
+                        "{seed}: {after:?} leaves a gap"
+                    );
+                }
+            }
         }
     }
 
@@ -1064,7 +1112,7 @@ mod tests {
 
     #[test]
     fn a_look_changes_the_eyes_and_nothing_else() {
-        let at_rest = rows("v2:example-0", Look::default(), &BRAND_STOPS);
+        let at_rest = rows("v2:example-0", Look::default(), &BRAND_STOPS, false);
         let shut = rows(
             "v2:example-0",
             Look {
@@ -1072,6 +1120,7 @@ mod tests {
                 blink: true,
             },
             &BRAND_STOPS,
+            false,
         );
         let turned = rows(
             "v2:example-0",
@@ -1080,6 +1129,7 @@ mod tests {
                 blink: false,
             },
             &BRAND_STOPS,
+            false,
         );
         let differing = |a: &[Vec<Span<'static>>], b: &[Vec<Span<'static>>]| {
             a.iter()

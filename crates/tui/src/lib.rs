@@ -17,6 +17,7 @@ pub mod app;
 pub mod ask;
 pub mod avatar;
 mod away;
+mod blocks;
 pub mod caffeinate;
 pub mod checkouts_command;
 pub mod clipboard;
@@ -83,9 +84,18 @@ pub(crate) fn asked_for(value: Option<&std::ffi::OsStr>) -> bool {
     value.is_some_and(|value| !value.is_empty())
 }
 
+/// Whether a `TERM_PROGRAM` value names Apple's Terminal.
+///
+/// That terminal prints the text of an application program command it does not understand, and
+/// draws block characters from the font rather than to the edge of the cell. Inside tmux the
+/// variable names tmux, so a session there is not recognised.
+pub(crate) fn apple_terminal(term_program: Option<&std::ffi::OsStr>) -> bool {
+    term_program == Some(std::ffi::OsStr::new("Apple_Terminal"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::asked_for;
+    use super::{apple_terminal, asked_for};
     use std::ffi::OsStr;
 
     /// The whole of the convention, and the half of it that surprises people: any value at all
@@ -97,5 +107,23 @@ mod tests {
         assert!(asked_for(Some(OsStr::new("false"))));
         assert!(!asked_for(Some(OsStr::new(""))));
         assert!(!asked_for(None));
+    }
+
+    /// Only the name Apple's Terminal sets. A terminal whose name merely contains it, or the
+    /// terminals this program draws pictures in, are not it.
+    #[test]
+    fn only_the_name_apple_terminal_sets_is_apple_terminal() {
+        assert!(apple_terminal(Some(OsStr::new("Apple_Terminal"))));
+        for other in [
+            "iTerm.app",
+            "ghostty",
+            "WezTerm",
+            "tmux",
+            "Apple_Terminal2",
+            "",
+        ] {
+            assert!(!apple_terminal(Some(OsStr::new(other))), "{other}");
+        }
+        assert!(!apple_terminal(None));
     }
 }

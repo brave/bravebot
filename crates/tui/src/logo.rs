@@ -10,6 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::avatar;
+use crate::blocks;
 use crate::theme;
 use crate::theme::Rgb;
 
@@ -81,17 +82,20 @@ fn face_fits(width: u16) -> bool {
 
 /// The face drawn to the left of the mark in the mark's colours, one list of spans per row, or
 /// nothing where there is no room for it or no colour was asked for.
+///
+/// `painted` is [`blocks::needs_painting`]'s answer for the terminal.
 fn face_rows(
     seed: &str,
     look: avatar::Look,
     stops: &[Rgb; 3],
     width: u16,
     plain: bool,
+    painted: bool,
 ) -> Vec<Vec<Span<'static>>> {
     if plain || !face_fits(width) {
         return Vec::new();
     }
-    avatar::rows(seed, look, stops)
+    avatar::rows(seed, look, stops, painted)
 }
 
 /// Rows the block occupies, so the padding can be measured against what is left.
@@ -165,7 +169,16 @@ fn ink(stops: &[Rgb; 3], row: usize, column: usize, character: char) -> Style {
 
 /// Row `index` of the mark, with the shadow inked apart from the letterform and "brave" apart
 /// from "bot", after the row of the face when there is one.
-fn mark_row(stops: &[Rgb; 3], index: usize, row: &str, face: &[Span<'static>]) -> Line<'static> {
+///
+/// `painted` draws the letterform from cell backgrounds ([`blocks::painted`]), for a terminal that
+/// leaves a gap between rows of block characters.
+fn mark_row(
+    stops: &[Rgb; 3],
+    index: usize,
+    row: &str,
+    face: &[Span<'static>],
+    painted: bool,
+) -> Line<'static> {
     let mut spans = vec![Span::raw(INDENT)];
     if !face.is_empty() {
         spans.extend(face.iter().cloned());
@@ -177,7 +190,10 @@ fn mark_row(stops: &[Rgb; 3], index: usize, row: &str, face: &[Span<'static>]) -
     // Batched by the ink itself rather than by which half the column is in, so the columns the
     // gradient rounds to the same shade stay one span instead of one span each.
     for (column, character) in row.chars().enumerate() {
-        let next = ink(stops, index, column, character);
+        let (character, next) = match ink(stops, index, column, character) {
+            style if painted => blocks::painted(character, style),
+            style => (character, style),
+        };
         if let Some(had) = current.filter(|had| *had != next) {
             spans.push(Span::styled(std::mem::take(&mut run), had));
         }
@@ -268,12 +284,14 @@ pub fn lines_with_network(
 
     if fits(width) {
         let stops = theme::mark();
+        let painted = blocks::needs_painting();
         let face = face_rows(
             avatar::startup_seed(),
             avatar::look_now(),
             &stops,
             width,
             theme::no_color(),
+            painted,
         );
         lines.extend(LOGO.iter().enumerate().map(|(index, row)| {
             mark_row(
@@ -281,6 +299,7 @@ pub fn lines_with_network(
                 index,
                 row,
                 face.get(index).map_or(&[][..], Vec::as_slice),
+                painted,
             )
         }));
         lines.push(Line::raw(""));
@@ -563,7 +582,7 @@ mod tests {
 
     /// The ink each column of a row is drawn in, the margin aside.
     fn inks(index: usize) -> Vec<Option<Color>> {
-        mark_row(&STOPS, index, LOGO[index], &[])
+        mark_row(&STOPS, index, LOGO[index], &[], false)
             .spans
             .iter()
             .skip(1)
@@ -718,10 +737,17 @@ mod tests {
     /// The face sits to the left of the mark on every row of it.
     #[test]
     fn the_face_is_drawn_to_the_left_of_the_mark() {
-        let face = face_rows("v2:example-0", avatar::Look::default(), &STOPS, WIDE, false);
+        let face = face_rows(
+            "v2:example-0",
+            avatar::Look::default(),
+            &STOPS,
+            WIDE,
+            false,
+            false,
+        );
         assert_eq!(face.len(), LOGO.len());
         for (index, (row, face)) in LOGO.iter().zip(&face).enumerate() {
-            let line = mark_row(&STOPS, index, row, face).to_string();
+            let line = mark_row(&STOPS, index, row, face, false).to_string();
             let drawn: String = face.iter().map(|span| span.content.as_ref()).collect();
             assert_eq!(line, format!("{INDENT}{drawn}{FACE_GAP}{row}"));
         }
@@ -738,11 +764,52 @@ mod tests {
                 avatar::Look::default(),
                 &STOPS,
                 width,
+                false,
                 false
             )
             .is_empty()
         );
         assert!(face_fits(width + (avatar::WIDTH + FACE_GAP.len()) as u16));
+    }
+
+    /// The characters of a row with the style each is drawn in, one entry per column.
+    fn cells(line: &Line<'static>) -> Vec<(char, Style)> {
+        line.spans
+            .iter()
+            .flat_map(|span| {
+                span.content
+                    .chars()
+                    .map(|character| (character, span.style))
+            })
+            .collect()
+    }
+
+    /// Drawn from cell backgrounds for a terminal that leaves a gap between rows of blocks, the
+    /// mark and the face beside it show what they showed as block characters, in every cell, and
+    /// the shadow keeps its texture. None of it is a character that leaves the gap.
+    #[test]
+    fn a_mark_drawn_from_backgrounds_is_the_same_picture() {
+        use crate::blocks::shown::{halves, is_block};
+        let _held = theme::exclusive();
+        let face = avatar::rows("v2:example-0", avatar::Look::default(), &STOPS, false);
+        let painted_face = avatar::rows("v2:example-0", avatar::Look::default(), &STOPS, true);
+        for (index, row) in LOGO.iter().enumerate() {
+            let blocks = cells(&mark_row(&STOPS, index, row, &face[index], false));
+            let painted = cells(&mark_row(&STOPS, index, row, &painted_face[index], true));
+            assert_eq!(blocks.len(), painted.len(), "row {index}");
+            for (column, (before, after)) in blocks.iter().zip(&painted).enumerate() {
+                if is_block(before.0) {
+                    assert_eq!(
+                        halves(before.0, before.1),
+                        halves(after.0, after.1),
+                        "row {index} column {column}: {before:?} became {after:?}"
+                    );
+                    assert!(matches!(after.0, ' ' | '▄'), "row {index} column {column}");
+                } else {
+                    assert_eq!(before, after, "row {index} column {column}");
+                }
+            }
+        }
     }
 
     fn opening_lines(width: u16) -> Vec<Line<'static>> {
@@ -824,6 +891,16 @@ mod tests {
     /// A request for no colour gets no painted face.
     #[test]
     fn the_face_takes_no_colour_where_none_was_asked_for() {
-        assert!(face_rows("v2:example-0", avatar::Look::default(), &STOPS, WIDE, true).is_empty());
+        assert!(
+            face_rows(
+                "v2:example-0",
+                avatar::Look::default(),
+                &STOPS,
+                WIDE,
+                true,
+                false
+            )
+            .is_empty()
+        );
     }
 }

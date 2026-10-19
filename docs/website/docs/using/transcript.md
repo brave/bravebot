@@ -197,6 +197,14 @@ Under `NO_MOTION` the glyph is still drawn, and the elapsed time and the token c
 figure that moves when the thing it measures moves is information rather than animation. A row with
 nothing in it would be indistinguishable from a program that had hung.
 
+## In Apple's Terminal
+
+Apple's Terminal draws the block characters the wordmark and the face are made of from the font, and
+leaves a gap between rows. Where `TERM_PROGRAM` is `Apple_Terminal`, the opening screen draws them from
+cell backgrounds instead, so the letters and the face are solid. The terminal is also not asked about
+Kitty graphics, which it would print as text at the top of the screen. Inside tmux the variable names
+tmux, so neither applies there.
+
 ## Scrolling at rest
 
 | Key | Where the view goes |
