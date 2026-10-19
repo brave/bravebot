@@ -298,6 +298,11 @@ an editor needs the screen, and a running turn is drawing it.
 Use it for anything past searching a screen: reading two passages side by side, keeping a copy,
 grepping the lot.
 
+**Dragging with the mouse** copies from the pane the press landed in: the transcript, the info
+panel, the prompt box or the footer. The selection stops at that pane's edge, so a drag down the
+transcript does not take the panel's text on every row. A press between panes starts nothing, and
+closing the panel or resizing the terminal drops a selection held in it.
+
 **Nothing comes back.** A transcript is a record of what happened, and a record you can edit back
 into the session is not one. No later turn reads that file, and no path in your workspace gains
 anything from its having existed.
