@@ -18650,6 +18650,7 @@ mod tests {
                 trails: Default::default(),
                 todos: Default::default(),
                 asides: Vec::new(),
+                started: None,
             },
         );
         answered(&mut session, "third question", "the third answer");

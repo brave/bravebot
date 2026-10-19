@@ -2333,8 +2333,12 @@ impl Session {
                 self.turn_places.insert(turn.number, self.transcript.len());
                 if let Some(prompt) = &turn.prompt {
                     self.unplaced_todos.remove(&turn.number);
-                    // This session's own, as far back as its record goes.
-                    self.history.adopt(&self.recallable(prompt));
+                    // This session's own, as far back as its record goes. A cancelled turn's prompt
+                    // left the history when it was cancelled (SESSION-6), so no entry is its.
+                    if !matches!(turn.outcome, Some(StoredOutcome::Cancelled { .. })) {
+                        self.history
+                            .adopt(&self.recallable(prompt), recalled.started);
+                    }
                     self.transcript.push(Entry::user(prompt));
                     for (offset, line) in said.iter().enumerate().take(end).skip(start) {
                         // Only the submitted prompt is replaced by its display copy. Context,
@@ -10763,6 +10767,7 @@ mod tests {
                 trails: Default::default(),
                 todos: Default::default(),
                 asides: Vec::new(),
+                started: None,
             },
         );
         s.recall_older();
@@ -10774,6 +10779,77 @@ mod tests {
         assert_eq!(
             s.input, "mine before",
             "Up walked into another session's prompt"
+        );
+    }
+
+    /// A cancelled turn's prompt left the history when it was cancelled, so resuming does not
+    /// hand it the entry of another session that has the same words and was sent while this one
+    /// was running.
+    #[test]
+    fn a_cancelled_turn_of_a_resumed_record_is_given_no_entry() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions::StoredOutcome;
+        use bravebot_session::sessions::StoredTurn;
+
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(Message::user("kept"));
+        conversation.push(Message::assistant("ok"));
+        let turn = |number, prompt: &str, start, end, outcome| StoredTurn {
+            number,
+            prompt: Some(prompt.to_string()),
+            start,
+            end,
+            prompt_offset: Some(0),
+            reset_context: false,
+            outcome: Some(outcome),
+        };
+        let turns = vec![
+            turn(1, "kept", 0, 2, StoredOutcome::Completed),
+            turn(
+                2,
+                "retry it",
+                2,
+                2,
+                StoredOutcome::Cancelled {
+                    reason: "turn 2 cancelled".to_string(),
+                },
+            ),
+        ];
+        let sent = |prompt: &str, at| bravebot_session::store::Entry {
+            prompt: prompt.to_string(),
+            at: Some(at),
+            project: None,
+        };
+
+        let mut s = session();
+        s.history = crate::history::History::from_entries(vec![
+            sent("kept", 1_000),
+            sent("retry it", 1_005),
+        ]);
+        s.replay(
+            &conversation,
+            "a title",
+            &bravebot_session::sessions::Recalled {
+                history: Some(turns),
+                turns: Some(2),
+                trails: Default::default(),
+                todos: Default::default(),
+                asides: Vec::new(),
+                started: Some(900),
+            },
+        );
+
+        s.recall_older();
+        assert_eq!(s.input, "retry it");
+        s.cycle_history_scope();
+        assert_eq!(
+            s.input, "kept",
+            "a prompt of another session was counted as this one's"
+        );
+        s.recall_older();
+        assert_eq!(
+            s.input, "kept",
+            "the session scope held more than its one prompt"
         );
     }
 
@@ -10800,6 +10876,7 @@ mod tests {
                 trails: Default::default(),
                 todos: Default::default(),
                 asides: Vec::new(),
+                started: None,
             },
         );
 
@@ -10856,6 +10933,7 @@ mod tests {
                 trails: Default::default(),
                 todos: Default::default(),
                 asides: Vec::new(),
+                started: None,
             },
         );
 
@@ -13296,6 +13374,7 @@ mod tests {
                     trails: trails.clone(),
                     todos: BTreeMap::new(),
                     asides: Vec::new(),
+                    started: None,
                 },
             )
         }
@@ -13458,6 +13537,7 @@ mod tests {
                 trails: BTreeMap::new(),
                 todos: BTreeMap::new(),
                 asides: Vec::new(),
+                started: None,
             };
             let mut s = session();
             s.replay(&conversation, "a title", &recalled);
@@ -13565,6 +13645,7 @@ mod tests {
                     trails: BTreeMap::new(),
                     todos: BTreeMap::from([(2, plan.clone())]),
                     asides: Vec::new(),
+                    started: None,
                 },
             );
 
@@ -13617,6 +13698,7 @@ mod tests {
                     trails: BTreeMap::new(),
                     todos: written,
                     asides: Vec::new(),
+                    started: None,
                 },
             );
             let second = transcript

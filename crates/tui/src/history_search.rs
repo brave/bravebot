@@ -756,7 +756,7 @@ mod tests {
     /// `run the tests` adopted from a resumed record.
     fn mixed() -> Session {
         let mut session = searching(sent());
-        session.history.adopt("run the tests");
+        session.history.adopt("run the tests", None);
         session.history.push("an old one", None);
         session.history.push("commit that", Some(HERE.to_string()));
         session.close_history_search();

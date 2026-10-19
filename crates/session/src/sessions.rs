@@ -2532,6 +2532,9 @@ pub struct Recalled {
     pub todos: BTreeMap<usize, Vec<Row>>,
     /// Questions asked beside the work, oldest first, for the view rather than the transcript.
     pub asides: Vec<Aside>,
+    /// When the session began, in seconds since the epoch, for telling its prompts from the
+    /// identical ones other sessions stored. `None` where there is no record to say.
+    pub started: Option<u64>,
 }
 
 /// Everything a resumed transcript needs beyond the conversation itself.
@@ -2547,6 +2550,7 @@ pub fn recall(project: &Path, record: &Record) -> Recalled {
             .cloned()
             .map(StoredAside::into_aside)
             .collect(),
+        started: Some(record.started),
     }
 }
 
