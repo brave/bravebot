@@ -540,21 +540,48 @@ impl Courier for RosterCourier {
 /// The entry for a session about to start, in the directory this runs in and in `mode`.
 ///
 /// A session started again keeps the name and the last prompt its entry had, and the time of its
-/// last turn, so the list does not forget what it was doing.
+/// last turn, so the list does not forget what it was doing. One with no entry yet, as a session
+/// handed over by `/bg` has none, takes the name and the last prompt from its own record, which
+/// holds only what the person typed (BG-4).
 pub(crate) fn entry(roster: &Roster, id: &str, first: Option<&str>, mode: Mode) -> Job {
     let directory = std::env::current_dir().unwrap_or_default();
+    let record = bravebot_session::sessions::load(&directory, id);
+    entry_from(roster, id, first, mode, &directory, record.as_ref())
+}
+
+fn entry_from(
+    roster: &Roster,
+    id: &str,
+    first: Option<&str>,
+    mode: Mode,
+    directory: &std::path::Path,
+    record: Option<&bravebot_session::sessions::Record>,
+) -> Job {
     let earlier = roster.get(id).map(|seen| seen.job);
     let prompt = first
         .map(str::to_string)
         .or_else(|| earlier.as_ref().map(|job| job.prompt.clone()))
+        .or_else(|| record.and_then(last_prompt_of))
         .unwrap_or_default();
-    let mut job = Job::starting(id.to_string(), &directory, &prompt, mode);
+    let mut job = Job::starting(id.to_string(), directory, &prompt, mode);
     if let Some(earlier) = earlier {
         job.name = earlier.name;
         job.last_turn = earlier.last_turn;
+    } else if let Some(record) = record.filter(|record| !record.title.is_empty()) {
+        job.name = record.title.clone();
     }
     job.is(State::Working, None);
     job
+}
+
+/// The last prompt the person typed that the record kept.
+fn last_prompt_of(record: &bravebot_session::sessions::Record) -> Option<String> {
+    record
+        .history
+        .as_ref()?
+        .iter()
+        .rev()
+        .find_map(|turn| turn.prompt.clone())
 }
 
 /// A line off a socket, bounded, without its newline; `None` at the end of the stream.
@@ -1116,6 +1143,67 @@ mod tests {
             Mode::Ask,
         );
         assert_eq!(fresh.prompt, "new");
+    }
+
+    /// BG-4: a session handed over by `/bg` has a record and no roster entry, and is entered under
+    /// the record's name with the last prompt the person typed, not `untitled` and nothing.
+    #[test]
+    fn an_entry_with_no_earlier_one_is_made_from_the_sessions_record() {
+        let roster = Roster::at(a_root());
+        let record: bravebot_session::sessions::Record =
+            serde_json::from_value(serde_json::json!({
+                "id": ID,
+                "directory": "/work",
+                "title": "fix the build",
+                "started": 1,
+                "updated": 2,
+                "conversation": bravebot_agent::Conversation::new().snapshot(),
+                "history": [
+                    {"number": 1, "prompt": "fix the build", "start": 0, "end": 2,
+                     "prompt_offset": 0, "outcome": null},
+                    {"number": 2, "prompt": "and the tests", "start": 2, "end": 4,
+                     "prompt_offset": 0, "outcome": null},
+                    {"number": 3, "prompt": null, "start": 4, "end": 4,
+                     "prompt_offset": null, "outcome": null},
+                ],
+            }))
+            .expect("a record");
+
+        let handed_over = entry_from(
+            &roster,
+            ID,
+            None,
+            Mode::Ask,
+            std::path::Path::new("/work"),
+            Some(&record),
+        );
+        assert_eq!(handed_over.name, "fix the build");
+        assert_eq!(handed_over.prompt, "and the tests");
+
+        let typed = entry_from(
+            &roster,
+            ID,
+            Some("now this"),
+            Mode::Ask,
+            std::path::Path::new("/work"),
+            Some(&record),
+        );
+        assert_eq!(typed.prompt, "now this");
+        assert_eq!(typed.name, "fix the build");
+    }
+
+    /// A blank line at an idle prompt is not a prompt, so the stored last prompt stays.
+    #[test]
+    fn a_blank_line_leaves_the_last_prompt_alone() {
+        let mut job = Job::starting(
+            ID.to_string(),
+            std::path::Path::new("/work"),
+            "fix",
+            Mode::Ask,
+        );
+        job.typed("   ");
+        job.typed("");
+        assert_eq!(job.prompt, "fix");
     }
 
     /// BG-8: the process runs in the mode it was started in, and an entry made for a process
