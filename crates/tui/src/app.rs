@@ -10634,6 +10634,8 @@ mod tests {
     #[test]
     fn a_press_outside_every_pane_starts_no_selection() {
         let (mut session, _) = two_panes();
+        swept(&mut session, (0, 0), (0, 10));
+        assert!(session.selection.is_some());
         session
             .laid
             .panes
