@@ -127,6 +127,30 @@ describe('a card taller than its viewport', () => {
     expect(has(tree, 'run-card-more')).toBe(false)
   })
 
+  it.each([
+    ['run-tests', 'run-card'],
+    ['update-changelog', 'confirm-card'],
+  ])('keeps Approve off until the end of the %s card has been reached, and never holds back Reject', async (name, card) => {
+    const pending = request(name)
+    const { tree, calls } = await show(pending)
+    const scroll = byTestId(tree, `${card}-scroll`)
+    const { act } = require('react-test-renderer')
+    await act(async () => {
+      scroll.props.onLayout({ nativeEvent: { layout: { height: 200 } } })
+      scroll.props.onContentSizeChange(0, 600)
+    })
+    expect(isDisabled(tree, 'approve')).toBe(true)
+    expect(isDisabled(tree, 'reject')).toBe(false)
+    await press(tree, 'approve')
+    expect(calls).toEqual([])
+    await act(async () => {
+      scroll.props.onScroll({ nativeEvent: { contentOffset: { y: 400 } } })
+    })
+    expect(isDisabled(tree, 'approve')).toBe(false)
+    await press(tree, 'approve')
+    expect(calls).toEqual([['decide', pending.request, 'approve']])
+  })
+
   it('says nothing when everything fits', async () => {
     const { tree } = await show(request('run-tests'))
     const scroll = byTestId(tree, 'run-card-scroll')

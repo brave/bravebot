@@ -1,7 +1,10 @@
-import { useState, type ReactNode } from 'react'
+import { createContext, useContext, useState, type ReactNode } from 'react'
 import { ScrollView, StyleSheet, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native'
 import { radius, space, type, useTheme } from '../../theme'
 import { Button, Caption, Divider, Meta, OutlinePill, UI, UntrustedText } from '../primitives'
+
+/** True while a card has more to read than fits, so the action that approves waits until the end has been reached. */
+const ReadingContext = createContext(false)
 
 /** The frame every question shares: what is asked, where it will happen, the evidence, and the answers. */
 export function CardFrame({
@@ -51,9 +54,11 @@ export function CardFrame({
       >
         {children}
       </ScrollView>
-      <View style={[styles.more, { height: Math.round(20 * Math.max(1, fontScale)) }]}>{more && <Caption testID={`${testID}-more`}>Scroll to read the rest before you answer</Caption>}</View>
+      <View style={[styles.more, { height: Math.round(20 * Math.max(1, fontScale)) }]}>{more && <Caption testID={`${testID}-more`}>Scroll to read the rest before you approve</Caption>}</View>
       <Divider />
-      <View style={styles.actions}>{actions}</View>
+      <ReadingContext.Provider value={more}>
+        <View style={styles.actions}>{actions}</View>
+      </ReadingContext.Provider>
     </View>
   )
 }
@@ -120,13 +125,15 @@ export function Actions({
   rejectLabel?: string
   busy: boolean
 }) {
+  // Rejecting never waits. Approving does, so a person cannot approve what is still below the fold.
+  const reading = useContext(ReadingContext)
   return (
     <>
       <View style={styles.action}>
         <Button label={rejectLabel} onPress={onReject} disabled={busy} testID="reject" />
       </View>
       <View style={styles.action}>
-        <Button label={approveLabel} onPress={onApprove} variant="primary" disabled={busy} testID="approve" />
+        <Button label={approveLabel} onPress={onApprove} variant="primary" disabled={busy || reading} testID="approve" />
       </View>
     </>
   )
