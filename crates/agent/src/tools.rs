@@ -151,8 +151,8 @@ pub struct Output {
     pub answers_for: Option<Option<SlotId>>,
     /// What an isolated processor said about what it did. For the person watching only.
     pub said: Option<Labelled<String>>,
-    /// What to tell the person where a processor was answered by a model other than the one
-    /// `processorModel` named (PROC-13). The driver's own sentence, never the model's words.
+    /// The model a processor was answered by, where it is not the one `processorModel` named
+    /// (PROC-13). The turn words it for the person: this module is read by the planner.
     pub substituted: Option<String>,
     /// The content alone, where `text` has the driver's own notes after it, so that a glimpse of
     /// a file is of the file and counts the file's lines.
@@ -9215,7 +9215,7 @@ fn spawn_processor<S: Sink>(
                     Some(from) => format!("nothing was written and {from} is as it was"),
                     None => "there is nothing to write".to_string(),
                 };
-                let substituted = done.substituted.as_deref().map(substitution_notice);
+                let substituted = done.substituted;
                 let mut produced = confirmed(
                     format!(
                         "that answer marked no document, so {stands}. What it said is on the \
@@ -9252,7 +9252,7 @@ fn spawn_processor<S: Sink>(
                 .of_content();
             produced.answers_for = Some(spec.about().cloned());
             produced.said = done.note;
-            produced.substituted = done.substituted.as_deref().map(substitution_notice);
+            produced.substituted = done.substituted;
             produced
         }
         Err(crate::processor::ProcessorError::Model(refusal)) => {
@@ -9288,11 +9288,6 @@ fn spawn_processor<S: Sink>(
             Produced::problem(format!("error: {error}")).waiting(waited)
         }
     }
-}
-
-/// The person's sentence for a processor answered by a model other than `processorModel`'s.
-fn substitution_notice(written: &str) -> String {
-    bravebot_i18n::t!(processor_model_substituted, model = written).to_string()
 }
 
 /// Hand a sub-task to a second planner and bring back one report.
