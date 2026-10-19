@@ -3601,7 +3601,7 @@ fn path_field(destination: Destination) -> &'static str {
 }
 
 /// Whether a write to `path` is to be put to a person, asked about the name as given and about
-/// the name it lands on. A rule that asks, or a table that does, about either one is enough: the
+/// the name it lands on and the other names of a file with a hard link. A rule that asks, or a table that does, about either one is enough: the
 /// second name can add a question and never removes one (PERM-7).
 pub(crate) fn write_needs_approval<S: Sink>(
     policy: &mut Policy<'_, S>,
@@ -3614,15 +3614,26 @@ pub(crate) fn write_needs_approval<S: Sink>(
         || workspace.landing(path).is_some_and(|landed| {
             policy.write_needs_approval(&landed, contents, Destination::Named)
         })
+        || workspace.hard_links(path).is_some_and(|names| {
+            names
+                .iter()
+                .any(|name| policy.write_needs_approval(name, contents, Destination::Named))
+        })
 }
 
 /// Whether `path`, as named or as it lands after links are followed, is one a write asks about
-/// whatever the mode or a rule says (MODE-2, PERM-9). Read off the routing path alone.
+/// whatever the mode or a rule says (MODE-2, PERM-9). Read off the routing path alone, and the
+/// other names of a file with a hard link, which a link is not followed to.
 pub(crate) fn write_is_protected(workspace: &Workspace, path: &str) -> bool {
     bravebot_core::protected::is_protected(path)
         || workspace
             .landing(path)
             .is_some_and(|landed| bravebot_core::protected::is_protected(&landed))
+        || workspace.hard_links(path).is_some_and(|names| {
+            names
+                .iter()
+                .any(|name| bravebot_core::protected::is_protected(name))
+        })
 }
 
 /// The reason the person wrote beside the rule that refuses `name`, where there is one (PERM-1).

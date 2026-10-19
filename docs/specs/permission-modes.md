@@ -86,8 +86,8 @@ and the files `.gitmodules`, `.gitconfig` and `.pre-commit-config.yaml` wherever
 there is code that runs later with the person's own rights, such as a git hook the next `git commit`
 starts. The mode is not the person, so it does not answer it; where nobody is there to ask, the
 write is refused ([PROMPT-9](prompting.md#PROMPT-9)). The match is on the path the planner named and
-on the path it lands on once links are followed, so a write through a link to `.git` asks, and it
-reads no byte of the body.
+on the path it lands on once links are followed, so a write through a link to `.git` asks. A file
+with a hard link is matched on each of its other names. The decision reads no byte of the body.
 
 **Why.** A write and a run are not the same risk. A write lands in a tree the person can read
 afterwards, and `git diff` shows them all of it; a program runs with everything their own shell has,
@@ -110,6 +110,7 @@ mode cannot be what answers it. Bypassing is that statement (MODE-4).
 `verified-by: bravebot_cli::running::an_accept_edits_run_refuses_a_command`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_protected_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later`
+`verified-by: bravebot_agent::turn::a_write_through_a_hard_link_to_a_hook_is_put_to_the_person`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_agent::turn::only_bypassing_answers_a_credential_write`
@@ -534,8 +535,6 @@ says it once, on the command line, where no content can say it for them.
   distinguish one file from another, except for the fixed list of protected paths in
   [PERM-9](permissions.md#PERM-9), which it asks about. The other write it does not accept is one the
   credential scan found something in, and that is decided by the finding, not the path.
-  A hard link to a protected file under another name is not recognised, so a write through it is
-  answered like any other.
 - **Accepting edits still stops on a file that is only one rare value.** The shape a created
   credential takes is also the shape of a file holding only a commit id, a UUID or a digest, so
   those writes are put to the person in a mode chosen so as not to be asked about writes. `a` is

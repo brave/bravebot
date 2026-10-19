@@ -62496,6 +62496,45 @@ fn a_finished_jobs_account_does_not_spell_the_names_a_glob_matched_to_the_planne
     );
 }
 
+/// MODE-2 and PERM-9. A file with a hard link under `.git/hooks` is the same file under its other
+/// name, so a write through `src/x` is put to the person, and an unlinked file beside it is not.
+#[cfg(unix)]
+#[test]
+fn a_write_through_a_hard_link_to_a_hook_is_put_to_the_person() {
+    use bravebot_agent::PermissionMode;
+
+    let scratch = Scratch::new("protected-write-hard-link");
+    std::fs::create_dir_all(scratch.path.join(".git/hooks")).unwrap();
+    std::fs::create_dir(scratch.path.join("src")).unwrap();
+    std::fs::write(scratch.path.join(".git/hooks/pre-commit"), "#!/bin/sh\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join(".git/hooks/pre-commit"),
+        scratch.path.join("src/x"),
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("src/y"), "plain\n").unwrap();
+
+    let mut person = RemembersWrites::default();
+    a_turn_allowing_every_edit(
+        &scratch,
+        PermissionMode::AcceptEdits,
+        &mut person,
+        vec![
+            writing("src/y", "changed\n"),
+            writing("src/x", "#!/bin/sh\necho ran\n"),
+        ],
+    );
+    assert_eq!(
+        person
+            .asked
+            .iter()
+            .map(|request| (request.path.as_str(), request.protected))
+            .collect::<Vec<_>>(),
+        [("src/x", true)],
+        "only the write through the link should reach the person"
+    );
+}
+
 /// One turn making the tool `calls` under `mode` with an `Edit(**)` allow rule and a trust map
 /// vouching for the tree, so the only thing that can still ask about a write is its destination.
 fn a_turn_allowing_every_edit<C: bravebot_agent::confirm::Confirmer + Send>(
