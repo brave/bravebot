@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/core/src/permissions.rs
   - crates/core/src/spelling.rs
+  - crates/core/src/protected.rs
   - crates/config/src/settings.rs
   - crates/config/src/managed.rs
   - crates/agent/src/permissions.rs
@@ -518,13 +519,19 @@ into routing, which is the whole thing labels exist to prevent.
 `verified-by: bravebot_agent::turn::an_allow_rule_reaches_the_path_it_names_and_no_other`
 
 <a id="PERM-9"></a>
-### PERM-9: four prompts no rule can answer
+### PERM-9: five prompts no rule can answer
 
 A run that would put the user's private data into a program asks whatever the rules say. A write
 whose destination is known only through a reference asks whatever the rules say. A run carrying an
 environment assignment written in front of one of its programs asks whatever the rules say. A call
 that would put the user's private data into a server's tool asks whatever the rules say, and
-whatever a standing answer says ([SERVERS-7](mcp-servers.md#SERVERS-7)).
+whatever a standing answer says ([SERVERS-7](mcp-servers.md#SERVERS-7)). A write whose destination
+is a protected path asks whatever the rules say, an `Edit` allow rule and the trust map included, and
+whatever the mode says short of bypassing ([MODE-2](permission-modes.md#MODE-2)). The paths are any
+`.git`, `.bravebot` or `.husky` component and the files `.gitmodules`, `.gitconfig` and
+`.pre-commit-config.yaml`, compared as a volume that folds case and normalizes opens them (`.GIT`,
+`.huſky`) and with a trailing dot or space dropped. The destination is read as named, as it lands after links are followed, and under each other
+name of a file with a hard link (PERM-7).
 
 **Why.** None of them is the question a rule answers. The first and the fourth are about
 confidentiality: a rule saying which commands may run or which tools may be called is not consent
@@ -534,12 +541,24 @@ anybody, and the endorsement is minted for the path the person saw, so nothing a
 stand in for having looked. The third is about what a rule can say at all: a rule is matched against
 the program's name and its arguments ([PERM-5](#PERM-5)), and an assignment is in neither, so `Bash(git log)` matches `LD_PRELOAD=./evil.so git log` and no rule anybody could write
 distinguishes them. An assignment decides what a program loads before its arguments are read
-([tools/run.md](tools/run.md)), so allowing the one is not allowing the other.
+([tools/run.md](tools/run.md)), so allowing the one is not allowing the other. The fifth is about
+what a write is: a file under `.git/hooks` or `.git/config` runs with the person's rights the next
+time git runs, so an allow rule for a tree is not consent to plant one, and the decision reads only
+the planner's routing path, as a deny rule does.
 
 `verified-by: bravebot_core::policy::private_input_asks_even_for_a_line_a_rule_allows`
 `verified-by: bravebot_core::policy::a_reference_named_write_asks_whatever_a_rule_says`
 `verified-by: bravebot_core::policy::an_environment_assignment_asks_even_for_a_line_a_rule_allows`
 `verified-by: bravebot_core::policy::private_arguments_ask_even_for_a_tool_a_rule_allows`
+`verified-by: bravebot_core::policy::a_protected_path_asks_whatever_a_rule_or_the_trust_map_says`
+`verified-by: bravebot_core::protected::a_git_component_anywhere_in_the_path_is_protected`
+`verified-by: bravebot_core::protected::an_ordinary_path_and_a_lookalike_are_not_protected`
+`verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_protected_write_to_the_person_and_bypassing_answers_it`
+`verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later`
+`verified-by: bravebot_agent::turn::a_write_through_a_hard_link_to_a_hook_is_put_to_the_person`
+`verified-by: bravebot_agent::turn::accepting_edits_puts_an_edit_of_a_hook_to_the_person`
+`verified-by: bravebot_agent::turn::accepting_edits_puts_a_download_into_a_hook_to_the_person`
+`verified-by: bravebot_agent::manifest::accepting_edits_puts_a_planned_write_to_a_hook_to_the_person`
 `verified-by: bravebot_agent::mcp::a_call_after_a_servers_answer_was_vetted_asks_though_a_rule_allows_it`
 `verified-by: bravebot_agent::mcp::reading_workspace_files_leaves_a_call_a_rule_allows_unasked`
 

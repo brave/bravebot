@@ -2149,6 +2149,66 @@ fn approving_a_plan_is_not_approving_a_credential_it_writes() {
     );
 }
 
+/// One planned run writing a note and a hook under accepting edits, answered by `inner`, with the
+/// tree vouched for.
+fn a_planned_hook_write<C: bravebot_agent::confirm::Confirmer>(
+    scratch: &Scratch,
+    inner: &mut C,
+) -> Result<bravebot_agent::Outcome, bravebot_agent::TurnError> {
+    let mode = bravebot_agent::PermissionMode::AcceptEdits;
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": "# Notes\n"}},
+            {"capability": "FILE_WRITE", "args": {"path": ".git/hooks/pre-commit", "contents": "echo ran\n"}},
+        ])),
+    ]);
+    let mut trust = TrustStore::new("/work");
+    trust.trust(".");
+    let mut confirmer = bravebot_agent::Confining::new(inner, mode, false);
+    manifest::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("set the hooks up").with_permission_mode(mode),
+        &mut confirmer,
+        &mut bravebot_agent::IgnoreReports,
+        &mut RecordingSink::new(),
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+}
+
+/// MODE-2 and PERM-9 over a planned run. A step that writes under `.git/hooks` goes to the person
+/// under accepting edits, with the tree vouched for, and is refused where nobody can be asked.
+#[test]
+fn accepting_edits_puts_a_planned_write_to_a_hook_to_the_person() {
+    let scratch = Scratch::new("planned-hook-asked");
+    std::fs::create_dir_all(scratch.path.join(".git/hooks")).unwrap();
+    let mut person = RecordsEveryQuestion::default();
+    a_planned_hook_write(&scratch, &mut person).expect("runs");
+    assert_eq!(
+        person
+            .writes
+            .iter()
+            .map(|request| (request.path.as_str(), request.protected))
+            .collect::<Vec<_>>(),
+        [(".git/hooks/pre-commit", true)],
+        "only the write to the hook should reach the person"
+    );
+    assert!(scratch.path.join("notes.md").exists());
+    assert!(scratch.path.join(".git/hooks/pre-commit").exists());
+
+    let scratch = Scratch::new("planned-hook-unattended");
+    std::fs::create_dir_all(scratch.path.join(".git/hooks")).unwrap();
+    let _ = a_planned_hook_write(&scratch, &mut bravebot_agent::Unattended);
+    assert!(
+        !scratch.path.join(".git/hooks/pre-commit").exists(),
+        "a planned write nobody was asked about landed under accepting edits"
+    );
+}
+
 /// MODE-4 and CRED-13 over a planned run: the flag answers the step's credential write as it
 /// answers the plan, so nothing is put to the person and the key is written.
 #[test]

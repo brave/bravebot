@@ -95,6 +95,11 @@ pub struct WriteRequest {
     /// decision is about these lines: somebody weighing a `POSTGRES_PASSWORD` wants the diff in
     /// front of them while they weigh it.
     pub credentials: Vec<String>,
+    /// Whether the destination is a path where a write runs code later (MODE-2, PERM-9).
+    ///
+    /// Decided from the routing path and the name it lands on, never from the body. A mode that
+    /// answers writes does not answer one of these, and an unattended confirmer refuses it.
+    pub protected: bool,
     /// Whether the prompt may offer to stop asking, for the rest of the session, about what the
     /// scan finds in writes to this file ([CRED-13]).
     ///
@@ -3034,6 +3039,7 @@ mod tests {
             intent: Intent::Overwrite,
             untrusted: false,
             remark: None,
+            protected: false,
             credentials: Vec::new(),
             may_always: false,
             record: None,
@@ -3629,6 +3635,7 @@ mod tests {
             intent: Intent::Create,
             untrusted: false,
             remark: None,
+            protected: false,
             credentials: Vec::new(),
             may_always: false,
             record: None,

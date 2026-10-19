@@ -33,6 +33,7 @@ pub mod permissions;
 pub mod policy;
 pub mod processor;
 pub mod programs;
+pub mod protected;
 pub mod pure;
 pub mod reference;
 pub mod remembered;

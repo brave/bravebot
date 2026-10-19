@@ -108,11 +108,12 @@ impl PermissionMode {
     /// Whether a write the policy would ask about is answered without drawing a prompt.
     ///
     /// A write that would create a credential is the exception in accept-edits: the diff shows the
-    /// person the value only after it is in the tree.
-    pub fn answers_a_write_unasked(self, creates_a_credential: bool) -> bool {
+    /// person the value only after it is in the tree. So is a write to a protected path, which
+    /// runs code the next time something reads it (MODE-2).
+    pub fn answers_a_write_unasked(self, creates_a_credential: bool, protected: bool) -> bool {
         match self {
             Self::Plan | Self::Bypass => true,
-            Self::AcceptEdits => !creates_a_credential,
+            Self::AcceptEdits => !creates_a_credential && !protected,
             Self::Ask => false,
         }
     }
@@ -359,6 +360,11 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// wants no prompt. The write tools refuse on the mode itself, before any of that. What this
     /// arm holds is the mode's answer wherever a write prompt does get raised.
     ///
+    /// Accepting edits does not answer a write to a protected path either: the destination is where
+    /// a write runs code later, so the question goes to the inner confirmer and an unattended one
+    /// refuses. The branch reads the `protected` flag the policy layer derived from the routing
+    /// path, never the body.
+    ///
     /// Accepting edits does not answer a write that would create a credential. CRED-13 puts an
     /// inferred one to a person, and a mode that said yes here would be that person: the approval
     /// is for the exact bytes that were shown, and nobody was shown them. So where the policy layer
@@ -374,7 +380,9 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         let creates_a_credential = !request.credentials.is_empty();
         match self.mode.get() {
             PermissionMode::Plan => WriteDecision::reject(),
-            mode if mode.answers_a_write_unasked(creates_a_credential) => WriteDecision::approve(),
+            mode if mode.answers_a_write_unasked(creates_a_credential, request.protected) => {
+                WriteDecision::approve()
+            }
             _ => self.asking().confirm_write(request),
         }
     }
@@ -637,6 +645,7 @@ mod tests {
             intent: Intent::Create,
             untrusted: false,
             remark: None,
+            protected: false,
             credentials: Vec::new(),
             may_always: false,
             record: None,
@@ -1131,6 +1140,44 @@ mod tests {
         assert!(
             !confining.confirm_run(&a_run()).approved(),
             "accepting edits must not accept running programs"
+        );
+    }
+
+    /// A write to a protected path is the exception to accepting edits (MODE-2): the question goes
+    /// to whoever is behind the mode and an unattended one refuses. An ordinary write is still
+    /// answered, so the mode is live and the destination is what asks. Bypassing answers it.
+    #[test]
+    fn accepting_edits_puts_a_protected_write_to_the_person_and_bypassing_answers_it() {
+        let a_protected_write = || WriteRequest {
+            path: ".git/hooks/pre-commit".to_string(),
+            protected: true,
+            ..a_write()
+        };
+        let mut refusing = Unattended;
+        let mut confining = Confining::new(&mut refusing, PermissionMode::AcceptEdits, false);
+        assert_eq!(
+            confining.confirm_write(&a_protected_write()),
+            WriteDecision::reject(),
+            "accepting edits answered a write that runs code later"
+        );
+        assert_eq!(
+            confining.confirm_write(&a_write()),
+            WriteDecision::approve()
+        );
+
+        let mut approving = crate::confirm::ApproveWrites;
+        let mut confining = Confining::new(&mut approving, PermissionMode::AcceptEdits, false);
+        assert_eq!(
+            confining.confirm_write(&a_protected_write()),
+            WriteDecision::approve(),
+            "the question did not reach the confirmer behind the mode"
+        );
+
+        let mut refusing = Unattended;
+        let mut confining = Confining::new(&mut refusing, PermissionMode::Bypass, false);
+        assert_eq!(
+            confining.confirm_write(&a_protected_write()),
+            WriteDecision::approve()
         );
     }
 
