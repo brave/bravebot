@@ -52,8 +52,8 @@ use offered::checkouts_share_refs;
 use offered::state_withheld;
 pub use offered::{
     Running, Scheduling, available, for_delegate, for_planner, offer_advisor,
-    offer_message_session, offer_tool_loader, state_confinement, state_read_output_answer,
-    state_withheld_variables,
+    offer_message_session, offer_propose_plan, offer_tool_loader, state_confinement,
+    state_read_output_answer, state_withheld_variables,
 };
 
 /// The argument every tool takes saying why the call is being made.
@@ -1660,6 +1660,9 @@ fn target_of<S: Sink>(
     // which the person is about to read anyway. How many were asked is the useful thing on a
     // line that goes by while they answer, and a count is structure rather than content, so
     // nothing is released to say it.
+    if tool == "propose_plan" {
+        return String::new();
+    }
     if tool == "ask_user" {
         return match arguments.get("questions").and_then(Value::as_array) {
             Some(asked) if asked.len() > 1 => tally(asked.len(), "question", "questions"),
@@ -2263,6 +2266,10 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         // A delegate's task came from a planner, so the question would ask the person to
         // arbitrate something they never set up. Refused here as well as absent from the list.
         "ask_user" if !tools.delegated => ask_user(policy, confirmer, &arguments),
+        // Offered only in plan mode and only to the turn the person is watching: a delegate's
+        // plan came from a planner, and approving it would end a mode the person set for the
+        // session. Refused here as well as absent from the list.
+        "propose_plan" if !tools.delegated => propose_plan(policy, tools, confirmer, &arguments),
         "request_path" if !tools.delegated => request_path(policy, tools, confirmer, &arguments),
         "run" => run(policy, tools, confirmer, reporter, &arguments),
         "read_output" => read_output(policy, tools, confirmer, reporter, &arguments),
@@ -10189,6 +10196,63 @@ fn ask_user<S: Sink, C: Confirmer>(
     }
 }
 
+/// Put a finished plan to the person and, on approval, leave plan mode for the mode they chose
+/// (MODE-14).
+///
+/// The plan is the planner's own text and goes through the same routing gate as a question: a
+/// planner whose context has met something untrusted cannot ask, and is told so. What the person
+/// is offered is fixed by the driver ([`crate::plan_approval`]), so the mode the session moves to
+/// is picked from a list they see in full and never named by the planner. Nothing here branches
+/// on the plan's bytes: the branch is on which of the fixed choices the person picked.
+fn propose_plan<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    arguments: &Value,
+) -> Produced {
+    use crate::plan_approval::{Approval, approval, question};
+
+    let Some(plan) = arguments.get("plan").and_then(Value::as_str) else {
+        return Produced::problem("error: 'plan' is required and must be the text of the plan.");
+    };
+    if tools.permission_mode.get() != crate::PermissionMode::Plan {
+        return Produced::problem(
+            "error: the session is not in plan mode, so there is no plan to approve. Carry out \
+             the work.",
+        );
+    }
+
+    let series = policy.label_model_output("propose_plan", Series::new(vec![question(plan)]));
+    let canonical = policy.render_in_place("propose_plan", &series, |s| ask::canonical_series(&s));
+    if let Err(denial) = policy.before_asking("propose_plan", &canonical) {
+        return Produced::problem(format!(
+            "refused: {denial}. A plan can only be put to the user before anything untrusted has \
+             reached your context. Say the plan in your reply instead."
+        ));
+    }
+    let shaped = policy.render_in_place("propose_plan", &series, |s| ask::asking(&s));
+    let proof = policy.authorise_display_release("the plan for the user");
+    let answers = confirmer.ask_user(&shaped.declassify(&proof));
+
+    let said = match policy.record_answers("propose_plan", &series, &answers) {
+        Ok(text) => text,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    let outcome = match approval(answers.first()) {
+        Approval::LeaveFor(mode) => {
+            // Applies to the rest of this turn, as any change of mode does (MODE-8).
+            tools.permission_mode.set(mode);
+            "The user approved the plan and plan mode has ended. Carry the plan out now."
+        }
+        Approval::KeepPlanning => {
+            "The user did not approve the plan, and the session is still in plan mode. Revise \
+             the plan from what they said, if anything, and do not write."
+        }
+    };
+    let text = policy.render_in_place("propose_plan", &said, |said| format!("{said}\n{outcome}"));
+    Produced::new(text, "", String::new())
+}
+
 /// Whether an `include` glob leans on syntax the matcher does not have.
 ///
 /// A pattern the matcher cannot read selects no files, and a search over no files reports no
@@ -11758,6 +11822,30 @@ mod tests {
                 "schedule_next"
             ]
         );
+    }
+
+    /// MODE-14: the plan tool is added for a plan-mode turn only, takes the plan and a reason,
+    /// and is never in the table a delegate is built from.
+    #[test]
+    fn propose_plan_takes_a_plan_and_a_reason_and_is_not_in_the_table() {
+        let table: Vec<String> = available(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        )
+        .iter()
+        .map(|t| t.function.name.clone())
+        .collect();
+        assert!(!table.iter().any(|name| name == "propose_plan"));
+
+        let mut offered = Vec::new();
+        offer_propose_plan(&mut offered);
+        let tool = offered.first().expect("offered");
+        assert_eq!(tool.function.name, "propose_plan");
+        let properties = &tool.function.parameters["properties"];
+        assert!(properties.get("plan").is_some());
+        assert!(properties.get(WHY).is_some());
     }
 
     /// SANDBOX-28: the tool is offered where `run` is and withheld where it is not, takes a path
@@ -15083,6 +15171,100 @@ mod tests {
                 }]}),
             ));
             assert!(told.starts_with("error:"), "{told}");
+        }
+
+        /// Run `propose_plan` in `mode` against a person who gives `reply`. Returns the mode
+        /// afterwards, what the planner is told, and what the person was shown.
+        fn proposed(
+            mode: crate::PermissionMode,
+            untrusted: bool,
+            reply: Vec<Answer>,
+        ) -> (crate::PermissionMode, String, Vec<Asking>) {
+            let scratch = super::arguments::Scratch::new("propose-plan");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy");
+            if untrusted {
+                policy = policy.resuming(Integrity::Untrusted);
+            }
+            let mut confirmer = Watching {
+                seen: Vec::new(),
+                reply,
+            };
+            let (after, text) = super::arguments::with_tools(&workspace, |tools| {
+                tools.permission_mode = crate::LiveMode::new(mode);
+                let produced = propose_plan(
+                    &mut policy,
+                    tools,
+                    &mut confirmer,
+                    &json!({"plan": "1. edit a.rs"}),
+                );
+                (tools.permission_mode.get(), released(&produced.text))
+            });
+            (after, text, confirmer.seen)
+        }
+
+        /// MODE-14: each approving choice ends plan mode for the mode it names, and no choice
+        /// reaches bypassing. The regressions it rejects: approval that leaves plan mode in force,
+        /// and a choice mapped to the wrong mode.
+        #[test]
+        fn approving_a_plan_leaves_plan_mode_for_the_mode_chosen() {
+            use crate::PermissionMode::{AcceptEdits, Ask, Plan};
+            let (mode, told, seen) = proposed(Plan, false, vec![Answer::Chosen(vec![0])]);
+            assert_eq!(mode, AcceptEdits);
+            assert!(told.contains("approved the plan"), "{told}");
+            assert_eq!(seen.len(), 1);
+            assert_eq!(seen[0].prompts[0].question, "1. edit a.rs");
+            assert_eq!(seen[0].prompts[0].rows.len(), 3);
+            assert_eq!(proposed(Plan, false, vec![Answer::Chosen(vec![1])]).0, Ask);
+        }
+
+        /// MODE-14: anything but an approving choice leaves the session planning.
+        #[test]
+        fn a_plan_not_approved_leaves_plan_mode_in_force() {
+            use crate::PermissionMode::Plan;
+            for reply in [
+                vec![Answer::Chosen(vec![2])],
+                vec![Answer::Typed("add tests".into())],
+                vec![Answer::Declined],
+                vec![],
+            ] {
+                let (mode, told, _) = proposed(Plan, false, reply.clone());
+                assert_eq!(mode, Plan, "{reply:?}");
+                assert!(!told.contains("approved the plan"), "{reply:?}: {told}");
+            }
+        }
+
+        /// MODE-14: outside plan mode there is no plan to approve, so nobody is asked and the
+        /// mode is not changed by a call.
+        #[test]
+        fn a_plan_proposed_outside_plan_mode_asks_nobody() {
+            use crate::PermissionMode::{AcceptEdits, Ask, Bypass};
+            for mode in [Ask, AcceptEdits, Bypass] {
+                let (after, told, seen) = proposed(mode, false, vec![Answer::Chosen(vec![0])]);
+                assert_eq!(after, mode);
+                assert!(told.starts_with("error:"), "{told}");
+                assert!(seen.is_empty());
+            }
+        }
+
+        /// MODE-14: a planner whose context met untrusted content cannot put a plan to the person.
+        #[test]
+        fn a_plan_from_an_untrusted_context_is_refused_and_changes_no_mode() {
+            let (after, told, seen) = proposed(
+                crate::PermissionMode::Plan,
+                true,
+                vec![Answer::Chosen(vec![0])],
+            );
+            assert_eq!(after, crate::PermissionMode::Plan);
+            assert!(told.starts_with("refused:"), "{told}");
+            assert!(seen.is_empty());
         }
     }
 

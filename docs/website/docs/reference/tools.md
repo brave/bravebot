@@ -31,6 +31,7 @@ that is merely carried.
 | [`spawn_agent`](#spawn_agent) | `kind` | `task`, `each` | not the call, but its writes and runs do |
 | [`load_skill`](#load_skill) | `name` | none | no |
 | [`ask_user`](#ask_user) | the questions | none | it *is* the question |
+| [`propose_plan`](#propose_plan) | the plan | none | it *is* the plan you approve |
 | [`request_path`](#request_path) | `path`, `write` | none | **yes, unless you bypass permissions** |
 | [`todo_write`](#todo_write) | none | `todos` | no |
 
@@ -1047,6 +1048,19 @@ every question is declined rather than answered on your behalf.
 
 This tool is for what the planner cannot find out itself: which of two approaches, whether something
 is in scope, which of two plausible files you meant. Never for a fact about the machine.
+
+## `propose_plan`
+
+Offered in plan mode only. Shows you the finished plan and asks how to proceed.
+
+| Parameter | |
+|---|---|
+| `plan` | the whole plan, in the planner's own words |
+
+You can accept edits, ask before each edit, or keep planning. The first two leave plan mode for that
+mode and the planner starts the work in the same turn. Anything else, including a typed reply, keeps
+plan mode and tells the planner the plan was not approved. Bypassing is never offered. Where nobody
+can be asked, or the planner's context has met something untrusted, the call is refused.
 
 ## `request_path`
 

@@ -1634,6 +1634,36 @@ pub fn offer_advisor(tools: &mut Vec<Tool>) {
     tools.push(advisor);
 }
 
+/// Add `propose_plan` to a planner's list, for a turn that begins in plan mode.
+///
+/// Built here rather than in the table because only plan mode has a plan to approve, and a
+/// description naming a tool that is not on the list sends the planner to a name that is not
+/// there. A delegate is built from the table and so is never offered it.
+pub fn offer_propose_plan(tools: &mut Vec<Tool>) {
+    let mut propose = Tool::function(
+        "propose_plan",
+        "Present the finished plan to the user and ask them to approve it. Call it once the plan \
+         is settled, instead of ending your reply with the plan. The user chooses whether to \
+         carry it out with edits accepted, to carry it out asking before each edit, or to keep \
+         planning; the answer comes back as the result, and on approval plan mode has ended for \
+         the rest of the turn so you can begin the work. If they keep planning, revise from what \
+         they said. It is refused where nobody can be asked.",
+        json!({
+            "type": "object",
+            "properties": {
+                "plan": {
+                    "type": "string",
+                    "description": "The whole plan, written so the user can approve it as it \
+                                    stands: the steps, the files each touches, and why."
+                }
+            },
+            "required": ["plan"]
+        }),
+    );
+    ask_why(&mut propose);
+    tools.push(propose);
+}
+
 /// Add `message_session` to a planner's list, for a background session that can reach the others.
 ///
 /// Built here rather than in the table because no other session is offered it, and a description

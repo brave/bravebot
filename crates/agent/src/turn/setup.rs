@@ -118,6 +118,9 @@ pub(super) fn offered_tools<S: Sink>(
         if task.courier.is_some() {
             tools::offer_message_session(&mut offered);
         }
+        if task.permission_mode.get() == crate::PermissionMode::Plan {
+            tools::offer_propose_plan(&mut offered);
+        }
         offered.retain(|tool| bravebot_core::tool_set::allows(&tool.function.name));
         let names: Vec<&str> = offered
             .iter()
@@ -142,6 +145,9 @@ pub(super) fn offered_tools<S: Sink>(
                 }
                 if task.courier.is_some() {
                     tools::offer_message_session(&mut offered);
+                }
+                if task.permission_mode.get() == crate::PermissionMode::Plan {
+                    tools::offer_propose_plan(&mut offered);
                 }
                 offered.retain(|tool| bravebot_core::tool_set::allows(&tool.function.name));
             }
