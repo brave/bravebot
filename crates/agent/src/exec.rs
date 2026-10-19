@@ -187,11 +187,23 @@ const TICK: Duration = Duration::from_millis(50);
 /// How long the drain threads are given to reach the end of their pipe, once the stages are done.
 ///
 /// They are waited on rather than joined, because a stage can leave a child holding the write end
-/// of the pipe. `sh -c 'echo hi; sleep 30'` is enough: killing the shell leaves `sleep` holding
-/// the same descriptor, so the pipe never reaches end-of-file and a joining thread waits on a
-/// process nobody is waiting for. Whatever was read by the time the grace runs out is kept, which
-/// is what makes the wait safe to abandon.
+/// of the pipe. `sh -c 'sleep 30 & echo hi'` is enough: the shell exits and `sleep` holds the same
+/// descriptor, so the pipe never reaches end-of-file and a joining thread waits on a process
+/// nobody is waiting for. A child that left the stage's process group does the same when the
+/// stage is stopped. Whatever was read by the time the grace runs out is kept, which is what
+/// makes the wait safe to abandon.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
+
+/// How long the process group of a stage is given to end after it has been asked to, before
+/// what is left of it is killed (RUN-11).
+///
+/// A program that is asked to end can undo what it holds: `git` removes its `index.lock` on
+/// `SIGTERM` and nothing removes it after `SIGKILL`. Short, because the stage was asked to end
+/// because a person's turn or deadline ran out, and one that ignores the request is killed
+/// anyway. Every stage of a pipeline waits out the same grace together, so a long pipeline is no
+/// slower to stop than one stage.
+#[cfg(unix)]
+const STOP_GRACE: Duration = Duration::from_secs(2);
 
 /// What running a pipeline produced.
 ///
@@ -869,34 +881,115 @@ fn from_upstream(upstream: &mut Option<Handle>) -> Result<Handle, ExecError> {
 
 /// A started step: an ordinary child, or on Windows a process in a container.
 enum Process {
-    Plain(Child),
+    /// On Unix the child leads a process group of its own (see [`crate::confine::begin`]), so its
+    /// number is also the number of the group everything it started belongs to.
+    Plain {
+        child: Child,
+        /// Whether the child has been waited for. Its number is free to be given to another
+        /// process from then on, so a signal addressed by it could reach a process that is not
+        /// this stage's, and none is sent once this is set.
+        #[cfg(unix)]
+        reaped: bool,
+    },
     #[cfg(windows)]
     Contained(crate::confine::Contained),
 }
 
 impl Process {
-    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
-        match self {
-            Self::Plain(child) => child.try_wait(),
-            #[cfg(windows)]
-            Self::Contained(contained) => contained.child.try_wait(),
+    fn plain(child: Child) -> Self {
+        Self::Plain {
+            child,
+            #[cfg(unix)]
+            reaped: false,
         }
     }
 
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        let status = match self {
+            Self::Plain { child, .. } => child.try_wait(),
+            #[cfg(windows)]
+            Self::Contained(contained) => contained.child.try_wait(),
+        };
+        // Any answer but "still running" ends the waiting, an error included. A parent that
+        // ignores `SIGCHLD` has its children collected by the kernel, and the number of a child
+        // that was collected may belong to another process.
+        #[cfg(unix)]
+        if !matches!(status, Ok(None)) {
+            self.waited_for();
+        }
+        status
+    }
+
+    #[cfg(unix)]
+    fn waited_for(&mut self) {
+        let Self::Plain { reaped, .. } = self;
+        *reaped = true;
+    }
+
+    /// End the stage, and on Unix every program in its process group with it.
+    ///
+    /// Nothing is signalled by number once the stage has been waited for: see
+    /// [`Process::Plain`].
     fn kill(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Some(group) = self.group() {
+            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        }
         match self {
-            Self::Plain(child) => child.kill(),
+            Self::Plain { child, .. } => child.kill(),
             #[cfg(windows)]
             Self::Contained(contained) => contained.child.kill(),
         }
     }
 
     fn wait(&mut self) -> std::io::Result<ExitStatus> {
-        match self {
-            Self::Plain(child) => child.wait(),
+        let status = match self {
+            Self::Plain { child, .. } => child.wait(),
             #[cfg(windows)]
             Self::Contained(contained) => contained.child.wait(),
+        };
+        #[cfg(unix)]
+        self.waited_for();
+        status
+    }
+
+    /// The process group the stage leads, while the stage has not been waited for.
+    ///
+    /// Not waited for means its number still names it, even if it has exited and is waiting to be
+    /// collected, so the group it names cannot belong to anything else.
+    #[cfg(unix)]
+    fn group(&self) -> Option<rustix::process::Pid> {
+        let Self::Plain { child, reaped } = self;
+        if *reaped {
+            return None;
         }
+        rustix::process::Pid::from_raw(i32::try_from(child.id()).ok()?)
+    }
+
+    /// Ask the stage to end, and every program in its group with it, and name the group asked.
+    ///
+    /// `SIGCONT` follows, because a stopped group holds a `SIGTERM` back until it is continued.
+    #[cfg(unix)]
+    fn ask_to_end(&self) -> Option<rustix::process::Pid> {
+        let group = self.group()?;
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::TERM);
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::CONT);
+        Some(group)
+    }
+
+    /// Collect the stage if it has exited, then say whether anything is left in `group`, the group
+    /// it was asked to end.
+    ///
+    /// The stage is collected first because a leader nobody has collected still counts as a member
+    /// of its group. A group's number is not given to another process while the group has a member,
+    /// so a group this finds a member in can still be signalled by that number.
+    #[cfg(unix)]
+    fn collect_then_group_has_members(&mut self, group: rustix::process::Pid) -> bool {
+        let _ = self.try_wait();
+        !matches!(
+            rustix::process::test_kill_process_group(group),
+            Err(rustix::io::Errno::SRCH)
+        )
     }
 }
 
@@ -915,7 +1008,7 @@ fn launch(
                 .stdout(Stdio::from(stdout))
                 .stderr(Stdio::from(stderr));
             bravebot_sandbox::process::starting_a_program(|| command.spawn())
-                .map(Process::Plain)
+                .map(Process::plain)
                 .map_err(|e| ExecError::NotStarted {
                     program: step.program.clone(),
                     detail: e.to_string(),
@@ -1113,8 +1206,35 @@ pub struct Seen {
     stderr: Vec<Mark>,
 }
 
-/// Kill every stage and reap it, so nothing is left behind.
+/// Stop every stage and reap it, so nothing is left behind.
+///
+/// On Unix each stage is first asked to end, together with everything in its process group, and
+/// its group is given `STOP_GRACE` to do so. Whatever is left of a group after that is killed, so
+/// a program that ignored the request, or a child that outlived the stage, does not keep running
+/// (RUN-11). The grace lasts while the group has a member, since a stage that ends at once on the
+/// request can leave programs it started that are still undoing what they hold.
 fn stop(children: &mut [Process]) {
+    #[cfg(unix)]
+    {
+        let asked: Vec<(usize, rustix::process::Pid)> = children
+            .iter()
+            .enumerate()
+            .filter_map(|(index, child)| Some((index, child.ask_to_end()?)))
+            .collect();
+        let until = Instant::now() + STOP_GRACE;
+        while Instant::now() < until
+            && asked
+                .iter()
+                .any(|&(index, group)| children[index].collect_then_group_has_members(group))
+        {
+            std::thread::sleep(TICK);
+        }
+        for &(index, group) in &asked {
+            if children[index].collect_then_group_has_members(group) {
+                let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+            }
+        }
+    }
     for child in children.iter_mut() {
         let _ = child.kill();
         let _ = child.wait();
@@ -1307,6 +1427,17 @@ impl Background {
     /// Kill every step, and keep what it printed.
     pub fn kill(&mut self) {
         stop(&mut self.children);
+    }
+
+    /// Ask every step to end, without waiting for any of them to.
+    ///
+    /// For a caller about to stop several jobs one after another: each job's own stop then finds
+    /// its steps already asked, and the grace the jobs are given runs together.
+    pub(crate) fn ask_to_end(&self) {
+        #[cfg(unix)]
+        for child in &self.children {
+            let _ = child.ask_to_end();
+        }
     }
 
     /// Wait for something to happen, and return at the first of five things.

@@ -1010,6 +1010,11 @@ impl Jobs {
     /// stop and recorded in the trail as one (RUN-27), so their stop is not told back to them as
     /// the turn's.
     pub fn stop_all<S: Sink, R: Reporter>(&mut self, policy: &mut Policy<'_, S>, reporter: &mut R) {
+        // Every job is asked to end before any is waited for, so jobs that take their time to end
+        // share one grace period.
+        for job in self.running.values() {
+            job.running.ask_to_end();
+        }
         for (name, job) in self.running.iter_mut() {
             if job.reported {
                 continue;
