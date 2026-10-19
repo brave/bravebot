@@ -408,6 +408,33 @@ worth a count rather than a guess at which half was safe to drop.
 `verified-by: bravebot_agent::turn::a_skill_body_stays_out_of_the_context_until_search_finds_it_and_load_skill_is_asked`
 `verified-by: bravebot_agent::turn::a_long_description_is_said_as_a_count_and_never_cut`
 `verified-by: bravebot_agent::turn::an_addressed_turn_is_offered_only_the_skills_its_definition_names`
+`verified-by: bravebot_agent::preamble::the_skills_section_points_at_search_skills_only_where_more_could_be_found`
+
+<a id="SKILL-18"></a>
+### SKILL-18: the first turn of a session not already told also gives the count and names of what the listing leaves out
+
+Where [SKILL-17](#SKILL-17) holds a skill back from the default listing, the first turn of a
+session that has not already been told is also given how many such skills there are and what
+each is named, so the planner can tell whether `search_skills` could find anything before it
+calls it. A later turn of the same session gets [SKILL-17](#SKILL-17)'s plain sentence instead:
+the count and the names are said once, not repeated on every turn they would cost the same room
+a full listing did.
+
+Names only, never a description: a description is what `search_skills` is for, and giving every
+one away up front would pay back the cost [SKILL-17](#SKILL-17) removed it to avoid. Nothing is
+said where there is nothing to report, so a curated catalogue ([DELEGATE-23](delegation.md#DELEGATE-23))
+and a session with no skill beyond a built-in are both silent on it, and a session that starts
+silent because of the second reason is not thereby told it already learned the count: a skill
+written into the project later in the session still gets its turn.
+
+**Why.** Holding most skills back by default, per [SKILL-17](#SKILL-17), means a planner that
+never thinks to call `search_skills` never learns one exists. A count says whether the call could
+find anything at all, and a name is the hint for when it might be worth making, which costs one
+sentence, once, against paying the room a full listing would have cost on every turn of the
+session.
+
+`verified-by: bravebot_agent::preamble::an_overview_gives_the_count_and_names_a_default_listing_otherwise_leaves_out`
+`verified-by: bravebot_agent::turn::the_skills_overview_is_said_once_per_session_not_once_per_turn`
 
 ## Known costs
 
@@ -416,10 +443,11 @@ worth a count rather than a guess at which half was safe to drop.
   Nothing downstream second-guesses it, because everything downstream is built to trust what the
   user vouched for. Read one before installing it.
 
-- **A skill of the user's own or the project's is seen only where the planner calls
+- **A skill of the user's own or the project's is loaded only where the planner calls
   `search_skills` for it, where a built-in is seen whether the planner looks for it or not.**
-  Past [SKILL-17](#SKILL-17), nothing names it up front, so a planner that never searches never
-  finds it.
+  [SKILL-18](#SKILL-18) names it once, on the first turn a session has one to name, but a skill
+  written into the project after that turn has no later one: the names said were the ones found
+  then, and nothing says the count changed.
 
 - **A subscription is looked for once per turn, from the model the turn starts on, so a skill that
   moves the rounds onto a model needing one finds none in hand.** Such a round is answered by a

@@ -344,6 +344,13 @@ pub struct Conversation {
     /// stub is made as a request is assembled, which is what leaves the record whole (COMPACT-6).
     /// Not part of a [`Snapshot`], for the reason `reads` is not.
     masked_before: usize,
+    /// Whether the planner has already been given the count and names of the skills the default
+    /// listing leaves out (SKILL-17).
+    ///
+    /// Not part of a [`Snapshot`], for the reason `reads` is not: a resumed session telling the
+    /// planner again costs one sentence, and never telling it because a stale record said it
+    /// already knew costs a skill nobody can find.
+    skills_overview_said: bool,
 }
 
 /// A window of a file as `read_file` showed it, for telling a repeat of the same read from a new one.
@@ -432,6 +439,7 @@ impl Conversation {
             carried_task_list: None,
             opening_end: None,
             masked_before: 0,
+            skills_overview_said: false,
         }
     }
 
@@ -732,6 +740,17 @@ impl Conversation {
     /// Whether a write has been asked for since a turn last ended with an answer.
     pub fn asked_to_write(&self) -> bool {
         self.asked_to_write
+    }
+
+    /// Whether the planner has already been given the count and names of the skills the
+    /// default listing leaves out (SKILL-17).
+    pub fn skills_overview_said(&self) -> bool {
+        self.skills_overview_said
+    }
+
+    /// Record that it has, so a later turn of the same session does not say it again.
+    pub fn skill_overview_was_said(&mut self) {
+        self.skills_overview_said = true;
     }
 
     /// Where compaction would cut, or `None` when there is nothing worth summarising.
@@ -1356,6 +1375,7 @@ impl Conversation {
             carried_task_list: None,
             opening_end: None,
             masked_before: 0,
+            skills_overview_said: false,
         }
     }
 

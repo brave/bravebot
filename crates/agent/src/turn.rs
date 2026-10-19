@@ -2872,6 +2872,18 @@ where
         ));
     }
 
+    // The count and names of what the default listing leaves out, said once per session rather
+    // than every turn (SKILL-17): the count tells the planner whether searching could find
+    // anything at all, and the names are a hint for when it might be worth the call. Marked
+    // only where something was actually said, so a session that started with nothing to report
+    // still gets told if a skill appears later in it.
+    let show_overview = !conversation.skills_overview_said();
+    let catalogue = if show_overview {
+        catalogue.with_overview()
+    } else {
+        catalogue
+    };
+
     // Nothing is started here: LSP-8 starts a server on the first question that needs one, and
     // LSP-5 asks the person before it does, so a session that never asks about a symbol never
     // prompts about a server.
@@ -2923,6 +2935,9 @@ where
         &preamble.added,
     ));
     note_rules_added(workspace, &preamble.added);
+    if show_overview && !catalogue.other_skill_names().is_empty() {
+        conversation.skill_overview_was_said();
+    }
 
     // Said here rather than only on the outcome. These describe what the turn is about to work
     // with, and an interface that waits for the turn to end draws them after every tool line, so

@@ -1995,6 +1995,9 @@ fn the_help_skill_is_offered_everywhere_for_a_question_about_bravebot_and_nothin
     assert!(
         !catalogue.describe_for_prompt().contains("using/watches"),
         "the pages are advertised with the skill instead of waiting for load_skill"
+    );
+}
+
 /// A skill of the user's own is never in the default listing, however many there are: only a
 /// built-in is (SKILL-17).
 ///

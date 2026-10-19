@@ -19637,11 +19637,13 @@ fn a_missing_agents_file_is_not_an_error() {
     );
 }
 
-/// A skill of the user's own, unlike a built-in, is not in the system prompt by default (SKILL-17).
-/// It is found with `search_skills`, which advertises its name and description and not its body
-/// (LOAD-3), and only then loaded by name like any other skill (LOAD-1): nothing a directory
-/// holds is unreachable just because the catalogue did not advertise it up front, and a query
-/// matches the skill wired into a real turn rather than only `Catalogue::search` called directly.
+/// A skill of the user's own, unlike a built-in, has only its name in the system prompt by
+/// default (SKILL-17), on the first turn of the session the overview of it is said on. Its
+/// description is not: it is found with `search_skills`, which advertises its name and
+/// description and not its body (LOAD-3), and only then loaded by name like any other skill
+/// (LOAD-1). Nothing a directory holds is unreachable just because the catalogue did not
+/// advertise its description up front, and a query matches the skill wired into a real turn
+/// rather than only `Catalogue::search` called directly.
 ///
 /// The skill's name avoids the words a tool's own description already uses as an example (such
 /// as "commit-style" in `load_skill`'s), so a match in the request body is the skill and not the
@@ -19679,8 +19681,12 @@ fn a_skill_body_stays_out_of_the_context_until_search_finds_it_and_load_skill_is
 
     let first = received.recv().expect("first request");
     assert!(
-        !first.contains("wombat-polish"),
-        "a project skill was advertised in the system prompt by default: {first}"
+        first.contains("wombat-polish"),
+        "the first turn's overview did not name the one project skill there is: {first}"
+    );
+    assert!(
+        !first.contains("when to use it"),
+        "the overview carried the skill's description, not only its name: {first}"
     );
 
     let second = received.recv().expect("second request");
@@ -19697,6 +19703,71 @@ fn a_skill_body_stays_out_of_the_context_until_search_finds_it_and_load_skill_is
     assert!(
         third.contains("THE-BODY-NOBODY-ASKED-FOR"),
         "load_skill did not return the body of a skill search_skills found: {third}"
+    );
+}
+
+/// SKILL-17: the count and names of what the default listing leaves out are said on the first
+/// turn of a session and not again: a second turn of the same conversation gets the plain
+/// pointer to search_skills, the names costing nothing more after the first one paid for them.
+#[test]
+fn the_skills_overview_is_said_once_per_session_not_once_per_turn() {
+    let scratch = Scratch::new("skills-overview-once-per-session");
+    write_project_skill(&scratch.path, "aardvark-polish", "aardvark-polish", "BODY");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("first answer"),
+        reply_with("second answer"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("first task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the first turn finishes");
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("second task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+
+    let first = received.recv().expect("first request");
+    assert!(
+        first.contains("aardvark-polish"),
+        "the first turn of the session did not name the one project skill there is: {first}"
+    );
+
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("aardvark-polish"),
+        "the second turn of the same session named the skill again: {second}"
     );
 }
 

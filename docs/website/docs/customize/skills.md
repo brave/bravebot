@@ -89,6 +89,11 @@ full, then loads it with `load_skill` the same way. The one exception is a defin
 `skills:` line: naming skills there already makes a short, deliberate list, so those are listed
 directly.
 
+The first turn of a session that has one to name also says how many such skills there are and
+what each is called, so the planner can tell whether searching could find anything before it
+tries. Just the names, never a description: a description is what `search_skills` is for. Said
+once, not on every turn, since repeating it would cost what listing them outright did.
+
 A description nobody wrote to be long is still returned in full, never cut, however it is found.
 Where one is long enough to be worth saying so, past 1,024 characters, the session tells you a
 count of how many are, never which ones.
