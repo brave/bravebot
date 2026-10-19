@@ -9730,6 +9730,20 @@ fn load_skill<S: Sink>(
         return Produced::problem("error: the skill name was not usable");
     };
 
+    // A page of the documentation compiled into this program (SKILL-17): selected from a fixed table
+    // by an exact match, and offered only while the built-in that lists the pages is the one in the
+    // catalogue, so a user's skill of that name takes the pages with it.
+    if skills
+        .get(crate::help::SKILL)
+        .is_some_and(|skill| skill.source == crate::skills::Source::BuiltIn)
+        && let Some(text) = crate::help::page(&name)
+    {
+        let note = tally(text.lines().count(), "line", "lines");
+        let mut produced = confirmed(text, note);
+        produced.origin = "built-in".to_string();
+        return produced;
+    }
+
     let Some(skill) = skills.get(&name) else {
         // The names are listed in the system prompt, so this is a mistake worth naming rather
         // than a refusal worth explaining.
@@ -19363,6 +19377,70 @@ mod tests {
         let produced = load_skill(policy, catalogue, &json!({ "name": name }));
         assert!(!produced.failed, "the skill did not load");
         told(policy, &produced.text)
+    }
+
+    /// The regression it rejects: the index naming pages that `load_skill` then refuses, or a page
+    /// loading as the index does, or any name but an exact one reaching a page.
+    #[cfg(unix)]
+    #[test]
+    fn a_documentation_page_loads_by_the_name_the_index_gives_it() {
+        let fixture = SkillFixture::new("help-page-loads");
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+
+        let index = load_named(&mut policy, &catalogue, "bravebot-help");
+        assert!(
+            index.contains("- bravebot-help/using/watches: Watching a file."),
+            "{index}"
+        );
+        let page = load_named(&mut policy, &catalogue, "bravebot-help/using/watches");
+        assert!(
+            page.starts_with("# Watching a file") && !page.contains("sidebar_position"),
+            "{page}"
+        );
+        assert_ne!(page, index);
+
+        let produced = load_skill(
+            &mut policy,
+            &catalogue,
+            &json!({ "name": "bravebot-help/using/watche" }),
+        );
+        assert!(produced.failed, "a name one character out loaded a page");
+    }
+
+    /// The regression it rejects: a page answering for a skill of the user's own that took the
+    /// place of the built-in index, which would hand the planner built-in text the user replaced.
+    #[cfg(unix)]
+    #[test]
+    fn a_users_skill_of_the_help_name_takes_the_pages_with_it() {
+        let fixture = SkillFixture::new("help-page-shadowed");
+        let own = fixture.home.join(".bravebot/skills/bravebot-help");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(
+            own.join("SKILL.md"),
+            "---\nname: bravebot-help\ndescription: mine\n---\nmy own help\n",
+        )
+        .unwrap();
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+
+        assert_eq!(
+            load_named(&mut policy, &catalogue, "bravebot-help").trim(),
+            "my own help"
+        );
+        let produced = load_skill(
+            &mut policy,
+            &catalogue,
+            &json!({ "name": "bravebot-help/using/watches" }),
+        );
+        assert!(
+            produced.failed,
+            "a built-in page answered for the user's skill"
+        );
     }
 
     /// The regression it rejects: a skill's sibling file being readable before the skill is

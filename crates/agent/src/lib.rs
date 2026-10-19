@@ -26,6 +26,7 @@ pub mod git;
 pub mod glob;
 pub mod goal;
 pub mod granted;
+pub mod help;
 pub mod home;
 pub mod hooks;
 pub mod host_proxy;
