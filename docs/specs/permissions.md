@@ -1018,6 +1018,36 @@ it. A rule matches routing only ([PERM-1](#PERM-1)), so the rule is kept as writ
 `verified-by: bravebot_config::settings::a_machine_with_only_pinned_rules_has_no_settings_of_its_own`
 `verified-by: bravebot_agent::permissions::a_managed_deny_holds_against_the_persons_allow_and_a_checkouts_layer`
 
+<a id="PERM-20"></a>
+### PERM-20: a deny or ask rule also covers the program under a wrapper
+
+A `deny` or `ask` rule is matched against a stage as it was written and against what is left of it
+after each leading wrapper, so `Bash(git push *)` in `deny` refuses `timeout 30 git push`, `nice -n 5
+git push` and `timeout 5 nice git push`. A wrapper is one of a fixed table of programs whose first
+word that is not an option is the program they run: `timeout`, `time`, `nice`, `nohup`, `stdbuf`,
+`command`, `builtin`, `noglob` and `env`. The table is not configurable, and each entry has the
+options it reads: `timeout` its signal and kill-after options and its duration, `nice` an adjustment,
+`stdbuf` its three buffer options, `command` `-p`, `time` `-p`, `-v`, `-a`, `-f` and `-o`, and `env`
+its `-i`, its `-u`, `NAME=value` words and `--`. A wrapper with an option the table does not list, a
+`command -v`, a wrapper with nothing after it to run, a wrapper named by a path, and a program that
+only runs another one by another way (`xargs`, `npx`, `devbox run`, `docker exec`) are left whole,
+so a rule is matched against the words that were written and never against a reading of them.
+
+An `allow` rule is matched as written. `Bash(git push *)` in `allow` does not grant
+`timeout 30 git push`, which is a program the rule never named, and a deny rule written for the
+wrapper itself, `Bash(timeout *)`, still matches the whole stage.
+
+**Why.** A deny rule is a statement about what will not happen, and a rule that a prefix defeats is
+a statement that is not true. Looking through the wrapper costs a person a second rule for each one
+otherwise. It is [PERM-4](#PERM-4)'s asymmetry: a rule that restricts covers more and a rule that
+grants covers what it names, and [RUN-20](tools/run.md#RUN-20) declines the same widening for a
+vouch for the same reason. The decision reads the argv and nothing else.
+
+`verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_under_a_wrapper`
+`verified-by: bravebot_core::permissions::an_allow_rule_does_not_look_through_a_wrapper`
+`verified-by: bravebot_core::permissions::a_wrapper_the_table_cannot_read_is_left_whole`
+`verified-by: bravebot_core::permissions::a_rule_naming_the_wrapper_still_matches_the_whole_stage`
+
 ## Known costs
 
 - **How many questions a session opens with is the file's to choose.** Every name in
@@ -1070,7 +1100,9 @@ it. A rule matches routing only ([PERM-1](#PERM-1)), so the rule is kept as writ
   they did not write this code has said something about whoever wrote the rules too.
 - **A rule is matched against argv, not against what a program does.** `Bash(git *)` covers
   `git -c core.fsmonitor=<script> diff`, which runs a program the rule never named, and
-  `Bash(devbox run *)` covers whatever follows `run`. A pattern constraining arguments is weaker
+  `Bash(devbox run *)` covers whatever follows `run`. A deny or ask rule looks through the wrappers
+  of [PERM-20](#PERM-20) and no further, so `devbox run git push` and `npx git push` are not
+  covered by `Bash(git push *)`. A pattern constraining arguments is weaker
   than it looks, and a `deny` list is not a sandbox: [sandboxing.md](sandboxing.md) is what
   confines a process, and the label on a program's output is what holds regardless.
 - **A path rule does not reach a program's own file access.** `Read` and `Edit` rules govern the
