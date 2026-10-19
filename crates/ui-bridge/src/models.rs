@@ -446,6 +446,24 @@ mod tests {
         assert_eq!(unnamed.context_budget, 102_400);
     }
 
+    /// IMPORT-5 in the window: a block that states a window for the provider and none for its model
+    /// gives that model the provider's window. Read through the model alone, the default would stand.
+    #[test]
+    fn a_turn_in_the_window_takes_the_window_a_provider_block_states() {
+        let mut config = a_config_with_a_gateway_stating_a_window(8_192);
+        config.providers = bravebot_config::Settings::parse(
+            r#"{"provider": {"ollama": {
+                "options": {"baseURL": "http://localhost:11434/v1", "contextWindow": 65536},
+                "models": {"tiny": {}}}}}"#,
+        )
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 1, "the block configured no service");
+        adopt_window(&mut config, Some("ollama/tiny"));
+        assert_eq!(config.context_budget, 65_536);
+        assert!(!config.budget_is_guessed());
+    }
+
     /// A model no roster describes states no window, so the default stands rather than the window
     /// of the configured default or of the first row.
     #[test]
