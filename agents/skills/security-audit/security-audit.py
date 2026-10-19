@@ -25,8 +25,9 @@ names a commit rather than a tag its owner can move, that every container image 
 digest rather than a tag its publisher can move, that no job holding a credential installs or runs a
 dependency beside it, that a checkout of this tree names a kind of ref rather than a bare name a
 branch and a tag can share, that the contexts a merge is held to are written down, name jobs
-that exist, and cover every job that runs a check, and that every question and remembered answer has
-a row in the register of kept answers. A rule that can be written as one of these belongs here
+that exist, and cover every job that runs a check, that clippy still refuses a program start by any
+name and every allow of that refusal says who chose the program, and that every question and
+remembered answer has a row in the register of kept answers. A rule that can be written as one of these belongs here
 rather than in a reviewer's head.
 """
 
@@ -39,6 +40,7 @@ import shlex
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
+import tomllib
 from itertools import zip_longest
 from pathlib import Path
 
@@ -789,58 +791,189 @@ def check_network_clients_are_recorded(sources):
                 )
 
 
-BARE_PROGRAM = re.compile(r"""\bCommand::new\(\s*(?:&\s*)?"([^"]*)"\s*[,)]""")
+# The calls `clippy.toml` refuses, which are the ones this tree starts a program with. A path that
+# does not resolve in a crate that has the dependency is itself a warning, so a call is listed once
+# the tree uses it. `windows_sys` is silent in a crate that does not depend on it.
+START_CALLS = (
+    "std::process::Command::new",
+    "windows_sys::Win32::System::Threading::CreateProcessW",
+)
+START_LINT = "clippy::disallowed_methods"
+# Allowing a group that holds the lint, or every warning, refuses nothing either.
+WIDE_ALLOW = re.compile(r"\b(?:allow|expect)\s*\([^()]*\b(?:clippy::style|clippy::all|warnings)\b")
+REASON = re.compile(r'\breason\s*=\s*"((?:[^"\\]|\\.)*)"', re.DOTALL)
+TEST_ONLY = re.compile(r"#!\[\s*cfg_attr\(\s*test\s*,")
+HOLDS_ITEMS = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?(?:mod|impl|trait|extern)\b")
+LINT_ALLOWED_BY_CONFIG = re.compile(r'disallowed_methods\s*=\s*(?:"allow"|\{[^}]*level\s*=\s*"allow")')
 
-# Production files where a program may be started by a bare name, with who chose the name. A name
-# is looked up through `PATH`, so this list is the whole of the places bravebot trusts that lookup.
-BARE_PROGRAM_ALLOWED = {}
+
+def attribute_around(text, offset):
+    """The attribute holding `offset`, as `(start, end)`, or `None` where none does.
+
+    Brackets are matched with strings skipped, since a reason may hold a `]`.
+    """
+    start = max(text.rfind("#[", 0, offset), text.rfind("#![", 0, offset))
+    if start < 0:
+        return None
+    depth, index, in_string = 0, text.index("[", start), False
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if char == "\\":
+                index += 1
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return (start, index + 1) if index >= offset else None
+        index += 1
+    return None
 
 
-def check_programs_are_resolved(sources):
-    """A program bravebot starts itself is named by an absolute path, never by a bare name.
+def refused_calls():
+    """The calls `clippy.toml` lists under `disallowed-methods`, none where it cannot be read."""
+    try:
+        config = tomllib.loads(Path("clippy.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return set()
+    listed = config.get("disallowed-methods", [])
+    return {one if isinstance(one, str) else one.get("path") for one in listed}
+
+
+def hiding_the_refusal():
+    """What makes clippy read something other than `clippy.toml`, or turns the lint off beside it.
+
+    Clippy reads the nearest configuration file at or above a crate's manifest and does not merge a
+    second one into it. A file deeper than a manifest's directory is read for nothing.
+    """
+    manifests = sorted(Path("crates").rglob("Cargo.toml"))
+    for directory in [Path("crates"), *(one.parent for one in manifests)]:
+        for name in ("clippy.toml", ".clippy.toml"):
+            if (directory / name).is_file():
+                yield (
+                    directory / name,
+                    "is read by clippy for the crates beneath it, and the root `clippy.toml` is not",
+                )
+    if Path(".clippy.toml").is_file():
+        yield Path(".clippy.toml"), "is read by clippy before the root `clippy.toml`"
+    for one in [Path("Cargo.toml"), *manifests, Path(".cargo/config.toml"), Path(".cargo/config")]:
+        if not one.is_file():
+            continue
+        text = one.read_text(encoding="utf-8", errors="replace")
+        if "CLIPPY_CONF_DIR" in text or LINT_ALLOWED_BY_CONFIG.search(text):
+            yield one, "moves the configuration clippy reads or allows the lint"
+
+
+def check_process_starts_are_marked(sources):
+    """A program bravebot starts itself is refused by clippy, whatever names it, unless marked.
 
     SANDBOX-30 keeps the programs bravebot starts unconfined from being a file a confined stage
     wrote into a `PATH` directory. It was applied one report at a time (`aws`, the clipboard tools,
-    hooks, language servers, the editor, the inhibitor's `cat`, `doctor --push-identity`), because
-    nothing asked of a new spawn whether it was resolved first. `Command::new("name")` in
-    production code is that lookup left to the operating system, so every one is an error unless
-    `BARE_PROGRAM_ALLOWED` records it.
+    hooks, language servers, the editor, the inhibitor's `cat`, `doctor --push-identity`, the
+    workflow stages), because nothing asked of a new spawn whether it was resolved first. A check
+    that read `Command::new("name")` saw a string literal and nothing else, so a name held in a
+    variable and a start through a helper shipped. `clippy.toml` refuses the call itself, and
+    `make check` runs clippy over every target, so a start names who chose its program in a mark
+    beside it and a reviewer reads each one in the diff.
 
-    A name held in a variable, a program that looks up a second one through the `PATH` it inherited,
-    and one started through a helper this pattern does not match are not seen here, and
-    `docs/best_practices/security.md` asks for them in review.
+    What this decides is what clippy cannot: that the ban is still configured, that nothing makes
+    a crate read another configuration, that a mark carries a reason, and that a mark covers a
+    start and not a crate or a module.
     """
+    missing = [call for call in START_CALLS if call not in refused_calls()]
+    if missing:
+        yield finding(
+            ERROR,
+            "process-start-not-refused",
+            "nothing refuses a program started by a variable or through a helper, so the next "
+            "spawn is found by a report",
+            "`clippy.toml` does not list "
+            + ", ".join(f"`{call}`" for call in missing)
+            + " under `disallowed-methods`",
+            "sandbox",
+            "high",
+            evidence=["clippy.toml"],
+            fix="list each in `disallowed-methods` in `clippy.toml` "
+            "([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+            gain="a stage-written program run with the person's access to `~/.ssh` and `~/.aws`",
+        )
+    for one, what in hiding_the_refusal():
+        yield finding(
+            ERROR,
+            "process-start-refusal-hidden",
+            "clippy is made to read a configuration other than the one refusing program starts",
+            f"`{one}` {what}",
+            "sandbox",
+            "high",
+            evidence=[str(one)],
+            fix="move its settings into the `clippy.toml` at the root and remove it",
+            gain="a crate whose spawns no lint reads",
+        )
     for path in sorted(sources):
-        text = str(path)
-        if (
-            "/tests/" in text
-            or "/test-support/" in text
-            or text.endswith(("_tests.rs", "build.rs"))
-        ):
+        raw = "\n".join(sources[path])
+        if START_LINT not in raw and not WIDE_ALLOW.search(raw):
             continue
-        spans = test_regions(sources[path])
-        for number, raw in enumerate(mechanics.strip_comments(sources[path]), start=1):
-            match = BARE_PROGRAM.search(raw)
-            if not match or match.group(1).startswith("/"):
+        text = "\n".join(mechanics.strip_comments(sources[path]))
+        seen = set()
+        for found in [*re.finditer(re.escape(START_LINT), text), *WIDE_ALLOW.finditer(text)]:
+            around = attribute_around(text, found.start())
+            if around is None or around in seen:
                 continue
-            if any(low <= number <= high for low, high in spans):
+            seen.add(around)
+            attribute = text[around[0] : around[1]]
+            if not re.search(r"\b(?:allow|expect)\s*\(", attribute):
                 continue
-            if text in BARE_PROGRAM_ALLOWED:
+            number = text.count("\n", 0, around[0]) + 1
+            shown = [f"{path}:{number} {' '.join(attribute.split())[:160]}"]
+            inner = attribute.startswith("#![")
+            test_only = (
+                bool(TEST_ONLY.match(attribute))
+                or "tests" in path.parts
+                or "test-support" in path.parts
+            )
+            rest = text[around[1] :]
+            while following := re.match(r"\s*#\[[^\]]*\]", rest):
+                rest = rest[following.end() :]
+            if not test_only and (
+                inner or WIDE_ALLOW.search(attribute) or HOLDS_ITEMS.match(rest.lstrip())
+            ):
+                yield finding(
+                    ERROR,
+                    "process-start-mark-too-wide",
+                    "an allow covering a crate, a module, an impl or a whole lint group lifts the "
+                    "refusal from every start inside it, so none of them is read in a diff",
+                    f"`{path}:{number}` allows the refusal for more than one start",
+                    "sandbox",
+                    "high",
+                    evidence=shown,
+                    fix="put `allow(clippy::disallowed_methods, reason = \"...\")` on the statement or "
+                    "function that starts the program; only `#![cfg_attr(test, allow(...))]` and a "
+                    "file under `tests` may allow more ([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+                    gain="a crate whose spawns are all unreviewed",
+                )
+            if START_LINT not in attribute:
+                continue
+            reason = REASON.search(attribute)
+            if reason and re.sub(r"\\\n\s*", "", reason.group(1)).strip():
                 continue
             yield finding(
                 ERROR,
-                "program-started-by-bare-name",
-                "production code starts a program by a bare name, so `PATH` decides what runs "
-                "unconfined and a file a stage wrote can be the one",
-                f"`{path}:{number}` starts `{match.group(1)}` with `Command::new` and no "
-                "absolute path",
+                "process-start-mark-without-reason",
+                "a start allowed without saying who chose the program leaves a reviewer nothing "
+                "to read",
+                f"`{path}:{number}` allows `{START_LINT}` with no reason",
                 "sandbox",
                 "high",
-                evidence=[f"{path}:{number} {raw.strip()[:160]}"],
-                fix="resolve it first with `bravebot_sandbox::programs` and start the absolute "
-                "path ([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30)), or record the file in "
-                "`BARE_PROGRAM_ALLOWED` with who chose the name",
-                gain="a stage-written program run with the person's access to `~/.ssh` and `~/.aws`",
+                evidence=shown,
+                fix="add `reason = \"...\"` saying who chose the program: a path from "
+                "`bravebot_sandbox::programs`, `current_exe()`, the person's own line, or a "
+                "program a person's setting names ([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+                gain="a mark nobody has to justify, which is how a spawn goes unreviewed",
             )
 
 
@@ -3162,7 +3295,7 @@ def mechanical_findings(specs, sources):
     findings = list(check_exception_counts())
     findings += list(check_network_clients_are_recorded(sources))
     findings += list(check_prompt_split())
-    findings += list(check_programs_are_resolved(sources))
+    findings += list(check_process_starts_are_marked(sources))
     findings += list(check_labelled_impls(sources))
     findings += list(check_exhaustive_reader_docs(sources))
     findings += list(check_construction_pinned(specs, sources))

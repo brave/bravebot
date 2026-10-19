@@ -4,6 +4,8 @@
 //! a shell would chain them, whether an argument survives intact, and whether a run that goes
 //! wrong comes back with what it produced instead of nothing.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use bravebot_agent::exec::{self, ExecError};
 use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::{Pipeline, Stage};

@@ -4,6 +4,8 @@
 //! addressing changes is the request a turn makes: the definition's body goes in, and the tools
 //! its kind does not hold come out. A turn that was not addressed is identical until the request.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;

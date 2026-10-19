@@ -12,6 +12,8 @@
 //! [INCOG-7]: ../../../docs/specs/incognito.md
 //! [PERM-11]: ../../../docs/specs/permissions.md
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};

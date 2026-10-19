@@ -1,0 +1,14 @@
+# SANDBOX-30 (docs/specs/sandboxing.md): a program bravebot starts itself is never one a confined
+# stage could have written. These are the calls this tree starts a program with, so each is refused
+# whatever its argument is: a string literal, a variable, a name an alias or a helper passes on. A
+# start that stays is marked at the call with `#[allow(clippy::disallowed_methods, reason = "...")]`
+# and the reason says who chose the program. `make check-security` fails a mark with no reason or one
+# that covers more than a start.
+#
+# A path that does not resolve in a crate that has the dependency is a warning, and clippy runs with
+# `-D warnings`, so a call is listed once the tree uses it. `windows_sys` is not looked up in a crate
+# that does not depend on it.
+disallowed-methods = [
+    { path = "std::process::Command::new", reason = "SANDBOX-30: resolve the program with `bravebot_sandbox::programs` first, or mark the start with `#[allow(clippy::disallowed_methods, reason = \"...\")]` saying who chose the program" },
+    { path = "windows_sys::Win32::System::Threading::CreateProcessW", reason = "SANDBOX-30: mark the start with `#[allow(clippy::disallowed_methods, reason = \"...\")]` saying who chose the program" },
+]

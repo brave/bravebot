@@ -2939,59 +2939,258 @@ def test_the_manifest_is_read_from_the_work_directory():
         )
 
 
-def audit_programs(files):
+LISTED = (
+    "disallowed-methods = [\n"
+    '    { path = "std::process::Command::new", reason = "r" },\n'
+    '    { path = "windows_sys::Win32::System::Threading::CreateProcessW", reason = "r" },\n'
+    "]\n"
+)
+MARKED = (
+    "fn go(program: &Path) {\n"
+    '    #[allow(clippy::disallowed_methods, reason = "the person named it")]\n'
+    "    let _ = std::process::Command::new(program);\n"
+    "}\n"
+)
+
+
+def audit_starts(files):
     where = in_tree(files)
     return with_cwd(
         where,
-        lambda: list(audit.check_programs_are_resolved(audit.mechanics.load_sources())),
+        lambda: list(audit.check_process_starts_are_marked(audit.mechanics.load_sources())),
     )
 
 
-def test_programs_are_resolved():
-    spawn = 'fn go() {\n    let _ = std::process::Command::new("ssh-keygen").status();\n}\n'
-    found = audit_programs({"crates/cli/src/identity.rs": spawn})
+def test_process_starts_are_refused_by_the_configuration():
+    found = audit_starts({"clippy.toml": LISTED, "crates/cli/src/identity.rs": MARKED})
+    check("a start marked with a reason is not a finding", found == [], str(found))
+
+    found = audit_starts(
+        {
+            "clippy.toml": 'disallowed-methods = ["std::process::Command::new", '
+            '"windows_sys::Win32::System::Threading::CreateProcessW"]\n',
+        }
+    )
+    check("the calls listed as bare strings are read as listed", found == [], str(found))
+
+    for name, files in {
+        "no clippy.toml": {},
+        "a clippy.toml listing another call": {
+            "clippy.toml": 'disallowed-methods = [{ path = "std::env::var" }]\n'
+        },
+        "a clippy.toml naming both calls only in comments": {
+            "clippy.toml": "# std::process::Command::new\n"
+            "# windows_sys::Win32::System::Threading::CreateProcessW\n"
+            "disallowed-methods = []\n"
+        },
+        "a clippy.toml naming both calls only after a list that is empty": {
+            "clippy.toml": "disallowed-methods = [] # std::process::Command::new, "
+            "windows_sys::Win32::System::Threading::CreateProcessW\n"
+        },
+        "a clippy.toml banning both under another key": {
+            "clippy.toml": 'disallowed-types = [{ path = "std::process::Command::new" }, '
+            '{ path = "windows_sys::Win32::System::Threading::CreateProcessW" }]\n'
+        },
+        "a clippy.toml that cannot be read": {"clippy.toml": "disallowed-methods = [\n"},
+        "a clippy.toml without the Windows call": {
+            "clippy.toml": 'disallowed-methods = [{ path = "std::process::Command::new" }]\n'
+        },
+        "a clippy.toml without the Unix call": {
+            "clippy.toml": "disallowed-methods = "
+            '[{ path = "windows_sys::Win32::System::Threading::CreateProcessW" }]\n'
+        },
+    }.items():
+        found = audit_starts({**files, "crates/cli/src/identity.rs": MARKED})
+        check(
+            f"{name} is an error, since nothing refuses a start",
+            kinds(found) == ["process-start-not-refused"] and found[0]["severity"] == audit.ERROR,
+            str(kinds(found)),
+        )
+    found = audit_starts(
+        {
+            "clippy.toml": 'disallowed-methods = [{ path = "std::process::Command::new" }]\n',
+            "crates/cli/src/identity.rs": MARKED,
+        }
+    )
     check(
-        "a bare name in production code is an error naming the file, line and program",
-        kinds(found) == ["program-started-by-bare-name"]
-        and found[0]["severity"] == audit.ERROR
-        and "crates/cli/src/identity.rs:2" in found[0]["summary"]
-        and "ssh-keygen" in found[0]["summary"],
+        "the call missing from clippy.toml is the one the error names",
+        bool(found)
+        and "CreateProcessW" in found[0]["summary"]
+        and "Command::new" not in found[0]["summary"],
         str([one["summary"] for one in found]),
     )
 
-    found = audit_programs(
-        {"crates/cli/src/identity.rs": 'fn go() { Command::new("/usr/bin/ssh-keygen"); }\n'}
-    )
-    check("an absolute path is not a finding", found == [], str(found))
 
-    found = audit_programs(
-        {"crates/cli/src/identity.rs": 'fn go() { Command::new(resolved); }\n'}
+def test_nothing_makes_clippy_read_another_configuration():
+    crate = {"clippy.toml": LISTED, "crates/agent/Cargo.toml": "[package]\n"}
+    for name, (files, hidden) in {
+        "a clippy.toml in a crate": ({"crates/agent/clippy.toml": 'msrv = "1.90"\n'}, "crates/agent/clippy.toml"),
+        "a .clippy.toml in a crate": ({"crates/agent/.clippy.toml": 'msrv = "1.90"\n'}, "crates/agent/.clippy.toml"),
+        "a clippy.toml above the crates": ({"crates/clippy.toml": 'msrv = "1.90"\n'}, "crates/clippy.toml"),
+        "a .clippy.toml beside the root one": ({".clippy.toml": 'msrv = "1.90"\n'}, ".clippy.toml"),
+        "a manifest that allows the lint": (
+            {"crates/agent/Cargo.toml": '[lints.clippy]\ndisallowed_methods = "allow"\n'},
+            "crates/agent/Cargo.toml",
+        ),
+        "a manifest that allows the lint with a level": (
+            {"Cargo.toml": '[workspace.lints.clippy]\ndisallowed_methods = { level = "allow", priority = 1 }\n'},
+            "Cargo.toml",
+        ),
+        "a cargo configuration that moves clippy's directory": (
+            {".cargo/config.toml": '[env]\nCLIPPY_CONF_DIR = "elsewhere"\n'},
+            ".cargo/config.toml",
+        ),
+    }.items():
+        found = audit_starts({**crate, **files})
+        check(
+            f"{name} is an error naming the file",
+            kinds(found) == ["process-start-refusal-hidden"] and hidden in found[0]["summary"],
+            str([one["summary"] for one in found]),
+        )
+
+    for name, files in {
+        "a clippy.toml deeper than any crate's manifest": {
+            "crates/agent/tests/fixtures/one/clippy.toml": 'msrv = "1.90"\n'
+        },
+        "a manifest that denies the lint": {
+            "crates/agent/Cargo.toml": '[lints.clippy]\ndisallowed_methods = "deny"\n'
+        },
+    }.items():
+        found = audit_starts({**crate, **files})
+        check(f"{name} is not a finding", found == [], str(found))
+
+
+def test_a_mark_is_one_start_with_a_reason():
+    def marks(attribute, path="crates/cli/src/identity.rs", after="fn start() {}\n"):
+        return audit_starts(
+            {"clippy.toml": LISTED, path: f"fn go() {{}}\n{attribute}\n{after}"}
+        )
+
+    def at_line_two(found):
+        return all("crates/cli/src/identity.rs:2" in one["summary"] for one in found)
+
+    for name, attribute in {
+        "no reason": "#[allow(clippy::disallowed_methods)]",
+        "an empty reason": '#[allow(clippy::disallowed_methods, reason = "")]',
+        "a blank reason": '#[allow(clippy::disallowed_methods, reason = "   ")]',
+        "a reason of only a line continuation": '#[allow(clippy::disallowed_methods, reason = "\\\n   ")]',
+        "an expect with no reason": "#[expect(clippy::disallowed_methods)]",
+        "another lint beside it": "#[allow(unused, clippy::disallowed_methods)]",
+        "a crate-wide test allow and no reason": "#![cfg_attr(test, allow(clippy::disallowed_methods))]",
+    }.items():
+        found = marks(attribute)
+        check(
+            f"an allow with {name} is an error naming the file and line",
+            kinds(found) == ["process-start-mark-without-reason"]
+            and found[0]["severity"] == audit.ERROR
+            and at_line_two(found),
+            str([one["summary"] for one in found]),
+        )
+
+    for name, attribute in {
+        "a reason": '#[allow(clippy::disallowed_methods, reason = "the person named it")]',
+        "a reason on its own lines": "#[allow(\n    clippy::disallowed_methods,\n"
+        '    reason = "a path written here, \\\n              and nothing a stage wrote"\n)]',
+        "a reason holding brackets": '#[allow(clippy::disallowed_methods, reason = "see [a] ] and )")]',
+        "an expect with a reason": '#[expect(clippy::disallowed_methods, reason = "the person named it")]',
+        "a deny, which loosens nothing": "#![deny(clippy::disallowed_methods)]",
+        "a warn, which loosens nothing": "#[warn(clippy::disallowed_methods)]",
+    }.items():
+        check(f"an attribute with {name} is not a finding", marks(attribute) == [], str(marks(attribute)))
+
+    for name, (attribute, after) in {
+        "a crate-wide allow": ('#![allow(clippy::disallowed_methods, reason = "needed")]', "fn start() {}\n"),
+        "an allow on a module": (
+            '#[allow(clippy::disallowed_methods, reason = "needed")]',
+            "mod inner {\n    fn start() {}\n}\n",
+        ),
+        "an allow on a public module behind another attribute": (
+            '#[allow(clippy::disallowed_methods, reason = "needed")]\n#[cfg(unix)]',
+            "pub(crate) mod inner {}\n",
+        ),
+        "an allow on an impl": (
+            '#[allow(clippy::disallowed_methods, reason = "needed")]',
+            "impl Thing {\n    fn start() {}\n}\n",
+        ),
+        "an allow of the style group": ('#[allow(clippy::style)]', "fn start() {}\n"),
+        "an allow of the all group": ('#![allow(clippy::all)]', "fn start() {}\n"),
+        "an allow of warnings": ('#[allow(warnings)]', "fn start() {}\n"),
+    }.items():
+        found = audit_starts(
+            {"clippy.toml": LISTED, "crates/cli/src/identity.rs": f"fn go() {{}}\n{attribute}\n{after}"}
+        )
+        check(
+            f"{name} is an error, since it lifts the refusal from more than one start",
+            kinds(found) == ["process-start-mark-too-wide"] and found[0]["severity"] == audit.ERROR,
+            str([one["summary"] for one in found]),
+        )
+
+    found = marks("#![allow(clippy::disallowed_methods)]")
+    check(
+        "a crate-wide allow with no reason is both too wide and unexplained",
+        kinds(found) == ["process-start-mark-too-wide", "process-start-mark-without-reason"],
+        str(kinds(found)),
     )
-    check("a name held in a variable is left to review", found == [], str(found))
+
+    for name, (attribute, path) in {
+        "a crate-wide test allow": (
+            '#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "a test"))]',
+            "crates/cli/src/identity.rs",
+        ),
+        "a crate-wide test allow of every lint": (
+            "#![cfg_attr(test, allow(clippy::all))]",
+            "crates/cli/src/identity.rs",
+        ),
+        "an integration test file's allow": (
+            '#![allow(clippy::disallowed_methods, reason = "a test")]',
+            "crates/cli/tests/running.rs",
+        ),
+        "a test support file's allow": (
+            '#![allow(clippy::disallowed_methods, reason = "a test")]',
+            "crates/session/test-support/profile.rs",
+        ),
+    }.items():
+        found = marks(attribute, path=path)
+        check(f"{name} is not a finding", found == [], str(found))
+
+    found = marks("#![allow(clippy::disallowed_methods)]", path="crates/cli/tests/running.rs")
+    check(
+        "an integration test file's allow still needs a reason",
+        kinds(found) == ["process-start-mark-without-reason"],
+        str(kinds(found)),
+    )
 
     for name, body in {
-        "a test module": 'fn go() {}\n#[cfg(test)]\nmod t {\n    fn x() { Command::new("sh"); }\n}\n',
-        "a platform test module": 'fn go() {}\n#[cfg(all(test, target_os = "macos"))]\nmod t {\n'
-        '    fn x() { Command::new("cc"); }\n}\n',
+        "a comment": "// #[allow(clippy::disallowed_methods)]\nfn go() {}\n",
+        "a string": "fn go() -> &'static str { \"clippy::disallowed_methods\" }\n",
+        "a comment about warnings": "// #[allow(warnings)] is not used\nfn go() {}\n",
     }.items():
-        found = audit_programs({"crates/cli/src/identity.rs": body})
-        check(f"a bare name inside {name} is not a finding", found == [], str(found))
+        found = audit_starts({"clippy.toml": LISTED, "crates/cli/src/identity.rs": body})
+        check(f"the lint named in {name} is not a finding", found == [], str(found))
 
-    for path in ("crates/cli/tests/run.rs", "crates/cli/src/identity_tests.rs"):
-        found = audit_programs({path: 'fn x() { Command::new("sh"); }\n'})
-        check(f"a bare name in {path} is not a finding", found == [], str(found))
-
-    found = audit_programs(
-        {"crates/cli/src/identity.rs": '// Command::new("sh") was the old way\nfn go() {}\n'}
+    found = audit_starts(
+        {
+            "clippy.toml": LISTED,
+            "crates/cli/src/a.rs": '#[allow(clippy::disallowed_methods, reason = "named")]\nfn a() {}\n',
+            "crates/cli/src/b.rs": "fn b() {}\n\n#[allow(clippy::disallowed_methods)]\nfn b2() {}\n"
+            '#[allow(clippy::disallowed_methods, reason = "named")]\nfn b3() {}\n',
+        }
     )
-    check("a bare name in a comment is not a finding", found == [], str(found))
+    check(
+        "only the mark without a reason is reported, at its own line",
+        kinds(found) == ["process-start-mark-without-reason"]
+        and "crates/cli/src/b.rs:3" in found[0]["summary"],
+        str([one["summary"] for one in found]),
+    )
 
 
 def main():
     for test in (
         test_exception_counts,
         test_network_clients_are_recorded,
-        test_programs_are_resolved,
+        test_process_starts_are_refused_by_the_configuration,
+        test_nothing_makes_clippy_read_another_configuration,
+        test_a_mark_is_one_start_with_a_reason,
         test_prompt_split,
         test_exhaustive_reader_docs,
         test_labelled_impls,

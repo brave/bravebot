@@ -119,10 +119,11 @@ the rest.
 shows a file in a directory [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30) leaves out is not found
 as the program, the test that shows the same for a name the program itself starts, the `PATH` the
 program is given, and whether `own_credentials()` is removed from its environment
-([CRED-14](../specs/credential-protection.md#CRED-14)).** `make check-security` fails on
-`Command::new("name")` in production code, so what a reviewer reads for is what it cannot see: a
-program named by a variable, and a started program that looks up a second one through the `PATH` it
-inherited (SANDBOX-30).
+([CRED-14](../specs/credential-protection.md#CRED-14)).** `clippy.toml` refuses every call the
+tree starts a program with, so each start has a mark beside it in the diff,
+`#[allow(clippy::disallowed_methods, reason = "...")]`. A reviewer reads what the lint cannot
+decide: that the reason names who chose the program and is true, and what the program itself starts
+by name (SANDBOX-30).
 
 The second test puts a directory SANDBOX-30 leaves out first on the `PATH` bravebot inherits and
 plants an executable file in it under a name the program itself starts, such as the interpreter an
@@ -136,10 +137,11 @@ as the `/caffeinate` inhibitor's `cat` is. Where it is given neither, such as a 
 runs the project's own interpreter on purpose, the description cites the issue or Known costs entry
 that records it, as [GAP-001](gaps.md#GAP-001) says.
 
-**Why:** the check reads literals. A name held in a variable and a program started by another
-program each reach the same unconfined lookup, and each shipped before being asked about. A program
-whose own file is found safely still runs a file a stage wrote when a name it looks up resolves in
-a directory SANDBOX-30 leaves out.
+**Why:** the lint sees every start and no reason for it. A reason that says a program was resolved
+when it was found by a walk of the caller's own, and a program started by another program, each
+reach the same unconfined lookup, and each shipped before being asked about. A program whose own
+file is found safely still runs a file a stage wrote when a name it looks up resolves in a
+directory SANDBOX-30 leaves out.
 
 ---
 

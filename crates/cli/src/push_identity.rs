@@ -228,6 +228,11 @@ pub(crate) fn keep_out_where_this_ran() {
 /// `~/.ssh`, and [CRED-14](../../../docs/specs/credential-protection.md#CRED-14) keeps what this
 /// agent authenticates with out of reach of such a program.
 fn started(program: &Path) -> std::process::Command {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the program `run` found with `bravebot_sandbox::programs::find`, which \
+                      leaves out every directory a stage may write (SANDBOX-30)"
+    )]
     let mut command = std::process::Command::new(program);
     for name in bravebot_config::scrub::own_credentials() {
         command.env_remove(name);

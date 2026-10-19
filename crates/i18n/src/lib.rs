@@ -72,6 +72,10 @@
 //! ```
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::disallowed_methods, reason = "the test names its program")
+)]
 
 /// The catalog format and its parser, compiled only for tests.
 ///

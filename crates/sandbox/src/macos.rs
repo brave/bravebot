@@ -327,6 +327,10 @@ pub fn developer_directory() -> Option<std::path::PathBuf> {
     static DIRECTORY: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     DIRECTORY
         .get_or_init(|| {
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "the program is `/usr/bin/xcode-select`, an absolute path written here"
+            )]
             let mut command = std::process::Command::new("/usr/bin/xcode-select");
             command
                 .arg("-p")
@@ -496,6 +500,11 @@ impl SeatbeltSandbox {
             });
         }
 
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the program is `SANDBOX_EXEC`, an absolute path written here; the program \
+                      it confines is an argument the caller chose"
+        )]
         let mut wrapped = Command::new(SANDBOX_EXEC);
         wrapped.arg("-p").arg(Self::profile(policy));
         wrapped.args(confined_argv(

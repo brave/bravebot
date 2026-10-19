@@ -202,6 +202,11 @@ fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<T
             std::io::Error::from(std::io::ErrorKind::NotFound).to_string(),
         ));
     };
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "a hook's own program: a path the person wrote, or a bare name found by \
+                      `bravebot_sandbox::programs::find` (SANDBOX-30)"
+    )]
     let mut command = Command::new(program);
     // The vector, never a string. There is no shell between the file and the process, so an
     // argument holding a space or a semicolon is one argument and arrives as one.

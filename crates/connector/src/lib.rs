@@ -400,6 +400,11 @@ impl Authority {
     /// Start the authority, write `line` to it, and read its whole reply, stopping it if the run
     /// is cancelled or it outlasts the bound. The child is killed and reaped on either.
     fn exchange(&self, line: Vec<u8>) -> Result<Vec<u8>, ConnectorError> {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the credential authority, an absolute path the person configured \
+                          (`Authority::new` refuses a name)"
+        )]
         let mut command = Command::new(&self.program);
         command
             .arg("connector")

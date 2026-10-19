@@ -13,6 +13,10 @@
 //! sandbox that was never applied.
 
 #![deny(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::disallowed_methods, reason = "the test names its program")
+)]
 
 pub mod address;
 pub mod agent;

@@ -6,6 +6,8 @@
 //! Driven through the binary against a model service of the test's own. The plan writes one file
 //! with a body the plan fixed, so whether the plan ran is read off the disk.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;

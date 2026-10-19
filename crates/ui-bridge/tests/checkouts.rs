@@ -1,6 +1,8 @@
 //! A checkout a desktop turn's delegate was given outlives the turn that made it, is written into
 //! the session's record, and is taken back when the session is opened again (CHECKOUT-16).
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 #[allow(dead_code)]
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;

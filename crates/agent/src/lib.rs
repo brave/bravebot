@@ -5,6 +5,10 @@
 //! by the content it processes.
 
 #![deny(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::disallowed_methods, reason = "the test names its program")
+)]
 
 pub mod advisor;
 pub mod agents;

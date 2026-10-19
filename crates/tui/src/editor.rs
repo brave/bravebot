@@ -347,6 +347,11 @@ fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failur
         .to_string_lossy()
         .into_owned();
 
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the editor `lookup` found: a path the person wrote, or a name \
+                      `bravebot_sandbox::programs::find` returned (SANDBOX-30)"
+    )]
     let mut command = Command::new(program);
     bravebot_sandbox::programs::restrict_path(&mut command);
     match command.args(arguments).arg(path).status() {

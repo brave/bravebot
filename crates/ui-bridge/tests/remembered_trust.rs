@@ -6,6 +6,8 @@
 //! Driven through the binary with a home of the test's own, since the record lives in the home and a
 //! test in-process would be reading and writing the developer's.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use bravebot_agent::trusted::{Identity, Store};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
