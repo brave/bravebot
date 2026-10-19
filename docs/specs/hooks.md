@@ -13,6 +13,8 @@ governs:
   - crates/agent/src/turn/task.rs
   - crates/agent/src/turn/sentences.rs
   - crates/agent/src/delegate.rs
+  - crates/agent/src/confirm.rs
+  - crates/agent/src/permission_mode.rs
   - crates/ui-bridge/src/hooks.rs
   - crates/ui-files/src/main.rs
   - ui/src/shared/agent-settings.ts
@@ -64,7 +66,7 @@ learn.
 `verified-by: by-construction (one path is ever built, by joining the file name onto the state directory the caller was given; nothing reads a hooks file from a working directory or an ancestor of one)`
 
 <a id="HOOK-2"></a>
-### HOOK-2: three moments, and each fires the hooks written for it
+### HOOK-2: four moments, and each fires the hooks written for it
 
 A declaration names one moment. These are the moments:
 
@@ -73,9 +75,10 @@ A declaration names one moment. These are the moments:
 | `turn-started` | before the turn a person asked for sends anything |
 | `tool-finished` | after one tool call has finished, whatever came of it |
 | `turn-finished` | when the turn a person asked for is over, however it ended |
+| `prompt-shown` | just before a prompt or an `ask_user` question is put to a person who can answer it |
 
 A `tool-finished` entry may name a `tool`, and then fires for calls of that name alone; one that
-names none fires for every call. A tool named on either of the other two moments is about a call
+names none fires for every call. A tool named on any of the other moments is about a call
 that does not happen there, and that entry fires for nothing. Two entries on one moment are two
 commands, run one after the other in the order the file listed them. A word this build does not
 fire declares no hook and leaves the rest of the file in force.
@@ -83,6 +86,13 @@ fire declares no hook and leaves the rest of the file in force.
 The turn moments belong to the turn a person asked for. A delegate is a run inside that turn,
 started by a call nobody typed, so a turn that spawns three delegates still fires `turn-started`
 once. A call a delegate made is a call, and fires `tool-finished` like any other.
+
+`prompt-shown` is about a question that reaches a person, so it fires once for each one that does and
+for none that is answered without them: not where nobody can be asked ([PROMPT-9](prompting.md#PROMPT-9)),
+and not where a permission mode answered in advance ([permission-modes.md](permission-modes.md)). A
+delegate's question reaches the same person through the same confirmer and fires it once. It fires
+before the question is drawn, so a notifier attached to it calls somebody back while the turn is
+waiting on them, and the question is the same whatever the hook does (HOOK-6).
 
 **Why.** A short vocabulary in a person's own terms, rather than the events the audit trail
 records: those say which gate decided what, and somebody wanting their formatter to run should not
@@ -106,6 +116,12 @@ and a turn that died is exactly when they want telling.
 `verified-by: bravebot_agent::turn::a_delegate_fires_neither_turn_moment`
 `verified-by: bravebot_agent::turn::a_hook_fires_when_the_turn_is_over_though_it_was_cancelled`
 `verified-by: bravebot_agent::turn::a_delegate_does_not_fire_the_turn_s_own_moments`
+`verified-by: bravebot_agent::turn::a_hook_fires_when_a_question_is_put_to_a_person`
+`verified-by: bravebot_agent::turn::an_unattended_run_fires_no_prompt_hook`
+`verified-by: bravebot_agent::permission_mode::the_alert_comes_before_a_question_the_mode_did_not_answer`
+`verified-by: bravebot_agent::permission_mode::no_alert_comes_before_a_question_the_inner_confirmer_refuses_unasked`
+`verified-by: bravebot_cli::main::a_one_shot_run_alerts_for_a_plan_it_puts_and_not_for_a_write_it_refuses`
+`verified-by: bravebot_agent::turn::a_delegate_s_question_fires_prompt_shown_once`
 
 <a id="HOOK-3"></a>
 ### HOOK-3: a hook is a program and its arguments, never a line a shell parses
@@ -197,6 +213,7 @@ one. A rule about what to refuse is written as a rule ([permissions.md](permissi
 decision is taken from something a person wrote rather than from something a program read.
 
 `verified-by: bravebot_agent::turn::a_turn_whose_hook_failed_still_answers`
+`verified-by: bravebot_agent::turn::a_failing_prompt_hook_leaves_the_question_alone`
 `verified-by: by-construction (a hook's standard output and standard error are discarded at the spawn and read by nothing; its status reaches one sentence said to the person and no branch)`
 
 <a id="HOOK-7"></a>
@@ -312,6 +329,11 @@ A check is announced the same way, for the same reason.
 `verified-by: bravebot_ui_bridge::reporting::a_running_hook_crosses_as_a_pair_naming_the_moment_and_the_program`
 `verified-by: bravebot_tui::state::a_running_hook_names_the_indicator_and_gives_it_back`
 
+`prompt-shown` is the exception to the first sentence: it fires from the confirmer, which has no
+display to hand, and a running status drawn over the prompt it precedes would be gone before the
+prompt is. What it says when it goes wrong is still said (HOOK-7), as soon as the turn next has
+somewhere to say it, which is the end of the call the question came up in.
+
 ## The file
 
 ```json
@@ -344,6 +366,16 @@ A check is announced the same way, for the same reason.
   confined stage left at that name. Looking such a name up as a bare name is would refuse the
   person's own script in their own project. A hook that must not run a file a stage could write
   names its program by an absolute path outside the session's directories.
+- **`prompt-shown` holds the prompt back while it runs.** The hook runs before the question is
+  drawn, up to the bound in HOOK-7, so a slow notifier delays the prompt it was meant to announce.
+  Starting one in the background is not offered, for the reason a hook that does not wait is not.
+  A hook that must return at once starts its own long work and exits.
+- **`prompt-shown` covers questions the turn raises, and no others.** The trust question asked when
+  an interface opens, and a question put to a person outside a turn, fire nothing: no turn is
+  running to read the hooks. A confirmer that refuses without asking, such as a
+  one-shot run's for everything but a plan, fires it for nothing it refuses. A channel that
+  closed during the turn is found closed only when a question fails to send, so the question that
+  finds it closed fires it once.
 - **There is no moment for a session.** A session is many turns, and something that should happen
   once when the program opens fires per turn instead. The interactive interface is where a session
   begins and ends, and nothing there fires a hook yet.

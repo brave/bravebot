@@ -85,8 +85,8 @@ pub mod workspace;
 pub use bravebot_sandbox::crash;
 
 pub use confirm::{
-    Carried, Confined, Confirmer, Decision, Intent, Remark, RunDecision, RunRequest, Unattended,
-    WriteDecision, WriteRequest,
+    Carried, Confined, Confirmer, Decision, Intent, PromptAlert, Remark, RunDecision, RunRequest,
+    Unattended, WriteDecision, WriteRequest,
 };
 pub use conversation::Conversation;
 pub use delegate::Delegated;

@@ -21,8 +21,8 @@
 //! less than the person could see themselves.
 
 use crate::confirm::{
-    Confirmer, Decision, OutputRequest, RunDecision, RunRequest, VetRequest, VouchRequest,
-    WriteDecision, WriteRequest,
+    Confirmer, Decision, OutputRequest, PromptAlert, RunDecision, RunRequest, VetRequest,
+    VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_core::vetting::{Endorsed, Verdict};
 
@@ -283,9 +283,23 @@ pub struct Confining<'a, C: Confirmer> {
     inner: &'a mut C,
     mode: LiveMode,
     auto_vetting: bool,
+    /// Called before each question that is not answered by the mode, which is the questions that
+    /// reach a person (HOOK-2).
+    alert: Option<PromptAlert>,
 }
 
 impl<'a, C: Confirmer> Confining<'a, C> {
+    /// The inner confirmer, for a question the mode did not answer: a person is about to be asked,
+    /// so whoever asked to be told is, first.
+    fn asking(&mut self) -> &mut C {
+        if self.inner.asks_a_person()
+            && let Some(alert) = &self.alert
+        {
+            alert();
+        }
+        self.inner
+    }
+
     /// `auto_vetting` is whatever [`bravebot_core::vetting::auto`] resolved for this run, and the
     /// same value the task carries. A parameter rather than a default, because the two prompts that
     /// promote quarantined content answer yes without it: a builder call left off at one of the
@@ -299,6 +313,7 @@ impl<'a, C: Confirmer> Confining<'a, C> {
             inner,
             mode: mode.into(),
             auto_vetting,
+            alert: None,
         }
     }
 
@@ -321,6 +336,17 @@ impl<'a, C: Confirmer> Confining<'a, C> {
 }
 
 impl<C: Confirmer> Confirmer for Confining<'_, C> {
+    /// Kept here for the questions this asks of a person, and handed to the inner confirmer for the
+    /// ones it asks itself while refusing the rest, as a one-shot run does for a plan.
+    fn alert_when_asking(&mut self, alert: Option<PromptAlert>) {
+        self.inner.alert_when_asking(alert.clone());
+        self.alert = alert;
+    }
+
+    fn asks_a_person(&self) -> bool {
+        self.inner.asks_a_person()
+    }
+
     /// The one question the mode may answer either way.
     ///
     /// A refusal is not the same as a person having said no, but the tool reports it the same way,
@@ -349,7 +375,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         match self.mode.get() {
             PermissionMode::Plan => WriteDecision::reject(),
             mode if mode.answers_a_write_unasked(creates_a_credential) => WriteDecision::approve(),
-            _ => self.inner.confirm_write(request),
+            _ => self.asking().confirm_write(request),
         }
     }
 
@@ -367,7 +393,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         if self.mode.get().answers_this_run_unasked(request) {
             RunDecision::approve()
         } else {
-            self.inner.confirm_run(request)
+            self.asking().confirm_run(request)
         }
     }
 
@@ -376,7 +402,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         match self.mode.get() {
             PermissionMode::Bypass => self.screened(request.verdict),
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_read_output(request)
+                self.asking().confirm_read_output(request)
             }
         }
     }
@@ -393,7 +419,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         match self.mode.get() {
             PermissionMode::Bypass => self.screened(request.verdict),
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_vetted_read(request)
+                self.asking().confirm_vetted_read(request)
             }
         }
     }
@@ -409,7 +435,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_fetch(request)
+                self.asking().confirm_fetch(request)
             }
         }
     }
@@ -426,7 +452,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// with no sandbox: the server runs with no profile, and it runs the `build.rs`, the project's
     /// `tsserver.js` or the `.pth` file a confined stage could have written.
     fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
-        self.inner.confirm_server(request)
+        self.asking().confirm_server(request)
     }
 
     /// Approves a whole plan only where every check is being bypassed, and asks in every other mode
@@ -446,7 +472,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_manifest(request)
+                self.asking().confirm_manifest(request)
             }
         }
     }
@@ -463,7 +489,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_vouch(request)
+                self.asking().confirm_vouch(request)
             }
         }
     }
@@ -483,7 +509,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_exposing_read(request)
+                self.asking().confirm_exposing_read(request)
             }
         }
     }
@@ -498,7 +524,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_tool_list(request)
+                self.asking().confirm_tool_list(request)
             }
         }
     }
@@ -515,7 +541,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         match self.mode.get() {
             PermissionMode::Bypass => crate::confirm::CallDecision::approve(),
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_mcp_call(request)
+                self.asking().confirm_mcp_call(request)
             }
         }
     }
@@ -529,7 +555,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
         match self.mode.get().answers_a_run_unasked() {
             true => Decision::Approve,
-            false => self.inner.confirm_path(request),
+            false => self.asking().confirm_path(request),
         }
     }
 
@@ -542,7 +568,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         match self.mode.get() {
             PermissionMode::Bypass => Decision::Reject,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_host(request)
+                self.asking().confirm_host(request)
             }
         }
     }
@@ -560,7 +586,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         match self.mode.get() {
             PermissionMode::Bypass => crate::confirm::MessageDecision::Decline,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_message(request)
+                self.asking().confirm_message(request)
             }
         }
     }
@@ -575,7 +601,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         match self.mode.get() {
             PermissionMode::Bypass => Decision::Reject,
             PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.inner.confirm_move(request)
+                self.asking().confirm_move(request)
             }
         }
     }
@@ -583,7 +609,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// Always the inner confirmer's. A question the planner posed is not a permission, and an answer
     /// invented here would be reported to the model as the user's own words.
     fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
-        self.inner.ask_user(asking)
+        self.asking().ask_user(asking)
     }
 
     /// Always the inner confirmer's, for the same reason: this is the person talking, not being
@@ -883,6 +909,126 @@ mod tests {
             let mut yes = YesToHosts(0);
             let decided = Confining::new(&mut yes, mode, false).confirm_host(&request);
             assert_eq!((yes.0, decided), (asked, answer), "{mode:?}");
+        }
+    }
+
+    /// Records the order in which an alert and a question happened, and answers no other way.
+    struct Ordered(std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+    impl Confirmer for Ordered {
+        fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
+            self.0.lock().unwrap().push("asked");
+            Decision::Approve
+        }
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
+        }
+        fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+            Unattended.confirm_write(request)
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            Unattended.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            Unattended.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            Unattended.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+            Unattended.confirm_server(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+            Unattended.confirm_vouch(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
+            Unattended.confirm_path(request)
+        }
+        fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            Unattended.interjection()
+        }
+    }
+
+    /// HOOK-2: the alert comes before a question that reaches the confirmer and never for one the
+    /// mode answered. The regressions it rejects: an alert after the question, which calls a person
+    /// back once they have already been asked, and one for a question bypass answered, which rings
+    /// a person up about something nobody is waiting on.
+    #[test]
+    fn the_alert_comes_before_a_question_the_mode_did_not_answer() {
+        let request = crate::confirm::HostRequest {
+            hosts: vec!["a.example".to_string()],
+        };
+        for (mode, trace) in [
+            (PermissionMode::Ask, vec!["alert", "asked"]),
+            (PermissionMode::AcceptEdits, vec!["alert", "asked"]),
+            (PermissionMode::Plan, vec!["alert", "asked"]),
+            (PermissionMode::Bypass, Vec::new()),
+        ] {
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut inner = Ordered(seen.clone());
+            let mut confining = Confining::new(&mut inner, mode, false);
+            let said = seen.clone();
+            confining.alert_when_asking(Some(std::sync::Arc::new(move || {
+                said.lock().unwrap().push("alert");
+            })));
+            confining.confirm_host(&request);
+            assert_eq!(*seen.lock().unwrap(), trace, "{mode:?}");
+        }
+    }
+
+    /// HOOK-2, PROMPT-9: over a confirmer that refuses without asking, no question is alerted for in
+    /// any mode. The regression it rejects is the wrapper alerting before a question nobody is
+    /// asked.
+    #[test]
+    fn no_alert_comes_before_a_question_the_inner_confirmer_refuses_unasked() {
+        let request = crate::confirm::HostRequest {
+            hosts: vec!["a.example".to_string()],
+        };
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Bypass,
+        ] {
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut inner = crate::confirm::Unattended;
+            let mut confining = Confining::new(&mut inner, mode, false);
+            let said = seen.clone();
+            confining.alert_when_asking(Some(std::sync::Arc::new(move || {
+                said.lock().unwrap().push("alert");
+            })));
+            confining.confirm_host(&request);
+            assert!(seen.lock().unwrap().is_empty(), "{mode:?}");
         }
     }
 

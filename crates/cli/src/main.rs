@@ -3415,6 +3415,33 @@ mod tests {
         }
     }
 
+    /// HOOK-2, PROMPT-9: a one-shot run alerts for the plan it puts to a person and for nothing it
+    /// refuses. The regression it rejects is the mode wrapper alerting before every question it
+    /// passes on, which rings a person up about writes and runs the confirmer declines unasked.
+    #[test]
+    fn a_one_shot_run_alerts_for_a_plan_it_puts_and_not_for_a_write_it_refuses() {
+        use bravebot_agent::PermissionMode;
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut shown = Vec::new();
+        let mut one_shot = OneShot::new(&b"y\n"[..], &mut shown, true);
+        let mut confining =
+            bravebot_agent::Confining::new(&mut one_shot, PermissionMode::Ask, false);
+        let counted = std::sync::Arc::clone(&count);
+        confining.alert_when_asking(Some(std::sync::Arc::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })));
+
+        let refused = confining.confirm_host(&bravebot_agent::confirm::HostRequest {
+            hosts: vec!["a.example".to_string()],
+        });
+        assert_eq!(refused, Decision::Reject);
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let decision = confining.confirm_manifest(&a_plan());
+        assert_eq!(decision, Decision::Approve);
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
     /// The question reaches the person and their answer reaches the run. It names the task in their
     /// own words and how many steps they are answering for, and says what a yes does not cover.
     #[test]

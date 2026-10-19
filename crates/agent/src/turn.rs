@@ -2043,7 +2043,6 @@ fn fire_hooks<R: Reporter + ?Sized>(
             checkout.mark_worked_in();
         }
     }
-    let mut said = Vec::new();
     let fired_all = crate::hooks::fire_watched(
         hooks,
         moment,
@@ -2057,6 +2056,32 @@ fn fire_hooks<R: Reporter + ?Sized>(
             crate::hooks::Watch::Over => reporter.hook_finished(),
         },
     );
+    let said = trouble_sentences(fired_all);
+    for one in &said {
+        reporter.notice(one.clone());
+    }
+    said
+}
+
+/// The confirmer fires `prompt-shown` with no reporter to hand and leaves each hook's trouble in
+/// `waiting`, so it is drained here, where the turn has one.
+fn say_prompt_notices<R: Reporter + ?Sized>(
+    waiting: &std::sync::Mutex<Vec<String>>,
+    reporter: &mut R,
+) -> Vec<String> {
+    let said = waiting
+        .lock()
+        .map(|mut held| std::mem::take(&mut *held))
+        .unwrap_or_default();
+    for one in &said {
+        reporter.notice(one.clone());
+    }
+    said
+}
+
+/// What went wrong, in a sentence each, for the hooks that did not run and end well.
+fn trouble_sentences(fired_all: Vec<crate::hooks::Fired>) -> Vec<String> {
+    let mut said = Vec::new();
     for fired in fired_all {
         let Some(trouble) = fired.trouble else {
             continue;
@@ -2081,9 +2106,6 @@ fn fire_hooks<R: Reporter + ?Sized>(
                 seconds = limit.as_secs()
             ),
         });
-    }
-    for one in &said {
-        reporter.notice(one.clone());
     }
     said
 }
@@ -2158,6 +2180,39 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // started by a call the person did not make, so firing "the turn began" for each of them would
     // say it four times for a turn that spawned three.
     let own = task.delegate.is_none();
+
+    // What a hook on `prompt-shown` has to say for itself. The confirmer fires it from wherever a
+    // question is about to be drawn, with no reporter to hand, so its sentences wait here until the
+    // turn next has one. A delegate's questions reach the same confirmer, which the turn that
+    // spawned it armed, so only a turn a person asked for arms it (HOOK-2).
+    let prompt_notices = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let prompts_hooked = own
+        && hooks
+            .firing(bravebot_config::hooks::Moment::PromptShown, None)
+            .next()
+            .is_some();
+    if prompts_hooked {
+        // Hook programs can write files outside the backup journal, regardless of their outcome.
+        workspace.mark_rewind_gap(crate::rewind::CoverageGap::Hook);
+        if let Some(checkout) = workspace.checkout() {
+            checkout.mark_worked_in();
+        }
+        let hooks = hooks.clone();
+        let directory = workspace.root().to_path_buf();
+        let notices = std::sync::Arc::clone(&prompt_notices);
+        confirmer.alert_when_asking(Some(std::sync::Arc::new(move || {
+            let fired = crate::hooks::fire(
+                &hooks,
+                bravebot_config::hooks::Moment::PromptShown,
+                None,
+                &directory,
+            );
+            let said = trouble_sentences(fired);
+            if let Ok(mut held) = notices.lock() {
+                held.extend(said);
+            }
+        })));
+    }
     let began = match own {
         true => fire_hooks(
             &hooks,
@@ -2185,6 +2240,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             task,
             cancel,
             hooks: &hooks,
+            prompt_notices: &prompt_notices,
             advisor: advisor.as_deref(),
             lent_wallet,
         },
@@ -2200,6 +2256,10 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         &mut taken,
         &mut done,
     );
+    if prompts_hooked {
+        confirmer.alert_when_asking(None);
+        fired.extend(say_prompt_notices(&prompt_notices, reporter));
+    }
 
     let ended = match own {
         true => fire_hooks(
@@ -2257,6 +2317,8 @@ struct Inputs<'a> {
     task: &'a Task,
     cancel: &'a Cancel,
     hooks: &'a bravebot_config::hooks::Hooks,
+    /// What `prompt-shown` hooks said went wrong since the turn last drained it. See [`run_inner`].
+    prompt_notices: &'a std::sync::Mutex<Vec<String>>,
     /// The model the planner may consult, where it may consult one. See [`advisor_for`].
     advisor: Option<&'a str>,
     /// The wallet the run that started this one is spending from, where this is a delegate's turn.
@@ -2552,6 +2614,7 @@ where
         task,
         cancel,
         hooks: _,
+        prompt_notices: _,
         advisor,
         lent_wallet,
     } = inputs;
@@ -3327,6 +3390,7 @@ where
         task,
         cancel,
         hooks,
+        prompt_notices,
         advisor,
         lent_wallet: _,
     } = inputs;
@@ -3950,6 +4014,11 @@ where
                 workspace,
                 reporter,
             ));
+            // What a hook on a question drawn during this call had to say, which is the person's to
+            // hear about as soon as there is somewhere to say it.
+            state
+                .hook_notices
+                .extend(say_prompt_notices(prompt_notices, reporter));
 
             round_steps::start_delegates(
                 scope,

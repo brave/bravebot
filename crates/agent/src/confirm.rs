@@ -1549,6 +1549,12 @@ fn tally(count: usize, one: &str, many: &str) -> String {
     }
 }
 
+/// What a confirmer calls just before it puts a question to a person who can answer it.
+///
+/// Takes and returns nothing: what it is told is that a question is coming and not what it is
+/// about (HOOK-5), and nothing it does changes the question (HOOK-6).
+pub type PromptAlert = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 /// What the user decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
@@ -1565,6 +1571,26 @@ pub enum Decision {
 /// written out at every implementation rather than inherited from a trait an implementor never
 /// read.
 pub trait Confirmer {
+    /// Hand this confirmer what to call each time it is about to put a question to a person.
+    ///
+    /// The one method here with a body, and not a question: it decides nothing and carries nothing
+    /// from the request, so the no-default rule above, which is about failing closed, does not
+    /// reach it. Doing nothing is right for a confirmer that never asks (it is how an unattended
+    /// run fires nothing, PROMPT-9) and for one that only forwards. A confirmer that answers some
+    /// questions in advance has to call it for the others alone, since a question answered unasked
+    /// is nobody being waited on.
+    fn alert_when_asking(&mut self, _alert: Option<PromptAlert>) {}
+
+    /// Whether a question put to this confirmer reaches a person.
+    ///
+    /// False for one that refuses without asking anyone, so a wrapper that would alert before each
+    /// question it passes on does not alert for one nobody sees (PROMPT-9). A confirmer that
+    /// returns false and does ask some question, as a one-shot run does for a plan, fires the alert
+    /// it was handed through [`Confirmer::alert_when_asking`] for that question itself.
+    fn asks_a_person(&self) -> bool {
+        true
+    }
+
     /// Ask about a write. Implementations must default to refusal when they cannot ask.
     ///
     /// The answer carries whether to stop asking about what the scan found as well as whether to
@@ -1743,6 +1769,11 @@ pub trait Confirmer {
 pub struct Unattended;
 
 impl Confirmer for Unattended {
+    /// Nobody is asked, so nothing is alerted for.
+    fn asks_a_person(&self) -> bool {
+        false
+    }
+
     /// Refuses. Nothing about a test double is a person agreeing to start a process.
     fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
         Decision::Reject
