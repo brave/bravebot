@@ -707,7 +707,10 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     let (left, panel) = if crate::panel::drawn(session, frame.area().width) {
         let [left, panel] = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(1), Constraint::Length(crate::panel::WIDTH)])
+            .constraints([
+                Constraint::Min(1),
+                Constraint::Length(session.panel_columns(frame.area().width)),
+            ])
             .areas(body);
         (left, Some(panel))
     } else {

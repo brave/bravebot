@@ -1563,6 +1563,21 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             session.scroll_down(session.wheel_rows());
             Action::Redraw
         }
+        // The border between the transcript and the panel is the panel's handle, and a press on
+        // it starts neither a selection nor a copy (PANEL-6).
+        MouseEventKind::Down(MouseButton::Left)
+            if session.begin_panel_drag(mouse.row, mouse.column) =>
+        {
+            Action::Redraw
+        }
+        MouseEventKind::Drag(MouseButton::Left) if session.dragging_panel() => {
+            session.drag_panel_to(mouse.column);
+            Action::Redraw
+        }
+        MouseEventKind::Up(MouseButton::Left) if session.dragging_panel() => {
+            session.end_panel_drag();
+            Action::Redraw
+        }
         MouseEventKind::Down(MouseButton::Left) => {
             session.begin_selection(mouse.row, mouse.column);
             Action::Redraw

@@ -130,6 +130,10 @@ const VETTING_FILE: &str = "vetting";
 /// Whether the info panel was last left open, one word, inside the global state directory.
 const PANEL_FILE: &str = "panel";
 
+/// How many columns the info panel was last dragged to, a number, inside the global state
+/// directory.
+const PANEL_WIDTH_FILE: &str = "panel-width";
+
 /// Whether the person has read what `/caffeinate` does and turned it on, one word, inside the
 /// global state directory.
 const CAFFEINATE_FILE: &str = "caffeinate";
@@ -672,6 +676,46 @@ pub fn save_panel(open: bool) {
     }
 }
 
+/// The width the person last dragged the info panel to, or `None` where they never did.
+///
+/// Global as the open/closed choice is: it is about their screen and not about a checkout.
+pub fn load_panel_width() -> Option<u16> {
+    let path = directory()?.join(PANEL_WIDTH_FILE);
+    parse_panel_width(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Read the width out of the file's contents.
+///
+/// A single whole number, after trimming. Anything else is no choice and the panel keeps its
+/// default. How far the number may reach is the interface's to decide, since it depends on the
+/// terminal; a number that cannot be a width at all is refused here.
+pub fn parse_panel_width(contents: &str) -> Option<u16> {
+    contents
+        .lines()
+        .next()?
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|width| *width > 0)
+}
+
+/// Record the width the person dragged the info panel to.
+///
+/// Written as [`save_panel`] is: to a temporary file and renamed, best-effort.
+pub fn save_panel_width(width: u16) {
+    let Some(dir) = writable() else {
+        return;
+    };
+    if bravebot_agent::home::create_directory(&dir).is_err() {
+        return;
+    }
+
+    let temporary = dir.join("panel-width.tmp");
+    if bravebot_agent::home::write_file(&temporary, format!("{width}\n").as_bytes()).is_ok() {
+        let _ = std::fs::rename(&temporary, dir.join(PANEL_WIDTH_FILE));
+    }
+}
+
 /// Whether the person has agreed to `/caffeinate` before, so it turns on without the explanation.
 ///
 /// Read through [`writable`], as [`load_vetting`] is: the answer is to a warning about leaving a
@@ -1088,6 +1132,21 @@ and this?
         assert_eq!(parse_panel("closed\n"), Some(false));
         for contents in ["", "\n", "   \n", "on\n", "true\n", "opened\n"] {
             assert_eq!(parse_panel(contents), None, "{contents:?} became a choice");
+        }
+    }
+
+    /// A file that does not hold a plain positive number is no width, so the panel keeps its 36
+    /// columns rather than taking whatever a half-written or hand-edited file made of it.
+    #[test]
+    fn only_a_positive_whole_number_is_a_panel_width() {
+        assert_eq!(parse_panel_width("40\n"), Some(40));
+        assert_eq!(parse_panel_width("  52  \n"), Some(52));
+        for contents in ["", "\n", "0\n", "-3\n", "wide\n", "40.5\n", "99999999\n"] {
+            assert_eq!(
+                parse_panel_width(contents),
+                None,
+                "{contents:?} became a width"
+            );
         }
     }
 

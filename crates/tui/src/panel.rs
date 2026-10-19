@@ -18,6 +18,21 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 /// Columns the panel takes, its border included.
 pub const WIDTH: u16 = 36;
 
+/// The fewest columns the panel can be dragged down to, border included.
+pub const NARROWEST_PANEL: u16 = 24;
+
+/// Columns the transcript keeps whatever the panel is dragged to.
+const TRANSCRIPT_MINIMUM: u16 = 64;
+
+/// A requested width held between the panel's minimum and what leaves the transcript its own on a
+/// terminal `columns` wide.
+pub fn clamped(width: u16, columns: u16) -> u16 {
+    let most = columns
+        .saturating_sub(TRANSCRIPT_MINIMUM)
+        .max(NARROWEST_PANEL);
+    width.clamp(NARROWEST_PANEL, most)
+}
+
 /// The narrowest terminal the panel is drawn on, which leaves the transcript 64 columns.
 pub const NARROWEST: u16 = 100;
 
@@ -266,7 +281,12 @@ fn laid_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, 
 /// both rather than leave the reading on neither.
 pub fn shows_context(session: &Session, columns: u16, rows: u16) -> bool {
     // The hint line takes one row and the key that hides the panel another.
-    drawn(session, columns) && head(session, text_width(WIDTH)).0.len() + 2 <= usize::from(rows)
+    drawn(session, columns)
+        && head(session, text_width(session.panel_columns(columns)))
+            .0
+            .len()
+            + 2
+            <= usize::from(rows)
 }
 
 /// One column for the border and one for the space after it.
@@ -1949,5 +1969,102 @@ mod tests {
             above.contains(&t!(panel_earlier, count = 12).to_string()),
             "rows left out above are counted as more to come: {above:#?}"
         );
+    }
+
+    fn mouse(
+        kind: ratatui::crossterm::event::MouseEventKind,
+        row: u16,
+        column: u16,
+    ) -> ratatui::crossterm::event::MouseEvent {
+        ratatui::crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+        }
+    }
+
+    /// Hold the left button down on `from`, move to `to` and let go, as the event loop would.
+    fn dragged(session: &mut Session, from: (u16, u16), to: (u16, u16)) -> Vec<crate::app::Action> {
+        use ratatui::crossterm::event::{MouseButton::Left, MouseEventKind::*};
+        [Down(Left), Drag(Left), Up(Left)]
+            .into_iter()
+            .zip([from, to, to])
+            .map(|(kind, (row, column))| {
+                crate::app::handle_mouse(session, mouse(kind, row, column))
+            })
+            .collect()
+    }
+
+    /// Dragging the border moves it, the panel takes what is to its right, and the transcript and
+    /// the input wrap to the columns left of it. A panel that kept 36 columns, or a transcript laid
+    /// out at the old width, fails here.
+    #[test]
+    fn a_drag_on_the_border_moves_it_and_the_transcript_rewraps() {
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        assert_eq!(session.laid.width, 84, "the default is 36 columns");
+        dragged(&mut session, (5, 84), (5, 70));
+        let rows = screen(&mut session, 120, 30);
+        assert_eq!(session.laid.width, 70, "the transcript kept its old width");
+        assert_eq!(session.panel_columns(120), 50);
+        let cell = |x: usize| rows[5].chars().nth(x).unwrap_or(' ');
+        assert_eq!(cell(70), '│', "the border is not where it was dragged to");
+        assert_ne!(cell(84), '│', "the border is also where it was");
+    }
+
+    /// A drag past either end stops at the minimum panel and at the transcript's 64 columns, so
+    /// neither pane can be dragged out of existence.
+    #[test]
+    fn the_width_is_clamped_at_both_ends() {
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        dragged(&mut session, (5, 84), (5, 0));
+        assert_eq!(
+            session.panel_columns(120),
+            56,
+            "the transcript lost columns"
+        );
+        screen(&mut session, 120, 30);
+        assert_eq!(session.laid.width, 64);
+        let border = session.laid.width;
+        dragged(&mut session, (5, border), (5, 119));
+        assert_eq!(session.panel_columns(120), NARROWEST_PANEL);
+    }
+
+    /// A terminal narrowed while the panel is open draws it at what fits, and widened again it is
+    /// back at the width that was dragged to: the choice is the person's, the clamp is the screen's.
+    #[test]
+    fn a_narrowed_terminal_reclamps_without_forgetting_the_choice() {
+        let mut session = opened_at(160);
+        screen(&mut session, 160, 30);
+        dragged(&mut session, (5, 124), (5, 90));
+        assert_eq!(session.panel_columns(160), 70);
+        assert_eq!(session.panel_columns(120), 56);
+        assert_eq!(session.panel_columns(100), 36);
+        assert_eq!(session.panel_columns(160), 70, "the choice was overwritten");
+    }
+
+    /// A press on the border is the handle and never the start of a selection, and the release of
+    /// that drag copies nothing. A press one column to the right is the panel's text and still
+    /// selects, so the border is exactly one column wide.
+    #[test]
+    fn a_drag_from_the_border_never_selects_or_copies() {
+        use crate::app::Action;
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        let actions = dragged(&mut session, (5, 84), (8, 100));
+        assert!(session.selection.is_none(), "the drag selected text");
+        assert!(!actions.contains(&Action::Copy), "the release copied");
+        assert!(!session.dragging_panel(), "the drag was never let go");
+
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        let actions = dragged(&mut session, (5, 90), (6, 95));
+        assert!(
+            session.selection.is_some(),
+            "text in the panel did not select"
+        );
+        assert_eq!(actions.last(), Some(&Action::Copy));
     }
 }

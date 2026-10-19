@@ -1,5 +1,6 @@
 ## [0.16.0](https://github.com/brave/bravebot/releases/tag/v0.16.0)
 
+ - Added dragging the border between the info panel and the transcript to resize the panel, and keeping the width for the next session. ([#2731](https://github.com/brave/bravebot/issues/2731))
  - Changed the sandbox mode `read-only` to close the network and lend no remote, cloud, cluster or container credential, so `git push` and `gh pr create` fail under it. ([#2228](https://github.com/brave/bravebot/issues/2228))
  - Added a token budget for a delegate: a `budget:` line in an agent definition and a `budget` field on `spawn_agent` stop a delegate that has spent it, which answers with what it has. The call can only lower a definition's budget. ([#2489](https://github.com/brave/bravebot/issues/2489))
  - Added the `awaySummaryIdleSeconds` setting, which changes how long the terminal has to be unfocused after a turn before the automatic recap. ([#1580](https://github.com/brave/bravebot/issues/1580))

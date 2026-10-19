@@ -38,10 +38,13 @@ treats the whole screen as one pane.
 <a id="MOUSE-2"></a>
 ### MOUSE-2: a press between panes starts nothing
 
-A press that lands in no recorded pane begins no selection and clears the one held.
+A press that lands in no recorded pane begins no selection and clears the one held. A press on the
+info panel's border column starts a resize instead ([PANEL-6](info-panel.md#PANEL-6)), which also
+begins no selection and copies nothing on release.
 
 `verified-by: bravebot_tui::select::a_press_between_recorded_panes_belongs_to_none`
 `verified-by: bravebot_tui::app::a_press_outside_every_pane_starts_no_selection`
+`verified-by: bravebot_tui::panel::a_drag_from_the_border_never_selects_or_copies`
 
 <a id="MOUSE-3"></a>
 ### MOUSE-3: a selection does not outlive its pane
