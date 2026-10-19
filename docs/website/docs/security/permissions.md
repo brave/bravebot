@@ -476,6 +476,10 @@ spelling you approved.
   not against the line run together. A space in an `allow` rule covers only the gap between two words,
   so `Bash(ls *)` does not cover `"ls /x"`, a script named `ls /x`. In `deny` and `ask` a space also
   covers a space inside a word, and a `*` covers any text in every list.
+  A `deny` or `ask` rule also covers the program under a leading `timeout`, `time`, `nice`, `nohup`,
+  `stdbuf`, `command`, `builtin`, `noglob` or `env`, so `Bash(git push *)` refuses `timeout 30 git push`.
+  An `allow` rule does not look through them, and `npx`, `devbox run` and `docker exec` are not looked
+  through by any list.
 - **Redirections.** A `deny` rule on a file refuses a redirection to it or from it, as it refuses a
   write.
 - **Files read on your behalf.** A denied `AGENTS.md`, a file it points at, a skill or an agent
