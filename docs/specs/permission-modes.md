@@ -66,7 +66,7 @@ decision somebody made; this one is what holds when they have made none.
 `verified-by: bravebot_tui::state::a_session_starts_by_asking_about_everything`
 
 <a id="MODE-2"></a>
-### MODE-2: accepting edits answers the write prompt and no other, except where the write would create a credential
+### MODE-2: accepting edits answers the write prompt and no other, except where the write would create a credential or lands on a protected path
 
 A write goes through unasked. A run, a command's output and a file nobody vouched for are still put
 to the person. Under the sandbox mode `read-only` a write is refused before there is a prompt to
@@ -79,6 +79,15 @@ them, the write is refused and the planner is told nothing was created
 ([CRED-13](credential-protection.md#CRED-13)). The person may answer for the file for the rest of
 the session or past it, and the credential spec says how far each answer reaches. What decides this is the
 finding the policy layer produced, never the body of the write.
+
+A write to a protected path is put to the person as well ([PERM-9](permissions.md#PERM-9) lists the
+paths). The list is fixed: any `.git` component, any `.bravebot` component, any `.husky` component,
+and the files `.gitmodules`, `.gitconfig` and `.pre-commit-config.yaml` wherever they are. A file
+there is code that runs later with the person's own rights, such as a git hook the next `git commit`
+starts. The mode is not the person, so it does not answer it; where nobody is there to ask, the
+write is refused ([PROMPT-9](prompting.md#PROMPT-9)). The match is on the path the planner named and
+on the path it lands on once links are followed, so a write through a link to `.git` asks, and it
+reads no byte of the body.
 
 **Why.** A write and a run are not the same risk. A write lands in a tree the person can read
 afterwards, and `git diff` shows them all of it; a program runs with everything their own shell has,
@@ -99,6 +108,8 @@ mode cannot be what answers it. Bypassing is that statement (MODE-4).
 `verified-by: bravebot_agent::permission_mode::accepting_edits_lets_writes_through_but_not_commands`
 `verified-by: bravebot_cli::running::an_accept_edits_run_refuses_a_write_that_would_create_a_credential`
 `verified-by: bravebot_cli::running::an_accept_edits_run_refuses_a_command`
+`verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_protected_write_to_the_person_and_bypassing_answers_it`
+`verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_agent::turn::only_bypassing_answers_a_credential_write`
@@ -520,8 +531,11 @@ says it once, on the command line, where no content can say it for them.
 - **Accepting edits accepts a write to any path the workspace reaches.** The mode answers the write
   prompt, and the prompt is the only thing that would have shown the person the path. A rule in the
   settings file is what narrows it, and a `deny` rule still holds (MODE-6); the mode itself does not
-  distinguish one file from another. The one write it does not accept is one the credential scan
-  found something in, and that is decided by the finding, not the path.
+  distinguish one file from another, except for the fixed list of protected paths in
+  [PERM-9](permissions.md#PERM-9), which it asks about. The other write it does not accept is one the
+  credential scan found something in, and that is decided by the finding, not the path.
+  A hard link to a protected file under another name is not recognised, so a write through it is
+  answered like any other.
 - **Accepting edits still stops on a file that is only one rare value.** The shape a created
   credential takes is also the shape of a file holding only a commit id, a UUID or a digest, so
   those writes are put to the person in a mode chosen so as not to be asked about writes. `a` is

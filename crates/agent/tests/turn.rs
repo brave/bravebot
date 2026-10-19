@@ -62495,3 +62495,152 @@ fn a_finished_jobs_account_does_not_spell_the_names_a_glob_matched_to_the_planne
         "a name a glob matched in an unvouched tree reached the planner through a job: {bodies:?}"
     );
 }
+
+/// One turn making the tool `calls` under `mode` with an `Edit(**)` allow rule and a trust map
+/// vouching for the tree, so the only thing that can still ask about a write is its destination.
+fn a_turn_allowing_every_edit<C: bravebot_agent::confirm::Confirmer + Send>(
+    scratch: &Scratch,
+    mode: bravebot_agent::PermissionMode,
+    inner: &mut C,
+    calls: Vec<String>,
+) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = calls;
+    replies.push(reply_with("understood"));
+    let (endpoint, _received) = serve_sequence(replies);
+    let mut confirmer = bravebot_agent::Confining::new(inner, mode, false);
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("set the hooks up")
+            .with_permission_mode(mode)
+            .with_permissions(rules(&[], &[], &["Edit(**)"])),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+}
+
+/// MODE-2 and PERM-9. A write whose destination runs code later is put to the person in accepting
+/// edits and under an `Edit(**)` allow rule, by the name given and by the name a link lands on, and
+/// is refused where nobody can be asked. An ordinary write under the same settings is still
+/// answered, so the rule and the mode are live and the destination is what asks. Bypassing answers
+/// it, as it answers every question (MODE-4).
+#[test]
+fn accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later() {
+    use bravebot_agent::PermissionMode;
+
+    let setup = |name: &str| {
+        let scratch = Scratch::new(name);
+        std::fs::create_dir_all(scratch.path.join(".git/hooks")).unwrap();
+        std::fs::create_dir(scratch.path.join("src")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(".git/hooks", scratch.path.join("hooks")).unwrap();
+        scratch
+    };
+    let calls = || {
+        let mut calls = vec![
+            writing("src/a.rs", "fn main() {}\n"),
+            writing(".git/hooks/pre-commit", "#!/bin/sh\necho ran\n"),
+        ];
+        #[cfg(unix)]
+        calls.push(writing("hooks/post-merge", "#!/bin/sh\necho ran\n"));
+        calls
+    };
+    let planted: &[&str] = if cfg!(unix) {
+        &[".git/hooks/pre-commit", ".git/hooks/post-merge"]
+    } else {
+        &[".git/hooks/pre-commit"]
+    };
+    let asked_paths: &[&str] = if cfg!(unix) {
+        &[".git/hooks/pre-commit", "hooks/post-merge"]
+    } else {
+        &[".git/hooks/pre-commit"]
+    };
+
+    // A person behind accepting edits is asked about the two protected writes and not the third.
+    let scratch = setup("protected-write-accept-edits-asked");
+    let mut person = RemembersWrites::default();
+    a_turn_allowing_every_edit(&scratch, PermissionMode::AcceptEdits, &mut person, calls());
+    let asked = person
+        .asked
+        .iter()
+        .map(|request| request.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        asked, asked_paths,
+        "the person was asked about the wrong writes"
+    );
+    assert!(
+        person.asked.iter().all(|request| request.protected),
+        "a request for a protected destination was not marked: {:?}",
+        person.asked
+    );
+    assert!(
+        scratch.path.join("src/a.rs").exists(),
+        "an ordinary write was not answered"
+    );
+    for file in planted {
+        assert!(
+            scratch.path.join(file).exists(),
+            "{file}: an approved write was not made"
+        );
+    }
+
+    // Nobody behind it: refused, and the ordinary write still goes through.
+    let scratch = setup("protected-write-accept-edits-unattended");
+    a_turn_allowing_every_edit(
+        &scratch,
+        PermissionMode::AcceptEdits,
+        &mut bravebot_agent::Unattended,
+        calls(),
+    );
+    assert!(
+        scratch.path.join("src/a.rs").exists(),
+        "an ordinary write was refused"
+    );
+    for file in planted {
+        assert!(
+            !scratch.path.join(file).exists(),
+            "{file}: a write nobody was asked about landed under accepting edits"
+        );
+    }
+
+    // The same under asking with an allow rule: the rule answers nothing here.
+    let scratch = setup("protected-write-ask-unattended");
+    a_turn_allowing_every_edit(
+        &scratch,
+        PermissionMode::Ask,
+        &mut bravebot_agent::Unattended,
+        calls(),
+    );
+    assert!(
+        scratch.path.join("src/a.rs").exists(),
+        "an allow rule did not answer an ordinary write"
+    );
+    for file in planted {
+        assert!(
+            !scratch.path.join(file).exists(),
+            "{file}: an allow rule answered a protected write"
+        );
+    }
+
+    // Bypassing is the person's flag and answers it.
+    let scratch = setup("protected-write-bypass");
+    let mut person = RemembersWrites::default();
+    a_turn_allowing_every_edit(&scratch, PermissionMode::Bypass, &mut person, calls());
+    assert!(
+        person.asked.is_empty(),
+        "bypassing put a write to the person: {:?}",
+        person.asked
+    );
+    for file in planted {
+        assert!(
+            scratch.path.join(file).exists(),
+            "{file}: bypassing did not write"
+        );
+    }
+}

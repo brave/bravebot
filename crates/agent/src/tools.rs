@@ -3616,6 +3616,15 @@ pub(crate) fn write_needs_approval<S: Sink>(
         })
 }
 
+/// Whether `path`, as named or as it lands after links are followed, is one a write asks about
+/// whatever the mode or a rule says (MODE-2, PERM-9). Read off the routing path alone.
+pub(crate) fn write_is_protected(workspace: &Workspace, path: &str) -> bool {
+    bravebot_core::protected::is_protected(path)
+        || workspace
+            .landing(path)
+            .is_some_and(|landed| bravebot_core::protected::is_protected(&landed))
+}
+
 /// The reason the person wrote beside the rule that refuses `name`, where there is one (PERM-1).
 ///
 /// The rules are asked which rule decides, exactly as the gate just did, and the reason is read off
@@ -4459,6 +4468,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
             untrusted: !body_label.is_trusted(),
             remark,
             credentials: to_approve,
+            protected: write_is_protected(workspace, &proposed_path),
             may_always: standing.may_always,
             record: standing.record.clone(),
         };
@@ -4468,7 +4478,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         let mode = tools.permission_mode.get();
         let answer = confirmer.confirm_write(&request);
         policy.record_answer(
-            mode.answers_a_write_unasked(!request.credentials.is_empty())
+            mode.answers_a_write_unasked(!request.credentials.is_empty(), request.protected)
                 .then(|| mode.name()),
         );
         keep_the_note(policy, "write_file", answer.approved(), answer.note());
@@ -5192,13 +5202,14 @@ fn edit_file<S: Sink, C: Confirmer>(
             // so there is nothing anybody said about it.
             remark: None,
             credentials: to_approve,
+            protected: write_is_protected(workspace, &proposed_path),
             may_always: standing.may_always,
             record: standing.record.clone(),
         };
 
         let answer = confirmer.confirm_write(&request);
         policy.record_answer(
-            mode.answers_a_write_unasked(!request.credentials.is_empty())
+            mode.answers_a_write_unasked(!request.credentials.is_empty(), request.protected)
                 .then(|| mode.name()),
         );
         keep_the_note(policy, "edit_file", answer.approved(), answer.note());
@@ -8693,13 +8704,17 @@ fn download_url<S: Sink, C: Confirmer>(
         diff: Diff::compute("", ""),
         untrusted: true,
         remark: None,
+        protected: write_is_protected(workspace, &proposed_path),
         credentials: Vec::new(),
         may_always: false,
         record: None,
     };
     let mode = tools.permission_mode.get();
     let answer = confirmer.confirm_write(&request);
-    policy.record_answer(mode.answers_a_write_unasked(false).then(|| mode.name()));
+    policy.record_answer(
+        mode.answers_a_write_unasked(false, request.protected)
+            .then(|| mode.name()),
+    );
     keep_the_note(policy, "download_url", answer.approved(), answer.note());
     if !answer.approved() {
         return Produced::problem(format!(

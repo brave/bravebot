@@ -1203,6 +1203,7 @@ mod tests {
                 lines: 1,
                 label: "untrusted".to_string(),
             }),
+            protected: false,
             credentials: vec!["API_KEY on line 31".to_string()],
             may_always: false,
             record: None,

@@ -1818,6 +1818,7 @@ fn write<S: Sink, C: Confirmer>(
             untrusted: !body_label.is_trusted(),
             remark,
             credentials: to_approve,
+            protected: crate::tools::write_is_protected(workspace, &path),
             may_always: standing.may_always,
             record: standing.record.clone(),
         };
@@ -1825,7 +1826,7 @@ fn write<S: Sink, C: Confirmer>(
         let mode = permission_mode.get();
         let answer = confirmer.confirm_write(&request);
         policy.record_answer(
-            mode.answers_a_write_unasked(!request.credentials.is_empty())
+            mode.answers_a_write_unasked(!request.credentials.is_empty(), request.protected)
                 .then(|| mode.name()),
         );
         if !answer.approved() {

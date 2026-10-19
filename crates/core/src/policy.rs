@@ -5617,6 +5617,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return true;
         }
 
+        // A path where a write runs code later is put to the person whatever a rule or the trust
+        // map says. Read off the routing path alone, as a deny rule is (PERM-9, MODE-2).
+        if crate::protected::is_protected(path) {
+            self.allow(
+                "approval",
+                format!("{path}: a path where a write runs code later, asking"),
+            );
+            return true;
+        }
+
         // A rule the user wrote in advance answers before the table below, which is what a rule
         // is for. It cannot reach the case above: nothing a pattern says can put a path in front
         // of somebody, and that prompt is the only place a reference's path is ever seen.
@@ -12267,6 +12277,31 @@ five
             ),
             "a rule answered for a path nobody had seen"
         );
+    }
+
+    /// The prompt no rule and no trust map may answer (PERM-9). A file under `.git` runs code later,
+    /// so an `Edit` allow rule over the whole tree and a vouched-for workspace leave it asked about,
+    /// while a path beside it that the same rule reaches is not.
+    #[test]
+    fn a_protected_path_asks_whatever_a_rule_or_the_trust_map_says() {
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &[], &["Edit(**)"]));
+        assert!(!policy.write_needs_approval(
+            "src/a.rs",
+            Label::trusted_public(),
+            Destination::Named
+        ));
+        for path in [
+            ".git/hooks/pre-commit",
+            ".git/config",
+            ".bravebot/settings.json",
+        ] {
+            assert!(
+                policy.write_needs_approval(path, Label::trusted_public(), Destination::Named),
+                "{path}: a rule answered a write that runs code later"
+            );
+        }
     }
 
     /// An argument is never re-split, so a rule cannot be evaded by putting a second command

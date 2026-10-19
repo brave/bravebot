@@ -7651,6 +7651,7 @@ mod tests {
             intent: bravebot_agent::confirm::Intent::Create,
             untrusted: false,
             remark: None,
+            protected: false,
             credentials: Vec::new(),
             may_always: false,
             record: None,
