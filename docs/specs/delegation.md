@@ -1131,6 +1131,48 @@ holds ([DELEGATE-4](#DELEGATE-4)), and a limit takes some of it away.
 `verified-by: bravebot_agent::turn::a_delegate_cannot_write_through_a_link_outside_its_files_to_one_inside`
 `verified-by: bravebot_agent::turn::a_limited_delegates_redirection_is_held_to_its_definitions_files`
 
+<a id="DELEGATE-30"></a>
+### DELEGATE-30: a definition may name the delegates its delegate may start
+
+`spawns:` is optional and is read as `tools:` is, on one line or as a list, each name a definition
+or one of the three kinds. A delegate under a definition naming some selects, when it calls
+`spawn_agent`, out of the set the driver resolved ([DELEGATE-3](#DELEGATE-3)) less every name the
+list leaves out. The kinds `spawn_agent` offers and the kinds its refusal lists are that smaller
+set, so a model is not told of a delegate it cannot pick, and a name the list left out is refused
+before a place in the tree is taken ([DELEGATE-7](#DELEGATE-7)). A definition naming none keeps
+the whole set. An empty line names none: its delegate is not offered the tool, is told it cannot
+delegate, and is refused by the kernel if it calls it anyway.
+
+A name selects out of the set and adds nothing to it, and a name nothing in the set goes by
+selects nothing. The turn says so with the rest of what it says about what it found, naming the
+definition and the name, as it does for a skill ([DELEGATE-23](#DELEGATE-23)).
+
+**It only narrows, at every depth.** The list is carried to the delegates that delegate starts and
+to theirs, met with each one's own, so a delegate a coordinator was allowed to start holds no more
+of the set than the coordinator did, whatever its own file says. A later definition of the same
+name is met with the one it replaced, as `tools:` is ([DELEGATE-20](#DELEGATE-20)): it can shorten
+the list a person wrote and cannot lengthen it, and one writing no `spawns:` line keeps the list.
+
+**Who it applies to.** A turn a person addresses to a definition
+([ADDRESS-1](addressing-a-definition.md#ADDRESS-1)) is held to its list as a delegate is, since it
+runs the definition as a turn of the person's own and `spawn_agent` is among what it holds.
+
+**Why the comparison is sound.** The names are compared against a set the driver fixed before the
+turn, from files a person vouched for ([DELEGATE-20](#DELEGATE-20)), exactly as the planner's name
+is ([DELEGATE-3](#DELEGATE-3)). Nothing an attacker wrote is on either side, and the list can take
+the set down and never add to it, so it grants nothing ([DELEGATE-19](#DELEGATE-19)).
+
+`verified-by: bravebot_agent::agents::a_definition_reads_the_delegates_it_may_start`
+`verified-by: bravebot_agent::agents::a_spawns_name_nothing_resolved_is_said_once`
+`verified-by: bravebot_core::delegate::selecting_by_name_keeps_only_the_names_and_adds_none`
+`verified-by: bravebot_core::delegate::a_later_definition_cannot_widen_the_spawn_list_of_the_one_it_replaces`
+`verified-by: bravebot_core::policy::a_delegate_listing_reader_is_refused_a_worker_and_offered_only_reader`
+`verified-by: bravebot_core::policy::a_grandchild_cannot_start_what_an_ancestors_list_left_out`
+`verified-by: bravebot_core::policy::an_empty_spawns_list_starts_nothing`
+`verified-by: bravebot_core::policy::a_definition_naming_no_spawns_starts_anything_the_run_may`
+`verified-by: bravebot_core::policy::an_addressed_definition_starts_only_the_delegates_it_lists`
+`verified-by: bravebot_agent::turn::a_definition_lets_its_delegate_start_only_the_delegates_it_names`
+
 ## Known costs
 
 - **A definition is trusted exactly as far as a configuration file somebody pasted is.** That is

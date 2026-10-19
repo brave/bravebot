@@ -446,6 +446,11 @@ pub struct Policy<'sink, S: Sink> {
     /// Whether this run's definition named its tools and left `spawn_agent` out, which refuses
     /// every delegate it asks for wherever it sits.
     named_out_delegating: bool,
+    /// The names this run's definition, and every one above it, allowed it to start, where any
+    /// named some (DELEGATE-30). The set a turn resolves is narrowed to these wherever it is
+    /// installed, and a delegate it starts carries them on, so a child cannot start what the file
+    /// of an ancestor left out.
+    spawns: Option<Vec<String>>,
     /// The limits on the files this run may write, where its definition or one above it wrote a
     /// `writes:` line (DELEGATE-28). A path has to be inside every one; none is no limit.
     write_limits: Vec<crate::permissions::Permissions>,
@@ -609,6 +614,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // tree from its spec with `within`.
             at: None,
             named_out_delegating: false,
+            spawns: None,
             write_limits: Vec::new(),
             spawned: 0,
             tree: crate::delegate::Tree::default(),
@@ -1268,6 +1274,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             delegates: self.delegates.clone(),
             at: self.at,
             named_out_delegating: self.named_out_delegating,
+            spawns: self.spawns.clone(),
             write_limits: self.write_limits.clone(),
             spawned: self.spawned,
             tree: self.tree.clone(),
@@ -1525,8 +1532,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Taken by reference because the set is resolved from files, and resolving them takes this
     /// policy: the read of each one passes the same gates every other read does, so there is no
     /// point before the policy exists at which the caller could hand a set to a constructor.
+    ///
+    /// A run whose definition, or an ancestor's, named the delegates it may start is installed
+    /// only those of the set that the list names, so the comparison a name meets and the kinds the
+    /// planner is told of are both the intersection (DELEGATE-30).
     pub fn install_delegates(&mut self, delegates: crate::delegate::Definitions) {
-        self.delegates = delegates;
+        self.delegates = match &self.spawns {
+            Some(only) => delegates.only(only),
+            None => delegates,
+        };
     }
 
     /// The kinds of delegate a name may select.
@@ -1543,6 +1557,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn within(mut self, spec: &crate::delegate::DelegateSpec) -> Self {
         self.at = Some(spec.id());
         self.named_out_delegating = spec.named_out_delegating();
+        self.spawns = spec.spawns().map(<[String]>::to_vec);
         self.write_limits = spec.write_limits().to_vec();
         self.tree = spec.tree().clone();
         self.hold(
@@ -3711,6 +3726,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let proof = Declassification::authorise("a delegate kind the planner named");
         let name = kind.clone().declassify(&proof);
         let Some(selected) = self.delegates.get(&name).cloned() else {
+            if self.delegates.is_empty() {
+                return Err(self.deny(
+                    "delegate",
+                    Principle::Capability,
+                    "this run's definition names no delegate it may start; do the work yourself \
+                     or say in the report what is left"
+                        .to_string(),
+                ));
+            }
             return Err(self.deny(
                 "delegate",
                 Principle::Capability,
@@ -3936,7 +3960,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         )
         .holding(self.holds)
         .limited_to(limits)
-        .budgeted_to(asked);
+        .budgeted_to(asked)
+        .spawning_within(self.spawns.as_deref());
 
         let beneath = if spec.may_delegate() {
             "and a place in this turn's tree of delegates"
@@ -4123,6 +4148,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 ),
             ));
         };
+
+        // The addressed definition's own list, so the turn it now runs starts the delegates the
+        // file names and the ones those start are held to it (DELEGATE-30).
+        if let Some(only) = selected.spawns() {
+            self.delegates = self.delegates.only(only);
+            self.spawns = Some(only.to_vec());
+        }
 
         let wanted = selected.capabilities();
         let held = selected.held_out_of(&self.capabilities);
@@ -17538,6 +17570,140 @@ five
             );
         }
 
+        /// A coordinator and the definitions it may start, for the DELEGATE-30 tests.
+        fn coordinators(spawns: Option<&[&str]>) -> crate::delegate::Definitions {
+            let mut definitions = crate::delegate::Definitions::default();
+            let mut coordinator = crate::delegate::Definition::from_file(
+                "coordinator",
+                "starts the others",
+                Kind::Worker,
+                None,
+                "",
+                ".bravebot/agents/coordinator.md",
+            );
+            if let Some(spawns) = spawns {
+                coordinator =
+                    coordinator.with_spawns(spawns.iter().map(|s| s.to_string()).collect());
+            }
+            definitions.insert(coordinator);
+            definitions.insert(crate::delegate::Definition::from_file(
+                "helper",
+                "does any job",
+                Kind::Worker,
+                None,
+                "",
+                ".bravebot/agents/helper.md",
+            ));
+            definitions
+        }
+
+        /// DELEGATE-30. A delegate whose definition lists `reader` is refused a `worker` and is
+        /// told of the reader alone, so the refusal and the advertised kinds are one set.
+        #[test]
+        fn a_delegate_listing_reader_is_refused_a_worker_and_offered_only_reader() {
+            let all = coordinators(Some(&["reader"]));
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.install_delegates(all.clone());
+            let spec = turn
+                .before_delegate(&argument("coordinator"), &argument("coordinate"), None)
+                .expect("a clean context may delegate");
+
+            let mut child_sink = RecordingSink::new();
+            let mut child = open_policy(&mut child_sink).within(&spec);
+            child.install_delegates(all);
+            assert_eq!(child.delegates().names(), ["reader"]);
+            for refused in ["worker", "checker", "helper"] {
+                let err = child
+                    .before_delegate(&argument(refused), &argument("do it"), None)
+                    .expect_err("a name the list left out must not be started");
+                assert!(
+                    err.to_string().contains("the kinds are reader"),
+                    "the refusal did not name only what the list allows: {err}"
+                );
+            }
+            assert!(
+                child
+                    .before_delegate(&argument("reader"), &argument("look"), None)
+                    .is_ok()
+            );
+        }
+
+        /// DELEGATE-30. The list goes down the tree: a child the coordinator was allowed to start
+        /// holds no more of the set than the coordinator did, whatever its own file says.
+        #[test]
+        fn a_grandchild_cannot_start_what_an_ancestors_list_left_out() {
+            let all = coordinators(Some(&["reader", "helper"]));
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.install_delegates(all.clone());
+            let spec = turn
+                .before_delegate(&argument("coordinator"), &argument("coordinate"), None)
+                .expect("a clean context may delegate");
+
+            let mut child_sink = RecordingSink::new();
+            let mut child = open_policy(&mut child_sink).within(&spec);
+            child.install_delegates(all.clone());
+            let helper = child
+                .before_delegate(&argument("helper"), &argument("help"), None)
+                .expect("the list names helper");
+
+            let mut grandchild_sink = RecordingSink::new();
+            let mut grandchild = open_policy(&mut grandchild_sink).within(&helper);
+            grandchild.install_delegates(all);
+            assert!(
+                grandchild
+                    .before_delegate(&argument("worker"), &argument("do it"), None)
+                    .is_err(),
+                "a delegate started beneath a list started what the list left out"
+            );
+            assert!(
+                grandchild
+                    .before_delegate(&argument("reader"), &argument("look"), None)
+                    .is_ok()
+            );
+        }
+
+        /// DELEGATE-30. An empty line names none: the delegate is not offered the tool, and the
+        /// kernel refuses it if it calls it anyway.
+        #[test]
+        fn an_empty_spawns_list_starts_nothing() {
+            let all = coordinators(Some(&[]));
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.install_delegates(all.clone());
+            let spec = turn
+                .before_delegate(&argument("coordinator"), &argument("coordinate"), None)
+                .expect("a clean context may delegate");
+            assert!(!spec.may_delegate());
+
+            let mut child_sink = RecordingSink::new();
+            let mut child = open_policy(&mut child_sink).within(&spec);
+            child.install_delegates(all);
+            assert!(
+                child
+                    .before_delegate(&argument("reader"), &argument("look"), None)
+                    .is_err()
+            );
+        }
+
+        /// A definition naming no `spawns:` leaves its delegate the whole set.
+        #[test]
+        fn a_definition_naming_no_spawns_starts_anything_the_run_may() {
+            let all = coordinators(None);
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.install_delegates(all.clone());
+            let spec = turn
+                .before_delegate(&argument("coordinator"), &argument("coordinate"), None)
+                .expect("a clean context may delegate");
+
+            let mut child_sink = RecordingSink::new();
+            let mut child = open_policy(&mut child_sink).within(&spec);
+            child.install_delegates(all.clone());
+            assert_eq!(child.delegates(), &all);
+        }
+
         /// A delegate's delegates are numbered beneath it, so the trail names a grandchild by
         /// where it sits. Numbered by the policy of the run that spawned them, from the place that
         /// run's spec gave it: a delegate numbering its own from one would mint `d1` twice.
@@ -18290,6 +18456,54 @@ five
 
         fn trail(sink: &RecordingSink) -> String {
             format!("{:?}", sink.events())
+        }
+
+        /// DELEGATE-30. A definition addressed by a person starts only the delegates it lists,
+        /// and the ones those start are held to the same list.
+        #[test]
+        fn an_addressed_definition_starts_only_the_delegates_it_lists() {
+            let mut sink = RecordingSink::new();
+            let mut routing = routing_with("task", "look into it");
+            routing.insert_trusted(ADDRESSED, "coordinator");
+            let mut policy =
+                Policy::begin(routing, ReleasePlan::new(), all_capabilities(), &mut sink).unwrap();
+            let mut definitions = Definitions::default();
+            definitions.insert(
+                Definition::from_file(
+                    "coordinator",
+                    "starts the others",
+                    Kind::Worker,
+                    None,
+                    "",
+                    ".bravebot/agents/coordinator.md",
+                )
+                .with_spawns(vec!["checker".to_string()]),
+            );
+            policy.install_delegates(definitions);
+
+            policy
+                .address(&OFFERED)
+                .expect("a resolved name is addressed")
+                .expect("the line named a definition");
+            assert_eq!(policy.delegates().names(), ["checker"]);
+            assert!(
+                policy
+                    .before_delegate(
+                        &super::delegates::argument("worker"),
+                        &super::delegates::argument("do it"),
+                        None
+                    )
+                    .is_err()
+            );
+            assert!(
+                policy
+                    .before_delegate(
+                        &super::delegates::argument("checker"),
+                        &super::delegates::argument("check it"),
+                        None
+                    )
+                    .is_ok()
+            );
         }
 
         /// ADDRESS-7. A definition is a person choosing which of their own capabilities to work

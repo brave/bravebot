@@ -186,6 +186,12 @@ fn read_definition(text: &str, origin: &str) -> Read {
         definition = definition.with_servers(if declares_servers { Vec::new() } else { names });
     }
 
+    // The delegates it may start, read as `tools:` is (DELEGATE-30). An empty line names none, and
+    // its delegate starts none, for the reason an empty `tools:` line leaves one no tool.
+    if let Some(spawns) = declared.get("spawns") {
+        definition = definition.with_spawns(names_in(spawns));
+    }
+
     // Refused rather than left at the kind's own, because its author believes the number is in
     // force. Zero goes with the rest: the bound is checked after a round, so it would be one.
     if let Some(written) = declared
@@ -438,7 +444,7 @@ const FOLDS_TO_A_COLON: [char; 5] = [
     '\u{ff1a}', // FULLWIDTH COLON
 ];
 
-/// The names a `tools:`, a `skills:` or an `mcpServers:` value lists.
+/// The names a `tools:`, a `skills:`, a `spawns:` or an `mcpServers:` value lists.
 ///
 /// A comma and a space both separate, so a YAML scalar (`read_file, list_files`) and a YAML
 /// sequence (`- read_file` on its own line) both arrive here as something this splits the same
@@ -975,6 +981,34 @@ pub fn servers_not_found(definitions: &Definitions, reached: &[String]) -> Vec<N
                 definition = definition.origin(),
                 count = missing.len(),
                 servers = missing.join(", ")
+            )))
+        })
+        .collect()
+}
+
+/// What to tell whoever wrote a definition whose `spawns:` line names a delegate this session did
+/// not resolve (DELEGATE-30).
+///
+/// Such a name selects nothing, as a `skills:` name nothing found does, and silence would leave a
+/// misspelt name reading as a delegate the definition may start.
+pub fn spawns_not_found(definitions: &Definitions) -> Vec<Notice> {
+    definitions
+        .iter()
+        .filter_map(|definition| {
+            let mut missing: Vec<&str> = Vec::new();
+            for name in definition.spawns()? {
+                if definitions.get(name).is_none() && !missing.contains(&name.as_str()) {
+                    missing.push(name);
+                }
+            }
+            if missing.is_empty() {
+                return None;
+            }
+            Some(Notice::from_message(t!(
+                delegate_spawns_not_found,
+                definition = definition.origin(),
+                count = missing.len(),
+                names = missing.join(", ")
             )))
         })
         .collect()
@@ -1623,6 +1657,45 @@ mod tests {
         );
         assert_eq!(skills_of("skills:\n"), Some(Vec::new()));
         assert_eq!(skills_of(""), None);
+    }
+
+    /// DELEGATE-30. `spawns:` is read as `tools:` is, and an empty line is a list of none, which
+    /// is not the same as no line.
+    #[test]
+    fn a_definition_reads_the_delegates_it_may_start() {
+        let spawns_of = |line: &str| {
+            definition_of(&format!(
+                "---\nname: coordinator\ndescription: coordinates\nkind: worker\n{line}---\n\nbody\n"
+            ))
+            .spawns()
+            .map(<[String]>::to_vec)
+        };
+        let both = Some(vec!["reader".to_string(), "checker".to_string()]);
+
+        assert_eq!(spawns_of("spawns: reader, checker\n"), both);
+        assert_eq!(spawns_of("spawns:\n  - reader\n  - checker\n"), both);
+        assert_eq!(spawns_of("spawns:\n"), Some(Vec::new()));
+        assert_eq!(spawns_of(""), None);
+    }
+
+    /// DELEGATE-30. A name no definition resolved is said, naming the file, once.
+    #[test]
+    fn a_spawns_name_nothing_resolved_is_said_once() {
+        let mut definitions = Definitions::default();
+        definitions.insert(definition_of(
+            "---\nname: coordinator\ndescription: coordinates\nkind: worker\nspawns: reader, \
+             reviwer, reviwer\n---\n\nbody\n",
+        ));
+        let said: Vec<String> = spawns_not_found(&definitions)
+            .into_iter()
+            .map(|notice| notice.message)
+            .collect();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].contains("reviwer") && !said[0].contains("reviwer,"),
+            "{said:?}"
+        );
+        assert!(!said[0].contains("reader"), "{said:?}");
     }
 
     /// One misspelt name written twice is one name nothing found, so it is said once and in the

@@ -3539,6 +3539,14 @@ delegate-servers-not-found =
         [one] { $definition } names an MCP server this session did not reach, so its delegate runs without it: { $servers }
        *[other] { $definition } names MCP servers this session did not reach, so its delegate runs without them: { $servers }
     }
+# A definition's spawns line named delegates this session did not resolve. The definition is its
+# file's path and the names are that file's own words, joined with a comma, both from a vouched-for
+# file.
+delegate-spawns-not-found =
+    { $count ->
+        [one] { $definition } names a delegate this session did not resolve, so its delegate may not start it: { $names }
+       *[other] { $definition } names delegates this session did not resolve, so its delegate may not start them: { $names }
+    }
 # A definition's mcpServers line declared a server inline rather than naming one, so its delegate
 # calls no MCP server. The definition is its file's path. Nothing from the line is shown, since an
 # inline entry can hold a command line and the value of a secret. "MCP", "mcpServers" and the path

@@ -2662,8 +2662,12 @@ where
         .map(|mcp| mcp.aliases())
         .unwrap_or_default();
     notices.extend(crate::agents::servers_not_found(&delegates, &reached));
+    notices.extend(crate::agents::spawns_not_found(&delegates));
     notices.extend(style_notice.take().map(crate::skills::Notice::from_message));
-    policy.install_delegates(delegates.clone());
+    policy.install_delegates(delegates);
+    // What the kernel holds, which is the set narrowed by every `spawns:` line above this run, so
+    // the kinds the planner is offered are the ones it may select (DELEGATE-30).
+    let delegates = policy.delegates().clone();
 
     let resolved = setup::offered_tools(
         task, workspace, &delegates, advisor, scheduling, arming, policy,

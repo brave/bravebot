@@ -132,13 +132,21 @@ pub(super) fn offered_tools<S: Sink>(
             // definition narrowed past `run` leaves descriptions naming a tool that is no
             // longer beside them. Written again against what is left, which costs a second
             // table only in that case.
-            if !addressed.tools().iter().any(|tool| tool == "run") {
+            //
+            // So is the kinds `spawn_agent` offers where the definition named the delegates it
+            // may start, since the person's turn then starts only those (DELEGATE-30).
+            let without_run = !addressed.tools().iter().any(|tool| tool == "run");
+            if without_run || policy.delegates() != delegates {
+                let running = match without_run {
+                    true => tools::Running::Withheld,
+                    false => running,
+                };
                 offered = tools::for_planner(
                     scheduling,
                     arming,
-                    delegates,
+                    policy.delegates(),
                     task.deadlines,
-                    tools::Running::Withheld,
+                    running,
                 );
                 if advisor.is_some() {
                     tools::offer_advisor(&mut offered);

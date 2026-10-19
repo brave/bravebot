@@ -64363,3 +64363,96 @@ fn accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later(
         );
     }
 }
+
+/// A definition naming the delegates it may start (DELEGATE-30) is offered those and no others by
+/// its own `spawn_agent`, and a request for one it left out is refused naming what is left, so a
+/// coordinator told to start only the reader cannot start a worker. Through the whole turn,
+/// because the set the kernel compares against and the kinds the planner is offered are read in
+/// two places.
+#[test]
+fn a_definition_lets_its_delegate_start_only_the_delegates_it_names() {
+    let scratch = Scratch::new("delegate-definition-spawns");
+    let home = Scratch::new("delegate-definition-spawns-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("coordinator.md"),
+        "---\nname: coordinator\ndescription: Starts the others.\nkind: worker\nspawns: reader\n---\n\nCOORDINATE\n",
+    )
+    .expect("write the definition naming what it may start");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-A-COORDINATOR",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"coordinator","task":"COORDINATOR-TASK"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegates finished"),
+            ],
+        ),
+        (
+            "COORDINATOR-TASK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WORKER-TASK-NEVER-STARTED"}"#,
+                ),
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"READER-TASK"}"#),
+                reply_with("waiting"),
+                reply_with("coordinated"),
+            ],
+        ),
+        ("READER-TASK", vec![reply_with("read")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-A-COORDINATOR").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let planners = requests
+        .iter()
+        .find(|body| body.contains("DELEGATE-A-COORDINATOR") && !body.contains("COORDINATOR-TASK"))
+        .expect("the planner asked");
+    assert!(
+        planners.contains(r#""enum":["reader","checker","worker","coordinator"]"#),
+        "the planner was not offered the whole set"
+    );
+    let coordinators: Vec<&String> = requests
+        .iter()
+        .filter(|body| {
+            body.contains("COORDINATOR-TASK") && !body.contains("DELEGATE-A-COORDINATOR")
+        })
+        .collect();
+    let first = coordinators.first().expect("the coordinator never ran");
+    assert!(
+        first.contains(r#""enum":["reader"]"#),
+        "the coordinator was offered something its definition did not name"
+    );
+    let last = coordinators.last().expect("asked at least once");
+    assert!(
+        last.contains("the kinds are reader"),
+        "a worker the definition left out was not refused naming what is left"
+    );
+    assert_eq!(
+        reporter.delegated.len(),
+        2,
+        "the coordinator and its reader should have started, and nothing else"
+    );
+}

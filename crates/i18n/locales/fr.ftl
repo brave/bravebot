@@ -2978,6 +2978,11 @@ delegate-servers-not-found =
         [one] { $definition } nomme un serveur MCP que cette session n'a pas joint, si bien que son délégué s'en passe : { $servers }
        *[other] { $definition } nomme des serveurs MCP que cette session n'a pas joints, si bien que son délégué s'en passe : { $servers }
     }
+delegate-spawns-not-found =
+    { $count ->
+        [one] { $definition } nomme un délégué que cette session n'a pas résolu, si bien que son délégué ne peut pas le démarrer : { $names }
+       *[other] { $definition } nomme des délégués que cette session n'a pas résolus, si bien que son délégué ne peut pas les démarrer : { $names }
+    }
 delegate-servers-declared = { $definition } déclare un serveur MCP dans sa ligne mcpServers, ce que seul ~/.bravebot/mcp.json peut faire, si bien que son délégué n'appelle aucun serveur MCP
 delegate-rounds-not-a-count =
     { $definition } a été ignoré : son nombre de cycles (rounds) doit être un entier supérieur à zéro
