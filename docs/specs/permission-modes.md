@@ -555,6 +555,8 @@ invented (MODE-7), so no mode answers it for the person.
 `verified-by: bravebot_agent::tools::a_plan_proposed_outside_plan_mode_asks_nobody`
 `verified-by: bravebot_agent::tools::a_plan_from_an_untrusted_context_is_refused_and_changes_no_mode`
 `verified-by: bravebot_agent::tools::propose_plan_takes_a_plan_and_a_reason_and_is_not_in_the_table`
+`verified-by: bravebot_agent::tools::a_delegate_dispatching_propose_plan_asks_nobody_and_changes_no_mode`
+`verified-by: bravebot_agent::turn::propose_plan_is_offered_to_the_planner_in_plan_mode_only`
 `verified-by: bravebot_agent::plan_approval::no_answer_selects_bypassing_or_leaves_plan_mode_without_a_choice`
 
 ## Known costs

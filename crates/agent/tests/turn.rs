@@ -5160,6 +5160,54 @@ fn a_mode_chosen_during_a_turn_applies_to_the_rest_of_it() {
     );
 }
 
+/// MODE-14: the planner is offered `propose_plan` in plan mode and in no other mode. The
+/// regressions it rejects are a table that never offers the tool and one that offers it in every
+/// mode.
+#[test]
+fn propose_plan_is_offered_to_the_planner_in_plan_mode_only() {
+    use bravebot_agent::PermissionMode;
+    for (mode, offered) in [
+        (PermissionMode::Plan, true),
+        (PermissionMode::Ask, false),
+        (PermissionMode::AcceptEdits, false),
+        (PermissionMode::Bypass, false),
+    ] {
+        let scratch = Scratch::new("propose-plan-offered");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("plan the work").with_permission_mode(mode),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        let requests = every_request(&received);
+        let request: serde_json::Value = serde_json::from_str(&requests[0]).expect("a request");
+        let names: Vec<&str> = request["tools"]
+            .as_array()
+            .expect("a table of tools")
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"run"),
+            "{mode:?}: the table is empty of the usual tools"
+        );
+        assert_eq!(
+            names.contains(&"propose_plan"),
+            offered,
+            "{mode:?}: {names:?}"
+        );
+    }
+}
+
 /// MODE-8, the other direction: leaving plan mode during a turn lifts its refusal for the rest of
 /// it, and the planner is told it has ended.
 #[test]
