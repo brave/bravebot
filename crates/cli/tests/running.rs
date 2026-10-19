@@ -2111,6 +2111,84 @@ fn accept_edits_is_refused_with_the_bypass_flag_and_outside_a_one_shot_run() {
     assert!(!scratch.path.join("out.txt").exists());
 }
 
+/// CLI-6: a write nobody could approve is an effect a gate refused, so the run exits on status 4
+/// and says `BB1004`, however calmly the planner then reports it. The reply still reaches stdout.
+///
+/// The tool answers a declined question with a problem for the planner and never calls the
+/// policy, so a run that read only the policy's refusals ended on 0 with `"refusals":[]`: what a
+/// script piping this command into the next saw was a success with no file.
+#[test]
+fn a_write_nobody_could_approve_exits_on_the_refused_status_and_says_so() {
+    let gateway = a_gateway_asking_for_a_write();
+    let scratch =
+        Scratch::new("cli-running-unapproved-write").with_settings(&settings_for(&gateway));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["-p", "write out.txt"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    assert!(
+        stderr.contains("BB1004"),
+        "no identifier on stderr: {stderr}"
+    );
+    assert!(stdout.contains("all done"), "the reply was lost: {stdout}");
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "the write happened without approval"
+    );
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--json", "-p", "write out.txt"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    let object: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(object["ok"], false, "{stdout}");
+    assert_eq!(object["status"], 4, "{stdout}");
+    assert_eq!(object["refusals"][0]["gate"], "file_write", "{stdout}");
+}
+
+/// CLI-6: a manifest plan nobody could approve is a gate refusing it, not a failure to run, so the
+/// run exits on status 4 and `--json` names the `manifest_plan` refusal. The run stops before any
+/// step, so the plan is the only thing the result can point at.
+#[test]
+fn a_manifest_plan_nobody_could_approve_exits_on_the_refused_status() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let requests = count.clone();
+    let plan = r#"{"steps":[
+        {"capability":"FILE_READ","args":{"path":"a.md","out_slot":"raw"}},
+        {"capability":"ANSWER","args":{"from_slot":"raw"}}]}"#;
+    let gateway = a_gateway("[]", move |_| {
+        match requests.fetch_add(1, Ordering::SeqCst) {
+            0 => usage_reply(None, "Read a.md", 12, 5),
+            1 => usage_reply(None, plan, 20, 9),
+            _ => http(401, r#"{"error":{"message":"denied"}}"#),
+        }
+    });
+    let scratch = Scratch::new("cli-running-unapproved-plan")
+        .with_settings(&settings_for(&gateway))
+        .with_file("a.md", "hello");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--mode", "manifest", "--json", "-p", "read a.md"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    let object: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(object["status"], 4, "{stdout}");
+    assert_eq!(object["refusals"][0]["gate"], "manifest_plan", "{stdout}");
+}
+
 /// CLI-24: a run that is refused a write writes its events while it goes and ends on the result
 /// object. Streaming a gate's refusal is covered in `json.rs`: the approval a one-shot run lacks
 /// ends the call without a gate event.
@@ -7644,7 +7722,7 @@ fn a_project_whose_notes_the_model_changes(
 
 /// CLI-1. Trusting the working directory opens reads and nothing else: a run nobody is watching
 /// that was given `--trust-workspace` still has a write the planner composed refused, for a whole
-/// file and for an edit alike, and the one flag that lifts the refusal, the person's own
+/// file and for an edit alike (ending on the refused status, CLI-6), and the one flag that lifts the refusal, the person's own
 /// instruction to skip permissions, makes both land.
 ///
 /// A property of the process: the trust map is built in `main` from the flag and the confirmer is
@@ -7672,7 +7750,7 @@ fn a_one_shot_run_that_trusts_its_workspace_still_refuses_a_write_without_the_sk
         ),
     ];
     for (kind, tool, arguments, written) in changes {
-        let run = |flags: &[&str]| {
+        let run = |flags: &[&str], status: i32| {
             let (gateway, scratch, cwd) = a_project_whose_notes_the_model_changes(
                 &format!("cli-running-trust-writes-{kind}-{}", flags.len()),
                 tool,
@@ -7682,18 +7760,22 @@ fn a_one_shot_run_that_trusts_its_workspace_still_refuses_a_write_without_the_sk
             line.extend(["-p", "change the notes"]);
             let output = bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &line);
             let (_, stderr) = said(&output);
-            assert!(output.status.success(), "{kind} {flags:?}: {stderr}");
+            assert_eq!(
+                output.status.code(),
+                Some(status),
+                "{kind} {flags:?}: {stderr}"
+            );
             let _ = requests(&gateway);
             std::fs::read_to_string(cwd.join("notes.md")).expect("the notes")
         };
 
         assert_eq!(
-            run(&["--trust-workspace"]),
+            run(&["--trust-workspace"], 4),
             "THE-WORDS-IN-THE-PROJECT-NOTES",
             "{kind}: a trust flag alone applied a write nobody was asked about"
         );
         assert_eq!(
-            run(&["--trust-workspace", "--dangerously-skip-permissions"]),
+            run(&["--trust-workspace", "--dangerously-skip-permissions"], 0),
             written,
             "{kind}: the skip flag did not apply the write, so the refusal above says nothing"
         );

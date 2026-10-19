@@ -40,7 +40,7 @@ use crate::exit::{Ending, fail};
 use crate::finish::{
     Finished, ending_of_a_turn, failure_of_a_turn, print_trace, refusals, refused_with_the_usage,
     report, say_notices, say_the_result, say_what_a_stopped_manifest_produced,
-    stopped_before_the_turn, what_ran,
+    stopped_before_the_turn, what_ran, with_declined,
 };
 use crate::flags::{
     ACCEPT_EDITS, BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, SAFE, SKIP_PERMISSIONS, TASK_FLAGS, VET,
@@ -2073,6 +2073,9 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
         );
     }
 
+    // Read once the turn is over, which is when the confirmer's borrow ends.
+    let declined = one_shot.declined().to_vec();
+
     match outcome {
         Ok(outcome) => {
             // The reply is untrusted model output. Printing it is safe, since the
@@ -2110,8 +2113,10 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
                 .then(|| model_not_served(&asked, comparable, &outcome.model))
                 .flatten();
 
+            // An effect nobody could approve was refused as surely as one a rule refused, and the
+            // tool that answered it never told the policy (CLI-6).
             let ending = ending_of_a_turn(
-                outcome.clean,
+                outcome.clean && declined.is_empty(),
                 named_on_the_command_line,
                 not_served.is_some(),
             );
@@ -2148,7 +2153,7 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
                         cache_written: outcome.cached.written_tokens,
                     },
                     calls: reporter.calls(),
-                    refusals: &refusals(sink.recorded()),
+                    refusals: &with_declined(refusals(sink.recorded()), &declined),
                     notices: &outcome.notices,
                     structured: structured.as_deref(),
                 })
@@ -2159,7 +2164,7 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
                 notices: &outcome.notices,
                 attempt: attempt.as_deref(),
                 trail: trace.then_some((sink.recorded(), outcome.model.as_str())),
-                clean: outcome.clean,
+                clean: outcome.clean && declined.is_empty(),
                 ending,
                 not_served: not_served.as_deref(),
             };
@@ -2185,10 +2190,16 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
         // A run that stopped is the one worth looking at, so what it produced is printed
         // whether or not --trace was asked for. Without it a failed plan is a one-line
         // complaint about a document nobody can see.
-        Err(bravebot_agent::TurnError::Manifest { attempt, cause }) => {
-            report_a_failed_turn(&cause, Some(&attempt), trace, as_json, &reporter, &sink)
-        }
-        Err(err) => report_a_failed_turn(&err, None, trace, as_json, &reporter, &sink),
+        Err(bravebot_agent::TurnError::Manifest { attempt, cause }) => report_a_failed_turn(
+            &cause,
+            Some(&attempt),
+            trace,
+            as_json,
+            &reporter,
+            &sink,
+            &declined,
+        ),
+        Err(err) => report_a_failed_turn(&err, None, trace, as_json, &reporter, &sink, &declined),
     }
 }
 
@@ -2301,8 +2312,14 @@ fn report_a_failed_turn(
     as_json: bool,
     reporter: &progress::Progress<std::io::Stderr>,
     sink: &json::Streaming,
+    declined: &[one_shot::Declined],
 ) -> ExitCode {
-    let ending = exit::ending_of(error);
+    // A plan nobody approved stopped the run before anything happened, which is a gate refusing it
+    // and not a failure to run (CLI-6).
+    let ending = match declined.iter().any(|d| d.gate == "manifest_plan") {
+        true => Ending::Refused,
+        false => exit::ending_of(error),
+    };
     let stopped = fail(ending, error);
     say_notices(&mut std::io::stderr().lock(), reporter.notices());
     match attempt {
@@ -2324,7 +2341,7 @@ fn report_a_failed_turn(
             &error.to_string(),
             reporter.spent(),
             reporter.calls(),
-            &refusals(sink.recorded()),
+            &with_declined(refusals(sink.recorded()), declined),
             reporter.notices(),
         ));
     }
@@ -3495,6 +3512,27 @@ mod tests {
         for step in &plan.steps {
             assert!(!shown.contains(step), "step printed twice: {shown}");
         }
+    }
+
+    /// CLI-6: what a one-shot run could not ask is kept, so the run can end on the status that says
+    /// a gate refused something. A plan a person typed `y` to leaves nothing, so a run that was
+    /// answered does not end on it.
+    #[test]
+    fn what_nobody_could_be_asked_is_kept_and_what_was_answered_is_not() {
+        let mut shown = Vec::new();
+        let mut unattended = OneShot::new(&b"y\n"[..], &mut shown, false);
+        unattended.confirm_manifest(&a_plan());
+        unattended.confirm_fetch(&bravebot_agent::confirm::FetchRequest {
+            url: "https://example.invalid/a".to_string(),
+            host: "example.invalid".to_string(),
+        });
+        let gates: Vec<_> = unattended.declined().iter().map(|d| d.gate).collect();
+        assert_eq!(gates, ["manifest_plan", "web_fetch"]);
+
+        let mut shown = Vec::new();
+        let mut answered = OneShot::new(&b"y\n"[..], &mut shown, true);
+        answered.confirm_manifest(&a_plan());
+        assert!(answered.declined().is_empty());
     }
 
     /// A pipe or a redirected stderr is nobody, and then a plan is refused like every other
