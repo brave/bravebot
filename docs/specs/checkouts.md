@@ -660,7 +660,10 @@ Each is put to the person, even where [TRUST-4](trust-map.md#TRUST-4)'s table wo
 yes is bound to that path alone ([WRITE-3](tools/write-file.md#WRITE-3)), and the map, the
 permission rules and a rewind treat it as any write. The bytes keep the label the checkout's path
 gives them, so a file a write left untrusted there is still untrusted once it has come back, and the
-destination is recorded as [TRUST-4](trust-map.md#TRUST-4)'s table says.
+destination is recorded as [TRUST-4](trust-map.md#TRUST-4)'s table says. A path the working
+directory does not reach, which a directory made a link since the checkout was made can be, is
+refused before its file is read out of the checkout and before anybody is asked
+([TRUST-10](trust-map.md#TRUST-10)).
 
 The person is shown the difference between their file as it is and the checkout's. Where the
 driver's record holds a write to that path in the working directory after the checkout was made,
@@ -722,6 +725,8 @@ not text, is named and left.
 `verified-by: bravebot_tui::app::the_checkouts_command_lists_and_removes_by_number`
 `verified-by: bravebot_tui::checkouts_command::apply_a_number_and_paths_brings_back_only_those_paths`
 `verified-by: bravebot_agent::turn::a_typed_checkouts_apply_with_paths_asks_only_about_those_paths`
+`verified-by: bravebot_agent::turn::a_checkout_file_whose_directory_leaves_the_working_directory_is_refused_before_the_person_is_asked`
+`verified-by: bravebot_agent::turn::a_checkout_file_that_cannot_land_does_not_stop_the_files_after_it`
 `verified-by: bravebot_agent::turn::a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status`
 `verified-by: bravebot_ui_bridge::checkouts::a_later_turn_is_told_the_working_directory_was_written_since_the_checkout`
 

@@ -3750,6 +3750,304 @@ fn an_approved_write_cannot_escape_the_workspace() {
     );
 }
 
+/// What the trail of a write refused for leaving the workspace holds: the refusal, worded with
+/// `named` for the call `call`, and none of the steps that come before a question (TRUST-10). The
+/// approval of the path, the answer to it, the grant and the release into the file each record that
+/// something was allowed, and nothing was.
+fn assert_only_the_confinement_refusal_is_recorded(sink: &RecordingSink, call: &str, named: &str) {
+    let refused = confinement_refusals(sink);
+    assert_eq!(refused.len(), 1, "{:?}", sink.events());
+    assert!(
+        refused[0].starts_with(&format!(
+            "{call}: '{named}' resolves outside the workspace; remedy offered:"
+        )),
+        "the refusal does not name the call and the path: {}",
+        refused[0]
+    );
+    for event in sink.events() {
+        let allowed_something = match event {
+            Event::GatePassed {
+                gate: "grant" | "declassify",
+                ..
+            } => true,
+            Event::GatePassed {
+                gate: "approval",
+                detail,
+            } => detail.contains(named) || detail.starts_with("no mode answered"),
+            _ => false,
+        };
+        assert!(
+            !allowed_something,
+            "a refused write recorded a step that allows one: {event:?}"
+        );
+    }
+}
+
+/// TRUST-10: a write to a file no opened directory holds is refused before it is scanned, shown or
+/// granted, so the person is not asked a question no answer can make possible, and the planner is
+/// told the path is out of reach and what the person can do about it rather than that they said no.
+///
+/// Both answers are tried. An implementation that asks first reports a no as a decline, which hides
+/// the refusal from the planner, and reports a yes as the refusal only after an approval, a grant
+/// and a consumed grant are on the record.
+#[test]
+fn a_write_outside_every_opened_directory_is_refused_before_the_person_is_asked() {
+    let elsewhere = Scratch::new("write-unreachable-elsewhere");
+    let outside = elsewhere.path.join("new.txt").to_string_lossy().to_string();
+
+    for (answer, mut confirmer) in [
+        ("approving", RecordingConfirmer::approving()),
+        ("rejecting", RecordingConfirmer::rejecting()),
+    ] {
+        let scratch = Scratch::new(&format!("write-unreachable-{answer}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2(
+                "write_file",
+                &serde_json::json!({ "path": outside, "contents": "howdy\n" }).to_string(),
+            ),
+            reply_with("understood"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("write outside"),
+            &mut confirmer,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        assert!(
+            confirmer.seen.is_empty(),
+            "{answer}: the person was shown a write that is refused whatever they answer: {:?}",
+            confirmer.seen
+        );
+        let _first = received.recv().expect("first request");
+        let told = message_from(
+            &received.recv().expect("second request"),
+            "Result of write_file",
+        )
+        .to_string();
+        assert!(
+            told.contains("resolves outside the workspace"),
+            "{answer}: {told}"
+        );
+        assert!(
+            told.contains("/add-dir"),
+            "{answer}: no remedy was named: {told}"
+        );
+        assert!(
+            !told.contains("did not approve"),
+            "{answer}: a refusal was reported as the person declining: {told}"
+        );
+        assert!(
+            !elsewhere.path.join("new.txt").exists(),
+            "{answer}: the file was written"
+        );
+        assert_only_the_confinement_refusal_is_recorded(&sink, "write_file.path", &outside);
+    }
+}
+
+/// TRUST-10: the body of a write is not released into a path before the path is known to be
+/// reachable. A body from a reference is released with a record saying the file is inside the
+/// workspace, so the record of a write to a file outside it would say the opposite of what is true.
+#[test]
+fn a_quarantined_body_is_not_released_into_a_file_outside_the_workspace() {
+    const PAYLOAD: &str = "NOT-RELEASED-OUTSIDE";
+
+    let elsewhere = Scratch::new("write-unreachable-quarantined-elsewhere");
+    let outside = elsewhere.path.join("copy.md").to_string_lossy().to_string();
+    let scratch = Scratch::new("write-unreachable-quarantined");
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    std::fs::write(scratch.path.join("vendor/page.txt"), format!("{PAYLOAD}\n")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"vendor/page.txt"}"#),
+        tool_request_2(
+            "write_file",
+            &serde_json::json!({ "path": outside, "contents_ref": "ref:1" }).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    trust.distrust("vendor");
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("copy vendor/page.txt outside"),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    assert!(confirmer.seen.is_empty(), "{:?}", confirmer.seen);
+    let bodies: Vec<String> = received.try_iter().collect();
+    let told = bodies
+        .iter()
+        .find(|body| body.contains("Result of write_file"))
+        .map(|body| message_from(body, "Result of write_file").to_string())
+        .unwrap_or_else(|| panic!("no request carried the write's result: {}", bodies.len()));
+    assert!(told.contains("resolves outside the workspace"), "{told}");
+    assert!(!told.contains(PAYLOAD), "{told}");
+    assert!(!elsewhere.path.join("copy.md").exists());
+    assert_only_the_confinement_refusal_is_recorded(&sink, "write_file.path", &outside);
+}
+
+/// TRUST-10: a destination named by a reference that a link carries out of the workspace is refused
+/// before the person is asked, and the refusal says `ref:1` and never the name behind it. The
+/// question about a reference is always put, so this is where the order matters most, and the
+/// early refusal is a second place that words a failure about a name the planner is not told.
+#[cfg(unix)]
+#[test]
+fn a_reference_destination_a_link_carries_out_is_refused_before_the_person_is_asked() {
+    let elsewhere = Scratch::new("write-unreachable-reference-elsewhere");
+    std::fs::write(elsewhere.path.join("target.txt"), "kept\n").unwrap();
+    let scratch = Scratch::new("write-unreachable-reference");
+    let named = scratch.path.join("hidden-name.txt");
+    std::fs::write(&named, "listed as a file\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // The file is listed as a file, and is a link out of the workspace by the time it is written.
+    let target = elsewhere.path.join("target.txt");
+    let mut script = vec![
+        tool_request("list_files", r#"{"directory":"."}"#),
+        tool_request(
+            "write_file",
+            r#"{"path_ref":"ref:1","contents":"replaced"}"#,
+        ),
+        reply_with("done"),
+    ]
+    .into_iter();
+    let mut round = 0;
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |_| {
+        round += 1;
+        if round == 2 {
+            std::fs::remove_file(&named).unwrap();
+            std::os::unix::fs::symlink(&target, &named).unwrap();
+        }
+        script.next().map(Some)
+    });
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("write it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    assert!(confirmer.seen.is_empty(), "{:?}", confirmer.seen);
+    let _first = received.recv().expect("first request");
+    let _listed = received.recv().expect("the request after the listing");
+    let told = message_from(
+        &received.recv().expect("third request"),
+        "Result of write_file",
+    )
+    .to_string();
+    assert!(
+        told.contains("'ref:1' resolves outside the workspace"),
+        "{told}"
+    );
+    assert!(
+        !told.contains("hidden-name"),
+        "the refusal named the file: {told}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(elsewhere.path.join("target.txt")).unwrap(),
+        "kept\n"
+    );
+    assert_only_the_confinement_refusal_is_recorded(&sink, "write_file.path_ref", "ref:1");
+}
+
+/// TRUST-10: the check made before the question does not replace the one made at the write. A
+/// directory that is a link out of the workspace by the time the person has answered is refused
+/// there, and the refusal is recorded, since the first check saw a path that was still inside.
+#[cfg(unix)]
+#[test]
+fn a_write_whose_directory_leaves_the_workspace_while_asked_is_refused_at_the_write() {
+    let elsewhere = Scratch::new("write-leaves-while-asked-elsewhere");
+    let scratch = Scratch::new("write-leaves-while-asked");
+    std::fs::create_dir(scratch.path.join("sub")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"sub/new.txt","contents":"howdy\n"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let inside = scratch.path.join("sub");
+    let outside = elsewhere.path.clone();
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || {
+            std::fs::remove_dir(&inside).unwrap();
+            std::os::unix::fs::symlink(&outside, &inside).unwrap();
+        }),
+    };
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("write sub/new.txt"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let told = message_from(
+        &received.recv().expect("second request"),
+        "Result of write_file",
+    )
+    .to_string();
+    assert!(told.contains("resolves outside the workspace"), "{told}");
+    assert!(
+        !elsewhere.path.join("new.txt").exists(),
+        "the write followed the link out of the workspace"
+    );
+    let refused = confinement_refusals(&sink);
+    assert_eq!(refused.len(), 1, "{:?}", sink.events());
+    assert!(
+        refused[0].starts_with("write_file.path: 'sub/new.txt'"),
+        "{}",
+        refused[0]
+    );
+}
+
 /// The write appears in the trail as a granted action, so an audit shows a person
 /// authorised it.
 #[test]
@@ -39031,6 +39329,121 @@ fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
     assert!(asked_nobody.seen.is_empty());
 }
 
+/// TRUST-10 and CHECKOUT-14. A recorded file whose directory in the working directory is a link
+/// out of it is refused before the person is asked, and the line for that file says so. Every file
+/// of an apply is put to the person whatever the trust map says, so a file that cannot land would
+/// otherwise be put to them first and refused after a yes.
+#[cfg(unix)]
+#[test]
+fn a_checkout_file_whose_directory_leaves_the_working_directory_is_refused_before_the_person_is_asked()
+ {
+    let (workspace, scratch, home, trust) = a_checkout_kept_after_a_worker_wrote(
+        "checkout-apply-unreachable",
+        &[("sub/out.txt", "from the delegate")],
+    );
+    let elsewhere = Scratch::new("checkout-apply-unreachable-elsewhere");
+    std::os::unix::fs::symlink(&elsewhere.path, scratch.path.join("sub")).unwrap();
+    let config = config_for("http://127.0.0.1:1");
+    let egress = bravebot_net::Egress::new();
+    let task = Task::new("/checkouts apply c1").with_home(Some(home.path.clone()));
+
+    let mut approving = RecordingConfirmer::approving();
+    let mut sink = RecordingSink::new();
+    let applied = turn::apply_checkout_asked_for(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        "c1",
+        &[],
+        &mut approving,
+        &mut sink,
+        trust,
+    )
+    .expect("a kept checkout is applied");
+
+    assert!(
+        approving.seen.is_empty(),
+        "the person was asked about a file that cannot land: {:?}",
+        approving.seen
+    );
+    assert!(!applied.applied, "{}", applied.text);
+    assert!(
+        applied
+            .text
+            .contains("'sub/out.txt' resolves outside the workspace"),
+        "{}",
+        applied.text
+    );
+    assert!(!elsewhere.path.join("out.txt").exists());
+    assert_only_the_confinement_refusal_is_recorded(&sink, "apply_checkout.path", "sub/out.txt");
+}
+
+/// TRUST-10 and CHECKOUT-14. A file that cannot land is refused on its own line and the files after
+/// it are still put to the person and brought back, so one link in the working directory does not
+/// stop an apply. The unreachable file sorts first, since the files are taken in order and a
+/// refusal that ended the loop would leave the one after it unasked.
+#[cfg(unix)]
+#[test]
+fn a_checkout_file_that_cannot_land_does_not_stop_the_files_after_it() {
+    let (workspace, scratch, home, trust) = a_checkout_kept_after_a_worker_wrote(
+        "checkout-apply-unreachable-then-reachable",
+        &[("sub/out.txt", "cannot land"), ("tail.txt", "can land")],
+    );
+    let elsewhere = Scratch::new("checkout-apply-unreachable-then-reachable-elsewhere");
+    std::os::unix::fs::symlink(&elsewhere.path, scratch.path.join("sub")).unwrap();
+    let config = config_for("http://127.0.0.1:1");
+    let egress = bravebot_net::Egress::new();
+    let task = Task::new("/checkouts apply c1").with_home(Some(home.path.clone()));
+
+    let mut approving = RecordingConfirmer::approving();
+    let mut sink = RecordingSink::new();
+    let applied = turn::apply_checkout_asked_for(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        "c1",
+        &[],
+        &mut approving,
+        &mut sink,
+        trust,
+    )
+    .expect("a kept checkout is applied");
+
+    let asked: Vec<&str> = approving
+        .seen
+        .iter()
+        .map(|request| request.path.as_str())
+        .collect();
+    assert_eq!(asked, ["tail.txt"], "{}", applied.text);
+    assert!(applied.applied, "{}", applied.text);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("tail.txt")).expect("brought back"),
+        "can land"
+    );
+    assert!(!elsewhere.path.join("out.txt").exists());
+    assert!(
+        applied.text.contains("created tail.txt"),
+        "the file after the refused one has no line of its own: {}",
+        applied.text
+    );
+    assert!(
+        applied
+            .text
+            .contains("'sub/out.txt' resolves outside the workspace"),
+        "{}",
+        applied.text
+    );
+    let refused = confinement_refusals(&sink);
+    assert_eq!(refused.len(), 1, "{:?}", sink.events());
+    assert!(
+        refused[0].starts_with("apply_checkout.path: 'sub/out.txt'"),
+        "{}",
+        refused[0]
+    );
+}
+
 /// CHECKOUT-14. `/checkouts apply <n> <path>` puts only the paths typed to the person and brings
 /// back only those; a path the driver recorded no write to refuses the whole command before
 /// anything is asked, even beside one that is recorded; a path typed twice is asked about once.
@@ -61582,6 +61995,70 @@ fn a_declined_destination_sends_no_request_and_leaves_the_file() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(second.contains("did not approve"), "{second}");
+}
+
+/// TRUST-10: a destination no opened directory holds is refused before the person is asked about
+/// the host or about the file, and nothing is fetched. Neither question has an answer that makes
+/// the path reachable, and the planner is told the path is out of reach and what the person can do,
+/// not that the person said no.
+#[test]
+fn a_download_to_a_file_outside_the_workspace_is_refused_before_the_person_is_asked() {
+    let elsewhere = Scratch::new("download-unreachable-elsewhere");
+    let outside = elsewhere
+        .path
+        .join("data.bin")
+        .to_string_lossy()
+        .to_string();
+    let scratch = Scratch::new("download-unreachable");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, count) = serve_raw(raw_reply("application/octet-stream", b"never"));
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &serde_json::json!({ "url": format!("{site}/data"), "path": outside }).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ApprovesFetchesAndWrites::default();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("save it outside"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        confirmer.asked.is_empty() && confirmer.hosts.is_empty() && confirmer.writes.is_empty(),
+        "the person was asked about a download that is refused whatever they answer: {:?} {:?} {:?}",
+        confirmer.asked,
+        confirmer.hosts,
+        confirmer.writes
+    );
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        0,
+        "the refused download was fetched"
+    );
+    assert!(!elsewhere.path.join("data.bin").exists());
+    let _first = received.recv().expect("first request");
+    let told = message_from(
+        &received.recv().expect("second request"),
+        "Result of download_url",
+    )
+    .to_string();
+    assert!(told.contains("resolves outside the workspace"), "{told}");
+    assert!(told.contains("/add-dir"), "no remedy was named: {told}");
+    assert!(!told.contains("did not approve"), "{told}");
+    assert_only_the_confinement_refusal_is_recorded(&sink, "download_url.path", &outside);
 }
 
 /// PROMPT-12: words a person typed beside a refused download reach the planner in place of the
