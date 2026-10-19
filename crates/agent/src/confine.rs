@@ -7399,18 +7399,19 @@ mod tests {
         let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
         let status = step("/usr/bin/git", &["status"]);
 
-        let plain = confined.profile(&[&commit]);
+        let socket = vec![("SSH_AUTH_SOCK".to_string(), "/run/agent.sock".to_string())];
+        let plain = confined.profile_offering_in(&[&commit], false, &socket);
         assert!(plain.contains("No private key found"), "{plain}");
         assert!(plain.contains("never reads a private key"), "{plain}");
         assert!(plain.contains("`ssh-add`"), "{plain}");
         assert!(!plain.contains("unconfined"), "{plain}");
 
-        let offered = confined.profile_offering(&[&commit], true);
+        let offered = confined.profile_offering_in(&[&commit], true, &socket);
         assert!(offered.contains("No private key found"), "{offered}");
         assert!(offered.contains("'unconfined': true"), "{offered}");
         assert!(offered.contains("`ssh-add`"), "{offered}");
 
-        let none = confined.profile_offering(&[&status], true);
+        let none = confined.profile_offering_in(&[&status], true, &socket);
         assert!(!none.contains("No private key found"), "{none}");
         assert!(!none.contains("unconfined"), "{none}");
         std::fs::remove_dir_all(&home).unwrap();

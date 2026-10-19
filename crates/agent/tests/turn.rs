@@ -23036,7 +23036,12 @@ fn a_failed_signing_step_names_the_unconfined_line_only_where_it_is_accepted() {
         let context = format!("{} (front end asks: {front_end_asks}): {said}", mode.name());
         assert!(said.contains("exited"), "{context}");
         assert!(said.contains("No private key found"), "{context}");
-        assert!(said.contains("`ssh-add`"), "{context}");
+        let agent_hint = if std::env::var_os("SSH_AUTH_SOCK").is_some() {
+            "`ssh-add`"
+        } else {
+            "no agent to sign through"
+        };
+        assert!(said.contains(agent_hint), "{context}");
         assert_eq!(said.contains("'unconfined': true"), pointed, "{context}");
     }
 }
@@ -23097,7 +23102,12 @@ fn a_failed_signing_job_names_the_unconfined_line_only_where_it_is_accepted() {
         );
         assert!(account.contains("It failed: step 1 exited"), "{context}");
         assert!(account.contains("No private key found"), "{context}");
-        assert!(account.contains("`ssh-add`"), "{context}");
+        let agent_hint = if std::env::var_os("SSH_AUTH_SOCK").is_some() {
+            "`ssh-add`"
+        } else {
+            "no agent to sign through"
+        };
+        assert!(account.contains(agent_hint), "{context}");
         assert_eq!(account.contains("'unconfined': true"), pointed, "{context}");
     }
 }
