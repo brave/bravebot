@@ -2842,13 +2842,7 @@ fn suggest_next(
                     )
                     .ok()
                 });
-        let (text, tokens) = match done {
-            Some(answered) => (
-                bravebot_agent::aside::suggestion(&answered.shown),
-                answered.usage.total(),
-            ),
-            None => (None, 0),
-        };
+        let (text, tokens) = suggested_text(done);
         let _ = send.send(Suggested {
             text,
             tokens,
@@ -2856,6 +2850,24 @@ fn suggest_next(
         });
     });
     Some(Suggesting { answer })
+}
+
+/// The text a suggestion request's answer offers, and what the request cost (INPUT-43).
+///
+/// Text is offered only where the answer is one the planner could have held (`kept`), as a brief
+/// is: a conversation that has met something untrusted offers nothing, but the request is still
+/// charged.
+fn suggested_text(done: Option<bravebot_agent::aside::Answered>) -> (Option<String>, u64) {
+    match done {
+        Some(answered) => (
+            answered
+                .kept
+                .as_deref()
+                .and_then(bravebot_agent::aside::suggestion),
+            answered.usage.total(),
+        ),
+        None => (None, 0),
+    }
 }
 
 /// Take the answer to a request for a suggestion, if it has come, and say whether the screen
@@ -29660,6 +29672,24 @@ mod tests {
     }
 
     use bravebot_agent::{Ending, PermissionMode};
+
+    /// An answer from an exchange that met something untrusted holds no `kept`, and the driver
+    /// does not count it: removing the guard would offer text that content may have shaped as the
+    /// person's next prompt. The request is charged either way.
+    #[test]
+    fn a_suggestion_from_an_exchange_that_met_something_untrusted_is_not_offered() {
+        let answer = |kept: Option<&str>| bravebot_agent::aside::Answered {
+            shown: "run the tests again".to_string(),
+            kept: kept.map(str::to_string),
+            usage: Default::default(),
+        };
+        assert_eq!(suggested_text(Some(answer(None))).0, None);
+        assert_eq!(
+            suggested_text(Some(answer(Some("run the tests again")))).0,
+            Some("run the tests again".to_string())
+        );
+        assert_eq!(suggested_text(None), (None, 0));
+    }
 
     fn offered(text: &str) -> Session {
         let mut session = Session::new("none");

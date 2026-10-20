@@ -2589,7 +2589,9 @@ It is made once per turn, without the box waiting for it.
 
 What comes back is offered only if it holds 2 to 12 words, fewer than 100 characters and one line.
 The driver counts and nothing else: it does not read what the words say, and an answer outside the
-counts is not offered, rather than being cut to something the model did not write. An offer is
+counts is not offered, rather than being cut to something the model did not write. Nothing is
+offered where the answer is one the planner could not have held, which is an exchange that has met
+something untrusted, as a handoff brief is not (see [sessions.md](sessions.md)). An offer is
 drawn dimmed in the box where the invitation is, and only while the box is empty and the session
 idle.
 
@@ -2619,6 +2621,7 @@ nobody asked for on each turn is the cost this setting exists to let a person ch
 `verified-by: bravebot_tui::app::a_suggestion_is_offered_only_to_an_idle_empty_box_with_the_setting_on`
 `verified-by: bravebot_tui::app::a_suggestion_is_asked_for_only_after_a_turn_that_answered`
 `verified-by: bravebot_tui::app::a_suggestions_cost_is_charged_to_the_session`
+`verified-by: bravebot_tui::app::a_suggestion_from_an_exchange_that_met_something_untrusted_is_not_offered`
 `verified-by: bravebot_tui::app::an_answered_request_is_charged_recorded_and_offered`
 `verified-by: bravebot_tui::app::an_answer_that_is_not_usable_is_still_charged_and_recorded`
 `verified-by: bravebot_tui::app::a_request_not_yet_answered_is_waited_on`
