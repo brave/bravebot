@@ -1468,7 +1468,7 @@ the file would still say they had vouched for it.
 `verified-by: bravebot_agent::trusted::forgetting_removes_this_directorys_answers_and_keeps_the_rest`
 `verified-by: bravebot_agent::trusted::forgetting_the_last_answer_removes_the_file`
 `verified-by: bravebot_agent::trusted::a_line_cut_inside_a_character_is_skipped_like_any_half_written_line`
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the permissions list is pinned instead by ui/scripts/remembered-trust-list.test.mjs, which renders the real list row through react-dom and asserts that it gives when the answer was kept, from the time the bridge sends, the file it is kept in and a Forget button; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the permissions list is pinned instead by ui/scripts/remembered-trust-list.test.mjs, which renders the real list row through react-dom and asserts that it gives when the answer was kept, from the time the bridge sends, the file it is kept in, the git worktree root where the answer was kept about one (and no root where it was not) and a Forget button; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
 
 ## Trusting the directory of a run nobody is watching
 
