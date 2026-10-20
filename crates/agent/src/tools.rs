@@ -19497,7 +19497,7 @@ mod tests {
             let confinement = |workspace: &Workspace| {
                 with_tools(workspace, |tools| {
                     tools.confine_runs = true;
-                    tools.confinement().expect("a platform with a base")
+                    tools.confinement(true).expect("a platform with a base")
                 })
             };
             let granted = |workspace: &Workspace| {
