@@ -171,7 +171,8 @@ pub fn compose_in<S: Sink>(
     let safe = bravebot_core::safe::engaged();
     if !safe
         && let Some(home) = home
-        && let Some(text) = read_home_agents(policy, home)
+        && let Some(text) =
+            read_home_agents(policy, &[sources, workspace], home, &mut preamble.notices)
     {
         let origin = format!("~/.bravebot/{AGENTS_FILE}");
         admit_by_size(&origin, &text, &mut standing_bytes, &mut preamble.notices);
@@ -679,8 +680,27 @@ fn admit_by_size(origin: &str, text: &str, total: &mut usize, notices: &mut Vec<
 }
 
 /// `~/.bravebot/AGENTS.md`, trusted for sitting where it sits.
-fn read_home_agents<S: Sink>(policy: &mut Policy<'_, S>, home: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(home.join(AGENTS_FILE)).ok()?;
+///
+/// Not read where the way to it goes through a directory one of `workspaces` may write to, because
+/// a turn can write it and the trust map would then record it untrusted (SKILL-3).
+fn read_home_agents<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspaces: &[&Workspace],
+    home: &Path,
+    notices: &mut Vec<Notice>,
+) -> Option<String> {
+    let file = home.join(AGENTS_FILE);
+    if !file.is_file() {
+        return None;
+    }
+    if workspaces
+        .iter()
+        .any(|workspace| crate::skills::goes_through_the_workspace(workspace, &file))
+    {
+        notices.push(Notice::home_agents_file_reached_through_the_workspace());
+        return None;
+    }
+    let text = std::fs::read_to_string(file).ok()?;
     let origin = format!("~/.bravebot/{AGENTS_FILE}");
     let labelled = policy.label_user_configuration(&origin, text);
     policy.read_trusted_content("preamble", &labelled).ok()

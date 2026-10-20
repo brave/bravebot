@@ -960,13 +960,11 @@ fn a_definition_a_deny_rule_covers_is_selectable_nowhere_through_a_link_to_it() 
     );
 }
 
-/// MEMORY-2: a session whose working directory is the one holding the state directory, as a
-/// session opened in the home directory is, would keep a memory inside `~/.bravebot`, which the
-/// map does not govern. The definition still loads, keeps no memory, and says so. The same file
-/// read from a state directory elsewhere is the control, keeping one and saying nothing.
-///
-/// Inside, the definitions directory is also the checkout's own, which nobody vouched for here,
-/// so that one is counted as it would be for any session there.
+/// MEMORY-2, DELEGATE-20: a session whose working directory is the one holding the state directory,
+/// as a session opened in the home directory is, would keep a memory inside `~/.bravebot`, which
+/// the map does not govern. The definitions there are the checkout's own, which nobody vouched for
+/// here, so none loads and the directory is counted as it would be for any session there. The same
+/// file read from a state directory elsewhere is the control, keeping one and saying nothing.
 #[test]
 fn a_memory_that_would_sit_inside_the_state_directory_is_not_kept_and_is_said() {
     let scratch = Scratch::new("memory-in-home");
@@ -992,8 +990,7 @@ fn a_memory_that_would_sit_inside_the_state_directory_is_not_kept_and_is_said() 
         let (definitions, notices) = agents::discover(&mut policy, &workspace, Some(home));
         let keeps = definitions
             .get("notes-keeper")
-            .expect("loaded")
-            .keeps_memory();
+            .map(|definition| definition.keeps_memory());
         let said: Vec<String> = notices.into_iter().map(|n| n.message).collect();
         (keeps, said)
     };
@@ -1002,25 +999,17 @@ fn a_memory_that_would_sit_inside_the_state_directory_is_not_kept_and_is_said() 
         "1 delegate definition in .bravebot/agents was not loaded: this directory is not trusted";
     assert_eq!(
         discovered(&elsewhere, &mut sink),
-        (true, vec![counted.to_string()])
+        (Some(true), vec![counted.to_string()])
     );
     assert_eq!(
         discovered(&inside, &mut sink),
-        (
-            false,
-            vec![
-                counted.to_string(),
-                "~/.bravebot/agents/notes-keeper.md keeps no memory here: in this directory its \
-                 memory would be inside ~/.bravebot, which no write can leave untrusted"
-                    .to_string()
-            ]
-        )
+        (None, vec![counted.to_string()])
     );
 }
 
 /// CHECKOUT-2, CHECKOUT-9: a definition keeping a memory and asking for a checkout says, when it
-/// loads, that only an addressed turn keeps the memory. Where the memory is not kept at all, as
-/// inside the state directory, that is the only thing said.
+/// loads, that only an addressed turn keeps the memory. Inside the state directory nothing loads
+/// from provenance, so only the count of the checkout's own definitions is said.
 #[test]
 fn a_definition_keeping_a_memory_and_asking_for_a_checkout_says_so_when_it_loads() {
     let scratch = Scratch::new("memory-in-checkout");
@@ -1057,12 +1046,47 @@ fn a_definition_keeping_a_memory_and_asking_for_a_checkout_says_so_when_it_loads
              each of its delegates works in a checkout, which keeps none",
         ]
     );
-    assert_eq!(
-        said(&inside, &mut sink),
-        [
-            counted,
-            "~/.bravebot/agents/migrator.md keeps no memory here: in this directory its memory \
-             would be inside ~/.bravebot, which no write can leave untrusted",
-        ]
+    assert_eq!(said(&inside, &mut sink), [counted]);
+}
+
+const ONE_HOME_DEFINITION_REACHED: &str = "1 delegate definition in ~/.bravebot/agents was not \
+     loaded: the way to its file goes through a directory this session can write to";
+
+/// DELEGATE-20, SKILL-3. A working directory that holds the home directory, such as `/Users`,
+/// holds the person's definitions under a path no project definition directory is at. A turn can
+/// write that file and the trust map would record it untrusted, so it is not loaded from
+/// provenance, and the person is told one was left out. The same file in a state directory outside
+/// the working directory is the control and loads.
+#[test]
+fn a_definition_in_a_working_directory_that_holds_the_home_directory_is_not_loaded() {
+    let scratch = Scratch::new("definition-workspace-holds-home");
+    let state = scratch
+        .path
+        .join("people")
+        .join("somebody")
+        .join(".bravebot");
+    let elsewhere = scratch.path.join("elsewhere");
+    for home in [&state, &elsewhere] {
+        write_definition(
+            home,
+            "planted",
+            &frontmatter("planted", "INJECTED", "worker"),
+            "body",
+        );
+    }
+    let workspace = Workspace::new(scratch.path.join("people")).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy(&mut sink, &[]);
+    let (definitions, notices) = agents::discover(&mut policy, &workspace, Some(&state));
+    assert!(
+        from_disk(&definitions).is_empty(),
+        "a file a turn could write was loaded as the person's own"
     );
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(told, [ONE_HOME_DEFINITION_REACHED]);
+
+    let (definitions, notices) = agents::discover(&mut policy, &workspace, Some(&elsewhere));
+    assert_eq!(from_disk(&definitions), ["planted"]);
+    assert!(notices.is_empty(), "{notices:?}");
 }

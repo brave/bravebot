@@ -505,7 +505,13 @@ pub fn discover<S: Sink>(
     }
 
     if let Some(home) = home {
-        discover_home(policy, &home.join(AGENTS), &mut definitions, &mut notices);
+        discover_home(
+            policy,
+            workspace,
+            &home.join(AGENTS),
+            &mut definitions,
+            &mut notices,
+        );
     }
     discover_workspace(policy, workspace, &mut definitions, &mut notices);
     notices.extend(rounds_held_to_their_kind(&definitions));
@@ -612,8 +618,14 @@ pub fn not_vouched_for(workspace: &Workspace, trust: &bravebot_core::trust::Trus
 }
 
 /// Definitions from `~/.bravebot/agents`, labelled from where they sit.
+///
+/// A file whose path goes through the workspace is not read from here, because a turn can write
+/// it (DELEGATE-20, SKILL-3). It is the project's, and `discover_workspace` reads it through the
+/// trust map where `~/.bravebot/agents` is the project's definition directory. Those passed over
+/// are counted, except in that case, where `discover_workspace` has said what it did with each.
 fn discover_home<S: Sink>(
     policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
     root: &Path,
     definitions: &mut Definitions,
     notices: &mut Vec<Notice>,
@@ -622,7 +634,12 @@ fn discover_home<S: Sink>(
         return;
     }
 
+    let mut passed_over = 0;
     for file in definition_files(root) {
+        if crate::skills::goes_through_the_workspace(workspace, &root.join(&file)) {
+            passed_over += 1;
+            continue;
+        }
         let origin = format!("~/.bravebot/{AGENTS}/{file}");
 
         let Ok(text) = std::fs::read_to_string(root.join(&file)) else {
@@ -642,6 +659,17 @@ fn discover_home<S: Sink>(
             definitions,
             notices,
         );
+    }
+    // The project's own pass has said what it did with each file where it reads this directory.
+    let read_as_the_projects = std::fs::canonicalize(root)
+        .ok()
+        .zip(std::fs::canonicalize(workspace.root().join(WORKSPACE_AGENTS)).ok())
+        .is_some_and(|(home, project)| home == project);
+    if passed_over > 0 && !read_as_the_projects {
+        notices.push(Notice::from_message(t!(
+            home_definitions_reached_through_the_workspace,
+            count = passed_over
+        )));
     }
 }
 

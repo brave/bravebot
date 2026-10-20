@@ -2332,6 +2332,15 @@ home-skills-reached-through-the-workspace =
         [one] 1 skill de ~/.bravebot/skills n'a pas été chargé : le chemin vers son fichier passe par un répertoire où cette session peut écrire
        *[other] { $count } skills de ~/.bravebot/skills n'ont pas été chargés : le chemin vers leurs fichiers passe par un répertoire où cette session peut écrire
     }
+# Le ~/.bravebot/AGENTS.md de la personne quand il n'a pas été lu, parce que le chemin vers le fichier passe
+# par le répertoire de travail ou un répertoire ouvert à côté, où un tour peut écrire.
+home-agents-file-reached-through-the-workspace = ~/.bravebot/AGENTS.md n'a pas été lu : le chemin vers ce fichier passe par un répertoire où cette session peut écrire
+# Les définitions de ~/.bravebot/agents qui n'ont pas été chargées, pour la même raison.
+home-definitions-reached-through-the-workspace =
+    { $count ->
+        [one] 1 définition de délégué de ~/.bravebot/agents n'a pas été chargée : le chemin vers son fichier passe par un répertoire où cette session peut écrire
+       *[other] { $count } définitions de délégué de ~/.bravebot/agents n'ont pas été chargées : le chemin vers leurs fichiers passe par un répertoire où cette session peut écrire
+    }
 reference-bad-alias = la référence { $alias } n'a pas été utilisée : un alias ne peut pas être vide ni contenir /, espaces, accents graves ou virgules
 reference-repository-not-fetched = la référence { $alias } n'a pas été utilisée : une entrée qui nomme un dépôt n'est pas récupérée, donnez-lui un chemin
 reference-no-path = la référence { $alias } n'a pas été utilisée : elle ne nomme aucun répertoire

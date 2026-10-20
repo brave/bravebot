@@ -220,23 +220,29 @@ pub(super) fn set_limit(session: &mut Session, figure: &str) {
 ///
 /// Looked up as `/style` looks a name up, so a name that is not a style is said and leaves none in
 /// force. Nothing is said for one that is, and a `--system-prompt` run holds it as `/style` does.
-pub(super) fn adopt_style(session: &mut Session, named: Option<&str>) {
-    adopt_style_in(session, named, bravebot_agent::home::directory().as_deref());
+pub(super) fn adopt_style(session: &mut Session, workspace: &Workspace, named: Option<&str>) {
+    adopt_style_in(
+        session,
+        workspace,
+        named,
+        bravebot_agent::home::directory().as_deref(),
+    );
 }
 
 /// [`adopt_style`] with the `~/.bravebot` directory named, so a test can give it a scratch one.
 pub(super) fn adopt_style_in(
     session: &mut Session,
+    workspace: &Workspace,
     named: Option<&str>,
     home: Option<&std::path::Path>,
 ) {
     let Some(word) = named else {
         return;
     };
-    match bravebot_agent::styles::find(home, word) {
+    match bravebot_agent::styles::find(workspace, home, word) {
         Some(style) => session.choose_style(Some(style)),
         None => {
-            let styles = bravebot_agent::styles::available(home).join(", ");
+            let styles = bravebot_agent::styles::available(workspace, home).join(", ");
             session.note(t!(session_style_unknown, style = word, styles = styles));
         }
     }
@@ -248,14 +254,24 @@ pub(super) fn adopt_style_in(
 /// `~/.bravebot/styles` and the project's the trust map vouched for, and is never read from the
 /// line into the prompt. The pick lasts for the
 /// session and is not recorded.
-pub(super) fn set_style(session: &mut Session, word: &str) {
-    set_style_in(session, word, bravebot_agent::home::directory().as_deref());
+pub(super) fn set_style(session: &mut Session, workspace: &Workspace, word: &str) {
+    set_style_in(
+        session,
+        workspace,
+        word,
+        bravebot_agent::home::directory().as_deref(),
+    );
 }
 
 /// [`set_style`] with the `~/.bravebot` directory named, so a test can give it a scratch one.
-pub(super) fn set_style_in(session: &mut Session, word: &str, home: Option<&std::path::Path>) {
+pub(super) fn set_style_in(
+    session: &mut Session,
+    workspace: &Workspace,
+    word: &str,
+    home: Option<&std::path::Path>,
+) {
     let word = word.trim();
-    let mut styles = bravebot_agent::styles::available(home);
+    let mut styles = bravebot_agent::styles::available(workspace, home);
     styles.extend(session.project_styles().iter().cloned());
     let styles = styles.join(", ");
     if word.is_empty() {
@@ -271,7 +287,7 @@ pub(super) fn set_style_in(session: &mut Session, word: &str, home: Option<&std:
     } else if word == STYLE_OFF {
         session.choose_style(None);
         session.note(t!(session_style_cleared));
-    } else if let Some(style) = bravebot_agent::styles::find(home, word).or_else(|| {
+    } else if let Some(style) = bravebot_agent::styles::find(workspace, home, word).or_else(|| {
         // Taken on the held list, so a name nothing vouched for is no style, and picked by name
         // alone: the turn reads the words under its own trust map.
         let held = session.project_styles().iter().any(|name| name == word);

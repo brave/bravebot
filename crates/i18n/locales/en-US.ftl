@@ -3629,6 +3629,15 @@ home-skills-reached-through-the-workspace =
         [one] 1 skill in ~/.bravebot/skills was not loaded: the way to its file goes through a directory this session can write to
        *[other] { $count } skills in ~/.bravebot/skills were not loaded: the way to their files goes through a directory this session can write to
     }
+# The person's own ~/.bravebot/AGENTS.md when it was not read, because the way to the file goes
+# through the working directory or a directory opened beside it, where a turn can write.
+home-agents-file-reached-through-the-workspace = ~/.bravebot/AGENTS.md was not read: the way to it goes through a directory this session can write to
+# Definitions in the person's own ~/.bravebot/agents that were not loaded, for the same reason.
+home-definitions-reached-through-the-workspace =
+    { $count ->
+        [one] 1 delegate definition in ~/.bravebot/agents was not loaded: the way to its file goes through a directory this session can write to
+       *[other] { $count } delegate definitions in ~/.bravebot/agents were not loaded: the way to their files goes through a directory this session can write to
+    }
 # An entry of "references" in the person's settings that was not offered. The alias is the name they
 # gave it. One message per reason: the alias cannot be used, the entry names a repository, which
 # is not fetched, the entry names no directory, and a directory that could not be opened.

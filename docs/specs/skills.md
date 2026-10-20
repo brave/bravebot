@@ -83,6 +83,13 @@ in a notice, as [SKILL-6](#SKILL-6) counts what it skips, except where `~/.brave
 itself one of the project skill directories read, whose own notices already account for each.
 The two are compared as directories, so no entry's name is held or compared.
 
+The same holds for the other files read from `~/.bravebot`. `~/.bravebot/AGENTS.md` whose path goes
+through the workspace is not put in the system prompt, and the person is told it was not read.
+A file in `~/.bravebot/agents` whose path goes through it is not a definition, and those passed
+over are counted as skills are ([DELEGATE-20](delegation.md#DELEGATE-20)). A file in
+`~/.bravebot/styles` whose path goes through it is not a style, is not offered by `/style` and is
+not found by name.
+
 `verified-by: bravebot_agent::skills::a_home_skill_is_not_labelled_by_a_rule_meant_for_the_workspace`
 `verified-by: bravebot_agent::skills::a_session_started_in_the_home_directory_reads_its_skills_through_the_trust_map`
 `verified-by: bravebot_agent::skills::a_skill_inside_a_working_directory_that_holds_the_home_directory_is_not_offered`
@@ -92,6 +99,9 @@ The two are compared as directories, so no entry's name is held or compared.
 `verified-by: bravebot_agent::skills::a_home_skill_inside_a_directory_opened_beside_the_project_is_not_offered`
 `verified-by: bravebot_agent::skills::a_home_directory_spelled_in_another_case_is_inside_the_workspace_it_is`
 `verified-by: bravebot_agent::skills::a_home_skill_passed_over_is_counted_beside_a_project_skill_of_the_same_name`
+`verified-by: bravebot_agent::preamble::a_home_agents_file_inside_the_working_directory_is_not_read_as_the_persons_own`
+`verified-by: bravebot_agent::agents::a_definition_in_a_working_directory_that_holds_the_home_directory_is_not_loaded`
+`verified-by: bravebot_agent::styles::a_style_file_the_workspace_can_write_is_not_read_as_the_persons_own`
 
 <a id="SKILL-4"></a>
 ### SKILL-4: a project's own files are read through the trust map
