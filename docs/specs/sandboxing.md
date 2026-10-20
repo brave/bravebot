@@ -3230,9 +3230,9 @@ same change, or resolved first, and its mark is what a reviewer reads.
   | The AWS CLI | bravebot's own, unreduced. A program `aws` starts by name can be one a stage wrote. Tracked in #2756. |
   | `ssh-keygen`, `ssh` and `git` in `doctor --push-identity` | bravebot's own, unreduced. Tracked in #2754. |
   | The connector authority | bravebot's own, unreduced. Tracked in #2755. |
-  | A language server | bravebot's own, accepted: it runs code the project carries, and pyright is meant to use the virtualenv's `python3` ([LSP-5](tools/lsp.md#LSP-5)) |
-  | The clipboard tools and `osascript` | bravebot's own. They are given fixed arguments that name no program, so there is no lookup to reduce `PATH` for. The tools were read, not run. |
-  | The inhibitor `/caffeinate` starts | bravebot's own, with the one name it is given, `cat`, resolved first. Other names `systemd-inhibit` looks up were not examined. |
+  | A language server | bravebot's own, accepted: it runs code the project carries, and pyright is meant to use the virtualenv's `python3` ([LSP-5](tools/lsp.md#LSP-5), [Known costs](tools/lsp.md#known-costs)) |
+  | The clipboard tools and `osascript` | bravebot's own. They are given fixed arguments that name no program, so there is no lookup to reduce `PATH` for. |
+  | The inhibitor `/caffeinate` starts | bravebot's own, with the one name it is given, `cat`, resolved first. Other programs `systemd-inhibit` starts by name resolve through bravebot's unreduced `PATH`. Tracked in #2835. |
   | The background supervisor, the host and a bug report | not applicable: each starts this program's own executable or a path stored by it |
 
   A row that says unreduced is a known gap, not a decision, and it comes out of the table when the
