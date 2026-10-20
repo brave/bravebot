@@ -46,6 +46,10 @@ its name, a turn that confines none of its runs, a workspace not trusted, a mana
 a delegate, and for `scopes` a platform with no sandbox or a session with no profile directory. The
 sentence the planner reads names none of them.
 
+A `run` line that asked for `unconfined` or `scopes` and was accepted is given `(U,priv)` for its
+output whatever vouched for the same line without the request, and its `provenance` entry states
+`(U,priv)`.
+
 A delegate the gate approved and its checkout then refused is recorded as a refusal under
 `delegate`, not as a permission. The entry gives the delegate's number, one fixed cause (the
 isolation argument was not `checkout`, a reader asked for one, the run already works in one, the
@@ -90,6 +94,10 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
 `verified-by: bravebot_agent::tools::a_scope_request_is_accepted_only_where_the_session_confines_and_trusts`
 `verified-by: bravebot_agent::turn::a_refused_request_for_no_sandbox_or_for_scopes_is_recorded_with_its_cause`
+`verified-by: bravebot_core::policy::a_line_that_asked_for_a_request_is_untrusted_by_every_road_and_the_trail_says_so`
+`verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`
+`verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`
+`verified-by: bravebot_agent::turn::a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content

@@ -22480,6 +22480,26 @@ struct ScopedRun {
     reach: Vec<bravebot_agent::reach::Grant>,
     /// The reach remembered for a session that did not make the run.
     reach_elsewhere: Vec<bravebot_agent::reach::Grant>,
+    /// Every decision the turn recorded, in order.
+    trail: Vec<Event>,
+}
+
+/// The label each `run` line's `provenance` entry says its output was given, in the order the lines
+/// were run.
+fn labels_stated_for_runs(trail: &[Event]) -> Vec<String> {
+    trail
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "provenance",
+                detail,
+            } => detail
+                .strip_prefix("run: output labelled ")?
+                .split_once(", ")
+                .map(|(label, _)| label.to_string()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// One `run` call carrying `arguments`, made in a confining turn under `mode` with a profile
@@ -22562,6 +22582,7 @@ fn scoped_run_after<C: bravebot_agent::Confirmer + Send>(
             .with_home(Some(state.to_path_buf()))
             .remembering(Some("a-session".to_string()));
     }
+    let mut sink = RecordingSink::new();
     let outcome = turn::resume(
         &config,
         &egress,
@@ -22570,7 +22591,7 @@ fn scoped_run_after<C: bravebot_agent::Confirmer + Send>(
         &mut bravebot_agent::Conversation::new(),
         confirmer,
         &mut bravebot_agent::report::RecordingReporter::default(),
-        &mut RecordingSink::new(),
+        &mut sink,
         trust,
         programs,
         None,
@@ -22597,6 +22618,7 @@ fn scoped_run_after<C: bravebot_agent::Confirmer + Send>(
         reach_elsewhere: state.map_or_else(Vec::new, |state| {
             bravebot_agent::reach::Store::new(state).read(Some("another-session"), workspace.root())
         }),
+        trail: sink.events().to_vec(),
     }
 }
 
@@ -22638,6 +22660,11 @@ fn scopes_are_asked_about_on_a_vouched_line() {
             || message_from(&unrequested.second, "Result of run").contains("Linux"),
         "the vouched control's output was not shown, so the label check below proves nothing"
     );
+    assert_eq!(
+        labels_stated_for_runs(&unrequested.trail),
+        [Label::trusted_private().to_string()],
+        "the trail did not state the vouched control's label, so the trail check below proves nothing"
+    );
 
     let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
     let seen = asked.seen.clone();
@@ -22678,6 +22705,13 @@ fn scopes_are_asked_about_on_a_vouched_line() {
     assert!(
         !said.contains("Darwin") && !said.contains("Linux"),
         "{said}"
+    );
+    // The trail states the label the planner was given and not the one the vouch would have given
+    // the same line without the request (TRACE-1).
+    assert_eq!(
+        labels_stated_for_runs(&result.trail),
+        [Label::untrusted_private().to_string()],
+        "the trail names a label the planner was not given"
     );
 }
 
@@ -24056,6 +24090,11 @@ fn an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing() {
         shown.contains("Linux") || shown.contains("Darwin"),
         "{shown}"
     );
+    assert_eq!(
+        labels_stated_for_runs(&bare.trail),
+        [Label::trusted_private().to_string()],
+        "the trail did not state the vouched control's label, so the trail check below proves nothing"
+    );
 
     let state = Scratch::new("unconfined-vouched-state");
     let mut asked = AskedAboutRuns::answering_in_turn(vec![
@@ -24096,6 +24135,86 @@ fn an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing() {
         !said.contains("Linux") && !said.contains("Darwin"),
         "{said}"
     );
+    // The failed line that earned the request, then the vouched line run without a sandbox: the
+    // trail states `(U,priv)` for both, as the planner was given (TRACE-1).
+    assert_eq!(
+        labels_stated_for_runs(&result.trail),
+        vec![Label::untrusted_private().to_string(); 2],
+        "the trail names a label the planner was not given"
+    );
+}
+
+/// TRACE-1, SANDBOX-26, SANDBOX-29: a line the audited table accounts for prints a trusted answer,
+/// and asking for scopes or for no sandbox quarantines it all the same, with the trail stating the
+/// label the planner was given. The control is the same line without a request, which is not asked
+/// about, is shown and states `(T,priv)`, so what the other two do is the request's doing. The
+/// regression it rejects is a request that skips the vouched road and leaves the audited one open.
+#[test]
+fn a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so() {
+    if cannot_confine_here() {
+        return;
+    }
+    let mut control_asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    let control_seen = control_asked.seen.clone();
+    let control = scoped_run(
+        "audited-control",
+        serde_json::json!({ "command": "pwd" }),
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut control_asked,
+    );
+    assert!(
+        control_seen.lock().unwrap().is_empty(),
+        "the audited line was asked about without a request, so the checks below prove nothing"
+    );
+    let shown = message_from(&control.second, "Result of run");
+    assert!(
+        shown.contains("bravebot-turn-audited-control"),
+        "the audited control's output was not shown, so the label checks below prove nothing: {shown}"
+    );
+    assert_eq!(
+        labels_stated_for_runs(&control.trail),
+        [Label::trusted_private().to_string()],
+        "the trail did not state the audited control's label, so the trail checks below prove nothing"
+    );
+
+    let asked_scopes = scoped_run(
+        "audited-scopes",
+        serde_json::json!({ "command": "pwd", "scopes": ["cargo"] }),
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+    );
+    let asked_unconfined = scoped_run_after(
+        "audited-unconfined",
+        &[serde_json::json!({ "command": "false" })],
+        serde_json::json!({ "command": "pwd", "unconfined": true }),
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        None,
+    );
+    // The unconfined case runs the failed line that earned the request first, which is unvouched.
+    for (request, run, stated) in [
+        ("scopes", asked_scopes, 1),
+        ("unconfined", asked_unconfined, 2),
+    ] {
+        let last = run.second.rfind("Result of run").expect("a result");
+        let said = message_from(&run.second[last..], "Result of run");
+        assert!(said.contains("[ref:"), "{request}: {said}");
+        assert!(!said.contains("bravebot-turn-audited"), "{request}: {said}");
+        assert_eq!(
+            labels_stated_for_runs(&run.trail),
+            vec![Label::untrusted_private().to_string(); stated],
+            "{request}: the trail names a label the planner was not given"
+        );
+    }
 }
 
 /// SANDBOX-29, SANDBOX-22: the mode that asks nothing does not approve the request, because an
