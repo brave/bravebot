@@ -12798,7 +12798,10 @@ fn the_recorded_lines_are_private_and_end_with_the_terminal() {
     let modes: Vec<&str> = output
         .lines()
         .filter_map(|line| line.split_whitespace().next())
-        .filter(|mode| mode.len() == 10 && (mode.starts_with('d') || mode.starts_with('-')))
+        .filter(|word| matches!(word.len(), 10 | 11) && word.starts_with(['d', '-']))
+        // The 11th character is what `ls` appends for an extended attribute (`@`, which macOS puts
+        // on a file it tracks the origin of) or an ACL (`+`), and not part of the mode.
+        .map(|word| &word[..10])
         .collect();
     assert_eq!(
         modes,
