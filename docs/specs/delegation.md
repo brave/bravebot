@@ -1141,7 +1141,9 @@ list leaves out. The kinds `spawn_agent` offers and the kinds its refusal lists 
 set, so a model is not told of a delegate it cannot pick, and a name the list left out is refused
 before a place in the tree is taken ([DELEGATE-7](#DELEGATE-7)). A definition naming none keeps
 the whole set. An empty line names none: its delegate is not offered the tool, is told it cannot
-delegate, and is refused by the kernel if it calls it anyway.
+delegate, and is refused by the kernel if it calls it anyway. A line whose every name selects
+nothing leaves the delegate in the same state, so the tool is never offered with an empty set of
+kinds.
 
 A name selects out of the set and adds nothing to it, and a name nothing in the set goes by
 selects nothing. The turn says so with the rest of what it says about what it found, naming the
@@ -1176,6 +1178,7 @@ the set down and never add to it, so it grants nothing ([DELEGATE-19](#DELEGATE-
 `verified-by: bravebot_core::policy::an_addressed_definition_with_no_delegate_to_start_is_not_kept_spawn_agent`
 `verified-by: bravebot_agent::turn::an_addressed_definition_is_offered_spawn_agent_only_with_delegates_it_may_start`
 `verified-by: bravebot_agent::turn::a_definition_lets_its_delegate_start_only_the_delegates_it_names`
+`verified-by: bravebot_agent::turn::a_delegate_whose_spawns_names_resolve_to_nothing_is_not_offered_spawn_agent`
 
 ## Known costs
 

@@ -2794,6 +2794,7 @@ where
     let system = setup::system_prompt(
         task,
         workspace,
+        &delegates,
         addressed.as_ref(),
         style.as_ref(),
         &preamble,

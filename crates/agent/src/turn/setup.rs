@@ -166,13 +166,24 @@ pub(super) fn offered_tools<S: Sink>(
     let mut offered = tools::for_delegate(
         spec.capabilities(),
         spec.tools(),
-        spec.may_delegate().then_some(delegates),
+        delegate_may_delegate(spec, delegates).then_some(delegates),
         task.deadlines,
     );
     if workspace.checkout().is_some() {
         offered.retain(|tool| tool.function.name != "lsp");
     }
     Ok((None, offered))
+}
+
+/// Whether a delegate is offered `spawn_agent` and told it may delegate: it sits above the bottom
+/// of the tree, its definition did not leave the tool out, and the set its `spawns:` line left
+/// holds a delegate to start. A line whose every name resolved to nothing leaves none, and the
+/// tool's `kind` would then be an empty enumeration (DELEGATE-30).
+fn delegate_may_delegate(
+    spec: &bravebot_core::delegate::DelegateSpec,
+    delegates: &Definitions,
+) -> bool {
+    spec.may_delegate() && !delegates.is_empty()
 }
 
 /// Who answers a read of what a run printed: nobody in a bypass with no screening, a check's
@@ -302,13 +313,16 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
 /// nobody is watching the writes. Only plan mode says anything: see
 /// `PermissionMode::instruction`.
 ///
-/// `started_in` is the mode the turn began in, read once by the caller, which also updates it as
-/// the rounds go. `style` is the output style the turn resolved, which may differ from the one the
-/// task carries (INSTR-12). `memory` is what a definition's kept memory says, which the caller
-/// reads through its policy and so keeps hold of.
+/// `delegates` is the set the turn resolved, as narrowed by its `spawns:` lines, which decides
+/// whether a delegate is told it may delegate. `started_in` is the mode the turn began in, read
+/// once by the caller, which also updates it as the rounds go. `style` is the output style the
+/// turn resolved, which may differ from the one the task carries (INSTR-12). `memory` is what a
+/// definition's kept memory says, which the caller reads through its policy and so keeps hold of.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn system_prompt(
     task: &Task,
     workspace: &Workspace,
+    delegates: &Definitions,
     addressed: Option<&Addressed>,
     style: Option<&Style>,
     preamble: &crate::preamble::Preamble,
@@ -329,7 +343,7 @@ pub(super) fn system_prompt(
                     spec.capabilities(),
                     spec.prompt(),
                     &memory(spec.keeps_memory(), spec.definition()),
-                    spec.may_delegate(),
+                    delegate_may_delegate(spec, delegates),
                 ),
             );
             system.push(Provenance::Driver, checkout_notice);

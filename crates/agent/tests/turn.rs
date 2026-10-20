@@ -64457,6 +64457,103 @@ fn a_definition_lets_its_delegate_start_only_the_delegates_it_names() {
     );
 }
 
+/// DELEGATE-30. A delegate whose `spawns:` line names nothing the run's set holds, a misspelt
+/// name for one, is offered no `spawn_agent` and told it cannot delegate, as one whose line is
+/// empty is, while a line that also names a delegate that resolved still offers that one. Through
+/// the whole turn, because the set is narrowed where the delegate's run starts and its `kind`
+/// would otherwise be an empty enumeration, which some providers reject.
+#[test]
+fn a_delegate_whose_spawns_names_resolve_to_nothing_is_not_offered_spawn_agent() {
+    let scratch = Scratch::new("delegate-spawns-unresolved");
+    let home = Scratch::new("delegate-spawns-unresolved-home");
+    define(
+        &home,
+        "coordinator-lost",
+        "kind: worker\nspawns: reviwer\n",
+        "COORDINATE-LOST",
+    );
+    define(
+        &home,
+        "coordinator-mixed",
+        "kind: worker\nspawns: reviwer, reader\n",
+        "COORDINATE-MIXED",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "PLAN-THE-COORDINATORS",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"coordinator-lost","task":"LOST-TASK"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"coordinator-mixed","task":"MIXED-TASK"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegates finished"),
+            ],
+        ),
+        ("LOST-TASK", vec![reply_with("done")]),
+        ("MIXED-TASK", vec![reply_with("done")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("PLAN-THE-COORDINATORS").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let first_request_of = |task: &str| -> &String {
+        requests
+            .iter()
+            .find(|body| body.contains(task) && !body.contains("PLAN-THE-COORDINATORS"))
+            .unwrap_or_else(|| panic!("the delegate for {task} never ran"))
+    };
+
+    let lost = first_request_of("LOST-TASK");
+    assert!(
+        !lost.contains(r#""name":"spawn_agent""#),
+        "a delegate whose spawns line resolved to nothing was offered spawn_agent"
+    );
+    assert!(
+        !lost.contains(r#""enum":[]"#),
+        "a tool was offered with an empty enumeration"
+    );
+    assert!(
+        lost.contains("You cannot delegate"),
+        "a delegate with no delegate to start was told it may delegate"
+    );
+    assert!(
+        lost.contains(r#""name":"read_file""#),
+        "the rest of the delegate's tools were not offered"
+    );
+
+    let mixed = first_request_of("MIXED-TASK");
+    assert!(
+        mixed.contains(r#""enum":["reader"]"#),
+        "a misspelt name beside a resolved one took the resolved one away"
+    );
+    assert!(
+        !mixed.contains("You cannot delegate"),
+        "a delegate with a delegate to start was told it cannot delegate"
+    );
+}
+
 /// DELEGATE-30. A definition a person addresses is offered `spawn_agent` with the kinds its
 /// `spawns:` line names and no others, and none at all where the line names no delegate that
 /// resolved, as a delegate in that state is. Through the whole turn, because the planner's list
