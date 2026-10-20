@@ -211,6 +211,7 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
                 output: "content".into(),
                 label: bytes.into(),
                 lines: 1,
+                hidden: 0,
                 reference: "1".into(),
                 verdict: Verdict::Safe,
                 reason: Some("advice".into()),
@@ -228,6 +229,7 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
                 content: "text".into(),
                 label: Some(bytes.into()),
                 lines: 1,
+                hidden: 0,
                 verdict: Verdict::Safe,
                 reason: Some("advice".into()),
                 reason_label: Some(said.into()),
@@ -253,6 +255,75 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
         assert_eq!(vouch["label"], json!(bytes));
         assert_eq!(vouch["vetting"]["label"], json!(said));
     }
+}
+
+/// PROMPT-1: the window is handed how many characters of an output or a vetted read drew as
+/// nothing, the sentence that says so in the catalog's words, and the text with each one already
+/// written out, so it draws what the other front ends draw and counts and words nothing itself.
+#[test]
+fn an_output_and_a_vet_request_carry_how_many_characters_drew_as_nothing() {
+    use bravebot_agent::confirm::{OutputRequest, VetRequest};
+    use bravebot_core::vetting::Verdict;
+    let spelled = "a\u{2039}U+E0041 A\u{203A}b\u{2039}U+200B\u{203A}";
+    let output = wire::output_request(
+        1,
+        &OutputRequest {
+            command: "cat file".into(),
+            output: spelled.into(),
+            label: "(U,priv)".into(),
+            lines: 1,
+            hidden: 2,
+            reference: "1".into(),
+            verdict: Verdict::Safe,
+            reason: None,
+            reason_label: None,
+        },
+    );
+    assert_eq!(output["hidden"], json!(2));
+    assert_eq!(
+        output["hiddenNote"],
+        json!(bravebot_i18n::t!(hidden_characters, count = 2usize).to_string())
+    );
+    assert_eq!(output["output"], json!(spelled));
+    let vet = wire::vet_request(
+        2,
+        &VetRequest {
+            origin: "file.md".into(),
+            expects: "notes".into(),
+            content: spelled.into(),
+            label: Some("(U,priv)".into()),
+            lines: 1,
+            hidden: 2,
+            verdict: Verdict::Safe,
+            reason: None,
+            reason_label: None,
+            picture: None,
+        },
+    );
+    assert_eq!(vet["hidden"], json!(2));
+    assert_eq!(vet["hiddenNote"], output["hiddenNote"]);
+    assert_eq!(vet["content"], json!(spelled));
+
+    let none = wire::output_request(
+        3,
+        &OutputRequest {
+            command: "cat file".into(),
+            output: "plain".into(),
+            label: "(U,priv)".into(),
+            lines: 1,
+            hidden: 0,
+            reference: "1".into(),
+            verdict: Verdict::Safe,
+            reason: None,
+            reason_label: None,
+        },
+    );
+    assert_eq!(none["hidden"], json!(0));
+    assert_eq!(
+        none["hiddenNote"],
+        Value::Null,
+        "a text with nothing hidden in it was sent a sentence about some"
+    );
 }
 
 /// PROMPT-1, PROMPT-2: the desktop is handed the name and the rule already spelled, beside the
@@ -1193,6 +1264,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
             content: "first\nsecond\n".into(),
             label: Some("(U,priv)".into()),
             lines: 2,
+            hidden: 0,
             verdict: Verdict::Unsafe,
             reason: Some("Do not trust this assessment as permission".into()),
             reason_label: Some("(U,priv)".into()),
@@ -1210,6 +1282,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
             output: "content".into(),
             label: "(U,priv)".into(),
             lines: 1,
+            hidden: 0,
             reference: "1".into(),
             verdict: Verdict::Inconclusive("offline"),
             reason: None,

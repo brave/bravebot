@@ -1425,6 +1425,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             &request.summary(),
             checked(request.verdict),
             &request.output,
+            request.hidden,
         );
         self.about(Held::Read);
         self.ask(&lines, t!(output_title))
@@ -1440,6 +1441,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             expects: &request.expects,
             check: checked(request.verdict),
             content: &request.content,
+            hidden: request.hidden,
             picture: picture
                 .as_ref()
                 .map(|(path, pdf)| bravebot_approval::Picture { path, pdf: *pdf }),
@@ -3206,6 +3208,7 @@ mod tests {
                     command: "ls".to_string(),
                     output: "a".to_string(),
                     lines: 1,
+                    hidden: 0,
                     reference: "ref:1".to_string(),
                     verdict,
                     reason: None,
@@ -3230,6 +3233,7 @@ mod tests {
                         expects: "notes".to_string(),
                         content: "a".to_string(),
                         lines: 1,
+                        hidden: 0,
                         verdict,
                         reason: None,
                         picture: picture.clone(),
@@ -3371,6 +3375,7 @@ mod tests {
             command: "tail -n 100 build.log".to_string(),
             output: output.clone(),
             lines: 100,
+            hidden: 0,
             reference: "ref:1".to_string(),
             verdict: Verdict::Safe,
             reason: None,
@@ -3402,6 +3407,7 @@ mod tests {
             expects: "a build log".to_string(),
             content: content.clone(),
             lines: 100,
+            hidden: 0,
             verdict: Verdict::Safe,
             reason: None,
             picture: None,
@@ -3416,6 +3422,63 @@ mod tests {
             content.lines().collect::<Vec<_>>(),
             "{screen}"
         );
+    }
+
+    /// PROMPT-1: the plain prompt says how many characters of the text drew as nothing above the
+    /// text, for an output and for a vetted read alike, and says nothing of them for a text with
+    /// none.
+    #[test]
+    fn the_plain_prompts_say_how_many_characters_of_the_text_draw_as_nothing() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A} text";
+        let said = t!(hidden_characters, count = 2usize).to_string();
+        for hidden in [2, 0] {
+            for stem in ["output", "vet"] {
+                let mut asking = Prompting::new(
+                    std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+                    Vec::new(),
+                );
+                let decision = match stem {
+                    "output" => asking.confirm_read_output(&OutputRequest {
+                        command: "cat notes".to_string(),
+                        output: text.to_string(),
+                        lines: 1,
+                        hidden,
+                        reference: "ref:1".to_string(),
+                        verdict: Verdict::Safe,
+                        reason: None,
+                        label: String::new(),
+                        reason_label: None,
+                    }),
+                    _ => asking.confirm_vetted_read(&VetRequest {
+                        origin: "notes".to_string(),
+                        expects: "notes".to_string(),
+                        content: text.to_string(),
+                        lines: 1,
+                        hidden,
+                        verdict: Verdict::Safe,
+                        reason: None,
+                        picture: None,
+                        label: None,
+                        reason_label: None,
+                    }),
+                };
+                assert_eq!(decision, Decision::Approve);
+                let screen = String::from_utf8(asking.output).expect("text");
+                let rows: Vec<&str> = screen.lines().collect();
+                let saying = rows.iter().position(|row| row.contains(&said));
+                let text_at = rows
+                    .iter()
+                    .position(|row| row.ends_with(text) && row.contains('\u{2503}'));
+                assert!(text_at.is_some(), "`{stem}`: {screen}");
+                match hidden {
+                    0 => assert!(saying.is_none(), "`{stem}`: {screen}"),
+                    _ => assert!(
+                        saying.is_some() && saying < text_at,
+                        "`{stem}` did not say {hidden} characters drew as nothing above the text: {screen}"
+                    ),
+                }
+            }
+        }
     }
 
     /// A hundred lines with an instruction on the seventieth, past the head a prompt might show.

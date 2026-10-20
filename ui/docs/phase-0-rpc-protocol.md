@@ -938,7 +938,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `audit` | `{ at, turn, event }` | the `Sink`, via `audit::as_json` |
 | `confirm.request` | see §8.1 | `Confirmer::confirm_write` |
 | `run.request` | `{ request, stages, directory, line, plan, writes, releasesPrivate, confinement, vouches, summary }` | command approval |
-| `output.request` | `{ request, command, reference, lines, output, summary }` | admit command output |
+| `output.request` | `{ request, command, reference, lines, hidden, hiddenNote, output, summary }` | admit command output |
 | `vouch.request` | preview and label fields from `wire::vouch_request` | trust a quarantined path |
 | `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
 | `server.request` | `{ request, language, program, workspace, runsBuildTooling, summary }` | start a language server for the session |
@@ -1346,11 +1346,16 @@ Still open:
 - `run.request` stages carry `binary`, the file the step runs, and the request carries
   `confinement`: `null` where the turn does not confine the stages, else `{ heading, directories,
   sentences }` as the agent worded them.
-- `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `picture` and
+- `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `hidden`, `hiddenNote`, `picture` and
   `vetting: { verdict, reason, detail }`. `picture` is `null` for text. For a picture or a PDF it
   is `{ path, media, bytes }`, a copy of the file for the person to open, deleted once the request
   is answered, and `content` is empty. `vet.reply` carries the session, request and
   explicit decision. Its kind is distinct from output and path-vouch replies.
+- `output` of `output.request` and `content` of `vet.request` have each character that draws as
+  nothing written out as `‹U+XXXX›`, and a tag character also names the letter it stands for. `hidden`
+  counts the characters written out, and `hiddenNote` is the sentence saying so in the agent's words,
+  or null when the count is zero. The card draws the sentence above the text when there is one. All
+  three are drawn as sent: the window does not read the text to make, count or word them.
 - `output.request` and `vouch.request` include `vetting`. `confirm.request` includes an
   optional `remark: { preview, lines, label }`. None is interpreted as an approval.
 - `watches.list/add/stop` operate on an open session. Add names a project-relative file;

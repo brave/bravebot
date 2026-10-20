@@ -853,6 +853,7 @@ mod tests {
             expects: "the release notes".into(),
             content: "the notes".into(),
             lines: 1,
+            hidden: 0,
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
             picture: None,

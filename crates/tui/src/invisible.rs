@@ -10,6 +10,9 @@
 //! person's screen.
 
 /// Whether `c` is removed wherever it stands.
+///
+/// A subset of [`bravebot_core::invisible::draws_as_nothing`], the one list of characters that draw
+/// as nothing: what a paste keeps is a character a script or an emoji sequence is written with.
 fn always_removed(c: char) -> bool {
     matches!(
         c,
@@ -153,6 +156,23 @@ mod tests {
         text.chars()
             .map(|c| char::from_u32(0xE0000 + c as u32).unwrap())
             .collect()
+    }
+
+    /// A paste is cleaned of fewer characters than the prompts write out, never of one they do not.
+    /// The set removed wherever it stands is within the one list of characters that draw as
+    /// nothing, so a character added to a paste's list and not to that one fails here, and a
+    /// prompt's text and a paste cannot disagree about whether a character is hidden.
+    #[test]
+    fn every_character_removed_from_a_paste_is_one_that_draws_as_nothing() {
+        for code in 0..=char::MAX as u32 {
+            let Some(c) = char::from_u32(code) else {
+                continue;
+            };
+            assert!(
+                !always_removed(c) || bravebot_core::invisible::draws_as_nothing(c),
+                "{c:?} is removed from a paste and drawn by the prompts as itself"
+            );
+        }
     }
 
     /// The property that matters most: a message written in the tag block is gone, and the count

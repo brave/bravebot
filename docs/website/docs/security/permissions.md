@@ -56,6 +56,11 @@ The questions for `read_output` and `vet_content` show every line of what a yes 
 the terminal, in `--plain` and in ACP. The cap of 40 lines still applies to every other question,
 such as a write.
 
+Some characters draw as nothing: zero-width characters, bidirectional controls, variation selectors
+and the tag characters, which write ASCII letters that a model reads. Those two questions write each
+one out as `‹U+XXXX›`, and a tag character also with the letter it stands for. A sentence above the
+text says how many there are. The planner receives the text itself.
+
 A check's **verdict word** sits outside the margin, because it is the system's own. The **sentence**
 the check wrote about the content sits inside it, because that is free text about bytes somebody else
 may own, and it is the one line on such a screen you might otherwise read as the program's.
