@@ -487,6 +487,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `awaySummaryIdleSeconds` | how long after a turn finishes the automatic recap waits ([below](#awaysummaryidleseconds)) |
 | `suggestions` | whether the empty box offers a suggested next prompt ([below](#suggestions)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
+| `tui.mouse` | `false` stops the interface capturing the mouse, so the terminal's own selection works ([below](#tuimouse)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
 | `vetting` | whether quarantined content is checked without asking you ([below](#vetting)) |
@@ -894,6 +895,20 @@ The terminal's title names the session, as `bravebot · dependency audit`
 terminal or multiplexer that manages titles itself. Only the boolean `false` turns it off: `"false"`
 in quotes, or any other value, leaves it on. An incognito session leaves the title alone whatever this
 says.
+
+### `tui.mouse`
+
+```json
+{ "tui": { "mouse": false } }
+```
+
+`false` stops the session asking the terminal to report the mouse. The terminal's own text selection
+and scrollback wheel then work as they do outside a session, and the session's own drag selection
+and wheel scrolling do not (use the keys and the scroller instead). Only the boolean `false` does
+this: `"false"` in quotes or any other value leaves capture on. Read when the session opens.
+
+While capture is on, most terminals still select natively if you hold a modifier while dragging:
+Shift on most, Option on macOS iTerm2 and Terminal.app.
 
 ### `tui.wheelRows`
 

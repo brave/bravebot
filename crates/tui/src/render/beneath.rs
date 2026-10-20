@@ -375,7 +375,7 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
     bindings: &Keybindings,
-) -> [(String, &'static str); 26] {
+) -> [(String, &'static str); 27] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "letters as commands, then stop",
@@ -410,6 +410,7 @@ pub(super) fn shortcuts(
         ),
         (bindings.undo_name(), "undo the last edit"),
         ("drag".to_string(), "select, copy on release"),
+        ("shift-drag".to_string(), "the terminal's own selection"),
     ]
 }
 

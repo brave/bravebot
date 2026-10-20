@@ -657,7 +657,7 @@ session asks for four things, each because something here cannot work without it
 
 | What it asks for | What it buys |
 |---|---|
-| mouse reporting, narrowed to the buttons, the wheel, and motion while a button is held | the wheel scrolls the transcript |
+| mouse reporting, narrowed to the buttons, the wheel, and motion while a button is held (not asked for where [`tui.mouse`](../customize/configuration.md#tuimouse) is `false`) | the wheel scrolls the transcript |
 | bracketed paste | a pasted prompt does not send itself on the newline most clipboards carry |
 | focus reporting | the clipboard is worth a look the moment a picture appears on it, rather than polled forever |
 | disambiguated keys, where the terminal says it understands the request | Shift-Enter and Ctrl-Enter arrive at all |

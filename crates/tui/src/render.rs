@@ -6151,6 +6151,19 @@ mod tests {
         );
     }
 
+    /// MOUSE-4: the list names the modifier that gives a drag back to the terminal, since capturing
+    /// the mouse took its own selection away.
+    #[test]
+    fn the_shortcuts_name_the_terminals_own_selection() {
+        let listed = shortcuts(crate::vim::Editing::Ordinary, &Keybindings::default());
+        assert!(
+            listed
+                .iter()
+                .any(|(key, meaning)| key == "shift-drag" && meaning.contains("terminal")),
+            "no row names the bypass modifier"
+        );
+    }
+
     /// The list folds into columns, so it does not push the transcript off a short terminal the way
     /// one row per binding would.
     #[test]

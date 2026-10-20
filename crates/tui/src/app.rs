@@ -1393,8 +1393,12 @@ pub fn run(
     crate::indicator::sense_no_motion();
     crate::blocks::sense();
 
+    // Read before the takeover, which is where capture is asked for, and again with the rest of the
+    // settings once the session exists: the file is small and the session is built after the
+    // terminal is taken.
+    let mouse = bravebot_config::Settings::load().tui_mouse() != Some(false);
     let mut stdout = io::stdout();
-    take_over_terminal(&mut stdout)?;
+    take_over_terminal(&mut stdout, mouse)?;
     // After the takeover, which has finished asking about the background, and before the first
     // event is read, so the reply to this question cannot be taken for a keystroke.
     crate::preview::sense();
@@ -2166,6 +2170,7 @@ fn adopt_settings(
     // once at startup describes the session, and a terminal's own idea of a notch does not change
     // under it.
     session.adopt_wheel_rows(settings.wheel_rows());
+    session.adopt_mouse(settings.tui_mouse());
     session.adopt_panel();
     session.adopt_caffeinate();
     session.away.adopt(settings.away_summary_enabled());
@@ -6590,7 +6595,7 @@ mod tests {
 
     fn asked_for(enhanced: bool) -> String {
         let mut written = Vec::new();
-        ask_for_modes(&mut written, enhanced).expect("ask");
+        ask_for_modes(&mut written, enhanced, true).expect("ask");
         String::from_utf8(written).expect("utf8")
     }
 
@@ -6598,6 +6603,51 @@ mod tests {
         let mut written = Vec::new();
         give_back_modes(&mut written, enhanced).expect("give back");
         String::from_utf8(written).expect("utf8")
+    }
+
+    /// MOUSE-4: with `tui.mouse` off the interface never asks the terminal to report the mouse, so
+    /// the terminal's own selection and wheel keep working, and the rest of the takeover is
+    /// unchanged. Capture is 1000, 1002 and 1006 left on (1003 is turned back off either way).
+    #[test]
+    fn a_session_with_the_mouse_off_never_asks_for_mouse_reporting() {
+        let mut off = Vec::new();
+        ask_for_modes(&mut off, false, false).expect("ask");
+        let off = String::from_utf8(off).expect("utf8");
+        let left_on = modes_left_on(&off);
+        for mode in ["1000", "1002", "1003", "1006"] {
+            assert!(
+                !off.contains(&format!("\x1b[?{mode}h")),
+                "mode {mode} asked for"
+            );
+            assert!(!left_on.contains(mode), "mode {mode} left on");
+        }
+        for mode in ["1049", "2004"] {
+            assert!(
+                left_on.contains(mode),
+                "mode {mode} was dropped with the mouse"
+            );
+        }
+
+        let on = modes_left_on(&asked_for(false));
+        for mode in ["1000", "1002", "1006"] {
+            assert!(
+                on.contains(mode),
+                "mode {mode} not asked for with the mouse on"
+            );
+        }
+    }
+
+    /// MOUSE-4: only a `false` turns it off, and it is on before any settings are read.
+    #[test]
+    fn the_mouse_is_captured_unless_the_settings_turn_it_off() {
+        let mut session = Session::new(String::new());
+        assert!(session.mouse_captured());
+        session.adopt_mouse(Some(false));
+        assert!(!session.mouse_captured());
+        session.adopt_mouse(None);
+        assert!(session.mouse_captured());
+        session.adopt_mouse(Some(true));
+        assert!(session.mouse_captured());
     }
 
     /// A session draws on a screen of its own, so what was in the terminal before it started is
@@ -28485,6 +28535,30 @@ mod tests {
             session.away.due(start + Duration::from_secs(90), turns),
             "the idle time in the settings was not adopted"
         );
+    }
+
+    /// MOUSE-4: `tui.mouse` reaches the session through `adopt_settings`. The editor and the pager
+    /// take the terminal back with the session's choice, so a session that kept the default after
+    /// its settings turned capture off would capture the mouse again after the first round trip.
+    #[test]
+    fn adopting_settings_puts_the_mouse_choice_in_force() {
+        let off = bravebot_config::Settings::parse(r#"{"tui": {"mouse": false}}"#);
+        let on = bravebot_config::Settings::parse(r#"{"tui": {"mouse": true}}"#);
+        let unset = bravebot_config::Settings::parse("{}");
+
+        let mut turned_off = Session::new("none");
+        adopt_settings(&mut turned_off, &off, None);
+        let mut turned_on = Session::new("none");
+        adopt_settings(&mut turned_on, &on, None);
+        let mut unnamed = Session::new("none");
+        adopt_settings(&mut unnamed, &unset, None);
+
+        assert!(
+            !turned_off.mouse_captured(),
+            "tui.mouse off was not adopted"
+        );
+        assert!(turned_on.mouse_captured());
+        assert!(unnamed.mouse_captured(), "an absent key turned capture off");
     }
 
     /// A loop repeats a line somebody endorsed. The sentence this program writes to carry a goal
