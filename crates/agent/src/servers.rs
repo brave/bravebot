@@ -1093,6 +1093,10 @@ fn executable_extensions(pathext: Option<&OsStr>) -> Vec<String> {
 /// A name with no extension is tried with each of `extensions` before the name itself, which is how
 /// Windows finds `npx` as `npx.exe`, and why the extensionless sh shim npm installs beside it does
 /// not shadow it.
+///
+/// A directory a stage may write is not searched, and neither is a file that is a link into one,
+/// so a program a confined stage planted in a `PATH` entry is not the one an approval of the name
+/// starts ([SERVERS-5](../../../docs/specs/mcp-servers.md#SERVERS-5)).
 fn resolve(
     program: &str,
     path: Option<&OsStr>,
@@ -1117,8 +1121,38 @@ fn resolve(
     searched
         .iter()
         .flat_map(|directory| spellings.iter().map(move |name| directory.join(name)))
-        .find(|candidate| startable(candidate) && candidate.to_str().is_some())
+        .find(|candidate| {
+            startable(candidate)
+                && candidate.to_str().is_some()
+                && outside_stage_writable(candidate)
+        })
         .ok_or_else(|| t!(servers_program_not_found, program = shown(program)).to_string())
+}
+
+/// Whether a program found in a `PATH` entry lies outside every directory a stage may write.
+///
+/// Unit tests ask a list of their own, since the process-wide record fills with every directory
+/// any test opens a workspace in, scratch directories' parents among them.
+fn outside_stage_writable(candidate: &Path) -> bool {
+    #[cfg(not(test))]
+    {
+        bravebot_sandbox::programs::outside_stage_writable(candidate)
+    }
+    #[cfg(test)]
+    {
+        STAGE_WRITABLE.with(|writable| {
+            bravebot_sandbox::programs::outside_stage_writable_with(
+                candidate,
+                &writable.borrow(),
+                &[],
+            )
+        })
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static STAGE_WRITABLE: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Whether a file is there to be started.
@@ -2516,6 +2550,31 @@ mod tests {
         let third = settled(&home, &project, Asking::OneShot, false, true, "", &bin);
         assert_eq!(started(&third), vec!["weather"]);
         assert!(third.notes.is_empty(), "{:?}", third.notes);
+    }
+
+    /// A name approved while it resolved to one program does not start another that a stage could
+    /// have written ahead of it on `PATH`.
+    #[test]
+    fn an_approved_name_does_not_start_a_program_planted_in_a_directory_a_stage_may_write() {
+        let (home, project, declaration) = declared("cli-servers-planted", &["weather-mcp"]);
+        let root = home.parent().unwrap();
+        let real = root.join("real-bin");
+        let planted = root.join("planted-bin");
+        let genuine = installed(&real, "weather-mcp");
+        installed(&planted, "weather-mcp");
+        STAGE_WRITABLE.with(|writable| writable.borrow_mut().push(planted.clone()));
+        let mut approvals = Approvals::default();
+        approvals.approve("weather", declaration.digest());
+        std::fs::write(mcp::approvals_file(&home), approvals.to_text()).expect("approve");
+        let path = PathBuf::from(std::env::join_paths([&planted, &real]).expect("PATH"));
+
+        let settled = settled(&home, &project, Asking::OneShot, false, true, "", &path);
+
+        assert_eq!(started(&settled), vec!["weather"]);
+        let Some((_, Plan::Stdio { program, .. })) = settled.plans.first() else {
+            panic!("a stdio plan");
+        };
+        assert_eq!(program, &genuine);
     }
 
     #[test]
