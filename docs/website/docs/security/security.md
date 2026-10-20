@@ -417,7 +417,9 @@ so a program either starts by name (an `env` shebang, or an `$EDITOR` of `env vi
 directory a stage may write. A program the editor or a hook needs that lives only in such a directory,
 for example a tool run from a project's `node_modules/.bin`, is not found by it. `bravebot doctor --push-identity` looks up
 `ssh-keygen`, `ssh` and `git` the same way, leaving out the directory it ran in and the checkout
-holding it, reports one found only there as absent, and starts them without Brave Bot's own credentials.
+holding it, reports one found only there as absent, and starts them without Brave Bot's own credentials and
+with a `PATH` of those same entries only, so a `ProxyCommand` in your ssh configuration that names a bare
+program does not find one a stage wrote.
 
 **The remote scope can write `~/.ssh/known_hosts`.** A stage that carries it can add a host key or a
 `@cert-authority` line to that file, and your own ssh trusts the line afterwards. Read the

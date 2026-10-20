@@ -226,7 +226,11 @@ pub(crate) fn keep_out_where_this_ran() {
 ///
 /// Every program this file starts is built here: they run unconfined with the person's access to
 /// `~/.ssh`, and [CRED-14](../../../docs/specs/credential-protection.md#CRED-14) keeps what this
-/// agent authenticates with out of reach of such a program.
+/// agent authenticates with out of reach of such a program. Its `PATH` is reduced to the entries
+/// the lookup searches, so a program `ssh` starts by name from the person's configuration, a
+/// `ProxyCommand` among them, is not one a stage wrote ([SANDBOX-30]).
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
 fn started(program: &Path) -> std::process::Command {
     #[allow(
         clippy::disallowed_methods,
@@ -237,6 +241,7 @@ fn started(program: &Path) -> std::process::Command {
     for name in bravebot_config::scrub::own_credentials() {
         command.env_remove(name);
     }
+    bravebot_sandbox::programs::restrict_path(&mut command);
     command
 }
 
@@ -600,6 +605,85 @@ mod tests {
         let here = Path::new("/bravebot-no-such-directory/project");
 
         assert_eq!(checkout(here), [here.to_path_buf()]);
+    }
+
+    /// SANDBOX-30: `ssh` reads the person's configuration, and a `ProxyCommand` there names a
+    /// program that is looked up on the `PATH` it was started with. A file a confined stage wrote
+    /// under that name in a directory the command leaves out, first on `PATH`, must not be the one
+    /// that runs. The test binary runs again with `PATH` holding the checkout's `.venv/bin`, an
+    /// installed directory and the system directories, in that order. `ssh` in the installed
+    /// directory is `#!/usr/bin/env interp`, and each `interp` records that it ran. A program
+    /// started with bravebot's whole `PATH` runs the planted one.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_ssh_starts_by_name_is_never_one_a_stage_may_have_written() {
+        use crate::test_support::Scratch;
+        use std::os::unix::fs::PermissionsExt;
+        const TEST: &str = "push_identity::tests::a_program_ssh_starts_by_name_is_never_one_a_stage_may_have_written";
+        const SESSION: &str = "BRAVEBOT_TEST_PUSH_IDENTITY_SESSION";
+        const INSTALLED: &str = "BRAVEBOT_TEST_PUSH_IDENTITY_INSTALLED";
+
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            std::fs::write(session.join("ran"), "").unwrap();
+            bravebot_sandbox::programs::keep_out(&session);
+
+            let answer = run("ssh", &[]);
+            assert!(answer.is_some(), "the installed ssh was not started");
+            assert!(
+                !session.join("planted-ran").exists(),
+                "a program ssh starts by name was looked up in a directory a stage may write"
+            );
+            assert!(
+                session.join("installed-ran").exists(),
+                "ssh did not run the installed interpreter"
+            );
+            return;
+        }
+
+        let session = Scratch::new("push-identity-session");
+        let installed = Scratch::new("push-identity-installed");
+        let planted = session.path.join(".venv/bin");
+        std::fs::create_dir_all(&planted).unwrap();
+        let write = |directory: &Path, name: &str, body: String| {
+            let file = directory.join(name);
+            std::fs::write(&file, body).unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let records =
+            |marker: &str| format!("#!/bin/sh\n: > '{}'\n", session.path.join(marker).display());
+        write(&planted, "interp", records("planted-ran"));
+        write(&installed.path, "interp", records("installed-ran"));
+        write(
+            &installed.path,
+            "ssh",
+            "#!/usr/bin/env interp\n".to_string(),
+        );
+        let path = std::env::join_paths([
+            planted,
+            installed.path.clone(),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "this test binary, run again for the one test"
+        )]
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+            .env(SESSION, &session.path)
+            .env(INSTALLED, &installed.path)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+
+        let ran = session.path.join("ran").exists();
+        let report = String::from_utf8_lossy(&child.stderr).into_owned();
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(child.status.success(), "{report}");
     }
 
     /// The argument is `<host>/<owner>` and nothing else.
