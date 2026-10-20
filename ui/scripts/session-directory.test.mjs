@@ -55,13 +55,52 @@ test('the request handler makes a bot home again for session.new and session.ope
   assert.ok(index.indexOf('bridge.request(method', remake.index) > remake.index, 'and the folder is made before the request is forwarded')
 })
 
+const GATE_ARGUMENT = '(params as { directory?: unknown } | null)?.directory'
+
 test('the request handler refuses session.new, session.open and session.delete before forwarding them', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
-  const gate = /method === 'session\.new' \|\| method === 'session\.open' \|\| method === 'session\.delete'\) \{\s*if \(!mayOpenSessionIn\([^\n]*\)\) \{\s*return \{ error/.exec(index)
+  const gate = /method === 'session\.new' \|\| method === 'session\.open' \|\| method === 'session\.delete'\) \{\s*if \(!mayOpenSessionIn\(([^\n]*)\)\) \{\s*return \{ error/.exec(index)
   assert.ok(gate, 'an unoffered folder is answered with an error, unconditionally')
+  assert.equal(gate[1], GATE_ARGUMENT, 'and what it checks is the directory the window named, not the whole of its params')
   assert.ok(index.indexOf('bridge.request(method', gate.index) > gate.index, 'and the check comes before the request is forwarded')
 })
 
+// Every method the window may send, placed by whether the bridge reads a directory from it. A method
+// added to ALLOWED has to be put in one of these, so a new one that opens a session in a folder the
+// window composed cannot go unnoticed because the three-method gate above never heard of it.
+const GATED = ['session.new', 'session.open', 'session.delete']
+const NO_GATE = {
+  'models.list': 'answered in the main process, which reads the configuration of the folder it is given and opens no session',
+  'session.list': 'the sanitiser drops a directory the window states, so the window cannot choose the store',
+  'manifest.read': 'reads a store record and opens nothing',
+  'connectors.preview': 'a stdio connector\'s own working folder, typed into the form',
+  'connectors.connect': 'a stdio connector\'s own working folder, typed into the form',
+}
+const TAKES_NO_DIRECTORY = [
+  'agent.info', 'session.fork', 'session.close', 'session.mode', 'session.sandbox', 'session.rewind',
+  'turn.send', 'turn.cancel', 'mentions.offer', 'mentions.named', 'confirm.reply', 'run.reply',
+  'output.reply', 'vouch.reply', 'vet.reply', 'fetch.reply', 'server.reply', 'manifest.run',
+  'manifest.reply', 'exposure.reply', 'mcp-server.reply', 'mcp-tools.reply', 'mcp-call.reply',
+  'mcp-move.reply', 'host.reply', 'ask.reply', 'trust.reply', 'permissions.list', 'permissions.revoke',
+  'doctor', 'hooks.inspect', 'connectors.list', 'connectors.disconnect', 'connectors.remove',
+  'settings.inspect', 'watches.list', 'watches.add', 'watches.stop',
+]
+
+function allowedMethods(index) {
+  const body = /const ALLOWED = new Set\(\[([^\]]*)\]\)/.exec(index)
+  assert.ok(body, 'the allow-list is a literal set the test can read')
+  return [...body[1].matchAll(/'([^']+)'/g)].map(each => each[1])
+}
+
+test('every method the window may send is classified by whether it carries a directory', () => {
+  const index = readFileSync('src/main/index.ts', 'utf8')
+  const allowed = allowedMethods(index)
+  assert.ok(allowed.length > 40, 'the list was read whole')
+  const placed = [...GATED, ...Object.keys(NO_GATE), ...TAKES_NO_DIRECTORY]
+  assert.deepEqual(allowed.filter(name => !placed.includes(name)), [], 'a method added to ALLOWED is placed here, and gated if it opens or deletes a session by directory')
+  assert.deepEqual(placed.filter(name => !allowed.includes(name)), [], 'and a name that left ALLOWED leaves this list')
+  assert.equal(new Set(placed).size, placed.length, 'and no method is in two of the sets')
+})
 test('the request handler forwards a session list through the sanitiser, which drops a directory', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
   assert.match(index, /bridge\.request\(method, sanitised\(method, params\)\)/, 'every method the window sends, session.list included, is forwarded sanitised')
