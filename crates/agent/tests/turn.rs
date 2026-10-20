@@ -55662,6 +55662,107 @@ fn a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not() {
     );
 }
 
+/// What the planner reads of a `read_git` call of `arguments` over a repository holding `README`
+/// and `vendor/b.js` with the bytes given, when the map trusts `.` and distrusts `vendor`.
+fn read_git_over_a_distrusted_file(name: &str, vendor: &str, arguments: &str) -> String {
+    let scratch = Scratch::new(name);
+    repository::commit_files(
+        &scratch.path,
+        &[("README", "ours\n"), ("vendor/b.js", vendor)],
+        "add both",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", arguments),
+        reply_with("understood"),
+    ]);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("where is it"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+    let _first = received.recv().expect("first request");
+    newest_tool_result(received.recv().expect("second request"))
+}
+
+/// GIT-3 and GIT-14, and the fifth of labels.md's Known costs. `read_git` compares a pattern
+/// against the bytes of a blob committed from a path the map distrusts, so what the blob holds
+/// moves the counts the planner is shown. It must move nothing else: two repositories whose
+/// `vendor/b.js` differ only in whether a line matches, at the same length, give the planner a
+/// result that differs in the line and byte counts alone, and no line, no match and no skip
+/// appears outside the quarantined body.
+#[test]
+fn what_a_distrusted_blob_holds_changes_a_searchs_counts_and_nothing_else() {
+    let arguments = r#"{"query":"search","pattern":"needle"}"#;
+    let matching =
+        read_git_over_a_distrusted_file("read-git-blob-matches", &"needle\n".repeat(5), arguments);
+    let other = read_git_over_a_distrusted_file(
+        "read-git-blob-does-not-match",
+        &"haystk\n".repeat(5),
+        arguments,
+    );
+    for shown in [&matching, &other] {
+        assert!(
+            shown.contains("could not be shown to you") && !shown.contains("needle"),
+            "a result over a distrusted blob carried its bytes: {shown}"
+        );
+        assert!(
+            !shown.contains("ask again with skip") && !shown.contains("incomplete"),
+            "a search that was not cut short said it was, or offered a skip: {shown}"
+        );
+    }
+    // The two counts are the numbers the entry says the bytes decide, so a run of digits is
+    // compared as one.
+    let digits = |text: &str| -> String {
+        let mut out = String::new();
+        for c in text.chars() {
+            if !(c.is_ascii_digit() && out.ends_with('#')) {
+                out.push(if c.is_ascii_digit() { '#' } else { c });
+            }
+        }
+        out
+    };
+    assert_eq!(
+        digits(&matching),
+        digits(&other),
+        "the blob's bytes changed more than the numbers: {matching}\n--\n{other}"
+    );
+}
+
+/// The incomplete notice of a `read_git` search over a distrusted blob follows what the blob
+/// holds, since a page is counted in the lines printed, and the skip that lists the next of them
+/// stays inside the quarantined body. The notice is the whole of what the planner is told beyond
+/// the counts.
+#[test]
+fn the_skip_a_cut_read_git_search_offers_stays_inside_a_distrusted_blobs_body() {
+    let arguments = r#"{"query":"search","pattern":"needle","count":2}"#;
+    let cut =
+        read_git_over_a_distrusted_file("read-git-blob-cut", &"needle\n".repeat(5), arguments);
+    let whole =
+        read_git_over_a_distrusted_file("read-git-blob-whole", &"haystk\n".repeat(5), arguments);
+    assert!(
+        cut.contains("could not be shown to you") && whole.contains("could not be shown to you"),
+        "a result over a distrusted blob was shown: {cut}\n--\n{whole}"
+    );
+    assert!(
+        cut.contains("this result is incomplete") && !whole.contains("incomplete"),
+        "the incomplete notice did not follow whether the blob filled the page: {cut}\n--\n{whole}"
+    );
+    assert!(
+        !cut.contains("skip 2") && !cut.contains("ask again with skip"),
+        "the skip a page boundary decided reached the planner outside the body: {cut}"
+    );
+}
+
 /// The sentence a sealed result carries to name read_git.
 const READ_GIT_SENTENCE: &str = "To read a repository's history, use read_git";
 

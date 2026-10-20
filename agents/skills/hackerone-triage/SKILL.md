@@ -114,7 +114,7 @@ awarded.
 A problem the project has written down and accepted is known, even if no issue names it:
 
 - The **Known costs** sections of [docs/specs/](../../../docs/specs/README.md)
-  (`grep -n '## Known costs' docs/specs/*.md`), especially the four exceptions recorded in
+  (`grep -n '## Known costs' docs/specs/*.md`), especially the five exceptions recorded in
   [labels.md](../../../docs/specs/labels.md).
 - The exceptions written down in
   [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-the-rule.md).

@@ -154,10 +154,11 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
 
-## Five deliberate exceptions
+## Six deliberate exceptions
 
-Brave Bot looks at untrusted bytes to decide something in five places, three in the policy layer
-and two in the agent, the search and the diagnostics sentence, all written down rather than left to be found.
+Brave Bot looks at untrusted bytes to decide something in six places, three in the policy layer
+and three in the agent, the search, the diagnostics sentence and reading a repository's history, all
+written down rather than left to be found.
 
 **Splitting a processor's answer.** A processor returns one piece of text holding two things: a remark
 for the person watching, and the document to be written. It marks where the document begins, and the
@@ -201,6 +202,16 @@ of the sentence is Brave Bot's own. An attacker who owns such a file can set the
 line numbers are named, and choose whether the sentence says no errors were reported yet, which is
 worded as nothing stronger than that. They cannot choose the path, any destination, or put a word of
 their own in front of the model.
+
+**Searching a repository's history.** A repository's history can hold files from paths you did not
+vouch for, and reading it searches or compares their bytes. Which lines match and whether the
+answer is cut short are decided by those bytes, so one such file makes the whole answer untrusted,
+and the model is given a reference to it. What reaches the model is the answer's size and whether
+it was cut short. An attacker who owns one of the files can set those, and tell the model by a
+count whether the pattern it chose matched. A page boundary that earlier files' matching lines
+decided can stop the walk before later files, but every path is recorded before its file is read, so
+those bytes cannot steer the label. They cannot choose how the answer is labelled or any
+destination, and the model never sees a line of text from the file.
 
 ## What leaves the process
 

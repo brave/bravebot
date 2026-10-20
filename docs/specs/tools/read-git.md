@@ -472,6 +472,8 @@ in anything other than the lines it printed would repeat or skip one on the next
 
 `verified-by: bravebot_agent::turn::read_git_searches_the_files_at_a_revision_and_pages_the_lines`
 `verified-by: bravebot_agent::turn::a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not`
+`verified-by: bravebot_agent::turn::what_a_distrusted_blob_holds_changes_a_searchs_counts_and_nothing_else`
+`verified-by: bravebot_agent::turn::the_skip_a_cut_read_git_search_offers_stays_inside_a_distrusted_blobs_body`
 `verified-by: bravebot_agent::workspace::a_search_pattern_is_held_to_trusted_public_before_anything_is_read`
 `verified-by: bravebot_agent::git::search_lists_the_lines_a_pattern_matches_at_a_revision_as_git_grep_does`
 `verified-by: bravebot_agent::git::a_search_shows_every_file_it_read_whether_or_not_it_matched`
