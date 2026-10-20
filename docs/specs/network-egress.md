@@ -139,8 +139,9 @@ however long its reply was going to be.
 <a id="NET-6"></a>
 ### NET-6: a failure that means "not now" may be retried, and nothing else may
 
-A connection that gave out is worth another attempt. A refusal is not, and only the statuses that
-mean the server is temporarily unable are treated as retryable.
+A connection that gave out is worth another attempt: a timeout, a socket that went away, a name that
+did not resolve, and a network that is down or unreachable. A refusal is not, and only the statuses
+that mean the server is temporarily unable are treated as retryable.
 
 A `Retry-After` header on such an answer is read as whole seconds or an IMF-fixdate HTTP date and
 carried on the failure as a duration of at most one hour. A value that is neither, a date already
@@ -148,9 +149,15 @@ past aside, is absent. It is a number that only sets a timer ([BACKEND-54](backe
 the header's text is never kept or shown, and the retryable set above is decided from the status
 alone.
 
-**Why.** Retrying a refusal turns one denied request into several.
+**Why.** Retrying a refusal turns one denied request into several. A failed name lookup is retried
+whatever it failed on, because a name that does not exist and a network that is not up yet cannot be
+told apart by the failure ([Known costs](#known-costs)).
 
 `verified-by: bravebot_net::lib::a_connection_that_gave_out_is_worth_another_attempt_and_a_refusal_is_not`
+`verified-by: bravebot_net::lib::a_network_that_is_down_is_worth_another_attempt`
+`verified-by: bravebot_net::lib::a_request_whose_name_did_not_resolve_is_worth_another_attempt`
+`verified-by: bravebot_net::lib::a_lookup_that_failed_another_way_is_reported_as_it_failed`
+`verified-by: bravebot_net::lib::the_systems_own_failed_lookup_is_reported_as_a_host_not_found`
 `verified-by: bravebot_net::lib::only_the_statuses_that_mean_not_now_are_worth_another_attempt`
 `verified-by: bravebot_net::lib::a_retry_after_is_read_as_seconds_or_a_date_and_bounded`
 `verified-by: bravebot_net::lib::a_status_carries_the_wait_the_server_asked_for_and_nothing_it_wrote`
@@ -441,3 +448,16 @@ because its body is read to the end without a stop being looked at.
   end went away without the forward noticing. A bound long enough for the slowest local model would
   still be a guess, and one that ran out would cut a working reply, which is the failure the clause
   is there to remove.
+
+- **A request that cannot succeed is sent again when its failure looks like a network that is down.**
+  Nothing readable from a failed lookup says whether the name does not exist or the network is not
+  up yet, since `std` reports the lookup's own error code as a kind that cannot be matched, and a
+  machine without a network can fail a lookup the way it fails one for a name that does not exist.
+  So a mistyped host is sent three times, after a pause of one second and then two, before it is
+  reported. A lookup that failed for a cause of its own, a descriptor limit for example, is reported
+  as a host that could not be found, and so is a proxy that does not resolve, since ureq resolves
+  its host through the same lookup. `NetworkUnreachable` and `HostUnreachable` name one route as well
+  as a whole network, and the transport stops at the first address that fails other than by being
+  refused, so a name whose first address is IPv6, on a network with no IPv6 route, fails the same way
+  on each attempt. A request that fails for any of these reasons ends after three attempts with the
+  same failure it would have ended with on the first.
