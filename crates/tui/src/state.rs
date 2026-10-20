@@ -953,6 +953,8 @@ pub struct Session {
     /// Kept after the button comes up, so a user can see what they copied rather than watching
     /// it vanish at the moment it is taken.
     pub selection: Option<crate::select::Selection>,
+    /// The last press of the left button, which says whether the next one is a double click.
+    pub last_click: Option<crate::select::Click>,
     /// How much the last copy took, until the next click or the next prompt.
     pub copied: Option<usize>,
     /// What the turn that just finished cost, until the next one starts.
@@ -1438,6 +1440,7 @@ impl Session {
             cached_prompt_tokens: None,
             history: crate::history::History::new(),
             selection: None,
+            last_click: None,
             copied: None,
             finished: None,
             cleared_by_interrupt: false,
@@ -2425,6 +2428,19 @@ impl Session {
         self.selection = crate::select::pane_at(&self.laid.panes, row, column)
             .map(|(pane, bounds)| crate::select::Selection::in_pane(row, column, pane, bounds));
         self.copied = None;
+    }
+
+    /// Begin a selection that takes in the whole word or row under the press, as a double or
+    /// triple click does.
+    pub fn begin_selection_by(&mut self, row: u16, column: u16, unit: crate::select::Unit) {
+        self.begin_selection(row, column);
+        self.selection = self.selection.map(|selection| selection.by(unit));
+    }
+
+    /// Whether a press at `row` and `column` lands in the pane the selection held belongs to.
+    pub fn selection_holds(&self, row: u16, column: u16) -> bool {
+        self.selection
+            .is_some_and(|selection| selection.holds(row, column))
     }
 
     /// Follow the pointer with the loose end of the selection.

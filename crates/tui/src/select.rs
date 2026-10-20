@@ -18,6 +18,7 @@
 use crate::theme;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
 
 /// A region of the screen a selection can belong to.
 ///
@@ -80,6 +81,99 @@ pub fn pane_at(panes: &[(Pane, Rect)], row: u16, column: u16) -> Option<(Pane, R
         .copied()
 }
 
+/// How much text one end of a selection takes in with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unit {
+    /// Exactly the cells swept over.
+    Cell,
+    /// Whole words, from a double click.
+    Word,
+    /// Whole rows, from a triple click.
+    Line,
+}
+
+/// How long after a press the next one on the same cell still counts as part of the same click
+/// run.
+pub const MULTI_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// A press that has been answered, which the next press is compared with.
+#[derive(Debug, Clone, Copy)]
+pub struct Click {
+    at: std::time::Instant,
+    row: u16,
+    column: u16,
+    count: u8,
+}
+
+/// Which press of a run this one is: 1 for a lone press, 2 for a double click, 3 for a triple
+/// click. A fourth press starts the count again.
+///
+/// A press belongs to the run only when it lands on the same cell within [`MULTI_CLICK`] of the
+/// last. Returns the press to remember with the count.
+pub fn count_click(
+    previous: Option<Click>,
+    now: std::time::Instant,
+    row: u16,
+    column: u16,
+) -> (Click, u8) {
+    let count = match previous {
+        Some(last)
+            if last.row == row
+                && last.column == column
+                && now.saturating_duration_since(last.at) <= MULTI_CLICK =>
+        {
+            last.count % 3 + 1
+        }
+        _ => 1,
+    };
+    (
+        Click {
+            at: now,
+            row,
+            column,
+            count,
+        },
+        count,
+    )
+}
+
+impl Unit {
+    /// The unit the `count`th press of a run selects.
+    pub fn of_click(count: u8) -> Self {
+        match count {
+            2 => Self::Word,
+            3 => Self::Line,
+            _ => Self::Cell,
+        }
+    }
+}
+
+/// What kind of character a cell holds, for finding where a word stops.
+#[derive(PartialEq, Eq)]
+enum Class {
+    Word,
+    Blank,
+    Other,
+}
+
+/// The class of the character drawn at `column`.
+///
+/// A wide character fills two cells and the second reads as blank, so that cell takes the class of
+/// the character before it. Otherwise a word would end after every wide character.
+fn class_of(buffer: &Buffer, row: u16, column: u16) -> Class {
+    let symbol_at = |column: u16| buffer.cell((column, row)).map_or("", |cell| cell.symbol());
+    let symbol = match column.checked_sub(1).map(symbol_at) {
+        Some(before) if before.width() > 1 => before,
+        _ => symbol_at(column),
+    };
+    match symbol.chars().next() {
+        None => Class::Blank,
+        Some(c) if c.is_whitespace() => Class::Blank,
+        Some(c) if c.is_alphanumeric() || c == '_' => Class::Word,
+        Some(_) => Class::Other,
+    }
+}
+
 /// A sweep across the screen, from where the button went down to where the pointer is now.
 ///
 /// Held as row and column, in that order, so comparing two positions gives reading order.
@@ -89,6 +183,7 @@ pub struct Selection {
     head: (u16, u16),
     pane: Pane,
     bounds: Rect,
+    unit: Unit,
 }
 
 impl Selection {
@@ -109,7 +204,14 @@ impl Selection {
             head: (row, column),
             pane,
             bounds,
+            unit: Unit::Cell,
         }
+    }
+
+    /// Take in whole words or rows at each end, as a double or triple click does.
+    pub fn by(mut self, unit: Unit) -> Self {
+        self.unit = unit;
+        self
     }
 
     /// The region this selection belongs to.
@@ -140,8 +242,69 @@ impl Selection {
     }
 
     /// Nothing was swept over, which is what a plain click is.
+    ///
+    /// A word or a row taken in whole is something even with no drag, because what it covers is
+    /// only known against the screen.
     pub fn is_empty(&self) -> bool {
-        self.anchor == self.head
+        self.unit == Unit::Cell && self.anchor == self.head
+    }
+
+    /// Whether `row` and `column` are inside this selection's pane, which a press with shift held
+    /// has to be for it to extend the selection and not begin another.
+    pub fn holds(&self, row: u16, column: u16) -> bool {
+        self.bounds.contains((column, row).into())
+    }
+
+    /// This selection with each end moved out to the edge of the word or row it sits in, read
+    /// off the screen. A selection by cells is returned as it is.
+    fn resolved(&self, buffer: &Buffer) -> Selection {
+        let area = buffer.area.intersection(self.bounds);
+        if self.unit == Unit::Cell || area.is_empty() {
+            return *self;
+        }
+        let (first, last) = self.ends();
+        let (first, last) = (self.clamped_to(area, first), self.clamped_to(area, last));
+        let start = self.edge(buffer, area, first, false);
+        let end = self.edge(buffer, area, last, true);
+        Selection {
+            anchor: start,
+            head: end,
+            unit: Unit::Cell,
+            ..*self
+        }
+    }
+
+    fn clamped_to(&self, area: Rect, (row, column): (u16, u16)) -> (u16, u16) {
+        (
+            row.clamp(area.top(), area.bottom() - 1),
+            column.clamp(area.left(), area.right() - 1),
+        )
+    }
+
+    /// The far side of the word or row holding `at`: its end when `forward`, its start otherwise.
+    fn edge(&self, buffer: &Buffer, area: Rect, at: (u16, u16), forward: bool) -> (u16, u16) {
+        let (row, column) = at;
+        if self.unit == Unit::Line {
+            return if forward {
+                (row, text_end(buffer, row, area))
+            } else {
+                (row, area.left())
+            };
+        }
+        let class = class_of(buffer, row, column);
+        if forward {
+            let mut end = column + 1;
+            while end < area.right() && class_of(buffer, row, end) == class {
+                end += 1;
+            }
+            (row, end)
+        } else {
+            let mut start = column;
+            while start > area.left() && class_of(buffer, row, start - 1) == class {
+                start -= 1;
+            }
+            (row, start)
+        }
     }
 
     /// The two ends in reading order, so a selection dragged upwards reads like one dragged
@@ -175,6 +338,7 @@ pub fn text(buffer: &Buffer, selection: &Selection) -> String {
 /// [`text`], with the rows in `joined` running on into the row below them without a line break:
 /// one line of text the screen had to draw over two rows.
 pub fn text_joining(buffer: &Buffer, selection: &Selection, joined: &[u16]) -> String {
+    let selection = &selection.resolved(buffer);
     let area = buffer.area.intersection(selection.bounds);
     let (start, end) = selection.ends();
 
@@ -205,6 +369,7 @@ pub fn text_joining(buffer: &Buffer, selection: &Selection, joined: &[u16]) -> S
 /// line still reads as the line it was. In the info panel the marking stops at the end of each
 /// row's text, so it does not run over the blanks the row is padded with.
 pub fn highlight(buffer: &mut Buffer, selection: &Selection) {
+    let selection = &selection.resolved(buffer);
     let area = buffer.area.intersection(selection.bounds);
     for row in area.top()..area.bottom() {
         let end = if selection.pane == Pane::Panel {
@@ -414,6 +579,119 @@ mod tests {
         assert_ne!(
             buffer.cell((11, 0)).expect("cell").bg,
             theme::brand_primary()
+        );
+    }
+
+    #[test]
+    fn a_double_click_takes_the_word_under_it() {
+        let buffer = screen(&["hello there world"]);
+        let selection = Selection::started_at(0, 8).by(Unit::Word);
+        assert!(!selection.is_empty());
+        assert_eq!(text(&buffer, &selection), "there");
+    }
+
+    /// A word stops at punctuation, so a path or a call is not taken whole.
+    #[test]
+    fn a_word_stops_at_punctuation() {
+        let buffer = screen(&["foo.bar(baz)"]);
+        assert_eq!(
+            text(&buffer, &Selection::started_at(0, 1).by(Unit::Word)),
+            "foo"
+        );
+        assert_eq!(
+            text(&buffer, &Selection::started_at(0, 8).by(Unit::Word)),
+            "baz"
+        );
+    }
+
+    /// Dragging on from a double click takes whole words at both ends.
+    #[test]
+    fn a_drag_after_a_double_click_grows_by_words() {
+        let buffer = screen(&["hello there world"]);
+        let mut selection = Selection::started_at(0, 1).by(Unit::Word);
+        selection.extend_to(0, 8);
+        assert_eq!(text(&buffer, &selection), "hello there");
+        selection.extend_to(0, 14);
+        assert_eq!(text(&buffer, &selection), "hello there world");
+    }
+
+    #[test]
+    fn a_triple_click_takes_the_row_without_its_padding() {
+        let buffer = screen(&["hello there", "second line"]);
+        let selection = Selection::started_at(0, 3).by(Unit::Line);
+        assert_eq!(text(&buffer, &selection), "hello there");
+        let mut painted = buffer.clone();
+        highlight(&mut painted, &selection);
+        let marked = theme::picked_out().bg;
+        assert_eq!(painted[(0, 0)].style().bg, marked);
+        assert_eq!(painted[(10, 0)].style().bg, marked);
+        assert_ne!(painted[(11, 0)].style().bg, marked);
+        assert_ne!(painted[(0, 1)].style().bg, marked);
+    }
+
+    #[test]
+    fn a_drag_after_a_triple_click_grows_by_rows() {
+        let buffer = screen(&["one", "two", "three"]);
+        let mut selection = Selection::started_at(0, 1).by(Unit::Line);
+        selection.extend_to(1, 0);
+        assert_eq!(text(&buffer, &selection), "one\ntwo");
+    }
+
+    /// A wide character takes two cells, and the second reads as blank off the screen. A word
+    /// has to take both, or a double click on CJK text selects one character.
+    #[test]
+    fn a_word_of_wide_characters_is_taken_whole() {
+        let buffer = screen(&["ab 你好嗎 cd"]);
+        let marked = theme::picked_out().bg;
+        let painted = |column: u16| {
+            let mut painted = buffer.clone();
+            highlight(
+                &mut painted,
+                &Selection::started_at(0, column).by(Unit::Word),
+            );
+            (0..buffer.area.width)
+                .filter(|&c| painted[(c, 0)].style().bg == marked)
+                .collect::<Vec<u16>>()
+        };
+        let word: Vec<u16> = (3..9).collect();
+        for column in 3..9 {
+            assert_eq!(painted(column), word, "pressed on column {column}");
+        }
+        assert_eq!(painted(0), vec![0, 1]);
+        assert_eq!(painted(10), vec![10, 11]);
+    }
+
+    #[test]
+    fn a_word_never_leaves_its_pane() {
+        let buffer = screen(&["leftword rightword"]);
+        let pane = Rect::new(0, 0, 12, 1);
+        let selection = Selection::in_pane(0, 10, Pane::Transcript, pane).by(Unit::Word);
+        assert_eq!(text(&buffer, &selection), "rig");
+    }
+
+    #[test]
+    fn a_press_counts_as_part_of_a_run_only_on_the_same_cell_in_time() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let (first, one) = count_click(None, t0, 2, 5);
+        assert_eq!(one, 1);
+        let (second, two) = count_click(Some(first), t0 + Duration::from_millis(100), 2, 5);
+        assert_eq!(two, 2);
+        let (third, three) = count_click(Some(second), t0 + Duration::from_millis(200), 2, 5);
+        assert_eq!(three, 3);
+        let (_, again) = count_click(Some(third), t0 + Duration::from_millis(300), 2, 5);
+        assert_eq!(again, 1);
+        assert_eq!(
+            count_click(Some(first), t0 + Duration::from_secs(5), 2, 5).1,
+            1
+        );
+        assert_eq!(
+            count_click(Some(first), t0 + Duration::from_millis(100), 3, 5).1,
+            1
+        );
+        assert_eq!(
+            count_click(Some(first), t0 + Duration::from_millis(100), 2, 6).1,
+            1
         );
     }
 }
