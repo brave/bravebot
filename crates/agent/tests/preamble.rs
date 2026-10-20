@@ -963,7 +963,7 @@ fn the_sessions_own_directory_is_stated_so_a_turn_can_write_in_it() {
     let project = tree.directory("project");
     let own = tree.directory("session");
     let mut workspace = Workspace::new(&project).expect("workspace");
-    workspace.open_scratch(Some(own.clone()));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(own.clone()));
 
     let mut sink = RecordingSink::new();
     let preamble = {
@@ -1003,7 +1003,7 @@ fn a_missing_dependency_is_stood_in_for_from_the_sessions_own_directory() {
     let project = tree.directory("project");
     let own = tree.directory("session");
     let mut workspace = Workspace::new(&project).expect("workspace");
-    workspace.open_scratch(Some(own));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(own));
 
     let mut sink = RecordingSink::new();
     let preamble = {
@@ -1056,7 +1056,7 @@ fn the_stand_in_road_names_no_language_or_variable() {
     let project = tree.directory("project");
     let own = tree.directory("session");
     let mut workspace = Workspace::new(&project).expect("workspace");
-    workspace.open_scratch(Some(own));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(own));
 
     let mut sink = RecordingSink::new();
     let preamble = {

@@ -45709,7 +45709,7 @@ fn a_program_a_turn_runs_is_told_where_the_sessions_directory_is() {
         .canonicalize()
         .expect("the session's own directory");
     let mut workspace = Workspace::new(&scratch.path).expect("workspace");
-    workspace.open_scratch(Some(given.clone()));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
 
     // A script rather than a line naming the variable: a `$` in a line is refused, so what reads
     // the environment is the program the line named.

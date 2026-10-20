@@ -4932,7 +4932,7 @@ fn the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace(
     let mut workspace = Workspace::new(&scratch.path)
         .expect("workspace")
         .with_reads_kept_inside(true);
-    workspace.open_scratch(Some(given.clone()));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -8173,7 +8173,7 @@ fn a_file_in_the_sessions_own_directory_is_reachable_by_its_absolute_path() {
     let given = SessionScratch::create().expect("a directory of its own");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -8214,7 +8214,7 @@ fn a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo() {
     std::fs::write(given.path().join("workings.txt"), "the first pass").expect("already there");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -8267,7 +8267,7 @@ fn a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project() {
     std::fs::write(&heavy, vec![b'x'; MAX_REWIND_BYTES]).expect("an intermediate file");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -8320,7 +8320,7 @@ fn the_sessions_own_directory_is_not_one_the_user_added() {
     let given = SessionScratch::create().expect("a directory of its own");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     assert!(workspace.added_directories().is_empty());
     assert_eq!(workspace.scratch(), Some(given.path()));
@@ -8334,7 +8334,7 @@ fn the_sessions_own_directory_cannot_be_added_by_name() {
     let given = SessionScratch::create().expect("a directory of its own");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let error = workspace
         .add_directory(given.path().to_str().expect("utf-8 path"))
@@ -8355,7 +8355,7 @@ fn the_working_directory_cannot_be_moved_into_the_sessions_own_directory() {
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
     let root = workspace.root().to_path_buf();
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     for refused in [given.path(), inside.as_path()] {
         let error = workspace
@@ -8384,7 +8384,9 @@ fn a_second_spelling_of_a_file_in_the_sessions_own_directory_reaches_the_same_ru
     std::os::unix::fs::symlink(&holder, base.join("link")).unwrap();
 
     let mut workspace = Workspace::new(holder.join("work")).expect("workspace");
-    workspace.open_scratch(Some(holder.join("given")));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(
+        holder.join("given"),
+    ));
 
     // A rule about the canonical name and nothing else. The workspace was answered about nothing, so
     // a name that reaches no rule reads untrusted and the reduction is the whole of what is tested.
@@ -8441,7 +8443,7 @@ fn the_temporary_directory_around_it_stays_unreachable() {
     ];
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     for directory in around {
         // The temporary directory is shared, so the name carries this process and the moment: a
@@ -8497,7 +8499,7 @@ fn a_symlink_out_of_the_sessions_own_directory_is_refused() {
     .unwrap();
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -8530,7 +8532,9 @@ fn shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_w
     workspace
         .add_directory(added.path.to_str().unwrap())
         .unwrap();
-    workspace.open_scratch(Some(session.path.canonicalize().unwrap()));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(
+        session.path.canonicalize().unwrap(),
+    ));
     let mut trust = TrustStore::new(workspace.root());
     trust.distrust(".");
     trust.distrust(added.path.canonicalize().unwrap().to_str().unwrap());
@@ -9584,7 +9588,7 @@ fn the_sessions_own_directory_is_still_reachable_from_its_delegates_checkout() {
         repository_with_a_state_directory("checkout-reach-session-dir", &[("README", "hello\n")]);
     let given = SessionScratch::create().expect("a directory of its own");
     std::fs::write(given.path().join("workings.txt"), "first pass").unwrap();
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
     let mut sink = RecordingSink::new();
     let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
     let made = workspace

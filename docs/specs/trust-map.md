@@ -998,6 +998,12 @@ A local MCP server in a session that keeps nothing is given a directory on the s
 home ([SERVERS-10](mcp-servers.md#SERVERS-10)). That one is the server's and not the session's: it
 is not opened beside the working directory, and its name says it was made for a server.
 
+The session keeps which directory it made, the device and inode of the directory it holds the lock
+on, with the name. Every stage may write the temporary directory, so what stands at the name can
+change, and a grant of the directory holds only while the name still leads to the one the session
+made ([SANDBOX-18](sandboxing.md#SANDBOX-18)). A session that cannot read that identity has no
+scratch directory to grant.
+
 `verified-by: bravebot_agent::scratch::a_session_is_given_a_directory_of_its_own`
 `verified-by: bravebot_agent::scratch::a_name_something_else_holds_is_refused`
 `verified-by: bravebot_agent::scratch::nobody_else_may_read_what_a_session_writes_there`
@@ -1006,6 +1012,8 @@ is not opened beside the working directory, and its name says it was made for a 
 `verified-by: bravebot_agent::scratch::a_link_under_the_accounts_directorys_name_is_not_followed`
 `verified-by: bravebot_agent::scratch::a_directory_of_another_accounts_under_the_name_is_not_used`
 `verified-by: bravebot_agent::scratch::an_account_directory_that_cannot_be_written_is_put_back_to_private`
+`verified-by: bravebot_agent::scratch::a_name_that_leads_anywhere_but_to_the_directory_made_is_not_that_directory`
+`verified-by: bravebot_agent::scratch::a_directory_is_observed_only_where_the_name_leads_to_one`
 `verified-by: bravebot_tui::status::the_sessions_scratch_directory_is_reported_for_what_it_is`
 `verified-by: bravebot_tui::status::a_session_with_no_scratch_directory_reports_none`
 `verified-by: bravebot_ui_bridge::dispatch::a_desktop_session_is_given_a_directory_of_its_own`
