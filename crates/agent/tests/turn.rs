@@ -64464,3 +64464,272 @@ fn accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later(
         );
     }
 }
+
+/// A definition naming the delegates it may start (DELEGATE-30) is offered those and no others by
+/// its own `spawn_agent`, and a request for one it left out is refused naming what is left, so a
+/// coordinator told to start only the reader cannot start a worker. Through the whole turn,
+/// because the set the kernel compares against and the kinds the planner is offered are read in
+/// two places.
+#[test]
+fn a_definition_lets_its_delegate_start_only_the_delegates_it_names() {
+    let scratch = Scratch::new("delegate-definition-spawns");
+    let home = Scratch::new("delegate-definition-spawns-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("coordinator.md"),
+        "---\nname: coordinator\ndescription: Starts the others.\nkind: worker\nspawns: reader\n---\n\nCOORDINATE\n",
+    )
+    .expect("write the definition naming what it may start");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-A-COORDINATOR",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"coordinator","task":"COORDINATOR-TASK"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegates finished"),
+            ],
+        ),
+        (
+            "COORDINATOR-TASK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WORKER-TASK-NEVER-STARTED"}"#,
+                ),
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"READER-TASK"}"#),
+                reply_with("waiting"),
+                reply_with("coordinated"),
+            ],
+        ),
+        ("READER-TASK", vec![reply_with("read")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-A-COORDINATOR").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let planners = requests
+        .iter()
+        .find(|body| body.contains("DELEGATE-A-COORDINATOR") && !body.contains("COORDINATOR-TASK"))
+        .expect("the planner asked");
+    assert!(
+        planners.contains(r#""enum":["reader","checker","worker","coordinator"]"#),
+        "the planner was not offered the whole set"
+    );
+    let coordinators: Vec<&String> = requests
+        .iter()
+        .filter(|body| {
+            body.contains("COORDINATOR-TASK") && !body.contains("DELEGATE-A-COORDINATOR")
+        })
+        .collect();
+    let first = coordinators.first().expect("the coordinator never ran");
+    assert!(
+        first.contains(r#""enum":["reader"]"#),
+        "the coordinator was offered something its definition did not name"
+    );
+    let last = coordinators.last().expect("asked at least once");
+    assert!(
+        last.contains("the kinds are reader"),
+        "a worker the definition left out was not refused naming what is left"
+    );
+    assert_eq!(
+        reporter.delegated.len(),
+        2,
+        "the coordinator and its reader should have started, and nothing else"
+    );
+}
+
+/// DELEGATE-30. A delegate whose `spawns:` line names nothing the run's set holds, a misspelt
+/// name for one, is offered no `spawn_agent` and told it cannot delegate, as one whose line is
+/// empty is, while a line that also names a delegate that resolved still offers that one. Through
+/// the whole turn, because the set is narrowed where the delegate's run starts and its `kind`
+/// would otherwise be an empty enumeration, which some providers reject.
+#[test]
+fn a_delegate_whose_spawns_names_resolve_to_nothing_is_not_offered_spawn_agent() {
+    let scratch = Scratch::new("delegate-spawns-unresolved");
+    let home = Scratch::new("delegate-spawns-unresolved-home");
+    define(
+        &home,
+        "coordinator-lost",
+        "kind: worker\nspawns: reviwer\n",
+        "COORDINATE-LOST",
+    );
+    define(
+        &home,
+        "coordinator-mixed",
+        "kind: worker\nspawns: reviwer, reader\n",
+        "COORDINATE-MIXED",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "PLAN-THE-COORDINATORS",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"coordinator-lost","task":"LOST-TASK"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"coordinator-mixed","task":"MIXED-TASK"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegates finished"),
+            ],
+        ),
+        ("LOST-TASK", vec![reply_with("done")]),
+        ("MIXED-TASK", vec![reply_with("done")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("PLAN-THE-COORDINATORS").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let first_request_of = |task: &str| -> &String {
+        requests
+            .iter()
+            .find(|body| body.contains(task) && !body.contains("PLAN-THE-COORDINATORS"))
+            .unwrap_or_else(|| panic!("the delegate for {task} never ran"))
+    };
+
+    let lost = first_request_of("LOST-TASK");
+    assert!(
+        !lost.contains(r#""name":"spawn_agent""#),
+        "a delegate whose spawns line resolved to nothing was offered spawn_agent"
+    );
+    assert!(
+        !lost.contains(r#""enum":[]"#),
+        "a tool was offered with an empty enumeration"
+    );
+    assert!(
+        lost.contains("You cannot delegate"),
+        "a delegate with no delegate to start was told it may delegate"
+    );
+    assert!(
+        lost.contains(r#""name":"read_file""#),
+        "the rest of the delegate's tools were not offered"
+    );
+
+    let mixed = first_request_of("MIXED-TASK");
+    assert!(
+        mixed.contains(r#""enum":["reader"]"#),
+        "a misspelt name beside a resolved one took the resolved one away"
+    );
+    assert!(
+        !mixed.contains("You cannot delegate"),
+        "a delegate with a delegate to start was told it cannot delegate"
+    );
+}
+
+/// DELEGATE-30. A definition a person addresses is offered `spawn_agent` with the kinds its
+/// `spawns:` line names and no others, and none at all where the line names no delegate that
+/// resolved, as a delegate in that state is. Through the whole turn, because the planner's list
+/// is rebuilt after the definition narrows the set, and an empty `kind` enumeration is one some
+/// providers reject.
+#[test]
+fn an_addressed_definition_is_offered_spawn_agent_only_with_delegates_it_may_start() {
+    let scratch = Scratch::new("address-spawns");
+    let home = Scratch::new("address-spawns-home");
+    define(
+        &home,
+        "lists-reader",
+        "kind: worker\nspawns: reader\n",
+        "LISTS-READER",
+    );
+    define(&home, "lists-none", "kind: worker\nspawns:\n", "LISTS-NONE");
+    define(
+        &home,
+        "lists-unknown",
+        "kind: worker\nspawns: nothing-goes-by-this\n",
+        "LISTS-UNKNOWN",
+    );
+    define(&home, "lists-nothing", "kind: worker\n", "LISTS-NOTHING");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        ("TASK-READER", vec![reply_with("done")]),
+        ("TASK-NONE", vec![reply_with("done")]),
+        ("TASK-UNKNOWN", vec![reply_with("done")]),
+        ("TASK-NOTHING", vec![reply_with("done")]),
+    ]);
+    let offered = |task: &str, name: &str| {
+        addressed_once(
+            &endpoint,
+            &received,
+            &workspace,
+            &addressed(task, &home, name),
+        )
+    };
+
+    let listed = offered("TASK-READER", "lists-reader");
+    assert!(
+        listed.contains(r#""name":"spawn_agent""#),
+        "a definition naming a delegate it may start was not offered spawn_agent"
+    );
+    assert!(
+        listed.contains(r#""enum":["reader"]"#),
+        "the kinds offered were not the ones the definition named: {listed}"
+    );
+    assert!(
+        !listed.contains(r#""enum":["reader","checker","worker","coordinator"]"#),
+        "the whole set was offered to a definition that named one kind"
+    );
+
+    for (task, name) in [
+        ("TASK-NONE", "lists-none"),
+        ("TASK-UNKNOWN", "lists-unknown"),
+    ] {
+        let request = offered(task, name);
+        assert!(
+            !request.contains(r#""name":"spawn_agent""#),
+            "{name}: spawn_agent was offered with no delegate it may start"
+        );
+        assert!(
+            !request.contains(r#""enum":[]"#),
+            "{name}: a tool was offered with an empty enumeration"
+        );
+        assert!(
+            request.contains(r#""name":"read_file""#),
+            "{name}: the rest of the turn's tools were not offered"
+        );
+    }
+
+    let whole = offered("TASK-NOTHING", "lists-nothing");
+    assert!(
+        whole.contains(r#""enum":["reader","checker","worker""#),
+        "a definition naming no spawns was not offered the whole set: {whole}"
+    );
+}

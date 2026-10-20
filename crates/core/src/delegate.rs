@@ -313,6 +313,13 @@ pub struct Definition {
     /// no server's tool. `Some` selects out of the parent's by alias, so a name the parent holds
     /// no grant for selects nothing, and a kind holding no server holds none whatever this says.
     servers: Option<Vec<String>>,
+    /// The definitions and kinds a delegate of this one may start, where the definition named any
+    /// (DELEGATE-30).
+    ///
+    /// `None` is every one the run's own set holds. `Some` selects out of that set by name, so a
+    /// name nothing in it goes by selects nothing. Met with the one a replacement replaced, as
+    /// `tools:` is, so a later definition can shorten the list and cannot lengthen it.
+    spawns: Option<Vec<String>>,
     /// The rounds the definition asked for, where it asked for a number.
     ///
     /// `None` is the kind's own bound. Held to the kind's ceiling where it is read rather than
@@ -366,6 +373,7 @@ impl Definition {
             tools: None,
             skills: None,
             servers: None,
+            spawns: None,
             rounds: None,
             budget: None,
             memory: false,
@@ -394,6 +402,7 @@ impl Definition {
             tools,
             skills: None,
             servers: None,
+            spawns: None,
             rounds: None,
             budget: None,
             memory: false,
@@ -466,6 +475,18 @@ impl Definition {
     /// Let this delegate call only the servers of these aliases that its parent holds.
     pub fn with_servers(mut self, servers: Vec<String>) -> Self {
         self.servers = Some(servers);
+        self
+    }
+
+    /// The names of the delegates it asked to be allowed to start, before the run's own set
+    /// narrows them.
+    pub fn spawns(&self) -> Option<&[String]> {
+        self.spawns.as_deref()
+    }
+
+    /// Let a delegate of this definition start only the delegates of these names.
+    pub fn with_spawns(mut self, spawns: Vec<String>) -> Self {
+        self.spawns = Some(spawns);
         self
     }
 
@@ -845,6 +866,7 @@ impl Definitions {
         definition.writes = writes;
         definition.tools = tools;
         definition.servers = servers;
+        definition.spawns = meet(definition.spawns.as_deref(), existing.spawns.as_deref());
         definition.checkout |= existing.checkout;
         *existing = definition;
 
@@ -865,6 +887,22 @@ impl Definitions {
             writes_confined_to,
             replaced,
         })
+    }
+
+    /// The set with only the entries these names select, in the order the set holds them.
+    ///
+    /// A name nothing here goes by selects nothing, and no entry is added, so what comes back can
+    /// only be smaller (DELEGATE-30). The three kinds are not exempt: a definition that lists
+    /// `reader` alone has no `worker` to start.
+    pub fn only(&self, names: &[String]) -> Self {
+        Self {
+            entries: self
+                .entries
+                .iter()
+                .filter(|entry| names.contains(&entry.name))
+                .cloned()
+                .collect(),
+        }
     }
 
     /// Whether a definition may go by this name, which is any name but a kind's own.
@@ -1156,6 +1194,8 @@ pub struct DelegateSpec {
     tools: Option<Vec<String>>,
     /// The skills its definition named, where it named any, not yet met with what the turn found.
     skills: Option<Vec<String>>,
+    /// The names its definition allowed it to start, where it named any (DELEGATE-30).
+    spawns: Option<Vec<String>>,
     /// The standing part of what it is told about itself, from the definition that selected it.
     prompt: String,
     /// Whether the definition that selected it keeps a memory.
@@ -1206,6 +1246,7 @@ impl DelegateSpec {
             effort: definition.effort().map(str::to_string),
             tools,
             skills: definition.skills().map(<[String]>::to_vec),
+            spawns: definition.spawns().map(<[String]>::to_vec),
             prompt: definition.prompt().to_string(),
             memory: definition.keeps_memory(),
             checkout: definition.asks_for_checkout(),
@@ -1235,6 +1276,13 @@ impl DelegateSpec {
         self
     }
 
+    /// Meet the names its definition allowed it to start with those the run that started it may,
+    /// so a list further down can shorten what is above it and never lengthen it (DELEGATE-30).
+    pub(crate) fn spawning_within(mut self, above: Option<&[String]>) -> Self {
+        self.spawns = meet(self.spawns.as_deref(), above);
+        self
+    }
+
     pub(crate) fn limited_to(mut self, limits: Vec<Permissions>) -> Self {
         self.writes = limits;
         self
@@ -1254,7 +1302,9 @@ impl DelegateSpec {
     /// Where it may not, it is offered no way to, and [`crate::policy::Policy::before_delegate`]
     /// refuses the call anyway.
     pub fn may_delegate(&self) -> bool {
-        self.id.depth() < MAX_DEPTH && !self.named_out_delegating()
+        self.id.depth() < MAX_DEPTH
+            && !self.named_out_delegating()
+            && !self.spawns.as_ref().is_some_and(Vec::is_empty)
     }
 
     /// Whether its definition named the tools it may use and left `spawn_agent` out.
@@ -1301,6 +1351,12 @@ impl DelegateSpec {
     /// turn found is offered.
     pub fn skills(&self) -> Option<&[String]> {
         self.skills.as_deref()
+    }
+
+    /// The names its definition allowed it to start, where it named any, and `None` where it may
+    /// start whatever the run's set holds.
+    pub(crate) fn spawns(&self) -> Option<&[String]> {
+        self.spawns.as_deref()
     }
 
     /// The standing instruction its definition carried, empty where there was none.
@@ -2306,6 +2362,59 @@ mod tests {
                 replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
             })
         );
+    }
+
+    /// DELEGATE-30. A replacement's `spawns:` list is met with the one it replaces, so a later
+    /// file can shorten what a person wrote and cannot lengthen it, and one naming none inherits
+    /// it rather than handing back the whole set.
+    #[test]
+    fn a_later_definition_cannot_widen_the_spawn_list_of_the_one_it_replaces() {
+        let list = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let named = |spawns: Option<Vec<String>>, origin: &str| {
+            let definition = Definition::from_file(
+                "coordinator",
+                "starts the others",
+                Kind::Worker,
+                None,
+                "",
+                origin,
+            );
+            match spawns {
+                Some(spawns) => definition.with_spawns(spawns),
+                None => definition,
+            }
+        };
+        let mut definitions = Definitions::default();
+        definitions.insert(named(Some(list(&["reader"])), "~/.bravebot/agents/c.md"));
+        definitions.insert(named(
+            Some(list(&["reader", "worker"])),
+            ".bravebot/agents/c.md",
+        ));
+        assert_eq!(
+            definitions.get("coordinator").unwrap().spawns(),
+            Some(list(&["reader"]).as_slice()),
+            "a project's longer list widened the person's"
+        );
+        definitions.insert(named(None, ".bravebot/agents/d.md"));
+        assert_eq!(
+            definitions.get("coordinator").unwrap().spawns(),
+            Some(list(&["reader"]).as_slice()),
+            "a replacement naming none handed back every delegate"
+        );
+    }
+
+    /// DELEGATE-30. Selecting by name only takes away, three kinds included.
+    #[test]
+    fn selecting_by_name_keeps_only_the_names_and_adds_none() {
+        let all = Definitions::default();
+        let names = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        assert_eq!(all.only(&names(&["reader"])).names(), ["reader"]);
+        assert_eq!(
+            all.only(&names(&["worker", "reader", "elsewhere"])).names(),
+            ["reader", "worker"],
+            "the set's own order, and no name it does not hold"
+        );
+        assert!(all.only(&[]).is_empty());
     }
 
     /// The other spelling of the same widening, and the one no kind moves in. A `tools:` line is
