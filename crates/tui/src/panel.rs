@@ -33,6 +33,9 @@ pub fn clamped(width: u16, columns: u16) -> u16 {
     width.clamp(NARROWEST_PANEL, most)
 }
 
+/// Columns at the left of each panel row that hold no text: the border and the space after it.
+pub const INSET: u16 = 2;
+
 /// The narrowest terminal the panel is drawn on, which leaves the transcript 64 columns.
 pub const NARROWEST: u16 = 100;
 
@@ -201,10 +204,20 @@ pub fn lines(session: &Session, width: u16, height: u16) -> Vec<Line<'static>> {
     laid_out(session, width, height).0
 }
 
+/// The screen rows of a panel drawn over `area` that continue on the row below, as the two halves
+/// of the session id do. A copy joins them without a line break.
+pub fn continued_rows(session: &Session, area: Rect) -> Vec<u16> {
+    laid_out(session, area.width, area.height)
+        .2
+        .into_iter()
+        .map(|row| area.y + row as u16)
+        .collect()
+}
+
 /// Draw the panel over `area`, its border on the left, each shortened address a link to the
 /// address it stands for.
 pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) {
-    let (rows, links) = laid_out(session, area.width, area.height);
+    let (rows, links, _) = laid_out(session, area.width, area.height);
     Clear.render(area, buffer);
     Paragraph::new(rows)
         .block(Block::default().borders(Borders::LEFT).border_style(dim()))
@@ -221,14 +234,19 @@ pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) {
     }
 }
 
-/// The rows [`lines`] gives, and where among them the links are.
-fn laid_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, Vec<Link>) {
+/// The rows [`lines`] gives, where among them the links are, and which of them continue on the
+/// row below.
+fn laid_out(
+    session: &Session,
+    width: u16,
+    height: u16,
+) -> (Vec<Line<'static>>, Vec<Link>, Vec<usize>) {
     let height = usize::from(height);
     if height == 0 {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new());
     }
     let text = text_width(width);
-    let (mut body, mut links) = head(session, text);
+    let (mut body, mut links, mut continued) = head(session, text);
 
     let languages = session.language_servers().programs();
     if !languages.is_empty() {
@@ -271,7 +289,8 @@ fn laid_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, 
         dim(),
     ));
     links.retain(|link| link.row < height - 1);
-    (body, links)
+    continued.retain(|row| *row < height - 1);
+    (body, links, continued)
 }
 
 /// Whether a frame `columns` by `rows` draws the panel with its Context section whole.
@@ -291,14 +310,17 @@ pub fn shows_context(session: &Session, columns: u16, rows: u16) -> bool {
 
 /// One column for the border and one for the space after it.
 fn text_width(width: u16) -> usize {
-    usize::from(width).saturating_sub(2).max(1)
+    usize::from(width).saturating_sub(usize::from(INSET)).max(1)
 }
 
 /// The Session, Goal, Links and Context sections, each left out where it has nothing to say but for
-/// the context, which always has a reading, and where in them the links are.
-fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>) {
+/// the context, which always has a reading, where in them the links are, and which rows continue on
+/// the row below.
+fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<usize>) {
     let mut body: Vec<Line<'static>> = Vec::new();
     let mut links = Vec::new();
+    let mut continued = Vec::new();
+    let mut id_row = None;
 
     let identity = session.identity();
     let (name, addresses) = shortened(&crate::render::printable(&crate::status::cut(
@@ -335,6 +357,9 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>) {
         // last hyphen over two rows rather than cut.
         let id = crate::render::printable(id);
         let (first, second) = id.split_at(id.rfind('-').map_or(0, |at| at + 1));
+        if !first.is_empty() && !second.is_empty() {
+            id_row = Some(about.len());
+        }
         for half in [first, second] {
             if !half.is_empty() {
                 about.push(row(half.to_string(), dim()));
@@ -345,6 +370,7 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>) {
         let count = about.len();
         section(&mut body, t!(panel_session).to_string(), about);
         let first = body.len() - count;
+        continued.extend(id_row.map(|row| first + row));
         links.extend(name_links.into_iter().map(|link| Link {
             row: first + link.row,
             ..link
@@ -444,7 +470,7 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>) {
         }
     }
     section(&mut body, t!(panel_context).to_string(), context);
-    (body, links)
+    (body, links, continued)
 }
 
 /// The plan in at most `room` rows, the task being worked on among them.
