@@ -796,10 +796,13 @@ drawn above the list.
 
 A yes is the person vouching for the list, and it is the one road by which the list is promoted
 ([LABEL-8](labels.md#LABEL-8)). A no offers none of its tools for the rest of the session and is not
-asked again. A turn stopped at the question has not answered it, so the next turn asks again. Nothing is recorded, so a later session asks again about a list that is the
+asked again. A turn stopped at the question has not answered it, so the next turn asks again. Nothing is recorded, so a later process asks again about a list that is the
 same: the driver has no way to tell that it is, short of deciding from the server's bytes, and a
 decision taken from them is the one thing the driver may not do ([LABEL-8](labels.md#LABEL-8)). A
-`tools` line in `mcp-approved` is passed over and dropped the next time the file is written. A project path that [SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a
+`tools` line in `mcp-approved` is passed over and dropped the next time the file is written. The answer, a yes or a no, belongs to the MCP session the process started, so
+the terminal's `/clear`, `/branch` and `/resume` keep it and the conversation after them is
+offered the list that was vouched for without the question again ([CMD-14](commands.md#CMD-14));
+only a new process asks. A project path that [SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a
 server and not for its list.
 
 Each tool is offered as a function named `mcp__{alias}__{tool}`, which is what a backend's function
@@ -839,6 +842,9 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_agent::mcp::a_declined_list_offers_nothing_and_is_not_asked_again`
 `verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_leaves_it_to_be_asked_again`
 `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing`
+`verified-by: bravebot_tui::app::clearing_keeps_the_answer_to_an_mcp_servers_list_for_the_process`
+`verified-by: bravebot_tui::app::a_branch_keeps_the_answer_to_an_mcp_servers_list_for_the_process`
+`verified-by: bravebot_tui::app::resuming_carries_the_answer_to_an_mcp_servers_list_for_the_process`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
 `verified-by: bravebot_tui::confirm::a_tool_list_draws_every_description_row_behind_the_margin`
@@ -1737,9 +1743,9 @@ This spec cannot land without these. Each is named by what the clause says rathe
 - **Three prompts is three prompts.** A server gate and a call gate are the shape asked for, and a
   list gate is what letting a server's words reach the planner costs. Together they are more asking
   than the tool this is measured against does, because the call gate here has no per-server "never
-  ask again". The standing answers are what pay it back. A list is asked about again only when it
-  changes, and a person who answers 2 at the other two has the same quiet session with a record of
-  having been asked.
+  ask again". The standing answers are what pay it back. A list is asked about again by every new process, changed or not,
+  and kept for the life of one, and a person who answers 2 at the other two has the same quiet
+  session with a record of having been asked.
 - **The useful case costs two steps.** A newcomer to a checkout that requests a server has to declare
   it themselves and then approve it. That is the price of a shared file that cannot hand anything
   over, and it is paid by the person who wanted the server.

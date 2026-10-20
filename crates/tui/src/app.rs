@@ -26535,6 +26535,107 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// The two states a list's question leaves, as the session holding them reports them.
+    fn lists_answered() -> [(bool, bravebot_agent::mcp::Offering); 2] {
+        use bravebot_agent::mcp::Offering;
+        [(true, Offering::Tools(1)), (false, Offering::Declined)]
+    }
+
+    /// SERVERS-8: the MCP session belongs to the process, so a yes or a no to a server's list
+    /// outlives `/clear` and the new conversation is not asked again. Resetting it is the other
+    /// reading, and nothing else would notice the change.
+    #[test]
+    fn clearing_keeps_the_answer_to_an_mcp_servers_list_for_the_process() {
+        let root = crate::testutil::scratch_dir("bravebot-app-clear-mcp-list");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create");
+        let mut workspace = Workspace::new(&root).expect("a workspace");
+        for (yes, held) in lists_answered() {
+            let mut session = crate::mcp_command::tests::holding_a_list_answered(yes);
+            let before = session.servers.session.clone().expect("servers");
+            assert_eq!(before.offering(), [("weather".to_string(), held)]);
+
+            clear_session(&mut session, &mut workspace, None);
+
+            let after = session.servers.session.as_ref().expect("servers kept");
+            assert_eq!(after, &before, "/clear replaced the MCP session");
+            assert_eq!(
+                after.offering(),
+                [("weather".to_string(), held)],
+                "/clear changed the answer to a list (yes: {yes})"
+            );
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// SERVERS-8: `/branch` keeps the MCP session and what it was answered about a list.
+    #[test]
+    fn a_branch_keeps_the_answer_to_an_mcp_servers_list_for_the_process() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-branch-mcp-list");
+        std::fs::create_dir_all(&root).expect("create");
+        let (workspace, mut session, mut stored, conversation, mut answers) =
+            a_session_to_branch(&root);
+        for (yes, held) in lists_answered() {
+            session.servers = crate::mcp_command::tests::holding_a_list_answered(yes).servers;
+
+            assert!(branch_session(
+                &mut session,
+                &mut stored,
+                &conversation,
+                &mut answers,
+                &workspace,
+                &[],
+                "",
+            ));
+
+            assert_eq!(
+                session
+                    .servers
+                    .session
+                    .as_ref()
+                    .expect("servers")
+                    .offering(),
+                [("weather".to_string(), held)],
+                "/branch changed the answer to a list (yes: {yes})"
+            );
+        }
+    }
+
+    /// SERVERS-8: `/resume` carries the MCP session across the switch with what it was answered
+    /// about a list. A new process is the only thing that asks again.
+    #[test]
+    fn resuming_carries_the_answer_to_an_mcp_servers_list_for_the_process() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-resume-mcp-list");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, stored, _conversation, _answers) =
+            a_session_to_branch(&root);
+        for (yes, held) in lists_answered() {
+            session.servers = crate::mcp_command::tests::holding_a_list_answered(yes).servers;
+            let record = Box::new(
+                bravebot_session::sessions::load(&root, stored.id()).expect("the record to resume"),
+            );
+            let mut servers = crate::state::Servers::default();
+
+            switch_session(&mut session, &mut workspace, &mut servers, record);
+
+            assert_eq!(
+                servers
+                    .session
+                    .as_ref()
+                    .expect("servers carried")
+                    .offering(),
+                [("weather".to_string(), held)],
+                "/resume changed the answer to a list (yes: {yes})"
+            );
+        }
+    }
+
     /// SESSION-19: undoing a turn takes back the program vouched for in it and stops the servers.
     /// It keeps a file agreed to be shown or to hold a secret, which CRED-13 and CRED-15 give the
     /// session's lifetime, and the run prompts drawn, which grant nothing.
