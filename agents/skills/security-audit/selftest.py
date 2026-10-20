@@ -4126,7 +4126,7 @@ def test_the_tooling_lane_starts_from_the_scripts():
     files = set(found["tool_files"])
     check(
         "the scripts, the contrib checks and the hooks are listed",
-        {"agents/pr_worktree.py", "contrib/affected-checks.py", ".githooks/pre-push"} <= files
+        {"agents/pr_worktree.py", "contrib/affected-checks.py", ".githooks/pre-commit"} <= files
         and "agents/skills/pr-fix/pr-fix.py" in files,
         str(sorted(files)[:6]),
     )
