@@ -18,6 +18,7 @@
 use crate::theme;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
 
 /// A region of the screen a selection can belong to.
 ///
@@ -155,8 +156,16 @@ enum Class {
     Other,
 }
 
+/// The class of the character drawn at `column`.
+///
+/// A wide character fills two cells and the second reads as blank, so that cell takes the class of
+/// the character before it. Otherwise a word would end after every wide character.
 fn class_of(buffer: &Buffer, row: u16, column: u16) -> Class {
-    let symbol = buffer.cell((column, row)).map_or("", |cell| cell.symbol());
+    let symbol_at = |column: u16| buffer.cell((column, row)).map_or("", |cell| cell.symbol());
+    let symbol = match column.checked_sub(1).map(symbol_at) {
+        Some(before) if before.width() > 1 => before,
+        _ => symbol_at(column),
+    };
     match symbol.chars().next() {
         None => Class::Blank,
         Some(c) if c.is_whitespace() => Class::Blank,
@@ -626,6 +635,30 @@ mod tests {
         let mut selection = Selection::started_at(0, 1).by(Unit::Line);
         selection.extend_to(1, 0);
         assert_eq!(text(&buffer, &selection), "one\ntwo");
+    }
+
+    /// A wide character takes two cells, and the second reads as blank off the screen. A word
+    /// has to take both, or a double click on CJK text selects one character.
+    #[test]
+    fn a_word_of_wide_characters_is_taken_whole() {
+        let buffer = screen(&["ab 你好嗎 cd"]);
+        let marked = theme::picked_out().bg;
+        let painted = |column: u16| {
+            let mut painted = buffer.clone();
+            highlight(
+                &mut painted,
+                &Selection::started_at(0, column).by(Unit::Word),
+            );
+            (0..buffer.area.width)
+                .filter(|&c| painted[(c, 0)].style().bg == marked)
+                .collect::<Vec<u16>>()
+        };
+        let word: Vec<u16> = (3..9).collect();
+        for column in 3..9 {
+            assert_eq!(painted(column), word, "pressed on column {column}");
+        }
+        assert_eq!(painted(0), vec![0, 1]);
+        assert_eq!(painted(10), vec![10, 11]);
     }
 
     #[test]

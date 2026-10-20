@@ -91,13 +91,15 @@ line.
 
 Two presses of the left button on the same cell within 400 milliseconds select the word there, and
 a third the whole row, inside the pane the press belongs to. A word is a run of letters, digits and
-underscores, a run of blanks, or a run of anything else. A row is taken up to its last character,
+underscores, a run of blanks, or a run of anything else. A character drawn two cells wide is one
+character: both of its cells belong to the word it is in. A row is taken up to its last character,
 without the blanks the widget padded it with. Dragging on from such a press grows the selection by
 whole words or whole rows at the loose end. A fourth press starts the count again, and a press on
 another cell or after the interval is a single press.
 
 `verified-by: bravebot_tui::select::a_double_click_takes_the_word_under_it`
 `verified-by: bravebot_tui::select::a_word_stops_at_punctuation`
+`verified-by: bravebot_tui::select::a_word_of_wide_characters_is_taken_whole`
 `verified-by: bravebot_tui::select::a_drag_after_a_double_click_grows_by_words`
 `verified-by: bravebot_tui::select::a_triple_click_takes_the_row_without_its_padding`
 `verified-by: bravebot_tui::select::a_drag_after_a_triple_click_grows_by_rows`
