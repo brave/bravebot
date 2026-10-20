@@ -122,7 +122,11 @@ RELEASE = "Labelled::declassify"
 # compare content without a witness, which is the guarantee the absent implementations are.
 # `labels.md` states this as holding by construction, so nothing fails today if one is added.
 ALLOWED_IMPLS = {"fmt::Debug"}
-IMPL_FOR_LABELLED = re.compile(r"^\s*impl(?:<[^>]*>)?\s+(?!Labelled\b)(.+?)\s+for\s+Labelled\b")
+IMPL_START = re.compile(r"^\s*impl\b")
+STRUCT_LABELLED = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+Labelled\b")
+# A derive writes the same implementation an `impl` does, inside the module that can see the
+# private fields, so it is held to the same list. `Clone` is the one the type derives.
+ALLOWED_DERIVES = {"Clone"}
 
 # The gates. A witness may be minted nowhere else, and reaching content through anything but one of
 # these is shape 3.
@@ -1209,19 +1213,69 @@ def check_exhaustive_reader_docs(sources):
             )
 
 
+def _impl_header(text):
+    """The trait an `impl` header implements for `Labelled`, or None when it is not for it.
+
+    `text` starts at the `impl` keyword. Generics are skipped by counting angle brackets, so a
+    bound such as `T: AsRef<str>` does not end them early, and the header runs to the first `{`
+    or `where` at the top level, which lets it wrap over any number of lines.
+    """
+    rest = text[len("impl"):].lstrip()
+    if rest.startswith("<"):
+        depth = 0
+        for at, char in enumerate(rest):
+            depth += char == "<"
+            depth -= char == ">" and rest[at - 1] != "-"
+            if depth == 0:
+                rest = rest[at + 1:]
+                break
+    header = re.split(r"\{|\bwhere\b", rest, maxsplit=1)[0]
+    header = " ".join(header.split())
+    found = re.match(r"(.+?)\s+for\s+Labelled\b", header)
+    if not found or re.match(r"Labelled\b", header):
+        return None
+    return found.group(1).strip()
+
+
+ATTRIBUTES_AT_END = re.compile(r"(?:#!?\[(?:[^\[\]]|\[[^\]]*\])*\]\s*)+\Z")
+
+
+def _derives_above(lines, struct_at):
+    """The traits derived by the attributes sitting directly above line `struct_at`, wherever
+    they wrap, whether bare or inside `cfg_attr`."""
+    above = "\n".join(lines[:struct_at])
+    run = ATTRIBUTES_AT_END.search(above)
+    names = []
+    for derive in re.finditer(r"\bderive\s*\(([^)]*)\)", run.group(0) if run else ""):
+        names += [n.rsplit("::", 1)[-1] for n in re.findall(r"[\w:]+", derive.group(1))]
+    return names
+
+
 def check_labelled_impls(sources):
     """Nothing may be implemented on `Labelled` that reads or compares its content.
 
     The guarantee is partly the implementations that are absent: no `Deref`, no `PartialEq`, no
     `Display`, so a caller cannot reach the value without a witness. `labels.md` records that as
-    holding by construction, which means no check fails if somebody adds one.
+    holding by construction, so the doctests on `Labelled` pin the common ones and this reads
+    what they cannot: an implementation written with nested generics or a header wrapped over
+    several lines, and a `#[derive(...)]` above the struct, which expands inside the module that
+    sees the private fields.
     """
     for path, lines in sources.items():
-        for number, raw in enumerate(mechanics.strip_comments(lines), start=1):
-            found = IMPL_FOR_LABELLED.match(raw)
-            if not found:
-                continue
-            trait = found.group(1).strip()
+        stripped = mechanics.strip_comments(lines)
+        candidates = []
+        for index, raw in enumerate(stripped):
+            if IMPL_START.match(raw):
+                held = " ".join(stripped[index:index + 8])
+                trait = _impl_header(held.lstrip())
+                if trait is not None:
+                    candidates.append((index, trait, raw))
+            elif STRUCT_LABELLED.match(raw):
+                for name in _derives_above(stripped, index):
+                    if name in ALLOWED_DERIVES:
+                        continue
+                    candidates.append((index, name, f"#[derive({name})] on {raw.strip()}"))
+        for index, trait, raw in candidates:
             if trait in ALLOWED_IMPLS:
                 continue
             yield finding(
@@ -1232,7 +1286,7 @@ def check_labelled_impls(sources):
                 "label's content without a witness",
                 "trust",
                 "high",
-                evidence=[f"{path}:{number} {raw.strip()[:120]}"],
+                evidence=[f"{path}:{index + 1} {raw.strip()[:120]}"],
                 fix=f"remove it, or record it in `{LABELS_SPEC}` as an exception with what it costs",
                 gain="content the planner may not read can be compared against a guess, one guess at "
                 "a time, which is how a quarantined secret is read out of a program that never "
