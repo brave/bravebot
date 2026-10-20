@@ -78,6 +78,7 @@ export const CASES = {
     event: 'vouch.request',
     request: {
       request: 106, path: `vendor/${'deep/'.repeat(40)}zqu01.md`, truncated: true,
+      shownPath: `vendor/${'deep/'.repeat(40)}zqu01.md`, rule: '/work/vendor', shownRule: '/work/vendor',
       preview: ['zqu03 is the first line of the file', ...range(119).map((n) => `line ${n + 2} of the file`)].join('\n'),
       vetting: { verdict: 'safe', reason: `zqu02 ${filler(80)}` },
     },

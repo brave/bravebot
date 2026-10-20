@@ -2953,6 +2953,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
 
         let request = crate::confirm::VouchRequest {
             path: proposed_path.clone(),
+            rule: policy.file_authority().key(&keyed),
             preview,
             label,
             truncated,

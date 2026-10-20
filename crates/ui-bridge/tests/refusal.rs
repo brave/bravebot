@@ -358,6 +358,7 @@ fn an_unanswerable_vouch_refuses() {
     assert_eq!(
         harness.confirmer.confirm_vouch(&VouchRequest {
             path: "notes.md".into(),
+            rule: "notes.md".into(),
             preview: "first line".into(),
             truncated: true,
             verdict: bravebot_core::vetting::Verdict::Inconclusive("not checked"),

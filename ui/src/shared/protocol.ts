@@ -802,6 +802,13 @@ export interface VouchRequest {
   vetting?: Vetting
   request: number
   path: string
+  /** The path with whitespace at either end, zero-width and bidi characters made visible and
+   *  the name quoted, as the agent spelled it. Draw this and not `path`. */
+  shownPath: string
+  /** The rule a yes writes, as the map holds it. */
+  rule: string
+  /** The rule spelled the way `shownPath` is. Draw this and not `rule`. */
+  shownRule: string
   preview: string
   /** The label the preview was released under, as the trail writes it. */
   label: string

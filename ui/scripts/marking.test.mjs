@@ -280,7 +280,7 @@ const CARDS = {
     marks: '<pre class="preview" data-deciding="first">',
   },
   vouch: {
-    entry: () => t.askedVouch({ request: 1, path: 'notes.md', preview: FORGED_CHROME, truncated: false }),
+    entry: () => t.askedVouch({ request: 1, path: 'notes.md', shownPath: 'notes.md', rule: '/work/notes.md', shownRule: '/work/notes.md', preview: FORGED_CHROME, truncated: false }),
     marks: '<pre class="preview" data-deciding="first">',
   },
 }

@@ -88,6 +88,14 @@ stake is still shown rather than summarised: the file at that path is a copy of 
 one step away, and [VET-4](tools/vet-content.md#VET-4) says why it is not the path they were read
 from.
 
+The vouch prompt draws the name it asks about through one function, `shown_name`, which every front
+end that names a path uses. A name that is empty, is only whitespace, has whitespace at either end,
+or holds a character that draws as nothing (a zero-width character, a bidirectional control, a
+no-break space) is drawn quoted with each such character spelled, so it cannot read as another
+name. Under the name the prompt draws the rule a yes writes, the full path the trust map will hold
+it under ([TRUST-8](trust-map.md#TRUST-8)), so a rule wider than the name reads as wider. The rule
+is shown and nothing branches on it.
+
 Every prompt a check was run for shows what it said, and the three are drawn out of one row builder
 rather than three, so a prompt cannot carry a verdict and forget to say what it was. Which prompts
 those are is [CHECK-10](vetting.md#CHECK-10).
@@ -107,6 +115,10 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_tui::confirm::the_vet_prompt_shows_the_bytes_and_where_they_came_from`
 `verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`
 `verified-by: bravebot_tui::confirm::the_vouch_prompt_says_what_a_check_found`
+`verified-by: bravebot_tui::confirm::the_vouch_prompt_marks_an_unreadable_name_and_says_the_rule`
+`verified-by: bravebot_agent::confirm::a_name_that_draws_as_nothing_is_shown_as_what_it_is`
+`verified-by: bravebot_ui_bridge::wire::a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person`
+`verified-by: bravebot_agent::turn::approval_prompts_carry_the_labels_the_gates_released_their_bytes_under`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_shows_the_directory_it_would_open`
 `verified-by: bravebot_tui::confirm::the_plan_prompt_shows_the_task_and_every_step`
 `verified-by: bravebot_core::manifest::a_described_step_names_every_routing_field_it_fixes`

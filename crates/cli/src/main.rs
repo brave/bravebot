@@ -3594,6 +3594,7 @@ mod tests {
         };
         let vouch = VouchRequest {
             path: "notes.md".to_string(),
+            rule: "notes.md".to_string(),
             preview: "text".to_string(),
             truncated: false,
             verdict: bravebot_core::vetting::Verdict::Safe,

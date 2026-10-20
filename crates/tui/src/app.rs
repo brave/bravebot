@@ -13110,6 +13110,7 @@ mod tests {
         assert!(manifest_step_asks(&ToMain::Vouch(
             bravebot_agent::confirm::VouchRequest {
                 path: "notes.md".into(),
+                rule: "notes.md".into(),
                 preview: String::new(),
                 truncated: false,
                 verdict: bravebot_core::vetting::Verdict::Safe,

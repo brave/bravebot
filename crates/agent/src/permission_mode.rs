@@ -1094,6 +1094,7 @@ mod tests {
     fn a_vouch(verdict: Verdict) -> VouchRequest {
         VouchRequest {
             path: "notes.txt".to_string(),
+            rule: "notes.txt".to_string(),
             preview: "a line".to_string(),
             truncated: false,
             verdict,

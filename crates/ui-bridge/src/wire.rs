@@ -612,6 +612,9 @@ pub fn vouch_request(id: u64, request: &VouchRequest) -> Value {
     json!({
         "request": id,
         "path": request.path,
+        "shownPath": bravebot_agent::confirm::shown_name(&request.path),
+        "rule": request.rule,
+        "shownRule": bravebot_agent::confirm::shown_name(&request.rule),
         "preview": request.preview,
         "label": request.label,
         "truncated": request.truncated,

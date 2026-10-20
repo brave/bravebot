@@ -241,6 +241,7 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
             3,
             &VouchRequest {
                 path: "file".into(),
+                rule: "file".into(),
                 preview: "part".into(),
                 label: bytes.into(),
                 truncated: false,
@@ -252,6 +253,31 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
         assert_eq!(vouch["label"], json!(bytes));
         assert_eq!(vouch["vetting"]["label"], json!(said));
     }
+}
+
+/// PROMPT-1, PROMPT-2: the desktop is handed the name and the rule already spelled, beside the
+/// raw ones, so it draws what the other front ends draw.
+#[test]
+fn a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person() {
+    use bravebot_agent::confirm::VouchRequest;
+    use bravebot_core::vetting::Verdict;
+    let vouch = wire::vouch_request(
+        4,
+        &VouchRequest {
+            path: "note.md ".into(),
+            rule: "/work/note.md ".into(),
+            preview: "part".into(),
+            label: "(U,priv)".into(),
+            truncated: false,
+            verdict: Verdict::Safe,
+            reason: None,
+            reason_label: None,
+        },
+    );
+    assert_eq!(vouch["path"], json!("note.md "));
+    assert_eq!(vouch["rule"], json!("/work/note.md "));
+    assert_eq!(vouch["shownPath"], json!("\"note.md\u{2423}\""));
+    assert_eq!(vouch["shownRule"], json!("\"/work/note.md\u{2423}\""));
 }
 
 #[test]
@@ -1195,6 +1221,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
         9,
         &VouchRequest {
             path: "file".into(),
+            rule: "file".into(),
             preview: "part".into(),
             label: "(U,priv)".into(),
             truncated: true,

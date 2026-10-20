@@ -628,10 +628,20 @@ pub(super) fn draw_vouch(
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                request.path.clone(),
+                bravebot_agent::confirm::shown_name(&request.path),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
         ]),
+        // The rule a yes writes, under the name it was asked about: the name is what the planner
+        // wrote, and the rule is what the map will hold, which can be wider than it reads.
+        Line::from(Span::styled(
+            t!(
+                vouch_rule,
+                rule = bravebot_agent::confirm::shown_name(&request.rule).as_str()
+            )
+            .to_string(),
+            Style::default().fg(theme::muted()),
+        )),
         Line::raw(""),
     ];
     // What a check made of the whole file, above the head of it the person can read. The two are

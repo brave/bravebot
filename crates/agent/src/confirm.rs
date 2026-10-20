@@ -1059,6 +1059,46 @@ impl ServerRequest {
     }
 }
 
+/// A file name as a person is shown it, so a name that would draw as nothing, or as another name,
+/// is drawn as what it is.
+///
+/// A name that is empty, has whitespace at either end, or holds a character that draws as nothing
+/// (a zero-width character, a bidirectional control, a no-break space) comes back quoted with each
+/// such character spelled `\u{..}`, a space at an edge as `␣`, and a control character as its
+/// picture. Any other name comes back unchanged, so the plain case reads as it always did. Every
+/// front end that names a path in a prompt draws it through this, so the three cannot disagree
+/// about which names are marked.
+pub fn shown_name(name: &str) -> String {
+    let invisible = |c: char| {
+        c.is_control()
+            || (c.is_whitespace() && c != ' ')
+            || matches!(
+                c,
+                '\u{ad}' | '\u{61c}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}'
+                    | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{feff}'
+            )
+    };
+    let edge = name.starts_with(char::is_whitespace) || name.ends_with(char::is_whitespace);
+    if !name.is_empty() && !edge && !name.chars().any(invisible) {
+        return name.to_string();
+    }
+    let last = name.chars().count().saturating_sub(1);
+    let mut out = String::from("\"");
+    for (at, c) in name.chars().enumerate() {
+        match c {
+            ' ' if at == 0 || at == last => out.push('\u{2423}'),
+            '"' => out.push_str("\\\""),
+            c if c.is_control() => {
+                out.push(char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'));
+            }
+            c if invisible(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// A quarantined file the model would like to read.
 ///
 /// Offered at the moment a read is refused, so the trust question is put where it matters rather
@@ -1068,6 +1108,11 @@ impl ServerRequest {
 pub struct VouchRequest {
     /// The file, as the user knows it. They are the only party shown this.
     pub path: String,
+    /// The name the trust map will hold the rule under, in full, which is what a yes writes
+    /// (TRUST-8). It covers that path and everything beneath it, so it is drawn under the path:
+    /// a name that collapses to the project root says so there. Shown to the person and branched
+    /// on by nothing.
+    pub rule: String,
     /// The first lines of it, so the decision is about something they have seen.
     ///
     /// Empty where the file's text cannot be shown, whatever the reason: an empty file, and one
@@ -2846,6 +2891,30 @@ impl fmt::Display for Decision {
 mod tests {
     use super::*;
 
+    /// PROMPT-1: a name that would draw as nothing, or as another name, is drawn as what it is,
+    /// and a name that is fine is left alone. One row per way a name goes unseen.
+    #[test]
+    fn a_name_that_draws_as_nothing_is_shown_as_what_it_is() {
+        for (name, shown) in [
+            ("note.md", "note.md"),
+            ("two words.md", "two words.md"),
+            ("", "\"\""),
+            (" ", "\"\u{2423}\""),
+            ("note.md ", "\"note.md\u{2423}\""),
+            (" note.md", "\"\u{2423}note.md\""),
+            ("note.md\t", "\"note.md\u{2409}\""),
+            ("note.md\u{a0}", "\"note.md\\u{a0}\""),
+            ("\u{3000}", "\"\\u{3000}\""),
+            ("a\u{200b}b", "\"a\\u{200b}b\""),
+            ("a\u{202e}b", "\"a\\u{202e}b\""),
+            ("a\u{2066}b", "\"a\\u{2066}b\""),
+            ("a\u{1b}b", "\"a\u{241b}b\""),
+        ] {
+            assert_eq!(shown_name(name), shown, "{name:?}");
+        }
+        assert_ne!(shown_name("note.md "), shown_name("note.md"));
+    }
+
     /// PROMPT-12: a note is one line, cut to a length, and nothing where there is nothing in it.
     #[test]
     fn a_note_is_one_bounded_line() {
@@ -3119,6 +3188,7 @@ mod tests {
     fn a_vouch() -> VouchRequest {
         VouchRequest {
             path: "vendor/lib.js".to_string(),
+            rule: "vendor/lib.js".to_string(),
             preview: "// a library\n".to_string(),
             truncated: false,
             verdict: Verdict::Safe,
