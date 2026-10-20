@@ -412,9 +412,10 @@ it is installed elsewhere. In bypass mode a stage may write every path your acco
 `aws` in a directory your account owns (a Homebrew prefix, say) is found until the first stage runs
 and reads as not installed after that, until Brave Bot exits. [Hooks](../customize/hooks.md),
 language servers and the editor that Ctrl-G opens are looked up the same way when named without a path.
-The editor and a hook are also started with a `PATH` of those same entries only, in the order written,
-so a program either starts by name (an `env` shebang, or an `$EDITOR` of `env vim`) is not found in a
-directory a stage may write. A program the editor or a hook needs that lives only in such a directory,
+The editor, a hook and the AWS CLI are also started with a `PATH` of those same entries only, in the
+order written, so a program any of them starts by name (an `env` shebang, an `$EDITOR` of `env vim`,
+or a bare `credential_process` command) is not found in a directory a stage may write. A program the
+editor, a hook or the CLI needs that lives only in such a directory,
 for example a tool run from a project's `node_modules/.bin`, is not found by it. `bravebot doctor --push-identity` looks up
 `ssh-keygen`, `ssh` and `git` the same way, leaving out the directory it ran in and the checkout
 holding it, reports one found only there as absent, and starts them without Brave Bot's own credentials and
