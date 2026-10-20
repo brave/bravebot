@@ -1501,11 +1501,32 @@ impl Background {
         cancel: &Cancel,
         stops: &[JobStop],
     ) {
+        self.wait(Some(seen), bound, cancel, stops);
+    }
+
+    /// Wait for the job to end, and return at the first of four things.
+    ///
+    /// Every step having exited, `bound` running out, `cancel` being set, and one of `stops` being
+    /// set. Output arriving ends none of it, whether it arrives during the wait or was already
+    /// there, unseen, when the wait began: that is the difference from [`Background::wait_for_more`],
+    /// whose caller gets back at the next line from a job that prints more often than a round takes.
+    ///
+    /// Of the output this asks for nothing at all, not even a byte count, so it decides on which
+    /// steps have exited and on the clock alone. What was printed is taken by the caller afterwards,
+    /// the same way [`Background::wait_for_more`]'s is, and is all of what the job printed since the
+    /// caller's last look.
+    pub fn wait_for_exit(&mut self, bound: Duration, cancel: &Cancel, stops: &[JobStop]) {
+        self.wait(None, bound, cancel, stops);
+    }
+
+    /// The loop both waits share. `seen` is where the caller's last look left off for a wait that
+    /// output ends, and `None` for one that only an exit, the bound, the token or a stop does.
+    fn wait(&mut self, seen: Option<&Seen>, bound: Duration, cancel: &Cancel, stops: &[JobStop]) {
         let until = Instant::now() + bound;
         loop {
             if cancel.is_cancelled()
                 || stops.iter().any(JobStop::is_requested)
-                || self.has_more(seen)
+                || seen.is_some_and(|seen| self.has_more(seen))
                 || self.steps_exited()
             {
                 return;

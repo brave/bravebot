@@ -24,7 +24,7 @@ that is merely carried.
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read`, `scopes` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref`, `offset`, `pattern` | none | **yes, unless the planner may already read it** |
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
-| [`job_output`](#job_output) | `job`, `kill`, `wait_seconds` | none | no |
+| [`job_output`](#job_output) | `job`, `kill`, `wait_seconds`, `until_exit` | none | no |
 | [`fetch_url`](#fetch_url) | `url` | none | **yes, unless a rule names the host** |
 | [`download_url`](#download_url) | `url`, `path` | none | **yes: the host unless a rule names it, and the destination every time** |
 | [`spawn_processor`](#spawn_processor) | `reads`, `about` | `instruction` | no |
@@ -747,6 +747,7 @@ Reports what a [background job](run-tool.md#leaving-a-pipeline-running) has prin
 | `job` | the job name a `run` handed back |
 | `kill` | stop the pipeline |
 | `wait_seconds` | sit and watch for up to this long ([below](#a-look-may-wait)) |
+| `until_exit` | with `wait_seconds`, wait for the job to end and not for its output ([below](#a-look-may-wait)) |
 
 Each look reports what is new, counted in bytes, and whether the job has ended. Asking about a job
 that does not exist says so. What is new is counted separately for standard output and standard error,
@@ -771,6 +772,14 @@ vouching for every stage of the exact command for the next.
 `wait_seconds` makes one look sit and watch instead of taking a snapshot. It comes back at the first of
 four things: output arriving that the planner has not been handed, the job ending, the wait running
 out, or the turn being cancelled.
+
+A job that prints more often than a round takes ends that wait at its next line, so waiting for a build
+that prints a line per crate costs a look per line. `until_exit: true`, given with `wait_seconds`, waits
+for the job to end instead. Output arriving does not end it, including output already waiting when the
+call is made. It comes back when the job ends, when `wait_seconds` runs out, when the turn is
+cancelled, or when you stop a job of the turn, with what the job printed since the last look in one
+answer: where the output is quarantined, that is one reference to all of it. `until_exit` with no
+`wait_seconds`, with `kill`, or with anything but `true` or `false`, is refused.
 
 Between 1 second and 10 minutes, and **a value outside that is refused rather than quietly shortened**.
 A wait that was silently cut short would come back with silence, and silence carries no length: a

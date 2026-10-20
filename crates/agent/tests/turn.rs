@@ -46441,6 +46441,255 @@ fn a_job_output_call_reports_the_code_a_finished_job_exited_with() {
     );
 }
 
+/// What the flag is for, through the whole path rather than at the unit that parses it. A job that
+/// prints a line every half second is waited for in one call: the answer holds the first line and
+/// the last, and says the job exited. The job has already printed by the time the call is made, so
+/// the call also has to wait with output unseen, which a call that only wants the next output
+/// never does. Without the flag the same call comes back with the first lines and a job still
+/// running, and learning that it ended costs another round for each line it prints.
+#[test]
+fn one_job_output_call_that_waits_for_the_exit_is_handed_all_that_a_chatty_job_printed() {
+    let scratch = Scratch::new("background-until-exit");
+
+    // Eight lines half a second apart, the first at once and the last just before it exits. It
+    // writes a file once the first line is out, so the foreground run below can tell that it is.
+    let chatty = scratch.path.join("chatty");
+    std::fs::write(
+        &chatty,
+        "#!/bin/sh\necho FIRST-MARKER-ZORBLE\n: > printed-first\ni=1\nwhile [ $i -lt 7 ]; do sleep 0.5; \
+         echo \"middle $i\"; i=$((i + 1)); done\nsleep 0.5\necho LAST-MARKER-ZORBLE\n",
+    )
+    .unwrap();
+    // A second, foreground, that returns once the first has printed and the driver has had a moment
+    // to read it, so output is unseen and no look has been taken by the time the call is made, which
+    // is the state in which a wait for output returns at once. A fixed sleep would leave that to how
+    // soon the host starts the first.
+    let pause = scratch.path.join("pause");
+    std::fs::write(
+        &pause,
+        "#!/bin/sh\ni=0\nwhile [ ! -e printed-first ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done\n\
+         [ -e printed-first ] && echo PAUSE-SAW-THE-FIRST-LINE\nsleep 0.3\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for script in [&chatty, &pause] {
+            std::fs::set_permissions(script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./chatty","background":true}"#),
+        tool_request("run", r#"{"command":"./pause"}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":60,"until_exit":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Vouched for, so what the job printed comes back as text: a reference would say nothing about
+    // whether the wait had waited for it.
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and tell me when it has ended"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let after = bodies
+        .last()
+        .expect("the planner was asked nothing after the wait");
+    assert!(
+        after.contains("PAUSE-SAW-THE-FIRST-LINE"),
+        "the job had not printed when the call was made, so nothing below is a test of a wait that \
+         output does not end: {after}"
+    );
+    assert!(
+        after.contains("LAST-MARKER-ZORBLE"),
+        "a wait for the exit came back before the job had printed its last line: {after}"
+    );
+    assert!(
+        after.contains("FIRST-MARKER-ZORBLE"),
+        "what the job printed before the call was made was not handed over with the rest: {after}"
+    );
+    assert!(
+        after.contains("It exited 0"),
+        "the answer does not say the job exited: {after}"
+    );
+    assert!(
+        !after.contains("This look waited"),
+        "a wait for the exit reported a job that had ended as still running: {after}"
+    );
+}
+
+/// The bound of a wait for the exit, through the whole path. A job that is still printing when the
+/// bound runs out is reported as running, with the window the call watched, so a planner that
+/// asked for two seconds can tell a job that was watched for two seconds from one that was
+/// looked at once. A wait that output ended would report a window well short of the bound.
+#[test]
+fn a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_printing() {
+    let scratch = Scratch::new("background-until-exit-bound");
+
+    // A line every fifth of a second for half a minute: output throughout the wait, and no exit.
+    let endless = scratch.path.join("endless");
+    std::fs::write(
+        &endless,
+        "#!/bin/sh\ni=0\nwhile [ $i -lt 150 ]; do echo tick-$i; i=$((i + 1)); sleep 0.2; done\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&endless, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./endless","background":true}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":2,"until_exit":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and wait two seconds for it to end"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let after = bodies
+        .last()
+        .expect("the planner was asked nothing after the wait");
+    assert!(
+        after.contains("It is still running"),
+        "a job with half a minute left was not reported as running at the bound: {after}"
+    );
+    // Read out of the sentence rather than matched whole, so a host that overshoots the bound by a
+    // fraction of a second does not fail a test about whether the bound was waited at all.
+    let window: u64 = after
+        .split("This look waited ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|figure| figure.parse().ok())
+        .unwrap_or_else(|| panic!("the answer does not say which window it watched: {after}"));
+    assert!(
+        window >= 2,
+        "a wait for the exit came back after {window} seconds, short of the bound it was given: \
+         {after}"
+    );
+    assert!(
+        after.contains("tick-"),
+        "what the job printed during the wait was not handed over: {after}"
+    );
+}
+
+/// A flag the call cannot honour is refused to the planner, and nothing is waited for. Through the
+/// turn, because what a planner is told by a refusal is what it changes its next call by, and a
+/// refusal the tool never reached it with changes nothing. A wait for the exit with no bound has no
+/// time to wait to, and one beside `kill` holds the kill back until the bound, because the job is
+/// killed after the wait.
+#[test]
+fn a_job_output_call_asking_for_the_exit_in_a_way_it_cannot_honour_is_refused_without_waiting() {
+    let scratch = Scratch::new("background-until-exit-refused");
+
+    let script = scratch.path.join("quiet");
+    std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./quiet","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","until_exit":true}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","kill":true,"wait_seconds":60,"until_exit":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    let began = std::time::Instant::now();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and wait for it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    let took = began.elapsed();
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let after = bodies
+        .last()
+        .expect("the planner was asked nothing after the call");
+    assert!(
+        after.contains("'until_exit' needs 'wait_seconds'"),
+        "the planner was not told what to add to the call: {after}"
+    );
+    assert!(
+        after.contains("so a call gives one of them"),
+        "the planner was not told that a wait for the exit and a kill are not asked together: {after}"
+    );
+    // The job sleeps for half a minute: a call that was not refused waits for it, or kills it only
+    // after waiting out a bound of sixty seconds.
+    assert!(
+        took < std::time::Duration::from_secs(20),
+        "a call that was refused waited for the job: {took:?}"
+    );
+}
+
 /// The half of CMDLINE-14 that never landed, and what made a background job only half useful: a
 /// build started in the background finished, nothing said so, and a planner that did not happen to
 /// call job_output again answered as though it had never run. The exit is what has to tell the
