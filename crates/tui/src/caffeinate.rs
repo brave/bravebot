@@ -2,8 +2,9 @@
 //!
 //! The hold is the platform's own inhibitor program, started with a fixed argument vector and ended
 //! by killing it. Nothing from a model, a file or a setting reaches that vector, and the one program
-//! it names, on Linux, is an absolute path found where no confined stage could have written, so the
-//! program is not one that runs code we did not write
+//! it names, on Linux, is an absolute path found where no confined stage could have written. The
+//! inhibitor is started with a `PATH` that leaves those directories out too, so the programs it
+//! looks up by name are not ones that run code we did not write
 //! ([sandboxing](../../../docs/specs/sandboxing.md)).
 //!
 //! Only idle sleep is held off. The display can still turn off and the screen can still lock, so a
@@ -43,9 +44,9 @@ pub fn arguments(_pid: u32) -> io::Result<Vec<OsString>> {
 
 /// The arguments `systemd-inhibit` is given, with `cat` as the path `find` returns for it.
 ///
-/// `systemd-inhibit` starts its last argument by looking the name up on the `PATH` it inherited
-/// from this process, which is not the search SANDBOX-30 describes, so the name is resolved here and
-/// passed as an absolute path. Nothing is started when `find` has no `cat`.
+/// `systemd-inhibit` starts its last argument by looking the name up on a `PATH`, which is not the
+/// search SANDBOX-30 describes, so the name is resolved here and passed as an absolute path whatever
+/// `PATH` it is started with. Nothing is started when `find` has no `cat`.
 #[cfg(any(all(test, unix), not(any(target_os = "macos", target_os = "windows"))))]
 fn systemd_inhibit_arguments(
     find: impl Fn(&std::ffi::OsStr) -> Option<std::path::PathBuf>,
@@ -119,17 +120,22 @@ impl Drop for Held {
 }
 
 /// Start `program` with `arguments`, its standard input a pipe this process holds open.
+///
+/// The names the program looks up itself, such as the program a `unixexec:` bus address names to
+/// `systemd-inhibit`, are looked up on a `PATH` reduced to the entries `find` searches (SANDBOX-30).
 pub fn start_program(program: &str, arguments: &[OsString]) -> io::Result<Held> {
     let program = bravebot_sandbox::programs::find(std::ffi::OsStr::new(program))
         .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-    let child = bravebot_sandbox::programs::start(
+    let mut command = bravebot_sandbox::programs::start(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
-    )
-    .args(arguments)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .spawn()?;
+    );
+    bravebot_sandbox::programs::restrict_path(&mut command);
+    let child = command
+        .args(arguments)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
     Ok(Held { child: Some(child) })
 }
 
@@ -393,20 +399,37 @@ mod tests {
         }
     }
 
-    /// Run `test` again in a child whose `PATH` is `path` and whose environment names `session`,
-    /// and report whether the child reached the test, whether it passed, and what it printed.
+    /// Wait for a started inhibitor to exit, as a stand-in for `systemd-inhibit` does when its
+    /// command has run, and fail rather than hang when it never does.
+    #[cfg(unix)]
+    fn wait_until_it_ends(held: &mut Held) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !held.ended() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the inhibitor never ran its program"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// Run `test` again in a child whose `PATH` is `path`, whose environment names `session` and
+    /// holds `environment`, and report whether the child reached the test, whether it passed, and
+    /// what it printed.
     #[cfg(unix)]
     fn again_with_path(
         test: &str,
         variable: &str,
         session: &std::path::Path,
         path: &std::ffi::OsStr,
+        environment: &[(&str, &str)],
     ) -> (bool, bool, String) {
         // nosemgrep: rust.lang.security.current-exe.current-exe
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test, "--test-threads=1", "--nocapture"])
             .env(variable, session)
             .env("PATH", path)
+            .envs(environment.iter().copied())
             .output()
             .unwrap();
         (
@@ -434,14 +457,7 @@ mod tests {
             std::fs::write(session.join("ran"), "").unwrap();
 
             let mut held = start_linux_inhibitor().unwrap();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while !held.ended() {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "the inhibitor never ran its program"
-                );
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
+            wait_until_it_ends(&mut held);
 
             assert!(
                 !session.join("planted-ran").exists(),
@@ -479,7 +495,90 @@ mod tests {
         );
         let path = std::env::join_paths([planted, system.clone()]).unwrap();
 
-        let (ran, passed, report) = again_with_path(TEST, SESSION, &session, &path);
+        let (ran, passed, report) = again_with_path(TEST, SESSION, &session, &path, &[]);
+
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&system);
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(passed, "{report}");
+    }
+
+    /// SANDBOX-30: a name `systemd-inhibit` starts itself, as it does for the program a
+    /// `unixexec:` address in `DBUS_SYSTEM_BUS_ADDRESS` names, is looked up on the `PATH` it was
+    /// given. The test binary runs again with `PATH` holding a directory the session keeps out, with
+    /// a `bravebot-bus-helper` in it ahead of an installed one, and a `systemd-inhibit` that starts
+    /// the name the address gives and then its command. The planted helper runs the installed one
+    /// after recording itself, so the inhibitor still reaches its end when the lookup is made wrongly.
+    /// A `PATH` left whole starts the planted file, and a `PATH` taken away finds no helper at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_the_inhibitor_starts_by_name_is_never_one_a_stage_may_have_written() {
+        use std::path::PathBuf;
+        const TEST: &str = "caffeinate::tests::a_program_the_inhibitor_starts_by_name_is_never_one_a_stage_may_have_written";
+        const SESSION: &str = "BRAVEBOT_TEST_CAFFEINATE_BY_NAME_SESSION";
+
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            bravebot_sandbox::programs::keep_out(&session);
+            std::fs::write(session.join("ran"), "").unwrap();
+
+            let mut held = start_linux_inhibitor().unwrap();
+            wait_until_it_ends(&mut held);
+
+            assert!(
+                !session.join("planted-ran").exists(),
+                "the inhibitor started a program by name from a directory a stage may write"
+            );
+            assert!(
+                session.join("installed-ran").exists(),
+                "the inhibitor did not start the installed program it looked up by name"
+            );
+            return;
+        }
+
+        let session = crate::testutil::scratch_dir("caffeinate-by-name-session");
+        let system = crate::testutil::scratch_dir("caffeinate-by-name-system");
+        let _ = std::fs::remove_dir_all(&session);
+        let _ = std::fs::remove_dir_all(&system);
+        let planted = session.join(".venv/bin");
+        std::fs::create_dir_all(&planted).unwrap();
+        std::fs::create_dir_all(&system).unwrap();
+        script(
+            &planted,
+            "bravebot-bus-helper",
+            &format!(
+                ": > '{}'\nexec '{}'",
+                session.join("planted-ran").display(),
+                system.join("bravebot-bus-helper").display()
+            ),
+        );
+        script(
+            &system,
+            "bravebot-bus-helper",
+            &format!(": > '{}'", session.join("installed-ran").display()),
+        );
+        script(&system, "cat", ":");
+        script(
+            &system,
+            "systemd-inhibit",
+            "case \"$DBUS_SYSTEM_BUS_ADDRESS\" in\n\
+             unixexec:path=*) \"${DBUS_SYSTEM_BUS_ADDRESS#unixexec:path=}\";;\n\
+             esac\n\
+             while [ $# -gt 0 ]; do case \"$1\" in --*) shift;; *) break;; esac; done\n\
+             exec \"$@\" </dev/null",
+        );
+        let path = std::env::join_paths([planted, system.clone()]).unwrap();
+
+        let (ran, passed, report) = again_with_path(
+            TEST,
+            SESSION,
+            &session,
+            &path,
+            &[(
+                "DBUS_SYSTEM_BUS_ADDRESS",
+                "unixexec:path=bravebot-bus-helper",
+            )],
+        );
 
         let _ = std::fs::remove_dir_all(&session);
         let _ = std::fs::remove_dir_all(&system);
@@ -519,7 +618,8 @@ mod tests {
         std::fs::create_dir_all(&planted).unwrap();
         script(&planted, "cat", ":");
 
-        let (ran, passed, report) = again_with_path(TEST, SESSION, &session, planted.as_os_str());
+        let (ran, passed, report) =
+            again_with_path(TEST, SESSION, &session, planted.as_os_str(), &[]);
 
         let _ = std::fs::remove_dir_all(&session);
         assert!(ran, "the child did not run the test: {report}");
