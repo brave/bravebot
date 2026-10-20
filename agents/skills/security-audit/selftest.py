@@ -658,6 +658,48 @@ def test_labelled_impls():
         list(audit.check_labelled_impls(described)) == [],
     )
 
+    def labelled(*lines):
+        return {Path("crates/core/src/value.rs"): list(lines)}
+
+    for name, source in {
+        "a derived PartialEq": labelled("#[derive(Clone, PartialEq)]", "pub struct Labelled<T> {"),
+        "a derive wrapped over lines": labelled(
+            "#[derive(", "    Clone,", "    std::hash::Hash,", ")]", "pub struct Labelled<T> {"
+        ),
+        "a derive inside cfg_attr": labelled(
+            "#[cfg_attr(test, derive(Clone, Eq))]", "pub struct Labelled<T> {"
+        ),
+        "a derive above another attribute": labelled(
+            "#[derive(Debug)]", "#[must_use]", "pub struct Labelled<T> {"
+        ),
+        "an impl with a nested generic bound": labelled(
+            "impl<T: AsRef<str>> PartialEq<str> for Labelled<T> {"
+        ),
+        "an impl whose header wraps": labelled(
+            "impl<T>", "    std::ops::Deref", "    for Labelled<T>", "where", "    T: Clone,", "{"
+        ),
+        "an impl with a generic trait argument": labelled(
+            "impl<T: Into<Vec<u8>>> AsRef<[u8]> for Labelled<T> {"
+        ),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(f"{name} is an error", kinds(found) == ["labelled-impl"], str(kinds(found)))
+
+    for name, source in {
+        "a derive of Clone alone": labelled("#[derive(Clone)]", "pub struct Labelled<T> {"),
+        "a derive on another struct": labelled(
+            "#[derive(PartialEq)]", "pub struct Shape {", "}", "pub struct Labelled<T> {"
+        ),
+        "a wrapped impl of the one recorded trait": labelled(
+            "impl<T>", "    fmt::Debug", "    for Labelled<T> {"
+        ),
+        "an impl for another type that names Labelled in a bound": labelled(
+            "impl<T> Deref for Wrapper<T>", "where", "    T: Into<Labelled<String>>,", "{"
+        ),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(f"{name} is clean", found == [], str(kinds(found)))
+
     # `impl Labelled` is the type's own block, not a trait reaching into it.
     own = {Path("crates/core/src/value.rs"): ["impl<T> Labelled<T> {", "}"]}
     check("the type's own impl block is not a trait", list(audit.check_labelled_impls(own)) == [])
