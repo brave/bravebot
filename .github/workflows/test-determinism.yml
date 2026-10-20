@@ -63,10 +63,11 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
+    # Holds no grant beyond reading and no secret: this job runs every build script, proc macro and
+    # test in Cargo.lock, so whatever it holds is readable by code nobody here wrote (#2789). The
+    # `file` job below holds the issue grant and runs no cargo.
     permissions:
       contents: read
-      # A flake nobody filed is a flake nobody works on, so the job that finds one opens the issue.
-      issues: write
     defaults:
       run:
         shell: bash
@@ -80,33 +81,37 @@ jobs:
           - name: Linux, 4 threads
             os: ubuntu-latest
             threads: "4"
-            issues: ""
             python: python3
             toolchain: stable
             timeout: 240
           - name: Linux, 16 threads
             os: ubuntu-latest
             threads: "16"
-            issues: ${{ github.repository }}
+            files: true
+            report: linux-16
             python: python3
             toolchain: stable
             timeout: 240
           - name: macOS
             os: macos-latest
             threads: ""
-            issues: ${{ github.repository }}
+            files: true
+            report: macos
             python: python3
             toolchain: stable
             timeout: 240
           - name: Windows
             os: windows-latest
             threads: ""
-            issues: ""
             python: python
             toolchain: stable-x86_64-pc-windows-gnu
             timeout: 120
     steps:
+      # The checkout otherwise leaves the job token in the repository's git config, where every
+      # process this job starts could read it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Rust
         # Pinned to a full commit SHA; see the note in ci.yml's `check` job.
@@ -118,14 +123,8 @@ jobs:
       - name: Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      # Every flaky test that has no issue gets one, and one that already has an issue gets nothing:
-      # a job that files the same thing every Monday is a job whose issues are closed unread. The
-      # rates go to the job summary either way, and no rate fails this job, since going red over a
-      # known two percent flake is the state this exists to replace.
-      #
-      # Assigned to netzenbot, the account that opens the fix pull requests here. Nothing this job
-      # files is triaged, so an issue naming nobody waits on a person noticing it: #275 was filed
-      # unassigned on a Monday and assigned by hand seven hours later, which is the step this saves.
+      # What this step measures is saved to a file rather than filed from here, because filing needs
+      # a token and this step runs project code. The `file` job reads that file.
       #
       # A hundred runs rather than thirty. Thirty accounts for a test that loses about a tenth of
       # its runs and nothing rarer, and a tenth is where the flakes found in this suite were
@@ -138,9 +137,64 @@ jobs:
         env:
           RUNS: ${{ inputs.runs || '100' }}
           THREADS: ${{ matrix.threads }}
-          ISSUES: ${{ matrix.issues }}
           PYTHON: ${{ matrix.python }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           "$PYTHON" contrib/measure-flakes.py --runs "$RUNS" ${THREADS:+--test-threads "$THREADS"} \
-            --file-issues "$ISSUES" --assign netzenbot --summary "$GITHUB_STEP_SUMMARY"
+            --save "$RUNNER_TEMP/measured.json" --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep what was measured
+        if: ${{ matrix.files }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: measured-${{ matrix.report }}
+          path: ${{ runner.temp }}/measured.json
+          if-no-files-found: error
+
+  # Every flaky test that has no issue gets one, and one that already has an issue gets nothing:
+  # a job that files the same thing every Monday is a job whose issues are closed unread. No rate
+  # fails this job, since going red over a known two percent flake is the state this exists to
+  # replace.
+  #
+  # Assigned to netzenbot, the account that opens the fix pull requests here. Nothing this job
+  # files is triaged, so an issue naming nobody waits on a person noticing it: #275 was filed
+  # unassigned on a Monday and assigned by hand seven hours later, which is the step this saves.
+  #
+  # Only the wide Linux leg and macOS file. Both Linux legs measure the same tests, so both filing
+  # would race to open two issues for one flake, and Windows is not expected to pass yet (#88). In
+  # order, one at a time, so that a test that flakes on both is filed by the first and found as
+  # already filed by the second.
+  #
+  # This is the only job here holding `issues: write`, and it runs `gh` and nothing from the
+  # dependency tree. It checks out only to read `contrib/measure-flakes.py`, without leaving the
+  # token in the checkout, and installs no toolchain.
+  file:
+    name: File issues, ${{ matrix.report }}
+    needs: measure
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        report: [linux-16, macos]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: measured-${{ matrix.report }}
+          path: ${{ runner.temp }}
+
+      - name: File
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUES: ${{ github.repository }}
+        run: |
+          contrib/measure-flakes.py --load "$RUNNER_TEMP/measured.json" --file-issues "$ISSUES" \
+            --assign netzenbot --summary "$GITHUB_STEP_SUMMARY"

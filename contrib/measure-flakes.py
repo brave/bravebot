@@ -16,14 +16,18 @@ measurement or a report that could not be delivered fails here.
 """
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import platform
 import re
+import shutil
 
 # Only ever invoked with an argument list, never a shell string.
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
+import tempfile
 from collections import Counter, deque
 
 # Cargo names each test binary on stderr before that binary writes anything on stdout, so the two
@@ -95,7 +99,9 @@ def parse(stream):
         # outcome lines before any of its captured output, so a heading naming a test that did not
         # fail is a test talking.
         heading = FAILURE_TEXT.match(line)
-        starts_sample = heading is not None and qualify(binary, heading.group(1)) in failed
+        starts_sample = (
+            heading is not None and qualify(binary, heading.group(1)) in failed
+        )
 
         if failing is not None:
             # libtest closes the captured output of one test with the next heading, the list of
@@ -190,6 +196,12 @@ def system():
     return {"Darwin": "macOS"}.get(platform.system(), platform.system())
 
 
+# Set when the measurement is read from a file, because the host that files is not the one that ran
+# the suite, and an issue naming the filing host's CPUs would credit a rate to a machine that never
+# produced it.
+MEASURED_ON = None
+
+
 def machine():
     """What the machine reports, since a rate without it invites the wrong conclusion.
 
@@ -197,6 +209,8 @@ def machine():
     runner and a container on a developer's laptop can pass the identical flag and put a different
     number of tests in flight, and the rate is a property of that, not only of the test.
     """
+    if MEASURED_ON:
+        return MEASURED_ON
     count = os.cpu_count()
     cpus = f"{count} CPUs" if count else "an unknown number of CPUs"
     return f"{cpus} running {system()}"
@@ -332,7 +346,8 @@ def issue_body(test, failed, reported, threads, url, sample):
         f"at {parallelism}, on a machine reporting {machine()}.",
         "",
         "Nothing in the tree changed between those runs, so the difference is the test rather than "
-        "the code under it." + (f" The binary that ran it is `{binary}`." if binary else ""),
+        "the code under it."
+        + (f" The binary that ran it is `{binary}`." if binary else ""),
         "",
     ]
     if sample:
@@ -431,7 +446,10 @@ def file_issues(flaky, samples, threads, repo, assign, limit, gh):
         return (
             "\n".join(
                 heading
-                + [f"The issues on {repo} could not be listed, so nothing was filed.", ""]
+                + [
+                    f"The issues on {repo} could not be listed, so nothing was filed.",
+                    "",
+                ]
             ),
             False,
         )
@@ -474,9 +492,18 @@ def file_issues(flaky, samples, threads, repo, assign, limit, gh):
     return "\n".join(heading + (lines or ["Nothing to file."]) + [""]), delivered
 
 
+# What the filing step holds and nothing that runs project code may: `gh` reads either name.
+TOKENS = ("GH_TOKEN", "GITHUB_TOKEN")
+
+
 def cargo_env():
-    """Colour off, so the parse reads test names rather than escape sequences."""
-    env = dict(os.environ)
+    """Colour off, so the parse reads test names rather than escape sequences.
+
+    The token that files issues is left out. Cargo runs every build script and proc macro in
+    Cargo.lock, and each measured run executes their code again, so whatever is in this environment
+    is readable by bytes nobody here wrote (#2789).
+    """
+    env = {key: value for key, value in os.environ.items() if key not in TOKENS}
     env["CARGO_TERM_COLOR"] = "never"
     return env
 
@@ -511,7 +538,9 @@ def measure(runs, threads):
     # `--no-run` builds no doc-tests, so without this the first measured run would pay rustdoc's
     # compile while competing with the timing-sensitive tests it is measuring, and its rate would
     # not be comparable with the rest.
-    print("warming up, so the doc-tests are built before anything counts", file=sys.stderr)
+    print(
+        "warming up, so the doc-tests are built before anything counts", file=sys.stderr
+    )
     if not run_suite(command)[0]:
         print("the warm-up run reported no tests at all", file=sys.stderr)
         return None, None, 0
@@ -568,6 +597,17 @@ def main():
         help="a file to append the report to, such as $GITHUB_STEP_SUMMARY",
     )
     parser.add_argument(
+        "--save",
+        metavar="FILE",
+        help="write what was measured to FILE, so a later step holding a token can file issues "
+        "from it without this one ever holding one",
+    )
+    parser.add_argument(
+        "--load",
+        metavar="FILE",
+        help="file issues from what --save wrote, and run nothing: no cargo, so no project code",
+    )
+    parser.add_argument(
         "--file-issues",
         metavar="OWNER/REPO",
         # Empty rather than absent, because the workflow matrix passes this per leg and only one leg
@@ -600,9 +640,30 @@ def main():
     if args.selftest:
         return selftest()
 
-    per_run, samples, lost = measure(args.runs, args.test_threads)
+    if args.load:
+        with open(args.load, encoding="utf-8") as handle:
+            saved = json.load(handle)
+        per_run, samples, lost = saved["per_run"], saved["samples"], saved["lost"]
+        args.test_threads = saved["threads"]
+        global MEASURED_ON
+        MEASURED_ON = saved["machine"]
+    else:
+        per_run, samples, lost = measure(args.runs, args.test_threads)
     if not per_run:
         return 1
+
+    if args.save:
+        with open(args.save, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "per_run": per_run,
+                    "samples": samples,
+                    "lost": lost,
+                    "threads": args.test_threads,
+                    "machine": machine(),
+                },
+                handle,
+            )
 
     counts = tally(per_run)
     flaky, broken = disagreed(counts, len(per_run))
@@ -618,9 +679,11 @@ def main():
             args.issue_limit,
             dry_gh if args.dry_run else run_gh,
         )
-        report = f"{report}\n{section}"
+        # A filing step reports the filing only: the step that measured has already written the
+        # rest of the report to the same summary.
+        report = section if args.load else f"{report}\n{section}"
     detail = failures(flaky, broken, samples)
-    if detail:
+    if detail and not args.load:
         report = f"{report}\n{detail}"
 
     print(report)
@@ -770,10 +833,54 @@ def created(calls):
 def assignees(calls):
     """Who each issue a recording was asked to open would land on, `None` where it names nobody."""
     return [
-        arguments[arguments.index("--assignee") + 1] if "--assignee" in arguments else None
+        arguments[arguments.index("--assignee") + 1]
+        if "--assignee" in arguments
+        else None
         for arguments, _ in calls
         if arguments[:2] == ["issue", "create"]
     ]
+
+
+def round_trip(outcomes, second, samples):
+    """Whether --save then --load restores the threads and the machine and files without a report.
+
+    `measure` and the machine are stood in for, so no cargo runs, and the filing is a dry run.
+    """
+    global measure, MEASURED_ON
+    real = measure, MEASURED_ON, sys.argv
+    scratch = tempfile.mkdtemp()
+    path = os.path.join(scratch, "measured.json")
+    try:
+        measure = lambda runs, threads: ([outcomes, second], samples, 0)  # noqa: E731
+        MEASURED_ON = "a 64-core box running Plan 9"
+        sys.argv = ["measure-flakes.py", "--save", path, "--test-threads", "7"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            saved = main()
+        # What the filing host would report of itself, which the loaded file has to override.
+        MEASURED_ON = None
+        sys.argv = [
+            "measure-flakes.py",
+            "--load",
+            path,
+            "--file-issues",
+            "example/repo",
+            "--dry-run",
+        ]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            loaded = main()
+    finally:
+        measure, MEASURED_ON, sys.argv = real
+        shutil.rmtree(scratch, ignore_errors=True)
+    return (
+        "a saved measurement restores its threads and machine, and a load files without the report",
+        saved == 0
+        and loaded == 0
+        and "a 64-core box running Plan 9" in err.getvalue()
+        and "--test-threads=7" in err.getvalue()
+        and "### Issues" in out.getvalue()
+        and "## Test determinism" not in out.getvalue(),
+    )
 
 
 def selftest():
@@ -851,7 +958,8 @@ def selftest():
         ),
         (
             "the report states the rate and the parallelism it was measured at",
-            "50%" in describe(2, 4, counts) and "--test-threads=4" in describe(2, 4, counts),
+            "50%" in describe(2, 4, counts)
+            and "--test-threads=4" in describe(2, 4, counts),
         ),
         (
             "a run that reported nothing is counted as nothing rather than hidden",
@@ -894,7 +1002,9 @@ def selftest():
     # Filing is the half that writes to a repository everybody shares, and the failure that costs
     # most is a second issue for a test that already has one.
     gh, calls = recording_gh()
-    section, delivered = file_issues(flaky, samples, 16, "owner/repo", "netzenbot", ISSUE_LIMIT, gh)
+    section, delivered = file_issues(
+        flaky, samples, 16, "owner/repo", "netzenbot", ISSUE_LIMIT, gh
+    )
     opened = created(calls)
     checks.append(
         (
@@ -910,9 +1020,7 @@ def selftest():
     checks.append(
         (
             "the issue says the rate, the parallelism and what the failure was",
-            all(
-                "50%" in body and "--test-threads=16" in body for _, body in opened
-            )
+            all("50%" in body and "--test-threads=16" in body for _, body in opened)
             and any("the reply was drawn twice" in body for _, body in opened),
         )
     )
@@ -929,7 +1037,8 @@ def selftest():
     checks.append(
         (
             "a rate arrives with the operating system that produced it",
-            f"running {system()}" in clean and all(system() in body for _, body in opened),
+            f"running {system()}" in clean
+            and all(system() in body for _, body in opened),
         )
     )
     # Nothing here is triaged, so an issue naming nobody is one no person has agreed to look at:
@@ -953,7 +1062,9 @@ def selftest():
     covered, calls = recording_gh(
         existing=[(76, "Flaky test: a_reply_arrives_before_the_deadline")]
     )
-    section, _ = file_issues(flaky, samples, 16, "owner/repo", "netzenbot", ISSUE_LIMIT, covered)
+    section, _ = file_issues(
+        flaky, samples, 16, "owner/repo", "netzenbot", ISSUE_LIMIT, covered
+    )
     checks.append(
         (
             "a test that already has an issue is named rather than filed again",
@@ -1018,6 +1129,33 @@ def selftest():
             and "run by hand" in by_hand,
         )
     )
+
+    # Cargo runs every build script and proc macro in Cargo.lock, and each measured run executes
+    # their code again, so the token that files issues must not be in the environment they inherit.
+    saved = {key: os.environ.get(key) for key in (*TOKENS, "MEASURE_SELFTEST")}
+    try:
+        for key in TOKENS:
+            os.environ[key] = "secret"
+        os.environ["MEASURE_SELFTEST"] = "kept"
+        child = cargo_env()
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    checks.append(
+        (
+            "no token reaches the environment cargo and the tests inherit",
+            not any(key in child for key in TOKENS)
+            and child.get("MEASURE_SELFTEST") == "kept"
+            and child.get("CARGO_TERM_COLOR") == "never",
+        )
+    )
+
+    # The filing job runs from what the measuring job saved and never on a pull request, so a key
+    # the two halves disagree on would only surface in the weekly run. Drive both through main().
+    checks.append(round_trip(outcomes, second, samples))
 
     broke = [claim for claim, held in checks if not held]
     for claim in broke:

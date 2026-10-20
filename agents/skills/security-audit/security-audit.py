@@ -278,6 +278,15 @@ PNPM_RUNS_NOTHING = {
     "unpublish", "patch", "patch-commit", "remove", "rm", "uninstall", "un", "unlink", "prune",
     "link", "ln", "version", "help", "update", "up", "upgrade", "dedupe", "fetch", "import",
 }
+# What a Rust job runs that executes bytes nobody here wrote: cargo compiles every build script and
+# proc macro in Cargo.lock and runs them, and the tests after them. `contrib/measure-flakes.py` is the
+# one script known to do it, and it does not when it is given `--load`, which is its filing mode.
+CARGO_RUNS = re.compile(
+    r"(?:^|[\s;&|(])cargo(?:\s+\+\S+)?\s+(?:build|b|test|t|clippy|run|r|nextest|install|check|c|bench|doc)\b"
+)
+MEASURES_FLAKES = re.compile(r"(?:^|[\s;&|(])(?:\S*/)?contrib/measure-flakes\.py\b(?![^;&|\n]*--load)")
+WRITE_GRANT = re.compile(r"\bwrite\b|\bwrite-all\b")
+NOT_PERSISTED = re.compile(r"persist-credentials\s*:\s*[\"']?false\b")
 DEPENDENCY = (
     (
         re.compile(
@@ -1813,14 +1822,25 @@ def workflow_jobs(lines):
                 "line": number + 1,
                 "grants": None,
                 "secret": everywhere,
+                "secret_above_steps": everywhere,
+                "persists": False,
+                "in_steps": False,
                 "steps": [],
             }
             jobs.append(current)
             continue
         if current is None:
             continue
+        if column == 4 and raw.strip() == "steps:":
+            current["in_steps"] = True
         if SECRET.search(raw):
             current["secret"] = True
+            if not current["in_steps"]:
+                current["secret_above_steps"] = True
+        found = USES.match(raw)
+        if found and CHECKOUT.match(unquoted(found.group(1))):
+            if not any(NOT_PERSISTED.search(line) for line in step_text(lines, number)):
+                current["persists"] = True
         found = PERMISSIONS.match(raw) if column == 4 else None
         if found:
             current["grants"] = [found.group(1)] + nested(lines, number)
@@ -1833,6 +1853,7 @@ def workflow_jobs(lines):
                     "body": nested(lines, number, base=raw.index("run:"))
                     if inline in BLOCK
                     else [inline],
+                    "secret": any(SECRET.search(line) for line in step_text(lines, number)),
                 }
             )
     for job in jobs:
@@ -1856,6 +1877,14 @@ COMMIT = re.compile(r"^[0-9a-f]{40}$")
 # resolution. The cost is an input actually called `sha` passing; the other direction, reporting
 # every workflow that rebuilds `github.sha`, would be noise nobody could act on.
 NAMES_A_COMMIT = re.compile(r"sha\b", re.IGNORECASE)
+
+
+def step_text(lines, number):
+    """The lines of the step a line is in, including a line that is the `- key:` opening it."""
+    found = STEP_START.match(lines[number])
+    if found:
+        return [lines[number]] + nested(lines, number, base=len(found.group(1)))
+    return enclosing_step(lines, number)
 
 
 def enclosing_step(lines, number):
@@ -1953,6 +1982,58 @@ def dependency_commands(body):
     return found
 
 
+def runs_project_code(path, job, granted):
+    """The steps of one job that compile or run this repository's dependencies beside a credential.
+
+    Reported for a step that runs `cargo build`, `test`, `clippy`, `run`, `nextest` or `install`, or
+    `contrib/measure-flakes.py` in its measuring mode (#2789), when what it can read is a token:
+
+    - `id-token: write` on the job, which every step is handed the means to use;
+    - a secret named by the step itself, or by the job above its steps, or the workflow above its
+      jobs, since each of those is in the step's environment. A secret in another step of the job is
+      not, which is what lets one job measure in one step and hold the token in none of the steps
+      that run code;
+    - a write grant on a job whose `actions/checkout` leaves its credential in the checkout, because
+      the checkout is what every later step reads and `persist-credentials: false` is the only way
+      the token is not in it.
+    """
+    write = any(WRITE_GRANT.search(raw) for raw in job["grants"])
+    for step in job["steps"]:
+        ran = [
+            line.strip()[:120]
+            for line in step["body"]
+            if not line.strip().startswith("#")
+            and (CARGO_RUNS.search(line) or MEASURES_FLAKES.search(line))
+        ]
+        if not ran:
+            continue
+        if granted:
+            holds = "id-token: write"
+        elif step["secret"] or job["secret_above_steps"]:
+            holds = "a secret in its environment"
+        elif write and job["persists"]:
+            holds = "a write grant its checkout leaves in the working tree"
+        else:
+            continue
+        yield finding(
+            ERROR,
+            "privileged-job-runs-project-code",
+            f"{path.name} runs the build or the tests in {job['name']}, a step that holds {holds}, "
+            "so a build script, proc macro or test of any crate in Cargo.lock can use it",
+            f"`{job['name']}` in `{path}` runs `{ran[0]}` where {holds} is readable, and cargo "
+            "runs the build script and proc macro of every crate in `Cargo.lock` and then their "
+            "tests, in the environment and working tree of that step",
+            "infrastructure",
+            "medium",
+            evidence=[f"{path}:{job['line']} job `{job['name']}`", f"{path}:{step['line']} {ran[0]}"],
+            fix="measure in a step or job that holds no token and writes what it found to a file, "
+            "and file from a job that holds the grant and runs only `gh`. Set "
+            "`persist-credentials: false` on the checkout either way",
+            gain="whoever owns one crate in the lockfile reads the token and acts as the workflow "
+            "on this repository for as long as the job runs",
+        )
+
+
 def check_privileged_job_runs_only_its_own_code():
     """A job that can mint a credential installs and runs nothing from `node_modules`.
 
@@ -1964,9 +2045,9 @@ def check_privileged_job_runs_only_its_own_code():
     same two commands in a job holding `contents: read` reach a green check and nothing else. So the
     finding is the pairing rather than either half.
 
-    What it reads is the npm and pnpm tree, which is the third-party code a workflow here installs and runs by
-    name. A job that compiled the tree would run a crate's build script in the same environment and
-    this says nothing about that, which is a widening of this check rather than a second one.
+    It reads the npm and pnpm tree, and the Rust one: a job that compiles the tree runs a crate's
+    build script in the same environment, so `runs_project_code` pairs `cargo` commands and
+    `contrib/measure-flakes.py` with the same credentials (#2789).
     """
     if not WORKFLOWS.is_dir():
         return
@@ -1991,6 +2072,7 @@ def check_privileged_job_runs_only_its_own_code():
             continue
         for job in jobs:
             granted = any(GRANT.search(raw) for raw in job["grants"])
+            yield from runs_project_code(path, job, granted)
             if not granted and not job["secret"]:
                 continue
             reached = [

@@ -189,6 +189,12 @@ the tests: it is nonzero when the measurement did not happen, or when an issue t
 filed was not, because a filer that has quietly stopped working looks exactly like a suite that
 stopped being flaky.
 
+`--save FILE` writes what was measured, and `--load FILE` files issues from that file and runs
+nothing else. The workflow measures in one job that holds no token, because cargo runs every build
+script and proc macro in `Cargo.lock` and the child environment would otherwise carry it, and files
+from another job that holds `issues: write` and runs only `gh` (#2789). The script drops `GH_TOKEN`
+and `GITHUB_TOKEN` from the environment it gives cargo as well.
+
 `--summary FILE` appends the same report to a file, which is how the weekly
 [Test determinism](../.github/workflows/test-determinism.yml) workflow puts it in a job summary.
 That workflow names both thread counts rather than leaving either to cargo, since a hosted runner
