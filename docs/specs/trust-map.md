@@ -199,6 +199,11 @@ in both polarities. A second asks the same pairs of the key the workspace builds
 read, and of a second writer, where a step that joins two files can sit with the map seeing
 nothing, and compares the two keys. The vouch prompt is asked about four of the names.
 
+A turn that names each of the names with `@` is asked which files the rule it leaves covers, and
+`crates/mentions` is asked whether the line a completion writes for each name names that file
+([NAME-8](naming-files.md#NAME-8)). A reference cannot hold a whitespace character other than a
+space, so the names that do are listed in that test against #2863, and it fails once one reads back.
+
 `make check-security` fails a `trim`, a case fold, a Unicode normalisation or a lossy conversion
 in the functions that key a name or fold or decompose it: `normalise`, `TrustStore::key`,
 `fold_case`, `canonical_form`, `FileAuthority::key`, and the permission rule's `key_of`, `fold` and
@@ -228,6 +233,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_core::trust::a_name_with_whitespace_at_an_end_is_not_the_name_without_it`
 `verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group`
 `verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group`
+`verified-by: bravebot_agent::turn::a_file_named_with_an_at_sign_is_vouched_for_alone_whatever_its_name`
 `verified-by: bravebot_core::trust::a_name_ending_in_a_space_follows_the_rules_for_canonically_equivalent_names`
 `verified-by: bravebot_core::trust::a_working_directory_with_whitespace_at_an_end_is_not_the_one_without_it`
 `verified-by: bravebot_core::trust::every_equivalent_spelling_of_a_path_reaches_the_same_rule`

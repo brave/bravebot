@@ -30786,6 +30786,66 @@ fn a_vouch_for_a_file_with_an_awkward_name_is_a_rule_about_that_file_alone() {
     }
 }
 
+/// Naming a file, as `@` and `--file` do, is a rule about that file and no other, whatever the file
+/// is called (NAME-2, TRUST-2). The directory holds every awkward name, each is named in a turn of
+/// its own, and the rule that turn leaves has to cover that file and none of the others in the
+/// directory. Reading the name out of an `@` line is `bravebot-mentions`' to test.
+#[cfg(unix)]
+#[test]
+fn a_file_named_with_an_at_sign_is_vouched_for_alone_whatever_its_name() {
+    use std::os::unix::fs::MetadataExt;
+
+    let scratch = Scratch::new("named-awkward");
+    std::fs::write(scratch.path.join("sibling.md"), "AWKWARD_NAMED\n").unwrap();
+    let mut files = Vec::new();
+    for (name, _) in aliases::AWKWARD_NAMES {
+        let path = scratch.path.join(name);
+        std::fs::create_dir_all(path.parent().expect("a name is in a directory")).unwrap();
+        std::fs::write(&path, "AWKWARD_NAMED\n")
+            .unwrap_or_else(|error| panic!("the volume does not hold {name:?}: {error}"));
+        let meta = std::fs::metadata(&path).unwrap();
+        files.push((*name, (meta.dev(), meta.ino())));
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    for (name, identity) in &files {
+        let (endpoint, _received) = serve_sequence(vec![reply_with("done")]);
+        let outcome = turn::resume(
+            &config_for(&endpoint),
+            &egress,
+            &workspace,
+            &Task::new("summarise it").with_file(name.to_string()),
+            &mut bravebot_agent::Conversation::new(),
+            &mut bravebot_agent::Unattended,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new("/work"),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .unwrap_or_else(|error| panic!("the turn naming {name:?} failed: {error:?}"));
+        assert!(
+            outcome.trust.is_trusted(name),
+            "naming {name:?} did not record a rule about it"
+        );
+        for (other, other_identity) in &files {
+            if other_identity != identity {
+                assert!(
+                    !outcome.trust.is_trusted(other),
+                    "naming {name:?} vouched for {other:?}"
+                );
+            }
+        }
+        assert!(
+            !outcome.trust.is_trusted("sibling.md"),
+            "naming {name:?} vouched for a file beside it"
+        );
+    }
+}
+
 /// A file already vouched for is not asked about, or every read of a trusted workspace would
 /// interrupt the user.
 #[test]
