@@ -6927,6 +6927,77 @@ fn a_walk_does_not_report_a_link_to_a_denied_file() {
     );
 }
 
+/// A rule is about the file (PERM-7), and a hard link is a regular file under another name, which
+/// a walk keeps unless it asks about every name the file has. A listing, a search with context and
+/// a repository map each reach the file from a directory above the link, where a call naming the
+/// link is refused. Each tool is run in a turn of its own and judged by what it alone returned. A
+/// hard link to a file no rule covers is still reported and read by each of them.
+#[test]
+#[cfg(unix)]
+fn a_walk_does_not_read_a_hard_link_to_a_denied_file() {
+    let scratch = Scratch::new("permissions-denied-hard-link-under-a-walk");
+    let make = |name: &str, contents: &str| {
+        let path = scratch.path.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    };
+    let link = |original: &str, name: &str| {
+        let path = scratch.path.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::hard_link(scratch.path.join(original), path).unwrap();
+    };
+    make(".env", "SECRET_TOKEN=hunter2");
+    link(".env", "docs/readme.txt");
+    make("secrets/key.rs", "pub fn leaked_declaration() {}\n");
+    link("secrets/key.rs", "src/mirror.rs");
+    make("notes.md", "SECRET_TOKEN is set elsewhere");
+    link("notes.md", "docs/notes-copy.md");
+    make("src/lib.rs", "pub fn visible_declaration() {}\n");
+    link("src/lib.rs", "docs/lib-copy.rs");
+
+    let walk = |tool: &str, arguments: &str| {
+        run_calls_under_deny_rules(
+            &scratch,
+            &["Read(./.env)", "Read(secrets/**)"],
+            &[(tool, arguments)],
+        )
+        .join("\n")
+    };
+
+    let listing = walk("list_files", r#"{"directory":"."}"#);
+    assert!(
+        listing.contains("docs/notes-copy.md") && listing.contains("docs/lib-copy.rs"),
+        "the listing dropped a hard link to a file no rule covers: {listing}"
+    );
+    assert!(
+        !listing.contains("readme.txt") && !listing.contains("mirror.rs"),
+        "the listing reported a hard link to a covered file: {listing}"
+    );
+
+    let search = walk(
+        "search",
+        r#"{"pattern":"SECRET_TOKEN","directory":".","output":"lines","context":10}"#,
+    );
+    assert!(
+        search.contains("docs/notes-copy.md:1"),
+        "the search skipped a hard link to a file no rule covers: {search}"
+    );
+    assert!(
+        !search.contains("hunter2") && !search.contains("readme.txt"),
+        "the search quoted a covered file through a hard link to it: {search}"
+    );
+
+    let map = walk("repo_map", r#"{"directory":"."}"#);
+    assert!(
+        map.contains("visible_declaration"),
+        "the repository map named nothing: {map}"
+    );
+    assert!(
+        !map.contains("leaked_declaration") && !map.contains("mirror.rs"),
+        "the repository map read a covered file through a hard link to it: {map}"
+    );
+}
+
 /// The model's own account of what it is doing is the best progress report there is, and it
 /// used to be thrown away: only the final reply survived, so a turn that explained each step
 /// showed none of those explanations.
