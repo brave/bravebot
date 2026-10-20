@@ -1349,6 +1349,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// gives.
     fn integrity_in_force(&self, path: &str) -> Option<Integrity> {
         let path = &*self.keyed(path);
+        // A key that climbs is not read as text: the map keeps `..` as written and a confined path
+        // never reaches it with one, so an ancestor walk would find the rule of a directory the
+        // name only passes through and miss the one of the directory it lands in.
+        if std::path::Path::new(path)
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Some(Integrity::Untrusted);
+        }
         // Provenance, not the map: the user's own skill directory is trusted for being the user's
         // own (SKILL-3), and the map is keyed by workspace-relative paths and has nothing to say
         // about it (TRUST-11).
