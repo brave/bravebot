@@ -24887,7 +24887,9 @@ fn run_description(request: &str) -> String {
 /// The control is the same turn in a trusted workspace, which names both: a sentence left out
 /// whatever the session accepts fails it. The faults it rejects are a description or a failure
 /// sentence still pointing the planner at the closed routes, which the first call it makes then
-/// spends, and the read-only ending of the fixed text, which is a text of its own.
+/// spends, and the read-only ending of the fixed text, which is a text of its own. The read-only
+/// arm needs a `read-only` stage to start, which a platform that cannot deny the network refuses
+/// (SANDBOX-5), so it runs only where one starts.
 #[test]
 fn in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path() {
     if cannot_confine_here() {
@@ -24900,6 +24902,9 @@ fn in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_n
         ),
         ("read-only", bravebot_sandbox::SandboxMode::ReadOnly),
     ] {
+        if mode == bravebot_sandbox::SandboxMode::ReadOnly && read_only_cannot_run_here() {
+            continue;
+        }
         let told = |trust_name: &str, trust| {
             let scratch = Scratch::new(&format!("requests-offered-{mode_name}-{trust_name}"));
             let (first, second) =
