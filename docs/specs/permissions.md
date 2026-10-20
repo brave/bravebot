@@ -390,7 +390,15 @@ the directory it was asked for, and an entry a rule covers is left out before th
 its name is reported. A directory a rule covers is not descended into. Both are decided ahead of
 the walk's own caps, so a rule never costs a listing or a search the files it was asked about. A walk
 does not follow a symbolic link it meets: the entry is neither reported nor descended into, so a
-link to a denied file is not a second name a listing or a search hands back.
+link to a denied file is not a second name a listing or a search hands back. A hard link is a
+regular file under another name, so a walk reaches it, and an entry is left out when a rule covers
+any name its file has, found by device and inode as for a call that names it. A hard link to a
+denied file is left out of a listing, a search and a repository map as the file is, whichever
+directory the call named. An entry reached by a second path to an open tree (a firmlink or a bind
+mount opened with `/add-dir`) is left out when a rule covers its name beneath the first path, and
+so is a directory. Where the search for the other names reaches the search cap or cannot list a
+directory, or a name of the file is not UTF-8, an entry with more than one name is left out while a
+`Read` deny rule is in force. This is on Unix only.
 
 The files this program reads from the project on its own account are judged the same way. The
 project's instructions file, the file it points at, and a skill or a definition the project holds,
@@ -493,6 +501,13 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::workspace::a_listing_does_not_enumerate_a_tree_a_deny_rule_covers`
 `verified-by: bravebot_agent::workspace::a_denied_file_does_not_spend_a_searchs_budget`
 `verified-by: bravebot_agent::turn::a_walk_does_not_report_a_link_to_a_denied_file`
+`verified-by: bravebot_agent::turn::a_walk_does_not_read_a_hard_link_to_a_denied_file`
+`verified-by: bravebot_agent::workspace::a_search_does_not_open_a_hard_link_to_a_file_a_deny_rule_covers`
+`verified-by: bravebot_agent::workspace::a_search_leaves_out_a_file_with_two_names_where_the_walk_for_the_other_name_gives_up`
+`verified-by: bravebot_agent::workspace::a_file_with_a_name_that_is_not_utf8_is_covered_and_not_spelled_as_its_lossy_lookalike`
+`verified-by: bravebot_agent::workspace::a_search_leaves_out_a_file_with_a_name_no_rule_can_be_written_about_and_only_that_file`
+`verified-by: bravebot_agent::workspace::a_search_of_a_second_path_to_the_tree_does_not_open_a_file_a_deny_rule_covers`
+`verified-by: bravebot_agent::workspace::a_listing_of_a_second_path_to_the_tree_does_not_name_a_directory_a_deny_rule_covers`
 `verified-by: bravebot_agent::tools::a_read_refused_by_a_rule_with_a_reason_says_the_reason`
 `verified-by: bravebot_agent::tools::a_write_refused_by_a_rule_with_a_reason_says_the_deciding_rules_reason`
 `verified-by: bravebot_agent::tools::a_reason_a_checkout_wrote_is_not_in_a_refusal_and_the_persons_own_is`
@@ -1135,6 +1150,15 @@ vouch for the same reason. The decision reads the argv and nothing else.
   `vendor/secrets/key` and not `vault/key`, since finding every copy is a walk of the tree. And
   the place is looked up in the spelling the rule is stored in, folded where the volume folds case,
   so a link behind a name the volume does not open in its folded spelling is not followed.
+- **A hard link, or a second path to an open tree, reaches a denied file through the files the
+  program looks for itself.** The instructions file and the files it points at, a skill, a
+  definition, a style, a file named with `@`, `--file` or a drop, and an `lsp` location are judged
+  under the name they were found by and the one they land on ([PERM-7](#PERM-7)). A hard link to a
+  denied file, or a file's name beneath a second path to an open tree, is not covered there, though
+  a call that names it is refused and a walk leaves it out. Covering them takes a walk of the open
+  directories for each file that has more than one name, which a repository of hard-linked objects
+  pays once per object, and a walk that cannot finish would leave out a hard-linked instructions
+  file the person wants read.
 - **`readsStayInWorkspace` does not confine a program a `run` starts.** It governs the file tools, as
   the path rules do, and the known cost above about a path rule not reaching a program's own file
   access holds here word for word: `run cat ~/.ssh/id_rsa` is judged against the `Bash` rules and the

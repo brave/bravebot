@@ -6804,6 +6804,39 @@ fn a_search_does_not_open_a_file_a_deny_rule_covers() {
     );
 }
 
+/// The listing of `directory`, one level deep, in a workspace holding `secrets/key.pem` and
+/// `keep.txt` under a rule that covers `secrets/**`.
+///
+/// Bounded to one level, because that is the only shape in which a directory is named in the
+/// result at all: a walk with no depth descends rather than reporting where it stopped, so an
+/// unbounded listing has no directories to check and an assertion about them would hold whatever
+/// the rules said.
+fn listing_under_a_directory_rule(
+    workspace: &Workspace,
+    directory: &str,
+) -> bravebot_agent::workspace::Listing {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_permissions(denying(&["Read(secrets/**)"]));
+
+    let listing = workspace
+        .list(
+            &mut policy,
+            &Labelled::trusted(directory.to_string()),
+            None,
+            Some(1),
+        )
+        .expect("list succeeds");
+    let proof = policy.authorise_content_release("test", "paths");
+    listing.declassify(&proof)
+}
+
 /// A rule covering a directory is written against every file in it, so the walk does not descend
 /// and does not name the directory either: a listing that reported the name would answer the
 /// question the rule exists to refuse.
@@ -6815,30 +6848,7 @@ fn a_listing_does_not_enumerate_a_tree_a_deny_rule_covers() {
     std::fs::write(scratch.path.join("keep.txt"), "public").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let mut sink = RecordingSink::new();
-    let mut policy = Policy::begin(
-        routing(),
-        ReleasePlan::new(),
-        all_file_capabilities(),
-        &mut sink,
-    )
-    .expect("policy")
-    .with_permissions(denying(&["Read(secrets/**)"]));
-
-    // Bounded to one level, because that is the only shape in which a directory is named in the
-    // result at all: a walk with no depth descends rather than reporting where it stopped, so an
-    // unbounded listing has no directories to check and the assertion below would hold whatever
-    // the rules said.
-    let listing = workspace
-        .list(
-            &mut policy,
-            &Labelled::trusted(".".to_string()),
-            None,
-            Some(1),
-        )
-        .expect("list succeeds");
-    let proof = policy.authorise_content_release("test", "paths");
-    let listing = listing.declassify(&proof);
+    let listing = listing_under_a_directory_rule(&workspace, ".");
 
     assert_eq!(
         listing.files,
@@ -6848,6 +6858,38 @@ fn a_listing_does_not_enumerate_a_tree_a_deny_rule_covers() {
     assert!(
         listing.directories.is_empty(),
         "a denied directory was named as a place the tree continues: {:?}",
+        listing.directories
+    );
+}
+
+/// A directory a rule covers is covered under its name beneath a second path to an open tree too
+/// (PERM-7), so a listing by that path neither descends into it nor names it.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_listing_of_a_second_path_to_the_tree_does_not_name_a_directory_a_deny_rule_covers() {
+    let scratch = Scratch::new("list-denied-second-path");
+    std::fs::create_dir_all(scratch.path.join("secrets")).unwrap();
+    std::fs::write(scratch.path.join("secrets/key.pem"), "private").unwrap();
+    std::fs::write(scratch.path.join("keep.txt"), "public").unwrap();
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let second = std::path::Path::new("/System/Volumes/Data")
+        .join(workspace.root().strip_prefix("/").unwrap())
+        .to_string_lossy()
+        .into_owned();
+    workspace
+        .add_directory(&second)
+        .expect("the second path opens");
+
+    let listing = listing_under_a_directory_rule(&workspace, &second);
+
+    assert_eq!(
+        listing.files,
+        vec![format!("{second}/keep.txt")],
+        "a denied tree was enumerated under the second path to it"
+    );
+    assert!(
+        listing.directories.is_empty(),
+        "a denied directory was named under the second path to its tree: {:?}",
         listing.directories
     );
 }
@@ -7009,6 +7051,180 @@ fn a_denied_file_does_not_spend_a_searchs_budget() {
     assert!(
         !found.unvisited,
         "denied files were counted against the cap, so the search reported itself incomplete"
+    );
+}
+
+/// The paths a search of `directory` matched, whether a rule kept a file out, and whether the walk
+/// stopped at its cap.
+#[cfg(unix)]
+fn searched(workspace: &Workspace, rules: &[&str], directory: &str) -> (Vec<String>, bool, bool) {
+    let found = search_at(workspace, denying(rules), directory, None).expect("grep succeeds");
+    let mut paths: Vec<String> = found.matches.iter().map(|m| m.path.clone()).collect();
+    paths.sort();
+    (paths, found.withheld, found.unvisited)
+}
+
+/// A rule is about the file, so a hard link to a file it covers is not read through the link's own
+/// name (PERM-7), whichever directory the call names: the other names of a file are asked of the
+/// whole tree, not of the part a walk covers. A link to a file no rule covers, or any link with no
+/// rule in force, is searched as before.
+#[cfg(unix)]
+#[test]
+fn a_search_does_not_open_a_hard_link_to_a_file_a_deny_rule_covers() {
+    let scratch = Scratch::new("grep-denied-hard-link");
+    std::fs::create_dir_all(scratch.path.join("docs")).unwrap();
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=needle\n").unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "needle\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join(".env"),
+        scratch.path.join("docs/readme.txt"),
+    )
+    .unwrap();
+    std::fs::hard_link(
+        scratch.path.join("notes.md"),
+        scratch.path.join("docs/notes-copy.md"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (paths, withheld, unvisited) = searched(&workspace, &["Read(./.env)"], ".");
+    assert_eq!(
+        paths,
+        ["docs/notes-copy.md", "notes.md"],
+        "a hard link to a denied file was searched, or a link to a file no rule covers was not"
+    );
+    assert!(withheld, "the planner was not told a rule kept a file out");
+    assert!(!unvisited);
+
+    let (paths, withheld, _) = searched(&workspace, &["Read(./.env)"], "docs");
+    assert_eq!(
+        paths,
+        ["docs/notes-copy.md"],
+        "a search of the directory holding the link read the denied file the walk did not reach"
+    );
+    assert!(withheld);
+
+    let (paths, withheld, _) = searched(&workspace, &[], ".");
+    assert_eq!(
+        paths,
+        [".env", "docs/notes-copy.md", "docs/readme.txt", "notes.md"],
+        "with no rule in force a file with two names was left out"
+    );
+    assert!(!withheld);
+}
+
+/// A second path to an open tree, which macOS gives every directory under `/System/Volumes/Data`,
+/// is a second spelling of every file in it (PERM-7). A search of the tree by that path reaches
+/// each file under a name a rule written about the first path does not match.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_search_of_a_second_path_to_the_tree_does_not_open_a_file_a_deny_rule_covers() {
+    let scratch = Scratch::new("grep-denied-second-path");
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=needle\n").unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "needle\n").unwrap();
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let second = std::path::Path::new("/System/Volumes/Data")
+        .join(workspace.root().strip_prefix("/").unwrap())
+        .to_string_lossy()
+        .into_owned();
+    workspace
+        .add_directory(&second)
+        .expect("the second path opens");
+
+    let (paths, withheld, _) = searched(&workspace, &["Read(./.env)"], &second);
+    assert_eq!(
+        paths,
+        [format!("{second}/notes.md")],
+        "a file a rule covers was searched under the second path to its tree"
+    );
+    assert!(withheld);
+}
+
+/// Where the walk for a file's other names cannot finish, a rule about a path may be about the
+/// file, so the file is left out as a call that names it is refused (PERM-7). Here the walk for the
+/// other names reads every directory, an ignored one included, and stops at the cap that the search
+/// itself, which skips that directory, stays under.
+#[cfg(unix)]
+#[test]
+fn a_search_leaves_out_a_file_with_two_names_where_the_walk_for_the_other_name_gives_up() {
+    let scratch = Scratch::new("grep-denied-hard-link-cap");
+    std::fs::create_dir_all(scratch.path.join("docs")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("node_modules")).unwrap();
+    for n in 0..12 {
+        std::fs::write(scratch.path.join(format!("node_modules/f{n}.js")), "x\n").unwrap();
+    }
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=needle\n").unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "needle\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join(".env"),
+        scratch.path.join("docs/readme.txt"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(8), None);
+
+    let (paths, withheld, unvisited) = searched(&workspace, &["Read(./.env)"], ".");
+    assert_eq!(
+        paths,
+        ["notes.md"],
+        "a file with two names was searched though its other names could not be listed"
+    );
+    assert!(withheld);
+    assert!(
+        !unvisited,
+        "the search itself stayed under its cap, so the cap is the other walk's"
+    );
+
+    let (paths, _, _) = searched(&workspace, &[], ".");
+    assert_eq!(
+        paths,
+        [".env", "docs/readme.txt", "notes.md"],
+        "with no rule in force the second walk was made, and a file was left out"
+    );
+}
+
+/// A name that is not UTF-8 has no spelling a rule can be written about (PATH-003), and its lossy
+/// rendering is the name of a different file, so a file with such a name is left out where a rule
+/// is in force and nothing else is: another file with two names is still searched, and so is the
+/// file named by the invalid name's lossy rendering.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_search_leaves_out_a_file_with_a_name_no_rule_can_be_written_about_and_only_that_file() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let scratch = Scratch::new("grep-denied-hard-link-bytes");
+    let write = |name: &str| std::fs::write(scratch.path.join(name), "needle\n").unwrap();
+    write("plain.txt");
+    write("pair-a.txt");
+    write("link-\u{FFFD}");
+    std::fs::hard_link(
+        scratch.path.join("plain.txt"),
+        scratch.path.join(OsStr::from_bytes(b"link-\xff")),
+    )
+    .unwrap();
+    std::fs::hard_link(
+        scratch.path.join("pair-a.txt"),
+        scratch.path.join("pair-b.txt"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (paths, withheld, _) = searched(&workspace, &["Read(./.env)"], ".");
+    assert!(withheld);
+    assert!(
+        !paths.iter().any(|path| path == "plain.txt"),
+        "a file with a second name no rule can spell was searched: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| path == "link-\u{FFFD}"),
+        "the file named like the invalid name's rendering was left out: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| path == "pair-a.txt")
+            && paths.iter().any(|path| path == "pair-b.txt"),
+        "a name that cannot be spelled stopped the search of a file whose names can: {paths:?}"
     );
 }
 
