@@ -152,13 +152,20 @@ Copying the spelling means copying the parse.
 A hook runs in the directory the turn is working in, so a relative path in one means what the
 person who wrote it meant. It is not confined, and its environment is the one it was started from
 less this agent's own credentials, which are the same names taken off a program the planner asked
-for, a gateway's token variables included ([RUN-12](tools/run.md#RUN-12)).
+for, a gateway's token variables included ([RUN-12](tools/run.md#RUN-12)), and with its `PATH`
+reduced as described below.
 
 A bare program name is the one exception to "the person's own shell would give it": it is looked up
 as every program bravebot starts unconfined is ([SANDBOX-30](sandboxing.md#SANDBOX-30)), so a
 `.venv/bin/ruff` a confined stage wrote is not the `ruff` that runs. A hook whose bare name is found
 only there is reported as not started. A name with a separator in it is the person's path and is
 never looked up.
+
+The names a hook starts itself are looked up the same way. A hook is started with bravebot's `PATH`
+reduced to the entries that lookup searches, whether it was named bare or by a path, so a
+`#!/usr/bin/env node` shebang finds `node` only among them and a `.venv/bin/node` a confined stage
+wrote is not the `node` that runs. A hook that starts a program by name found only in a directory
+left out does not find it.
 
 **Why.** The person named this command in a file in their own directory, so it is their program on
 their machine, and [sandboxing.md](sandboxing.md) confines processes running code we did not write.
@@ -176,6 +183,7 @@ A hook has no more use for one than a formatter has.
 `verified-by: bravebot_agent::hooks::two_hooks_on_one_moment_run_in_the_order_the_file_listed_them`
 `verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`
 `verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
+`verified-by: bravebot_agent::hooks::a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 
 <a id="HOOK-5"></a>
 ### HOOK-5: a hook is told which moment fired, and nothing else
@@ -366,6 +374,13 @@ somewhere to say it, which is the end of the call the question came up in.
   confined stage left at that name. Looking such a name up as a bare name is would refuse the
   person's own script in their own project. A hook that must not run a file a stage could write
   names its program by an absolute path outside the session's directories.
+- **A tool a hook starts by name is found only among the entries bravebot searches.** A hook that is
+  a script with an `env` shebang, or a launcher that starts another program by name, has that name
+  looked up in the `PATH` entries a confined stage may not write (HOOK-4), as they stand when the
+  hook fires: a directory a stage is given writes in later in the session leaves them from then on.
+  A formatter that starts a tool from a project's `node_modules/.bin`, or from an activated
+  virtualenv's `bin`, does not find it there. A hook that needs a tool from one of them names it by a
+  path in its `run`, which runs whatever is at that path, as the entry above says.
 - **`prompt-shown` holds the prompt back while it runs.** The hook runs before the question is
   drawn, up to the bound in HOOK-7, so a slow notifier delays the prompt it was meant to announce.
   Starting one in the background is not offered, for the reason a hook that does not wait is not.

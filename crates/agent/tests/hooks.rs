@@ -119,8 +119,8 @@ fn a_hook_is_told_the_moment_and_nothing_else() {
 }
 
 /// HOOK-5: the moment and the tool an entry names reach the hook on its standard input only. Its
-/// environment is this process's own, less what is scrubbed, with no name added and no value
-/// carrying the tool or the moment.
+/// environment is this process's own, less what is scrubbed and with `PATH` reduced, with no name
+/// added and no value carrying the tool or the moment.
 #[test]
 fn a_hook_is_given_no_environment_of_its_own() {
     let scratch = Scratch::new("environment");

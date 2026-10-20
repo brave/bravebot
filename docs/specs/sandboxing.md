@@ -3187,14 +3187,16 @@ a new spawn is added to the list here, in the same change, or resolved first.
   activated virtualenv's `bin` among them, is told it is not installed
   (Known costs in [backends.md](backends.md#known-costs)); the clipboard tool reads as absent and the next tool is
   tried.
-- **The editor's own lookups search only those entries.** A started program looks up the names it
-  starts itself through the `PATH` it inherits. The editor Ctrl-G opens is started with bravebot's
-  `PATH` reduced to the entries the lookup searches, in the order they were written, so a `#!/usr/bin/env`
-  shebang in the editor, a launcher script, or an `$EDITOR` of `env vim` finds the program it starts
-  only among them. Where no entry is searched the editor is started with no `PATH` variable. An empty
-  `PATH` would be read as the current directory. A program the editor starts by name that is found
-  only in a directory left out is not found by it. A `PATH` names directories, so a file in a
-  searched entry that links into a directory left out is still found by those lookups.
+- **The editor's and a hook's own lookups search only those entries.** A started program looks up the
+  names it starts itself through the `PATH` it inherits. The editor Ctrl-G opens and a hook's program
+  are started with bravebot's `PATH` reduced to the entries the lookup searches, in the order they
+  were written, so a `#!/usr/bin/env` shebang in the editor or the hook, a launcher script, or an
+  `$EDITOR` of `env vim` finds the program it starts only among them. A hook named by a path gets the
+  same `PATH` as one named bare. Where no entry is searched the program is started with no `PATH`
+  variable. An empty `PATH` would be read as the current directory. A program the editor or a hook
+  starts by name that is found only in a directory left out is not found by it. A `PATH` names
+  directories, so a file in a searched entry that links into a directory left out is still found by
+  those lookups.
 - **The suite's programs started with no sandbox search only those entries as well.** The `gh` of
   the stored-login row and every stage a workflow starts with no confinement are given a `PATH`
   reduced as the editor's is, so a `sh` that starts `mkdir`, or a `gh` that starts `git`, finds it
@@ -3202,11 +3204,11 @@ a new spawn is added to the list here, in the same change, or resolved first.
   A program found only in a directory left out is not installed: its workflow is skipped
   ([SANDBOX-21](#SANDBOX-21)), and a `gh` found only there gives no login row.
 - **A program named in another started program's arguments is resolved first.** A started program
-  other than the editor keeps bravebot's own `PATH`, which can hold those directories, so an argument
-  that names a program for it to start is that program's absolute path, found the same way. The
-  inhibitor `/caffeinate` starts on Linux is given `cat` that way ([CMD-12](commands.md#CMD-12)).
-  Where `cat` is found only in such a directory the inhibitor is not started, and `/caffeinate`
-  reports it as it does an inhibitor that is not installed.
+  other than the editor, a hook and the suite's programs started with no sandbox keeps bravebot's own
+  `PATH`, which can hold those directories, so an argument that names a program for it to start is
+  that program's absolute path, found the same way. The inhibitor `/caffeinate` starts on Linux is given `cat` that way
+  ([CMD-12](commands.md#CMD-12)). Where `cat` is found only in such a directory the inhibitor is not
+  started, and `/caffeinate` reports it as it does an inhibitor that is not installed.
 - **The stage's grants are not narrowed.** Withholding `PATH` directories from the write grants
   would stop `pip install` in an activated environment, which is what the grants are for.
 
@@ -3216,7 +3218,7 @@ confinement ([CRED-14](credential-protection.md#CRED-14)): the stage has chosen 
 the person's access, which the confinement exists to deny it. A started program looks up a name in
 its own arguments through the `PATH` it inherited from bravebot, not through the lookup above.
 `systemd-inhibit` starts `cat` that way, so its argument is the resolved path and not the bare name.
-An editor that is a script starts its interpreter the same way, so the editor is given the `PATH`
+An editor or a hook that is a script starts its interpreter the same way, so each is given the `PATH`
 the lookup would have searched.
 
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
@@ -3242,6 +3244,7 @@ the lookup would have searched.
 `verified-by: bravebot_bedrock::credentials::an_aws_where_a_stage_given_the_whole_machine_may_write_is_not_the_one_run`
 `verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`
 `verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
+`verified-by: bravebot_agent::hooks::a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`
 `verified-by: bravebot_tui::caffeinate::an_inhibitor_with_no_cat_but_a_planted_one_is_not_started`
