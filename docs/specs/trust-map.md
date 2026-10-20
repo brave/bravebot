@@ -211,6 +211,9 @@ trimmed and a `*` in it is a wildcard, so a name with whitespace at an end, a na
 alone and a name holding `*` cannot be written as a rule. The test lists them against #2864 and
 fails once one can.
 
+A listing is asked the same pairs. It reports two entries for two files, and a refusal of one reaches
+a listing of the other only within a group.
+
 `make check-security` fails a `trim`, a case fold, a Unicode normalisation or a lossy conversion
 in the functions that key a name or fold or decompose it: `normalise`, `TrustStore::key`,
 `fold_case`, `canonical_form`, `FileAuthority::key`, and the permission rule's `key_of`, `fold` and
@@ -240,6 +243,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group`
 `verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group`
 `verified-by: bravebot_agent::workspace::a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it`
+`verified-by: bravebot_agent::workspace::a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule`
 `verified-by: bravebot_agent::turn::a_file_named_with_an_at_sign_is_vouched_for_alone_whatever_its_name`
 `verified-by: bravebot_core::trust::a_name_ending_in_a_space_follows_the_rules_for_canonically_equivalent_names`
 `verified-by: bravebot_core::trust::a_working_directory_with_whitespace_at_an_end_is_not_the_one_without_it`

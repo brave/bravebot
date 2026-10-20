@@ -471,6 +471,79 @@ fn two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_
     );
 }
 
+/// A listing reports two names the volume holds apart as two entries, each as the volume spells
+/// it, and trusts each by the rule about that name (TRUST-2). A refusal about one name reaches a
+/// listing of the other only where the two are one group. The walk turns a path into the text the
+/// map is asked about, so a step there that trims or re-spells a name would show as one entry
+/// standing for two files, or as a refusal landing on the wrong one.
+#[test]
+fn a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule() {
+    let mut asked = 0;
+    for (index, (first, first_group)) in aliases::AWKWARD_NAMES.iter().enumerate() {
+        for (second, second_group) in &aliases::AWKWARD_NAMES[index + 1..] {
+            let scratch = Scratch::new(&format!("listing-pairs-{index}-{asked}"));
+            if !aliases::two_files(&scratch.path, first, second) {
+                continue;
+            }
+            asked += 1;
+            let joined = first_group == second_group;
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let integrity_of_listing = |distrusted: Option<&str>| {
+                let mut sink = RecordingSink::new();
+                let mut policy = alias_policy(&workspace, &mut sink, distrusted);
+                workspace
+                    .list(&mut policy, &trusted_text("."), None, None)
+                    .expect("list")
+                    .label()
+                    .integrity
+            };
+            let files = || list_under(&scratch.path, ".", "**");
+
+            assert_eq!(
+                integrity_of_listing(None),
+                Integrity::Trusted,
+                "a listing of {first:?} and {second:?} is not trusted under a trusted workspace"
+            );
+            let mut expected = vec![first.to_string(), second.to_string()];
+            expected.sort();
+            assert_eq!(
+                files(),
+                expected,
+                "{first:?} and {second:?} are two files and not two entries"
+            );
+
+            for (named, other) in [(first, second), (second, first)] {
+                assert_eq!(
+                    integrity_of_listing(Some(named)),
+                    Integrity::Untrusted,
+                    "a distrust of {named:?} did not reach a listing that holds it"
+                );
+                let path = scratch.path.join(named);
+                std::fs::remove_file(&path).expect("remove the named file");
+                assert_eq!(
+                    files(),
+                    [other.to_string()],
+                    "the listing is of {other:?} alone"
+                );
+                assert_eq!(
+                    integrity_of_listing(Some(named)),
+                    if joined {
+                        Integrity::Untrusted
+                    } else {
+                        Integrity::Trusted
+                    },
+                    "a distrust of {named:?} did not leave a listing of {other:?} as the table says"
+                );
+                std::fs::write(&path, aliases::CONTENT).expect("restore the named file");
+            }
+        }
+    }
+    assert!(
+        asked > 100,
+        "only {asked} pairs were two files: the alphabet is not being used"
+    );
+}
+
 /// Names a rule's text cannot spell, each with the issue that tracks it. A rule line is trimmed
 /// when it is read and so is the specifier inside the brackets, so a name with whitespace at an end
 /// is read as the name without it and a name of whitespace alone is read as `./`, which names no
