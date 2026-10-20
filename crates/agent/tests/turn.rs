@@ -5847,6 +5847,306 @@ fn a_write_refused_by_plan_mode_is_recorded_as_a_refusal() {
     );
 }
 
+/// What a call that put a question to the person and was not approved left under `approval`, in
+/// the order it was written (TRACE-1).
+fn refused_under_approval(sink: &RecordingSink) -> Vec<String> {
+    sink.blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "approval",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// One turn making `call`, put to `person`, in a vouched workspace. The rules ask about `notes.md`
+/// by name and allow everything under `config/`, so a write there is asked about only for the
+/// scan's doubt about its body. Returns the trail and whether the turn ended as clean.
+fn a_turn_asked_about_a_file<C: bravebot_agent::confirm::Confirmer + Send>(
+    scratch: &Scratch,
+    person: &mut C,
+    call: String,
+) -> (RecordingSink, bool) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![call, reply_with("understood")]);
+    let mut sink = RecordingSink::new();
+    let outcome = turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("change the file").with_permissions(rules(
+            &[],
+            &["Edit(notes.md)"],
+            &["Edit(config/**)"],
+        )),
+        person,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    (sink, outcome.clean)
+}
+
+/// TRACE-1: a write or an edit put to the person and not approved is a refusal in the trail, under
+/// the tool, and the turn does not end as clean. A no, a no with words beside it, and a question
+/// nobody could be asked are one answer to the policy, so each leaves the same entry. A body the
+/// scan has doubts about is declined by its own road, which tells the planner something else, and
+/// the entry is the same there.
+///
+/// Without the record the trail holds the question and the mode that answered it and nothing about
+/// the answer, which reads the same as a write that went ahead. The control is the same call
+/// approved, which records no refusal, so an entry written for every question put would fail it.
+#[test]
+fn a_write_or_an_edit_the_person_does_not_approve_is_recorded_as_a_refusal() {
+    use bravebot_agent::WriteDecision;
+    let secret = format!("{GENERATED_SECRET}\n");
+    let editing_the_key = tool_request_2(
+        "edit_file",
+        &format!(
+            r#"{{"path":"config/master.key","old_text":"placeholder","new_text":{}}}"#,
+            serde_json::Value::String(secret.clone())
+        ),
+    );
+    // The tool, its call, the file it is about, what the workspace holds first, and whether the
+    // question the call raises carries the scan's doubt about the body.
+    let cases = [
+        (
+            "write_file",
+            tool_request_2("write_file", r#"{"path":"notes.md","contents":"replaced"}"#),
+            "notes.md",
+            vec![("notes.md", "original")],
+            false,
+        ),
+        (
+            "write_file",
+            writing("config/master.key", &secret),
+            "config/master.key",
+            Vec::new(),
+            true,
+        ),
+        (
+            "edit_file",
+            tool_request_2(
+                "edit_file",
+                r#"{"path":"notes.md","old_text":"original","new_text":"edited"}"#,
+            ),
+            "notes.md",
+            vec![("notes.md", "original")],
+            false,
+        ),
+        (
+            "edit_file",
+            editing_the_key,
+            "config/master.key",
+            vec![("config/master.key", "placeholder")],
+            true,
+        ),
+    ];
+    for (tool, call, file, before, doubted) in cases {
+        let sentence = format!("{tool}: the write was not approved, so nothing was written");
+        let seeded = || {
+            let scratch = Scratch::new("unapproved-write-recorded");
+            std::fs::create_dir(scratch.path.join("config")).unwrap();
+            for (path, contents) in &before {
+                std::fs::write(scratch.path.join(path), contents).unwrap();
+            }
+            scratch
+        };
+        let holds = |scratch: &Scratch| std::fs::read_to_string(scratch.path.join(file)).ok();
+        let held_before = before
+            .iter()
+            .find(|(path, _)| *path == file)
+            .map(|(_, contents)| contents.to_string());
+        let refused = |scratch: &Scratch, sink: &RecordingSink, clean: bool, case: &str| {
+            assert_eq!(
+                refused_under_approval(sink),
+                std::slice::from_ref(&sentence),
+                "{case}: the refusal was not recorded once, under the tool"
+            );
+            assert!(
+                !clean,
+                "{case}: a turn whose write was refused read as clean"
+            );
+            assert_eq!(
+                holds(scratch),
+                held_before,
+                "{case}: the file changed without approval"
+            );
+        };
+
+        for answer in [
+            WriteDecision::reject(),
+            WriteDecision::reject().with_note("not now"),
+        ] {
+            let case = format!("{tool} on {file}, answered {answer:?}");
+            let scratch = seeded();
+            let mut person = RecordingConfirmer {
+                decision: answer,
+                ..RecordingConfirmer::approving()
+            };
+            let (sink, clean) = a_turn_asked_about_a_file(&scratch, &mut person, call.clone());
+            assert_eq!(person.seen.len(), 1, "{case}: the question was not put");
+            assert_eq!(
+                !person.seen[0].credentials.is_empty(),
+                doubted,
+                "{case}: the question did not carry the doubt this case is for"
+            );
+            refused(&scratch, &sink, clean, &case);
+        }
+
+        let case = format!("{tool} on {file}, nobody to ask");
+        let scratch = seeded();
+        let (sink, clean) =
+            a_turn_asked_about_a_file(&scratch, &mut bravebot_agent::Unattended, call.clone());
+        refused(&scratch, &sink, clean, &case);
+
+        let case = format!("{tool} on {file}, approved");
+        let scratch = seeded();
+        let mut person = RecordingConfirmer::approving();
+        let (sink, clean) = a_turn_asked_about_a_file(&scratch, &mut person, call);
+        assert_eq!(person.seen.len(), 1, "{case}: the question was not put");
+        assert!(
+            refused_under_approval(&sink).is_empty(),
+            "{case}: an approval was recorded as a refusal: {:?}",
+            sink.events()
+        );
+        assert!(
+            clean,
+            "{case}: a turn whose write was approved did not read as clean"
+        );
+        assert_ne!(
+            holds(&scratch),
+            held_before,
+            "{case}: the write did not land"
+        );
+    }
+}
+
+/// TRACE-1: a fetch put to the person and not approved is a refusal in the trail, under the tool
+/// that asked, and a save is one of its own. `download_url` asks twice, about the host and then
+/// about the file the bytes would land in, and each answer is recorded as what it was: a host
+/// declined is a fetch that was not made and a destination declined is a write that was not made,
+/// each once, with the question that was not reached left out.
+///
+/// The control approves both questions and records no refusal, so an entry written for every
+/// question put would fail it.
+#[test]
+fn a_fetch_or_a_save_the_person_does_not_approve_is_recorded_as_a_refusal() {
+    let fetched = "fetch_url: the fetch was not approved, so nothing was fetched";
+    let not_fetched = "download_url: the fetch was not approved, so nothing was fetched";
+    let not_saved = "download_url: the write was not approved, so nothing was written";
+
+    let refused_by = |tool: &str, arguments: &dyn Fn(&str) -> String| {
+        let scratch = Scratch::new("unapproved-fetch-recorded");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (site, requests) = serve_raw(raw_reply("text/plain", b"fetched"));
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2(tool, &arguments(&site)),
+            reply_with("understood"),
+        ]);
+        let mut person = RecordingConfirmer::rejecting();
+        let mut sink = RecordingSink::new();
+        let outcome = turns::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("get it"),
+            &mut person,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            0,
+            "{tool}: a fetch that was not approved reached the site"
+        );
+        assert!(
+            !scratch.path.join("saved.txt").exists(),
+            "{tool}: a download that was not approved left a file"
+        );
+        assert!(
+            person.seen.is_empty(),
+            "{tool}: a destination was put to the person after the host was declined"
+        );
+        (refused_under_approval(&sink), outcome.clean)
+    };
+
+    let (refused, clean) = refused_by("fetch_url", &|site| format!(r#"{{"url":"{site}/page"}}"#));
+    assert_eq!(refused, [fetched]);
+    assert!(!clean, "a turn whose fetch was refused read as clean");
+
+    let (refused, clean) = refused_by("download_url", &|site| {
+        format!(r#"{{"url":"{site}/page","path":"saved.txt"}}"#)
+    });
+    assert_eq!(refused, [not_fetched]);
+    assert!(!clean, "a turn whose download was refused read as clean");
+
+    // The host is approved and the destination is not.
+    let downloading = |person: &mut ApprovesFetchesAndWrites| {
+        let scratch = Scratch::new("unapproved-save-recorded");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (site, requests) = serve_raw(raw_reply("text/plain", b"fetched"));
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2(
+                "download_url",
+                &format!(r#"{{"url":"{site}/page","path":"saved.txt"}}"#),
+            ),
+            reply_with("understood"),
+        ]);
+        let mut sink = RecordingSink::new();
+        let outcome = turns::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("save it"),
+            person,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+        let reached = requests.load(Ordering::SeqCst) > 0;
+        let saved = scratch.path.join("saved.txt").exists();
+        (refused_under_approval(&sink), outcome.clean, reached, saved)
+    };
+    let mut person = ApprovesFetchesAndWrites {
+        declines_writes: true,
+        ..ApprovesFetchesAndWrites::default()
+    };
+    let (refused, clean, reached, saved) = downloading(&mut person);
+    assert_eq!(person.asked.len(), 1, "the host was not put to the person");
+    assert_eq!(
+        person.writes.len(),
+        1,
+        "the destination was not put to the person"
+    );
+    assert_eq!(refused, [not_saved]);
+    assert!(!clean, "a turn whose save was refused read as clean");
+    assert!(!reached, "a save that was not approved reached the site");
+    assert!(!saved, "a save that was not approved left a file");
+
+    let mut person = ApprovesFetchesAndWrites::default();
+    let (refused, clean, reached, saved) = downloading(&mut person);
+    assert_eq!(person.asked.len(), 1, "the host was not put to the person");
+    assert_eq!(
+        person.writes.len(),
+        1,
+        "the destination was not put to the person"
+    );
+    assert!(
+        refused.is_empty(),
+        "an approval was recorded as a refusal: {refused:?}"
+    );
+    assert!(
+        clean,
+        "a turn whose download was approved did not read as clean"
+    );
+    assert!(reached && saved, "the approved download did not land");
+}
+
 /// The other half: an allow rule stops the prompt, so a write that would have been refused for
 /// want of anyone to ask goes through.
 ///
@@ -40451,6 +40751,33 @@ fn a_note_typed_at_one_file_of_an_apply_is_told_beside_that_file() {
     let first = told.find("only the first").unwrap();
     let second = told.find("only the second").unwrap();
     assert!(first < second, "the notes are out of order: {told}");
+}
+
+/// TRACE-1, CHECKOUT-14: each file of an apply the person does not approve is a refusal in the
+/// trail, under `apply_checkout`, the tool that asked, and not under the `write_file` whose
+/// question each file shares. A trail that named the shared path would tell a reader of a turn that
+/// never called `write_file` that one was refused.
+#[test]
+fn a_file_of_an_apply_the_person_does_not_approve_is_recorded_under_the_apply() {
+    let (_asked, confirmer, scratch, sink) = apply_after_a_worker_wrote_files(
+        "checkout-apply-refused-recorded",
+        &[("a.txt", "one"), ("b.txt", "two")],
+        vec![],
+        vec![],
+        vec![r#"{"checkout":"c1"}"#],
+        RecordingConfirmer::rejecting(),
+    );
+    assert_eq!(confirmer.seen.len(), 2, "{:#?}", confirmer.seen);
+    assert_eq!(
+        refused_under_approval(&sink),
+        [
+            "apply_checkout: the write was not approved, so nothing was written",
+            "apply_checkout: the write was not approved, so nothing was written",
+        ],
+        "each refused file was not recorded once, under the apply"
+    );
+    assert!(!scratch.path.join("a.txt").exists());
+    assert!(!scratch.path.join("b.txt").exists());
 }
 
 /// CHECKOUT-14. The question says so where the session wrote the same path in the working
