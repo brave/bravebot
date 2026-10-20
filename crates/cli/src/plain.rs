@@ -268,7 +268,7 @@ fn run(
     for problem in &rejected {
         asking.say(&t!(
             session_permission_rule_ignored,
-            problem = bravebot_agent::permissions::describe(problem)
+            problem = crate::progress::described(problem)
         ));
     }
     // And the `allow` entries a checkout wrote, which are dropped wherever the file is read
@@ -279,8 +279,8 @@ fn run(
     for rule in bravebot_agent::permissions::proposed(&settings, profile.as_deref()) {
         asking.say(&t!(
             session_permission_allow_ignored,
-            rule = &rule.rule,
-            path = rule.path.display().to_string()
+            rule = shown(&rule.rule),
+            path = crate::progress::printable_path(&rule.path)
         ));
     }
 

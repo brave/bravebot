@@ -610,7 +610,8 @@ and the rest of the file still applies. So is an entry that is not a line at all
 rule nested one array too deep. So is a `deny`, `ask` or `allow` value that is not an array, and a
 `permissions` block that is not an object, each named with the keys that lead to it and the file
 that wrote it. Every one dropped is reported: on `doctor`, and in the session where the file was
-read, named in the spelling the file used.
+read, named in the spelling the file used, with each control character drawn as its picture
+([LAYER-3](layering.md#LAYER-3)).
 
 **Why.** A misspelled deny rule reads as protection that is not there, which is the one failure
 here worth interrupting somebody over. Refusing the whole file instead would mean a typo in an
@@ -623,6 +624,8 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_config::settings::a_malformed_permissions_block_carries_no_rules`
 `verified-by: bravebot_config::settings::a_rule_list_that_is_not_a_list_is_carried_out_to_be_reported`
 `verified-by: bravebot_cli::running::doctor_keeps_the_home_rules_under_a_checkout_block_that_is_not_an_object`
+`verified-by: bravebot_cli::running::doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures`
+`verified-by: bravebot_cli::running::a_one_shot_run_draws_the_control_characters_of_a_checkouts_rule_as_pictures`
 `verified-by: bravebot_agent::permissions::a_line_that_is_not_a_rule_is_reported`
 `verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported`
 `verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported_to_a_run_nobody_is_watching`
