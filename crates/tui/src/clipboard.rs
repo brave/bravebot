@@ -392,7 +392,6 @@ fn run_text(program: &str, arguments: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     /// The sequence has to be exactly what a terminal recognises, and a test is the only place
     /// that can say so, since a terminal that does not recognise it says nothing at all.
@@ -558,7 +557,7 @@ mod tests {
         script(&bin, "uname", "echo planted");
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env("PATH", &bin)

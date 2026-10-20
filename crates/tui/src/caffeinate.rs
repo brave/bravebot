@@ -264,7 +264,6 @@ impl KeepAwake {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     fn stand_in() -> io::Result<Held> {
         Ok(Held::stand_in())
@@ -404,7 +403,7 @@ mod tests {
         path: &std::ffi::OsStr,
     ) -> (bool, bool, String) {
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test, "--test-threads=1", "--nocapture"])
             .env(variable, session)
             .env("PATH", path)

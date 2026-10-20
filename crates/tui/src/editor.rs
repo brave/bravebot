@@ -367,7 +367,6 @@ fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failur
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     /// A name already taken is refused rather than reused, so two names that are the same name
     /// cost whichever prompt asked second its editor.
@@ -623,7 +622,7 @@ mod tests {
         let path = std::env::join_paths([session.join(".venv/bin"), system.clone()]).unwrap();
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env(SYSTEM, &system)
@@ -668,7 +667,7 @@ mod tests {
         }
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env("PATH", &bin)
@@ -776,7 +775,7 @@ mod tests {
         let path = std::env::join_paths(entries(&session, &tools)).unwrap();
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let mut child = Command::new(std::env::current_exe().unwrap());
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
         child
             .args(["--exact", test, "--test-threads=1", "--nocapture"])
             .env(STARTED_SESSION, &session)

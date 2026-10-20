@@ -256,7 +256,6 @@ fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<T
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     /// HOOK-5: the line is built from the moment's own word and holds nothing else.
     #[test]
@@ -340,7 +339,7 @@ mod tests {
         let path = std::env::join_paths([planted, system.clone()]).unwrap();
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env("PATH", &path)
@@ -434,7 +433,7 @@ mod tests {
         .unwrap();
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env(INSTALLED, &installed)
