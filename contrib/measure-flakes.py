@@ -16,14 +16,18 @@ measurement or a report that could not be delivered fails here.
 """
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import platform
 import re
+import shutil
 
 # Only ever invoked with an argument list, never a shell string.
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
+import tempfile
 from collections import Counter, deque
 
 # Cargo names each test binary on stderr before that binary writes anything on stdout, so the two
@@ -95,7 +99,9 @@ def parse(stream):
         # outcome lines before any of its captured output, so a heading naming a test that did not
         # fail is a test talking.
         heading = FAILURE_TEXT.match(line)
-        starts_sample = heading is not None and qualify(binary, heading.group(1)) in failed
+        starts_sample = (
+            heading is not None and qualify(binary, heading.group(1)) in failed
+        )
 
         if failing is not None:
             # libtest closes the captured output of one test with the next heading, the list of
@@ -340,7 +346,8 @@ def issue_body(test, failed, reported, threads, url, sample):
         f"at {parallelism}, on a machine reporting {machine()}.",
         "",
         "Nothing in the tree changed between those runs, so the difference is the test rather than "
-        "the code under it." + (f" The binary that ran it is `{binary}`." if binary else ""),
+        "the code under it."
+        + (f" The binary that ran it is `{binary}`." if binary else ""),
         "",
     ]
     if sample:
@@ -439,7 +446,10 @@ def file_issues(flaky, samples, threads, repo, assign, limit, gh):
         return (
             "\n".join(
                 heading
-                + [f"The issues on {repo} could not be listed, so nothing was filed.", ""]
+                + [
+                    f"The issues on {repo} could not be listed, so nothing was filed.",
+                    "",
+                ]
             ),
             False,
         )
@@ -528,7 +538,9 @@ def measure(runs, threads):
     # `--no-run` builds no doc-tests, so without this the first measured run would pay rustdoc's
     # compile while competing with the timing-sensitive tests it is measuring, and its rate would
     # not be comparable with the rest.
-    print("warming up, so the doc-tests are built before anything counts", file=sys.stderr)
+    print(
+        "warming up, so the doc-tests are built before anything counts", file=sys.stderr
+    )
     if not run_suite(command)[0]:
         print("the warm-up run reported no tests at all", file=sys.stderr)
         return None, None, 0
@@ -821,10 +833,54 @@ def created(calls):
 def assignees(calls):
     """Who each issue a recording was asked to open would land on, `None` where it names nobody."""
     return [
-        arguments[arguments.index("--assignee") + 1] if "--assignee" in arguments else None
+        arguments[arguments.index("--assignee") + 1]
+        if "--assignee" in arguments
+        else None
         for arguments, _ in calls
         if arguments[:2] == ["issue", "create"]
     ]
+
+
+def round_trip(outcomes, second, samples):
+    """Whether --save then --load restores the threads and the machine and files without a report.
+
+    `measure` and the machine are stood in for, so no cargo runs, and the filing is a dry run.
+    """
+    global measure, MEASURED_ON
+    real = measure, MEASURED_ON, sys.argv
+    scratch = tempfile.mkdtemp()
+    path = os.path.join(scratch, "measured.json")
+    try:
+        measure = lambda runs, threads: ([outcomes, second], samples, 0)  # noqa: E731
+        MEASURED_ON = "a 64-core box running Plan 9"
+        sys.argv = ["measure-flakes.py", "--save", path, "--test-threads", "7"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            saved = main()
+        # What the filing host would report of itself, which the loaded file has to override.
+        MEASURED_ON = None
+        sys.argv = [
+            "measure-flakes.py",
+            "--load",
+            path,
+            "--file-issues",
+            "example/repo",
+            "--dry-run",
+        ]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            loaded = main()
+    finally:
+        measure, MEASURED_ON, sys.argv = real
+        shutil.rmtree(scratch, ignore_errors=True)
+    return (
+        "a saved measurement restores its threads and machine, and a load files without the report",
+        saved == 0
+        and loaded == 0
+        and "a 64-core box running Plan 9" in err.getvalue()
+        and "--test-threads=7" in err.getvalue()
+        and "### Issues" in out.getvalue()
+        and "## Test determinism" not in out.getvalue(),
+    )
 
 
 def selftest():
@@ -902,7 +958,8 @@ def selftest():
         ),
         (
             "the report states the rate and the parallelism it was measured at",
-            "50%" in describe(2, 4, counts) and "--test-threads=4" in describe(2, 4, counts),
+            "50%" in describe(2, 4, counts)
+            and "--test-threads=4" in describe(2, 4, counts),
         ),
         (
             "a run that reported nothing is counted as nothing rather than hidden",
@@ -945,7 +1002,9 @@ def selftest():
     # Filing is the half that writes to a repository everybody shares, and the failure that costs
     # most is a second issue for a test that already has one.
     gh, calls = recording_gh()
-    section, delivered = file_issues(flaky, samples, 16, "owner/repo", "netzenbot", ISSUE_LIMIT, gh)
+    section, delivered = file_issues(
+        flaky, samples, 16, "owner/repo", "netzenbot", ISSUE_LIMIT, gh
+    )
     opened = created(calls)
     checks.append(
         (
@@ -961,9 +1020,7 @@ def selftest():
     checks.append(
         (
             "the issue says the rate, the parallelism and what the failure was",
-            all(
-                "50%" in body and "--test-threads=16" in body for _, body in opened
-            )
+            all("50%" in body and "--test-threads=16" in body for _, body in opened)
             and any("the reply was drawn twice" in body for _, body in opened),
         )
     )
@@ -980,7 +1037,8 @@ def selftest():
     checks.append(
         (
             "a rate arrives with the operating system that produced it",
-            f"running {system()}" in clean and all(system() in body for _, body in opened),
+            f"running {system()}" in clean
+            and all(system() in body for _, body in opened),
         )
     )
     # Nothing here is triaged, so an issue naming nobody is one no person has agreed to look at:
@@ -1004,7 +1062,9 @@ def selftest():
     covered, calls = recording_gh(
         existing=[(76, "Flaky test: a_reply_arrives_before_the_deadline")]
     )
-    section, _ = file_issues(flaky, samples, 16, "owner/repo", "netzenbot", ISSUE_LIMIT, covered)
+    section, _ = file_issues(
+        flaky, samples, 16, "owner/repo", "netzenbot", ISSUE_LIMIT, covered
+    )
     checks.append(
         (
             "a test that already has an issue is named rather than filed again",
@@ -1092,6 +1152,10 @@ def selftest():
             and child.get("CARGO_TERM_COLOR") == "never",
         )
     )
+
+    # The filing job runs from what the measuring job saved and never on a pull request, so a key
+    # the two halves disagree on would only surface in the weekly run. Drive both through main().
+    checks.append(round_trip(outcomes, second, samples))
 
     broke = [claim for claim, held in checks if not held]
     for claim in broke:
