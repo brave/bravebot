@@ -338,6 +338,56 @@ fn each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_l
     }
 }
 
+/// Two names the volume holds apart are two files, so a record about one decides nothing about the
+/// other, in either polarity (TRUST-2). The table above asks the opposite question, whether names of
+/// one file share a rule. A step that turns a name into a key can also join different files, which
+/// no row of that table would show: trimming whitespace from the ends of a name made `note.md ` and
+/// `note.md` one rule. Every pair of awkward names is made in a scratch directory and asked of the
+/// volume; a pair that is two files there has to be two rules, unless the names are one group, which
+/// a refusal joins on purpose.
+#[test]
+fn two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group() {
+    let mut asked = 0;
+    for (index, (first, first_group)) in aliases::AWKWARD_NAMES.iter().enumerate() {
+        for (second, second_group) in &aliases::AWKWARD_NAMES[index + 1..] {
+            let scratch = Scratch::new(&format!("two-rules-{index}-{asked}"));
+            if !aliases::two_files(&scratch.path, first, second) {
+                continue;
+            }
+            asked += 1;
+            let joined = first_group == second_group;
+            let root = scratch.path.to_str().expect("scratch path is text");
+
+            for (named, other) in [(first, second), (second, first)] {
+                let mut refused = TrustStore::new(root);
+                refused.trust(".");
+                refused.distrust(named);
+                assert_eq!(
+                    refused.integrity_of(other),
+                    if joined {
+                        Some(Integrity::Untrusted)
+                    } else {
+                        Some(Integrity::Trusted)
+                    },
+                    "a refusal about {named:?} decided the other file {other:?}"
+                );
+
+                let mut vouched = TrustStore::new(root);
+                vouched.trust(named);
+                assert_eq!(
+                    vouched.integrity_of(other),
+                    None,
+                    "a trust about {named:?} reached the other file {other:?}"
+                );
+            }
+        }
+    }
+    assert!(
+        asked > 100,
+        "only {asked} pairs were two files: the alphabet is not being used"
+    );
+}
+
 /// Fetched bytes written through one name of a file are what every name of it reads back, so the
 /// trust the earlier trusted write recorded cannot stay on the other name (TRUST-4). A row the map
 /// does not join lists the issue that tracks it.
