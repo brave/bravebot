@@ -2591,7 +2591,7 @@ What comes back is offered only if it holds 2 to 12 words, fewer than 100 charac
 The driver counts and nothing else: it does not read what the words say, and an answer outside the
 counts is not offered, rather than being cut to something the model did not write. Nothing is
 offered where the answer is one the planner could not have held, which is an exchange that has met
-something untrusted, as a handoff brief is not (SESSION-34). An offer is
+something untrusted, as a handoff brief is not (see [sessions.md](sessions.md)). An offer is
 drawn dimmed in the box where the invitation is, and only while the box is empty and the session
 idle.
 
