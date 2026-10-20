@@ -166,8 +166,16 @@ fn as_sse(reply: &str) -> String {
                 .pointer("/function/arguments")
                 .and_then(|a| a.as_str())
                 .unwrap_or("");
-            for chunk in arguments.as_bytes().chunks(8) {
-                let piece = String::from_utf8_lossy(chunk).to_string();
+            // Eight bytes at a time, extended to the end of the character it falls in, so a name
+            // holding a multibyte character reaches the client whole.
+            let mut rest = arguments;
+            while !rest.is_empty() {
+                let mut end = rest.len().min(8);
+                while !rest.is_char_boundary(end) {
+                    end += 1;
+                }
+                let (piece, tail) = rest.split_at(end);
+                rest = tail;
                 frame(json!({"choices": [{"delta": {"tool_calls": [
                     {"index": index, "function": {"arguments": piece}}
                 ]}}]}));
@@ -30619,6 +30627,92 @@ fn a_vouch_for_a_file_named_with_whitespace_leaves_its_siblings_asking() {
         !second.contains("SIBLING_TEXT"),
         "a file nobody vouched for reached the planner"
     );
+}
+
+/// A yes at the vouch prompt is a rule about the file the prompt named and no other, whatever the
+/// file is called (TRUST-8). The directory holds every awkward name, and the yes has to leave each
+/// other file in it unvouched.
+///
+/// A turn that reads and vouches takes seconds, so the names read are one for each way a step that
+/// keys a name could join two files: a space at the end, a no-break space, a backslash and a
+/// right-to-left override. A name with a control character is refused before a prompt is drawn,
+/// since the person could not be shown it, so none of those is read.
+#[cfg(unix)]
+#[test]
+fn a_vouch_for_a_file_with_an_awkward_name_is_a_rule_about_that_file_alone() {
+    use std::os::unix::fs::MetadataExt;
+
+    let scratch = Scratch::new("vouch-awkward");
+    let mut files = Vec::new();
+    for (name, _) in aliases::AWKWARD_NAMES {
+        let path = scratch.path.join(name);
+        std::fs::create_dir_all(path.parent().expect("a name is in a directory")).unwrap();
+        std::fs::write(&path, "AWKWARD_NAMED\n")
+            .unwrap_or_else(|error| panic!("the volume does not hold {name:?}: {error}"));
+        let meta = std::fs::metadata(&path).unwrap();
+        files.push((*name, (meta.dev(), meta.ino())));
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let read = ["a.md ", "a.md\u{a0}", "a\\b.md", "\u{202e}a.md"];
+    for name in read {
+        let (_, identity) = files
+            .iter()
+            .find(|(listed, _)| *listed == name)
+            .unwrap_or_else(|| panic!("{name:?} is not one of the awkward names"));
+        let named = format!("./{name}");
+        // Built as JSON rather than through `tool_request`, which escapes a quote and leaves a
+        // backslash, one of the names being asked about.
+        let request = json!({"model": "test-model", "choices": [{"message": {
+            "role": "assistant",
+            "tool_calls": [{"id": "c1", "type": "function", "function": {
+                "name": "read_file",
+                "arguments": json!({ "path": named }).to_string(),
+            }}],
+        }}]})
+        .to_string();
+        let (endpoint, _received) = serve_sequence(vec![request, reply_with("done")]);
+        let mut confirmer = VouchesForFiles::new(true);
+        let offered = confirmer.offered.clone();
+        let vouched = turn::resume(
+            &config_for(&endpoint),
+            &egress,
+            &workspace,
+            &Task::new("read the file"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new("/work"),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("turn runs");
+        assert_eq!(
+            offered.lock().unwrap().len(),
+            1,
+            "{name:?} was not offered for vouching exactly once"
+        );
+        assert!(
+            vouched.trust.is_trusted(&named),
+            "the yes for {name:?} did not record a rule about it"
+        );
+        for (other, other_identity) in &files {
+            if other_identity != identity {
+                assert!(
+                    !vouched.trust.is_trusted(&format!("./{other}")),
+                    "the yes for {name:?} vouched for {other:?}"
+                );
+            }
+        }
+        assert!(
+            !vouched.trust.is_trusted("sibling.md"),
+            "the yes for {name:?} vouched for a file beside it"
+        );
+    }
 }
 
 /// A file already vouched for is not asked about, or every read of a trusted workspace would

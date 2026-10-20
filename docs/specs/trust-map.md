@@ -40,6 +40,16 @@ governs:
   - ui/src/renderer/components/Permissions.tsx
   - ui/scripts/remembered-trust-list.test.mjs
   - crates/tui/src/command_table.rs
+  - crates/core/src/permissions.rs
+  - crates/agent/test-support/aliases.rs
+key_step_allowed:
+  - crates/core/src/trust.rs::fold_case to_uppercase: a key is folded to upper case and then to lower, so two spellings a volume that folds case opens as one file are one key, and only a map told the volume folds compares them so (TRUST-2, Case)
+  - crates/core/src/trust.rs::fold_case to_lowercase: the second half of that fold, taken after upper case so a letter whose lower case is itself still meets the letter the volume folds it to (TRUST-2, Case)
+  - crates/core/src/trust.rs::canonical_form fold_case x2: a key is folded before its form is taken, again only where the volume folds case (TRUST-2, Case)
+  - crates/core/src/trust.rs::canonical_form decompose x2: a name is compared in the form every canonically equivalent spelling shares, which joins the NFC and NFD spellings of a name for a refusal and a writer on purpose and never for a trust (TRUST-2, Normalization)
+  - crates/core/src/permissions.rs::key_of fold: a rule and a path are compared in one case only where the volume folds case, which joins two spellings that volume opens as one file (TRUST-2, Case)
+  - crates/core/src/permissions.rs::fold fold_case: a rule and a path are folded a segment at a time, so the separators and the anchor are left as they were (TRUST-2, Case)
+  - crates/core/src/permissions.rs::drive_in_upper_case make_ascii_uppercase: a drive letter is one drive in either case on a host that separates with a backslash, and a directory called `d:` elsewhere is left as written (TRUST-2, Drive letter row)
 guards:
   - symbol: TrustStore::trust
   - symbol: TrustStore::distrust
@@ -174,6 +184,29 @@ the host's own answer, so only a Windows host takes the refusing branch there; t
 tested on every host with the answer supplied. A short name for a directory a person opened is
 accepted, since it names that one directory.
 
+**Names the volume holds apart.** The table lists the names one file has. The other direction is a
+rule too: two names a volume holds apart are two files, so the step that turns a name into a key
+gives them two keys, and a rule about one decides nothing about the other. Only a refusal and a
+writer in flight reach a name on purpose, and only the canonically equivalent spellings of the NFC
+and NFD row. Whitespace, a trailing dot, a leading `-`, a glob character, a backslash, a colon and
+a character Unicode gives no width are part of a name where a path is bytes. A step that trims,
+folds case or decodes lossily joins two such files, and no row of the table lists a join of two
+files.
+
+The names are `AWKWARD_NAMES` in `crates/agent/test-support/aliases.rs`. One test makes every pair in
+a directory, asks the volume whether it is two files, and asks the map about a rule for one of them
+in both polarities. A second asks the same pairs of the key the workspace builds for a name, of a
+read, and of a second writer, where a step that joins two files can sit with the map seeing
+nothing, and compares the two keys. The vouch prompt is asked about four of the names.
+
+`make check-security` fails a `trim`, a case fold, a Unicode normalisation or a lossy conversion
+in the functions that key a name or fold or decompose it: `normalise`, `TrustStore::key`,
+`fold_case`, `canonical_form`, `FileAuthority::key`, and the permission rule's `key_of`, `fold` and
+`drive_in_upper_case`. One those functions keep is listed under `key_step_allowed` in this spec's
+front matter, for the number of calls it names, with the files it joins and why. A step in any
+other function is for a reviewer to find. Deny and ask rules key a path of their own and are not
+yet asked the same question (#2761).
+
 **Why.** Per-file exceptions in both directions are the only way `@vendor/lib.js` can be trusted
 inside a `vendor` a person marked untrusted, without that answer leaking to its siblings.
 
@@ -193,6 +226,8 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_core::trust::a_rule_matches_whole_segments_only`
 `verified-by: bravebot_core::trust::equivalent_path_spellings_are_the_same_rule`
 `verified-by: bravebot_core::trust::a_name_with_whitespace_at_an_end_is_not_the_name_without_it`
+`verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group`
+`verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group`
 `verified-by: bravebot_core::trust::a_name_ending_in_a_space_follows_the_rules_for_canonically_equivalent_names`
 `verified-by: bravebot_core::trust::a_working_directory_with_whitespace_at_an_end_is_not_the_one_without_it`
 `verified-by: bravebot_core::trust::every_equivalent_spelling_of_a_path_reaches_the_same_rule`
@@ -548,6 +583,7 @@ check and caught the attempt. The prompt that grants the most was the one saying
 `verified-by: bravebot_agent::turn::a_path_that_names_no_file_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::declining_to_vouch_leaves_the_file_quarantined`
 `verified-by: bravebot_agent::turn::a_vouch_for_a_file_named_with_whitespace_leaves_its_siblings_asking`
+`verified-by: bravebot_agent::turn::a_vouch_for_a_file_with_an_awkward_name_is_a_rule_about_that_file_alone`
 `verified-by: bravebot_agent::turn::a_trusted_file_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::the_same_file_is_offered_once_per_turn`
 `verified-by: bravebot_tui::confirm::a_preview_with_nothing_in_it_says_so`
