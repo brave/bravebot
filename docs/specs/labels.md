@@ -641,8 +641,8 @@ arrives at all.
     is that the alternative is somebody editing a settings file to get it, which is a decision made
     further from the thing it is about.
   - **Force the word `safe` where somebody turned auto-vetting on.** Then it promotes, and nobody
-    reads the bytes. This is the one thing on the list that reaches the planner's context without a
-    person in between, and it is why the mode is off until somebody asks for it in one of the three
+    reads the bytes. This is the one thing on the list that puts the attacker's bytes in the planner's context
+    without a person in between, and it is why the mode is off until somebody asks for it in one of the three
     ways [CHECK-11](vetting.md#CHECK-11) names, and why the settings key that asks for it cannot be
     written into a checkout. What it buys is bounded by everything the verdict does not decide: one
     slot, whichever one the planner named, once, at `(T,priv)` so nothing leaves the machine and
@@ -653,7 +653,15 @@ arrives at all.
     words drawn in it and the checker ([CHECK-15](vetting.md#CHECK-15)), and what it buys is the
     same one slot, once.
   - **Force the word `unsafe`, or reply with nothing a verdict can be read out of.** That lands on
-    the prompt with the warning, which is the direction this is built to fail in.
+    the prompt with the warning, which is the direction this is built to fail in. Where nobody
+    can be asked, which is a run that bypasses permissions with auto-vetting on, there is no
+    prompt: the verdict alone answers, anything but `safe` is a refusal, and the planner is told
+    the slot was kept back and not to ask again ([CHECK-12](vetting.md#CHECK-12), "nobody to fall
+    back to", and the Known cost "A screened run with nobody to ask" in [vetting.md](vetting.md)).
+    What it buys is the denial of one slot read the planner asked for, decided by the check's
+    reply with no person in between, at no cost to the attacker. It promotes nothing, chooses no
+    destination, changes no label and writes no trust rule, and none of their bytes reach the
+    planner on this path. The same refusal follows a check that could not complete.
   - **Put their words in the reason.** It reaches a person's screen and stops there. It is drawn
     inside a margin it cannot forge, no model is given it, and it is kept out of the audit trail.
     It can still *lie*, since nothing holds a reason against the content it describes and nothing
