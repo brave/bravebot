@@ -352,6 +352,14 @@ pub enum Outcome {
     },
 }
 
+/// What the planner is told a stop can leave behind, wherever a run is reported as stopped.
+///
+/// A stage that does not end when it is asked to is killed, and a program that was killed has not
+/// undone what it held: a `git` killed in the middle of a commit leaves its `index.lock`, and the
+/// next `git` command fails on it.
+const WHAT_A_STOP_LEAVES: &str = "A stop can leave lock files or partly written output behind, \
+     and programs the line started may need checking.";
+
 /// A whole number of seconds with its unit, pluralised.
 ///
 /// Every duration these sentences quote goes through here, so none of them can say "1 seconds".
@@ -379,12 +387,13 @@ impl Outcome {
             } => format!("It failed: {detail}. {confinement}"),
             Self::Stopped(after) => format!(
                 "It was still running after {} seconds and was stopped, so this is what it had \
-                 printed by then and not the whole of what it would print.",
+                 printed by then and not the whole of what it would print. {WHAT_A_STOP_LEAVES}",
                 after.as_secs()
             ),
             Self::StoppedByTheUser(after) => format!(
                 "The user stopped it after {}, so this is what it had printed by then and not the \
-                 whole of what it would print. Do not start it again unless the user asks you to.",
+                 whole of what it would print. {WHAT_A_STOP_LEAVES} Do not start it again unless \
+                 the user asks you to.",
                 seconds(*after)
             ),
             Self::Running {
@@ -1198,6 +1207,43 @@ mod tests {
             said.matches("1 second").count(),
             2,
             "both of the durations should read as one second: {said}"
+        );
+    }
+
+    /// A planner told only that a run was stopped treats the repository as it was before the run,
+    /// and the next `git` command fails on the lock the stopped one left. The sentence is for a
+    /// stop, at the deadline or at the person's asking, and for no other ending: a job left running
+    /// has been stopped by nothing.
+    #[test]
+    fn a_stop_says_it_can_leave_files_behind_and_a_run_still_going_does_not() {
+        for (stopped, how) in [
+            (
+                Outcome::Stopped(std::time::Duration::from_secs(300)).describe(),
+                "at the deadline",
+            ),
+            (
+                Outcome::StoppedByTheUser(std::time::Duration::from_secs(40)).describe(),
+                "by the person",
+            ),
+        ] {
+            assert!(
+                stopped.contains("A stop can leave lock files or partly written output behind"),
+                "a run stopped {how} does not say what a stop can leave behind: {stopped}"
+            );
+            assert!(
+                stopped.contains("programs the line started may need checking"),
+                "a run stopped {how} does not say the programs it started may be running: {stopped}"
+            );
+        }
+
+        let going = Outcome::Running {
+            ran_for: std::time::Duration::from_secs(90),
+            waited: None,
+        }
+        .describe();
+        assert!(
+            !going.contains("lock files"),
+            "a run nothing stopped is warned about the effects of a stop: {going}"
         );
     }
 

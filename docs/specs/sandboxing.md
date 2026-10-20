@@ -159,8 +159,8 @@ these sockets under every mode, as `doctor` says. A connect to a socket in the a
 which has no path, is refused when the socket was made outside the confined process's Landlock domain, on a kernel
 carrying ABI version 6, and is reachable below it. The domain is that of one stage, so a socket made
 by the session or by another stage is refused too. On Linux signals are not scoped. On macOS a
-confined process signals the processes its own profile started and no other: not the session, which
-shares its process group, not another stage, and no other process of the account. A backend that cannot
+confined process signals the processes its own profile started and no other: not the session, not
+another stage, and no other process of the account. A backend that cannot
 enforce the network denial refuses the policy instead, so the guarantee never degrades into one
 that is not in force. On Linux the network is denied by a new user and network namespace, in which
 the stage has its own loopback and nothing else, whatever the address, port or protocol. Landlock's

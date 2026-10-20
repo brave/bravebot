@@ -1469,3 +1469,67 @@ fn a_platform_that_cannot_hold_a_stage_to_the_proxy_refuses_it() {
         "{refused:?}"
     );
 }
+
+/// What stopping a confined stage at its limit does to it and to what it started. The stage holds a
+/// file, as `git commit` holds `.git/index.lock`, and removes it when it is asked to end; a program
+/// it started appends to a file for as long as it runs.
+///
+/// The regression it rejects is a confined stage that is not in a process group the stop can
+/// address, which on Linux is also the case where asking for the group makes the backend's own
+/// `setsid` fail and the stage not start at all. Either way the file is left behind or the program
+/// keeps appending.
+#[cfg(unix)]
+#[test]
+fn a_confined_stage_stopped_at_the_limit_is_asked_to_end_and_what_it_started_ends_with_it() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("stopped-at-the-limit");
+    let confinement = places.confinement();
+    let line = "sh -c 'trap \"rm -f held; exit 143\" TERM; : > held; \
+                (while :; do echo x >> beat; sleep 0.05; done) & echo ready; wait'";
+
+    // The limit is found by trying. A confined stage takes seconds to start on a loaded machine,
+    // and a stop that arrived before the stage was set up says nothing about the stop.
+    let mut limit = std::time::Duration::from_secs(4);
+    let ran = loop {
+        for leftover in ["held", "beat"] {
+            let _ = std::fs::remove_file(places.session.join(leftover));
+        }
+        let ran = exec::run_plan_observed(
+            &places.plan(line),
+            &Cancel::new(),
+            limit,
+            None,
+            None,
+            Some(&confinement),
+            &mut |_| Ok(()),
+        )
+        .unwrap_or_else(|error| panic!("the stage should start: {error}"));
+        if ran.stdout.contains("ready") {
+            break ran;
+        }
+        assert!(
+            limit < std::time::Duration::from_secs(32),
+            "the stage never became ready: {ran:?}"
+        );
+        limit *= 2;
+    };
+
+    assert!(ran.stopped.is_some(), "the stop was not reported: {ran:?}");
+    assert!(
+        !places.session.join("held").exists(),
+        "the stage was killed before it could remove the file it held"
+    );
+    let appended = |places: &Places| {
+        std::fs::metadata(places.session.join("beat")).map_or(0, |file| file.len())
+    };
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let before = appended(&places);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert_eq!(
+        appended(&places),
+        before,
+        "a program the confined stage started was left running when the stage was stopped"
+    );
+}

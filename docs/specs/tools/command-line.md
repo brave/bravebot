@@ -734,10 +734,10 @@ ones in force, since a ceiling it was not told about is one it never asks for. T
 them.
 
 Reaching the deadline ends the run rather than failing it, exactly as the fixed limit does today:
-the stages are killed, what they printed is collected and returned under whatever label it had
-earned, and the stop is reported as structure so a caller can tell the two apart without reading a
-byte. Collection after a kill stays abandonable, because a killed stage can leave a child holding the
-write end of the pipe.
+the stages are stopped as [RUN-11](run.md#RUN-11) says, what they printed is collected and returned
+under whatever label it had earned, and the stop is reported as structure so a caller can tell the
+two apart without reading a byte. Collection after a stop stays abandonable, because a stage can
+leave a child holding the write end of the pipe.
 
 Not a safety property. A program that finishes in time is no safer than one that does not.
 

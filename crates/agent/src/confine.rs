@@ -1914,6 +1914,24 @@ pub(crate) struct Contained {
     _sandbox: Box<dyn bravebot_sandbox::Sandbox>,
 }
 
+/// `command`, started as the leader of a process group of its own on Unix.
+///
+/// The group is what ending a stage addresses, so that the programs the stage started are ended
+/// with it ([`crate::exec`], RUN-11). A stage that stayed in the session's group could not be
+/// signalled without signalling the session.
+fn leading_a_group(command: Command) -> Command {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = command;
+        command.process_group(0);
+        command
+    }
+    #[cfg(not(unix))]
+    command
+}
+
 /// `command`, ready to start under `confinement`, or the reason it cannot be.
 pub(crate) fn begin(
     confinement: Option<&Confinement>,
@@ -1922,13 +1940,22 @@ pub(crate) fn begin(
     directory: &Path,
 ) -> Result<Launch, ExecError> {
     let Some(confinement) = confinement else {
-        return Ok(Launch::Command(command));
+        return Ok(Launch::Command(leading_a_group(command)));
     };
     #[cfg(unix)]
     {
         confinement
             .wrap(command, step, directory)
-            .map(Launch::Command)
+            // A Linux stage is a session leader once the backend has called `setsid`, and a
+            // session leader leads a group of its own. Asking for the group as well would make
+            // that call fail, since it refuses a process that already leads a group.
+            .map(|wrapped| {
+                if cfg!(target_os = "linux") {
+                    Launch::Command(wrapped)
+                } else {
+                    Launch::Command(leading_a_group(wrapped))
+                }
+            })
     }
     #[cfg(windows)]
     {
