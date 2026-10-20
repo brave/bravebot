@@ -1444,13 +1444,17 @@ input-history-scope = { $chord } ce projet
 resume-heading = Reprendre une session
 resume-search-placeholder = Rechercher dans les titres et les échanges… (since:7d pour les récentes)
 resume-keys =
-    ↑↓ pour choisir  ·  Entrée pour reprendre  ·  tapez pour rechercher  ·  Échap pour une
-    nouvelle session
+    ↑↓ pour choisir  ·  Entrée pour reprendre  ·  Suppr pour supprimer  ·  tapez pour rechercher  ·
+    Échap pour une nouvelle session
 resume-from-pr = pull request { $pull_request }
 resume-keys-within =
-    ↑↓ pour choisir  ·  Entrée pour reprendre  ·  tapez pour rechercher  ·  Échap pour rester dans
-    cette session
+    ↑↓ pour choisir  ·  Entrée pour reprendre  ·  Suppr pour supprimer  ·  tapez pour rechercher  ·
+    Échap pour rester ici
 resume-nothing-matches = aucune correspondance
+resume-delete-question = Supprimer « { $title } » ? y la supprime, toute autre touche la garde
+resume-delete-held = cette session s'exécute en arrière-plan ; arrêtez-la avant de la supprimer
+resume-delete-done = supprimée
+resume-delete-failed = impossible de supprimer cette session
 resume-manifest-run =
     c'était une exécution manifest, qui ne peut pas être reprise ; démarrez une nouvelle
     session

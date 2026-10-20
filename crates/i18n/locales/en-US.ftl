@@ -1673,11 +1673,15 @@ input-history-search = { $chord } to search
 input-history-scope = { $chord } this project
 resume-heading = Resume session
 resume-search-placeholder = Search titles and what was said… (since:7d for recent)
-resume-keys = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc for a new session
+resume-keys = ↑↓ to choose  ·  Enter to resume  ·  Del to delete  ·  type to search  ·  Esc for a new session
 resume-from-pr = for pull request { $pull_request }
 resume-handed-off = from { $id }
-resume-keys-within = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc to stay in this session
+resume-keys-within = ↑↓ to choose  ·  Enter to resume  ·  Del to delete  ·  type to search  ·  Esc to stay here
 resume-nothing-matches = nothing matches that
+resume-delete-question = Delete "{ $title }"? y deletes it, any other key keeps it
+resume-delete-held = that session is running in the background; stop it before deleting it
+resume-delete-done = deleted
+resume-delete-failed = could not delete that session
 resume-manifest-run = that was a manifest run, which cannot be continued; start a new session
 
 
