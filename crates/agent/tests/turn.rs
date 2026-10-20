@@ -20093,11 +20093,15 @@ struct AskedAboutRuns {
     /// gave a yes.
     path_answer: bravebot_agent::confirm::Decision,
     paths: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::confirm::PathRequest>>>,
+    /// A directory removed while the first run is being asked about, as happens when an approval
+    /// waits for hours.
+    removing: Option<std::path::PathBuf>,
 }
 
 impl AskedAboutRuns {
     fn answering(answer: bravebot_agent::RunDecision) -> Self {
         Self {
+            removing: None,
             answer,
             answers: std::collections::VecDeque::new(),
             writes: bravebot_agent::WriteDecision::reject(),
@@ -20105,6 +20109,12 @@ impl AskedAboutRuns {
             path_answer: bravebot_agent::confirm::Decision::Reject,
             paths: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    /// Removes `directory` while the first run is being asked about.
+    fn removing_while_asked(mut self, directory: std::path::PathBuf) -> Self {
+        self.removing = Some(directory);
+        self
     }
 
     /// Also lets programs reach the path a request names, for a test whose subject is what a yes
@@ -20151,6 +20161,9 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
 
     fn confirm_run(&mut self, request: &bravebot_agent::RunRequest) -> bravebot_agent::RunDecision {
         self.seen.lock().unwrap().push(request.clone());
+        if let Some(directory) = self.removing.take() {
+            std::fs::remove_dir_all(directory).unwrap();
+        }
         self.answers.pop_front().unwrap_or(self.answer.clone())
     }
 
@@ -48577,6 +48590,113 @@ fn a_nonexistent_directory_is_an_error_and_does_not_mutate() {
     assert!(
         second.contains("is not a directory"),
         "reported not a directory: {second}"
+    );
+}
+
+/// CMDLINE-12: A carried directory that has been removed is refused before any prompt, and the
+/// next call runs at the workspace root.
+#[test]
+fn a_carried_directory_that_was_removed_is_refused_before_asking() {
+    let scratch = Scratch::new("cmdline-12-carried-removed");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+
+    let (endpoint, received) = serve_sequence(vec![
+        // Runs in `sub` and removes it, so `sub` is the directory the next call carries.
+        tool_request("run", r#"{"command":"rmdir ../sub","directory":"sub"}"#),
+        tool_request("run", r#"{"command":"cargo --version"}"#),
+        tool_request("run", r#"{"command":"cargo --version"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("carry a removed directory"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+
+    assert!(
+        !scratch.path.join("sub").exists(),
+        "the first call removed sub"
+    );
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+    assert!(
+        third.contains("no longer exists") && !third.contains("could not be started"),
+        "the removed directory was not named as removed: {third}"
+    );
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        2,
+        "the call with a removed directory was put to the person"
+    );
+    assert_eq!(
+        asked[1].plan.directory.canonicalize().unwrap(),
+        scratch.path.canonicalize().unwrap(),
+        "the call after the refusal runs at the workspace root"
+    );
+}
+
+/// CMDLINE-12: A directory removed while the person is being asked is reported as removed, not as a
+/// program that could not be started.
+#[test]
+fn a_directory_removed_during_the_approval_is_reported_as_removed() {
+    let scratch = Scratch::new("cmdline-12-removed-while-asked");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve())
+        .removing_while_asked(scratch.path.join("sub"));
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cargo --version","directory":"sub"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("remove the directory during the approval"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("no longer exists")
+            && !second.contains("could not be started")
+            && !second.contains("may have run in part"),
+        "the removed directory was reported as something else: {second}"
     );
 }
 

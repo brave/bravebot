@@ -7695,6 +7695,13 @@ fn failed_line_text(said: &str, error: &crate::exec::ExecError) -> String {
             "error: `{said}` was started and then {error}; it may have run in part, so check \
              what it did before running it again"
         ),
+        // Nothing of this pipeline started, so only a command earlier in a line joined with `&&`,
+        // `||` or `;` can have run.
+        crate::exec::ExecError::DirectoryGone { .. } => format!(
+            "error: `{said}` was not run: {error}. Name a directory that \
+             exists with the 'directory' argument. A command earlier in the line may already \
+             have run"
+        ),
         _ => format!(
             "error: `{said}` may have run in part: {error}; check what it did before running it \
              again"
@@ -7824,7 +7831,22 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             }
             resolved
         }
-        None => tools.run_directory.clone(),
+        None => {
+            // The directory carried from the last call is checked as a named one is, before the
+            // line is compiled and before anybody is asked: it may have been removed since.
+            // Falling back to the workspace root means the next call is not refused the same way.
+            if !tools.run_directory.is_dir() {
+                let gone =
+                    std::mem::replace(tools.run_directory, tools.workspace.root().to_path_buf());
+                return Produced::problem(format!(
+                    "error: the directory this line would run in, '{}', no longer exists. Name \
+                     a directory with the 'directory' argument; without one the next call runs \
+                     at the workspace root",
+                    gone.display()
+                ));
+            }
+            tools.run_directory.clone()
+        }
     };
     // The rules are handed to the compiler rather than consulted on the plan it hands back,
     // because a rule has to answer before the program is looked for (PERM-7): a denied line that
@@ -11355,6 +11377,16 @@ mod tests {
             assert!(!text.contains("did not run"), "{error:?}: {text}");
         }
         assert!(failed_line_text("sleep 30", &errors[0]).contains("was started"));
+        let gone = failed_line_text(
+            "git status",
+            &ExecError::DirectoryGone {
+                directory: "sub".into(),
+            },
+        );
+        assert!(
+            gone.contains("no longer exists") && !gone.contains("may have run in part"),
+            "{gone}"
+        );
     }
 
     use crate::exec::Deadlines;

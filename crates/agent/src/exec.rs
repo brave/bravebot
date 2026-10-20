@@ -288,6 +288,11 @@ pub enum ExecError {
     /// Carries the program name, which is safe to report: argv was endorsed by a person, so it is
     /// not content an attacker chose.
     NotStarted { program: String, detail: String },
+    /// The directory the line was to run in no longer exists, so the pipeline was not started.
+    ///
+    /// Checked immediately before the first stage is spawned, since an approval can wait for
+    /// hours. The directory is the one the person was shown and approved.
+    DirectoryGone { directory: String },
     /// The platform could not confine the program, so it was not started.
     ///
     /// A program a person approved runs under its profile or not at all, so this is a refusal and
@@ -308,6 +313,9 @@ impl fmt::Display for ExecError {
         match self {
             Self::NotStarted { program, detail } => {
                 write!(f, "'{program}' could not be started: {detail}")
+            }
+            Self::DirectoryGone { directory } => {
+                write!(f, "the directory '{directory}' no longer exists")
             }
             Self::NotConfined { program, detail } => {
                 write!(
@@ -558,6 +566,7 @@ impl<'a> Running<'a> {
         if steps.is_empty() {
             return Err(ExecError::Io("no stages to run".to_string()));
         }
+        the_directory_exists(self.directory)?;
         still_approved(steps)?;
 
         let mut children = ForegroundChildren(Vec::with_capacity(steps.len()));
@@ -1248,6 +1257,18 @@ fn stop_processes(mut children: Vec<&mut Process>) {
     }
 }
 
+/// Refuse the pipeline when the directory it runs in has been removed since the line was planned
+/// or approved. Without this the spawn fails with the operating system's "No such file or
+/// directory", which reads as a missing program.
+fn the_directory_exists(directory: &std::path::Path) -> Result<(), ExecError> {
+    if directory.is_dir() {
+        return Ok(());
+    }
+    Err(ExecError::DirectoryGone {
+        directory: directory.display().to_string(),
+    })
+}
+
 /// Refuse the pipeline unless every step's start path still leads to the file that was approved.
 ///
 /// A link can be repointed after the person approved the file it led to, so each path is resolved
@@ -1531,6 +1552,7 @@ pub fn start_steps(
     if steps.is_empty() {
         return Err(ExecError::Io("no stages to run".to_string()));
     }
+    the_directory_exists(directory)?;
     still_approved(steps)?;
 
     let mut children: Vec<Process> = Vec::with_capacity(steps.len());
