@@ -77,7 +77,10 @@ which lists the six as `optionalDependencies` at its own version and holds no bi
 `TAG` the target takes the latest GitHub release rather than the version in the tree, which may
 already be bumped past it. The workflow, not the target, refuses a tag that does not match its
 tree or a release missing an asset. OIDC trusted publishing; there is no `NPM_TOKEN`, and the
-trusted publisher on npmjs.com must name that workflow file for each of the seven packages.
+trusted publisher on npmjs.com must name that workflow file, and the `npm-publish` environment, for
+each of the seven packages. The publishing jobs wait on that environment's required reviewer, so
+the dispatch is followed by an approval from a second maintainer
+([branch-protection.md](branch-protection.md#the-npm-publish-environment)).
 
 Each platform package is built by `npm/scripts/stage-platform-package.js` on a runner of that
 platform's own kind. It verifies the binary against its published `.sha256` before writing it, and
