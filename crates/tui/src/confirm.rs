@@ -4788,10 +4788,6 @@ mod tests {
         assert!(drawn.contains('…'), "{drawn}");
     }
 
-    /// The offer this branch was reported for. A person promoting a file is answering the question
-    /// `vet_content` asks, so the check's word is on the screen here too, and it is about the whole
-    /// file rather than the preview above it.
-    ///
     /// PROMPT-1, PROMPT-2: a name that would draw as nothing, or as another name, is drawn quoted
     /// with its characters spelled, and the rule a yes writes is drawn under it.
     #[test]
@@ -4814,6 +4810,10 @@ mod tests {
         }
     }
 
+    /// The offer this branch was reported for. A person promoting a file is answering the question
+    /// `vet_content` asks, so the check's word is on the screen here too, and it is about the whole
+    /// file rather than the preview above it.
+    ///
     /// The banner is the driver's and sits outside the margin; the check's own sentence is inside
     /// it, alongside the file's own text, since a model wrote it about text a page could have.
     #[test]

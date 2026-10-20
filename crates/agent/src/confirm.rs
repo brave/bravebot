@@ -1065,7 +1065,7 @@ impl ServerRequest {
 /// A name that is empty, has whitespace at either end, or holds a character that draws as nothing
 /// (a zero-width character, a bidirectional control, a no-break space) comes back quoted with each
 /// such character spelled `\u{..}`, a space at an edge as `␣`, and a control character as its
-/// picture. Any other name comes back unchanged, so the plain case reads as it always did. Every
+/// picture (DEL as its own, a C1 control as `\u{..}`). Any other name comes back unchanged, so the plain case reads as it always did. Every
 /// front end that names a path in a prompt draws it through this, so the three cannot disagree
 /// about which names are marked.
 pub fn shown_name(name: &str) -> String {
@@ -1088,7 +1088,8 @@ pub fn shown_name(name: &str) -> String {
         match c {
             ' ' if at == 0 || at == last => out.push('\u{2423}'),
             '"' => out.push_str("\\\""),
-            c if c.is_control() => {
+            '\u{7f}' => out.push('\u{2421}'),
+            c if (c as u32) < 0x20 => {
                 out.push(char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'));
             }
             c if invisible(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
@@ -2909,6 +2910,9 @@ mod tests {
             ("a\u{202e}b", "\"a\\u{202e}b\""),
             ("a\u{2066}b", "\"a\\u{2066}b\""),
             ("a\u{1b}b", "\"a\u{241b}b\""),
+            ("a\u{7f}b", "\"a\u{2421}b\""),
+            ("a\u{85}b", "\"a\\u{85}b\""),
+            ("a\u{9f}b", "\"a\\u{9f}b\""),
         ] {
             assert_eq!(shown_name(name), shown, "{name:?}");
         }
