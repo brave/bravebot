@@ -208,8 +208,10 @@ vouch for, and reading it searches or compares their bytes. Which lines match an
 answer is cut short are decided by those bytes, so one such file makes the whole answer untrusted,
 and the model is given a reference to it. What reaches the model is the answer's size and whether
 it was cut short. An attacker who owns one of the files can set those, and tell the model by a
-count whether the pattern it chose matched. They cannot choose which files are read, how the answer
-is labelled, or any destination, and the model never sees a line of text from the file.
+count whether the pattern it chose matched. A page boundary that earlier files' matching lines
+decided can stop the walk before later files, but every path is recorded before its file is read, so
+those bytes cannot steer the label. They cannot choose how the answer is labelled or any
+destination, and the model never sees a line of text from the file.
 
 ## What leaves the process
 
