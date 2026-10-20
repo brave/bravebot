@@ -1356,6 +1356,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// gives.
     fn integrity_in_force(&self, path: &str) -> Option<Integrity> {
         let path = &*self.keyed(path);
+        // A key that climbs is not read as text: the map keeps `..` as written and a confined path
+        // never reaches it with one, so an ancestor walk would find the rule of a directory the
+        // name only passes through and miss the one of the directory it lands in.
+        if std::path::Path::new(path)
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Some(Integrity::Untrusted);
+        }
         // Provenance, not the map: the user's own skill directory is trusted for being the user's
         // own (SKILL-3), and the map is keyed by workspace-relative paths and has nothing to say
         // about it (TRUST-11).
@@ -14823,6 +14832,42 @@ five
             policy.read_is_quarantined("/tmp/bravebot-scratch-1/../../etc/hosts"),
             "a name that climbed out of the session's directory took the workspace's own answer"
         );
+    }
+
+    /// Every question the policy asks of the map reads a key that climbs as untrusted, not only the
+    /// ones the two tests above reach (a command line's operand and the scratch directory's own
+    /// answer): the label of one path, of several, the label in force, and the quarantine check.
+    #[test]
+    fn a_climbing_key_is_untrusted_to_every_question_asked_of_the_map() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &["."]);
+
+        for path in ["src/a.rs", "/work/src/a.rs"] {
+            assert!(!policy.read_is_quarantined(path), "control: {path}");
+            assert!(policy.label_in_force(path).is_trusted(), "control: {path}");
+        }
+        for path in [
+            "src/../src/a.rs",
+            "/work/src/../src/a.rs",
+            "../work/src/a.rs",
+        ] {
+            assert!(policy.read_is_quarantined(path), "{path} was shown");
+            assert!(
+                !policy.label_in_force(path).is_trusted(),
+                "{path} was labelled by the rule of a directory it passes through"
+            );
+            let one = policy
+                .observe_path(Capability::FileRead, path)
+                .expect("labelled");
+            assert!(!one.is_trusted(), "{path} observed as trusted");
+            let many = policy
+                .observe_paths(Capability::FileRead, ["src/a.rs", path])
+                .expect("labelled");
+            assert!(
+                !many.is_trusted(),
+                "{path} among others observed as trusted"
+            );
+        }
     }
 
     /// The workspace's answer is lent only where there is one. A session that vouched for nothing

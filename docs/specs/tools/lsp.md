@@ -176,6 +176,17 @@ strength of a server having said it. [LSP-9](#LSP-9)'s
 `the_lsp_capability_produces_no_routing_safe_output` says the capability's own output must not be
 routing-safe, and the label the tool gives the answer has to agree with it.
 
+**A name the server composed is not a file.** A path holding `..` is untrusted whatever the map
+says about the directories it passes through, because the map is keyed by confined names and an
+ancestor walk over the text would find the rule of a directory the name only climbs out of. A path
+that no entry on disk backs, including one beneath a file, has no entry of its own and would be read
+under the rule of an ancestor, so an answer naming one is the server's text and is untrusted.
+**Accepted cost:** a server that can write to the tree can create the entry first, and a file it
+created is not marked untrusted by anything. Existence narrows the names a server can use to ones
+that exist; it does not make them the project's.
+
+`verified-by: bravebot_agent::lsp::a_composed_location_is_not_labelled_by_the_rule_of_an_ancestor`
+
 **The label is not a function of the answer's text, and nothing here decides from a name.** The
 paths go to the kernel and a label comes back. Which wording the answer uses ("outside the
 workspace", the 200-location notice) is chosen from the same bytes, but it is written into a string
