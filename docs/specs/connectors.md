@@ -62,13 +62,18 @@ and nothing from the request.
 
 The authority is started with only `HOME`, `XDG_RUNTIME_DIR`, `PATH`, `TMPDIR`, `LANG` and
 `DBUS_SESSION_BUS_ADDRESS`, each where this process has it set, and with nothing else of this
-process's environment. It starts in the root directory, not the one this process runs in.
+process's environment. Its `PATH` is this process's reduced to the entries a lookup by bravebot searches, in the
+order they were written ([SANDBOX-30](sandboxing.md#SANDBOX-30)), so an authority that is a script, or a launcher
+that starts programs by name, finds them only among those. It starts in the root directory, not the one this
+process runs in.
 
 **Why.** The rest of the environment may hold this process's own credentials, which are not the
-authority's to read, and a relative path the authority reads should not be one a checkout answers.
+authority's to read, a relative path the authority reads should not be one a checkout answers, and a name the
+authority looks up should not be answered by a file a confined stage wrote.
 
 `verified-by: bravebot_connector::lib::the_authority_starts_with_only_the_variables_it_is_passed`
 `verified-by: bravebot_connector::lib::the_authority_starts_outside_the_checkout`
+`verified-by: bravebot_connector::lib::an_authority_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 
 <a id="CONNECTOR-5"></a>
 ### CONNECTOR-5: a call needs its capability
