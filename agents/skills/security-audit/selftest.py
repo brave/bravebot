@@ -3874,7 +3874,7 @@ def test_a_test_attribute_covers_only_what_it_is_attached_to():
     )
 
 
-def test_identity_sites():
+def test_the_identity_lane_starts_from_the_calls_that_resolve_a_name():
     """The identity lane starts from every call that turns a name into a thing, outside the tests."""
     sources = {
         Path("crates/agent/src/workspace.rs"): [
@@ -3929,7 +3929,7 @@ def test_identity_sites():
     )
 
 
-def test_output_sites():
+def test_the_output_lane_lists_a_write_only_where_its_arguments_are_not_all_literals():
     """The output lane lists a write only where its arguments are not all literals.
 
     A write of literals cannot carry anything somebody else chose, so listing it only buries the
@@ -4006,7 +4006,7 @@ def test_output_sites():
     )
 
 
-def test_window_sinks():
+def test_the_window_list_holds_the_places_a_string_becomes_markup():
     """The window's start list holds the places a string becomes markup or preformatted text."""
     where = in_tree(
         {
@@ -4232,6 +4232,21 @@ def test_the_new_lanes_are_run_for_the_files_they_read():
         check(
             "a Rust file that makes no decision on a name does not run the identity lane",
             "identity" not in lanes and "tooling" not in lanes and "checkout-controls" not in lanes,
+            str(lanes),
+        )
+
+        audit.mechanics.changed_files = lambda base: iter(["crates/tui/src/asks.rs"])
+        lanes = audit.changed_lanes("base", [Governing()])
+        check(
+            "a Rust file runs the identity lane where there is no surface to ask",
+            "identity" in lanes,
+            str(lanes),
+        )
+        audit.mechanics.changed_files = lambda base: iter(["docs/specs/asking.md"])
+        lanes = audit.changed_lanes("base", [Governing()])
+        check(
+            "a file that is not Rust does not run the identity lane where there is no surface to ask",
+            "identity" not in lanes,
             str(lanes),
         )
     finally:
@@ -4803,6 +4818,12 @@ def test_a_verdict_covers_the_candidates_it_says_are_the_same_defect():
 
 
 def test_a_draft_names_every_lane_that_found_it():
+    """A draft names every lane that reported the defect, not only the one whose candidate was kept.
+
+    A reader of the issue judges from that list how many independent readings the finding has had.
+    A draft that named one lane would report a defect that two lanes reached from different starting
+    points as the claim of a single lane.
+    """
     one = {"lane": "identity"}
     two = {"lane": "identity", "also_reported_by": ["checkout-controls", "output-sinks"]}
     check(
@@ -4902,9 +4923,9 @@ TESTS = (
     test_the_manifest_is_read_from_the_work_directory,
     test_verifying_saves_the_candidates_the_collector_reads,
     test_a_test_attribute_covers_only_what_it_is_attached_to,
-    test_identity_sites,
-    test_output_sites,
-    test_window_sinks,
+    test_the_identity_lane_starts_from_the_calls_that_resolve_a_name,
+    test_the_output_lane_lists_a_write_only_where_its_arguments_are_not_all_literals,
+    test_the_window_list_holds_the_places_a_string_becomes_markup,
     test_the_checkout_lane_starts_from_the_layers,
     test_the_prompt_lane_reaches_the_line_interface_and_the_replay,
     test_the_tooling_lane_starts_from_the_scripts,
