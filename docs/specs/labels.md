@@ -803,8 +803,8 @@ arrives at all.
     nothing.** The first happens inside the body the planner cannot read. The second is a blob that
     is binary or past the size cap, which a search names or describes and does not print.
 
-  What is **not** on the list: the label, which is fixed before the blob is read, any destination,
-  any argument of a later call, and a line of the blob. The pattern, the path and the skip are the
+  What is **not** on the list: the label, which depends only on the paths shown, each recorded
+  before its blob is read, any destination, any argument of a later call, and a line of the blob. The pattern, the path and the skip are the
   planner's own arguments and no byte of a blob reaches them. This entry cannot take the search's
   wording that the result is labelled "before any file is opened" or that which files the walk
   reaches is never decided by a byte of a file. `read_git` labels an answer after the walk has
