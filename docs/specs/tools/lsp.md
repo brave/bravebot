@@ -588,7 +588,10 @@ the failure is carried.
 for after the write, and a write sets that from the trust of the bytes written
 ([TRUST-4](../trust-map.md#TRUST-4)). So a file written from `contents_ref`, whose bytes came out
 of quarantine, is untrusted once written and reports nothing: the server's view of bytes nobody
-vouched for is not put in the planner's context. An edit is made only to a file the trust map
+vouched for is not put in the planner's context. The gate is there because nothing asked for this
+sentence: a write or an edit starts no server and puts no question to a person, so it is held to the
+stricter rule, where [LSP-13](#LSP-13)'s answer is to a question the planner asked about a path a
+person could approve alone. An edit is made only to a file the trust map
 vouches for ([EDIT-2](edit-file.md#EDIT-2)), and the result is given on the same terms.
 
 **Bounded.** The server is sent the file as it now stands, as a change where it already holds the
@@ -632,7 +635,11 @@ and the line each starts on, how many warnings, and how many notes of any other 
 repository's words and capped as [LSP-12](#LSP-12) caps them. A line and a severity are an integer and
 a fixed enumeration the server reports, which [LSP-3](#LSP-3) already reads as structure for a
 location, so the sentence is given for a file in a tree the trust map does not vouch for as it is for
-one it does. It names no path the server reported, so it carries no taint.
+one it does. It names no path the server reported, so it carries no taint. The counts are still computed
+from bytes nobody may have vouched for, including files other than the one queried, and the planner
+is moved by them as far as a count and a list of lines can move it. That is recorded as an exception in
+[labels.md](../labels.md#LABEL-8)'s table of roads in and in its Known costs, which enumerates what
+it buys; it is not a claim that the numbers are untouched by the file.
 
 **The messages are content.** A diagnostic's `message`, `code` and `source` are bytes the server
 composed out of the files it indexed, and a message can quote a name defined in another file. The
