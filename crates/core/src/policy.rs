@@ -14797,6 +14797,42 @@ five
         );
     }
 
+    /// Every question the policy asks of the map reads a key that climbs as untrusted, not only the
+    /// ones the two tests above reach (a command line's operand and the scratch directory's own
+    /// answer): the label of one path, of several, the label in force, and the quarantine check.
+    #[test]
+    fn a_climbing_key_is_untrusted_to_every_question_asked_of_the_map() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &["."]);
+
+        for path in ["src/a.rs", "/work/src/a.rs"] {
+            assert!(!policy.read_is_quarantined(path), "control: {path}");
+            assert!(policy.label_in_force(path).is_trusted(), "control: {path}");
+        }
+        for path in [
+            "src/../src/a.rs",
+            "/work/src/../src/a.rs",
+            "../work/src/a.rs",
+        ] {
+            assert!(policy.read_is_quarantined(path), "{path} was shown");
+            assert!(
+                !policy.label_in_force(path).is_trusted(),
+                "{path} was labelled by the rule of a directory it passes through"
+            );
+            let one = policy
+                .observe_path(Capability::FileRead, path)
+                .expect("labelled");
+            assert!(!one.is_trusted(), "{path} observed as trusted");
+            let many = policy
+                .observe_paths(Capability::FileRead, ["src/a.rs", path])
+                .expect("labelled");
+            assert!(
+                !many.is_trusted(),
+                "{path} among others observed as trusted"
+            );
+        }
+    }
+
     /// The workspace's answer is lent only where there is one. A session that vouched for nothing
     /// has none, and then the rules inside the directory are the whole of what is known about it.
     #[test]

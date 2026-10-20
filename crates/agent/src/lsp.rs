@@ -709,6 +709,42 @@ mod tests {
         }
     }
 
+    /// LSP-3, through the other rows of TRUST-2's spelling table: a `.` segment, a doubled or
+    /// trailing separator, and a symbolic link are each the same file as a distrusted one, or
+    /// refused. `.` and `//` are one rule with the file they name, so a distrusted `vendor` stays
+    /// distrusted; a trailing separator on a file names no entry. A link is the table's known cost
+    /// (#2328) and is not pinned here. Case is not run: whether it is one file is the volume's.
+    #[test]
+    fn a_respelled_location_of_a_distrusted_file_is_still_untrusted() {
+        let ws = tree("lsp-respelled-location");
+        let label_of = |path: String| {
+            let mut sink = RecordingSink::new();
+            let mut store = bravebot_core::trust::TrustStore::new(&ws);
+            store.trust(".");
+            store.distrust("vendor");
+            let mut policy =
+                Policy::begin(routing(), ReleasePlan::new(), capabilities(), &mut sink)
+                    .expect("policy")
+                    .with_trust(store);
+            let answer = Answer {
+                locations: vec![location(&path, 1)],
+                ..Answer::default()
+            };
+            label_for_locations(&mut policy, &answer).expect("labelled")
+        };
+
+        assert!(label_of(format!("{ws}/src/a.rs")).is_trusted(), "control");
+        for path in [
+            format!("{ws}/vendor/./b.rs"),
+            format!("{ws}/./vendor/b.rs"),
+            format!("{ws}//vendor//b.rs"),
+            format!("{ws}/vendor/b.rs/"),
+            format!("{ws}/src/a.rs/"),
+        ] {
+            assert!(!label_of(path.clone()).is_trusted(), "{path} was trusted");
+        }
+    }
+
     /// LSP-4: a definition in a dependency is the common case in Rust, not an edge, and it must not
     /// be spelled as though it were a workspace path.
     #[test]
