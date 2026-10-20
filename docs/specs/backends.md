@@ -2741,7 +2741,9 @@ parsed number only how long.
   answers every question and the sandbox mode is workspace-write, a stage is given every path the account
   can write, so an `aws` in a directory the account owns, such as a Homebrew prefix, is found before
   the first stage runs and not after, and every Bedrock request from then until bravebot exits gets
-  `NotInstalled`.
+  `NotInstalled`. The CLI is also started with a `PATH` of those same entries, so a program it starts
+  by name, the interpreter of an `aws` that is a script or a bare `credential_process` command, is
+  not found by it in a directory left out.
   An editor found outside those directories still starts, with a `PATH` of the searched entries
   alone, so a program it starts by name that lives only in a directory left out is not found by it:
   a tool a plugin runs from a project's `node_modules/.bin`, or one in `~/.local/bin` under a
