@@ -599,9 +599,11 @@ since the next request would end it as stopped.
 planner with the question, as the line typed while a delegate runs is put in front of the round after
 its report.
 
-**Not kept across a resume.** The count is not written to the session record, so a resumed session
-asks only about a list written after the resume, as [COMPACT-16](compaction.md#COMPACT-16) carries
-a list forward only from the next `todo_write`.
+**Known costs.** The count is not written to the session record, so a session resumed with a list
+still open is not asked about it, though the panel shows that plan
+([PANEL-10](info-panel.md#PANEL-10)). The first turn that answers ends on its answer, and the
+question comes only for a list written after the resume, as [COMPACT-16](compaction.md#COMPACT-16)
+carries a list forward only from the next `todo_write`.
 
 `verified-by: bravebot_agent::turn::a_turn_that_answers_with_tasks_still_open_is_asked_to_bring_the_list_up_to_date`
 `verified-by: bravebot_agent::turn::a_turn_asks_about_open_tasks_once_however_the_planner_answers`
