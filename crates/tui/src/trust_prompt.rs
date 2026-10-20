@@ -465,7 +465,7 @@ fn draw(
     let question = vec![
         asking(
             t!(trust_directory_question),
-            &directory.display().to_string(),
+            &bravebot_agent::confirm::shown_path(directory),
         ),
         // What a yes grants beyond the files stays above what scrolls with the question, so it is
         // on the screen whenever a yes can be taken (RUN-5).
@@ -562,7 +562,10 @@ fn draw_named(
     scroll: u16,
 ) -> Drawn {
     let question = vec![
-        asking(t!(named_directory_question), directory),
+        asking(
+            t!(named_directory_question),
+            &bravebot_agent::confirm::shown_name(directory),
+        ),
         Line::raw(""),
     ];
     let lines = vec![
@@ -705,7 +708,7 @@ fn withheld(why: &str) -> Line<'static> {
     ))
 }
 
-/// What is being asked, and the path it is being asked about.
+/// What is being asked, and the path it is being asked about, already spelled for a person.
 ///
 /// The path is the whole of what an answer is about, so it is drawn rather than summarised.
 fn asking(question: &str, directory: &str) -> Line<'static> {
@@ -1851,6 +1854,30 @@ mod tests {
         assert!(output.contains("/home/me/.ssh"), "no path: {output}");
         assert!(output.contains("open it"));
         assert!(output.contains("leave it closed"));
+    }
+
+    /// PROMPT-1: both directory questions draw the path they ask about with a name that would draw
+    /// as nothing, or as another name, quoted and spelled. A settings file chose the name in the
+    /// named question, so the person reading it cannot tell `/srv/shared ` from `/srv/shared`
+    /// unless the box says so.
+    #[test]
+    fn the_directory_questions_mark_a_name_that_would_draw_as_another() {
+        let named = |directory: &str| rendered(|frame| draw_named_at_rest(frame, directory));
+        let working = |directory: &str| rendered(|frame| draw_at_rest(frame, Path::new(directory)));
+        for (draw_it, plain) in [
+            (&named as &dyn Fn(&str) -> String, named("/srv/shared")),
+            (&working, working("/srv/shared")),
+        ] {
+            assert!(plain.contains("/srv/shared"), "{plain}");
+            for (name, spelled) in [
+                ("/srv/shared ", "\"/srv/shared\u{2423}\""),
+                ("/srv/sh\u{202e}ared", "\"/srv/sh\\u{202e}ared\""),
+            ] {
+                let drawn = draw_it(name);
+                assert_ne!(drawn, plain, "{name:?}");
+                assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+            }
+        }
     }
 
     /// Opening a directory grants two things at once, reach and trust, and neither is on the

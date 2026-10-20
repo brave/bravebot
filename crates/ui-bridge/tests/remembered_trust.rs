@@ -289,6 +289,12 @@ fn the_yes_rule() -> Value {
     json!([{"path": "", "integrity": "trusted"}])
 }
 
+/// The rule a yes writes, as the permissions list has it: with the name spelled beside it, which for
+/// the empty name is two quotation marks. A window words the root itself and draws neither.
+fn the_listed_yes_rule() -> Value {
+    json!([{"path": "", "shownPath": "\"\"", "integrity": "trusted"}])
+}
+
 /// The question names the file a yes would be kept in, a plain yes writes it, and it settles the next
 /// session started in that directory, in a later launch of the window: it is not asked, it says which
 /// kept answer settled it, it runs a turn, and it holds the rule a yes writes.
@@ -341,7 +347,7 @@ fn a_remembered_yes_settles_the_next_session_started_there() {
         "a remembered answer did not answer the question: {done}"
     );
     let listed = front.call("permissions.list", json!({"session": session}));
-    assert_eq!(listed["paths"], the_yes_rule(), "{listed}");
+    assert_eq!(listed["paths"], the_listed_yes_rule(), "{listed}");
     assert_eq!(listed["remembered"]["path"], keeping, "{listed}");
 }
 
@@ -416,7 +422,7 @@ fn a_remembered_worktree_root_answers_for_a_directory_below_it() {
     );
     let session = handle(&opened);
     let listed = front.call("permissions.list", json!({"session": session}));
-    assert_eq!(listed["paths"], the_yes_rule(), "{listed}");
+    assert_eq!(listed["paths"], the_listed_yes_rule(), "{listed}");
     assert_eq!(
         listed["remembered"]["root"],
         scratch.project().to_str().unwrap()
@@ -499,7 +505,7 @@ fn a_yes_where_keeping_is_not_offered_trusts_this_session_and_writes_nothing() {
         );
         assert_eq!(front.turn(&session)["event"], "turn.done");
         let listed = front.call("permissions.list", json!({"session": session}));
-        assert_eq!(listed["paths"], the_yes_rule(), "{listed}");
+        assert_eq!(listed["paths"], the_listed_yes_rule(), "{listed}");
 
         let (_, question) = front.begin(&directory);
         assert!(
@@ -586,7 +592,7 @@ fn a_yes_from_a_client_that_did_not_show_the_sentence_is_kept_without_it() {
     let (opened, question) = front.begin(&scratch.project());
     assert_eq!(question, None, "a kept answer was asked again");
     let listed = front.call("permissions.list", json!({"session": handle(&opened)}));
-    assert_eq!(listed["paths"], the_yes_rule(), "{listed}");
+    assert_eq!(listed["paths"], the_listed_yes_rule(), "{listed}");
 }
 
 /// RUN-5: the question carries the sentence, in the words the terminal draws, and a yes from the
@@ -640,7 +646,7 @@ fn an_answer_that_cannot_be_kept_is_still_a_yes_for_this_session() {
     );
     assert_eq!(front.turn(&session)["event"], "turn.done");
     let listed = front.call("permissions.list", json!({"session": session}));
-    assert_eq!(listed["paths"], the_yes_rule(), "{listed}");
+    assert_eq!(listed["paths"], the_listed_yes_rule(), "{listed}");
 
     let (_, question) = front.begin(&scratch.project());
     assert!(
@@ -704,7 +710,7 @@ fn a_resume_takes_its_own_map_before_a_kept_answer() {
         "{reopened}"
     );
     let listed = front.call("permissions.list", json!({"session": reopened["session"]}));
-    assert_eq!(listed["paths"], the_yes_rule(), "{listed}");
+    assert_eq!(listed["paths"], the_listed_yes_rule(), "{listed}");
 }
 
 /// Make the record `id` one written before maps were kept, by taking its map out.
@@ -758,7 +764,7 @@ fn forgetting_a_remembered_answer_makes_the_next_session_there_ask() {
     assert_eq!(listed["remembered"], Value::Null, "{listed}");
     assert_eq!(
         listed["paths"],
-        the_yes_rule(),
+        the_listed_yes_rule(),
         "forgetting took this session's map"
     );
     assert!(!keeping.exists(), "the record outlived being forgotten");
@@ -795,7 +801,7 @@ fn a_repeated_trust_answer_is_refused_and_the_first_stands() {
     let listed = front.call("permissions.list", json!({"session": session}));
     assert_ne!(
         listed["paths"],
-        the_yes_rule(),
+        the_listed_yes_rule(),
         "a repeat replaced the first answer: {listed}"
     );
 }
@@ -816,5 +822,5 @@ fn a_trust_answer_cannot_be_changed_after_a_turn_has_used_it() {
         "the trust question is not waiting for an answer"
     );
     let listed = front.call("permissions.list", json!({"session": session}));
-    assert_eq!(listed["paths"], the_yes_rule(), "{listed}");
+    assert_eq!(listed["paths"], the_listed_yes_rule(), "{listed}");
 }

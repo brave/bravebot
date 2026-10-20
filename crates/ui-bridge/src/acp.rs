@@ -1048,7 +1048,7 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             format!(
                 "{} {}",
                 data["intent"].as_str().unwrap_or("write"),
-                text("path")
+                bravebot_agent::confirm::shown_name(text("path"))
             ),
             "edit",
             write_text(data),
@@ -1078,7 +1078,10 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             .join("\n"),
         ),
         "vouch" => (
-            format!("trust {}", text("path")),
+            format!(
+                "trust {}",
+                bravebot_agent::confirm::shown_name(text("path"))
+            ),
             "read",
             bravebot_approval::vouch_lines(
                 text("path"),
@@ -1095,7 +1098,10 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             bravebot_approval::manifest_lines(text("task"), &strings(&data["steps"])).join("\n"),
         ),
         "exposure" => (
-            format!("read {}, which holds a credential", text("path")),
+            format!(
+                "read {}, which holds a credential",
+                bravebot_agent::confirm::shown_name(text("path"))
+            ),
             "read",
             bravebot_approval::exposure_lines(text("path"), &strings(&data["credentials"]))
                 .join("\n"),
@@ -1520,6 +1526,76 @@ mod tests {
             }
         }
         assert!(describe("something-new", &json!({"summary": "do it"})).is_none());
+    }
+
+    /// PROMPT-1: an editor is shown a question's title and body as words. The title names the file
+    /// for a write, a vouch and a credential read, and a name that would draw as nothing, or as
+    /// another name, is spelled in it, as it is in the terminal.
+    #[test]
+    fn the_title_of_a_question_about_a_file_spells_a_name_that_would_draw_as_another() {
+        use bravebot_agent::confirm::{ExposureRequest, Intent, VouchRequest, WriteRequest};
+        let write = |path: &str| {
+            crate::wire::write_request(
+                1,
+                &WriteRequest {
+                    written_since_checkout: false,
+                    path: path.into(),
+                    contents: "a\n".into(),
+                    existing: None,
+                    diff: bravebot_agent::diff::Diff::compute("", "a\n"),
+                    intent: Intent::Create,
+                    untrusted: false,
+                    remark: None,
+                    protected: false,
+                    credentials: Vec::new(),
+                    may_always: false,
+                    record: None,
+                },
+            )
+        };
+        let vouch = |path: &str| {
+            crate::wire::vouch_request(
+                2,
+                &VouchRequest {
+                    path: path.into(),
+                    rule: format!("/work/{path}"),
+                    preview: "a".into(),
+                    label: "(U,priv)".into(),
+                    truncated: false,
+                    verdict: bravebot_core::vetting::Verdict::Safe,
+                    reason: None,
+                    reason_label: None,
+                },
+            )
+        };
+        let exposure = |path: &str| {
+            crate::wire::exposure_request(
+                3,
+                &ExposureRequest {
+                    path: path.into(),
+                    credentials: vec!["an API key at line 1".into()],
+                },
+            )
+        };
+        let titled = |stem: &str, data: Value| shown(stem, data).0;
+        assert_eq!(titled("confirm", write("note.md")), "create note.md");
+        assert_eq!(
+            titled("confirm", write("note.md ")),
+            "create \"note.md\u{2423}\""
+        );
+        assert_eq!(titled("vouch", vouch("note.md")), "trust note.md");
+        assert_eq!(
+            titled("vouch", vouch("note.md ")),
+            "trust \"note.md\u{2423}\""
+        );
+        assert_eq!(
+            titled("exposure", exposure("note.md")),
+            "read note.md, which holds a credential"
+        );
+        assert_eq!(
+            titled("exposure", exposure("note.md ")),
+            "read \"note.md\u{2423}\", which holds a credential"
+        );
     }
 
     #[test]

@@ -405,12 +405,12 @@ pub fn vouch_lines(path: &str, rule: &str, check: Check, preview: &str) -> Vec<S
 /// The findings in a file the planner asked to read, and nothing of the file.
 ///
 /// Each line is already a kind, a place and a mask, so there is no content here to picture or to
-/// put behind a margin. `printable` is still applied, since a control character reaching a terminal
-/// from any direction is a cursor somewhere else, and the path in a finding is a path the planner
-/// may have spelled.
+/// put behind a margin. `printable` is still applied to a finding, since a control character
+/// reaching a terminal from any direction is a cursor somewhere else, and the path is drawn through
+/// `shown_name`, which spells a name that would draw as nothing or as another name.
 pub fn exposure_lines(path: &str, findings: &[String]) -> Vec<String> {
     let mut lines = vec![
-        printable(path),
+        bravebot_agent::confirm::shown_name(path),
         t!(expose_explained).to_string(),
         t!(expose_found).to_string(),
     ];
@@ -715,6 +715,21 @@ mod tests {
                 lines.iter().all(|line| !line.contains("U+XXXX")),
                 "{what}: a text with nothing hidden in it said something was: {lines:?}"
             );
+        }
+    }
+
+    /// PROMPT-1: the credential-read lines name the file so a name that would draw as nothing, or as
+    /// another name, is spelled, and a plain name reads as it did.
+    #[test]
+    fn the_exposure_lines_spell_a_name_that_would_draw_as_another() {
+        let findings = ["an API key at line 1".to_string()];
+        assert_eq!(exposure_lines("note.md", &findings)[0], "note.md");
+        for (name, spelled) in [
+            (" ", "\"\u{2423}\""),
+            ("note.md ", "\"note.md\u{2423}\""),
+            ("a\u{202e}b", "\"a\\u{202e}b\""),
+        ] {
+            assert_eq!(exposure_lines(name, &findings)[0], spelled, "{name:?}");
         }
     }
 

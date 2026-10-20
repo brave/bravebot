@@ -457,6 +457,7 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
     json!({
         "request": id,
         "path": request.path,
+        "shownPath": bravebot_agent::confirm::shown_name(&request.path),
         "intent": intent(request.intent),
         "untrusted": request.untrusted,
         "remark": request.remark.as_ref().map(|r| json!({"preview": r.preview, "lines": r.lines, "label": r.label})),
@@ -860,6 +861,7 @@ pub fn exposure_request(id: u64, request: &ExposureRequest) -> Value {
     json!({
         "request": id,
         "path": request.path,
+        "shownPath": bravebot_agent::confirm::shown_name(&request.path),
         "credentials": request.credentials,
         "summary": request.summary(),
     })

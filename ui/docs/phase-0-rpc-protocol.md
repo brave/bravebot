@@ -815,7 +815,9 @@ indices; unreadable entries decline. Choices are fitted to the question before u
 #### Permissions
 
 `permissions.list` takes `session` and returns `paths`, `commands` and `remembered`, the
-kept answer about the session's directory as §9 has it, read when the list is asked for.
+kept answer about the session's directory as §9 has it, read when the list is asked for. Each
+`paths` entry is `{ path, shownPath, integrity }`: a client draws `shownPath` and revokes with `path`,
+and tells the project root by an empty `path`.
 `permissions.revoke` takes `session` plus either `kind: "path"` and `path`,
 `kind: "command"` and `command: { program, startedAs, args }`, or `kind: "remembered"`, which removes
 every answer kept about the directory so the next session there is asked, and leaves this
@@ -946,7 +948,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `manifest.started` | `{ run, mode }` | a manifest run began; `run` counts runs in this open session |
 | `manifest.done` | `{ run, reply, model, steps, clean, tokens, outputTokens, notices, attempt, record, trust }` | a run finished |
 | `manifest.error` | `{ run, kind, message, category, attempts, status, stopped, declined, problem, attempt, record, notices }` | a run stopped |
-| `exposure.request` | `{ request, path, credentials, summary }` | let the planner read a file holding a credential |
+| `exposure.request` | `{ request, path, shownPath, credentials, summary }` | let the planner read a file holding a credential |
 | `mcp.starting` | `{ servers }` | a session's first turn is starting the MCP servers its settings request |
 | `mcp-server.request` | `{ request, alias, transport, command, url, program, variables, reads, directory, digest, requestedBy, changed, fetching }` | use an MCP server (SERVERS-4) |
 | `mcp.started` | `{ servers, confined, notes }` | what started, and a line for each request that did not |
@@ -1024,6 +1026,11 @@ whose events all share one second cannot say which came first.
 } }
 ```
 
+- `path` is the name the planner wrote, and is what the decision is about. `shownPath` is the same
+  name spelled for a person: a name that is empty, has whitespace at either end or holds a
+  character that draws as nothing (a zero-width character, a bidirectional control, a no-break
+  space) is quoted with each such character written out, and any other name is unchanged. A client
+  draws `shownPath` and never `path`. `vouch.request` and `exposure.request` carry it the same way.
 - `request` is agent-assigned and **single-use** for its pending question. IDs can
   recur in later turns; clients must discard pending questions when a turn ends.
 - `changes` is `WriteRequest::diff()`, already condensed. The full `contents` is **not**
@@ -1447,7 +1454,7 @@ Still open:
   `proposed`, `plan` and `steps`, as `attempt` does, and `failure`, which is the agent's
   sentence about why the run stopped and is null for a run that finished. It is refused with
   `bad_request` for a session's record, and with `no_such_session` for an id that names none.
-- `exposure.request` carries `request`, `path`, `credentials` and `summary`. `credentials` has
+- `exposure.request` carries `request`, `path`, `shownPath`, `credentials` and `summary`. `credentials` has
   one line per finding, as the agent wrote it: the kind, where it is, and a mask of the value.
   No part of a value and no text of the file is sent. `exposure.reply` carries the session,
   request and explicit decision, and its kind is distinct from every other reply's.

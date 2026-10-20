@@ -3031,6 +3031,32 @@ mod tests {
         .collect()
     }
 
+    /// PROMPT-1: the names the removal would delete are drawn as what they are, so a file called
+    /// `note.md ` is not listed as the file called `note.md`.
+    #[test]
+    fn the_remove_checkout_question_marks_a_name_that_would_draw_as_another() {
+        let screen = |name: &str| {
+            let mut checkout = a_checkout_forty_files_were_written_in();
+            checkout.candidates.named = std::iter::once(name.to_string()).collect();
+            remove_checkout_screen(&checkout, (100, 30), 0).0.join("\n")
+        };
+        let plain = screen("note.md");
+        assert!(plain.contains("note.md"), "{plain}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let drawn = screen(name);
+            assert_ne!(drawn, plain, "{name:?}");
+            assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+        }
+        // The checkout's own directory is drawn in the same question, and named from the project's.
+        let mut checkout = a_checkout_forty_files_were_written_in();
+        checkout.path = "/state/checkouts/a\u{202e}b/c2".into();
+        let drawn = remove_checkout_screen(&checkout, (100, 30), 0).0.join("\n");
+        assert!(
+            drawn.contains("\"/state/checkouts/a\\u{202e}b/c2\""),
+            "{drawn}"
+        );
+    }
+
     /// CHECKOUT-15. The question names the checkout, where it is and what removing it deletes, and
     /// the names written in it scroll beneath. No turn runs at rest, so the keys offer none to stop.
     #[test]
@@ -4869,6 +4895,82 @@ mod tests {
             assert_ne!(drawn, screen("note.md", "/work/note.md"), "{name:?}");
             assert!(drawn.contains("Trust \""), "{name:?}\n{drawn}");
             assert!(drawn.contains("trusts \"/work/"), "{name:?}\n{drawn}");
+        }
+    }
+
+    /// The names a prompt has to draw as what they are: each is the planner's spelling of a name
+    /// that would draw as nothing, or as another name, and the quoted form a person is shown.
+    const UNSEEN_NAMES: [(&str, &str); 4] = [
+        (" ", "\"\u{2423}\""),
+        ("note.md ", "\"note.md\u{2423}\""),
+        ("a\u{202e}b", "\"a\\u{202e}b\""),
+        ("a\u{200b}b", "\"a\\u{200b}b\""),
+    ];
+
+    /// PROMPT-1: the write prompt, for a create and for an overwrite, draws a name that would draw
+    /// as nothing quoted with its characters spelled, so a yes to `note.md ` cannot be read as one
+    /// to `note.md`.
+    #[test]
+    fn the_write_prompt_marks_an_unreadable_name() {
+        let screen = |path: &str, existing: Option<&str>| {
+            let mut asked = request("a line", existing);
+            asked.path = path.into();
+            rows_of(100, 30, |frame| {
+                draw(frame, &asked, 0, &mut Seen::default());
+            })
+            .join("\n")
+        };
+        for existing in [None, Some("old")] {
+            let plain = screen("note.md", existing);
+            assert!(plain.contains("note.md"), "{plain}");
+            for (name, spelled) in UNSEEN_NAMES {
+                let drawn = screen(name, existing);
+                assert_ne!(drawn, plain, "{name:?}");
+                assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+            }
+        }
+    }
+
+    /// PROMPT-1: the credential-read prompt draws the file it names the same way.
+    #[test]
+    fn the_exposure_prompt_marks_an_unreadable_name() {
+        let screen = |path: &str| {
+            let request = ExposureRequest {
+                path: path.into(),
+                credentials: vec!["an API key at line 1".into()],
+            };
+            rows_of(100, 30, |frame| {
+                draw_exposure(frame, &request, 0, &mut Seen::default());
+            })
+            .join("\n")
+        };
+        let plain = screen("note.md");
+        assert!(plain.contains("note.md"), "{plain}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let drawn = screen(name);
+            assert_ne!(drawn, plain, "{name:?}");
+            assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+        }
+    }
+
+    /// PROMPT-1, SANDBOX-28: the prompt about a directory programs may reach draws the path the
+    /// grant is made for, so a path ending in whitespace is not drawn as the one without it.
+    #[test]
+    fn the_path_prompt_marks_an_unreadable_name() {
+        let screen = |path: &str| {
+            let mut request = a_path_request(true);
+            request.path = std::path::PathBuf::from(path);
+            path_screen(&request, (160, 24), 0).0.join("\n")
+        };
+        let plain = screen("/opt/include");
+        assert!(plain.contains("/opt/include"), "{plain}");
+        for (name, spelled) in [
+            ("/opt/include ", "\"/opt/include\u{2423}\""),
+            ("/opt/in\u{202e}clude", "\"/opt/in\\u{202e}clude\""),
+        ] {
+            let drawn = screen(name);
+            assert_ne!(drawn, plain, "{name:?}");
+            assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
         }
     }
 
