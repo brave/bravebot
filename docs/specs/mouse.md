@@ -70,3 +70,18 @@ terminals that still report the mouse.
 `verified-by: bravebot_tui::app::a_session_with_the_mouse_off_never_asks_for_mouse_reporting`
 `verified-by: bravebot_tui::app::the_mouse_is_captured_unless_the_settings_turn_it_off`
 `verified-by: bravebot_tui::render::the_shortcuts_name_the_terminals_own_selection`
+
+<a id="MOUSE-5"></a>
+### MOUSE-5: a selection in the info panel takes its text and nothing around it
+
+The info panel draws a border column and a space before each row's text. A press on the border
+column resizes the panel ([MOUSE-2](#MOUSE-2)). A selection that begins on the space starts at the
+first column of the text, and the highlight stops at the end of each row's
+text. The copy takes the text alone, with no border, indent or trailing blanks. The session id is
+drawn over two rows because it does not fit on one, and a copy that spans both rows reads it as one
+line.
+
+`verified-by: bravebot_tui::select::a_panel_selection_takes_the_text_and_not_the_border_or_indent`
+`verified-by: bravebot_tui::select::a_panel_highlight_covers_the_text_and_not_the_chrome_or_padding`
+`verified-by: bravebot_tui::select::a_joined_row_runs_on_into_the_next_without_a_break`
+`verified-by: bravebot_tui::app::a_drag_over_the_session_id_copies_the_id_alone`
