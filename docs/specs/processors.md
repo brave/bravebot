@@ -128,6 +128,8 @@ approved it.
 `verified-by: bravebot_agent::manifest::a_planned_answer_cannot_be_written_to_a_file_it_is_not_about`
 `verified-by: bravebot_agent::manifest::a_second_transform_does_not_find_a_document_for_an_answer`
 `verified-by: bravebot_agent::manifest::two_spellings_of_one_path_are_one_document`
+`verified-by: bravebot_agent::manifest::a_planned_answer_cannot_be_written_to_a_name_that_differs_by_trailing_whitespace`
+`verified-by: bravebot_agent::turn::an_answer_cannot_be_written_to_a_file_named_like_its_own_with_trailing_whitespace`
 `verified-by: bravebot_core::policy::a_file_beside_another_input_is_not_taken_for_the_document`
 
 <a id="PROC-7"></a>

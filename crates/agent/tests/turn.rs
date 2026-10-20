@@ -14153,6 +14153,51 @@ fn an_answer_cannot_be_written_to_a_file_it_is_not_about() {
     );
 }
 
+/// Where a path is bytes, `in.md ` is not `in.md`, so an answer about one is not written to the
+/// other through the `write_file` tool either.
+#[cfg(unix)]
+#[test]
+fn an_answer_cannot_be_written_to_a_file_named_like_its_own_with_trailing_whitespace() {
+    let scratch = Scratch::new("answer-spaced");
+    std::fs::write(scratch.path.join("in.md"), "raw text\n").unwrap();
+    std::fs::write(scratch.path.join("in.md "), "kept as it is\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("list_files", r#"{"directory":"."}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"about":"ref:1","instruction":"shout"}"#,
+        ),
+        processor_reply("RAW TEXT"),
+        // ref:2 is `in.md `, which is not the file the answer is about.
+        tool_request(
+            "write_file",
+            r#"{"path_ref":"ref:2","contents_ref":"ref:4"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("shout in.md"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("in.md ")).unwrap(),
+        "kept as it is\n",
+        "an answer about one file was written to the file named with trailing whitespace"
+    );
+}
+
 /// An answer that never says where the file begins cannot become a file. A processor decided a
 /// Python script was not the game, said so in a paragraph, and the paragraph was written over the
 /// script: prose was the default and the line was the exception, so forgetting it destroyed a
@@ -30482,6 +30527,95 @@ fn declining_to_vouch_leaves_the_file_quarantined() {
     assert!(
         !second.contains("SPEED"),
         "a file the user declined to vouch for reached the planner"
+    );
+}
+
+/// A file whose name is only whitespace is a file of its own, and a yes for it vouches for it and
+/// nothing else, so a sibling read afterwards is asked about as it would be without that yes.
+#[cfg(unix)]
+#[test]
+fn a_vouch_for_a_file_named_with_whitespace_leaves_its_siblings_asking() {
+    let scratch = Scratch::new("vouch-spaced");
+    std::fs::write(scratch.path.join(" "), "WHITESPACE_NAMED\n").unwrap();
+    std::fs::write(scratch.path.join("sibling.md"), "SIBLING_TEXT\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"./ "}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = VouchesForFiles::new(true);
+    let offered = confirmer.offered.clone();
+    let vouched = turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("read the file named with a space"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+    assert_eq!(
+        offered.lock().unwrap().len(),
+        1,
+        "the file named with a space was not offered for vouching"
+    );
+    assert!(
+        vouched.trust.is_trusted("./ "),
+        "the yes did not record a rule about the file it was given for"
+    );
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"sibling.md"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = VouchesForFiles::new(false);
+    let offered = confirmer.offered.clone();
+    let outcome = turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("read sibling.md"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        vouched.trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let asked = offered.lock().unwrap();
+    assert_eq!(
+        asked
+            .iter()
+            .map(|ask| ask.path.as_str())
+            .collect::<Vec<_>>(),
+        ["sibling.md"],
+        "a sibling of the vouched file was read with no question"
+    );
+    drop(asked);
+    assert!(
+        !outcome.trust.is_trusted("sibling.md"),
+        "a yes for the file named with a space vouched for its sibling"
+    );
+    let _first = received.recv().expect("first request");
+    let _check = received.recv().expect("the check before the question");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("SIBLING_TEXT"),
+        "a file nobody vouched for reached the planner"
     );
 }
 

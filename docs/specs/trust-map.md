@@ -163,6 +163,7 @@ pinned by the test the last column names.
 | 8.3 short name | `ENV~1` for `.env` | refused on Windows, never reaches the map | refused | `bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only` |
 | Alternate data stream | `.env::$DATA` | refused on Windows | refused | same |
 | Trailing dot or space | `.env.` | refused on Windows | refused | same |
+| Leading or trailing whitespace | `note.md ` and `note.md` | not one name: whitespace at an end is part of the name wherever a path is bytes, so a POSIX volume holds two files, each with its own rule and its own reservation, and a name made only of whitespace is a file and not the working directory. A trailing space is refused on Windows (the previous row) and other whitespace is part of the name there | the path is matched as written | `bravebot_core::trust::a_name_with_whitespace_at_an_end_is_not_the_name_without_it`, `bravebot_core::permissions::a_rule_about_a_name_does_not_cover_the_name_with_whitespace_at_an_end`, `bravebot_agent::turn::a_vouch_for_a_file_named_with_whitespace_leaves_its_siblings_asking` |
 
 The three Windows rows are refused where a path is resolved and where a redirection target is
 opened, before any key is made, so the map is not asked about those names. Path resolution passes
@@ -188,6 +189,9 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_core::trust::a_trusted_subpath_overrides_an_untrusted_parent`
 `verified-by: bravebot_core::trust::a_rule_matches_whole_segments_only`
 `verified-by: bravebot_core::trust::equivalent_path_spellings_are_the_same_rule`
+`verified-by: bravebot_core::trust::a_name_with_whitespace_at_an_end_is_not_the_name_without_it`
+`verified-by: bravebot_core::trust::a_name_ending_in_a_space_follows_the_rules_for_canonically_equivalent_names`
+`verified-by: bravebot_core::trust::a_working_directory_with_whitespace_at_an_end_is_not_the_one_without_it`
 `verified-by: bravebot_core::trust::every_equivalent_spelling_of_a_path_reaches_the_same_rule`
 `verified-by: bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_core::trust::a_rule_covers_a_case_variant_spelling_of_the_same_file`
@@ -419,6 +423,7 @@ who has already decided to vouch for the tree, on a screen that names what a yes
 `verified-by: bravebot_session::sessions::a_record_that_predates_the_map_has_none_rather_than_an_empty_one`
 `verified-by: bravebot_session::sessions::a_distrusted_path_inside_a_trusted_tree_survives_the_record`
 `verified-by: bravebot_session::sessions::two_recorded_spellings_of_one_path_resume_as_untrusted`
+`verified-by: bravebot_session::sessions::a_recorded_rule_resumes_as_a_rule_about_the_name_it_is_stored_under`
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
 
 <a id="TRUST-7"></a>
@@ -538,6 +543,7 @@ check and caught the attempt. The prompt that grants the most was the one saying
 `verified-by: bravebot_agent::turn::a_picture_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::a_path_that_names_no_file_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::declining_to_vouch_leaves_the_file_quarantined`
+`verified-by: bravebot_agent::turn::a_vouch_for_a_file_named_with_whitespace_leaves_its_siblings_asking`
 `verified-by: bravebot_agent::turn::a_trusted_file_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::the_same_file_is_offered_once_per_turn`
 `verified-by: bravebot_tui::confirm::a_preview_with_nothing_in_it_says_so`
@@ -1674,3 +1680,9 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   reach only each other. And a path on a share that no open directory holds, such as one a `run`
   line writes to, is asked about under the project, so the answer about the project decides a
   file it does not decide on a drive letter. Giving a share a key is what closes both.
+- **A recorded rule is about the name it is stored under, and the record does not say which file
+  it was written for.** A session record keeps each rule under the name spelled relative to the
+  working directory (TRUST-2). A record that holds a name without the whitespace its file had
+  applies the rule to the name without the whitespace, and resuming cannot correct it. A record
+  this build writes keeps names as written. A person who wants a resumed session without such a
+  rule starts a new one.
