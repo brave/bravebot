@@ -18890,6 +18890,13 @@ mod tests {
                 return;
             }
 
+            // Seatbelt cannot be applied from inside a seatbelt, so a suite started by
+            // bravebot's own `run` tool on macOS cannot start the confined curl.
+            if !bravebot_sandbox::confinement_works_here() {
+                eprintln!("SKIPPED (no confinement here)");
+                return;
+            }
+
             let scratch = Scratch::new("ask-about-refused-hosts");
             let home = scratch.path.join("home");
             let project = scratch.path.join("project");
