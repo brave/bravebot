@@ -662,6 +662,38 @@ mod tests {
         assert!(fallen_back.starts_with(&temporary), "{fallen_back:?}");
     }
 
+    /// A runtime directory is compared with the temporary directory by the bytes of their names. A
+    /// directory whose name is the replacement-character rendering of the temporary directory's
+    /// name, which is not UTF-8, is another directory and is kept, and a directory inside the
+    /// temporary one is left out whatever its name is spelled with.
+    ///
+    /// The regression it rejects: a comparison through a lossy rendering, which reads the two
+    /// names as one and so drops a runtime directory a stage has no write row over, and which
+    /// would take one directory for the other wherever the names differ only in the bytes that
+    /// rendering replaces. The names are built in memory, so nothing here needs a file system that
+    /// can hold them.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_runtime_directory_is_told_from_the_temporary_one_by_the_bytes_of_its_name() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let temporary = PathBuf::from(OsStr::from_bytes(b"/bb-no-such-dir/tmp-\xff"));
+        let lookalike = PathBuf::from("/bb-no-such-dir/tmp-\u{FFFD}");
+        let inside = temporary.join(OsStr::from_bytes(b"run-\xff"));
+
+        assert_eq!(
+            socket_parents(Some(lookalike.clone().into()), temporary.clone()),
+            vec![lookalike, temporary.clone()],
+            "the lookalike was taken for the temporary directory"
+        );
+        assert_eq!(
+            socket_parents(Some(inside.into()), temporary.clone()),
+            vec![temporary],
+            "a directory inside a temporary directory whose name is not UTF-8 was kept"
+        );
+    }
+
     use std::io::BufRead;
 
     /// A server that echoes what its first connection sends.
