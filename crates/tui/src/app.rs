@@ -1232,14 +1232,7 @@ fn copy_selection(
                 render::draw(frame, session);
             })
             .map_err(io::Error::other)?;
-        let joined = session
-            .laid
-            .panes
-            .iter()
-            .find(|(pane, _)| *pane == select::Pane::Panel)
-            .map(|(_, rect)| crate::panel::continued_rows(session, *rect))
-            .unwrap_or_default();
-        select::text_joining(completed.buffer, &selection, &joined)
+        selected_text(session, completed.buffer, &selection)
     };
 
     // Nothing but the padding between widgets, which is not something to put on a clipboard and
@@ -1252,6 +1245,25 @@ fn copy_selection(
         session.note_copied(text.chars().count());
     }
     Ok(())
+}
+
+/// What `selection` covers on the drawn `buffer`, as it is put on the clipboard.
+///
+/// The rows of the info panel that continue on the row below, as the two halves of the session id
+/// do, are joined without a line break.
+fn selected_text(
+    session: &Session,
+    buffer: &ratatui::buffer::Buffer,
+    selection: &select::Selection,
+) -> String {
+    let joined = session
+        .laid
+        .panes
+        .iter()
+        .find(|(pane, _)| *pane == select::Pane::Panel)
+        .map(|(_, rect)| crate::panel::continued_rows(session, *rect))
+        .unwrap_or_default();
+    select::text_joining(buffer, selection, &joined)
 }
 
 /// The reply `/copy` was asked for: the latest when nothing follows the word, otherwise the one
@@ -10692,11 +10704,7 @@ mod tests {
             (first + 1, panel.right() - 1),
         );
         let selection = session.selection.expect("selection");
-        let joined = crate::panel::continued_rows(&session, panel);
-        assert_eq!(
-            crate::select::text_joining(&buffer, &selection, &joined),
-            ID
-        );
+        assert_eq!(super::selected_text(&session, &buffer, &selection), ID);
     }
 
     /// Dragging past the bottom of the transcript stops at its last row, which is above the box.
