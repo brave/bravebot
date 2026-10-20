@@ -86,8 +86,9 @@ A hook runs in the directory the turn is working in, so a relative path in one m
 
 It is not confined. Its environment is the one Brave Bot was started from, less this agent's own
 credentials, which are the same names taken off a program the planner asks to
-[run](../reference/tools.md#run). You read the program and the arguments you wrote down, so a secret
-travelling beside those is something you were never shown, and a formatter has no use for one.
+[run](../reference/tools.md#run), and with a `PATH` cut down as described below. You read the program
+and the arguments you wrote down, so a secret travelling beside those is something you were never
+shown, and a formatter has no use for one.
 
 A relative path such as `./scripts/format.sh` runs whatever file is at that name in the working
 directory when the hook fires, and a program the agent ran there may have written it. Where that
@@ -97,6 +98,13 @@ A program named without a path, such as `cargo`, is looked for only in `PATH` di
 program the agent runs cannot write. One found only under the session's own directory, such as a
 `.venv/bin` or `node_modules/.bin` entry, is reported as a hook that could not be started. A name
 with a path in it is yours and is never looked up.
+
+A hook is also started with a `PATH` of those same directories only, in the order written, so a
+program it starts by name (the `node` in a `#!/usr/bin/env node` script, or a program a launcher
+runs) is not found in a directory a program the agent runs may write. A tool your hook needs that
+lives only in such a directory, for example one run from a project's `node_modules/.bin` or an
+activated virtualenv's `bin`, is not found by it. A hook that needs one names it by a path in its
+`run`. A directory the agent is given writes in later in the session leaves the `PATH` from then on.
 
 ## What a hook is told
 
