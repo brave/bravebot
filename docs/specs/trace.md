@@ -46,6 +46,11 @@ its name, a turn that confines none of its runs, a workspace not trusted, a mana
 a delegate, and for `scopes` a platform with no sandbox or a session with no profile directory. The
 sentence the planner reads names none of them.
 
+A `run` line put to the person and not approved, by an answer of no, Ctrl-C or nobody being there
+to ask, is recorded as a refusal under `approval` saying the line was not approved and did not run.
+Its `sandbox` entry, which names the mode the programs ran in, is written only once the line is
+approved, so a line that did not start is not recorded as having run.
+
 A `run` line that asked for `unconfined` or `scopes` and was accepted is given `(U,priv)` for its
 output whatever vouched for the same line without the request, and its `provenance` entry states
 `(U,priv)`.
@@ -98,6 +103,8 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`
 `verified-by: bravebot_agent::turn::a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so`
+`verified-by: bravebot_agent::turn::a_run_line_the_person_does_not_approve_is_recorded_as_not_run`
+`verified-by: bravebot_agent::turn::an_unconfined_line_the_person_does_not_approve_is_not_recorded_as_unconfined`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content

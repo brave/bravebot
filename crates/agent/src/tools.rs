@@ -7573,6 +7573,7 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     policy.record_answer(mode.answers_this_run_unasked(&request).then(|| mode.name()));
     keep_the_note(policy, "run", answer.approved(), answer.note());
     if !answer.approved() {
+        policy.refuse_unapproved_run();
         return Err(Box::new(Produced::problem(format!(
             "refused: the user did not approve running this. Do not retry the same line{}",
             what_next(answer.note().is_some())
@@ -8003,16 +8004,20 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             return Produced::problem(UNCONFINED_BEFORE_A_FAILURE);
         }
         spends_a_request = !leaves_the_workspace;
-        policy.record_sandbox_mode("unconfined");
-    } else if tools.confine_runs {
-        policy.record_sandbox_mode(tools.sandbox.name());
-        if confinement
-            .as_ref()
-            .is_some_and(|confinement| confinement.writes_without_a_request())
-        {
-            policy.record_sandbox_unasked_writes();
-        }
     }
+    // Written once the line is about to start rather than here, so a line the person does not
+    // approve is not recorded as having run in a mode. The writes are read from the confinement as
+    // it stands now, before a directory's trust replaces it below.
+    let sandbox_mode = match (unconfined, tools.confine_runs) {
+        (true, _) => Some("unconfined"),
+        (false, true) => Some(tools.sandbox.name()),
+        (false, false) => None,
+    };
+    let unasked_writes = !unconfined
+        && tools.confine_runs
+        && confinement
+            .as_ref()
+            .is_some_and(|confinement| confinement.writes_without_a_request());
 
     let names: Vec<&'static str> = requested.iter().map(|request| request.name()).collect();
     // How the sandbox holds the line, said from the compiled steps and the session's own settings:
@@ -8087,6 +8092,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     };
     if spends_a_request {
         tools.confined_failures.spend();
+    }
+    if let Some(mode) = sandbox_mode {
+        policy.record_sandbox_mode(mode);
+    }
+    if unasked_writes {
+        policy.record_sandbox_unasked_writes();
     }
 
     // The tree comes with the line wherever the line is said, and only where it is not the root.

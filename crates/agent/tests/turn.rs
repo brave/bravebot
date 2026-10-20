@@ -23922,6 +23922,73 @@ fn an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confine
     );
 }
 
+/// TRACE-1: a line the person does not approve is not recorded as having run in a sandbox mode,
+/// and the trail says it was not approved, as a refusal.
+#[test]
+fn a_run_line_the_person_does_not_approve_is_recorded_as_not_run() {
+    let name = "unapproved-line-trail";
+    let result = runs(
+        name,
+        vec![serde_json::json!({ "command": "touch ran.txt" })],
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::reject()),
+    );
+    assert!(
+        !result.trail.contains("the programs ran in"),
+        "{}",
+        result.trail
+    );
+    assert!(
+        result
+            .trail
+            .contains("GateBlocked { gate: \"approval\", detail: \"\", reason: \"run: the line was not approved and did not run\""),
+        "{}",
+        result.trail
+    );
+}
+
+/// SANDBOX-29, TRACE-1: a line that asked to start with no sandbox and was not approved is not
+/// recorded as having run unconfined.
+#[test]
+fn an_unconfined_line_the_person_does_not_approve_is_not_recorded_as_unconfined() {
+    if cannot_confine_here() {
+        return;
+    }
+    let name = "unapproved-unconfined-trail";
+    let result = two_runs_after_a_failed_line(
+        name,
+        serde_json::json!({ "command": writing_the_marker(name, "first"), "unconfined": true }),
+        serde_json::json!({ "command": writing_the_marker(name, "second") }),
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut AskedAboutRuns::answering_in_turn(vec![
+            bravebot_agent::RunDecision::approve(),
+            bravebot_agent::RunDecision::reject(),
+            bravebot_agent::RunDecision::approve(),
+        ]),
+    );
+    let first_wrote = result.first_wrote;
+    clear_the_markers(name);
+    assert!(!first_wrote, "the line ran without being approved");
+    assert!(
+        !result.trail.contains("the programs ran in unconfined mode"),
+        "{}",
+        result.trail
+    );
+    assert!(
+        result
+            .trail
+            .contains("run: the line was not approved and did not run"),
+        "{}",
+        result.trail
+    );
+}
+
 /// SANDBOX-29: a request for no sandbox on the first line of a turn is refused before anybody is
 /// asked, so the line does not run, and the planner is told to run it with the sandbox first. The
 /// control is the same request after a line that ran with the sandbox and exited non-zero, which is

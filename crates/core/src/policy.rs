@@ -6956,6 +6956,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("approval", detail);
     }
 
+    /// Record that a `run` line was put to the confirmer and not approved, so it did not start
+    /// (TRACE-1, SANDBOX-29).
+    ///
+    /// A no, Ctrl-C at the prompt and nobody being there to ask all reach here as the same answer,
+    /// and the entry says only that the answer was not a yes. The text is fixed and names nothing
+    /// the line or a program produced.
+    pub fn refuse_unapproved_run(&mut self) {
+        let _ = self.deny(
+            "approval",
+            Principle::Capability,
+            "run: the line was not approved and did not run".to_string(),
+        );
+    }
+
     /// Record that a person moved a waited-for command to the background, and which job it became.
     ///
     /// A decision only a person can make: the planner cannot press the key and is told afterwards.
