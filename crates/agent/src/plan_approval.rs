@@ -4,8 +4,10 @@
 //! fixed here and never written by the planner, so the mode the session moves to is picked from a
 //! list the person sees in full (MODE-14). Bypassing is not on the list (MODE-5).
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::PermissionMode;
-use bravebot_core::ask::{Answer, Choice, Question};
+use bravebot_core::ask::{Answer, Asking, Choice, Question};
 use bravebot_i18n::t;
 
 /// What the person's answer comes to.
@@ -38,6 +40,19 @@ pub fn question(plan: &str) -> Question {
         ],
         false,
     )
+}
+
+/// Give each prompt a key no other prompt has had, so an interface that remembers an answer by key
+/// puts this one to the person again.
+///
+/// An approval is a permission to change the mode, given for one moment. A yes remembered under the
+/// plan's own key would end plan mode a second time, with no question, for the same plan proposed
+/// after the person had gone back to planning.
+pub fn asked_afresh(asking: &mut Asking) {
+    static ASKED: AtomicU64 = AtomicU64::new(0);
+    for prompt in &mut asking.prompts {
+        prompt.key = format!("plan approval {}", ASKED.fetch_add(1, Ordering::Relaxed));
+    }
 }
 
 /// What an answer to [`question`] does. Anything other than one of the two approving choices

@@ -10320,7 +10320,9 @@ fn propose_plan<S: Sink, C: Confirmer>(
     }
     let shaped = policy.render_in_place("propose_plan", &series, |s| ask::asking(&s));
     let proof = policy.authorise_display_release("the plan for the user");
-    let answers = confirmer.ask_user(&shaped.declassify(&proof));
+    let mut asking = shaped.declassify(&proof);
+    crate::plan_approval::asked_afresh(&mut asking);
+    let answers = confirmer.ask_user(&asking);
 
     let said = match policy.record_answers("propose_plan", &series, &answers) {
         Ok(text) => text,
@@ -15358,6 +15360,23 @@ mod tests {
             assert_eq!(seen[0].prompts[0].question, "1. edit a.rs");
             assert_eq!(seen[0].prompts[0].rows.len(), 3);
             assert_eq!(proposed(Plan, false, vec![Answer::Chosen(vec![1])]).0, Ask);
+        }
+
+        /// MODE-14: the same plan proposed again is a new prompt. An interface remembers an answer
+        /// by key, so a key repeated for an identical plan would answer the second proposal from
+        /// the first approval. Rejects: a prompt keyed by the plan alone.
+        #[test]
+        fn the_same_plan_proposed_again_is_put_under_a_new_key() {
+            use crate::PermissionMode::Plan;
+            let (_, _, first) = proposed(Plan, false, vec![Answer::Chosen(vec![0])]);
+            let (_, _, second) = proposed(Plan, false, vec![Answer::Chosen(vec![0])]);
+            assert_eq!(first[0].prompts[0].question, second[0].prompts[0].question);
+            assert_ne!(first[0].prompts[0].key, second[0].prompts[0].key);
+            let plan = crate::plan_approval::question("1. edit a.rs");
+            assert_ne!(
+                first[0].prompts[0].key,
+                bravebot_core::ask::canonical(&plan)
+            );
         }
 
         /// MODE-14: anything but an approving choice leaves the session planning.
