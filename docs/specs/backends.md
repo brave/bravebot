@@ -2775,6 +2775,10 @@ parsed number only how long.
   alone, so a program it starts by name that lives only in a directory left out is not found by it:
   a tool a plugin runs from a project's `node_modules/.bin`, or one in `~/.local/bin` under a
   session opened on the home directory. A program the editor leaves running keeps that `PATH`.
+  A clipboard tool, `osascript` included, is given the same `PATH`, so a launcher among them that
+  starts a program by name finds it only among the searched entries. A tool that then fails passes
+  for one that is absent: the next tool is tried, and with none left a copy goes out as the
+  terminal's own escape sequence and a paste reads as an empty clipboard.
 
 - **An `openai` entry naming no models is offered everything OpenAI's listing returns.** The listing
   states an id and an owner for each model and nothing about what it can do, so BACKEND-19 has

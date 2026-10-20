@@ -3212,24 +3212,25 @@ same change, or resolved first, and its mark is what a reviewer reads.
   activated virtualenv's `bin` among them, is told it is not installed
   (Known costs in [backends.md](backends.md#known-costs)); the clipboard tool reads as absent and the next tool is
   tried.
-- **The editor's, a hook's, the credential authority's, the inhibitor's, `doctor --push-identity`'s
-  and the AWS CLI's own lookups search only those entries.** A started program looks up the names it
-  starts itself through the `PATH` it inherits. The editor Ctrl-G opens, a hook's program, the
-  credential authority, the inhibitor `/caffeinate` starts, the `ssh-keygen`, `ssh` and `git` of
-  `doctor --push-identity`, and the AWS CLI are started with bravebot's `PATH` reduced to the
-  entries the lookup searches, in the order they were written, so a `#!/usr/bin/env` shebang in the
-  editor, the hook or an `aws` that is a script, a launcher script, an `$EDITOR` of `env vim`, a
-  `ProxyCommand` in the person's ssh configuration that names a bare program, or the program a
-  `unixexec:` address in the person's `DBUS_SYSTEM_BUS_ADDRESS` names to `systemd-inhibit` finds the
-  program it starts only among them. The authority is always an absolute path
+- **The editor's, a hook's, the credential authority's, the inhibitor's, a clipboard tool's,
+  `doctor --push-identity`'s and the AWS CLI's own lookups search only those entries.** A started
+  program looks up the names it starts itself through the `PATH` it inherits. The editor Ctrl-G
+  opens, a hook's program, the credential authority, the inhibitor `/caffeinate` starts, a clipboard
+  tool or `osascript`, the `ssh-keygen`, `ssh` and `git` of `doctor --push-identity`, and the AWS
+  CLI are started with bravebot's `PATH` reduced to the entries the lookup searches, in the order
+  they were written, so a `#!/usr/bin/env` shebang in the editor, the hook, a clipboard tool or an
+  `aws` that is a script, a launcher script, an `$EDITOR` of `env vim`, a `ProxyCommand` in the
+  person's ssh configuration that names a bare program, or the program a `unixexec:` address in the
+  person's `DBUS_SYSTEM_BUS_ADDRESS` names to `systemd-inhibit` finds the program it starts only
+  among them. The authority is always an absolute path
   ([CONNECTOR-2](connectors.md#CONNECTOR-2)). A hook named by a path gets the same `PATH` as one
   named bare. Where no entry is searched the program is started with no `PATH` variable. An empty
-  `PATH` would be read as the current directory. A program the editor, a hook, `ssh`,
-  `systemd-inhibit` or the AWS CLI starts by name that is found only in a directory left out is not
-  found by it, such as a bare `credential_process` command in the person's `~/.aws/config`. A path
-  in a `unixexec:` address, relative or not, is the person's own and is started as written. A `PATH`
-  names directories, so a file in a searched entry that links into a directory left out is still
-  found by those lookups.
+  `PATH` would be read as the current directory. A program the editor, a hook, a clipboard tool,
+  `ssh`, `systemd-inhibit` or the AWS CLI starts by name that is found only in a directory left out
+  is not found by it, such as a bare `credential_process` command in the person's `~/.aws/config`.
+  A path in a `unixexec:` address, relative or not, is the person's own and is started as written.
+  A `PATH` names directories, so a file in a searched entry that links into a directory left out
+  is still found by those lookups.
 - **The suite's programs started with no sandbox search only those entries as well.** The `gh` of
   the stored-login row and every stage a workflow starts with no confinement are given a `PATH`
   reduced as the editor's is, so a `sh` that starts `mkdir`, or a `gh` that starts `git`, finds it
@@ -3257,7 +3258,7 @@ same change, or resolved first, and its mark is what a reviewer reads.
   | `ssh-keygen`, `ssh` and `git` in `doctor --push-identity` | reduced to the entries the lookup searches |
   | The connector authority | reduced to the entries the lookup searches |
   | A language server | bravebot's own, accepted: it runs code the project carries, and pyright is meant to use the virtualenv's `python3` ([LSP-5](tools/lsp.md#LSP-5), [Known costs](tools/lsp.md#known-costs)) |
-  | The clipboard tools and `osascript` | bravebot's own. They are given fixed arguments that name no program, so there is no lookup to reduce `PATH` for. |
+  | The clipboard tools and `osascript` | reduced to the entries the lookup searches, on every platform: a tool that is a script or a launcher starts its interpreter by name |
   | The inhibitor `/caffeinate` starts | reduced to the entries the lookup searches, on every platform. On Linux the one name it is given, `cat`, is resolved first, and the other name `systemd-inhibit` can start is the program a `unixexec:` address in `DBUS_SYSTEM_BUS_ADDRESS` names. |
   | The background supervisor, the host and a bug report | not applicable: each starts this program's own executable or a path stored by it |
 
@@ -3274,9 +3275,10 @@ the person's access, which the confinement exists to deny it. A started program 
 its own arguments through the `PATH` it was started with, not through the lookup above, which also
 judges where a link leads. `systemd-inhibit` starts `cat` that way, so its argument is the resolved
 path and not the bare name.
-An editor, a hook, a credential authority or an `aws` that is a script starts its interpreter the
-same way, `ssh` starts a `ProxyCommand`'s program so, and `systemd-inhibit` starts the program a
-`unixexec:` bus address names so, so each is given the `PATH` the lookup would have searched.
+An editor, a hook, a credential authority, a clipboard tool or an `aws` that is a script starts its
+interpreter the same way, `ssh` starts a `ProxyCommand`'s program so, and `systemd-inhibit` starts
+the program a `unixexec:` bus address names so, so each is given the `PATH` the lookup would have
+searched.
 
 **What it costs.** A directory is compared by device and inode, so a filesystem that reports the
 same pair for two directories (some FUSE, 9p and network mounts) leaves out an entry that should be
@@ -3340,6 +3342,8 @@ another spelling of it is compared by name only until it exists.
 `verified-by: bravebot_tui::clipboard::a_paste_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`
 `verified-by: bravebot_tui::clipboard::a_paste_tool_installed_outside_every_writable_directory_is_read`
 `verified-by: bravebot_tui::clipboard::the_clipboard_entry_points_start_no_tool_found_only_in_a_directory_a_stage_may_write`
+`verified-by: bravebot_tui::clipboard::a_copy_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
+`verified-by: bravebot_tui::clipboard::a_paste_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_cli::push_identity::the_checkout_holding_the_directory_is_left_out_with_it`
 `verified-by: bravebot_cli::push_identity::a_directory_under_no_checkout_is_left_out_by_itself`
 `verified-by: bravebot_cli::running::doctor_push_identity_starts_no_program_from_the_checkout_it_runs_in`

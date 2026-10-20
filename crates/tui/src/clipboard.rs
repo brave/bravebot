@@ -21,7 +21,7 @@ use bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES;
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 
 /// Put `text` on the clipboard, reporting whether anything took it.
 pub fn copy(text: &str) -> bool {
@@ -50,6 +50,18 @@ const COPY_TOOLS: &[(&str, &[&str])] = &[
     ("xsel", &["--clipboard", "--input"]),
 ];
 
+/// The command that starts a clipboard tool found as `program`.
+///
+/// A tool that is a script or a launcher starts programs by name too, so it is given only the
+/// `PATH` entries the lookup searched (SANDBOX-30).
+fn start_tool(program: PathBuf) -> Command {
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+    );
+    bravebot_sandbox::programs::restrict_path(&mut command);
+    command
+}
+
 /// Run a tool and write the text to it, reporting whether it took it.
 fn pipe_into(program: &str, arguments: &[&str], text: &str) -> bool {
     pipe_into_found_by(bravebot_sandbox::programs::find, program, arguments, text)
@@ -65,14 +77,13 @@ fn pipe_into_found_by(
     let Some(program) = find(OsStr::new(program)) else {
         return false;
     };
-    let Ok(mut child) = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
-    )
-    .args(arguments)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .spawn() else {
+    let Ok(mut child) = start_tool(program)
+        .args(arguments)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
         return false;
     };
 
@@ -374,14 +385,12 @@ fn run_bytes_found_by(
     arguments: &[&str],
 ) -> Option<Vec<u8>> {
     let program = find(OsStr::new(program))?;
-    let output = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
-    )
-    .args(arguments)
-    .stdin(Stdio::null())
-    .stderr(Stdio::null())
-    .output()
-    .ok()?;
+    let output = start_tool(program)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
     output.status.success().then_some(output.stdout)
 }
 
@@ -459,7 +468,13 @@ mod tests {
         let system = crate::testutil::scratch_dir("clipboard-copy-installed-system");
         let _ = std::fs::remove_dir_all(&session);
         let _ = std::fs::remove_dir_all(&system);
-        script(&system, "bravebot-test-copy-tool", "cat >/dev/null");
+        // The shell's own `read` takes the text, so the tool looks no program up on this process's
+        // `PATH`, which the start now reduces by the session's real kept-out directories.
+        script(
+            &system,
+            "bravebot-test-copy-tool",
+            "while read -r _; do :; done",
+        );
         let path = std::env::join_paths([&system]).unwrap();
         let writable = [session.clone()];
 
@@ -569,6 +584,149 @@ mod tests {
         let _ = std::fs::remove_dir_all(&session);
         assert!(ran, "the child did not run the test: {report}");
         assert!(child.status.success(), "{report}");
+    }
+
+    #[cfg(unix)]
+    const INTERPRETER_SESSION: &str = "BRAVEBOT_TEST_CLIPBOARD_INTERPRETER_SESSION";
+
+    /// Run `test` again in a child whose `PATH` is a directory the session keeps out, then an
+    /// installed one, then the system's. `bravebot-test-tool` is installed and is a script with an
+    /// `env` shebang naming `bravebot-test-interp`, which is how a shim or a launcher starts its
+    /// interpreter. An interpreter that records `planted-ran` is planted in the kept-out directory
+    /// ahead of the installed one, which records `installed-ran`, prints `installed` and reads its
+    /// standard input to the end. Reports whether the child reached the test and whether it
+    /// passed, with what it printed.
+    #[cfg(unix)]
+    fn tool_started_with_a_planted_interpreter_ahead(
+        test: &str,
+        name: &str,
+    ) -> (bool, bool, String) {
+        let session = crate::testutil::scratch_dir(name);
+        let tools = crate::testutil::scratch_dir(&format!("{name}-tools"));
+        for directory in [&session, &tools] {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        let planted = session.join(".venv/bin");
+        let installed = tools.join("bravebot-test-interp");
+        script(
+            &planted,
+            "bravebot-test-interp",
+            &format!(
+                ": > '{}'\nexec '{}' \"$@\"",
+                session.join("planted-ran").display(),
+                installed.display()
+            ),
+        );
+        script(
+            &tools,
+            "bravebot-test-interp",
+            &format!(
+                ": > '{}'\necho installed\nwhile read -r _; do :; done",
+                session.join("installed-ran").display()
+            ),
+        );
+        // The tool is only a shebang naming the interpreter, so the interpreter is looked up by
+        // name. Writing over the script keeps its executable mode.
+        script(&tools, "bravebot-test-tool", "");
+        std::fs::write(
+            tools.join("bravebot-test-tool"),
+            "#!/usr/bin/env bravebot-test-interp\n",
+        )
+        .unwrap();
+        let path = std::env::join_paths([
+            planted,
+            tools.clone(),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--test-threads=1", "--nocapture"])
+            .env(INTERPRETER_SESSION, &session)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+
+        let outcome = (
+            session.join("ran").exists(),
+            child.status.success(),
+            String::from_utf8_lossy(&child.stderr).into_owned(),
+        );
+        for directory in [&session, &tools] {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        outcome
+    }
+
+    /// The child half of [`tool_started_with_a_planted_interpreter_ahead`]: keeps the session out of
+    /// the search, as a session's own directory is, for the rest of this process. Returns `None`
+    /// when this process is not the child, and the test then runs the parent half.
+    #[cfg(unix)]
+    fn keep_the_session_out_in_the_child() -> Option<PathBuf> {
+        let session = PathBuf::from(std::env::var_os(INTERPRETER_SESSION)?);
+        bravebot_sandbox::programs::keep_out(&session);
+        std::fs::write(session.join("ran"), "").unwrap();
+        Some(session)
+    }
+
+    /// SANDBOX-30: a copy tool that is a script or a launcher looks the programs it starts up on the
+    /// `PATH` it was started with, and it is started with the person's access to their clipboard
+    /// and nothing confining it. An interpreter a confined stage wrote into a directory the
+    /// session keeps out, ahead of the installed one on bravebot's `PATH`, must not be the one that
+    /// runs. A tool started with the whole `PATH` runs the planted file first, then the installed
+    /// one, and still copies, so the marker is what tells the two apart.
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written() {
+        const TEST: &str = "clipboard::tests::a_copy_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written";
+        if let Some(session) = keep_the_session_out_in_the_child() {
+            assert!(
+                pipe_into("bravebot-test-tool", &[], "hello"),
+                "the installed interpreter did not take the text"
+            );
+            assert!(
+                session.join("installed-ran").exists(),
+                "the tool did not run the installed interpreter"
+            );
+            assert!(
+                !session.join("planted-ran").exists(),
+                "the tool looked its interpreter up in a directory a stage may write"
+            );
+            return;
+        }
+
+        let (ran, passed, report) =
+            tool_started_with_a_planted_interpreter_ahead(TEST, "clipboard-copy-by-name");
+
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(passed, "{report}");
+    }
+
+    /// The same for reading the clipboard, which starts its tool through [`run_bytes`], a start of
+    /// its own: what the installed interpreter printed is what comes back.
+    #[cfg(unix)]
+    #[test]
+    fn a_paste_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written() {
+        const TEST: &str = "clipboard::tests::a_paste_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written";
+        if let Some(session) = keep_the_session_out_in_the_child() {
+            assert_eq!(
+                run_bytes("bravebot-test-tool", &[]),
+                Some(b"installed\n".to_vec())
+            );
+            assert!(
+                !session.join("planted-ran").exists(),
+                "the tool looked its interpreter up in a directory a stage may write"
+            );
+            return;
+        }
+
+        let (ran, passed, report) =
+            tool_started_with_a_planted_interpreter_ahead(TEST, "clipboard-paste-by-name");
+
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(passed, "{report}");
     }
 
     /// A machine with none of these tools installed is the ordinary case on a bare server, and it
