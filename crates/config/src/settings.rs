@@ -150,6 +150,7 @@ const READ_KEYS: &[&str] = &[
     crate::git_identities::BLOCK,
     "keybindings",
     "limit",
+    "maxRunningDelegates",
     "mcp",
     "mcpServers",
     "model",
@@ -307,6 +308,11 @@ pub struct Settings {
     /// `None` is the built-in idle time, which belongs to the interface that decides when a recap
     /// is owed, for the reason [`Settings::wheel_rows`] gives about its own count.
     away_summary_idle_seconds: Option<u64>,
+    /// What the top-level `maxRunningDelegates` key said, if it said a whole positive count.
+    ///
+    /// `None` is the built-in bound, which belongs to the kernel that holds a turn's tree of
+    /// delegates, for the reason [`Settings::wheel_rows`] gives about its own count.
+    max_running_delegates: Option<u32>,
     /// What `vetting.auto` said, where the layer that said it was entitled to.
     ///
     /// Read from the **home** layer and no other, which is why [`Settings::layered`] settles this
@@ -1345,6 +1351,13 @@ impl Settings {
                 .get("awaySummaryIdleSeconds")
                 .and_then(serde_json::Value::as_u64)
                 .filter(|seconds| *seconds > 0),
+            // A count past what a `u32` holds is more delegates than a turn could start, which is
+            // no bound at all, so it is read as the largest the kernel counts rather than dropped.
+            max_running_delegates: root
+                .get("maxRunningDelegates")
+                .and_then(serde_json::Value::as_u64)
+                .filter(|count| *count > 0)
+                .map(|count| u32::try_from(count).unwrap_or(u32::MAX)),
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
             // from and so the only one entitled to answer.
@@ -1601,6 +1614,16 @@ impl Settings {
     /// absence, and so is anything that is not a whole count.
     pub fn away_summary_idle_seconds(&self) -> Option<u64> {
         self.away_summary_idle_seconds
+    }
+
+    /// The most delegates the settings in force let one turn have running at once, if they say.
+    ///
+    /// `None` where nobody named a usable count, which is the built-in bound: that belongs to the
+    /// kernel that holds the tree, and answering with it here would put a second copy of it in
+    /// this crate. Zero would let a turn start no delegate at all, which is what turning
+    /// delegation off is for, so it is absence, and so is anything that is not a whole count.
+    pub fn max_running_delegates(&self) -> Option<u32> {
+        self.max_running_delegates
     }
 
     /// What `vetting.auto` said in the home layer, if it said anything.
@@ -1997,6 +2020,7 @@ impl Settings {
             && self.update_check.is_none()
             && self.away_summary_enabled.is_none()
             && self.away_summary_idle_seconds.is_none()
+            && self.max_running_delegates.is_none()
             && self.vetting.is_none()
             && self.narrowing.is_empty()
             // A key named as something other than a boolean said something too, and `doctor` names
@@ -2229,6 +2253,11 @@ impl Settings {
                 self.away_summary_idle_seconds
                     .is_some()
                     .then_some("awaySummaryIdleSeconds"),
+            )
+            .chain(
+                self.max_running_delegates
+                    .is_some()
+                    .then_some("maxRunningDelegates"),
             )
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain(self.narrowing.named())
@@ -6873,6 +6902,56 @@ mod tests {
             .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
             .read();
         assert_eq!(only_global.away_summary_idle_seconds(), Some(90));
+    }
+
+    /// DELEGATE-7: the most delegates a turn may have running is a whole positive count. Zero
+    /// would be a turn that may start none, and anything that is not a whole count is no figure,
+    /// so each leaves the built-in bound in force. A count too large to hold is the largest one,
+    /// not the built-in bound, and the nearest layer that named one wins.
+    #[test]
+    fn a_settings_file_names_how_many_delegates_a_turn_may_have_running() {
+        let settings = Settings::parse(r#"{"maxRunningDelegates": 12}"#);
+        assert_eq!(settings.max_running_delegates(), Some(12));
+        assert!(!settings.is_empty());
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            ["maxRunningDelegates"]
+        );
+
+        assert_eq!(
+            Settings::parse(r#"{"maxRunningDelegates": 5000000000}"#).max_running_delegates(),
+            Some(u32::MAX),
+            "a count past what the kernel holds was not read as the largest it holds"
+        );
+
+        for text in [
+            r#"{"maxRunningDelegates": 0}"#,
+            r#"{"maxRunningDelegates": -5}"#,
+            r#"{"maxRunningDelegates": 1.5}"#,
+            r#"{"maxRunningDelegates": "12"}"#,
+            r#"{"maxRunningDelegates": null}"#,
+            r#"{"agents": {"maxRunningDelegates": 12}}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).max_running_delegates(),
+                None,
+                "{text:?} named a bound"
+            );
+        }
+
+        let layered = Layers::new("delegates-layers")
+            .global(r#"{"maxRunningDelegates": 12}"#)
+            .project(r#"{"maxRunningDelegates": 4}"#)
+            .read();
+        assert_eq!(layered.max_running_delegates(), Some(4));
+        assert_eq!(layered.unread_keys().count(), 0);
+
+        let only_global = Layers::new("delegates-global")
+            .global(r#"{"maxRunningDelegates": 12}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
+            .read();
+        assert_eq!(only_global.max_running_delegates(), Some(12));
     }
 
     /// INPUT-43: the key turns a request that spends on, so only a real `true` does it. A quoted

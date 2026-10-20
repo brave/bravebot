@@ -957,12 +957,15 @@ impl Definitions {
 /// reads.
 pub const MAX_DEPTH: usize = 3;
 
-/// How many delegates one turn's whole tree may hold, however they are arranged.
+/// How many delegates one turn's whole tree may hold running at once, where the settings name no
+/// other figure.
 ///
-/// On the tree rather than on each node, so the bound on a turn's delegated work is this many
-/// delegates at their kinds' rounds and not a product of fan-outs at every level. Four full
-/// fan-outs of a single call.
-pub const MAX_DELEGATES: u32 = 32;
+/// On the tree rather than on each node, so the bound on the delegates running at once is this many
+/// and not a product of fan-outs at every level. A delegate that has ended gives its place back
+/// ([`Place`]), so a turn may start more than this many over its life and never has more than this
+/// many going at once. Six delegates that each hand four to six parts to nested readers need 30 to
+/// 42 places together, which this holds with room over.
+pub const DEFAULT_MAX_RUNNING_DELEGATES: u32 = 64;
 
 /// Which delegate a record is about.
 ///
@@ -1056,49 +1059,80 @@ impl std::fmt::Display for DelegateId {
     }
 }
 
-/// The places left in one turn's tree of delegates.
+/// The places held in one turn's tree of delegates.
 ///
-/// One count, shared by every run in the tree, so siblings running at once draw on the same
-/// [`MAX_DELEGATES`] rather than each on its own. Carried in a [`DelegateSpec`] and nowhere
-/// else, so a run can only reach its tree's count through the kernel that spawned it.
-#[derive(Clone, Default)]
-pub(crate) struct Tree(std::sync::Arc<std::sync::atomic::AtomicU32>);
+/// One count, shared by every run in the tree, so siblings running at once draw on the same bound
+/// rather than each on its own. Carried in a [`DelegateSpec`] and nowhere else, so a run can only
+/// reach its tree's count through the kernel that spawned it.
+#[derive(Clone)]
+pub(crate) struct Tree(std::sync::Arc<Places>);
+
+/// What a [`Tree`] counts, and the most it may hold.
+struct Places {
+    held: std::sync::atomic::AtomicU32,
+    bound: u32,
+}
 
 impl Tree {
+    /// A tree that holds at most `bound` places at once.
+    pub(crate) fn bounded(bound: u32) -> Self {
+        Self(std::sync::Arc::new(Places {
+            held: std::sync::atomic::AtomicU32::new(0),
+            bound,
+        }))
+    }
+
+    /// The most places it holds at once.
+    pub(crate) fn bound(&self) -> u32 {
+        self.0.bound
+    }
+
     /// Take one place, or nothing where the tree is full.
-    pub(crate) fn claim(&self) -> bool {
+    pub(crate) fn claim(&self) -> Option<Place> {
         use std::sync::atomic::Ordering;
-        let mut held = self.0.load(Ordering::SeqCst);
+        let mut held = self.0.held.load(Ordering::SeqCst);
         loop {
-            if held >= MAX_DELEGATES {
-                return false;
+            if held >= self.0.bound {
+                return None;
             }
-            match self
-                .0
-                .compare_exchange_weak(held, held + 1, Ordering::SeqCst, Ordering::SeqCst)
-            {
-                Ok(_) => return true,
+            match self.0.held.compare_exchange_weak(
+                held,
+                held + 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return Some(Place(self.clone())),
                 Err(now) => held = now,
             }
         }
     }
 }
 
-impl Tree {
-    /// Give back a place [`Tree::claim`] took, for a delegate that was approved and then did not
-    /// start. Never below none.
-    pub(crate) fn release(&self) {
-        use std::sync::atomic::Ordering;
-        let mut held = self.0.load(Ordering::SeqCst);
-        while held > 0 {
-            match self
-                .0
-                .compare_exchange_weak(held, held - 1, Ordering::SeqCst, Ordering::SeqCst)
-            {
-                Ok(_) => return,
-                Err(now) => held = now,
-            }
-        }
+/// A bound of [`DEFAULT_MAX_RUNNING_DELEGATES`], which is the tree of a turn whose settings name
+/// no other.
+impl Default for Tree {
+    fn default() -> Self {
+        Self::bounded(DEFAULT_MAX_RUNNING_DELEGATES)
+    }
+}
+
+/// One place in a [`Tree`], given back when this is dropped.
+///
+/// Held by the [`DelegateSpec`] of the delegate that took it, and so by every copy of that spec the
+/// delegate's own run makes. The last of them goes when the delegate's thread ends, whichever way
+/// it ended: it reported, it failed, a person stopped it, it reached its round bound, or its thread
+/// panicked. A delegate that was approved and then never started drops its spec unused and gives
+/// the place back the same way. Nothing returns a place by calling for it, so no route to an end
+/// can be the one that forgot to, and a place cannot be returned twice.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Place(Tree);
+
+impl Drop for Place {
+    fn drop(&mut self) {
+        self.0
+            .0
+            .held
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -1113,8 +1147,8 @@ impl Eq for Tree {}
 
 impl std::fmt::Debug for Tree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let held = self.0.load(std::sync::atomic::Ordering::SeqCst);
-        write!(f, "Tree({held} of {MAX_DELEGATES})")
+        let held = self.0.held.load(std::sync::atomic::Ordering::SeqCst);
+        write!(f, "Tree({held} of {})", self.0.bound)
     }
 }
 
@@ -1212,8 +1246,12 @@ pub struct DelegateSpec {
     /// The most tokens it may spend, where one is fixed: the least of its definition's figure,
     /// the call's and what its parent had left.
     budget: Option<u64>,
-    /// The tree it belongs to, which is the one the delegates it spawns draw on.
-    tree: Tree,
+    /// The place it holds in its tree, and through it the tree, which is the one the delegates it
+    /// spawns draw on.
+    ///
+    /// Shared by every copy of the spec, since the delegate's own run copies it. The place goes
+    /// back when the last copy does, which is when the delegate's thread ends.
+    place: std::sync::Arc<Place>,
     /// What the context of the run that wrote its task held, which its own context starts
     /// holding: a task written by a planner shown private content may carry it.
     holds: Confidentiality,
@@ -1226,7 +1264,7 @@ impl DelegateSpec {
         task: impl Into<String>,
         capabilities: CapabilitySet,
         rounds: usize,
-        tree: Tree,
+        place: Place,
     ) -> Self {
         let kind = definition.kind();
         let tools = definition.tools().map(|named| {
@@ -1255,7 +1293,7 @@ impl DelegateSpec {
             capabilities,
             rounds,
             budget: definition.budget(),
-            tree,
+            place: std::sync::Arc::new(place),
             holds: Confidentiality::Public,
         }
     }
@@ -1315,7 +1353,7 @@ impl DelegateSpec {
     }
 
     pub(crate) fn tree(&self) -> &Tree {
-        &self.tree
+        &self.place.0
     }
 
     /// What the planner named to get this, and what the person watching is shown.
@@ -1562,6 +1600,11 @@ impl Addressed {
 mod tests {
     use super::*;
     use crate::capability::ServerAlias;
+
+    /// A place in a tree of its own, for a spec a test builds by hand.
+    fn a_place() -> Place {
+        Tree::default().claim().expect("a new tree has room")
+    }
 
     /// A record writes a delegate's number down and reads it back, and what it reads is checked as
     /// a path: a position of zero, a sign, a path past the depth limit and stray text are none.
@@ -2718,7 +2761,7 @@ mod tests {
             "find out whether the tests pass",
             Kind::Checker.capabilities(),
             80,
-            Tree::default(),
+            a_place(),
         );
 
         let described = spec.describe();
@@ -2750,7 +2793,7 @@ mod tests {
             "check the diff",
             Kind::Reader.capabilities(),
             60,
-            Tree::default(),
+            a_place(),
         );
 
         let described = spec.describe();
@@ -2786,7 +2829,7 @@ mod tests {
             "check the diff",
             Kind::Reader.capabilities(),
             60,
-            Tree::default(),
+            a_place(),
         );
 
         assert_eq!(spec.tools(), Some(["read_file".to_string()].as_slice()));
@@ -2813,7 +2856,7 @@ mod tests {
             "read something",
             Kind::Reader.capabilities(),
             60,
-            Tree::default(),
+            a_place(),
         );
         assert_eq!(spec.model(), Some("haiku"));
     }
@@ -2829,7 +2872,7 @@ mod tests {
                 "read something",
                 Kind::Reader.capabilities(),
                 60,
-                Tree::default(),
+                a_place(),
             )
         };
         let plain =
@@ -2859,7 +2902,7 @@ mod tests {
                 "review something",
                 Kind::Reader.capabilities(),
                 60,
-                Tree::default(),
+                a_place(),
             )
         };
 
@@ -3120,7 +3163,7 @@ mod tests {
                 "migrate",
                 Kind::Worker.capabilities(),
                 60,
-                Tree::default(),
+                a_place(),
             )
             .asks_for_checkout()
         );
@@ -3145,7 +3188,7 @@ mod tests {
                 "review",
                 Kind::Reader.capabilities(),
                 60,
-                Tree::default(),
+                a_place(),
             )
             .asks_for_checkout()
         );
@@ -3256,26 +3299,95 @@ mod tests {
         );
     }
 
-    /// One count for the tree, shared by every handle on it, and it stops at the bound rather
-    /// than wrapping or going over.
+    /// One count for the tree, shared by every handle on it. It stops at the bound rather than
+    /// wrapping or going over, and a place that is dropped is a place the next claim takes, so
+    /// what the bound holds is the places in hand at once.
     #[test]
     fn a_tree_holds_at_most_its_bound_across_every_handle() {
-        let tree = Tree::default();
+        let tree = Tree::bounded(5);
         let sibling = tree.clone();
-        let claimed = (0..MAX_DELEGATES * 2)
-            .filter(|n| {
-                if n % 2 == 0 {
-                    tree.claim()
-                } else {
-                    sibling.claim()
-                }
-            })
-            .count();
-        assert_eq!(claimed, MAX_DELEGATES as usize);
-        assert!(!tree.claim() && !sibling.claim());
+        let claim = |n: u32| {
+            if n.is_multiple_of(2) {
+                tree.claim()
+            } else {
+                sibling.claim()
+            }
+        };
+        let mut held: Vec<Place> = (0..10).filter_map(claim).collect();
+        assert_eq!(held.len(), 5);
+        assert!(tree.claim().is_none() && sibling.claim().is_none());
+
+        held.truncate(3);
+        let taken: Vec<Place> = (0..6).filter_map(claim).collect();
+        assert_eq!(
+            taken.len(),
+            2,
+            "two places were given back, and the tree took another number than that"
+        );
+        assert!(tree.claim().is_none() && sibling.claim().is_none());
+
         assert!(
-            Tree::default().claim(),
+            Tree::bounded(5).claim().is_some(),
             "another turn's tree shared this one's count"
+        );
+    }
+
+    /// A delegate's thread that panics has ended like any other, so the place its spec held goes
+    /// back and the turn that started it is not left holding one for a run that is gone.
+    #[test]
+    fn a_place_goes_back_when_the_delegates_thread_panics() {
+        let tree = Tree::bounded(1);
+        let spec = DelegateSpec::new(
+            DelegateId::nth(1),
+            &Definition::of_kind(Kind::Reader),
+            "look",
+            Kind::Reader.capabilities(),
+            10,
+            tree.claim().expect("a new tree has room"),
+        );
+        assert!(tree.claim().is_none(), "the one place was not held");
+
+        let ended = std::thread::spawn(move || {
+            let _held = spec;
+            panic!("the delegate's thread died");
+        })
+        .join();
+        assert!(ended.is_err(), "the thread did not panic");
+        assert!(
+            tree.claim().is_some(),
+            "the place of a delegate that panicked was not given back"
+        );
+    }
+
+    /// The delegate's own run copies its spec, so the place is the last copy's to give back. One
+    /// copy dropped while another is alive leaves the place held, and the two together give back
+    /// one place and no more: a place given back twice would be a place nobody took.
+    #[test]
+    fn a_place_goes_back_when_the_last_copy_of_its_spec_does() {
+        let tree = Tree::bounded(1);
+        let spec = DelegateSpec::new(
+            DelegateId::nth(1),
+            &Definition::of_kind(Kind::Reader),
+            "look",
+            Kind::Reader.capabilities(),
+            10,
+            tree.claim().expect("a new tree has room"),
+        );
+        let copy = spec.clone();
+        assert!(tree.claim().is_none(), "the one place was not held");
+
+        drop(spec);
+        assert!(
+            tree.claim().is_none(),
+            "a copy of the spec was still running and its place went back"
+        );
+
+        drop(copy);
+        let first = tree.claim();
+        assert!(first.is_some(), "the place did not go back");
+        assert!(
+            tree.claim().is_none(),
+            "dropping two copies gave back more than the one place taken"
         );
     }
 }

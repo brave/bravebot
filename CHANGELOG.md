@@ -1,5 +1,7 @@
 ## [0.16.0](https://github.com/brave/bravebot/releases/tag/v0.16.0)
 
+ - Added the `maxRunningDelegates` setting, the most delegates one turn may have running at once. ([#2819](https://github.com/brave/bravebot/issues/2819))
+ - Changed the limit on delegates in one turn from 32 started to 64 running at once. A delegate that has finished gives its place back to the next one the turn starts. ([#2819](https://github.com/brave/bravebot/issues/2819))
  - Added dragging the border between the info panel and the transcript to resize the panel, and keeping the width for the next session. ([#2731](https://github.com/brave/bravebot/issues/2731))
  - Changed the sandbox mode `read-only` to close the network and lend no remote, cloud, cluster or container credential, so `git push` and `gh pr create` fail under it. ([#2228](https://github.com/brave/bravebot/issues/2228))
  - Added a token budget for a delegate: a `budget:` line in an agent definition and a `budget` field on `spawn_agent` stop a delegate that has spent it, which answers with what it has. The call can only lower a definition's budget. ([#2489](https://github.com/brave/bravebot/issues/2489))

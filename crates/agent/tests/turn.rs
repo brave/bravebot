@@ -42003,9 +42003,11 @@ fn a_fan_out_that_names_no_delegate_is_refused_and_starts_nothing() {
 
 /// DELEGATE-7: a fan-out that reaches the turn's ceiling part-way starts the delegates that fit,
 /// and the planner is told how many did not start and why, rather than losing the ones that did.
+/// The ceiling is the figure the settings name, and it counts delegates running: the ones that fit
+/// are still working when the second call is made.
 #[test]
 fn a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not() {
-    use bravebot_core::delegate::MAX_DELEGATES;
+    const CEILING: u32 = 6;
 
     let scratch = Scratch::new("delegate-tree-ceiling");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
@@ -42027,25 +42029,32 @@ fn a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not
             ),
         )
     };
-    // Two short of the ceiling, eight at a time, then a call for four.
-    let mut asked = Vec::new();
-    let mut left = MAX_DELEGATES - 2;
-    while left > 0 {
-        asked.push(fan_out(left.min(8)));
-        left -= left.min(8);
-    }
-    asked.push(fan_out(4));
-    asked.push(reply_with("waiting"));
-    asked.push(reply_with("done"));
+    // Four fit, and a second call for four finds room for two.
+    let asked = vec![
+        fan_out(4),
+        fan_out(4),
+        reply_with("waiting"),
+        reply_with("done"),
+    ];
 
-    let (endpoint, received) = serve_by_marker(vec![
-        ("FILL-THE-TREE", asked),
-        (
-            "FILL-SHARED",
-            (0..MAX_DELEGATES).map(|_| reply_with("ok")).collect(),
-        ),
-    ]);
-    let config = config_for(&endpoint);
+    // Held until the planner asks its third question, which it does only once it has been told
+    // how the second call went, so every delegate is still running when that call is made.
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            ("FILL-THE-TREE", asked),
+            (
+                "FILL-SHARED",
+                (0..CEILING).map(|_| reply_with("ok")).collect(),
+            ),
+        ],
+        Order::After {
+            held: "FILL-SHARED",
+            after: "FILL-THE-TREE",
+            asked: 3,
+        },
+    );
+    let mut config = config_for(&endpoint);
+    config.max_running_delegates = Some(CEILING);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = Watched::default();
@@ -42064,13 +42073,17 @@ fn a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not
     .expect("turn runs");
 
     assert!(
+        held.load(Ordering::SeqCst),
+        "the delegates were not all still working when the second call was made"
+    );
+    assert!(
         reporter
-            .position(&format!("delegate d{MAX_DELEGATES} finished failed=false"))
+            .position(&format!("delegate d{CEILING} finished failed=false"))
             .is_some(),
         "the delegates that fit under the ceiling were not all started: {:?}",
         reporter.lines()
     );
-    let past = MAX_DELEGATES + 1;
+    let past = CEILING + 1;
     assert!(
         reporter
             .position(&format!("delegate d{past} finished"))
@@ -42083,8 +42096,222 @@ fn a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not
         bodies
             .iter()
             .any(|body| body.contains("The other 2 were not started")
-                && body.contains(&format!("already started {MAX_DELEGATES} delegates"))),
+                && body.contains(&format!("already has {CEILING} delegates running"))),
         "the planner was not told which of its delegates did not start, or why"
+    );
+}
+
+/// DELEGATE-7: a delegate that has ended gives its place back, so the next delegate the turn
+/// starts takes it and the ceiling counts the delegates running rather than the ones started. The
+/// second delegate is the second the turn started, not the first again.
+#[test]
+fn a_place_a_finished_delegate_returned_is_taken_by_the_next_one_the_turn_starts() {
+    let scratch = Scratch::new("delegate-place-returned");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "REUSE-THE-PLACE",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"FIRST-TASK"}"#),
+                // Answering with a delegate outstanding makes the turn wait for it, so the next
+                // request is after the first delegate has ended.
+                reply_with("waiting"),
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"SECOND-TASK"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        ("FIRST-TASK", vec![reply_with("first")]),
+        ("SECOND-TASK", vec![reply_with("second")]),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.max_running_delegates = Some(1);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("REUSE-THE-PLACE"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    for number in ["d1", "d2"] {
+        assert!(
+            reporter
+                .position(&format!("delegate {number} finished failed=false"))
+                .is_some(),
+            "{number} did not run under a ceiling of one: {:?}",
+            reporter.lines()
+        );
+    }
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        !bodies.iter().any(|body| body.contains("delegates running")),
+        "the planner was refused a delegate after the first had ended: {bodies:?}"
+    );
+}
+
+/// DELEGATE-7: a delegate that failed gives its place back as one that answered does, since the
+/// place does not depend on how the run ended.
+#[test]
+fn a_delegate_that_failed_gives_its_place_back() {
+    let scratch = Scratch::new("delegate-place-returned-after-failure");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    // Nothing answers the first delegate, so its own first request fails and its run ends with it.
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "REUSE-THE-PLACE-AFTER-A-FAILURE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"NOBODY-ANSWERS-THIS"}"#,
+                ),
+                reply_with("waiting"),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"ANSWERED-LATER"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        ("ANSWERED-LATER", vec![reply_with("second")]),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.max_running_delegates = Some(1);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("REUSE-THE-PLACE-AFTER-A-FAILURE"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn survives a delegate that did not");
+
+    assert!(
+        reporter
+            .position("delegate d1 finished failed=true")
+            .is_some(),
+        "the first delegate did not fail: {:?}",
+        reporter.lines()
+    );
+    assert!(
+        reporter
+            .position("delegate d2 finished failed=false")
+            .is_some(),
+        "a delegate that failed kept its place under a ceiling of one: {:?}",
+        reporter.lines()
+    );
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        !bodies.iter().any(|body| body.contains("delegates running")),
+        "the planner was refused a delegate after the first had failed: {bodies:?}"
+    );
+}
+
+/// DELEGATE-7: the ceiling is on the turn's tree and not on each run, so a delegate's own
+/// delegates draw on the count the delegate holds a place in. With a ceiling of two, the delegate
+/// and its first delegate fill the tree, and the second delegate it asks for is refused and never
+/// runs, while the first is still working.
+#[test]
+fn a_nested_delegate_draws_on_the_ceiling_of_the_turn_it_belongs_to() {
+    let scratch = Scratch::new("delegate-nested-ceiling");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // The first nested delegate is held until the delegate has been asked a third time, which it
+    // is only after it has been told what became of its second request.
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "NESTED-CEILING-ROOT",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"OUTER-TASK"}"#),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "OUTER-TASK",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"INNER-ONE"}"#),
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"INNER-TWO"}"#),
+                    reply_with("waiting"),
+                    reply_with("relayed"),
+                ],
+            ),
+            ("INNER-ONE", vec![reply_with("ok")]),
+            ("INNER-TWO", vec![reply_with("ok")]),
+        ],
+        Order::After {
+            held: "INNER-ONE",
+            after: "OUTER-TASK",
+            asked: 3,
+        },
+    );
+    let mut config = config_for(&endpoint);
+    config.max_running_delegates = Some(2);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("NESTED-CEILING-ROOT"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the first nested delegate had ended when the second was asked for"
+    );
+    let asked = every_request(&received);
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("OUTER-TASK")
+                && body.contains("already has 2 delegates running")),
+        "the delegate was not told the turn's tree was full"
+    );
+    assert!(
+        !asked
+            .iter()
+            .any(|body| body.contains("INNER-TWO") && !body.contains("OUTER-TASK")),
+        "a second nested delegate ran under a ceiling of two"
+    );
+    let approved: Vec<String> = sink
+        .events()
+        .iter()
+        .filter_map(|e| match e {
+            Event::GatePassed { gate, detail } if *gate == "delegate" => Some(detail.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        approved.iter().any(|d| d.starts_with("d1.1 ")),
+        "the first nested delegate was not approved: {approved:?}"
+    );
+    assert!(
+        !approved.iter().any(|d| d.starts_with("d1.2 ")),
+        "the second nested delegate was approved under a ceiling of two: {approved:?}"
     );
 }
 
@@ -42093,15 +42320,17 @@ fn a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not
 /// leaves a valid spawn startable.
 #[test]
 fn a_spawn_refused_for_its_checkout_takes_no_place_under_the_turns_ceiling() {
-    use bravebot_core::delegate::MAX_DELEGATES;
+    const CEILING: u32 = 3;
 
     let scratch = Scratch::new("delegate-ceiling-refused-checkout");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let mut asked: Vec<String> = (0..=MAX_DELEGATES)
-        .map(|_| {
+    // The tasks differ by call, so no two calls are the same call (TURN-9) and every one reaches
+    // the kernel.
+    let mut asked: Vec<String> = (0..=CEILING)
+        .map(|n| {
             tool_request(
                 "spawn_agent",
-                r#"{"kind":"reader","task":"NEVER-RUNS","isolation":"checkout"}"#,
+                &format!(r#"{{"kind":"reader","task":"NEVER-RUNS-{n}","isolation":"checkout"}}"#),
             )
         })
         .collect();
@@ -42115,7 +42344,8 @@ fn a_spawn_refused_for_its_checkout_takes_no_place_under_the_turns_ceiling() {
         ("REFUSE-THEN-START", asked),
         ("RUNS-AFTER", vec![reply_with("ok")]),
     ]);
-    let config = config_for(&endpoint);
+    let mut config = config_for(&endpoint);
+    config.max_running_delegates = Some(CEILING);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = Watched::default();
@@ -42147,16 +42377,18 @@ fn a_spawn_refused_for_its_checkout_takes_no_place_under_the_turns_ceiling() {
 /// turn's ceiling.
 #[test]
 fn a_spawn_whose_checkout_could_not_be_made_takes_no_place_under_the_turns_ceiling() {
-    use bravebot_core::delegate::MAX_DELEGATES;
+    const CEILING: u32 = 3;
 
     let scratch = Scratch::new("delegate-ceiling-unmade-checkout");
     let home = Scratch::new("delegate-ceiling-unmade-checkout-home");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let mut asked: Vec<String> = (0..=MAX_DELEGATES)
-        .map(|_| {
+    // The tasks differ by call, so no two calls are the same call (TURN-9) and every one reaches
+    // the kernel.
+    let mut asked: Vec<String> = (0..=CEILING)
+        .map(|n| {
             tool_request(
                 "spawn_agent",
-                r#"{"kind":"worker","task":"NEVER-RUNS","isolation":"checkout"}"#,
+                &format!(r#"{{"kind":"worker","task":"NEVER-RUNS-{n}","isolation":"checkout"}}"#),
             )
         })
         .collect();
@@ -42170,7 +42402,8 @@ fn a_spawn_whose_checkout_could_not_be_made_takes_no_place_under_the_turns_ceili
         ("REFUSE-THEN-START", asked),
         ("RUNS-AFTER", vec![reply_with("ok")]),
     ]);
-    let config = config_for(&endpoint);
+    let mut config = config_for(&endpoint);
+    config.max_running_delegates = Some(CEILING);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = Watched::default();
