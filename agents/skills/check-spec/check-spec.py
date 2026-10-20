@@ -57,6 +57,8 @@ WARNING = "warning"
 # otherwise faults. It is listed so a deliberate key is told apart from a `sites:` indented out of
 # its `guards` entry, which is what the unknown-key error is for. `kept_in` is the security-audit
 # skill's too: it says which register row each question and remembered set lands in.
+# `key_step_allowed` is the same skill's: the constructs a function that keys a name may keep, each
+# with the files it joins and why.
 FRONT_MATTER_KEYS = {
     "id",
     "title",
@@ -66,6 +68,7 @@ FRONT_MATTER_KEYS = {
     "documented-by",
     "reads_a_step_without_keying",
     "kept_in",
+    "key_step_allowed",
 }
 
 UNVERIFIED_FILE = Path("agents/unverified-clauses.txt")

@@ -191,21 +191,26 @@ branch and a tag can share, whether the check contexts a merge is held to are wr
 name jobs that exist, and cover every job whose purpose is running a check, and whether every
 method of the agent's confirmer, every remembered set the front ends hold in `Answers` and every
 question the terminal's trust prompts ask has a row in the register of kept answers in
-`docs/specs/prompting.md`, with each cell filled and each test it names one that exists. CI runs it
-too, so a pull request that moves a workflow step or a build image onto a movable tag, that puts an
-install back beside the publish credential, that points a checkout at a name instead of a ref, that
-gives a crate a network client the egress register does not admit, that drops the entry pinning a
-constructor, that adds a check nothing holds a merge to, or that adds a confirmer method, a
-remembered set or a trust question the register does not account for, fails rather than holding
-only for whoever remembers to run this. The register also has a table beneath it saying, for each
-answer, what a second checkout, a new session, a replaced file, another directory, a changed
+`docs/specs/prompting.md`, with each cell filled and each test it names one that exists, and whether
+the functions that build the key a name is filed under, or fold or decompose it (`normalise`,
+`TrustStore::key`, `FileAuthority::key`, the permission rule's `key_of` and the helpers
+`docs/specs/trust-map.md` lists) call a `trim`, a case fold, a Unicode normalisation or a lossy
+conversion, each of which can give two files the volume holds apart one key, unless that spec lists
+the construct with the files it joins and why. CI runs it too, so a pull request that moves a
+workflow step or a build image onto a movable tag, that puts an install back beside the publish
+credential, that points a checkout at a name instead of a ref, that gives a crate a network client
+the egress register does not admit, that drops the entry pinning a constructor, that adds a check
+nothing holds a merge to, or that adds a confirmer method, a remembered set or a trust question the
+register does not account for, or that puts a `trim` in the step that keys a name, fails rather than
+holding only for whoever remembers to run this. The register also has a table beneath it saying, for
+each answer, what a second checkout, a new session, a replaced file, another directory, a changed
 invocation, a changed declaration and an answer wider than its prompt do to it: this check fails a
-row, a cell or a cited test that is missing, and a case in `crates/agent/src/kept_answers.rs` that no
-cell cites. It is the deterministic half of the
+row, a cell or a cited test that is missing, and a case in `crates/agent/src/kept_answers.rs` that
+no cell cites. It is the deterministic half of the
 [security-audit skill](../../agents/skills/security-audit/SKILL.md); the lanes that read code are the
 other half, and a person runs those. Run it before a commit that touches a label,
 `.github/workflows`, a Dockerfile, the Makefile's containers, a crate's manifest, the required
-check contexts, the trust specs, the confirmer, the remembered answers
+check contexts, the trust specs, a function that keys a name, the confirmer, the remembered answers
 (`crates/agent/src/answers.rs`), the cases that change the world under them
 (`crates/agent/src/kept_answers.rs`), or `docs/specs/prompting.md`. Claude Code runs the mechanical
 half itself when a task ends on a branch that changes a file where an answer is kept
