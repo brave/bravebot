@@ -94,6 +94,9 @@ mod unix {
         };
         let root = directory.join("doctor-sandbox");
         let _ = std::fs::remove_dir_all(&root);
+        // This is a new process, so SANDBOX-30 finds the programs the suite starts outside the
+        // sandbox only once the directory it ran in and its checkout are left out.
+        crate::push_identity::keep_out_where_this_ran();
         let report = match usability::run(&root, &usability::workflows())
             .and_then(|report| with_the_login(report, &root))
         {

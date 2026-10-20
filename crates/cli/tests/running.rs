@@ -1703,6 +1703,66 @@ fn doctor_push_identity_reports_a_program_found_only_in_the_checkout_as_absent()
     assert!(stdout.contains("id_ed25519.pub"), "{stdout}");
 }
 
+/// SANDBOX-30 over the process: `doctor --sandbox-check` starts no `gh` or `git` from a `bin` in the
+/// checkout the command runs in, nor in the directory it runs in, when that is first on `PATH`. Each
+/// planted program records a start in a file outside the suite's directories, and so does the
+/// installed one behind it, which tells this apart from a command that started nothing. `gh` sits
+/// in the checkout's root and `git` in the directory the command ran in, so leaving out only one of
+/// them fails too. A machine that cannot confine stops the command before it starts anything.
+#[cfg(unix)]
+#[test]
+fn doctor_sandbox_check_starts_no_program_from_the_checkout_it_runs_in() {
+    if !bravebot_agent::usability::available() {
+        return;
+    }
+    let scratch = Scratch::new("cli-running-doctor-sandbox-planted");
+    let work = checkout_in(&scratch);
+    let here = work.join("crates").join("cli");
+    std::fs::create_dir_all(&here).unwrap();
+    let record = |directory: PathBuf, name: &str, kind: &str| {
+        let marker = scratch.path.join(format!("{kind}-{name}"));
+        let body = format!("printf x >> '{}' 2>/dev/null; exit 0", marker.display());
+        stand_in(&directory, name, &body);
+        directory
+    };
+    let in_the_root = record(work.join("bin"), "gh", "planted");
+    let in_the_directory = record(here.join("bin"), "git", "planted");
+    let tools = scratch.path.join("tools");
+    record(tools.clone(), "gh", "installed");
+    record(tools.clone(), "git", "installed");
+    let path = std::env::join_paths([
+        in_the_directory.as_path(),
+        in_the_root.as_path(),
+        tools.as_path(),
+        Path::new("/usr/bin"),
+        Path::new("/bin"),
+    ])
+    .unwrap();
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &here,
+        &[("PATH", path.to_str().unwrap())],
+        &["doctor", "--sandbox-check"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains(" passed, "),
+        "the suite did not run: {stdout}{stderr}"
+    );
+    for name in ["gh", "git"] {
+        assert!(
+            !scratch.path.join(format!("planted-{name}")).exists(),
+            "the planted {name} was started from the checkout: {stdout}"
+        );
+        assert!(
+            scratch.path.join(format!("installed-{name}")).exists(),
+            "the installed {name} was not started: {stdout}"
+        );
+    }
+}
+
 /// CRED-14 over the process: this agent's signing key and key id are not in the environment of
 /// `ssh-keygen`, `ssh` or `git`, which run unconfined with the person's access to `~/.ssh`. Each
 /// stand-in reports what it was handed in the part of its answer the report shows.

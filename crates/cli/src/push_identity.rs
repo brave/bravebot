@@ -211,6 +211,17 @@ fn checkout(cwd: &Path) -> Vec<PathBuf> {
     directories
 }
 
+/// Leave out of the lookup for programs the directory this command ran in and the checkout holding
+/// it. A command that starts programs with no session of its own calls this before its first
+/// lookup.
+pub(crate) fn keep_out_where_this_ran() {
+    if let Ok(cwd) = std::env::current_dir() {
+        for directory in checkout(&cwd) {
+            bravebot_sandbox::programs::keep_out(&directory);
+        }
+    }
+}
+
 /// A command for `program`, with this agent's own credentials taken off it.
 ///
 /// Every program this file starts is built here: they run unconfined with the person's access to
@@ -322,11 +333,7 @@ pub fn run_command(argument: Option<&str>) -> ExitCode {
     let Ok(argument) = named(argument) else {
         return fail(Ending::Argument, t!(cli_doctor_push_identity_argument));
     };
-    if let Ok(cwd) = std::env::current_dir() {
-        for directory in checkout(&cwd) {
-            bravebot_sandbox::programs::keep_out(&directory);
-        }
-    }
+    keep_out_where_this_ran();
     let Some(home) = bravebot_agent::home::profile() else {
         return fail(Ending::Failed, t!(doctor_push_no_home));
     };
