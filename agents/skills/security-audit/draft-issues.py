@@ -114,8 +114,7 @@ IMPACT_LINE = {
 }
 
 FOUND_BY = (
-    "Found by the `security-audit` skill: the `{lane}` lane read the code and a second pass tried to "
-    "disprove the finding before it was drafted. Filed by a tool rather than by a person, so nothing "
+    "Found by the `security-audit` skill: {readers}. Filed by a tool rather than by a person, so nothing "
     "here is triaged and no `importance`, `urgency` or `size` has been judged. The verifier's reason "
     "for letting it stand: {reason}"
 )
@@ -131,6 +130,19 @@ AREAS = ("trust", "tools", "turns", "interface", "cli", "delegation", "backends"
 # The build and the tracker rather than the product. There is no `area/` for it, and a finding about a
 # workflow belongs to whoever owns the pipeline.
 INFRASTRUCTURE = "infrastructure"
+
+
+def readers_of(finding):
+    """Who read the code and found it: the lane, and every other lane whose candidate the verifier
+    judged to be the same defect."""
+    lanes = list(dict.fromkeys([finding.get("lane") or "unknown", *finding.get("also_reported_by", [])]))
+    named = [f"`{one}`" for one in lanes]
+    if len(named) == 1:
+        return f"the {named[0]} lane read the code and a second pass tried to disprove the finding before it was drafted"
+    return (
+        f"the {', '.join(named[:-1])} and {named[-1]} lanes each read the code, and one second pass "
+        "tried to disprove the finding for all of them before it was drafted"
+    )
 
 
 def label_set(finding):
@@ -413,7 +425,7 @@ def body_for(finding, screen=None, session=None):
     if finding.get("source") == "audit":
         lines.append(
             FOUND_BY.format(
-                lane=finding.get("lane") or "unknown",
+                readers=readers_of(finding),
                 reason=prose(finding.get("verified_reason") or "not recorded"),
             )
         )
