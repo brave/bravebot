@@ -71,14 +71,33 @@ impl SessionScratch {
         // secure creation this rule asks for.
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
         let root = std::env::temp_dir();
-        let scratch = Self::created_at(reserved_name(&root, kind))?;
+        Self::made_in(&root, kind)
+    }
+
+    /// [`SessionScratch::made`] in a named temporary directory, so a test can give it one of its own.
+    ///
+    /// Made in a directory this account keeps for them inside `root` ([`places_in`]), because the
+    /// cost of making a directory, and of reading the directory for the sweep, grows with what
+    /// `root` holds, and other programs fill a temporary directory with entries nothing removes.
+    fn made_in(root: &Path, kind: &str) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        let places = places_in(root, rustix::process::geteuid().as_raw());
+        #[cfg(not(unix))]
+        let places = Places {
+            home: root.to_path_buf(),
+        };
+        let scratch = Self::created_at(reserved_name(&places.home, kind))?;
         #[cfg(unix)]
         if let Ok(own) = scratch.claim.metadata() {
             use std::os::unix::fs::MetadataExt;
             let owner = own.uid();
             let _ = std::thread::Builder::new()
                 .name("scratch sweep".into())
-                .spawn(move || sweep(&root, owner));
+                .spawn(move || {
+                    for place in &places.sweeps {
+                        sweep(place, owner);
+                    }
+                });
         }
         Ok(scratch)
     }
@@ -148,6 +167,72 @@ const UNCLAIMABLE: u32 = 0o1700;
 /// being made holds it for a moment; whatever holds it longer is not a sweep.
 #[cfg(unix)]
 const CLAIM_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Where a session's directory is made, and where the directories killed sessions left are looked
+/// for when it is.
+struct Places {
+    home: PathBuf,
+    #[cfg(unix)]
+    sweeps: Vec<PathBuf>,
+}
+
+/// The places for a session of `owner`'s in the temporary directory `root`, which on Unix is a
+/// directory of that account's own named for it, and `root` itself where that one cannot be used.
+///
+/// The temporary directory is swept along with it where this call made the directory, once, since a
+/// build before this one made its directories in the temporary directory itself and this is the
+/// only moment that build's leftovers are looked for there. Every later start reads the
+/// account's directory alone.
+#[cfg(unix)]
+fn places_in(root: &Path, owner: u32) -> Places {
+    match home_for(root, owner) {
+        Some((home, true)) => Places {
+            sweeps: vec![home.clone(), root.to_path_buf()],
+            home,
+        },
+        Some((home, false)) => Places {
+            sweeps: vec![home.clone()],
+            home,
+        },
+        None => Places {
+            home: root.to_path_buf(),
+            sweeps: vec![root.to_path_buf()],
+        },
+    }
+}
+
+/// The directory `owner` keeps session directories in under `root`, and whether this call made it.
+///
+/// `None` unless what stands at the name is a directory `owner` owns. The temporary directory is
+/// shared where it is `/tmp`, so a name this program composes is one another account can create
+/// first, or leave as a link to a directory of theirs. Making it is attempted first and a name
+/// already taken is then opened without following a link, so what is checked is what stands at the
+/// name. A directory of `owner`'s own at another mode is put back to [`CLAIMED`], since nothing
+/// can have changed it but `owner`, and one a session could not make a directory in would
+/// otherwise take every session's directory with it.
+///
+/// Named for the account, so two accounts sharing a temporary directory each have one.
+#[cfg(unix)]
+fn home_for(root: &Path, owner: u32) -> Option<(PathBuf, bool)> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let path = root.join(format!("bravebot-{owner}"));
+    let made = match std::fs::DirBuilder::new().mode(CLAIMED).create(&path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(_) => return None,
+    };
+    let directory = opened(&path).ok()?;
+    let found = directory.metadata().ok()?;
+    if found.uid() != owner {
+        return None;
+    }
+    if found.mode() & 0o7777 != CLAIMED {
+        directory
+            .set_permissions(std::fs::Permissions::from_mode(CLAIMED))
+            .ok()?;
+    }
+    Some((path, made))
+}
 
 /// Make the directory, at a mode no sweep takes and nobody else can enter.
 fn made_unclaimed(path: &Path) -> std::io::Result<()> {
@@ -440,23 +525,152 @@ mod tests {
         }
     }
 
-    /// Opening a session takes away what killed ones left in the temporary directory, which is
-    /// the only thing that ever will: nothing else knows the directory is there.
+    /// Opening a session takes away what killed ones left where sessions make their directories,
+    /// which is the only thing that ever will: nothing else knows the directory is there.
     #[test]
     #[cfg(unix)]
     fn a_session_opening_removes_what_a_killed_one_left() {
-        // Where `create` looks, since that is what is being asked about.
-        // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        let left = reserved_name(&std::env::temp_dir(), SESSION);
+        let root = SessionScratch::create().expect("a directory to stand for the temporary one");
+        let home = places_in(root.path(), owner_of(root.path())).home;
+        let left = reserved_name(&home, SESSION);
         left_by_a_killed_session(&left);
 
         let deadline = std::time::Instant::now() + SETTLE;
         while left.exists() && std::time::Instant::now() < deadline {
-            let _opened = SessionScratch::create().expect("a scratch directory");
+            let _opened =
+                SessionScratch::made_in(root.path(), SESSION).expect("a scratch directory");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
 
         assert!(!left.exists(), "{} outlived its session", left.display());
+    }
+
+    /// A session's directory is in a directory this account keeps for them, so making it does not
+    /// depend on how many entries the temporary directory holds, and that directory is the
+    /// account's alone to enter.
+    #[test]
+    #[cfg(unix)]
+    fn a_session_is_given_its_directory_inside_one_of_this_accounts_own() {
+        let root = SessionScratch::create().expect("a directory to stand for the temporary one");
+        let owner = owner_of(root.path());
+
+        let scratch = SessionScratch::made_in(root.path(), SESSION).expect("a scratch directory");
+
+        let home = scratch.path().parent().expect("the directory it is in");
+        assert_eq!(home.parent(), Some(root.path()), "{}", home.display());
+        assert_eq!(
+            home.file_name().and_then(|name| name.to_str()),
+            Some(format!("bravebot-{owner}").as_str())
+        );
+        assert_eq!(owner_of(home), owner);
+        assert_eq!(mode_of(home), CLAIMED, "mode was {:o}", mode_of(home));
+    }
+
+    /// One directory serves every session of the account. A directory made for each would leave
+    /// the temporary directory holding one more entry per session, which is what this avoids.
+    #[test]
+    #[cfg(unix)]
+    fn the_sessions_of_one_account_are_given_directories_in_the_same_one() {
+        let root = SessionScratch::create().expect("a directory to stand for the temporary one");
+
+        let one = SessionScratch::made_in(root.path(), SESSION).expect("one");
+        let other = SessionScratch::made_in(root.path(), SERVER).expect("another");
+
+        assert_ne!(one.path(), other.path());
+        assert_eq!(one.path().parent(), other.path().parent());
+    }
+
+    /// A link under the name is not followed. Another account could leave one pointing at a
+    /// directory of theirs, and a session that made its directory through it would write there.
+    #[test]
+    #[cfg(unix)]
+    fn a_link_under_the_accounts_directorys_name_is_not_followed() {
+        let root = SessionScratch::create().expect("a directory to stand for the temporary one");
+        let theirs = root.path().join("theirs");
+        std::fs::create_dir(&theirs).expect("their directory");
+        let name = root
+            .path()
+            .join(format!("bravebot-{}", owner_of(root.path())));
+        std::os::unix::fs::symlink(&theirs, &name).expect("a link");
+
+        let scratch = SessionScratch::made_in(root.path(), SESSION).expect("a scratch directory");
+
+        assert_eq!(
+            scratch.path().parent(),
+            Some(root.path()),
+            "made through the link"
+        );
+        assert_eq!(
+            std::fs::read_dir(&theirs).expect("read it").count(),
+            0,
+            "something was made where the link points"
+        );
+    }
+
+    /// A directory another account owns under the name is not used, whatever its mode. No test can
+    /// make a directory another account owns, so this one asks for the directory of an account that
+    /// is somebody else's, and finds the one it makes is not that account's.
+    #[test]
+    #[cfg(unix)]
+    fn a_directory_of_another_accounts_under_the_name_is_not_used() {
+        let root = SessionScratch::create().expect("a directory to stand for the temporary one");
+        let theirs = owner_of(root.path()).wrapping_add(1);
+
+        let places = places_in(root.path(), theirs);
+
+        assert_eq!(places.home, root.path());
+        assert_eq!(places.sweeps, [root.path().to_path_buf()]);
+    }
+
+    /// A directory of the account's own that a session could not make a directory in is put back,
+    /// rather than leaving every session after it without one.
+    #[test]
+    #[cfg(unix)]
+    fn an_account_directory_that_cannot_be_written_is_put_back_to_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = SessionScratch::create().expect("a directory to stand for the temporary one");
+        let home = root
+            .path()
+            .join(format!("bravebot-{}", owner_of(root.path())));
+        std::fs::create_dir(&home).expect("a directory");
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o500)).expect("a mode");
+
+        let scratch = SessionScratch::made_in(root.path(), SESSION).expect("a scratch directory");
+
+        assert_eq!(scratch.path().parent(), Some(home.as_path()));
+        assert_eq!(mode_of(&home), CLAIMED, "mode was {:o}", mode_of(&home));
+    }
+
+    /// The temporary directory is read for leftovers once, as the account's directory is first made,
+    /// because a build before this one made its directories there. Every start after that reads the
+    /// account's directory alone, which is what keeps opening a session from reading all of a
+    /// temporary directory that other programs have filled.
+    #[test]
+    #[cfg(unix)]
+    fn the_temporary_directory_is_swept_once_and_then_only_the_accounts_own() {
+        let root = SessionScratch::create().expect("a directory to stand for the temporary one");
+        let owner = owner_of(root.path());
+        let before = reserved_name(root.path(), SESSION);
+        left_by_a_killed_session(&before);
+        let home = root.path().join(format!("bravebot-{owner}"));
+
+        // Each pass opens a session as the first one does, with no account's directory yet, and a
+        // pass that finds the leftover held for a moment is followed by another.
+        let deadline = std::time::Instant::now() + SETTLE;
+        while before.exists() && std::time::Instant::now() < deadline {
+            let _ = std::fs::remove_dir_all(&home);
+            let _opened =
+                SessionScratch::made_in(root.path(), SESSION).expect("a scratch directory");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            !before.exists(),
+            "{} was left where an earlier build made it",
+            before.display()
+        );
+
+        let later = places_in(root.path(), owner);
+        assert_eq!(later.sweeps, std::slice::from_ref(&later.home));
     }
 
     /// A leftover is recognised for what it is: the name this program gives, this account's,
