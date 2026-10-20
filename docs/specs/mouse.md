@@ -74,8 +74,9 @@ terminals that still report the mouse.
 <a id="MOUSE-5"></a>
 ### MOUSE-5: a selection in the info panel takes its text and nothing around it
 
-The info panel draws a border column and a space before each row's text. A selection that begins
-on either starts at the first column of the text, and the highlight stops at the end of each row's
+The info panel draws a border column and a space before each row's text. A press on the border
+column resizes the panel ([MOUSE-2](#MOUSE-2)). A selection that begins on the space starts at the
+first column of the text, and the highlight stops at the end of each row's
 text. The copy takes the text alone, with no border, indent or trailing blanks. The session id is
 drawn over two rows because it does not fit on one, and a copy that spans both rows reads it as one
 line.

@@ -10684,10 +10684,11 @@ mod tests {
                     .contains("d23f56fe")
             })
             .expect("the id is drawn");
-        // Press on the border and drag past the end of the second half of the id.
+        // Press on the indent before the text and drag past the end of the second half of the id.
+        // The border column is a resize handle and starts no selection.
         swept(
             &mut session,
-            (first, panel.left()),
+            (first, panel.left() + 1),
             (first + 1, panel.right() - 1),
         );
         let selection = session.selection.expect("selection");
