@@ -1162,6 +1162,41 @@ mod tests {
         assert!(!drawn.contains("hooks"), "{drawn}");
     }
 
+    /// PROMPT-1: the run prompt draws a file the line writes, and a directory it is confined to,
+    /// with a name that would draw as nothing, or as another name, quoted and spelled, so a yes to
+    /// `note.md ` cannot be read as one to `note.md`.
+    #[test]
+    fn the_run_prompt_marks_an_unreadable_written_file_and_directory() {
+        let screen = |written: &str, directory: &str| {
+            let mut request = a_run(false);
+            request.plan.writes = vec![written.into()];
+            request.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                directories: vec![directory.into()],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: Vec::new(),
+                writes_git_directories: false,
+            });
+            run_screen(&request, (160, 40), 0, &mut RowsShown::default())
+                .0
+                .join("\n")
+        };
+        let plain = screen("note.md", "/work");
+        assert!(plain.contains("note.md"), "{plain}");
+        assert!(plain.contains("/work"), "{plain}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let written = screen(name, "/work");
+            assert_ne!(written, plain, "{name:?}");
+            assert!(written.contains(spelled), "{name:?}\n{written}");
+            let confined = screen("note.md", name);
+            assert_ne!(confined, plain, "{name:?}");
+            assert!(confined.contains(spelled), "{name:?}\n{confined}");
+        }
+    }
+
     /// SANDBOX-18: where nothing holds a `.git` back from a program that is not git, the heading a
     /// person approves under says that such a program can write a repository's hooks and
     /// configuration, at the size a terminal opens at, above the directories it names.
