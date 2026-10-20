@@ -10646,6 +10646,76 @@ mod tests {
         );
     }
 
+    /// The row and column where `needle` is drawn.
+    fn find_on(buffer: &ratatui::buffer::Buffer, needle: &str) -> (u16, u16) {
+        (0..buffer.area.height)
+            .find_map(|row| {
+                let line: String = (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol().to_string())
+                    .collect();
+                line.find(needle).map(|column| (row, column as u16))
+            })
+            .expect("text on the screen")
+    }
+
+    fn press(session: &mut Session, row: u16, column: u16, modifiers: KeyModifiers) {
+        let mut event = drag(MouseEventKind::Down(MouseButton::Left), row, column);
+        event.modifiers = modifiers;
+        handle_mouse(session, event);
+    }
+
+    /// Two presses in a row on one cell select the word there, and a third the whole row, and
+    /// neither takes anything from the info panel beside it.
+    #[test]
+    fn a_double_click_selects_a_word_and_a_triple_click_a_row() {
+        let (mut session, buffer) = two_panes();
+        let (row, column) = find_on(&buffer, "one two");
+        press(&mut session, row, column + 4, KeyModifiers::NONE);
+        press(&mut session, row, column + 4, KeyModifiers::NONE);
+        let word = session.selection.expect("selection");
+        assert_eq!(crate::select::text(&buffer, &word), "two");
+        press(&mut session, row, column + 4, KeyModifiers::NONE);
+        let line = session.selection.expect("selection");
+        let text = crate::select::text(&buffer, &line);
+        assert!(text.contains("TRANSCRIPTMARK one two three"), "{text:?}");
+        assert!(!text.contains("PANELMARK"), "{text:?}");
+    }
+
+    /// A press on another cell starts the count again, so two clicks on different words select
+    /// nothing in whole.
+    #[test]
+    fn two_presses_on_different_cells_are_not_a_double_click() {
+        let (mut session, buffer) = two_panes();
+        let (row, column) = find_on(&buffer, "one two");
+        press(&mut session, row, column, KeyModifiers::NONE);
+        press(&mut session, row, column + 4, KeyModifiers::NONE);
+        assert!(session.selection.expect("selection").is_empty());
+    }
+
+    /// Shift-click moves the loose end of the selection held and leaves the anchor.
+    #[test]
+    fn a_shift_click_extends_the_selection_held() {
+        let (mut session, buffer) = two_panes();
+        let (row, column) = find_on(&buffer, "one two");
+        swept(&mut session, (row, column), (row, column + 3));
+        press(&mut session, row, column + 7, KeyModifiers::SHIFT);
+        let selection = session.selection.expect("selection");
+        assert_eq!(crate::select::text(&buffer, &selection), "one two");
+    }
+
+    /// A shift-click in another pane begins a selection there and does not stretch the first.
+    #[test]
+    fn a_shift_click_in_another_pane_begins_a_new_selection() {
+        let (mut session, buffer) = two_panes();
+        let (row, column) = find_on(&buffer, "one two");
+        swept(&mut session, (row, column), (row, column + 3));
+        let (prow, pcolumn) = find_on(&buffer, "PANELMARK");
+        press(&mut session, prow, pcolumn, KeyModifiers::SHIFT);
+        let selection = session.selection.expect("selection");
+        assert_eq!(selection.pane(), crate::select::Pane::Panel);
+        assert!(selection.is_empty());
+    }
+
     /// A drag that starts in the transcript and sweeps right across the panel must not take the
     /// panel's text on the rows it passes.
     #[test]

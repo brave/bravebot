@@ -11,8 +11,8 @@ documented-by: docs/website/docs/using/transcript.md
 
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
-drag selects is spelled out here. Clicking things on the screen, a context menu, edge scrolling,
-word and line selection are proposed in
+drag selects is spelled out here. Clicking things on the screen, a context menu and edge scrolling
+are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
 ## Clauses
@@ -85,3 +85,33 @@ line.
 `verified-by: bravebot_tui::select::a_panel_highlight_covers_the_text_and_not_the_chrome_or_padding`
 `verified-by: bravebot_tui::select::a_joined_row_runs_on_into_the_next_without_a_break`
 `verified-by: bravebot_tui::app::a_drag_over_the_session_id_copies_the_id_alone`
+
+<a id="MOUSE-6"></a>
+### MOUSE-6: a double click takes a word and a triple click a row
+
+Two presses of the left button on the same cell within 400 milliseconds select the word there, and
+a third the whole row, inside the pane the press belongs to. A word is a run of letters, digits and
+underscores, a run of blanks, or a run of anything else. A row is taken up to its last character,
+without the blanks the widget padded it with. Dragging on from such a press grows the selection by
+whole words or whole rows at the loose end. A fourth press starts the count again, and a press on
+another cell or after the interval is a single press.
+
+`verified-by: bravebot_tui::select::a_double_click_takes_the_word_under_it`
+`verified-by: bravebot_tui::select::a_word_stops_at_punctuation`
+`verified-by: bravebot_tui::select::a_drag_after_a_double_click_grows_by_words`
+`verified-by: bravebot_tui::select::a_triple_click_takes_the_row_without_its_padding`
+`verified-by: bravebot_tui::select::a_drag_after_a_triple_click_grows_by_rows`
+`verified-by: bravebot_tui::select::a_word_never_leaves_its_pane`
+`verified-by: bravebot_tui::select::a_press_counts_as_part_of_a_run_only_on_the_same_cell_in_time`
+`verified-by: bravebot_tui::app::a_double_click_selects_a_word_and_a_triple_click_a_row`
+`verified-by: bravebot_tui::app::two_presses_on_different_cells_are_not_a_double_click`
+
+<a id="MOUSE-7"></a>
+### MOUSE-7: a shift-click extends the selection held
+
+A press with shift held, inside the pane the selection held belongs to, moves the selection's loose
+end to the pointer and keeps its anchor. A shift-press anywhere else, or with no selection held, is
+an ordinary press. Terminals that keep shift for their own selection never report it.
+
+`verified-by: bravebot_tui::app::a_shift_click_extends_the_selection_held`
+`verified-by: bravebot_tui::app::a_shift_click_in_another_pane_begins_a_new_selection`
