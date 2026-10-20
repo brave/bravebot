@@ -342,7 +342,8 @@ grepping the lot.
 **Dragging with the mouse** copies from the pane the press landed in: the transcript, the info
 panel, the prompt box or the footer. The selection stops at that pane's edge, so a drag down the
 transcript does not take the panel's text on every row. A press between panes starts nothing, and
-closing the panel or resizing the terminal drops a selection held in it.
+closing the panel or resizing the terminal drops a selection held in it. Double-click selects a word, triple-click a row, and dragging on from
+either grows the selection by words or rows. Shift-click moves the end of the selection you hold.
 
 **Nothing comes back.** A transcript is a record of what happened, and a record you can edit back
 into the session is not one. No later turn reads that file, and no path in your workspace gains

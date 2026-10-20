@@ -31,12 +31,13 @@ guards:
     sites:
       - crates/agent/src/confine.rs: 1
       - crates/agent/src/workspace.rs: 1
-      - crates/sandbox/src/programs.rs: 17
+      - crates/agent/tests/workspace.rs: 1
+      - crates/sandbox/src/programs.rs: 19
       - crates/tui/src/clipboard.rs: 8
       - crates/tui/src/editor.rs: 2
   - symbol: find_in_with
     sites:
-      - crates/sandbox/src/programs.rs: 7
+      - crates/sandbox/src/programs.rs: 8
 documented-by: docs/website/docs/security/security.md
 ---
 
@@ -3152,7 +3153,7 @@ the session only; and whether a covered line is announced in the transcript befo
 The programs bravebot starts on its own account and looks up by name, unconfined and with the
 person's access to `~/.ssh`, `~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`), the clipboard
 tools, `osascript`, the inhibitor `/caffeinate` starts, a hook's program, a language server, the
-editor Ctrl-G opens, the `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs
+editor Ctrl-G opens, the credential authority ([CONNECTOR-2](connectors.md#CONNECTOR-2)), the `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs
 ([SANDBOX-16](#SANDBOX-16)), and what `doctor --sandbox-check` runs with no sandbox
 ([SANDBOX-21](#SANDBOX-21)): the `gh` of the stored-login row, the programs of a workflow's setup
 stages, and the programs of a workflow run again without the sandbox as the control, `git`, `sh`,
@@ -3161,8 +3162,13 @@ absolute entries of `PATH` that lie outside every directory a confined stage may
 
 `clippy.toml` refuses every call the tree starts a program with, `std::process::Command::new` and
 `CreateProcessW`, whatever names the program: a string literal, a variable, an alias, or a helper
-that passes it on. `make check` fails a start that has no
-`#[allow(clippy::disallowed_methods, reason = "...")]` beside it. `make check-security` fails a mark
+that passes it on. A program is started with `bravebot_sandbox::programs::start`, which takes a
+`Resolved` and not a path or a string. Only the lookup (`Resolved::find`, `Resolved::find_on`) and a
+named constructor build one, and each constructor says who chose the program:
+`own_executable`, `written_in_source`, `named_by_person`, `found_earlier` and `to_confine`. `start`
+holds the one `Command::new` the tree has outside a build script and a test, so a new spawn picks a
+constructor in the diff and does not compile until it has. `make check` fails any other start that
+has no `#[allow(clippy::disallowed_methods, reason = "...")]` beside it. `make check-security` fails a mark
 whose reason is empty, a mark that covers more than one start, and a second clippy configuration
 that hides the refusal from a crate. The reason says who chose the program, and a start outside the
 list above says why it needs no lookup of this kind: it is this program's own executable, a path
@@ -3187,7 +3193,17 @@ same change, or resolved first, and its mark is what a reviewer reads.
   starts is also started without this agent's own credentials
   ([CRED-14](credential-protection.md#CRED-14)).
 - **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
-  and so is a file in another directory that links into one.
+  and so is a file in another directory that links into one. An entry that does not exist yet leads
+  where the part of it that exists does, since a stage can make the rest.
+- **A directory is judged by the directory it reaches, not only by its name.** A volume can open two
+  spellings of a name as one directory: ext4 or tmpfs with `casefold`, vfat, exFAT, and on macOS a
+  firmlink such as `/System/Volumes/Data/Users` for `/Users`. Resolving a path there returns the
+  spelling it was given, so an entry written another way than a recorded directory shares no name
+  with it. On Unix an entry, and the file the lookup resolves to, is also left out when a
+  directory above where it leads is a recorded directory by device and inode. The names are
+  compared first, so a recorded directory that no longer exists is still left out under the name
+  it was recorded under. The `PATH` given to the editor, a hook and the suite's unconfined
+  programs, and a row held where the account can write, are judged the same way.
 - **An entry that is not absolute is not searched,** and neither is an empty one, which a shell
   reads as the current directory. A name carrying a separator is not looked up, and an absolute
   path is started as given. A hook's relative path is the person's own and runs from the directory
@@ -3196,19 +3212,24 @@ same change, or resolved first, and its mark is what a reviewer reads.
   activated virtualenv's `bin` among them, is told it is not installed
   (Known costs in [backends.md](backends.md#known-costs)); the clipboard tool reads as absent and the next tool is
   tried.
-- **The editor's, a hook's, `doctor --push-identity`'s and the AWS CLI's own lookups search only
-  those entries.** A started program looks up the names it starts itself through the `PATH` it
-  inherits. The editor Ctrl-G opens, a hook's program, the `ssh-keygen`, `ssh` and `git` of
-  `doctor --push-identity`, and the AWS CLI are started with bravebot's `PATH` reduced to the entries
-  the lookup searches, in the order they were written, so a `#!/usr/bin/env` shebang in the editor,
-  the hook or an `aws` that is a script, a launcher script, an `$EDITOR` of `env vim`, or a
-  `ProxyCommand` in the person's ssh configuration that names a bare program finds the program it
-  starts only among them. A hook named by a path gets the same `PATH` as one named bare. Where no
-  entry is searched the program is started with no `PATH` variable. An empty `PATH` would be read as
-  the current directory. A program the editor, a hook, `ssh` or the AWS CLI starts by name that is
-  found only in a directory left out is not found by it, such as a bare `credential_process` command
-  in the person's `~/.aws/config`. A `PATH` names directories, so a file in a searched entry that
-  links into a directory left out is still found by those lookups.
+- **The editor's, a hook's, the credential authority's, the inhibitor's, `doctor --push-identity`'s
+  and the AWS CLI's own lookups search only those entries.** A started program looks up the names it
+  starts itself through the `PATH` it inherits. The editor Ctrl-G opens, a hook's program, the
+  credential authority, the inhibitor `/caffeinate` starts, the `ssh-keygen`, `ssh` and `git` of
+  `doctor --push-identity`, and the AWS CLI are started with bravebot's `PATH` reduced to the
+  entries the lookup searches, in the order they were written, so a `#!/usr/bin/env` shebang in the
+  editor, the hook or an `aws` that is a script, a launcher script, an `$EDITOR` of `env vim`, a
+  `ProxyCommand` in the person's ssh configuration that names a bare program, or the program a
+  `unixexec:` address in the person's `DBUS_SYSTEM_BUS_ADDRESS` names to `systemd-inhibit` finds the
+  program it starts only among them. The authority is always an absolute path
+  ([CONNECTOR-2](connectors.md#CONNECTOR-2)). A hook named by a path gets the same `PATH` as one
+  named bare. Where no entry is searched the program is started with no `PATH` variable. An empty
+  `PATH` would be read as the current directory. A program the editor, a hook, `ssh`,
+  `systemd-inhibit` or the AWS CLI starts by name that is found only in a directory left out is not
+  found by it, such as a bare `credential_process` command in the person's `~/.aws/config`. A path
+  in a `unixexec:` address, relative or not, is the person's own and is started as written. A `PATH`
+  names directories, so a file in a searched entry that links into a directory left out is still
+  found by those lookups.
 - **The suite's programs started with no sandbox search only those entries as well.** The `gh` of
   the stored-login row and every stage a workflow starts with no confinement are given a `PATH`
   reduced as the editor's is, so a `sh` that starts `mkdir`, or a `gh` that starts `git`, finds it
@@ -3216,12 +3237,13 @@ same change, or resolved first, and its mark is what a reviewer reads.
   A program found only in a directory left out is not installed: its workflow is skipped
   ([SANDBOX-21](#SANDBOX-21)), and a `gh` found only there gives no login row.
 - **A program named in another started program's arguments is resolved first.** A started program
-  other than the editor, a hook, `doctor --push-identity`'s, the AWS CLI and the suite's programs
-  started with no sandbox keeps bravebot's own `PATH`, which can hold those directories, so an
-  argument that names a program for it to start is that program's absolute path, found the same way.
-  The inhibitor `/caffeinate` starts on Linux is given `cat` that way
-  ([CMD-12](commands.md#CMD-12)). Where `cat` is found only in such a directory the inhibitor is not
-  started, and `/caffeinate` reports it as it does an inhibitor that is not installed.
+  looks up a name in its own arguments through the `PATH` it was started with. Bravebot's own `PATH`
+  can hold those directories, and a reduced one does not judge where a link in a searched entry
+  leads, so a program that bravebot names in the arguments it gives a started program is passed as
+  an absolute path, found the same way. The inhibitor `/caffeinate` starts on Linux is given `cat`
+  that way ([CMD-12](commands.md#CMD-12)). Where `cat` is found only in such a directory the
+  inhibitor is not started, and `/caffeinate` reports it as it does an inhibitor that is not
+  installed.
 - **Each start's `PATH` is stated here.** A program that starts others by name through the `PATH` it
   inherits is given one of three, and a start added to the list at the head of this clause is added
   to this list with its answer in the same change:
@@ -3233,10 +3255,10 @@ same change, or resolved first, and its mark is what a reviewer reads.
   | The AWS CLI | reduced to the entries the lookup searches |
   | `gh`, `sh` and the programs of a workflow's setup stages, and a workflow run again without the sandbox, in `doctor --sandbox-check` | reduced to the entries the lookup searches |
   | `ssh-keygen`, `ssh` and `git` in `doctor --push-identity` | reduced to the entries the lookup searches |
-  | The connector authority | bravebot's own, unreduced. Tracked in #2755. |
+  | The connector authority | reduced to the entries the lookup searches |
   | A language server | bravebot's own, accepted: it runs code the project carries, and pyright is meant to use the virtualenv's `python3` ([LSP-5](tools/lsp.md#LSP-5), [Known costs](tools/lsp.md#known-costs)) |
   | The clipboard tools and `osascript` | bravebot's own. They are given fixed arguments that name no program, so there is no lookup to reduce `PATH` for. |
-  | The inhibitor `/caffeinate` starts | bravebot's own, with the one name it is given, `cat`, resolved first. Other programs `systemd-inhibit` starts by name resolve through bravebot's unreduced `PATH`. Tracked in #2835. |
+  | The inhibitor `/caffeinate` starts | reduced to the entries the lookup searches, on every platform. On Linux the one name it is given, `cat`, is resolved first, and the other name `systemd-inhibit` can start is the program a `unixexec:` address in `DBUS_SYSTEM_BUS_ADDRESS` names. |
   | The background supervisor, the host and a bug report | not applicable: each starts this program's own executable or a path stored by it |
 
   A row that says unreduced is a known gap, not a decision, and it comes out of the table when the
@@ -3249,10 +3271,19 @@ same change, or resolved first, and its mark is what a reviewer reads.
 on `PATH`. The name `aws` then resolves to the stage's file, which bravebot starts outside any
 confinement ([CRED-14](credential-protection.md#CRED-14)): the stage has chosen what runs with
 the person's access, which the confinement exists to deny it. A started program looks up a name in
-its own arguments through the `PATH` it inherited from bravebot, not through the lookup above.
-`systemd-inhibit` starts `cat` that way, so its argument is the resolved path and not the bare name.
-An editor, a hook or an `aws` that is a script starts its interpreter the same way, and `ssh` starts
-a `ProxyCommand`'s program so, so each is given the `PATH` the lookup would have searched.
+its own arguments through the `PATH` it was started with, not through the lookup above, which also
+judges where a link leads. `systemd-inhibit` starts `cat` that way, so its argument is the resolved
+path and not the bare name.
+An editor, a hook, a credential authority or an `aws` that is a script starts its interpreter the
+same way, `ssh` starts a `ProxyCommand`'s program so, and `systemd-inhibit` starts the program a
+`unixexec:` bus address names so, so each is given the `PATH` the lookup would have searched.
+
+**What it costs.** A directory is compared by device and inode, so a filesystem that reports the
+same pair for two directories (some FUSE, 9p and network mounts) leaves out an entry that should be
+searched, and the program reads as not installed. Off Unix there is no comparison by identity,
+because the file index is not in the standard library, so only names are compared there, after a
+path is resolved as far as it exists. A recorded directory that does not exist has no identity, so
+another spelling of it is compared by name only until it exists.
 
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
@@ -3273,6 +3304,16 @@ a `ProxyCommand`'s program so, so each is given the `PATH` the lookup would have
 `verified-by: bravebot_sandbox::programs::a_started_programs_path_holds_exactly_the_entries_the_lookup_searches`
 `verified-by: bravebot_sandbox::programs::a_started_program_with_no_searched_entry_is_given_no_path_at_all`
 `verified-by: bravebot_sandbox::programs::a_started_programs_path_carries_an_entry_that_is_not_utf8_as_its_bytes`
+`verified-by: bravebot_sandbox::programs::a_path_entry_the_volume_opens_as_a_directory_a_stage_may_write_is_not_searched`
+`verified-by: bravebot_sandbox::programs::a_started_programs_path_leaves_out_an_entry_the_volume_opens_as_a_writable_directory`
+`verified-by: bravebot_sandbox::programs::a_program_the_volume_opens_in_a_row_held_where_the_account_can_write_is_not_found`
+`verified-by: bravebot_sandbox::programs::a_started_programs_path_leaves_out_a_link_into_another_spelling_of_a_writable_directory`
+`verified-by: bravebot_sandbox::programs::a_link_in_a_safe_directory_to_a_program_under_another_spelling_is_not_found`
+`verified-by: bravebot_sandbox::programs::a_path_is_within_a_directory_a_volume_opens_under_another_name`
+`verified-by: bravebot_sandbox::programs::a_started_programs_path_leaves_out_an_entry_not_yet_made_below_a_link_into_a_writable_directory`
+`verified-by: bravebot_sandbox::programs::a_directory_that_is_not_text_is_judged_by_what_it_is_and_not_by_its_lossy_lookalike`
+`verified-by: bravebot_sandbox::programs::a_recorded_directory_that_does_not_exist_is_still_compared_by_name`
+`verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_left_out_of_a_program_lookup_unless_it_is_a_listed_gap`
 `verified-by: bravebot_bedrock::credentials::an_aws_a_confined_stage_wrote_at_the_front_of_path_is_not_the_one_run`
 `verified-by: bravebot_bedrock::credentials::an_aws_where_a_stage_given_the_whole_machine_may_write_is_not_the_one_run`
 `verified-by: bravebot_bedrock::credentials::an_aws_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
@@ -3280,9 +3321,11 @@ a `ProxyCommand`'s program so, so each is given the `PATH` the lookup would have
 `verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
 `verified-by: bravebot_agent::hooks::a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_cli::push_identity::a_program_ssh_starts_by_name_is_never_one_a_stage_may_have_written`
+`verified-by: bravebot_connector::lib::an_authority_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`
 `verified-by: bravebot_tui::caffeinate::an_inhibitor_with_no_cat_but_a_planted_one_is_not_started`
+`verified-by: bravebot_tui::caffeinate::a_program_the_inhibitor_starts_by_name_is_never_one_a_stage_may_have_written`
 `verified-by: bravebot_tui::editor::an_editor_found_only_in_a_directory_a_stage_may_write_is_not_started`
 `verified-by: bravebot_tui::editor::an_editor_named_only_by_a_planted_file_is_not_found`
 `verified-by: bravebot_tui::editor::an_editor_that_runs_another_program_by_name_never_runs_one_a_stage_may_have_written`

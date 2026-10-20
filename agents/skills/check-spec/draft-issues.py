@@ -390,7 +390,9 @@ def draftable(findings, errors_only):
     """The findings a green CI run leaves unsaid, which are the ones worth an issue."""
     keep = []
     for finding in findings:
-        if finding.get("kind") in NOT_A_BUG:
+        # One the record carried was drafted by the run that decided it, and is in this report
+        # only because it still holds.
+        if finding.get("carried") or finding.get("kind") in NOT_A_BUG:
             continue
         if finding.get("source") != "review" and finding.get("severity") == collect.ERROR:
             continue
@@ -470,7 +472,7 @@ def main():
         return 2
 
     findings = list(manifest.get("mechanical_findings", []))
-    reviews, _ = collect.load_reviews(manifest)
+    reviews, _, _ = collect.load_reviews(manifest)
     findings.extend(reviews)
 
     out = Path(args.out) if args.out else Path(args.work_dir) / "issues"

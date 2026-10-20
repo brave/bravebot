@@ -327,11 +327,9 @@ pub fn developer_directory() -> Option<std::path::PathBuf> {
     static DIRECTORY: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     DIRECTORY
         .get_or_init(|| {
-            #[allow(
-                clippy::disallowed_methods,
-                reason = "the program is `/usr/bin/xcode-select`, an absolute path written here"
-            )]
-            let mut command = std::process::Command::new("/usr/bin/xcode-select");
+            let mut command = crate::programs::start(
+                &crate::programs::Resolved::written_in_source("/usr/bin/xcode-select"),
+            );
             command
                 .arg("-p")
                 .env_remove("DEVELOPER_DIR")

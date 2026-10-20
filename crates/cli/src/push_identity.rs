@@ -232,12 +232,9 @@ pub(crate) fn keep_out_where_this_ran() {
 ///
 /// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
 fn started(program: &Path) -> std::process::Command {
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "the program `run` found with `bravebot_sandbox::programs::find`, which \
-                      leaves out every directory a stage may write (SANDBOX-30)"
-    )]
-    let mut command = std::process::Command::new(program);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+    );
     for name in bravebot_config::scrub::own_credentials() {
         command.env_remove(name);
     }

@@ -40,6 +40,16 @@ governs:
   - ui/src/renderer/components/Permissions.tsx
   - ui/scripts/remembered-trust-list.test.mjs
   - crates/tui/src/command_table.rs
+  - crates/core/src/permissions.rs
+  - crates/agent/test-support/aliases.rs
+key_step_allowed:
+  - crates/core/src/trust.rs::fold_case to_uppercase: a key is folded to upper case and then to lower, so two spellings a volume that folds case opens as one file are one key, and only a map told the volume folds compares them so (TRUST-2, Case)
+  - crates/core/src/trust.rs::fold_case to_lowercase: the second half of that fold, taken after upper case so a letter whose lower case is itself still meets the letter the volume folds it to (TRUST-2, Case)
+  - crates/core/src/trust.rs::canonical_form fold_case x2: a key is folded before its form is taken, again only where the volume folds case (TRUST-2, Case)
+  - crates/core/src/trust.rs::canonical_form decompose x2: a name is compared in the form every canonically equivalent spelling shares, which joins the NFC and NFD spellings of a name for a refusal and a writer on purpose and never for a trust (TRUST-2, Normalization)
+  - crates/core/src/permissions.rs::key_of fold: a rule and a path are compared in one case only where the volume folds case, which joins two spellings that volume opens as one file (TRUST-2, Case)
+  - crates/core/src/permissions.rs::fold fold_case: a rule and a path are folded a segment at a time, so the separators and the anchor are left as they were (TRUST-2, Case)
+  - crates/core/src/permissions.rs::drive_in_upper_case make_ascii_uppercase: a drive letter is one drive in either case on a host that separates with a backslash, and a directory called `d:` elsewhere is left as written (TRUST-2, Drive letter row)
 guards:
   - symbol: TrustStore::trust
   - symbol: TrustStore::distrust
@@ -144,8 +154,11 @@ deny-rule cell that is not covered, is a defect. A change that fixes a spelling 
 a spelling with no row gets one in the same commit as its test.
 
 The rows a volume can make without a person opening another directory are `ALIASES` in
-`crates/agent/test-support/aliases.rs`. Four tests ask each consumer about every row, skip a row
-the volume holds apart, and fail on a row listed as unhandled once it is handled. The other rows are
+`crates/agent/test-support/aliases.rs`. Five tests ask each consumer about every row, skip a row
+the volume holds apart, and fail on a row listed as unhandled once it is handled. The fifth is the
+lookup of a program bravebot starts itself ([SANDBOX-30](sandboxing.md#SANDBOX-30)), which is asked
+of the rows that spell a directory another way and leaves out an entry under every spelling of a
+directory a stage may write, by device and inode where the names differ. The other rows are
 pinned by the test the last column names.
 
 | Alias | Example | Map and writer reservation | Deny rules | Pinned by, or tracked in |
@@ -159,7 +172,7 @@ pinned by the test the last column names.
 | NFC and NFD | `café.md` in either form | a distrust, an undecided boundary and the writer reservation join the forms; a trust reaches only the spelling it was written about | covered, whichever form the rule and the file are in | `bravebot_agent::workspace::a_canonically_equivalent_spelling_of_a_distrusted_file_is_read_as_untrusted`, `bravebot_core::permissions::a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name` |
 | Symbolic link | a link to the file, or on the way to it | not handled (Known cost) | covered | #2328 |
 | Hard link | a second entry for the file | not handled (Known cost) | covered on Unix, by device and inode | #2328 |
-| Another path to the same tree | a macOS firmlink, a Linux bind mount, once both are open | not handled (Known cost) | covered on Unix, by device and inode of the directory | `bravebot_agent::workspace::a_name_is_respelled_under_each_open_directory_that_is_the_same_directory`, #2328 |
+| Another path to the same tree | a macOS firmlink, a Linux bind mount, once both are open | not handled (Known cost) | covered on Unix, by device and inode of the directory | `bravebot_agent::workspace::a_name_is_respelled_under_each_open_directory_that_is_the_same_directory`, `bravebot_sandbox::programs::a_path_entry_the_volume_opens_as_a_directory_a_stage_may_write_is_not_searched` for the program lookup, #2328 |
 | 8.3 short name | `ENV~1` for `.env` | refused on Windows, never reaches the map | refused | `bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only` |
 | Alternate data stream | `.env::$DATA` | refused on Windows | refused | same |
 | Trailing dot or space | `.env.` | refused on Windows | refused | same |
@@ -170,6 +183,29 @@ opened, before any key is made, so the map is not asked about those names. Path 
 the host's own answer, so only a Windows host takes the refusing branch there; the predicate is
 tested on every host with the answer supplied. A short name for a directory a person opened is
 accepted, since it names that one directory.
+
+**Names the volume holds apart.** The table lists the names one file has. The other direction is a
+rule too: two names a volume holds apart are two files, so the step that turns a name into a key
+gives them two keys, and a rule about one decides nothing about the other. Only a refusal and a
+writer in flight reach a name on purpose, and only the canonically equivalent spellings of the NFC
+and NFD row. Whitespace, a trailing dot, a leading `-`, a glob character, a backslash, a colon and
+a character Unicode gives no width are part of a name where a path is bytes. A step that trims,
+folds case or decodes lossily joins two such files, and no row of the table lists a join of two
+files.
+
+The names are `AWKWARD_NAMES` in `crates/agent/test-support/aliases.rs`. One test makes every pair in
+a directory, asks the volume whether it is two files, and asks the map about a rule for one of them
+in both polarities. A second asks the same pairs of the key the workspace builds for a name, of a
+read, and of a second writer, where a step that joins two files can sit with the map seeing
+nothing, and compares the two keys. The vouch prompt is asked about four of the names.
+
+`make check-security` fails a `trim`, a case fold, a Unicode normalisation or a lossy conversion
+in the functions that key a name or fold or decompose it: `normalise`, `TrustStore::key`,
+`fold_case`, `canonical_form`, `FileAuthority::key`, and the permission rule's `key_of`, `fold` and
+`drive_in_upper_case`. One those functions keep is listed under `key_step_allowed` in this spec's
+front matter, for the number of calls it names, with the files it joins and why. A step in any
+other function is for a reviewer to find. Deny and ask rules key a path of their own and are not
+yet asked the same question (#2761).
 
 **Why.** Per-file exceptions in both directions are the only way `@vendor/lib.js` can be trusted
 inside a `vendor` a person marked untrusted, without that answer leaking to its siblings.
@@ -190,6 +226,8 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_core::trust::a_rule_matches_whole_segments_only`
 `verified-by: bravebot_core::trust::equivalent_path_spellings_are_the_same_rule`
 `verified-by: bravebot_core::trust::a_name_with_whitespace_at_an_end_is_not_the_name_without_it`
+`verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group`
+`verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group`
 `verified-by: bravebot_core::trust::a_name_ending_in_a_space_follows_the_rules_for_canonically_equivalent_names`
 `verified-by: bravebot_core::trust::a_working_directory_with_whitespace_at_an_end_is_not_the_one_without_it`
 `verified-by: bravebot_core::trust::every_equivalent_spelling_of_a_path_reaches_the_same_rule`
@@ -208,6 +246,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::turn::each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap`
+`verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_left_out_of_a_program_lookup_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
 `verified-by: bravebot_agent::workspace::a_path_a_run_opens_is_refused_where_windows_reads_a_name_in_it_as_another_file`
 `verified-by: bravebot_core::trust::a_refusal_recorded_about_one_form_of_a_name_decides_the_other`
@@ -544,6 +583,7 @@ check and caught the attempt. The prompt that grants the most was the one saying
 `verified-by: bravebot_agent::turn::a_path_that_names_no_file_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::declining_to_vouch_leaves_the_file_quarantined`
 `verified-by: bravebot_agent::turn::a_vouch_for_a_file_named_with_whitespace_leaves_its_siblings_asking`
+`verified-by: bravebot_agent::turn::a_vouch_for_a_file_with_an_awkward_name_is_a_rule_about_that_file_alone`
 `verified-by: bravebot_agent::turn::a_trusted_file_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::the_same_file_is_offered_once_per_turn`
 `verified-by: bravebot_tui::confirm::a_preview_with_nothing_in_it_says_so`

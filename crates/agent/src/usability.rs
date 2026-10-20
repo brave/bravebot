@@ -502,12 +502,9 @@ fn start(
         routes: Vec::new(),
     };
 
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "a workflow stage's program: a path the workflow writes, or the program \
-                  `bravebot_sandbox::programs::find_on` returned (SANDBOX-30)"
-    )]
-    let mut command = Command::new(&started_as);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(&started_as),
+    );
     command.args(&args).current_dir(&places.session);
     for name in HOST_VARIABLES {
         command.env_remove(name);
@@ -649,12 +646,8 @@ fn ask_for_the_login(
         environment: Vec::new(),
         routes: Vec::new(),
     };
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "the `gh` that `bravebot_sandbox::programs::find_on` returned, which leaves \
-                  out every directory a stage may write (SANDBOX-30)"
-    )]
-    let mut command = Command::new(gh);
+    let mut command =
+        bravebot_sandbox::programs::start(&bravebot_sandbox::programs::Resolved::found_earlier(gh));
     command.args(&args).current_dir(session).env("HOME", home);
     for name in LOGIN_VARIABLES {
         command.env_remove(name);

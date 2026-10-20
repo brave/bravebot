@@ -204,12 +204,9 @@ fn run_client(
     client: &[std::ffi::OsString],
     current: &Current,
 ) {
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "the client the person named by an absolute path after `--` on this binary's \
-                      command line"
-    )]
-    let mut command = std::process::Command::new(&client[0]);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::named_by_person(&client[0]),
+    );
     command.args(&client[1..]);
     let mut linked = match bravebot_ui_bridge::control_link::launch(command) {
         Ok(linked) => linked,

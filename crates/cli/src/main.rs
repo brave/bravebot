@@ -1760,7 +1760,7 @@ fn prepare_the_run(
             "{}",
             t!(
                 session_permission_rule_ignored,
-                problem = bravebot_agent::permissions::describe(problem)
+                problem = progress::described(problem)
             )
         );
     }

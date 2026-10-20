@@ -1715,6 +1715,18 @@ check-unsafe = la vérification estime que ceci ressemble à une tentative de do
 check-inconclusive = la vérification n'a pas abouti, donc rien n'a examiné ceci
 
 
+## Caractères du texte d'une question qui ne s'affichent pas
+
+# Dit au-dessus d'un texte sur lequel on décide, quand une partie ne s'affiche pas : un caractère de
+# largeur nulle, un contrôle bidirectionnel, un sélecteur de variante ou un caractère d'étiquette. Le
+# texte écrit chacun d'eux en toutes lettres, donc la phrase dit ce que sont ces jetons et que le
+# modèle lit les caractères eux-mêmes.
+hidden-characters = { $count ->
+    [one] 1 caractère de ce texte ne s'affiche pas. Il est écrit ci-dessous sous la forme ‹U+XXXX›, et un caractère d'étiquette aussi avec la lettre qu'il représente. Le modèle le lit tel quel.
+   *[other] { $count } caractères de ce texte ne s'affichent pas. Chacun est écrit ci-dessous sous la forme ‹U+XXXX›, et un caractère d'étiquette aussi avec la lettre qu'il représente. Le modèle les lit tels quels.
+    }
+
+
 ## Laisser le modèle lire ce qu'une commande a affiché
 
 output-title = laisser le modèle lire ceci ?

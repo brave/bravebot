@@ -304,14 +304,24 @@ pub fn fetch_lines(host: &str, url: &str, metadata_service: bool) -> Vec<String>
 ///
 /// None of the output is left out, because a yes releases all of it to the planner (OUTPUT-1).
 /// The terminal's panel and the desktop card show all of it too.
-pub fn output_lines(summary: &str, check: Check, output: &str) -> Vec<String> {
+///
+/// `hidden` is how many characters of `output` drew as nothing before the agent wrote them out, so
+/// the sentence saying what the tokens in it are goes above it.
+pub fn output_lines(summary: &str, check: Check, output: &str, hidden: usize) -> Vec<String> {
     let mut lines = vec![
         printable(summary),
         t!(output_unseen).to_string(),
         checked(check),
     ];
+    lines.extend(hidden_note(hidden));
     lines.extend(quarantined_in_full(output));
     lines
+}
+
+/// The sentence over text in which `hidden` characters draw as nothing, or none where none do, in
+/// the catalog's words so a front end that draws it carries no copy of its own (SHARE-001).
+pub fn hidden_note(hidden: usize) -> Option<String> {
+    (hidden > 0).then(|| t!(hidden_characters, count = hidden).to_string())
 }
 
 /// A picture or a PDF in place of the text of a vetted read.
@@ -332,6 +342,9 @@ pub struct Vet<'a> {
     pub check: Check,
     /// The text, shown where there is no picture.
     pub content: &'a str,
+    /// How many characters of `content` drew as nothing before the agent wrote them out. A picture
+    /// has no text, so it is not read there.
+    pub hidden: usize,
     /// The picture to open in place of the text.
     pub picture: Option<Picture<'a>>,
 }
@@ -362,7 +375,10 @@ pub fn vet_lines(vet: &Vet<'_>) -> Vec<String> {
                 lines.push(t!(vet_pdf_hidden_text).to_string());
             }
         }
-        None => lines.extend(quarantined_in_full(vet.content)),
+        None => {
+            lines.extend(hidden_note(vet.hidden));
+            lines.extend(quarantined_in_full(vet.content));
+        }
     }
     lines
 }
@@ -655,6 +671,51 @@ mod tests {
         assert_eq!(plain[0], "note.md");
         assert!(blank[1].contains("/work/\u{2423}"), "{:?}", blank[1]);
         assert!(plain[1].contains("/work/note.md"), "{:?}", plain[1]);
+    }
+
+    /// PROMPT-1: where some of the text drew as nothing, the plain prompts say how many characters
+    /// that was above the text, outside the margin, since the tokens below it are what the sentence
+    /// explains. A text with none gets no such sentence.
+    #[test]
+    fn the_plain_prompts_say_how_many_characters_draw_as_nothing_above_the_text() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A}";
+        let said = t!(hidden_characters, count = 2usize).to_string();
+        let vet = |hidden| Vet {
+            summary: "read it",
+            expects: "notes",
+            check: Check::Safe,
+            content: text,
+            hidden,
+            picture: None,
+        };
+        for (what, lines) in [
+            ("output", output_lines("read it", Check::Safe, text, 2)),
+            ("vet", vet_lines(&vet(2))),
+        ] {
+            let saying = lines.iter().position(|line| *line == said);
+            let shown = lines
+                .iter()
+                .position(|line| *line == format!("{QUARANTINE_BAR} {text}"));
+            assert!(
+                saying.is_some() && saying < shown,
+                "{what}: the sentence is not above the text: {lines:?}"
+            );
+        }
+        for (what, lines) in [
+            ("output", output_lines("read it", Check::Safe, "plain", 0)),
+            (
+                "vet",
+                vet_lines(&Vet {
+                    content: "plain",
+                    ..vet(0)
+                }),
+            ),
+        ] {
+            assert!(
+                lines.iter().all(|line| !line.contains("U+XXXX")),
+                "{what}: a text with nothing hidden in it said something was: {lines:?}"
+            );
+        }
     }
 
     /// MSG-3: a message is shown whole behind the margin, however long, with its control characters

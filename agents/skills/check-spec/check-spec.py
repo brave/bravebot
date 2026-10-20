@@ -16,9 +16,16 @@ Run with neither --mechanical-only nor --list it also prepares the second pass: 
 directory holding one prompt file per group of clauses, for the conformance review the
 check-spec skill drives. Nothing about that pass is decided here; this script writes
 files and prints a pointer to them.
+
+    check-spec.py --full                     review every clause in full, ignoring the record
+    check-spec.py --threshold 25             review a clause in full from 25% of its lines changed
+
+A clause that docs/check-spec-reviewed holds a verdict for is reviewed only as far as the code it
+depends on has changed since the commit the verdict was reached at. `decide` says how far.
 """
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -33,6 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import reviewed  # noqa: E402
 from specs import (  # noqa: E402
     EM_DASH,
     README,
@@ -57,6 +65,8 @@ WARNING = "warning"
 # otherwise faults. It is listed so a deliberate key is told apart from a `sites:` indented out of
 # its `guards` entry, which is what the unknown-key error is for. `kept_in` is the security-audit
 # skill's too: it says which register row each question and remembered set lands in.
+# `key_step_allowed` is the same skill's: the constructs a function that keys a name may keep, each
+# with the files it joins and why.
 FRONT_MATTER_KEYS = {
     "id",
     "title",
@@ -66,6 +76,7 @@ FRONT_MATTER_KEYS = {
     "documented-by",
     "reads_a_step_without_keying",
     "kept_in",
+    "key_step_allowed",
 }
 
 UNVERIFIED_FILE = Path("agents/unverified-clauses.txt")
@@ -193,6 +204,7 @@ def git_output(arguments, directory):
             ["git", "-C", str(directory), *arguments],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
     except OSError:
@@ -1161,6 +1173,26 @@ def spec_names(spec):
     return {form.lower() for form in forms if form}
 
 
+def watched(spec):
+    """The paths whose change reopens a spec: the ones it governs, and the files its pinned guards
+    allow a use in.
+
+    A pinned path counts as well as a governed one. The files a guard allowlist pins are mostly
+    not the files the spec governs, so counting `governs` alone would leave a branch run and a
+    repeat run silent about the one edit the allowlist exists to catch."""
+    return [
+        pattern
+        for pattern in list(spec.governs)
+        + [
+            item.rpartition(":")[0].strip()
+            for sites in spec.allowlists.values()
+            if isinstance(sites, list)
+            for item in sites
+        ]
+        if pattern
+    ]
+
+
 def select(specs, selectors, changed_base):
     if selectors:
         wanted = {s.lower() for s in selectors}
@@ -1171,28 +1203,223 @@ def select(specs, selectors, changed_base):
         touched = set(changed_files(changed_base))
         chosen = []
         for spec in specs:
-            # A pinned path counts as well as a governed one. The files a guard allowlist pins
-            # are mostly not the files the spec governs, so selecting on `governs` alone would
-            # leave the branch run silent about the one edit the allowlist exists to catch.
-            patterns = list(spec.governs) + [
-                item.rpartition(":")[0].strip()
-                for sites in spec.allowlists.values()
-                if isinstance(sites, list)
-                for item in sites
-            ]
             if spec.rel in touched or any(
-                any(fnmatch(f, pattern) for f in touched) for pattern in patterns if pattern
+                any(fnmatch(f, pattern) for f in touched) for pattern in watched(spec)
             ):
                 chosen.append(spec)
         return chosen, []
     return list(specs), []
 
 
-PROMPT = """\
-# Conformance review: {spec_name}, clauses {clause_range}
+# How much of a clause a run reviews. `docs/check-spec-reviewed` holds what an earlier run decided
+# about each clause, and the commit it decided it at.
+FULL, DIFF, KEEP = "full", "diff", "keep"
 
-You are checking that the **implementation matches the spec**, not the other way round.
+# What a later step needs of an earlier verdict to put it in a report or in front of a reviewer.
+CARRIED = ("verdict", "severity", "summary", "commit")
 
+# Why a clause is reviewed in full, which is what a run says when it was not asked for one.
+NO_RECORD = "no record"
+CHANGED = "the clause, its spec, the guarded uses or the reviewer instructions changed"
+NOT_COMPARABLE = "nothing to compare with the recorded commit"
+UNTRACKED = "a file git does not track is in the paths it watches"
+OVER = "the diff is over the threshold"
+
+# The share of the lines a spec watches that may have changed since the recorded commit before the
+# clauses are reviewed in full. Past it the diff is as long as reading half of the code, which the
+# reviewer needs beside the diff to understand it, so a diff review saves little.
+DIFF_BELOW = 50
+
+
+def pathspecs(patterns):
+    """`patterns` as git reads them, where `*` stops at a `/` as it does for `Path.glob`."""
+    return [f":(glob){pattern}" for pattern in patterns]
+
+
+class Change:
+    """How the files a spec watches differ from the tree an earlier review read."""
+
+    def __init__(self, files, sizes, untracked):
+        self.files = files  # path to (lines added, lines deleted), for each file that differs
+        self.sizes = sizes  # path to the lines it has, or had where that is more
+        self.untracked = untracked  # files in those paths that git does not know
+
+    @property
+    def lines(self):
+        """Lines changed, with a file counted at most once over its length."""
+        return sum(
+            min(added + deleted, self.sizes[path]) for path, (added, deleted) in self.files.items()
+        )
+
+    @property
+    def fraction(self):
+        total = sum(self.sizes.values())
+        return self.lines / total if total else 1.0
+
+
+class Repo:
+    """What git says about the tree being reviewed, asked once per question.
+
+    A question git cannot answer is answered with `None`, which a caller reads as nothing to
+    compare against: a commit this history does not hold, a directory in no checkout, no git."""
+
+    def __init__(self, root):
+        self.root = Path(root)
+        self.head = (git_output(["rev-parse", "HEAD"], self.root) or "").strip() or None
+        self._reachable = {}
+        self._changes = {}
+        self._sizes = {}
+        self._lines = {}
+        self._base = {}
+        self._untracked = {}
+
+    def reachable(self, commit):
+        """Whether `commit` is one this tree descends from. A diff from any other says what main did
+        since as well as what this tree did, and the record was made on main."""
+        if commit not in self._reachable:
+            ancestor = git_output(["merge-base", "--is-ancestor", commit, "HEAD"], self.root)
+            self._reachable[commit] = self.head is not None and ancestor is not None
+        return self._reachable[commit]
+
+    def sizes(self, patterns):
+        key = tuple(patterns)
+        if key not in self._sizes:
+            found = {}
+            for pattern in patterns:
+                for path in sorted(self.root.glob(pattern)):
+                    if path.is_file():
+                        found[path.relative_to(self.root).as_posix()] = self.lines_in(path)
+            self._sizes[key] = found
+        return self._sizes[key]
+
+    def lines_in(self, path):
+        """The lines a file has, read once: specs share the large files they govern."""
+        if path not in self._lines:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            self._lines[path] = len(text.splitlines())
+        return self._lines[path]
+
+    def lines_at(self, commit, path):
+        """The lines a file had at `commit`, none where it had no such file."""
+        if (commit, path) not in self._base:
+            earlier = git_output(["show", f"{commit}:{path}"], self.root)
+            self._base[(commit, path)] = len((earlier or "").splitlines())
+        return self._base[(commit, path)]
+
+    def dirty(self, patterns):
+        """What a review read that is not in `HEAD`: a tracked file that differs, and a file git does
+        not know in `patterns`. Nothing for a tree that is a commit, whatever the ledger holds.
+        Where git cannot say, one entry that says so, since a tree not known to be a commit is not
+        one."""
+        changed = git_output(["diff", "--name-only", "-z", "HEAD", "--"], self.root)
+        untracked = self.untracked(patterns)
+        if self.head is None or changed is None or untracked is None:
+            return ["(git could not say what differs from HEAD)"]
+        differs = [path for path in changed.split("\0") if path and path != str(reviewed.LEDGER)]
+        return sorted(set(differs + untracked))
+
+    def untracked(self, patterns):
+        key = tuple(patterns)
+        if not key:  # no paths is every path to git
+            return []
+        if key not in self._untracked:
+            listed = git_output(
+                ["ls-files", "--others", "--exclude-standard", "-z", "--", *pathspecs(patterns)],
+                self.root,
+            )
+            self._untracked[key] = None if listed is None else [p for p in listed.split("\0") if p]
+        return self._untracked[key]
+
+    def since(self, commit, patterns):
+        """The `Change` between `commit` and this tree in the files among `patterns`, or `None`."""
+        key = (commit, tuple(patterns))
+        if key not in self._changes:
+            self._changes[key] = self._measure(commit, patterns)
+        return self._changes[key]
+
+    def _measure(self, commit, patterns):
+        # An empty list of paths is every path to git, which would be a spec that watches the
+        # whole tree.
+        if not patterns or not self.reachable(commit):
+            return None
+        counted = git_output(
+            [
+                "diff",
+                "--numstat",
+                "--no-renames",
+                "--no-ext-diff",
+                "--no-textconv",
+                "-z",
+                commit,
+                "--",
+                *pathspecs(patterns),
+            ],
+            self.root,
+        )
+        untracked = self.untracked(patterns)
+        if counted is None or untracked is None:
+            return None
+        sizes = dict(self.sizes(patterns))
+        files = {}
+        for record in filter(None, counted.split("\0")):
+            added, deleted, path = record.split("\t", 2)
+            if added == "-":  # binary: all of it changed, however many lines it has
+                added, deleted = sizes.get(path, 1), 0
+            elif added == deleted == "0":  # a mode change, which no clause is about
+                continue
+            files[path] = (int(added), int(deleted))
+            sizes[path] = max(sizes.get(path, 0), self.lines_at(commit, path))
+        return Change(files, sizes, untracked)
+
+    def diff(self, commit, patterns):
+        """The unified diff `since` counts."""
+        # The same diff whatever the person running it has configured: colour, an external
+        # program and a conversion each change what a reviewer is handed.
+        return (
+            git_output(
+                [
+                    "diff",
+                    "--no-renames",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-color",
+                    commit,
+                    "--",
+                    *pathspecs(patterns),
+                ],
+                self.root,
+            )
+            or ""
+        )
+
+
+def decide(record, hashed, since, threshold):
+    """How much of a clause to review, and why when it is all of it: `(mode, why)`.
+
+    `record` is what an earlier run decided about the clause, `hashed` is what the clause was read
+    from now, `since` asks `Repo.since` about the record's commit, and `threshold` is a fraction.
+    The order is the order of the questions. A clause the record knows nothing about, or knows
+    from other words, is reviewed from the start however little the code moved, and git is not
+    asked about it."""
+    if record is None:
+        return FULL, NO_RECORD
+    if record["hash"] != hashed:
+        return FULL, CHANGED
+    change = since()
+    if change is None:
+        return FULL, NOT_COMPARABLE
+    if change.untracked:
+        return FULL, UNTRACKED
+    if not change.files:
+        return KEEP, None
+    if change.fraction < threshold:
+        return DIFF, None
+    return FULL, OVER
+
+
+# What a reviewer is told whichever prompt it was given: a full review and a review of a change
+# are held to the same direction, the same rule and the same account of what a finding needs.
+GROUND_RULES = """\
 ## The one direction this review runs in
 
 When the code and the spec disagree, **the code is wrong**. Never propose editing a clause
@@ -1221,7 +1448,48 @@ by hand to give a value a better label than its inputs had is laundering.
 The deliberate exceptions are listed under "Known costs" in docs/specs/labels.md. Anything
 not listed there is a violation, whatever the comment beside it says.
 
-Report a breach of this rule at severity `error`, whether or not a clause names it.
+Report a breach of this rule at severity `error`, whether or not a clause names it."""
+
+VERDICTS = """\
+   - `conforms`: the behaviour the clause describes is the behaviour the code has.
+   - `violation`: the code does something the clause forbids, or does not do something the
+     clause requires. This is a finding.
+   - `untested`: the behaviour looks right, but the named tests do not actually pin it. A
+     test that would still pass against the buggy code does not pin anything. This is a
+     finding at severity `warning`, and the fix is a test, not a spec edit.
+   - `unclear`: you could not tell from the governed files. Say what you would need. Not a
+     finding, but say so honestly rather than guessing `conforms`."""
+
+VIOLATIONS = """\
+3. Every `violation` needs a concrete failure: the input or state, the path through the
+   code, and the outcome the clause forbids. `file:line` for each step. A finding you
+   cannot walk somebody through is a finding you have not verified, and it does not go in.
+4. On a `violation`, say which of two things the code does: attempts the behaviour and gets
+   it wrong, or does not attempt it at all. Set `absent` only for the second. Nothing is
+   broken today where nothing was built, and whoever picks the issue up needs to know which
+   of the two they are taking on before they open the file.
+5. Where the wrong behaviour is something a person could look at, a screen drawn wrongly
+   or a prompt that says the wrong thing, put in `screen` how to reach it: what to type,
+   in order, from a fresh session. Leave the field out otherwise, and never guess at one.
+   You do not run anything; that field is a script for whoever files this, so that the
+   bug report can show the screen instead of describing it."""
+
+REFUTATION = """\
+Check the whole clause, including the parts stated in the "Why" paragraph where the clause
+has one, and any table a clause carries: a table row is part of that clause.
+
+Before you report a violation, look for the code that would refute it. Structural
+guarantees in this repository are often enforced somewhere other than the place you are
+reading, in a type that offers no way to do the wrong thing. Take the refutation seriously.
+False findings on a spec check are expensive: they get somebody to weaken a guarantee that
+was already holding."""
+
+PROMPT = """\
+# Conformance review: {spec_name}, clauses {clause_range}
+
+You are checking that the **implementation matches the spec**, not the other way round.
+
+{ground_rules}
 
 ## What you are reviewing
 
@@ -1256,35 +1524,10 @@ For each clause in your scope:
 1. Read the governed source until you can say what the code actually does, in the terms
    the clause uses. Read the named tests too.
 2. Decide one of:
-   - `conforms`: the behaviour the clause describes is the behaviour the code has.
-   - `violation`: the code does something the clause forbids, or does not do something the
-     clause requires. This is a finding.
-   - `untested`: the behaviour looks right, but the named tests do not actually pin it. A
-     test that would still pass against the buggy code does not pin anything. This is a
-     finding at severity `warning`, and the fix is a test, not a spec edit.
-   - `unclear`: you could not tell from the governed files. Say what you would need. Not a
-     finding, but say so honestly rather than guessing `conforms`.
-3. Every `violation` needs a concrete failure: the input or state, the path through the
-   code, and the outcome the clause forbids. `file:line` for each step. A finding you
-   cannot walk somebody through is a finding you have not verified, and it does not go in.
-4. On a `violation`, say which of two things the code does: attempts the behaviour and gets
-   it wrong, or does not attempt it at all. Set `absent` only for the second. Nothing is
-   broken today where nothing was built, and whoever picks the issue up needs to know which
-   of the two they are taking on before they open the file.
-5. Where the wrong behaviour is something a person could look at, a screen drawn wrongly
-   or a prompt that says the wrong thing, put in `screen` how to reach it: what to type,
-   in order, from a fresh session. Leave the field out otherwise, and never guess at one.
-   You do not run anything; that field is a script for whoever files this, so that the
-   bug report can show the screen instead of describing it.
+{verdicts}
+{violations}
 
-Check the whole clause, including the parts stated in the "Why" paragraph where the clause
-has one, and any table a clause carries: a table row is part of that clause.
-
-Before you report a violation, look for the code that would refute it. Structural
-guarantees in this repository are often enforced somewhere other than the place you are
-reading, in a type that offers no way to do the wrong thing. Take the refutation seriously.
-False findings on a spec check are expensive: they get somebody to weaken a guarantee that
-was already holding.
+{refutation}
 
 ## Output
 
@@ -1314,22 +1557,204 @@ file. Do not edit any file.
 """
 
 
-def build_prompt(spec, clauses, sources, crates, index, results_file):
+DIFF_PROMPT = """\
+# Conformance review of a change: {spec_name}, clauses {clause_range}
+
+You are checking that the **implementation matches the spec**, not the other way round. These
+clauses were last reviewed at commit `{commit}`, in full or on the change since an earlier full
+review, and the code they govern has changed since. You are reviewing that change: whether a
+verdict reached on the earlier code still holds on the code as it is now.
+
+{ground_rules}
+
+## What you are reviewing
+
+Spec file: `{spec_path}`
+Clauses in your scope: {clause_ids}
+
+The verdicts that review gave them at `{commit}`:
+{previous}
+
+The change since then is in `{diff_file}`: the unified diff from `{commit}` to the tree you are
+in, of the governed paths, of the files the guarded symbols may be used in and of the files holding
+the tests below. {change} Read it in
+parts if it is long. It shows only the lines that changed, so read the governed source yourself,
+with your own tools, wherever a hunk cannot be understood without what is around it. The earlier
+review read the code the diff leaves alone, so do not go looking for new faults there.
+
+Governed source files (this spec decides these paths):
+{governed}
+
+Guarded symbols and every place they are used (each use is review-required). Comments are not
+listed, so a symbol you find named in prose is not missing from this list:
+{guards}
+
+Tests the clauses in your scope name, already confirmed to exist:
+{tests}
+
+## The spec, in full
+
+Read every clause for context. Report only on the ones in your scope.
+
+```markdown
+{spec_text}
+```
+
+## The job
+
+For each clause in your scope:
+
+1. Read the diff, then the code each hunk changes, until you can say whether any of it bears
+   on the clause. A hunk that touches nothing the clause depends on leaves the earlier verdict
+   standing, and so does one that changes code the clause depends on without changing what it
+   does.
+2. Decide whether the earlier verdict holds. It holds when what it recorded is still true of
+   the code as it is now: for `conforms`, nothing in the change breaks the clause; for
+   `violation` and `untested`, the same defect or the same gap is still there. Say so with
+   `"holds": true`, and leave out every other field: the earlier summary is kept. It does not
+   hold where the change fixed the defect, broke the clause, or left a defect that the earlier
+   summary no longer describes. Say so with `"holds": false` and decide one of:
+{verdicts}
+{violations}
+
+{refutation}
+
+Mark a clause `"holds": true` only when you have read the diff against it. A clause you did
+not check against the diff is not one that holds.
+
+## Output
+
+Write JSON to `{results_file}` and nothing else to stdout:
+
+```json
+{{
+  "spec": "{spec_name}",
+  "clauses": [
+    {{
+      "clause": "{example_clause}",
+      "holds": true
+    }},
+    {{
+      "clause": "another clause in your scope",
+      "holds": false,
+      "verdict": "conforms | violation | untested | unclear",
+      "summary": "one sentence, only when the verdict is not conforms",
+      "severity": "error | warning",
+      "evidence": ["crates/.../file.rs:123 what is there"],
+      "failure": "input or state, path through the code, outcome the clause forbids",
+      "absent": "true only where nothing in the code attempts the behaviour; leave it out otherwise",
+      "fix": "what the implementation should do instead, in a sentence",
+      "screen": "how to reach the screen this shows up on, only where a person could look at it"
+    }}
+  ]
+}}
+```
+
+One entry per clause in your scope. No prose outside the file. Do not edit any file.
+"""
+
+
+def guards_of(spec, sources):
+    """The guarded symbols with every place each is used: as the text a prompt names them in, and as
+    the uses in each file, which is what a change to them is read from. Scanning the sources for
+    every symbol is most of what preparing a run costs, so a spec is asked once."""
+    lines, uses = [], {}
+    for symbol in spec.guards:
+        sites = guard_sites(symbol, sources)
+        lines.append(f"- `{symbol}`: {sum(count for _, _, _, count in sites)} uses")
+        for path, number, _, _ in sites[:40]:
+            lines.append(f"    - {path}:{number}")
+        if len(sites) > 40:
+            lines.append(f"    - ... and {len(sites) - 40} more, grep for it")
+        per_file = {}
+        for path, _, _, count in sites:
+            per_file[path] = per_file.get(path, 0) + count
+        uses[symbol] = sorted(per_file.items())
+    return "\n".join(lines) or "- (none)", uses
+
+
+KNOWN_COSTS = Path("docs/specs/labels.md")
+
+
+def known_costs():
+    """The exceptions to the rule every reviewer is told outranks the clauses, as that spec lists
+    them under its `Known costs` heading. Every clause is judged against them."""
+    try:
+        lines = KNOWN_COSTS.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    found = []
+    for line in lines:
+        if line.startswith("## "):
+            if found:
+                break
+            if line.strip() == "## Known costs":
+                found.append(line)
+        elif found:
+            found.append(line)
+    return "\n".join(found)
+
+
+def instructions_hash():
+    """What a reviewer is told, and the exceptions it is told to consult, as a number that moves
+    when any of it does."""
+    told = "\0".join(
+        [PROMPT, DIFF_PROMPT, GROUND_RULES, VERDICTS, VIOLATIONS, REFUTATION, known_costs()]
+    )
+    return hashlib.sha256(told.encode("utf-8")).hexdigest()[:16]
+
+
+def review_state(spec, uses):
+    """What a verdict is read from besides the clause and the code a diff shows: the symbols the
+    spec guards, the files that use each (`uses`, the ones nobody watches), and the instructions
+    the reviewer was given. `reviewed.digest` is handed it."""
+    return json.dumps(
+        {"guards": spec.front.get("guards", []), "uses": uses, "instructions": instructions_hash()},
+        sort_keys=True,
+    )
+
+
+def tests_of(spec, index, crates):
+    """The files holding the tests the spec's clauses name. A clause is judged to be pinned or not
+    by reading them, so a test emptied or added there is a change the clause depends on."""
+    files = set()
+    for clause in spec.clauses:
+        for reference in clause.verified_by:
+            if reference == "none" or reference.startswith("by-construction"):
+                continue
+            status, detail = index.resolve(reference, crates)
+            if status in ("ok", "moved"):
+                files.update(site.rpartition(":")[0] for site in detail.split(", "))
+    return sorted(files)
+
+
+def clause_hashes(spec, clauses, sources, repo, patterns):
+    """The guarded symbols as a prompt names them, and the hash of each of `clauses`.
+
+    A use of a guarded symbol in a file the spec watches is in the diff when it changes. A use in
+    any other file is in no diff, so those, and only those, go into the hash."""
+    guards, uses = guards_of(spec, sources)
+    watching = set(repo.sizes(patterns))
+    outside = {
+        symbol: [(path, count) for path, count in per_file if path not in watching]
+        for symbol, per_file in uses.items()
+    }
+    state = review_state(spec, outside)
+    return guards, {clause.id: reviewed.digest(spec, clause, state) for clause in clauses}
+
+
+def inputs(spec, index, crates):
+    """The paths a change to which reopens a clause of `spec`: what `watched` names, and the tests."""
+    return list(dict.fromkeys(watched(spec) + tests_of(spec, index, crates)))
+
+
+def scope_of(spec, clauses, crates, index):
+    """The two lists of a prompt, besides the guarded symbols, that point a reviewer at files: the
+    governed paths and the tests the clauses name."""
     governed = "\n".join(
         f"- `{pattern}`" + ("" if Path(pattern).exists() else "  (missing)")
         for pattern in spec.governs
     ) or "- (none)"
-
-    guard_lines = []
-    for symbol in spec.guards:
-        sites = guard_sites(symbol, sources)
-        uses = sum(count for _, _, _, count in sites)
-        guard_lines.append(f"- `{symbol}`: {uses} uses")
-        for path, number, _, _ in sites[:40]:
-            guard_lines.append(f"    - {path}:{number}")
-        if len(sites) > 40:
-            guard_lines.append(f"    - ... and {len(sites) - 40} more, grep for it")
-    guards = "\n".join(guard_lines) or "- (none)"
 
     test_lines = []
     for clause in clauses:
@@ -1341,20 +1766,191 @@ def build_prompt(spec, clauses, sources, crates, index, results_file):
             location = detail if status in ("ok", "moved") else "unresolved"
             test_lines.append(f"- {clause.id}: `{reference}` at {location}")
     tests = "\n".join(test_lines) or "- (none)"
+    return governed, tests
 
+
+def clause_range(ids):
+    return f"{ids[0]} to {ids[-1]}" if len(ids) > 1 else ids[0]
+
+
+def build_prompt(spec, clauses, guards, crates, index, results_file):
+    governed, tests = scope_of(spec, clauses, crates, index)
     ids = [clause.id for clause in clauses]
     return PROMPT.format(
         spec_name=spec.name,
         spec_path=spec.rel,
-        clause_range=f"{ids[0]} to {ids[-1]}" if len(ids) > 1 else ids[0],
+        clause_range=clause_range(ids),
         clause_ids=", ".join(f"`{i}`" for i in ids),
+        ground_rules=GROUND_RULES,
         governed=governed,
         guards=guards,
         tests=tests,
         spec_text=spec.path.read_text(encoding="utf-8"),
+        verdicts=VERDICTS,
+        violations=VIOLATIONS,
+        refutation=REFUTATION,
         results_file=results_file,
         example_clause=ids[0],
     )
+
+
+def share(fraction):
+    """A fraction as a percentage, which says "under 1%" for a change smaller than that."""
+    return "under 1%" if 0 < fraction < 0.005 else f"{fraction:.0%}"
+
+
+def earlier(clause, record):
+    """One line of what an earlier review decided about `clause`."""
+    if record["verdict"] == "conforms":
+        return f"- `{clause.id}`: conforms"
+    return f"- `{clause.id}`: {record['verdict']}, severity `{record['severity']}`: {record['summary']}"
+
+
+def build_diff_prompt(spec, clauses, records, change, diff_file, guards, crates, index, results_file):
+    governed, tests = scope_of(spec, clauses, crates, index)
+    ids = [clause.id for clause in clauses]
+    commit = records[ids[0]]["commit"]
+    measured = (
+        f"It touches {len(change.files)} files and changes {change.lines} of the "
+        f"{sum(change.sizes.values())} lines the spec watches ({share(change.fraction)})."
+    )
+    return DIFF_PROMPT.format(
+        spec_name=spec.name,
+        spec_path=spec.rel,
+        clause_range=clause_range(ids),
+        clause_ids=", ".join(f"`{i}`" for i in ids),
+        commit=commit,
+        ground_rules=GROUND_RULES,
+        previous="\n".join(earlier(clause, records[clause.id]) for clause in clauses),
+        diff_file=diff_file,
+        change=measured,
+        governed=governed,
+        guards=guards,
+        tests=tests,
+        spec_text=spec.path.read_text(encoding="utf-8"),
+        verdicts=VERDICTS,
+        violations=VIOLATIONS,
+        refutation=REFUTATION,
+        results_file=results_file,
+        example_clause=ids[0],
+    )
+
+
+def prepare_review(chosen, work_dir, repo, record, sources, crates, index, chunk_size, threshold):
+    """The reviewers' prompts for `chosen`, written under `work_dir`, as manifest entries.
+
+    Each clause is reviewed in full, on the diff since the commit the record holds, or not at all,
+    as `decide` says. A spec's clauses are grouped by that, and a group by the commit its diff
+    starts at, so a reviewer is given one diff. `record` maps clause ids to what an earlier run
+    decided, and is empty for a run that was asked to ignore it.
+
+    Returns the entries and how many clauses were reviewed in full for each reason."""
+    entries, reasons = [], {}
+    for spec in chosen:
+        reviewable = [c for c in spec.clauses if not c.withdrawn]
+        if not reviewable:
+            continue
+        spec_dir = work_dir / (spec.id or spec.path.stem)
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        patterns = inputs(spec, index, crates)
+        guards, hashes = clause_hashes(spec, reviewable, sources, repo, patterns)
+        full, diffs, kept = [], {}, []
+        for clause in reviewable:
+            earlier_run = record.get(clause.id)
+            mode, why = decide(
+                earlier_run,
+                hashes[clause.id],
+                lambda: repo.since(earlier_run["commit"], patterns),
+                threshold / 100,
+            )
+            if mode == KEEP:
+                kept.append({"clause": clause.id, **{key: earlier_run[key] for key in CARRIED}})
+            elif mode == DIFF:
+                diffs.setdefault(earlier_run["commit"], []).append(clause)
+            else:
+                full.append(clause)
+                reasons[why] = reasons.get(why, 0) + 1
+
+        groups = [(None, full)] + list(diffs.items())
+        prompts, number = [], 0
+        for commit, group in groups:
+            diff_file = None
+            if commit is not None:
+                diff_file = spec_dir / f"since-{commit}.diff"
+                diff_file.write_text(repo.diff(commit, patterns), encoding="utf-8")
+            for i in range(0, len(group), chunk_size):
+                clauses = group[i : i + chunk_size]
+                number += 1
+                results_file = spec_dir / f"chunk{number}_results.json"
+                prompt_file = spec_dir / f"chunk{number}_prompt.md"
+                prompt = {
+                    "prompt_file": str(prompt_file),
+                    "results_file": str(results_file),
+                    "clauses": [c.id for c in clauses],
+                    "hashes": {c.id: hashes[c.id] for c in clauses},
+                    "mode": FULL if commit is None else DIFF,
+                }
+                if commit is None:
+                    text = build_prompt(spec, clauses, guards, crates, index, results_file)
+                else:
+                    records = {c.id: record[c.id] for c in clauses}
+                    change = repo.since(commit, patterns)
+                    text = build_diff_prompt(
+                        spec, clauses, records, change, diff_file, guards, crates, index, results_file
+                    )
+                    prompt["previous"] = {
+                        c.id: {key: records[c.id][key] for key in CARRIED} for c in clauses
+                    }
+                    prompt["diff_file"] = str(diff_file)
+                prompt_file.write_text(text, encoding="utf-8")
+                prompts.append(prompt)
+        entries.append(
+            {
+                "spec": spec.name,
+                "path": spec.rel,
+                "id": spec.id,
+                "clauses": len(reviewable),
+                "reviewer_prompts": prompts,
+                "kept": kept,
+            }
+        )
+    return entries, reasons
+
+
+def review_paths(chosen, index, crates):
+    """Where a file git does not track changes what a run read: the specs, every source the guarded
+    uses are counted in, and what each chosen spec watches."""
+    return list(
+        dict.fromkeys(
+            [f"{SPEC_DIR.as_posix()}/**", "crates/**/*.rs"]
+            + [pattern for spec in chosen for pattern in inputs(spec, index, crates)]
+        )
+    )
+
+
+def read_record(full):
+    """What earlier runs decided, as a run plans from it: nothing for a run that was asked for every
+    clause in full, and nothing for a file that cannot be read, which `check_reviewed_file` reports
+    as an error of its own."""
+    if full:
+        return {}
+    try:
+        return reviewed.read_ledger(reviewed.LEDGER)
+    except reviewed.Problem:
+        return {}
+
+
+def check_reviewed_file():
+    try:
+        reviewed.read_ledger(reviewed.LEDGER)
+    except reviewed.Problem as problem:
+        yield finding(
+            str(reviewed.LEDGER),
+            ERROR,
+            "reviewed-malformed",
+            str(problem),
+            fix="every clause is reviewed in full until the line is fixed or the file is removed",
+        )
 
 
 def render(findings, chosen, strict):
@@ -1395,8 +1991,23 @@ def main():
     )
     parser.add_argument("--work-dir", default=None)
     parser.add_argument("--chunk-size", type=int, default=6, help="clauses per reviewer")
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help=f"review every clause in full and ignore {reviewed.LEDGER}",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=DIFF_BELOW,
+        metavar="PERCENT",
+        help="review a clause in full once this share or more of the lines its spec watches "
+        f"changed since it was last reviewed (default {DIFF_BELOW})",
+    )
     parser.add_argument("--json", action="store_true", help="findings as JSON on stdout")
     args = parser.parse_args()
+    if not 0 <= args.threshold <= 100:
+        parser.error("--threshold is a percentage, from 0 to 100")
 
     if args.write_unverified and partial_selection(args.specs, args.changed):
         print("the unverified list requires every spec: drop the filter", file=sys.stderr)
@@ -1439,6 +2050,7 @@ def main():
         findings.extend(check_isolation(spec, prefixes))
         findings.extend(check_prose(spec))
         findings.extend(check_documentation(spec))
+    findings.extend(check_reviewed_file())
     # All three of these are about the whole tree rather than one spec, so a run given a filter
     # has not read enough to judge any: the table would look short of rows, the list short of
     # clauses, and a declaration naming a spec the filter left out would read as stale.
@@ -1460,53 +2072,38 @@ def main():
 
     work_dir = Path(args.work_dir or tempfile.mkdtemp(prefix="check-spec-"))
     work_dir.mkdir(parents=True, exist_ok=True)
-    entries = []
-    for spec in chosen:
-        reviewable = [c for c in spec.clauses if not c.withdrawn]
-        if not reviewable:
-            continue
-        spec_dir = work_dir / (spec.id or spec.path.stem)
-        spec_dir.mkdir(parents=True, exist_ok=True)
-        chunks = [
-            reviewable[i : i + args.chunk_size]
-            for i in range(0, len(reviewable), args.chunk_size)
-        ]
-        prompts = []
-        for number, clauses in enumerate(chunks, start=1):
-            results_file = spec_dir / f"chunk{number}_results.json"
-            prompt_file = spec_dir / f"chunk{number}_prompt.md"
-            prompt_file.write_text(
-                build_prompt(spec, clauses, sources, crates, index, results_file), encoding="utf-8"
-            )
-            prompts.append(
-                {
-                    "prompt_file": str(prompt_file),
-                    "results_file": str(results_file),
-                    "clauses": [c.id for c in clauses],
-                }
-            )
-        entries.append(
-            {
-                "spec": spec.name,
-                "path": spec.rel,
-                "id": spec.id,
-                "clauses": len(reviewable),
-                "reviewer_prompts": prompts,
-            }
-        )
+    repo = Repo(root)
+    record = read_record(args.full)
+    entries, reasons = prepare_review(
+        chosen, work_dir, repo, record, sources, crates, index, args.chunk_size, args.threshold
+    )
+    # Whether what the reviewers read was main, which only `record-reviewed.py` has a use for.
+    dirty = repo.dirty(review_paths(chosen, index, crates))
+
+    reviewers = [p for e in entries for p in e["reviewer_prompts"]]
+    on_diff = sum(1 for p in reviewers if p["mode"] == DIFF)
+    kept = sum(len(e["kept"]) for e in entries)
+    progress = f"check-spec: {len(entries)} specs, {len(reviewers)} reviewers"
+    if on_diff:
+        progress += f" ({on_diff} reading a diff)"
+    if kept:
+        progress += f", {kept} clauses carried from {reviewed.LEDGER}"
+    progress += f", {len(findings)} mechanical findings"
+    progress_lines = [progress]
+    if record and reasons:
+        why = ", ".join(f"{reason}: {count}" for reason, count in sorted(reasons.items()))
+        progress_lines.append(f"in full: {sum(reasons.values())} clauses ({why})")
 
     manifest = {
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "root": str(root),
+        "commit": repo.head,
+        "dirty": dirty,
         "strict": args.strict,
         "mechanical_findings": findings,
         "mechanical_failed": failed,
         "specs": entries,
-        "progress_lines": [
-            f"check-spec: {len(entries)} specs, "
-            f"{sum(len(e['reviewer_prompts']) for e in entries)} reviewers, "
-            f"{len(findings)} mechanical findings"
-        ],
+        "progress_lines": progress_lines,
     }
     manifest_path = workdir.write_manifest(work_dir, manifest)
 

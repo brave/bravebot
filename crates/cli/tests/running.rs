@@ -3106,6 +3106,182 @@ fn a_session_on_a_prompt_is_refused_where_there_is_no_terminal_and_sends_nothing
     );
 }
 
+/// A checkout whose settings files hold escape sequences in the text a report names back: a deny
+/// rule that is not a rule, an `allow` rule, a key nothing reads, two environment names (one of
+/// them set by both files) and a `sandbox.filesystem.denyRead` path. Returns the directory to run
+/// in.
+///
+/// The files carry the sequences as JSON escapes, as a cloned repository would, so a control
+/// character exists only once something has decoded the file. `[8m` conceals whatever is drawn
+/// after it and nothing resets it, and OSC 52 writes the clipboard in terminals that accept it.
+fn a_checkout_whose_settings_hold_escape_sequences(scratch: &Scratch) -> PathBuf {
+    let cwd = scratch.path.join("checkout");
+    let project = cwd.join(".bravebot");
+    std::fs::create_dir_all(&project).expect("create the project directory");
+    std::fs::write(
+        project.join("settings.json"),
+        r#"{
+            "permissions": {
+                "deny": ["\u001b]52;c;aGVsbG8=\u0007\u001b[8mdeny-rule"],
+                "allow": ["Bash(echo \u001b[8mallow-rule)"]
+            },
+            "\u001b[8munread-key": true,
+            "env": {"\u001b[8mcontested-name": "a", "\u001b[8mlone-name": "b"},
+            "sandbox": {"filesystem": {"denyRead": ["\u001b[8mdeny-read-path"]}}
+        }"#,
+    )
+    .expect("write the project layer");
+    std::fs::write(
+        project.join("settings.local.json"),
+        r#"{"env": {"\u001b[8mcontested-name": "c"}}"#,
+    )
+    .expect("write the local layer");
+    cwd
+}
+
+/// [`a_checkout_whose_settings_hold_escape_sequences`]'s deny rule as a person is shown it: each
+/// control character replaced by its picture.
+const THE_DENY_RULE_PICTURED: &str = "\u{241b}]52;c;aGVsbG8=\u{2407}\u{241b}[8mdeny-rule";
+
+/// The first control character in `text` that is not a break between lines, which is one a
+/// terminal would act on.
+fn control_character_in(text: &str) -> Option<char> {
+    text.chars()
+        .find(|c| c.is_control() && !matches!(c, '\n' | '\t'))
+}
+
+/// LAYER-3, CLI-7: `doctor` run in a cloned repository draws what the repository's settings files
+/// say as pictures, so the text cannot move the cursor, conceal the lines after it or write the
+/// clipboard. Every place the report names a piece of the checkout's text is asserted on, and each
+/// piece is asserted to be drawn rather than left out: a character silently removed is one nobody
+/// can tell was ever in the file.
+#[test]
+fn doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures() {
+    let scratch = Scratch::new("cli-running-doctor-checkout-escapes");
+    let cwd = a_checkout_whose_settings_hold_escape_sequences(&scratch);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        // A configuration with nothing wrong with it, so the run reaches the settings sections.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    for (stream, text) in [("stdout", &stdout), ("stderr", &stderr)] {
+        assert_eq!(
+            control_character_in(text),
+            None,
+            "doctor sent a control character from the checkout on {stream}: {text:?}"
+        );
+    }
+    for (what, drawn) in [
+        ("the deny rule that is not a rule", THE_DENY_RULE_PICTURED),
+        ("the dropped allow rule", "Bash(echo \u{241b}[8mallow-rule)"),
+        ("the key nothing reads", "\u{241b}[8munread-key"),
+        ("the denyRead path", "\u{241b}[8mdeny-read-path"),
+    ] {
+        assert!(
+            stdout.contains(drawn),
+            "doctor did not draw {what} as pictures: {stdout}"
+        );
+    }
+    // The names the file set are one line, and an override is another: a name drawn in one and
+    // left out of the other would pass the checks above.
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("\u{241b}[8mlone-name")
+                && line.contains("\u{241b}[8mcontested-name")),
+        "doctor did not draw the environment names the file set as pictures: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("override") && line.contains("\u{241b}[8mcontested-name")),
+        "doctor did not draw the environment name two files set as pictures: {stdout}"
+    );
+}
+
+/// LAYER-3 for a one-shot run: the notice that names a deny rule it could not read goes to the
+/// terminal before the turn starts, so the rule's own text has to be drawn as pictures there too.
+/// The turn runs to the end, which is what shows the notice was not an error that stopped the run
+/// before the report.
+#[test]
+fn a_one_shot_run_draws_the_control_characters_of_a_checkouts_rule_as_pictures() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("done"));
+    let scratch = Scratch::new("cli-running-one-shot-checkout-escapes")
+        .with_settings(&settings_for(&gateway));
+    let cwd = a_checkout_whose_settings_hold_escape_sequences(&scratch);
+
+    let output = bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &["-p", "say hello"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "the run did not finish: {stderr}");
+    for (stream, text) in [("stdout", &stdout), ("stderr", &stderr)] {
+        assert_eq!(
+            control_character_in(text),
+            None,
+            "-p sent a control character from the checkout on {stream}: {text:?}"
+        );
+    }
+    assert!(
+        stderr.contains(THE_DENY_RULE_PICTURED),
+        "-p did not draw the rule it ignored as pictures: {stderr}"
+    );
+}
+
+/// LAYER-3 for `permissions check`: the rule that decided a call, and a checkout's `allow` rule
+/// that would have, are named back to the person, and both are text the checkout wrote.
+#[test]
+fn permissions_check_draws_the_control_characters_of_a_checkouts_rules_as_pictures() {
+    let scratch = Scratch::new("cli-running-permissions-check-checkout-escapes");
+    let cwd = scratch.path.join("checkout");
+    let project = cwd.join(".bravebot");
+    std::fs::create_dir_all(&project).expect("create the project directory");
+    std::fs::write(
+        project.join("settings.json"),
+        r#"{"permissions": {
+            "deny": ["Bash(echo \u001b[8mdeny-rule)"],
+            "allow": ["Bash(echo \u001b[8mallow-rule)"]
+        }}"#,
+    )
+    .expect("write the project layer");
+
+    for (call, drawn) in [
+        ("echo \u{1b}[8mdeny-rule", "Bash(echo \u{241b}[8mdeny-rule)"),
+        (
+            "echo \u{1b}[8mallow-rule",
+            "Bash(echo \u{241b}[8mallow-rule)",
+        ),
+    ] {
+        let words: Vec<&str> = call.split(' ').collect();
+        let mut arguments = vec!["permissions", "check", "Bash"];
+        arguments.extend(words);
+        let output = bravebot_started_in(&scratch.path, &cwd, &[], &arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert!(
+            output.status.success(),
+            "permissions check failed: {stderr}"
+        );
+        assert_eq!(
+            control_character_in(&stdout),
+            None,
+            "permissions check sent a control character from the checkout: {stdout:?}"
+        );
+        assert!(
+            stdout.contains(drawn),
+            "permissions check did not draw {drawn} as pictures: {stdout}"
+        );
+    }
+}
+
 /// Run the built binary with a terminal for its input, and read back everything it wrote to one.
 ///
 /// A session in lines refuses a pipe before it does anything else, so nothing it decides after
@@ -3529,6 +3705,65 @@ fn a_session_in_lines_names_an_allow_rule_a_checkout_wrote() {
     assert!(
         report.contains("not granting the allow rule"),
         "the report came after the first question: {question}"
+    );
+}
+
+/// LAYER-3 on the surface where it matters most: a session in lines draws no escape of its own, so
+/// a sequence from a checkout's settings that conceals what follows it is never reset, and the
+/// startup question and the person's echo are drawn hidden. What the session says about the
+/// checkout's rules comes before that question, so it is drawn as pictures and holds no control
+/// character.
+///
+/// Running the binary in a terminal, for the reason the test above gives.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_draws_a_checkouts_settings_as_pictures_before_the_startup_question() {
+    let scratch = Scratch::new("cli-running-plain-checkout-escapes").with_settings(
+        // A configured gateway, for the reason the test above gives.
+        r#"{
+            "provider": {
+                "openrouter": {
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            },
+            "model": "openrouter/z-ai/glm-4.6"
+        }"#,
+    );
+    let cwd = a_checkout_whose_settings_hold_escape_sequences(&scratch);
+
+    let output = in_a_terminal_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+            ("OPENROUTER_API_KEY", "a-token"),
+        ],
+        &["--plain"],
+    );
+
+    // The terminal ends every line with a carriage return, and echoes the end of the input as `^D`
+    // and two backspaces, wherever it arrives. Both are the terminal's and not the session's.
+    let (transcript, _) = said(&output);
+    let seen = transcript.replace("\r\n", "\n").replace("^D\u{8}\u{8}", "");
+    let (report, _) = seen
+        .split_once("trust this directory?")
+        .unwrap_or_else(|| panic!("the session never reached the startup question: {transcript}"));
+    assert_eq!(
+        control_character_in(report),
+        None,
+        "the session sent a control character from the checkout before the startup question: {report:?}"
+    );
+    assert!(
+        report.contains(THE_DENY_RULE_PICTURED),
+        "the session did not draw the rule it ignored as pictures: {report}"
+    );
+    assert!(
+        report.contains("not granting the allow rule Bash(echo \u{241b}[8mallow-rule)"),
+        "the session did not draw the allow rule it dropped as pictures: {report}"
     );
 }
 

@@ -33,6 +33,25 @@ const BLOCK_WIDTH: usize = 80;
 
 pub(crate) use bravebot_approval::printable;
 
+/// A file's path as [`printable`] draws it.
+pub(crate) fn printable_path(path: &std::path::Path) -> String {
+    printable(&path.display().to_string())
+}
+
+/// One dropped permission entry, said as [`bravebot_agent::permissions::describe`] says it, with
+/// the entry and the file it was written in pictured by [`printable`] (LAYER-3).
+///
+/// Both are text a checkout's settings file chose, and `describe` puts them into the sentence
+/// unchanged. The sentence's own words are left alone, so a message that runs over several lines
+/// keeps its breaks.
+pub(crate) fn described(rejected: &bravebot_core::permissions::Rejected) -> String {
+    bravebot_agent::permissions::describe(&bravebot_core::permissions::Rejected {
+        text: printable(&rejected.text),
+        reason: rejected.reason,
+        file: rejected.file.as_deref().map(printable),
+    })
+}
+
 /// One line of shown content as rows, each beginning with the margin.
 fn marked(margin: &str, line: &str) -> Vec<String> {
     // One column at least. A margin wider than the block still gets its margin, and the content
@@ -605,6 +624,31 @@ mod tests {
             written.contains('\u{241b}'),
             "the escape was not neutralised: {written:?}"
         );
+    }
+
+    /// The sentence about a dropped rule is the catalog's, and the rule and the file are a
+    /// checkout's. Both are drawn as pictures, and the sentence around them keeps its own breaks,
+    /// so the replacement is of the pieces rather than of the whole line.
+    #[test]
+    fn a_dropped_rule_and_the_file_it_was_written_in_are_described_as_pictures() {
+        let rejected = bravebot_core::permissions::Rejected {
+            text: "\u{1b}[8mrule".to_string(),
+            reason: bravebot_core::permissions::Unreadable::NotAList,
+            file: Some("\u{1b}[8mfile.json".to_string()),
+        };
+
+        let said = described(&rejected);
+
+        assert!(
+            !said.chars().any(|c| c.is_control() && c != '\n'),
+            "the sentence holds a control character from the checkout: {said:?}"
+        );
+        for piece in ["\u{241b}[8mrule", "\u{241b}[8mfile.json"] {
+            assert!(
+                said.contains(piece),
+                "{piece:?} was left out of the sentence rather than pictured: {said:?}"
+            );
+        }
     }
 
     /// A previewed line arrives trimmed to a width wider than most terminals. Left whole, the

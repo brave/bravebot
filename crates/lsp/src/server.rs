@@ -780,12 +780,9 @@ impl Server {
             language_ids,
         } = spec;
 
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "the language server's absolute path, resolved by the host before the \
-                          person was shown it (`Server::launch`)"
-        )]
-        let mut command = std::process::Command::new(resolved);
+        let mut command = bravebot_sandbox::programs::start(
+            &bravebot_sandbox::programs::Resolved::found_earlier(resolved),
+        );
         command.args(&args);
 
         // The user's environment reaches the server, because it runs with their access and a

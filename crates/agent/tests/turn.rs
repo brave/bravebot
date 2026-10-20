@@ -166,8 +166,16 @@ fn as_sse(reply: &str) -> String {
                 .pointer("/function/arguments")
                 .and_then(|a| a.as_str())
                 .unwrap_or("");
-            for chunk in arguments.as_bytes().chunks(8) {
-                let piece = String::from_utf8_lossy(chunk).to_string();
+            // Eight bytes at a time, extended to the end of the character it falls in, so a name
+            // holding a multibyte character reaches the client whole.
+            let mut rest = arguments;
+            while !rest.is_empty() {
+                let mut end = rest.len().min(8);
+                while !rest.is_char_boundary(end) {
+                    end += 1;
+                }
+                let (piece, tail) = rest.split_at(end);
+                rest = tail;
                 frame(json!({"choices": [{"delta": {"tool_calls": [
                     {"index": index, "function": {"arguments": piece}}
                 ]}}]}));
@@ -6916,6 +6924,77 @@ fn a_walk_does_not_report_a_link_to_a_denied_file() {
     assert!(
         !bodies.iter().any(|b| b.contains("hunter2")),
         "a walk read a denied file through a link to it"
+    );
+}
+
+/// A rule is about the file (PERM-7), and a hard link is a regular file under another name, which
+/// a walk keeps unless it asks about every name the file has. A listing, a search with context and
+/// a repository map each reach the file from a directory above the link, where a call naming the
+/// link is refused. Each tool is run in a turn of its own and judged by what it alone returned. A
+/// hard link to a file no rule covers is still reported and read by each of them.
+#[test]
+#[cfg(unix)]
+fn a_walk_does_not_read_a_hard_link_to_a_denied_file() {
+    let scratch = Scratch::new("permissions-denied-hard-link-under-a-walk");
+    let make = |name: &str, contents: &str| {
+        let path = scratch.path.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    };
+    let link = |original: &str, name: &str| {
+        let path = scratch.path.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::hard_link(scratch.path.join(original), path).unwrap();
+    };
+    make(".env", "SECRET_TOKEN=hunter2");
+    link(".env", "docs/readme.txt");
+    make("secrets/key.rs", "pub fn leaked_declaration() {}\n");
+    link("secrets/key.rs", "src/mirror.rs");
+    make("notes.md", "SECRET_TOKEN is set elsewhere");
+    link("notes.md", "docs/notes-copy.md");
+    make("src/lib.rs", "pub fn visible_declaration() {}\n");
+    link("src/lib.rs", "docs/lib-copy.rs");
+
+    let walk = |tool: &str, arguments: &str| {
+        run_calls_under_deny_rules(
+            &scratch,
+            &["Read(./.env)", "Read(secrets/**)"],
+            &[(tool, arguments)],
+        )
+        .join("\n")
+    };
+
+    let listing = walk("list_files", r#"{"directory":"."}"#);
+    assert!(
+        listing.contains("docs/notes-copy.md") && listing.contains("docs/lib-copy.rs"),
+        "the listing dropped a hard link to a file no rule covers: {listing}"
+    );
+    assert!(
+        !listing.contains("readme.txt") && !listing.contains("mirror.rs"),
+        "the listing reported a hard link to a covered file: {listing}"
+    );
+
+    let search = walk(
+        "search",
+        r#"{"pattern":"SECRET_TOKEN","directory":".","output":"lines","context":10}"#,
+    );
+    assert!(
+        search.contains("docs/notes-copy.md:1"),
+        "the search skipped a hard link to a file no rule covers: {search}"
+    );
+    assert!(
+        !search.contains("hunter2") && !search.contains("readme.txt"),
+        "the search quoted a covered file through a hard link to it: {search}"
+    );
+
+    let map = walk("repo_map", r#"{"directory":"."}"#);
+    assert!(
+        map.contains("visible_declaration"),
+        "the repository map named nothing: {map}"
+    );
+    assert!(
+        !map.contains("leaked_declaration") && !map.contains("mirror.rs"),
+        "the repository map read a covered file through a hard link to it: {map}"
     );
 }
 
@@ -30619,6 +30698,92 @@ fn a_vouch_for_a_file_named_with_whitespace_leaves_its_siblings_asking() {
         !second.contains("SIBLING_TEXT"),
         "a file nobody vouched for reached the planner"
     );
+}
+
+/// A yes at the vouch prompt is a rule about the file the prompt named and no other, whatever the
+/// file is called (TRUST-8). The directory holds every awkward name, and the yes has to leave each
+/// other file in it unvouched.
+///
+/// A turn that reads and vouches takes seconds, so the names read are one for each way a step that
+/// keys a name could join two files: a space at the end, a no-break space, a backslash and a
+/// right-to-left override. A name with a control character is refused before a prompt is drawn,
+/// since the person could not be shown it, so none of those is read.
+#[cfg(unix)]
+#[test]
+fn a_vouch_for_a_file_with_an_awkward_name_is_a_rule_about_that_file_alone() {
+    use std::os::unix::fs::MetadataExt;
+
+    let scratch = Scratch::new("vouch-awkward");
+    let mut files = Vec::new();
+    for (name, _) in aliases::AWKWARD_NAMES {
+        let path = scratch.path.join(name);
+        std::fs::create_dir_all(path.parent().expect("a name is in a directory")).unwrap();
+        std::fs::write(&path, "AWKWARD_NAMED\n")
+            .unwrap_or_else(|error| panic!("the volume does not hold {name:?}: {error}"));
+        let meta = std::fs::metadata(&path).unwrap();
+        files.push((*name, (meta.dev(), meta.ino())));
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let read = ["a.md ", "a.md\u{a0}", "a\\b.md", "\u{202e}a.md"];
+    for name in read {
+        let (_, identity) = files
+            .iter()
+            .find(|(listed, _)| *listed == name)
+            .unwrap_or_else(|| panic!("{name:?} is not one of the awkward names"));
+        let named = format!("./{name}");
+        // Built as JSON rather than through `tool_request`, which escapes a quote and leaves a
+        // backslash, one of the names being asked about.
+        let request = json!({"model": "test-model", "choices": [{"message": {
+            "role": "assistant",
+            "tool_calls": [{"id": "c1", "type": "function", "function": {
+                "name": "read_file",
+                "arguments": json!({ "path": named }).to_string(),
+            }}],
+        }}]})
+        .to_string();
+        let (endpoint, _received) = serve_sequence(vec![request, reply_with("done")]);
+        let mut confirmer = VouchesForFiles::new(true);
+        let offered = confirmer.offered.clone();
+        let vouched = turn::resume(
+            &config_for(&endpoint),
+            &egress,
+            &workspace,
+            &Task::new("read the file"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new("/work"),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("turn runs");
+        assert_eq!(
+            offered.lock().unwrap().len(),
+            1,
+            "{name:?} was not offered for vouching exactly once"
+        );
+        assert!(
+            vouched.trust.is_trusted(&named),
+            "the yes for {name:?} did not record a rule about it"
+        );
+        for (other, other_identity) in &files {
+            if other_identity != identity {
+                assert!(
+                    !vouched.trust.is_trusted(&format!("./{other}")),
+                    "the yes for {name:?} vouched for {other:?}"
+                );
+            }
+        }
+        assert!(
+            !vouched.trust.is_trusted("sibling.md"),
+            "the yes for {name:?} vouched for a file beside it"
+        );
+    }
 }
 
 /// A file already vouched for is not asked about, or every read of a trusted workspace would
@@ -54668,6 +54833,165 @@ fn the_lines_a_vetting_prompt_states_are_counted_inside_the_kernel() {
         "the content was released before it was measured, so the driver counted bytes it had \
          been handed for a screen: {:?}",
         sink.events()
+    );
+}
+
+/// What a command printed holds text a person cannot see: a tag-character message, a zero-width
+/// space, a bidirectional override and a variation selector. The output prompt shows each written
+/// out and says how many there are, and the planner is handed the bytes the command printed.
+///
+/// The count and the spelling are taken in the reshape the lines are counted in, so the test also
+/// holds that the planner's copy is the slot's own bytes: spelling it would hand the model a
+/// different text from the one the person agreed to.
+#[test]
+fn an_output_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes() {
+    let scratch = Scratch::new("output-hidden-characters");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let hidden_message = "\u{E0064}\u{E006F}";
+    let printed = format!(
+        "first line\nplain {hidden_message} tags\nzero\u{200B}width and bidi\u{202E}x and selector\u{FE0F}\n"
+    );
+    std::fs::write(scratch.path.join("where.txt"), &printed).unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(true);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the output prompt was put");
+    assert_eq!(
+        request.output,
+        "first line\nplain \u{2039}U+E0064 d\u{203A}\u{2039}U+E006F o\u{203A} tags\n\
+         zero\u{2039}U+200B\u{203A}width and bidi\u{2039}U+202E\u{203A}x and \
+         selector\u{2039}U+FE0F\u{203A}\n",
+        "a character the person cannot see was drawn as nothing, or the text was changed otherwise"
+    );
+    assert_eq!(
+        request.hidden, 5,
+        "the prompt would say the wrong number of characters draw as nothing"
+    );
+    assert_eq!(
+        request.lines, 3,
+        "writing the characters out changed how many lines the prompt says there are"
+    );
+    drop(asked);
+
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let _check = received.recv().expect("the check before the question");
+    let third = received.recv().expect("third request");
+    assert!(
+        third.contains(&format!("plain {hidden_message} tags")),
+        "the planner was not handed the bytes the command printed: {third}"
+    );
+    assert!(
+        !third.contains("U+E0064"),
+        "the planner was handed the person's spelling of the bytes instead of the bytes: {third}"
+    );
+}
+
+/// The same on the vetting prompt, which has a release of its own: what it shows is the slot with
+/// the characters that draw as nothing written out, and what the planner is handed is the slot.
+#[test]
+fn a_vetting_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes() {
+    let scratch = Scratch::new("vet-hidden-characters");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let hidden_message = "\u{E0064}\u{E006F}";
+    let printed = format!(
+        "first line\nplain {hidden_message} tags\nzero\u{200B}width and bidi\u{202E}x and selector\u{FE0F}\n"
+    );
+    std::fs::write(scratch.path.join("where.txt"), &printed).unwrap();
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "three lines"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the lines the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the user was asked");
+    assert_eq!(
+        request.content,
+        "first line\nplain \u{2039}U+E0064 d\u{203A}\u{2039}U+E006F o\u{203A} tags\n\
+         zero\u{2039}U+200B\u{203A}width and bidi\u{2039}U+202E\u{203A}x and \
+         selector\u{2039}U+FE0F\u{203A}\n",
+        "a character the person cannot see was drawn as nothing, or the text was changed otherwise"
+    );
+    assert_eq!(
+        request.hidden, 5,
+        "the prompt would say the wrong number of characters draw as nothing"
+    );
+    assert_eq!(
+        request.lines, 3,
+        "writing the characters out changed how many lines the prompt says there are"
+    );
+    drop(asked);
+
+    let _first = received.recv().expect("the first round");
+    let _second = received.recv().expect("the second round");
+    let _check = received.recv().expect("the check's own call");
+    let third = received.recv().expect("the round after the approval");
+    assert!(
+        third.contains(&format!("plain {hidden_message} tags")),
+        "the planner was not handed the bytes the command printed: {third}"
+    );
+    assert!(
+        !third.contains("U+E0064"),
+        "the planner was handed the person's spelling of the bytes instead of the bytes: {third}"
     );
 }
 

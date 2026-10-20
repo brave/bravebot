@@ -41,6 +41,10 @@ pub enum Consumer {
     WriterReservation,
     /// Whether a deny rule written about the name refuses a read and a write of the alias.
     DenyRule,
+    /// Whether the lookup of a program bravebot starts itself leaves out a `PATH` entry spelled as
+    /// the alias, when the directory spelled as the name is one a stage may write (SANDBOX-30).
+    /// Asked of the rows that spell a directory another way.
+    ProgramLookup,
 }
 
 pub struct Alias {

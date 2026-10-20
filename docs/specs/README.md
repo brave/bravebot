@@ -25,7 +25,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [checkouts.md](checkouts.md) | `CHECKOUT` | 21 | a delegate given a checkout of its own, so workers stop editing and building in one tree, and how its work comes back (partly built) |
 | [worktrees.md](worktrees.md) | `WORKTREE` | 10 | a session working in a worktree the driver made for it: asking for one, its name, what the session keeps of it, resuming into it and leaving it (proposed, nothing built) |
 | [turns.md](turns.md) | `TURN` | 11 | how long a turn may go on, what happens when it does not stop, what is said when it produces nothing, checks nothing or runs into its output ceiling, what a session does when it has spent its limit, what is done about the same call three times running, how the reads of one round are run together, and what the note under a finished turn says about refusals |
-| [prompting.md](prompting.md) | `PROMPT` | 12 | every moment the system stops and puts something to a human, what an answer grants, and where each answer is kept |
+| [prompting.md](prompting.md) | `PROMPT` | 13 | every moment the system stops and puts something to a human, what an answer grants, and where each answer is kept |
 | [permission-modes.md](permission-modes.md) | `MODE` | 14 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |
 | [references.md](references.md) | `REFER` | 6 | directories outside the working one that a person declared in their settings, what declaring one grants, and what the planner is told (repository entries and `@alias` proposed, not built) |
 | [naming-files.md](naming-files.md) | `NAME` | 10 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |
@@ -60,7 +60,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [goal.md](goal.md) | `GOAL` | 20 | one condition a person set, judged after every turn, until it holds |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
 | [sessions.md](sessions.md) | `SESSION` | 37 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
-| [mouse.md](mouse.md) | `MOUSE` | 5 | dragging across the screen to copy text: which cells a selection may take |
+| [mouse.md](mouse.md) | `MOUSE` | 7 | dragging, double and triple clicking and shift-clicking to copy text: which cells a selection may take |
 | [info-panel.md](info-panel.md) | `PANEL` | 15 | telling many sessions apart: the terminal's title and the info panel |
 | [background-sessions.md](background-sessions.md) | `BG` | 16 | proposed, the roster, its list (grouped by state on a terminal) and stop, `--bg`, `/bg`, attach, reply and the supervisor that restarts an idle process built: sessions that keep running after the terminal closes, with a list, attach and reply |
 | [session-messages.md](session-messages.md) | `MSG` | 12 | proposed, built: one background session sending text to another, put to a person and never starting a turn |

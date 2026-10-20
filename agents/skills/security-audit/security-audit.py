@@ -26,9 +26,10 @@ digest rather than a tag its publisher can move, that no job holding a credentia
 dependency beside it, that a checkout of this tree names a kind of ref rather than a bare name a
 branch and a tag can share, that the contexts a merge is held to are written down, name jobs
 that exist, and cover every job that runs a check, that clippy still refuses a program start by any
-name and every allow of that refusal says who chose the program, and that every question and
-remembered answer has a row in the register of kept answers. A rule that can be written as one of these belongs here
-rather than in a reviewer's head.
+name and every allow of that refusal says who chose the program, that every question and
+remembered answer has a row in the register of kept answers, and that no function keying a name
+trims it, folds its case or decodes it lossily unless the trust spec says which files that joins. A
+rule that can be written as one of these belongs here rather than in a reviewer's head.
 """
 
 import argparse
@@ -221,6 +222,47 @@ RUN_SPEC = Path("docs/specs/tools/run.md")
 # is matched against, or the read set a pure plan is proven by. Those are named in the spec rather
 # than here, so admitting one is an edit somebody reviews.
 NOT_A_KEY = "reads_a_step_without_keying"
+
+# The functions that turn a name into the key a decision is filed under, and the helpers that fold or
+# decompose it (TRUST-2). A step in one of them that trims, folds case or decodes lossily gives two
+# files the volume holds apart one key, and the table of names asks only whether one file's names
+# share a rule, so nothing else asks about it. `normalise` and the two `key` methods build the key
+# every trust rule, writer reservation and prompt answer is filed under, and `key_of` is the key a
+# permission rule is matched under. The rest are the steps those call that fold or decompose a name.
+# Only these are read: a step added somewhere else is the reviewer's, which is what PATH-007 asks.
+KEY_FUNCTIONS = (
+    ("crates/core/src/trust.rs", "normalise"),
+    ("crates/core/src/trust.rs", "key"),
+    ("crates/core/src/trust.rs", "fold_case"),
+    ("crates/core/src/trust.rs", "canonical_form"),
+    ("crates/core/src/file_authority.rs", "key"),
+    ("crates/core/src/permissions.rs", "key_of"),
+    ("crates/core/src/permissions.rs", "fold"),
+    ("crates/core/src/permissions.rs", "drive_in_upper_case"),
+)
+# A trim, a case fold, a lossy decode or a Unicode normalisation, written as a method, as a path
+# (`.map(str::trim)`, `char::to_lowercase`) or, for the helpers, as a call. `.fold(` on an iterator
+# is none of them, so a bare `fold(` counts only where nothing is called on the left of it. What is
+# recognised is these names. A step spelled another way is the reviewer's, which PATH-007 asks of
+# them.
+JOINING_NAMES = (
+    "trim|trim_start|trim_end|trim_left|trim_right|trim_matches|trim_start_matches"
+    "|trim_end_matches|to_lowercase|to_uppercase|to_ascii_lowercase|to_ascii_uppercase"
+    "|make_ascii_lowercase|make_ascii_uppercase|eq_ignore_ascii_case|to_string_lossy"
+    "|from_utf8_lossy|fold_case|decompose|canonical_form|nfc|nfd|nfkc|nfkd"
+)
+JOINING_CONSTRUCT = re.compile(
+    rf"(?:\.|::)({JOINING_NAMES})\b"
+    r"|(?<![.\w:])(?<!fn )(fold_case|fold|from_utf8_lossy|decompose|canonical_form)\s*\("
+)
+CHAR_LITERAL = re.compile(r"'(?:[^'\\]|\\.)'")
+# A construct a key function is allowed to keep, each with the reason a reader checks: a `path::fn
+# construct: reason` line under this key in the trust spec, so admitting one is an edit somebody
+# reviews, as for `declassify`. It allows one call. `path::fn construct xN: reason` allows N, so a
+# second call is a change the spec has to say yes to as well.
+KEY_STEP_ALLOWED = "key_step_allowed"
+KEY_STEP_SPEC = "TRUST"
+KEY_STEP_ENTRY = re.compile(r"^(\S+::\w+ \w+)(?: x(\d+))?:\s*(.*)$")
 
 # A third party step in a workflow, and the only form of it that names one immutable thing. A tag or
 # a branch is whatever its owner points it at today, and every one of these runs with the repository
@@ -1771,6 +1813,189 @@ def check_key_sites_exhaustive(specs, sources):
             "the defect RUN-8's environment, tree and path-bytes paragraphs were each written "
             "after, arriving a fourth time in a function nobody thought to re-read",
         )
+
+
+def blanked(lines):
+    """The lines with their comments cut and the inside of every string and character literal
+    emptied, so that a brace or a construct named in one is not read as code.
+
+    Character literals first: `'"'` is one, and read after the strings it would pair its quote with
+    the next string's and move the brace depth."""
+    return [
+        STRING_LITERAL.sub('""', CHAR_LITERAL.sub("''", raw))
+        for raw in mechanics.strip_comments(lines)
+    ]
+
+
+def braced_spans(lines, name):
+    """The 1-based line ranges of each `fn name` outside a test module, from its signature to the
+    line closing its body.
+
+    The signature is found as the rest of the tree finds one (`definition_of`), generics included.
+    """
+    code = blanked(lines)
+    tests = test_regions(code)
+    declaration = mechanics.definition_of(name)
+    spans = []
+    for index, raw in enumerate(code):
+        number = index + 1
+        if not declaration.search(raw) or any(start <= number <= end for start, end in tests):
+            continue
+        depth = 0
+        opened = False
+        end = None
+        for at in range(index, len(code)):
+            if not opened and ";" in code[at] and "{" not in code[at]:
+                break
+            depth += code[at].count("{") - code[at].count("}")
+            opened = opened or "{" in code[at]
+            if opened and depth <= 0:
+                end = at
+                break
+        if end is not None:
+            spans.append((number, end + 1))
+    return spans
+
+
+def key_step_allowances(specs):
+    """What the trust spec allows, as `path::fn construct` to the number of calls and the reason,
+    and a finding for each other spec that lists any.
+
+    Read from the trust spec alone. The list is the one place that says which files a key function
+    joins, and an entry in another spec would silence the check without being read where the table
+    of names is.
+    """
+    allowed = {}
+    misplaced = []
+    for spec in specs:
+        if KEY_STEP_ALLOWED not in spec.front:
+            continue
+        if spec.front.get("id") != KEY_STEP_SPEC:
+            misplaced.append(spec)
+            continue
+        listed = spec.front[KEY_STEP_ALLOWED]
+        for entry in [listed] if isinstance(listed, str) else listed:
+            parsed = KEY_STEP_ENTRY.match(str(entry).strip())
+            if parsed:
+                where, calls, reason = parsed.groups()
+                allowed[where] = (int(calls or 1), reason.strip())
+            else:
+                allowed[str(entry).strip()] = (1, "")
+    return allowed, misplaced
+
+
+def check_key_steps_join_no_names(specs, sources):
+    """A construct inside a key function that makes two different names one key.
+
+    The table of names in TRUST-2 and the tests over it ask whether the names of one file share a
+    rule. A step that joins two different files has no row there and no test, which is how
+    `normalise` kept its `trim()` from the first commit until a file named only whitespace was keyed
+    as the working directory and a vouch for it trusted the whole workspace. A tool can find the
+    construct, so this does, and a reviewer reads what is left: the allowed entries and the reason
+    each gives.
+
+    A construct that stays is listed in the trust spec with the files it joins and why, which is also
+    where PATH-007 asks the description to say it. It is allowed for the number of calls the spec
+    gives, so a second call is read again. An entry that no longer matches is reported, since it
+    would otherwise be a standing allowance for whatever is written there next.
+    """
+    allowed, misplaced = key_step_allowances(specs)
+    for spec in misplaced:
+        yield finding(
+            ERROR,
+            "key-step-allowance-misplaced",
+            f"{spec.front.get('id', 'a spec')} lists `{KEY_STEP_ALLOWED}`, which only the trust spec reads",
+            f"`{KEY_STEP_ALLOWED}` is listed in a spec other than `docs/specs/trust-map.md`, so "
+            "the constructs it allows are not where the table of names is read, and they would "
+            "silence this check there",
+            "trust",
+            "low",
+            fix=f"move the entries to `{KEY_STEP_ALLOWED}:` in `docs/specs/trust-map.md`",
+        )
+
+    hits = {}
+    for path, name in KEY_FUNCTIONS:
+        lines = sources.get(Path(path))
+        spans = braced_spans(lines, name) if lines else []
+        if not spans:
+            yield finding(
+                ERROR,
+                "key-function-missing",
+                f"`{name}` in {path} is not where the key check reads it, so nothing checks it",
+                f"`{path}` has no `fn {name}` outside a test module, so the check that keeps a "
+                "trim, a case fold or a lossy decode out of the functions that key a name is "
+                "silently passing for it",
+                "trust",
+                "medium",
+                fix=f"point `KEY_FUNCTIONS` in this script at where `{name}` is now, or remove "
+                "its entry in the same change that removes the function",
+                gain="nothing directly. It removes the check that would report the next step "
+                "that gives two different files one key",
+            )
+            continue
+        code = blanked(lines)
+        for start, end in spans:
+            for number in range(start, end + 1):
+                for found in JOINING_CONSTRUCT.finditer(code[number - 1]):
+                    construct = next(group for group in found.groups() if group)
+                    where = f"{path}::{name} {construct}"
+                    hits.setdefault(where, []).append((number, lines[number - 1].strip()))
+
+    for where, found in sorted(hits.items()):
+        permitted = allowed.get(where, (0, ""))[0]
+        if len(found) <= permitted:
+            continue
+        path, _, rest = where.partition("::")
+        name, _, construct = rest.partition(" ")
+        said = f", and the spec allows {permitted}" if permitted else ""
+        yield finding(
+            ERROR,
+            "key-step-joins-names",
+            f"{name} calls {construct}, which can make two different files one key",
+            f"`{name}` in `{path}` turns a name into a key and calls `{construct}` {len(found)} "
+            f"time{'s' * (len(found) != 1)}{said}, so two names a volume holds apart can have one "
+            "key, and a trust rule, a writer reservation, a prompt answer or a permission rule "
+            "about one decides the other",
+            "trust",
+            "medium",
+            evidence=[f"{path}:{number}: {text}" for number, text in found],
+            fix=f"remove the call. Where the join is deliberate, add `{where}: <the files it "
+            f"joins and why>` under `{KEY_STEP_ALLOWED}:` in `docs/specs/trust-map.md` (`x<N>` "
+            "after the construct for N calls), add the row to the TRUST-2 table, and add a test in "
+            "which two names that must stay different do (PATH-007)",
+            gain="a step that trims, folds or decodes a name joins two files the table of names "
+            "does not list. That is the defect #2752 was, and each earlier report in this family "
+            "found one join after the one before it",
+        )
+
+    for where, (permitted, reason) in sorted(allowed.items()):
+        if not reason:
+            yield finding(
+                ERROR,
+                "key-step-allowance-unexplained",
+                f"{where} is allowed with no reason",
+                f"`{where}` is listed under `{KEY_STEP_ALLOWED}:` with nothing after the colon, so "
+                "a reader of the spec cannot tell which files the construct joins or why",
+                "trust",
+                "low",
+                fix=f"write the files it joins and why after `{where}:`",
+            )
+        if len(hits.get(where, ())) < permitted:
+            yield finding(
+                WARNING,
+                "key-step-allowance-stale",
+                f"{where} is allowed {permitted} time{'s' * (permitted != 1)} and the function "
+                "has fewer such calls",
+                f"`{where}` is listed under `{KEY_STEP_ALLOWED}:` for {permitted} call"
+                f"{'s' * (permitted != 1)} and the key function has "
+                f"{len(hits.get(where, ()))}, so the entry would admit whatever is next written "
+                "there under that name rather than the call somebody reviewed",
+                "trust",
+                "low",
+                evidence=[f"{KEY_STEP_ALLOWED}: {where}"],
+                fix=f"drop the entry from `{KEY_STEP_ALLOWED}:`, or correct it to where the call "
+                "moved to",
+            )
 
 
 def check_pinned_actions():
@@ -3547,6 +3772,7 @@ def mechanical_findings(specs, sources):
     findings += list(check_construction_pinned(specs, sources))
     findings += list(check_gates_pinned(specs, sources))
     findings += list(check_key_sites_exhaustive(specs, sources))
+    findings += list(check_key_steps_join_no_names(specs, sources))
     findings += list(check_pinned_actions())
     findings += list(check_pinned_images())
     findings += list(check_downloads_verified())

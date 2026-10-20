@@ -1578,8 +1578,29 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             session.end_panel_drag();
             Action::Redraw
         }
+        // Shift-click moves the loose end of the selection held, when the press is in the pane
+        // it belongs to. Where it is not, or nothing is held, it is a press like any other.
+        MouseEventKind::Down(MouseButton::Left)
+            if mouse.modifiers.contains(KeyModifiers::SHIFT)
+                && session.selection_holds(mouse.row, mouse.column) =>
+        {
+            session.last_click = None;
+            session.extend_selection(mouse.row, mouse.column);
+            Action::Redraw
+        }
         MouseEventKind::Down(MouseButton::Left) => {
-            session.begin_selection(mouse.row, mouse.column);
+            let (click, count) = crate::select::count_click(
+                session.last_click,
+                std::time::Instant::now(),
+                mouse.row,
+                mouse.column,
+            );
+            session.last_click = Some(click);
+            session.begin_selection_by(
+                mouse.row,
+                mouse.column,
+                crate::select::Unit::of_click(count),
+            );
             Action::Redraw
         }
         MouseEventKind::Drag(MouseButton::Left) => {

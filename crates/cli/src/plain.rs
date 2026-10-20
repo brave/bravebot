@@ -268,7 +268,7 @@ fn run(
     for problem in &rejected {
         asking.say(&t!(
             session_permission_rule_ignored,
-            problem = bravebot_agent::permissions::describe(problem)
+            problem = crate::progress::described(problem)
         ));
     }
     // And the `allow` entries a checkout wrote, which are dropped wherever the file is read
@@ -279,8 +279,8 @@ fn run(
     for rule in bravebot_agent::permissions::proposed(&settings, profile.as_deref()) {
         asking.say(&t!(
             session_permission_allow_ignored,
-            rule = &rule.rule,
-            path = rule.path.display().to_string()
+            rule = shown(&rule.rule),
+            path = crate::progress::printable_path(&rule.path)
         ));
     }
 
@@ -1177,6 +1177,9 @@ pub(crate) enum Waiting {
 /// Told what the session is waiting for, so that a process nobody is at can say so and take a
 /// line only when one is being waited for (BG-7, BG-10).
 pub(crate) trait Watcher: Send {
+    /// Called before the first line of a question is written, so that what is written from here
+    /// to the answer can be kept whole for a terminal that attaches while it is held (BG-7).
+    fn asking(&mut self);
     /// Called before the read, which blocks.
     fn waiting(&mut self, on: Waiting);
     /// Called after it, with the line where one came.
@@ -1206,6 +1209,18 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     /// the plainest kind, so that no question is ever taken for a prompt.
     fn about(&mut self, held: Held) {
         self.kind = Some(held);
+    }
+
+    /// Write the lines of a question, after telling the watcher they are coming, so that a process
+    /// nobody is at keeps all of them for a terminal that attaches while the question is held
+    /// (BG-7). Every question is written here, whatever else it does.
+    fn say_question(&mut self, lines: &[String]) {
+        if let Some(watch) = &mut self.watch {
+            watch.asking();
+        }
+        for line in lines {
+            self.say(line);
+        }
     }
 
     /// What the person answered the last time this exact question was put to them, if it was.
@@ -1279,9 +1294,7 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     /// startup question reads as a refusal: a question nobody answered is not a question somebody
     /// said yes to.
     fn put(&mut self, lines: &[String], question: &str) -> Option<Decision> {
-        for line in lines {
-            self.say(line);
-        }
+        self.say_question(lines);
         let _ = write!(self.output, "{question} {} ", t!(line_answer));
         let _ = self.output.flush();
 
@@ -1303,6 +1316,7 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     /// Ask a question answered with a word rather than a yes, and read the word back trimmed, or
     /// `None` at the end of the input.
     pub(crate) fn answer(&mut self, question: &str) -> Option<String> {
+        self.say_question(&[]);
         let _ = write!(self.output, "{question} ");
         let _ = self.output.flush();
         let on = self.answering();
@@ -1425,6 +1439,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             &request.summary(),
             checked(request.verdict),
             &request.output,
+            request.hidden,
         );
         self.about(Held::Read);
         self.ask(&lines, t!(output_title))
@@ -1440,6 +1455,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             expects: &request.expects,
             check: checked(request.verdict),
             content: &request.content,
+            hidden: request.hidden,
             picture: picture
                 .as_ref()
                 .map(|(path, pdf)| bravebot_approval::Picture { path, pdf: *pdf }),
@@ -1572,9 +1588,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             label: &label,
         });
         lines.push(t!(message_explained_turn, key = t!(message_answer_turn)).to_string());
-        for line in &lines {
-            self.say(line);
-        }
+        self.say_question(&lines);
         let _ = write!(self.output, "{} {} ", t!(message_title), t!(message_answer));
         let _ = self.output.flush();
         self.about(Held::Message);
@@ -1643,14 +1657,14 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             .filter(|(_, earlier)| earlier.is_none())
             .map(|(prompt, _)| prompt)
         {
-            self.say(&shown(&prompt.header));
-            self.say(&shown(&prompt.question));
+            let mut lines = vec![shown(&prompt.header), shown(&prompt.question)];
             for row in &prompt.rows {
-                self.say(&format!("  {}", shown(&row.label)));
+                lines.push(format!("  {}", shown(&row.label)));
                 if let Some(detail) = &row.detail {
-                    self.say(&format!("    {}", shown(detail)));
+                    lines.push(format!("    {}", shown(detail)));
                 }
             }
+            self.say_question(&lines);
             let _ = write!(self.output, "{} ", t!(ask_own_words));
             let _ = self.output.flush();
             self.about(Held::Question);
@@ -2987,15 +3001,40 @@ mod tests {
         );
     }
 
-    /// A watcher that keeps what each read was for, so a test can read it back.
-    struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<Waiting>>>);
+    /// A watcher that keeps what each read was for, so a test can read it back, and fails a
+    /// question that was waited on without being announced first.
+    struct Recorded {
+        seen: std::sync::Arc<std::sync::Mutex<Vec<Waiting>>>,
+        announced: bool,
+    }
+
+    impl Recorded {
+        fn new(seen: std::sync::Arc<std::sync::Mutex<Vec<Waiting>>>) -> Self {
+            Self {
+                seen,
+                announced: false,
+            }
+        }
+    }
 
     impl Watcher for Recorded {
-        fn waiting(&mut self, on: Waiting) {
-            self.0.lock().expect("the record").push(on);
+        fn asking(&mut self) {
+            self.announced = true;
         }
 
-        fn received(&mut self, _on: Waiting, _line: Option<&str>) {}
+        fn waiting(&mut self, on: Waiting) {
+            if let Waiting::Answer(held) = on {
+                assert!(
+                    std::mem::take(&mut self.announced),
+                    "a {held:?} question was waited on without being announced"
+                );
+            }
+            self.seen.lock().expect("the record").push(on);
+        }
+
+        fn received(&mut self, _on: Waiting, _line: Option<&str>) {
+            self.announced = false;
+        }
     }
 
     /// BG-7, CLI-14: a server question is put to whoever attaches as a held question of its own
@@ -3024,7 +3063,7 @@ mod tests {
             let mut asking = Prompting::watched(
                 std::io::BufReader::new(std::io::Cursor::new(typed.to_vec())),
                 Vec::new(),
-                Box::new(Recorded(seen.clone())),
+                Box::new(Recorded::new(seen.clone())),
             );
             let answer = Attached(&mut asking).ask_to_start(&Question {
                 alias: "news",
@@ -3120,7 +3159,7 @@ mod tests {
             let mut asking = Prompting::watched(
                 std::io::BufReader::new(std::io::Cursor::new(typed.as_bytes().to_vec())),
                 Vec::new(),
-                Box::new(Recorded(seen.clone())),
+                Box::new(Recorded::new(seen.clone())),
             );
             assert_eq!(
                 asking.confirm_message(&a_message_to_ask_about()),
@@ -3164,7 +3203,7 @@ mod tests {
             let mut asking = Prompting::watched(
                 std::io::BufReader::new(std::io::Cursor::new(b"n\n".to_vec())),
                 Vec::new(),
-                Box::new(Recorded(seen.clone())),
+                Box::new(Recorded::new(seen.clone())),
             );
             put(&mut asking);
             std::mem::take(&mut *seen.lock().expect("the record"))
@@ -3206,6 +3245,7 @@ mod tests {
                     command: "ls".to_string(),
                     output: "a".to_string(),
                     lines: 1,
+                    hidden: 0,
                     reference: "ref:1".to_string(),
                     verdict,
                     reason: None,
@@ -3230,6 +3270,7 @@ mod tests {
                         expects: "notes".to_string(),
                         content: "a".to_string(),
                         lines: 1,
+                        hidden: 0,
                         verdict,
                         reason: None,
                         picture: picture.clone(),
@@ -3371,6 +3412,7 @@ mod tests {
             command: "tail -n 100 build.log".to_string(),
             output: output.clone(),
             lines: 100,
+            hidden: 0,
             reference: "ref:1".to_string(),
             verdict: Verdict::Safe,
             reason: None,
@@ -3402,6 +3444,7 @@ mod tests {
             expects: "a build log".to_string(),
             content: content.clone(),
             lines: 100,
+            hidden: 0,
             verdict: Verdict::Safe,
             reason: None,
             picture: None,
@@ -3416,6 +3459,63 @@ mod tests {
             content.lines().collect::<Vec<_>>(),
             "{screen}"
         );
+    }
+
+    /// PROMPT-1: the plain prompt says how many characters of the text drew as nothing above the
+    /// text, for an output and for a vetted read alike, and says nothing of them for a text with
+    /// none.
+    #[test]
+    fn the_plain_prompts_say_how_many_characters_of_the_text_draw_as_nothing() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A} text";
+        let said = t!(hidden_characters, count = 2usize).to_string();
+        for hidden in [2, 0] {
+            for stem in ["output", "vet"] {
+                let mut asking = Prompting::new(
+                    std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+                    Vec::new(),
+                );
+                let decision = match stem {
+                    "output" => asking.confirm_read_output(&OutputRequest {
+                        command: "cat notes".to_string(),
+                        output: text.to_string(),
+                        lines: 1,
+                        hidden,
+                        reference: "ref:1".to_string(),
+                        verdict: Verdict::Safe,
+                        reason: None,
+                        label: String::new(),
+                        reason_label: None,
+                    }),
+                    _ => asking.confirm_vetted_read(&VetRequest {
+                        origin: "notes".to_string(),
+                        expects: "notes".to_string(),
+                        content: text.to_string(),
+                        lines: 1,
+                        hidden,
+                        verdict: Verdict::Safe,
+                        reason: None,
+                        picture: None,
+                        label: None,
+                        reason_label: None,
+                    }),
+                };
+                assert_eq!(decision, Decision::Approve);
+                let screen = String::from_utf8(asking.output).expect("text");
+                let rows: Vec<&str> = screen.lines().collect();
+                let saying = rows.iter().position(|row| row.contains(&said));
+                let text_at = rows
+                    .iter()
+                    .position(|row| row.ends_with(text) && row.contains('\u{2503}'));
+                assert!(text_at.is_some(), "`{stem}`: {screen}");
+                match hidden {
+                    0 => assert!(saying.is_none(), "`{stem}`: {screen}"),
+                    _ => assert!(
+                        saying.is_some() && saying < text_at,
+                        "`{stem}` did not say {hidden} characters drew as nothing above the text: {screen}"
+                    ),
+                }
+            }
+        }
     }
 
     /// A hundred lines with an instruction on the seventieth, past the head a prompt might show.

@@ -420,12 +420,7 @@ impl LandlockSandbox {
         })?;
         let policy = trimmed.as_ref().unwrap_or(policy);
 
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "the program the caller asked to run confined, started inside the \
-                          policy's confinement"
-        )]
-        let mut command = Command::new(program);
+        let mut command = crate::programs::start(&crate::programs::Resolved::to_confine(program));
         command.args(args);
         if let Some(directory) = &policy.starting_in {
             command.current_dir(directory);
