@@ -3130,6 +3130,58 @@ def test_the_manifest_is_read_from_the_work_directory():
         )
 
 
+def test_verifying_saves_the_candidates_the_collector_reads():
+    """The collector takes each candidate, and where its verdict goes, from the manifest.
+
+    A verify pass that pairs candidates with verifiers and does not save the pairing leaves a report
+    of no candidates, whatever the verifiers decided.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        lane_results = work / "gates_results.json"
+        lane_results.write_text(
+            json.dumps({"candidates": [{"summary": "a claim", "place": "crates/core/src/policy.rs:1"}]}),
+            encoding="utf-8",
+        )
+        collect.workdir.write_manifest(
+            work,
+            {
+                "lanes": [
+                    {
+                        "lane": "gates",
+                        "prompt_file": str(work / "gates_prompt.md"),
+                        "results_file": str(lane_results),
+                    }
+                ]
+            },
+        )
+        argv = sys.argv
+        sys.argv = ["verify-findings.py", "--work-dir", str(work)]
+        try:
+            with redirect_stdout(io.StringIO()):
+                status = verifying.main()
+        finally:
+            sys.argv = argv
+        check("pairing candidates with verifiers exits clean", status == 0, str(status))
+
+        pairs = collect.read_manifest(work).get("verifications", [])
+        if not check(
+            "the manifest keeps one verification for the one candidate",
+            len(pairs) == 1 and pairs[0]["lane"] == "gates" and Path(pairs[0]["prompt_file"]).is_file(),
+            str(pairs),
+        ):
+            return
+        Path(pairs[0]["results_file"]).write_text(
+            json.dumps({"verdict": "CONFIRMED", "impact": "low"}), encoding="utf-8"
+        )
+        findings = collect.load_verdicts(collect.read_manifest(work))[0]
+        check(
+            "a verdict written where the manifest says is collected as a finding",
+            [one["lane"] for one in findings] == ["gates"],
+            str(findings),
+        )
+
+
 LISTED = (
     "disallowed-methods = [\n"
     '    { path = "std::process::Command::new", reason = "r" },\n'
@@ -3411,6 +3463,7 @@ def main():
         test_a_draft_key_is_one_its_title_keeps,
         test_a_run_writes_a_manifest_and_posts_nothing,
         test_the_manifest_is_read_from_the_work_directory,
+        test_verifying_saves_the_candidates_the_collector_reads,
     ):
         print(test.__name__)
         test()
