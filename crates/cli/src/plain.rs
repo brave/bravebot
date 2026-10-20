@@ -1477,6 +1477,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
         let lines = bravebot_approval::vouch_lines(
             &request.path,
+            &request.rule,
             checked(request.verdict),
             &request.preview,
         );
@@ -3266,6 +3267,7 @@ mod tests {
             asked(&mut |asking| {
                 asking.confirm_vouch(&VouchRequest {
                     path: "scripts/a.sh".to_string(),
+                    rule: "scripts/a.sh".to_string(),
                     preview: "echo".to_string(),
                     truncated: false,
                     verdict,

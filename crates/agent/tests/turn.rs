@@ -63262,6 +63262,8 @@ fn approval_prompts_carry_the_labels_the_gates_released_their_bytes_under() {
     assert!(vouch.preview.contains("RAW-CONTENTS"));
     assert_eq!(vouch.label, said);
     assert_eq!(vouch.reason_label.as_deref(), Some(said.as_str()));
+    // The rule a yes writes covers this file and nothing wider: the full path, not the root.
+    assert_eq!(vouch.rule, "/work/config.py");
 
     let vet = shown.lock().unwrap();
     let vet = vet.first().expect("the person was asked to read");

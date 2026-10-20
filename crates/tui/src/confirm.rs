@@ -4275,6 +4275,7 @@ mod tests {
     fn a_vouch(path: &str, preview: impl Into<String>, truncated: bool) -> VouchRequest {
         VouchRequest {
             path: path.into(),
+            rule: path.into(),
             preview: preview.into(),
             truncated,
             verdict: Verdict::Safe,
@@ -4785,6 +4786,28 @@ mod tests {
         assert!(drawn.contains("padded.txt"), "{drawn}");
         assert!(!drawn.contains("nothing of this file"), "{drawn}");
         assert!(drawn.contains('…'), "{drawn}");
+    }
+
+    /// PROMPT-1, PROMPT-2: a name that would draw as nothing, or as another name, is drawn quoted
+    /// with its characters spelled, and the rule a yes writes is drawn under it.
+    #[test]
+    fn the_vouch_prompt_marks_an_unreadable_name_and_says_the_rule() {
+        let screen = |path: &str, rule: &str| {
+            let mut request = a_vouch(path, "a line", false);
+            request.rule = rule.into();
+            rows_of(100, 30, |frame| {
+                draw_vouch(frame, &request, 0, &mut Seen::default());
+            })
+            .join("\n")
+        };
+        let plain = screen("note.md", "/work/note.md");
+        assert!(plain.contains("/work/note.md"), "{plain}");
+        for name in [" ", "note.md ", "a\u{202e}b", "a\u{200b}b"] {
+            let drawn = screen(name, &format!("/work/{name}"));
+            assert_ne!(drawn, screen("note.md", "/work/note.md"), "{name:?}");
+            assert!(drawn.contains("Trust \""), "{name:?}\n{drawn}");
+            assert!(drawn.contains("trusts \"/work/"), "{name:?}\n{drawn}");
+        }
     }
 
     /// The offer this branch was reported for. A person promoting a file is answering the question

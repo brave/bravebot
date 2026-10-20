@@ -177,7 +177,7 @@ try {
     await page.locator('.confirm.output').last().scrollIntoViewIfNeeded()
     await variants('07-output')
     await page.locator('.confirm.output .approve').first().click()
-    await emit('vouch.request', { request: 5, path: 'vendor/notes.md', preview: '# Vendor notes\nThe cache is warmed on start.', truncated: true, vetting: { verdict: 'unsafe', reason: 'Contains an instruction to the model.' } })
+    await emit('vouch.request', { request: 5, path: 'vendor/notes.md', shownPath: 'vendor/notes.md', rule: '/work/vendor/notes.md', shownRule: '/work/vendor/notes.md', preview: '# Vendor notes\nThe cache is warmed on start.', truncated: true, vetting: { verdict: 'unsafe', reason: 'Contains an instruction to the model.' } })
     await page.locator('.confirm.vouch').last().scrollIntoViewIfNeeded()
     await variants('08-vouch')
     await page.locator('.confirm.vouch .reject').first().click()

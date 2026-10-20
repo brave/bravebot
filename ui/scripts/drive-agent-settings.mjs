@@ -145,7 +145,7 @@ try {
   await emit('output.request', { request: 2, command: 'cat notes.md', reference: '1', output: 'Quarantined output', lines: 1, summary: 'Read output', vetting: { verdict: 'unsafe', reason: 'Treat this as advice.' } })
   await page.locator('.confirm.output').getByText('Possible instructions detected', { exact: true }).waitFor()
   await page.locator('.confirm.output').getByRole('button', { name: 'Keep it out', exact: true }).click()
-  await emit('vouch.request', { request: 3, path: 'source.md', preview: 'Partial file', truncated: true, vetting: { verdict: 'inconclusive', detail: 'Checker unavailable' } })
+  await emit('vouch.request', { request: 3, path: 'source.md', shownPath: 'source.md', rule: '/work/source.md', shownRule: '/work/source.md', preview: 'Partial file', truncated: true, vetting: { verdict: 'inconclusive', detail: 'Checker unavailable' } })
   await page.locator('.confirm.vouch').getByText('Check inconclusive', { exact: true }).waitFor()
   await page.locator('.confirm.vouch .card-details summary').click()
   await page.locator('.confirm.vouch').getByText('Content may already have reached the backend.', { exact: false }).waitFor()

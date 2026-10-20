@@ -1068,8 +1068,13 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
         "vouch" => (
             format!("trust {}", text("path")),
             "read",
-            bravebot_approval::vouch_lines(text("path"), check_of(data), text("preview"))
-                .join("\n"),
+            bravebot_approval::vouch_lines(
+                text("path"),
+                text("rule"),
+                check_of(data),
+                text("preview"),
+            )
+            .join("\n"),
         ),
         "vet" => (format!("read {}", text("origin")), "read", vet_text(data)),
         "manifest" => (

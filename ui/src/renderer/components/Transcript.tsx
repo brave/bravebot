@@ -2820,7 +2820,7 @@ function Card({
           subject={request.path}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You vouched for this path' : 'You left it confined' }}
           head={<CardHead icon="shield-done" intent="Vouch for" deciding
-            subject={<code className="path">{request.path}</code>}
+            subject={<code className="path">{request.shownPath}</code>}
             trust={<VettingVerdict vetting={request.vetting} />} />}
           actions={<>
             <Button
@@ -2835,6 +2835,9 @@ function Card({
           </>}
         >
           <VettingReason vetting={request.vetting} />
+          <p className="vouch-rule" data-deciding="all">
+            A yes trusts <code className="path">{request.shownRule}</code> and everything beneath it.
+          </p>
           <p className="warn" data-deciding="all">
             <Icon name="warning-triangle-filled" />
             <span>Vouching records a standing rule for this path, so it applies to later reads as

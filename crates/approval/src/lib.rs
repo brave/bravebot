@@ -368,9 +368,14 @@ pub fn vet_lines(vet: &Vet<'_>) -> Vec<String> {
 }
 
 /// The lines a quarantined file is read before it is vouched for.
-pub fn vouch_lines(path: &str, check: Check, preview: &str) -> Vec<String> {
+pub fn vouch_lines(path: &str, rule: &str, check: Check, preview: &str) -> Vec<String> {
     let mut lines = vec![
-        printable(path),
+        bravebot_agent::confirm::shown_name(path),
+        t!(
+            vouch_rule,
+            rule = bravebot_agent::confirm::shown_name(rule).as_str()
+        )
+        .to_string(),
         t!(vouch_explained).to_string(),
         checked(check),
     ];
@@ -638,6 +643,19 @@ pub fn manifest_lines(task: &str, steps: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// PROMPT-1, PROMPT-2: the plain prompt names the file so a blank name is visible, and says
+    /// the rule a yes writes, which the file's own name does not.
+    #[test]
+    fn the_vouch_lines_mark_a_blank_name_and_say_the_rule() {
+        let blank = vouch_lines(" ", "/work/ ", Check::from_word("safe"), "text");
+        let plain = vouch_lines("note.md", "/work/note.md", Check::from_word("safe"), "text");
+        assert_ne!(blank[0], " ");
+        assert!(blank[0].contains('\u{2423}'), "{:?}", blank[0]);
+        assert_eq!(plain[0], "note.md");
+        assert!(blank[1].contains("/work/\u{2423}"), "{:?}", blank[1]);
+        assert!(plain[1].contains("/work/note.md"), "{:?}", plain[1]);
+    }
 
     /// MSG-3: a message is shown whole behind the margin, however long, with its control characters
     /// pictured. A yes sends every byte of it into another planner's context, so a row counted and
