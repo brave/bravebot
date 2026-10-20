@@ -102,7 +102,7 @@ pub use outcome::{Category, Diagnosis, Ending, Spent};
 pub use permission_mode::{Confining, LiveMode, PermissionMode};
 pub use processor::ProcessorError;
 pub use report::{Activity, IgnoreReports, Reporter};
-pub use scratch::SessionScratch;
+pub use scratch::{ScratchDirectory, SessionScratch};
 pub use spend_limit::SpendLimit;
 pub use subscription::{Discovery, ImportedSubscription};
 pub use turn::{Outcome, Task, TurnError};

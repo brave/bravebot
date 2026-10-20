@@ -1654,7 +1654,7 @@ fn opened_scratch(session: &mut Session, workspace: &mut Workspace) -> Option<Se
             None
         }
     };
-    workspace.open_scratch(scratch.as_ref().map(|held| held.path().to_path_buf()));
+    workspace.open_scratch(scratch.as_ref().and_then(SessionScratch::directory));
     bravebot_session::sessions::sweep_unlisted_checkouts(workspace);
     scratch
 }

@@ -525,7 +525,7 @@ impl<'a> Tools<'a> {
         #[cfg(all(test, unix))]
         let hosts = scripted.as_ref().or(hosts);
         let confinement =
-            crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)?
+            crate::confine::Confinement::here(roots, self.workspace.scratch_made(), self.profile)?
                 .with_network(bravebot_config::run_network())
                 .with_hosts(hosts)
                 .with_mode(self.sandbox)
@@ -19305,6 +19305,70 @@ mod tests {
             }
         }
 
+        /// SANDBOX-18: the confinement of a turn holds the session's scratch directory to the
+        /// directory the session made, which the workspace carries from the session's own claim.
+        /// The regression it rejects: a confinement given the identity of whatever the name leads
+        /// to when the line starts, which after a program made the directory again is the identity
+        /// of the new one, and so grants a directory the session did not make.
+        #[cfg(unix)]
+        #[test]
+        fn a_turns_confinement_holds_the_scratch_directory_to_the_one_the_session_made() {
+            let project = Scratch::new("scratch-made-project");
+            let session = crate::SessionScratch::create().expect("a scratch directory");
+            let scratch = session.path().canonicalize().expect("canonical");
+            let step = bravebot_core::command::Step {
+                program: "ls".to_string(),
+                resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
+                args: Vec::new(),
+                environment: Vec::new(),
+                routes: Vec::new(),
+            };
+            let mut workspace = Workspace::new(&project.path).expect("workspace");
+            workspace.open_scratch(session.directory());
+            let confinement = |workspace: &Workspace| {
+                with_tools(workspace, |tools| {
+                    tools.confine_runs = true;
+                    tools.confinement().expect("a platform with a base")
+                })
+            };
+            let granted = |workspace: &Workspace| {
+                let policy = confinement(workspace).policy(&step, workspace.root(), &[]);
+                policy.readable.contains(&scratch)
+                    && policy.writable.iter().any(|row| row.path == scratch)
+            };
+            let refused_for_the_scratch_directory = |workspace: &Workspace| {
+                confinement(workspace)
+                    .wrap(
+                        std::process::Command::new("/bin/ls"),
+                        &step,
+                        workspace.root(),
+                    )
+                    .is_err_and(|error| {
+                        matches!(
+                            error,
+                            crate::exec::ExecError::NotConfined { ref detail, .. }
+                                if detail.contains("scratch directory")
+                        )
+                    })
+            };
+            assert!(granted(&workspace), "no row for the directory made");
+            assert!(!refused_for_the_scratch_directory(&workspace));
+
+            let aside = crate::testutil::moved_aside_and_replaced(session.path(), |name| {
+                std::fs::create_dir(name).expect("a directory in its place")
+            });
+            assert!(!granted(&workspace), "a row for a directory not made");
+            assert!(!refused_for_the_scratch_directory(&workspace));
+
+            std::fs::remove_dir(session.path()).expect("the directory made again removed");
+            std::os::unix::fs::symlink(&project.path, session.path()).expect("link");
+            assert!(!granted(&workspace), "a row for a link");
+            assert!(refused_for_the_scratch_directory(&workspace));
+            let _ = std::fs::remove_file(session.path());
+            let _ = std::fs::remove_dir_all(&aside);
+        }
+
         /// The reach a person remembered is read from the state directory for the session that has
         /// one, and nowhere else. The regressions it rejects: a record read from the checkout, whose
         /// contents a repository controls; a session grant applied to a session that did not make
@@ -20391,7 +20455,9 @@ mod tests {
         workspace
             .add_directory(&added.to_string_lossy())
             .expect("an added directory");
-        workspace.open_scratch(Some(scratch.canonicalize().unwrap()));
+        workspace.open_scratch(crate::scratch::ScratchDirectory::observed(
+            scratch.canonicalize().unwrap(),
+        ));
         let catalogue = fixture.catalogue(&workspace);
         let mut sink = RecordingSink::new();
         let mut policy = skill_policy(&mut sink);
@@ -20449,7 +20515,9 @@ mod tests {
         std::os::unix::fs::symlink(scratch.join("untrusted.md"), lookalike.join("out.md")).unwrap();
         std::os::unix::fs::symlink(lookalike.join("own.md"), lookalike.join("in.md")).unwrap();
         let mut workspace = fixture.workspace();
-        workspace.open_scratch(Some(scratch.canonicalize().unwrap()));
+        workspace.open_scratch(crate::scratch::ScratchDirectory::observed(
+            scratch.canonicalize().unwrap(),
+        ));
         let catalogue = fixture.catalogue(&workspace);
         let mut sink = RecordingSink::new();
         let mut policy = skill_policy(&mut sink);

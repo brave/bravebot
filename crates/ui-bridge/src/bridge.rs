@@ -2108,12 +2108,7 @@ fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Fail
     let (directories, scratch) = open
         .state
         .lock()
-        .map(|s| {
-            (
-                s.directories.clone(),
-                s.scratch.path().map(Path::to_path_buf),
-            )
-        })
+        .map(|s| (s.directories.clone(), s.scratch.directory()))
         .unwrap_or((Vec::new(), None));
     workspace.open_scratch(scratch);
     for directory in &directories {

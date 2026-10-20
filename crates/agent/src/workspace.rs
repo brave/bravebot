@@ -14,6 +14,7 @@
 
 use crate::rewind::CoverageTracker;
 pub use crate::rewind::{CoverageGap, RewindCoverage};
+use crate::scratch::ScratchDirectory;
 use base64::Engine;
 use bravebot_core::capability::Capability;
 use bravebot_core::delegate::CheckoutRefusal;
@@ -504,7 +505,7 @@ pub struct Workspace {
     /// `added` because the user did not name it: `/status` says what it is rather than listing it
     /// among the directories they opened, and `/cd` leaves it alone rather than closing it for
     /// overlapping the directory being moved to.
-    scratch: Option<PathBuf>,
+    scratch: Option<ScratchDirectory>,
     /// The state directory a write that leaves a definition's memory untrusted is recorded in,
     /// where the session has one ([MEMORY-5]).
     ///
@@ -963,17 +964,26 @@ impl Workspace {
     /// `None` is a session that could not be given one, and then nothing outside the project and
     /// the directories the user opened is reachable. Set as the session opens rather than asked for
     /// by a tool, so a turn cannot widen its own reach by calling this: the caller is the code that
-    /// made the directory.
-    pub fn open_scratch(&mut self, directory: Option<PathBuf>) {
+    /// made the directory, and hands over [`SessionScratch::directory`], which carries the identity
+    /// of the directory it locked.
+    ///
+    /// [`SessionScratch::directory`]: crate::SessionScratch::directory
+    pub fn open_scratch(&mut self, directory: Option<ScratchDirectory>) {
         if let Some(directory) = &directory {
-            bravebot_sandbox::programs::keep_out(directory);
+            bravebot_sandbox::programs::keep_out(directory.path());
         }
         self.scratch = directory;
     }
 
     /// The session's own directory outside the project, where it has one.
     pub fn scratch(&self) -> Option<&Path> {
-        self.scratch.as_deref()
+        self.scratch.as_ref().map(ScratchDirectory::path)
+    }
+
+    /// The same directory with the identity it had when the session made it, which is what a
+    /// grant of it is held to.
+    pub fn scratch_made(&self) -> Option<&ScratchDirectory> {
+        self.scratch.as_ref()
     }
 
     /// Whether a resolved path lands in a directory reached by its absolute name.
@@ -991,11 +1001,7 @@ impl Workspace {
                 .added_directories()
                 .iter()
                 .any(|dir| resolved.starts_with(dir));
-        added
-            || self
-                .scratch
-                .as_deref()
-                .is_some_and(|dir| resolved.starts_with(dir))
+        added || self.scratch().is_some_and(|dir| resolved.starts_with(dir))
     }
 
     /// Whether a resolved path lands where this workspace's file tools may write: the root or a
@@ -5136,7 +5142,7 @@ impl Workspace {
         }
         self.added_directories()
             .into_iter()
-            .chain(self.scratch.clone())
+            .chain(self.scratch().map(Path::to_path_buf))
             .filter(|dir| resolved.starts_with(dir))
             .max_by_key(|dir| dir.components().count())
     }
@@ -5451,7 +5457,7 @@ mod tests {
             .expect("added");
         assert!(!found_in(&added, "bravebot-probe-added", &recorded()));
 
-        workspace.open_scratch(Some(session.clone()));
+        workspace.open_scratch(ScratchDirectory::observed(session.clone()));
         assert!(!found_in(&session, "bravebot-probe-session", &recorded()));
 
         workspace

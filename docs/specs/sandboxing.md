@@ -1465,6 +1465,22 @@ none of them has nothing to refuse. `/add-dir`,
 `--add-dir` and `additionalDirectories` refuse the same directories before they are added, so a
 person is not shown a session directory the stage would be refused for.
 
+A stage is refused, on every platform that has a scratch directory, once the name of the session's
+scratch directory leads to a link or a file. Every stage may write the temporary directory the
+scratch directory is made in, so the name can be made to lead somewhere else, and a row written from
+it then grants wherever it leads. The session records the device and inode of the directory it
+locked as it made it ([TRUST-14](trust-map.md#TRUST-14)), and the scratch directory is a row only
+while its name leads to that directory. A name that leads to another directory, or to nothing,
+because the directory was removed or made again, is given no row, and the stages that follow still
+start. The check is made as each stage starts, so a stage of a line that starts after an earlier
+stage of the same line replaced the directory is refused too, and a name already changed when a
+line's confinement is built is given no row. The scratch directory is also compared with the
+credential locations on the terms a session directory is, and where it is or lies inside one it is
+given no row, since the stages would otherwise all be refused by a temporary directory a new session
+is given in the same place. Where no identity is recorded, as on Windows, the name is held to being
+a directory and not a link, so a directory made in place of the original is given the row. The
+refusal lasts for the session, and a new session makes a new scratch directory.
+
 A stage's program is git where the file it resolved to, with its links followed, is named `git`, or
 `git.exe` in any case on Windows, and lies beneath none of the rows the stage writes. The rows the mode bypass gives without a request
 ([SANDBOX-28](#SANDBOX-28)) are left out of that comparison, since they are the whole machine and
@@ -1496,7 +1512,10 @@ home is read as the file a person read and not as its directory, so that grantin
 open the home. The persistence locations are refused for writing on macOS because a program started
 later by a shell, by launchd, systemd or a desktop session, or by git (`core.fsmonitor`,
 `core.pager`, a `!` alias, a credential helper) runs as the account with no profile around it, so a
-write there reaches past the stage that made it. The cost is that a stage of a session opened on the
+write there reaches past the stage that made it. The scratch directory is held to the directory the session
+made, and not to the credential table alone, because every stage writes the temporary directory and
+so the name can be made to lead to any directory the account can reach, most of which are no
+credential location. The cost is that a stage of a session opened on the
 home directory cannot run `git config --global`.
 
 Every cache is written by every stage on Linux and macOS in the mode `workspace-write` because a stage is as often a script or a
@@ -1507,6 +1526,12 @@ build it drives. The cost is that the separation between ecosystems that
 stay out of the write rows, so the reach is to caches only. A person who wants each ecosystem held
 to its own cache uses the mode `strict` ([SANDBOX-22](#SANDBOX-22)). Under `read-only` no cache is
 written.
+
+**What the scratch directory check costs.** The check and the start of a stage are two steps. A
+program that is already running when another stage starts, such as an earlier stage of a pipeline or
+one left running, can change the name between them, and on Linux the row is then opened by the name
+the start finds. A name changed before the check is refused, so what remains is a change made in
+that interval.
 
 **What the `.git` rule costs.** What git starts runs under the git stage's profile: a hook, a
 filter, the command `git bisect run` is given, an editor, a pager and a credential helper may each
@@ -1569,6 +1594,15 @@ makes. A Windows container refuses a policy that carries a refusal at all.
 `verified-by: bravebot_agent::confine::a_session_beside_or_above_the_credential_locations_is_not_refused_outside_windows`
 `verified-by: bravebot_agent::confine::a_macos_session_inside_the_system_keychains_is_refused`
 `verified-by: bravebot_agent::confine::a_macos_session_at_or_above_home_cannot_write_where_it_cannot_read`
+`verified-by: bravebot_agent::confine::a_scratch_directory_inside_a_credential_location_gets_no_row_on_every_platform`
+`verified-by: bravebot_agent::confine::a_stage_is_refused_once_the_scratch_directory_leads_to_a_link_or_a_file`
+`verified-by: bravebot_agent::confine::a_scratch_directory_that_is_replaced_or_gone_gets_no_row_and_stops_no_stage`
+`verified-by: bravebot_agent::confine::a_scratch_directory_linked_before_the_confinement_is_built_gets_no_row`
+`verified-by: bravebot_agent::confine::the_scratch_directory_the_session_made_is_a_row_and_starts_a_stage`
+`verified-by: bravebot_agent::confine::a_stage_that_relinks_the_scratch_directory_hands_the_next_stage_nothing`
+`verified-by: bravebot_agent::confine::a_line_that_relinks_the_scratch_directory_is_refused_at_the_stage_after`
+`verified-by: bravebot_agent::confine::a_scratch_directory_made_again_by_a_program_does_not_stop_the_stages_after`
+`verified-by: bravebot_agent::tools::a_turns_confinement_holds_the_scratch_directory_to_the_one_the_session_made`
 `verified-by: bravebot_agent::confine::a_linux_session_is_compared_to_the_credential_locations_with_case`
 `verified-by: bravebot_agent::workspace::a_directory_at_or_inside_a_credential_location_is_refused`
 `verified-by: bravebot_sandbox::rules::a_directory_at_or_inside_a_credential_location_is_inside_one_and_its_neighbours_are_not`

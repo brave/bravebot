@@ -14,6 +14,7 @@
 use crate::confirm::{Carried, Confined, KeyChoice, Offered, Remembered};
 use crate::exec::ExecError;
 use crate::reach::{ChosenKey, Grant, Reached};
+use crate::scratch::ScratchDirectory;
 use bravebot_config::git_identities::Identities;
 use bravebot_config::sandbox_network::Hosts;
 use bravebot_core::command::Step;
@@ -63,6 +64,10 @@ pub struct Confinement {
     home: Option<PathBuf>,
     roots: Vec<PathBuf>,
     scratch: Option<PathBuf>,
+    /// The directory `scratch` was made as. `scratch` is a row only while its name leads to this
+    /// directory, and each stage is refused as it starts once the name leads to a link or a file
+    /// (SANDBOX-18). None where the confinement was built from a path alone.
+    scratch_made: Option<ScratchDirectory>,
     /// Where the run is, for the `[includeIf]` blocks of the person's git configuration: the
     /// session's first directory, and every directory the session may write.
     place: signing::Place,
@@ -125,15 +130,28 @@ impl Confinement {
     ///
     /// `roots` are the directories the person opened the session on, each read and written. `home`
     /// is the account's profile directory, which is what `~` means and what no row reaches.
-    pub fn here(roots: Vec<PathBuf>, scratch: Option<&Path>, home: Option<&Path>) -> Option<Self> {
+    ///
+    /// `scratch` is the session's own directory as the session made it. It is a row only while its
+    /// name still leads to that directory (SANDBOX-18), since `canonical` would turn the row for a
+    /// name that has become a link into wherever the link leads, and it is no row where it is or
+    /// lies inside a credential location.
+    pub fn here(
+        roots: Vec<PathBuf>,
+        scratch: Option<&ScratchDirectory>,
+        home: Option<&Path>,
+    ) -> Option<Self> {
         let prelude = Prelude::current()?;
-        let confinement = Self::new(
-            prelude,
-            canonical(&temporary_directory()),
-            home,
-            roots,
-            scratch,
-        );
+        // Resolved first and compared second, so the row is the path that was checked and not a
+        // second reading of a name a stage may have changed in between.
+        let row = scratch.and_then(|made| {
+            let named = canonical(made.path());
+            made.stands_as_made_at(&named).then_some(named)
+        });
+        let confinement = Self::built(prelude, canonical(&temporary_directory()), home, roots, row);
+        let confinement = Self {
+            scratch_made: scratch.cloned(),
+            ..confinement
+        };
         #[cfg(target_os = "macos")]
         let confinement = Self {
             user_cache: bravebot_sandbox::macos::user_cache_directory(),
@@ -152,12 +170,28 @@ impl Confinement {
         roots: Vec<PathBuf>,
         scratch: Option<&Path>,
     ) -> Self {
+        Self::built(prelude, temporary, home, roots, scratch.map(canonical))
+    }
+
+    /// [`Confinement::new`] for a scratch row that is already resolved, so nothing reads the name a
+    /// second time. A row that is or lies inside a credential location is left out, since it is a
+    /// read and write one and is held to what a session directory is.
+    fn built(
+        prelude: Prelude,
+        temporary: PathBuf,
+        home: Option<&Path>,
+        roots: Vec<PathBuf>,
+        scratch: Option<PathBuf>,
+    ) -> Self {
         let roots: Vec<PathBuf> = roots.iter().map(|root| canonical(root)).collect();
-        let scratch = scratch.map(canonical);
+        let home = home.map(canonical);
+        let scratch = scratch.filter(|row| {
+            reaching_credentials(prelude, home.as_deref(), std::iter::once(row)).is_none()
+        });
         Self {
             prelude,
             temporary,
-            home: home.map(canonical),
+            home,
             place: signing::Place {
                 directory: roots.first().cloned(),
                 sessions: roots.iter().chain(scratch.iter()).cloned().collect(),
@@ -165,6 +199,7 @@ impl Confinement {
             },
             roots,
             scratch,
+            scratch_made: None,
             user_cache: None,
             developer: None,
             network: Network::Open,
@@ -1742,34 +1777,15 @@ impl Confinement {
     /// refused path lifts the refusal. Names are compared without regard to case on Windows and
     /// macOS, whose file systems fold it, and exactly on Linux.
     fn root_reaching_credentials(&self) -> Option<(&Path, PathBuf)> {
-        // The locations under the home need one to name them; `/Library/Keychains` does not.
-        let mut locations = self
-            .home
-            .as_deref()
-            .map(|home| credential_locations(self.prelude, home))
-            .unwrap_or_default();
-        if self.prelude == Prelude::MacOs {
-            locations.push(PathBuf::from(
-                bravebot_sandbox::base::MACOS_SYSTEM_KEYCHAINS,
-            ));
-        }
-        let reaches = |root: &Path, candidate: &Path| match self.prelude {
-            Prelude::Windows => overlaps(root, candidate),
-            Prelude::MacOs => {
-                overlaps(root, candidate)
-                    && root.components().count() >= candidate.components().count()
-            }
-            Prelude::Linux => root.starts_with(candidate),
-        };
-        self.roots.iter().find_map(|root| {
-            locations.iter().find_map(|location| {
-                let resolved = canonical(location);
-                [location, &resolved]
-                    .into_iter()
-                    .any(|candidate| reaches(root, candidate))
-                    .then(|| (root.as_path(), location.clone()))
-            })
-        })
+        reaching_credentials(self.prelude, self.home.as_deref(), self.roots.iter())
+    }
+
+    /// The scratch directory, if its name now leads to a link or a file.
+    fn scratch_linked(&self) -> Option<&Path> {
+        self.scratch_made
+            .as_ref()
+            .filter(|made| made.leads_elsewhere())
+            .map(ScratchDirectory::path)
     }
 
     /// What `command` is started as under this confinement, or the reason it cannot be.
@@ -1802,6 +1818,14 @@ impl Confinement {
                     location.display()
                 ),
             }));
+        }
+        if let Some(linked) = self.scratch_linked() {
+            return Err(not_confined(format!(
+                "the session's scratch directory `{}` has been replaced by a link or a file, so a \
+                 stage given it to write could reach wherever its name now leads; start a new \
+                 session to be given another",
+                linked.display()
+            )));
         }
         let proxy = self.host_proxy(step).map_err(not_confined)?;
         let proxied = proxy.as_deref().map(Proxy::environment).unwrap_or_default();
@@ -2691,6 +2715,40 @@ fn lookup(environment: &[(String, String)], name: &str, fold_case: bool) -> Opti
         .filter(|value| !value.is_empty())
 }
 
+/// The first of `directories` that is or lies inside a credential location, or on Windows holds
+/// one, and that location (SANDBOX-18). See [`Confinement::root_reaching_credentials`].
+fn reaching_credentials<'a>(
+    prelude: Prelude,
+    home: Option<&Path>,
+    directories: impl Iterator<Item = &'a PathBuf>,
+) -> Option<(&'a Path, PathBuf)> {
+    // The locations under the home need one to name them; `/Library/Keychains` does not.
+    let mut locations = home
+        .map(|home| credential_locations(prelude, home))
+        .unwrap_or_default();
+    if prelude == Prelude::MacOs {
+        locations.push(PathBuf::from(
+            bravebot_sandbox::base::MACOS_SYSTEM_KEYCHAINS,
+        ));
+    }
+    let reaches = |root: &Path, candidate: &Path| match prelude {
+        Prelude::Windows => overlaps(root, candidate),
+        Prelude::MacOs => {
+            overlaps(root, candidate) && root.components().count() >= candidate.components().count()
+        }
+        Prelude::Linux => root.starts_with(candidate),
+    };
+    directories.into_iter().find_map(|root| {
+        locations.iter().find_map(|location| {
+            let resolved = canonical(location);
+            [location, &resolved]
+                .into_iter()
+                .any(|candidate| reaches(root, candidate))
+                .then(|| (root.as_path(), location.clone()))
+        })
+    })
+}
+
 fn canonical(path: &Path) -> PathBuf {
     without_verbatim_prefix(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
 }
@@ -3382,6 +3440,278 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A confinement on `prelude` whose scratch row is `scratch`, with a session directory that is
+    /// beside every credential location.
+    fn scratch_confinement(prelude: Prelude, scratch: &str) -> Confinement {
+        Confinement::new(
+            prelude,
+            PathBuf::from("/tmp"),
+            Some(Path::new(HOME)),
+            vec![PathBuf::from("/people/person/project")],
+            Some(Path::new(scratch)),
+        )
+    }
+
+    /// What `confinement` refuses a stage for when it is about the scratch directory, and nothing
+    /// otherwise.
+    fn refused_for_the_scratch_directory(confinement: &Confinement) -> Option<String> {
+        match prepared_in(confinement) {
+            Err(ExecError::NotConfined { detail, .. }) if detail.contains("scratch directory") => {
+                Some(detail)
+            }
+            _ => None,
+        }
+    }
+
+    /// SANDBOX-18: the scratch row is a read and write row as a session directory is, so it is not
+    /// granted where it is or lies inside a credential location, on every platform, and the stage
+    /// still starts. The regressions it rejects: the row left out of the comparison the session
+    /// directories go through, and a refusal of every stage for a temporary directory that lies in
+    /// such a place, which no new session can clear.
+    #[test]
+    fn a_scratch_directory_inside_a_credential_location_gets_no_row_on_every_platform() {
+        let rows = |prelude, scratch: &str| {
+            let confinement = scratch_confinement(prelude, scratch);
+            let policy = confinement.policy(
+                &step("/bin/cat", &["f"]),
+                Path::new("/people/person/project"),
+                &[],
+            );
+            (
+                reads(&policy, scratch) || writes(&policy, scratch),
+                refused_for_the_scratch_directory(&confinement),
+            )
+        };
+        for prelude in [Prelude::MacOs, Prelude::Linux, Prelude::Windows] {
+            for scratch in [
+                "/people/person/.ssh",
+                "/people/person/.ssh/keys",
+                "/people/person/.bravebot",
+                "/people/person/.aws/sso",
+            ] {
+                assert_eq!(
+                    rows(prelude, scratch),
+                    (false, None),
+                    "{prelude:?}: {scratch}"
+                );
+            }
+            for scratch in ["/var/scratch", "/people/person/.sshfoo"] {
+                assert_eq!(
+                    rows(prelude, scratch),
+                    (true, None),
+                    "{prelude:?}: {scratch}"
+                );
+            }
+        }
+    }
+
+    /// The scratch directory of a session, made as the session makes it, and a confinement on
+    /// `prelude` holding it to the directory it was made as.
+    #[cfg(unix)]
+    fn made_scratch(prelude: Prelude) -> (crate::SessionScratch, Confinement) {
+        let session = crate::SessionScratch::create().expect("a scratch directory");
+        let confinement = Confinement {
+            scratch_made: session.directory(),
+            ..Confinement::new(
+                prelude,
+                PathBuf::from("/tmp"),
+                Some(Path::new(HOME)),
+                vec![PathBuf::from("/people/person/project")],
+                Some(session.path()),
+            )
+        };
+        (session, confinement)
+    }
+
+    /// What a stage with a write row on the temporary directory can put at the scratch directory's
+    /// name that leads somewhere else: a link to each kind of place, and a file.
+    #[cfg(unix)]
+    fn what_leads_elsewhere(outside: &Path) -> Vec<(&'static str, crate::testutil::PutThere<'_>)> {
+        use std::os::unix::fs::symlink;
+        vec![
+            (
+                "a link to a credential directory",
+                Box::new(|name| symlink(outside.join(".ssh"), name).expect("link")),
+            ),
+            (
+                "a link to a shell startup file",
+                Box::new(|name| symlink(outside.join(".bashrc"), name).expect("link")),
+            ),
+            (
+                "a link to a directory no row names",
+                Box::new(|name| symlink(outside.join("elsewhere"), name).expect("link")),
+            ),
+            (
+                "a file",
+                Box::new(|name| std::fs::write(name, "x").expect("a file")),
+            ),
+        ]
+    }
+
+    /// What a stage can put at the name that leads nowhere else: another directory, or nothing.
+    #[cfg(unix)]
+    fn what_leads_nowhere_else() -> Vec<(&'static str, crate::testutil::PutThere<'static>)> {
+        vec![
+            (
+                "an empty directory made in its place",
+                Box::new(|name| std::fs::create_dir(name).expect("a directory")),
+            ),
+            ("nothing", Box::new(|_| {})),
+        ]
+    }
+
+    /// The directories a link can lead to, under a directory of their own.
+    #[cfg(unix)]
+    fn somewhere_to_link_to(name: &str) -> PathBuf {
+        let outside = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(outside.join(".ssh")).expect("a credential directory");
+        std::fs::create_dir_all(outside.join("elsewhere")).expect("a directory");
+        std::fs::write(outside.join(".bashrc"), "export X=1\n").expect("a startup file");
+        outside
+    }
+
+    /// SANDBOX-18: a stage is refused once the scratch directory's name leads to a link or a file,
+    /// wherever it leads, on every platform that reads the machine. The check is made as each
+    /// stage starts, since the confinement is built before the first stage of a line and a later
+    /// stage of the same line starts after an earlier one changed the name. The regressions it
+    /// rejects: the check made only when the confinement is built, which lets the second stage of
+    /// `a && b` through, and one that compares where the name leads with the credential table
+    /// alone, which passes a link to a directory that holds none.
+    #[cfg(unix)]
+    #[test]
+    fn a_stage_is_refused_once_the_scratch_directory_leads_to_a_link_or_a_file() {
+        let outside = somewhere_to_link_to("confine-scratch-linked");
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            for (change, put_there) in what_leads_elsewhere(&outside) {
+                let (session, confinement) = made_scratch(prelude);
+                assert_eq!(
+                    refused_for_the_scratch_directory(&confinement),
+                    None,
+                    "{prelude:?}: refused before it was changed"
+                );
+
+                let aside = crate::testutil::moved_aside_and_replaced(session.path(), put_there);
+
+                let refused = refused_for_the_scratch_directory(&confinement)
+                    .unwrap_or_else(|| panic!("{prelude:?}: {change} was not refused"));
+                assert!(
+                    refused.contains(&session.path().display().to_string()),
+                    "{prelude:?}: {refused}"
+                );
+                let _ = std::fs::remove_file(session.path());
+                let _ = std::fs::remove_dir_all(&aside);
+            }
+        }
+    }
+
+    /// SANDBOX-18: a scratch directory that was removed, or replaced by another directory, is no
+    /// longer the one the session made and gets no row, and the stage still starts. The
+    /// regressions it rejects: the row kept for a directory that is not the one made, which grants
+    /// whatever a stage made there, and a refusal for a name that leads nowhere else, which ends
+    /// every later `run` of a session whose temporary directory was cleaned or whose scratch
+    /// directory a program made again.
+    #[cfg(unix)]
+    #[test]
+    fn a_scratch_directory_that_is_replaced_or_gone_gets_no_row_and_stops_no_stage() {
+        for (change, put_there) in what_leads_nowhere_else() {
+            let session = crate::SessionScratch::create().expect("a scratch directory");
+            let made = session.directory().expect("the directory as made");
+            let confinement = |made: &ScratchDirectory| {
+                Confinement::here(
+                    vec![PathBuf::from("/people/person/project")],
+                    Some(made),
+                    Some(Path::new(HOME)),
+                )
+                .expect("a platform with a base")
+            };
+            let scratch = session.path().canonicalize().expect("canonical");
+            let scratch = scratch.display().to_string();
+            let policy = |confinement: &Confinement| {
+                confinement.policy(
+                    &step("/bin/cat", &["f"]),
+                    Path::new("/people/person/project"),
+                    &[],
+                )
+            };
+            let before = confinement(&made);
+            assert!(reads(&policy(&before), &scratch), "{change}: before");
+
+            let aside = crate::testutil::moved_aside_and_replaced(session.path(), put_there);
+            let after = confinement(&made);
+
+            let policy = policy(&after);
+            assert!(!reads(&policy, &scratch), "{change}: read");
+            assert!(!writes(&policy, &scratch), "{change}: written");
+            assert_eq!(refused_for_the_scratch_directory(&before), None, "{change}");
+            assert_eq!(refused_for_the_scratch_directory(&after), None, "{change}");
+            let _ = std::fs::remove_dir_all(session.path());
+            let _ = std::fs::remove_dir_all(&aside);
+        }
+    }
+
+    /// SANDBOX-18: a scratch directory already a link when the next line's confinement is built
+    /// gets no row, so the confirmation of that line does not describe a grant of wherever the
+    /// name now leads, and the stage is refused. The regression it rejects: the row built from the
+    /// name as `canonical` resolves it, which is the target of the link.
+    #[cfg(unix)]
+    #[test]
+    fn a_scratch_directory_linked_before_the_confinement_is_built_gets_no_row() {
+        let outside = somewhere_to_link_to("confine-scratch-linked-first");
+        let target = outside
+            .join(".ssh")
+            .canonicalize()
+            .expect("a canonical target");
+        let session = crate::SessionScratch::create().expect("a scratch directory");
+        let made = session.directory().expect("the directory as made");
+        let aside = crate::testutil::moved_aside_and_replaced(session.path(), |name| {
+            std::os::unix::fs::symlink(&target, name).expect("link")
+        });
+
+        let confinement = Confinement::here(
+            vec![PathBuf::from("/people/person/project")],
+            Some(&made),
+            Some(Path::new(HOME)),
+        )
+        .expect("a platform with a base");
+        let policy = confinement.policy(
+            &step("/bin/cat", &["f"]),
+            Path::new("/people/person/project"),
+            &[],
+        );
+
+        let target = target.display().to_string();
+        assert!(!reads(&policy, &target) && !writes(&policy, &target));
+        assert!(refused_for_the_scratch_directory(&confinement).is_some());
+        let _ = std::fs::remove_file(session.path());
+        let _ = std::fs::remove_dir_all(&aside);
+    }
+
+    /// The directory the session made is a row and starts a stage. The control for the three
+    /// above: a check that refuses every stage, or grants no row, rejects them for the wrong
+    /// reason.
+    #[cfg(unix)]
+    #[test]
+    fn the_scratch_directory_the_session_made_is_a_row_and_starts_a_stage() {
+        let session = crate::SessionScratch::create().expect("a scratch directory");
+        let confinement = Confinement::here(
+            vec![PathBuf::from("/people/person/project")],
+            session.directory().as_ref(),
+            Some(Path::new(HOME)),
+        )
+        .expect("a platform with a base");
+        let policy = confinement.policy(
+            &step("/bin/cat", &["f"]),
+            Path::new("/people/person/project"),
+            &[],
+        );
+
+        let scratch = session.path().canonicalize().expect("canonical");
+        let scratch = scratch.display().to_string();
+        assert!(reads(&policy, &scratch) && writes(&policy, &scratch));
+        assert_eq!(refused_for_the_scratch_directory(&confinement), None);
     }
 
     /// SANDBOX-12, SANDBOX-18: a macOS session on the home directory or above it grants a row that
