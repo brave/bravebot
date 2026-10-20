@@ -298,7 +298,45 @@ fn within_any(path: &Path, directories: &[PathBuf]) -> bool {
             || resolved
                 .as_deref()
                 .is_some_and(|resolved| within(resolved, directory))
-    })
+    }) || holds_a_directory_by_identity(path, resolved.as_deref(), directories)
+}
+
+/// Whether `path`, or the path it resolves to, lies in a directory that is one of `directories`
+/// under another spelling.
+///
+/// Names are compared first, which is all a directory that no longer exists leaves. A volume that
+/// opens two spellings as one directory, ext4 with `casefold` among them, gives a name no byte
+/// comparison can relate, and `canonicalize` returns the spelling it was given. So each ancestor is
+/// also compared by device and inode, which needs no guess about the volume.
+#[cfg(unix)]
+fn holds_a_directory_by_identity(
+    path: &Path,
+    resolved: Option<&Path>,
+    directories: &[PathBuf],
+) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let identities: Vec<(u64, u64)> = directories
+        .iter()
+        .filter_map(|directory| std::fs::metadata(directory).ok())
+        .map(|metadata| (metadata.dev(), metadata.ino()))
+        .collect();
+    if identities.is_empty() {
+        return false;
+    }
+    std::iter::once(path)
+        .chain(resolved)
+        .flat_map(Path::ancestors)
+        .filter_map(|ancestor| std::fs::metadata(ancestor).ok())
+        .any(|metadata| identities.contains(&(metadata.dev(), metadata.ino())))
+}
+
+#[cfg(not(unix))]
+fn holds_a_directory_by_identity(
+    _path: &Path,
+    _resolved: Option<&Path>,
+    _directories: &[PathBuf],
+) -> bool {
+    false
 }
 
 fn within(path: &Path, directory: &Path) -> bool {
@@ -922,6 +960,73 @@ mod tests {
             set,
             [(OsStr::new("PATH"), None)],
             "the PATH was left alone or set to a value instead of being removed"
+        );
+    }
+
+    /// A directory is recognised by the device and inode a spelling reaches, where no comparison of
+    /// names relates the two. The regression it rejects: judging containment by names alone, which
+    /// leaves a spelling the volume opens as the same directory, ext4 `casefold` among them,
+    /// searched. A link on the way stands in for such a spelling: it is not the name, and `path` is
+    /// not resolved here, so only the identity of an ancestor can relate them.
+    #[cfg(unix)]
+    #[test]
+    fn a_spelling_that_reaches_a_writable_directory_is_within_it_by_identity() {
+        let session = scratch_dir("programs-identity");
+        std::fs::create_dir_all(session.join("real").join("bin")).unwrap();
+        let alias = session.join("alias");
+        std::os::unix::fs::symlink(session.join("real"), &alias).unwrap();
+        let spelled = alias.join("bin");
+        let writable = [session.join("real")];
+
+        assert!(!within(&spelled, &writable[0]), "the names differ");
+        assert!(holds_a_directory_by_identity(&spelled, None, &writable));
+        assert!(!holds_a_directory_by_identity(
+            &scratch_dir("programs-identity-other"),
+            None,
+            &writable
+        ));
+        // Through the lookup's own check: `bin` does not exist, so nothing resolves and only the
+        // identity of `alias` leaves the entry out of what `restrict_path` hands on.
+        std::fs::remove_dir(session.join("real").join("bin")).unwrap();
+        assert_eq!(
+            searched_path(&path_of(&[&spelled]), &writable, &[]),
+            None,
+            "the entry through the alias was kept"
+        );
+    }
+
+    /// On a volume that opens two spellings of a name as one directory, a `PATH` entry spelled
+    /// differently from the recorded directory is left out, and so is `restrict_path`'s copy of it.
+    /// Skipped where the volume holds the two spellings apart, which is most of them. The
+    /// regression it rejects: a byte comparison of components, which searches the alias.
+    #[cfg(unix)]
+    #[test]
+    fn another_spelling_of_a_writable_directory_is_not_searched() {
+        let session = scratch_dir("programs-Casefold");
+        let alias = session.parent().unwrap().join("PROGRAMS-casefold");
+        if !alias.exists() {
+            eprintln!("skipped: the volume holds two spellings of a name apart");
+            return;
+        }
+        let planted = executable(&session.join("bin"), "wl-paste");
+        let entry = alias.join("bin");
+        assert!(entry.join("wl-paste").exists());
+        let path = path_of(&[&entry]);
+
+        assert_eq!(
+            find_in(
+                OsStr::new("wl-paste"),
+                &path,
+                std::slice::from_ref(&session)
+            ),
+            None,
+            "{} was found through {}",
+            planted.display(),
+            entry.display()
+        );
+        assert_eq!(
+            searched_path(&path, std::slice::from_ref(&session), &[]),
+            None
         );
     }
 }

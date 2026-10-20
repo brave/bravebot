@@ -31,7 +31,7 @@ guards:
     sites:
       - crates/agent/src/confine.rs: 1
       - crates/agent/src/workspace.rs: 1
-      - crates/sandbox/src/programs.rs: 17
+      - crates/sandbox/src/programs.rs: 18
       - crates/tui/src/clipboard.rs: 8
       - crates/tui/src/editor.rs: 2
   - symbol: find_in_with
@@ -3188,6 +3188,13 @@ same change, or resolved first, and its mark is what a reviewer reads.
   ([CRED-14](credential-protection.md#CRED-14)).
 - **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
   and so is a file in another directory that links into one.
+- **A directory is judged by the directory a name reaches, not by its spelling.** On Unix an entry,
+  or a file, is also left out when an ancestor of it has the device and inode of a directory left
+  out, so a volume that opens two spellings as one directory (ext4 `casefold`, vfat, an NFC and an
+  NFD spelling) cannot make a writable directory searched under another spelling. Names are
+  compared first, which is all a directory that no longer exists leaves.
+`verified-by: bravebot_sandbox::programs::a_spelling_that_reaches_a_writable_directory_is_within_it_by_identity`
+`verified-by: bravebot_sandbox::programs::another_spelling_of_a_writable_directory_is_not_searched`
 - **An entry that is not absolute is not searched,** and neither is an empty one, which a shell
   reads as the current directory. A name carrying a separator is not looked up, and an absolute
   path is started as given. A hook's relative path is the person's own and runs from the directory
