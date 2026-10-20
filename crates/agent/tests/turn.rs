@@ -49853,6 +49853,234 @@ fn a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_mad
     );
 }
 
+/// The words of the note a failed turn leaves, which a test looks for rather than spelling out.
+const FAILED_TURN_NOTE: &str = bravebot_agent::conversation::FAILED_TURN;
+
+fn holds_the_note_of_a_failed_turn(conversation: &bravebot_agent::Conversation) -> bool {
+    conversation
+        .messages()
+        .iter()
+        .any(|stored| stored.message.content.text().contains(FAILED_TURN_NOTE))
+}
+
+/// TURN-13: a turn that fails after tool calls leaves the planner a note that it failed, in the
+/// driver's words, with the category and the number of requests sent and none of what the service
+/// said, the status of its reply included. The prompt that follows is sent with the note in front
+/// of it, and the note is in what is written down.
+///
+/// The faults this rejects: no note, which is the planner reading its tool results as a pause of
+/// its own; a note that repeats the service's body or headers; a note that is made for the
+/// interface and never reaches the next request; and a note left out of the saved conversation.
+#[test]
+fn a_turn_that_ends_on_a_failed_request_leaves_the_planner_a_note_of_it() {
+    let scratch = Scratch::new("failed-turn-note");
+    std::fs::write(scratch.path.join("target.txt"), "the file body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_script(vec![
+        Served::Reply(tool_request("read_file", r#"{"path":"target.txt"}"#)),
+        Served::DiagnosticStatus(503),
+        Served::DiagnosticStatus(503),
+        Served::DiagnosticStatus(503),
+        Served::Reply(reply_with("the request failed")),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("what does target.txt say?"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("the service refused every request");
+
+    let note = conversation.messages().last().expect("a message");
+    assert_eq!(
+        note.composed,
+        Some(bravebot_agent::conversation::Composed::Notice),
+        "the last message is not the driver's notice: {note:?}"
+    );
+    let words = note.message.content.text();
+    assert!(words.contains(FAILED_TURN_NOTE), "{words}");
+    assert!(
+        words.ends_with("Failure category: unavailable. Requests sent for the failed call: 3."),
+        "{words}"
+    );
+    for sentinel in [
+        "503",
+        "PRIVATE_RESPONSE_SENTINEL",
+        "PRIVATE_HEADER_SENTINEL",
+    ] {
+        assert!(
+            !words.contains(sentinel),
+            "the service's words reached the note: {words}"
+        );
+    }
+    let written = serde_json::to_string(&conversation.snapshot()).expect("it serialises");
+    assert!(
+        written.contains(FAILED_TURN_NOTE),
+        "the note is not in what is written down"
+    );
+
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("what happened?"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the service answered the next prompt");
+
+    let bodies = every_request(&received);
+    assert_eq!(
+        bodies.len(),
+        5,
+        "one request, three attempts, then the next prompt"
+    );
+    assert!(
+        bodies[..4]
+            .iter()
+            .all(|body| !body.contains(FAILED_TURN_NOTE)),
+        "the note was sent before the turn had failed"
+    );
+    let next = &bodies[4];
+    let (noted, asked) = (next.find(FAILED_TURN_NOTE), next.find("what happened?"));
+    assert!(
+        noted.is_some() && asked.is_some() && noted < asked,
+        "the request does not carry the note in front of the prompt: {next}"
+    );
+    assert!(
+        next.contains("the file body"),
+        "the completed round was dropped"
+    );
+    for sentinel in ["PRIVATE_RESPONSE_SENTINEL", "PRIVATE_HEADER_SENTINEL"] {
+        assert!(
+            !next.contains(sentinel),
+            "the service's words were sent back: {next}"
+        );
+    }
+}
+
+/// TURN-13: only a failure leaves the note. A turn that answered and a turn the person stopped
+/// leave the conversation as the turn made it.
+///
+/// The fault this rejects: a note added to every turn's end, or to every turn that returned an
+/// error, which would tell the planner a stop was a failure.
+#[test]
+fn a_turn_that_answered_or_was_stopped_leaves_no_note_of_a_failure() {
+    let scratch = Scratch::new("failed-turn-no-note");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let (endpoint, _received) = serve_script(vec![Served::Reply(reply_with("an answer"))]);
+    let mut answered = bravebot_agent::Conversation::new();
+    take_a_turn_reporting(
+        &config_for(&endpoint),
+        &workspace,
+        &mut answered,
+        Task::new("say something"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn answered");
+    assert!(!answered.is_empty());
+    assert!(
+        !holds_the_note_of_a_failed_turn(&answered),
+        "an answer was noted as a failure"
+    );
+
+    let (endpoint, _received) = serve_script(vec![Served::Reply(reply_with("never read"))]);
+    let mut stopped = bravebot_agent::Conversation::new();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    cancel.cancel();
+    let error = take_a_turn_reporting(
+        &config_for(&endpoint),
+        &workspace,
+        &mut stopped,
+        Task::new("say something"),
+        &mut reporter,
+        &cancel,
+    )
+    .expect_err("the turn was stopped");
+    assert_eq!(
+        error.ending().diagnosis(),
+        None,
+        "a stop was reported as a failure"
+    );
+    assert!(
+        !holds_the_note_of_a_failed_turn(&stopped),
+        "a stop was noted as a failure"
+    );
+}
+
+/// TURN-13: a turn that fails on its first request has put its prompt in the conversation, so the
+/// note follows the prompt. A turn that fails before it has put anything there leaves nothing for
+/// the planner to account for and no note.
+///
+/// The faults this rejects: a note left out when the turn made no tool call, and a note added when
+/// the turn failed before the conversation held any of it, which would tell the planner that a
+/// turn it never saw failed and that its work is above.
+#[test]
+fn a_turn_that_failed_before_adding_anything_leaves_no_note_and_one_that_added_its_prompt_does() {
+    let scratch = Scratch::new("failed-turn-first-request");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let (endpoint, _received) = serve_script(vec![Served::Status(401)]);
+    let mut asked = bravebot_agent::Conversation::new();
+    take_a_turn_reporting(
+        &config_for(&endpoint),
+        &workspace,
+        &mut asked,
+        Task::new("say something"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("the service refused every request");
+    let held: Vec<_> = asked.messages().iter().collect();
+    assert_eq!(held.len(), 2, "the prompt and the note: {held:?}");
+    assert_eq!(held[0].message.content.text(), "say something");
+    assert_eq!(
+        held[1].composed,
+        Some(bravebot_agent::conversation::Composed::Notice)
+    );
+    assert!(
+        held[1]
+            .message
+            .content
+            .text()
+            .ends_with("Failure category: unauthorized. Requests sent for the failed call: 1."),
+        "{held:?}"
+    );
+
+    let (endpoint, received) = serve_script(vec![Served::Reply(reply_with("never read"))]);
+    let mut unread = bravebot_agent::Conversation::new();
+    let error = take_a_turn_reporting(
+        &config_for(&endpoint),
+        &workspace,
+        &mut unread,
+        Task::new("summarise it").with_file("missing.txt"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("the file the prompt names cannot be read");
+    assert_eq!(
+        why_it_failed(&error).category,
+        bravebot_agent::Category::Workspace
+    );
+    assert_eq!(received.try_iter().count(), 0, "a request was sent");
+    assert!(
+        unread.is_empty(),
+        "the conversation holds something of a turn that added nothing: {:?}",
+        unread.messages()
+    );
+}
+
 /// BACKEND-53: the client makes its attempts at the model it was asked for, and the request after
 /// them names the fallback the person's settings gave. A 503 is attempted three times and a 529,
 /// which the client does not send again, once.
@@ -51478,12 +51706,15 @@ mod usage {
                 .unwrap_or_default()
         }
         fn finish(&self) -> Result<turn::Outcome, turn::TurnError> {
+            self.finish_with_snapshot().0
+        }
+        fn finish_with_snapshot(&self) -> (Result<turn::Outcome, turn::TurnError>, String) {
             let (result, snapshot) = self.finished.recv_timeout(WAIT).expect("turn ended");
             assert!(
                 !snapshot.contains("PRIVATE_ERROR!"),
                 "raw backend error entered context"
             );
-            result
+            (result, snapshot)
         }
         fn interrupt(&self, request: Pending, stop: bool) {
             if stop {
@@ -51926,6 +52157,30 @@ mod usage {
     #[test]
     fn compaction_progress_survives_cancellation() {
         compaction_usage(true);
+    }
+
+    /// TURN-13: a compaction at the start of a turn shortens the request, and a turn that then
+    /// fails still leaves its note.
+    ///
+    /// The fault this rejects: telling whether the turn added anything by comparing the length of
+    /// the request before and after, which a compaction lowers below where it began.
+    #[test]
+    fn a_turn_that_compacted_and_then_failed_leaves_the_note_of_the_failure() {
+        let run = Run::start("usage-compaction-note", a_long_conversation(), true);
+        run.request().answer(&reply_with_cache(
+            "they were porting the parser",
+            400,
+            60,
+            40,
+        ));
+        let next = run.request();
+        run.interrupt(next, false);
+        let (result, snapshot) = run.finish_with_snapshot();
+        result.expect_err("the planner request was refused");
+        assert!(
+            snapshot.contains(FAILED_TURN_NOTE),
+            "the turn left no note: {snapshot}"
+        );
     }
 
     /// Decisions made by an outstanding child survive every ordinary parent ending.

@@ -22,6 +22,7 @@
 //!   whether the planner was shown private content, for the same reason on the other axis
 //!   ([`bravebot_core::policy::Policy::holding`]).
 
+use crate::outcome::Diagnosis;
 use crate::request_view::Provenance;
 use bravebot_aichat::protocol::{Content, Message, Role};
 #[cfg(test)]
@@ -129,10 +130,12 @@ pub enum Composed {
     },
     /// A message the driver wrote for the planner in the middle of a turn: a nudge after a stop or
     /// a spent budget, the mode having changed, a delegate's report, a background job's output, the
-    /// jobs still running.
+    /// jobs still running. Also the note after a turn that ended in a failure (TURN-13), which
+    /// follows the last round of that turn.
     ///
-    /// House-keeping for the planner: it belongs to the round above it, so a transcript draws no
-    /// row for it, no fork is cut in front of it and no compaction cuts between the two.
+    /// House-keeping for the planner: it belongs to the round above it, or to the turn above it
+    /// for the failure note, so a transcript draws no row for it, no fork is cut in front of it and
+    /// no cut between exchanges falls in front of it.
     Notice,
     /// A message the agent or a front end wrote in its own words into the conversation, and that a
     /// person is shown as it stands: the line a goal's carry-on or `/init` sends, the standard
@@ -440,6 +443,15 @@ impl Conversation {
     /// How many messages the next request would carry.
     pub fn len(&self) -> usize {
         self.messages.len()
+    }
+
+    /// How many messages the conversation has been given, the ones a compaction took out of the
+    /// request included.
+    ///
+    /// It does not fall when a compaction shortens the request, which [`Conversation::len`] does,
+    /// so a caller that reads it before and after a turn learns whether the turn added anything.
+    pub fn given(&self) -> usize {
+        self.archive.len() + self.messages.len()
     }
 
     /// The whole exchange with the system prompt in front, as one request's messages.
@@ -1284,6 +1296,22 @@ impl Conversation {
         });
     }
 
+    /// Tell the planner that the turn that has just ended failed, and so did not finish.
+    ///
+    /// The conversation holds what the turn completed and nothing of how it ended. A planner that
+    /// reads its own tool results with no ending takes the turn for a pause and says it will carry
+    /// on. The words are the driver's and carry the diagnosis's category and request count and
+    /// nothing the service sent (TURN-13). Recorded as a notice, so it is written down with the
+    /// conversation, which a resume after a failed turn needs as the live session does, and is
+    /// drawn as nothing anyone said.
+    pub fn note_failed_turn(&mut self, diagnosis: Diagnosis) {
+        self.push_composed_from(
+            Message::user(failed_turn(diagnosis)),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+    }
+
     /// A conversation read back from one.
     ///
     /// The quarantine starts empty, since a snapshot has none: see [`Snapshot`]. Anything but
@@ -1582,6 +1610,31 @@ const UNFINISHED_TURN: &str = "This session was resumed. Its last turn ended bef
 because the process running it ended. That turn is not repeated and is not part of this \
 conversation. Work it had started may be partly done: look at the state of the files before \
 relying on it.";
+
+/// What the planner is told when a turn ended in a failure, before the fields of the diagnosis.
+///
+/// Fixed words. They say that the failure ended the turn, that the turn did not pause, and that
+/// nothing is continuing it, which a planner with tool results and no ending does not otherwise
+/// know. Nothing decides from the words.
+pub const FAILED_TURN: &str = "The previous turn failed and ended before it finished. It did not \
+pause, and nothing is carrying it on. What it had already done is above in this conversation.";
+
+/// The note for a turn that ended in a failure: [`FAILED_TURN`], then the category and the request
+/// count the driver holds. A count that is not known is left out rather than said as zero.
+///
+/// The category is a fixed name and the count is the driver's own, so nothing the service sent
+/// reaches the planner through this. The status of the reply is left out, as it is from every
+/// other failure text the planner is given: the category is what the driver made of it.
+fn failed_turn(diagnosis: Diagnosis) -> String {
+    let mut note = format!(
+        "{FAILED_TURN} Failure category: {}.",
+        diagnosis.category.name()
+    );
+    if let Some(attempts) = diagnosis.attempts {
+        note.push_str(&format!(" Requests sent for the failed call: {attempts}."));
+    }
+    note
+}
 
 /// How the summary standing in for a compacted exchange begins.
 ///
@@ -2145,6 +2198,84 @@ mod tests {
         assert!(sent[2].contains("ended before it finished"), "{sent:?}");
         assert_eq!(conversation.recounted(), before);
         assert_eq!(conversation.snapshot().messages.len(), 2);
+    }
+
+    /// TURN-13: the note that a turn failed is in front of the planner, is drawn as nothing anyone
+    /// said, is no place for a cut, and is written down, so a resume after a failed turn holds it
+    /// as the live session did.
+    #[test]
+    fn the_note_about_a_failed_turn_is_sent_and_kept_and_is_not_drawn() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("fix the build"));
+        conversation.push(Message::assistant("looking"));
+        let before = conversation.recounted();
+
+        conversation.note_failed_turn(
+            Diagnosis::of(crate::outcome::Category::Unavailable)
+                .with_status(503)
+                .after(3),
+        );
+
+        let note = conversation.messages().last().expect("the note");
+        assert_eq!(note.message.role, Role::User);
+        let text = note.message.content.text();
+        assert!(
+            text.contains("failed and ended before it finished"),
+            "{text}"
+        );
+        assert!(text.contains("did not pause"), "{text}");
+        assert_eq!(conversation.len(), 3);
+        assert_eq!(conversation.recounted(), before, "the note was drawn");
+        assert!(!opens_an_exchange(note), "compaction may cut at the note");
+
+        let written = serde_json::to_string(&conversation.snapshot()).expect("a record");
+        let restored = Conversation::restored(serde_json::from_str(&written).expect("it reads"));
+        let kept = restored.messages().last().expect("the note, kept");
+        assert_eq!(kept.message.content.text(), text);
+        assert_eq!(restored.len(), 3);
+        assert_eq!(
+            restored.recounted(),
+            before,
+            "the note was drawn after a resume"
+        );
+    }
+
+    /// TURN-13: the note carries the category and the request count where it is known, and no other
+    /// field of the diagnosis, the status of the reply included. A count that is not known is not
+    /// said as zero, and a count of zero, which means no request was sent, is said.
+    #[test]
+    fn the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else() {
+        use crate::outcome::Category;
+        let everything = Diagnosis::of(Category::RateLimited)
+            .with_status(429)
+            .after(3)
+            .at_ceiling(8192)
+            .asking_for_a_wait_of(std::time::Duration::from_secs(5400));
+        let note = failed_turn(everything);
+        assert!(
+            note.ends_with("Failure category: rate-limited. Requests sent for the failed call: 3."),
+            "{note}"
+        );
+        for left_out in ["429", "8192", "5400"] {
+            assert!(
+                !note.contains(left_out),
+                "{left_out} is in the note: {note}"
+            );
+        }
+
+        let category_only = failed_turn(Diagnosis::of(Category::Transport));
+        assert!(
+            category_only.ends_with("Failure category: transport."),
+            "{category_only}"
+        );
+        assert!(!category_only.contains("Requests sent"), "{category_only}");
+
+        let before_egress = failed_turn(Diagnosis::of(Category::Unconfigured).after(0));
+        assert!(
+            before_egress
+                .ends_with("Failure category: unconfigured. Requests sent for the failed call: 0."),
+            "{before_egress}"
+        );
     }
 
     /// Four exchanges, the shape most of the compaction tests need.

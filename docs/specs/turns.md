@@ -4,6 +4,7 @@ title: What bounds a turn
 status: normative
 governs:
   - crates/agent/src/turn.rs
+  - crates/agent/src/conversation.rs
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/setup.rs
   - crates/agent/src/turn/round_steps.rs
@@ -29,7 +30,7 @@ into its output ceiling. What a session does when it has spent as many tokens as
 it may. What a turn does when the planner asks for the same call three times running. How the reads of one
 round are run when the planner asks for several together. What the note under a finished turn says
 about refusals. What a turn that answers with tasks still open in the planner's list does about
-them.
+them. What the planner is told when a turn ends in a failure.
 
 ## Clauses
 
@@ -624,3 +625,54 @@ carries a list forward only from the next `todo_write`.
 `verified-by: bravebot_agent::tools::the_count_of_open_tasks_in_an_untrusted_list_is_refused_to_the_driver`
 `verified-by: bravebot_agent::tools::a_refused_call_carries_no_count_of_open_tasks`
 `verified-by: bravebot_core::todo::a_task_is_open_unless_it_is_finished_or_dropped`
+
+<a id="TURN-13"></a>
+### TURN-13: a turn that ends in a failure leaves the planner a note that it did
+
+When a turn ends as a failure ([TURN-5](#TURN-5)) after it has added messages to the conversation,
+the driver adds one more after them, so the next prompt follows it. The note says that the turn
+failed and ended before it finished, that it did not pause, and that nothing is continuing it. It
+gives the failure's category and, where it is known, the number of requests sent for the call that
+failed. A turn that answered, a turn that failed before it added anything to the conversation, and
+a turn the person stopped add no note. A stop is the person's own pause, and the next prompt usually
+continues the turn ([TURN-3](#TURN-3)).
+
+**The words are the driver's.** They are fixed, and the category and the request count are fields
+of the diagnosis ([BACKEND-37](backends.md#BACKEND-37)). The category is a fixed name and the count
+is the driver's own, so nothing the service sent is in the note: not its reply, its headers, its
+URL, its error text or the status of its reply. The category is what the driver made of that
+status, and it is all the planner is given of any other failure ([BACKEND-37](backends.md#BACKEND-37)
+says the same of a processor's). A background session started again after an interrupted turn is
+told in the same way, in the driver's own words, that the turn ended without finishing
+([BG-12](background-sessions.md#BG-12)).
+
+**It is part of the saved conversation.** The note is a notice. It is saved with the conversation,
+so a session resumed after a failed turn holds it as the live session did. It is drawn as nothing
+anyone said, and it is not a prompt a fork can be cut in front of or a point a cut between
+exchanges falls in front of. The note a resume adds about dead references is left out of the record
+because each resume adds its own. This note describes one turn, so a resume that left it out would
+again give the planner tool results with no ending.
+
+**Every front end that keeps a conversation has it.** The note is added where the turn ends, not
+where an interface records the failure ([SESSION-23](sessions.md#SESSION-23)), so the terminal, the
+line-mode session and the desktop window carry it into the next prompt. A one-shot run that fails
+writes no record, so no later prompt follows its conversation.
+
+**Why.** A turn that fails after some tool calls leaves those calls and their results in the
+conversation. Nothing in the conversation says they stop because of a failure, so a planner asked
+"what happened?" cannot tell a failed turn from one it paused itself, and can answer that it will
+carry on. The failure is recorded for the person alone. A turn that added nothing leaves nothing
+for a note to refer to.
+
+**Known costs.** Each failed turn adds its own note and a later turn that succeeds does not remove
+it, so a session that fails repeatedly holds one for each failure. A note is about fifty tokens.
+
+`verified-by: bravebot_agent::turn::a_turn_that_ends_on_a_failed_request_leaves_the_planner_a_note_of_it`
+`verified-by: bravebot_agent::turn::a_turn_that_failed_before_adding_anything_leaves_no_note_and_one_that_added_its_prompt_does`
+`verified-by: bravebot_agent::turn::a_turn_that_answered_or_was_stopped_leaves_no_note_of_a_failure`
+`verified-by: bravebot_agent::turn::a_turn_that_compacted_and_then_failed_leaves_the_note_of_the_failure`
+`verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_is_sent_and_kept_and_is_not_drawn`
+`verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else`
+`verified-by: bravebot_tui::sessions::a_failed_turn_leaves_a_note_the_transcript_does_not_draw_and_a_resume_still_sends`
+`verified-by: bravebot_ui_bridge::history::a_failed_turn_leaves_the_planner_a_note_in_the_saved_conversation`
+`verified-by: bravebot_cli::running::a_session_in_lines_tells_the_planner_that_the_turn_before_it_failed`
