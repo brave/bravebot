@@ -5785,7 +5785,7 @@ mod tests {
     /// Text counts as drawn once a draw so far has shown it whole. Each piece is shorter than a
     /// row and a step overlaps the last draw by a row, so a piece that wraps is whole in one draw.
     fn scroll_through(
-        kind: Kind,
+        kind: impl std::fmt::Debug,
         case: &Case,
         (width, height): (u16, u16),
         step: fn(&Looked) -> i16,
@@ -5870,6 +5870,54 @@ mod tests {
                 scroll_through(kind, &case, size, |_| 1);
                 scroll_through(kind, &case, size, Looked::page);
             }
+        }
+    }
+
+    /// The MCP server start question with a declaration far taller than the box. It is asked
+    /// through `servers::Asker`, not a `Reply`, so [`oversized`] cannot hold it.
+    fn oversized_start() -> Case {
+        use bravebot_config::mcp::{Declaration, Timeouts};
+        let reads = numbered('r', 40);
+        let declaration = Declaration::Stdio {
+            argv: vec!["/opt/tool/serve".into()],
+            variables: Vec::new(),
+            env: Default::default(),
+            reads: reads.iter().map(|word| format!("/data/{word}")).collect(),
+            directory: None,
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+        };
+        let mut deciding = vec!["/opt/tool/serve".to_string()];
+        deciding.extend(reads);
+        let lines = bravebot_agent::servers::Question {
+            alias: "files",
+            file: ".mcp.json",
+            declaration: &declaration,
+            program: None,
+            changed: false,
+        }
+        .lines();
+        Case {
+            draw: pinned(move |frame, scroll, memory| {
+                mcp::draw_start(frame, "files", &lines, scroll, &mut memory.seen)
+            }),
+            answer: Box::new(|key, looked| approves(start_answer_for(key, looked.pinned()))),
+            approving: vec!['1', '2'],
+            refusing: '3',
+            grants: Vec::new(),
+            deciding,
+        }
+    }
+
+    /// PROMPT-4, SERVERS-4: the server start question takes neither `1` nor `2` until every row of
+    /// the declaration has been drawn, a row or a page at a time, at both sizes.
+    #[test]
+    fn the_server_start_question_takes_no_yes_before_every_row_of_the_declaration_is_drawn() {
+        let case = oversized_start();
+        for size in [(80, 24), (60, 15)] {
+            scroll_through("server start", &case, size, |_| 1);
+            scroll_through("server start", &case, size, Looked::page);
         }
     }
 
@@ -6275,6 +6323,20 @@ mod tests {
         let host = HostRequest {
             hosts: vec!["example.com".into()],
         };
+        let declaration = bravebot_config::mcp::Declaration::http("https://example.com/mcp".into())
+            .expect("a declaration");
+        let start = bravebot_agent::servers::Question {
+            alias: "files",
+            file: ".mcp.json",
+            declaration: &declaration,
+            program: None,
+            changed: false,
+        };
+        assert_eq!(
+            ask_to_start(&mut terminal, &start),
+            bravebot_agent::servers::Answer::No,
+            "server start"
+        );
         let answers = [
             (
                 "fetch",
