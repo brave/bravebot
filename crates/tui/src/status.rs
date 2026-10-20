@@ -151,7 +151,9 @@ pub struct Facts<'a> {
     /// Whether the session was started with the flag that skips permissions.
     pub began_in_bypass: bool,
     /// Whether the programs `run` starts write every path a request for writing would be granted,
-    /// as [`programs_write_unasked`] answers it.
+    /// as [`programs_write_unasked`] answers it, before the trust of the directory is read: a
+    /// workspace the person has not trusted accepts no request, so [`report`] says it only where
+    /// `trust` vouches for the directory.
     pub programs_write_unasked: bool,
     /// Whether a check that finds nothing promotes a slot without the person being asked.
     ///
@@ -328,7 +330,8 @@ fn sockets_line(reachable: bool, mode: bravebot_sandbox::SandboxMode) -> Option<
 /// Whether the stages this session's `run` starts write every path a request for writing would be
 /// granted, as [`bravebot_agent::confine::Confinement::writes_without_a_request`] answers for the
 /// home, sandbox mode and permission mode a turn builds its confinement from. This session is the
-/// lead session, so bypass alone decides whether the confinement is told to.
+/// lead session, so bypass alone decides whether the confinement is told to. It leaves out the
+/// trust of the directory, which a turn reads when a line runs and [`report`] reads from the map.
 pub fn programs_write_unasked(
     mode: bravebot_sandbox::SandboxMode,
     permission: bravebot_agent::PermissionMode,
@@ -801,15 +804,25 @@ fn standing_lines(facts: &Facts<'_>) -> Vec<Line> {
     }
 
     // Only where it is so, for the reason the network line is: the ordinary session writes the
-    // directories it was opened on, and a line saying so on each would be skimmed past.
+    // directories it was opened on, and a line saying so on each would be skimmed past. A
+    // directory the person has not trusted accepts no request, so its stages are given none of
+    // the rows and the line is not drawn; while a turn holds the trust map the report cannot tell
+    // which, and says that instead of a claim about an earlier moment (PATHREQ-5).
     if facts.programs_write_unasked {
-        lines.push(
-            Line::new(
+        if facts.turn_holds_rules {
+            lines.push(Line::new(
                 t!(status_programs_write),
-                t!(status_programs_write_anywhere),
-            )
-            .with_note(t!(status_programs_write_except)),
-        );
+                t!(status_held_by_the_turn),
+            ));
+        } else if facts.trust.is_trusted(".") {
+            lines.push(
+                Line::new(
+                    t!(status_programs_write),
+                    t!(status_programs_write_anywhere),
+                )
+                .with_note(t!(status_programs_write_except)),
+            );
+        }
     }
 
     // Beside it for the same reason, and only where it is on: this is the other standing answer
@@ -2477,10 +2490,12 @@ mod tests {
         assert!(!shown.contains(asking), "{shown}");
     }
 
-    /// SANDBOX-22: a session whose programs write what a request would be granted says so, and a
-    /// session that does not is silent. The regressions it rejects are a line shown in `strict`, in
-    /// `off`, outside bypass, on Windows, or with no home directory, where the stage is given no
-    /// extra row.
+    /// SANDBOX-22, SANDBOX-28: a session whose programs write what a request would be granted says
+    /// so, and a session that does not is silent. The regressions it rejects are a line shown in
+    /// `strict`, in `off`, outside bypass, on Windows, or with no home directory, where the stage is
+    /// given no extra row, and a line shown for a directory the person has not trusted, which
+    /// accepts no request and so gives no row. While a turn holds the trust map the line says so
+    /// and states no reach, since either answer would be about an earlier moment.
     #[test]
     fn the_report_says_programs_write_what_a_request_would_be_granted_only_where_they_do() {
         use bravebot_agent::PermissionMode::{AcceptEdits, Ask, Bypass};
@@ -2507,16 +2522,32 @@ mod tests {
 
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
-        let mut facts = facts(&config, &trust);
+        let declined = TrustStore::new("/work");
         let said = |facts: &Facts<'_>| {
             report(facts)
                 .lines
-                .iter()
-                .any(|line| line.label == t!(status_programs_write))
+                .into_iter()
+                .find(|line| line.label == t!(status_programs_write))
+                .map(|line| line.value)
         };
-        assert!(!said(&facts));
+
+        let mut untrusted = facts(&config, &declined);
+        untrusted.programs_write_unasked = true;
+        assert_eq!(said(&untrusted), None, "a directory not trusted");
+
+        let mut facts = facts(&config, &trust);
+        assert_eq!(said(&facts), None, "the mode gives nothing");
         facts.programs_write_unasked = true;
-        assert!(said(&facts));
+        assert_eq!(
+            said(&facts).as_deref(),
+            Some(t!(status_programs_write_anywhere))
+        );
+        facts.turn_holds_rules = true;
+        assert_eq!(
+            said(&facts).as_deref(),
+            Some(t!(status_held_by_the_turn)),
+            "a turn holds the trust map"
+        );
     }
 
     fn rendered(report: &Report) -> String {

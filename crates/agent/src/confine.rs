@@ -375,9 +375,11 @@ impl Confinement {
     /// This confinement given, where [`Confinement::writes_without_a_request`] allows it, every path
     /// a `request_path` for writing would be granted when a stage starts (SANDBOX-28).
     ///
-    /// `bypass` is whether the permission mode answers a request in the person's place and the
-    /// caller is the lead session, which is the only one offered the tool. Nothing a program wrote
-    /// or printed is among its inputs.
+    /// `bypass` is whether the permission mode answers a request in the person's place, the caller
+    /// is the lead session, which is the only one offered the tool, and the session accepts a
+    /// request at all. A workspace the person has not trusted accepts none (PATHREQ-5), so its
+    /// stages are given no row a request would have added. Nothing a program wrote or printed is
+    /// among its inputs.
     #[must_use]
     pub fn with_unasked_writes(mut self, bypass: bool) -> Self {
         self.unasked_writes = bypass;
