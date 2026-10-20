@@ -601,10 +601,11 @@ prefers this to rewriting a whole body.
 one pair fails, the agent is told which and the file is not changed. You are asked once, about one
 diff of the combined result.
 
-The result gives the agent back the changed lines with three lines either side. Those lines are
-scanned for credentials as a file read is. If they hold what looks like a credential and you have not
-agreed to the agent being shown that file, you are asked, and one answer covers the file for edits
-and reads alike. A no leaves the edit in place and the lines out of the result.
+The result gives the agent back each changed region with three lines either side, fewer where many
+regions would make the result long, and says how many unchanged lines lie between two regions. Those
+lines are scanned for credentials as a file read is. If they hold what looks like a credential and
+you have not agreed to the agent being shown that file, you are asked, and one answer covers the file
+for edits and reads alike. A no leaves the edit in place and the lines out of the result.
 
 Where a language server for the file's language is already running, the result also says how many
 errors it found and on which lines, and how many warnings, as a `write_file` result does

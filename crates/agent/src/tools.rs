@@ -3229,9 +3229,9 @@ fn exposed_note(note: String, found: &[bravebot_core::credentials::Finding]) -> 
 /// What the lines an edit comes back with hold that would authenticate somewhere and that the
 /// planner has not already been given.
 ///
-/// Scans exactly the lines the result shows, at their numbers in the file: a key in the part of a
-/// long span the excerpt cuts, or past its context, is not in the planner's context, and a question
-/// about it would be one the person cannot connect to anything they were shown.
+/// Scans exactly the lines the result shows, at their numbers in the file: a key between two changed
+/// regions, in the part the excerpt cuts, or past its context, is not in the planner's context, and
+/// a question about it would be one the person cannot connect to anything they were shown.
 ///
 /// A value that nothing in the file held before the edit is left out, because the edit's own words
 /// wrote it. The write was put to the person with it on the screen, and the result repeating it
