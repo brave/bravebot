@@ -171,6 +171,22 @@ and says so in [../../agents/renumbered-clauses.txt](../../agents/renumbered-cla
 hand-written line per clause that moved, naming the id and heading it carries now: nothing
 generates that file, and the check fails on a line that has stopped being true of the tree.
 
+The review of the governed code is the [check-spec skill](../../agents/skills/check-spec/SKILL.md),
+which needs a model and is not part of `make check-spec`. A full run starts one reviewer for every six
+clauses, and each reads the governed source again, so the skill keeps `docs/check-spec-reviewed`: one
+line per clause with its verdict, the main commit the verdict was reached at, and a hash of what the
+reviewer was given besides the code (the clause, the paths its spec governs, the symbols it guards and
+their uses in files nobody watches, the spec's text outside its clauses, and the reviewer's
+instructions). A repeat run reviews a clause only as far as that has changed. It starts no reviewer
+for a clause when none of the code its spec watches changed since the recorded commit, gives a
+reviewer the earlier verdict and the diff when under half of those lines changed, and reviews the
+clause in full from half, when the hash changed, or when it has no line. `/check-spec full`, or
+`check-spec.py --full`, ignores the file and reviews every clause in full. That is the run to make on
+a schedule, since a review of a diff sees only the lines that changed. `record-reviewed.py` writes
+the file, for a tree that is main and no other, and does not commit it. `make check-spec` fails a
+line of it that is not a well formed record, since a run that cannot read the file reviews every
+clause in full.
+
 `make check-security` decides the things `check-spec` structurally cannot: whether two documents
 agree about how many exceptions to the rule are admitted, whether every crate keeping a network
 client of its own is one the egress register admits and no comment claims a dependency a manifest
