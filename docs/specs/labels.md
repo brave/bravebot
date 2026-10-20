@@ -573,9 +573,10 @@ arrives at all.
 
 ## Known costs
 
-- **Six places do look at untrusted bytes in order to decide something.** Three are in the policy
+- **Seven places do look at untrusted bytes in order to decide something.** Three are in the policy
   layer, the fourth is the search, which is in `bravebot-agent`, the fifth is the diagnostics
-  sentence and the sixth is `read_git`, which are in `bravebot-agent` too. The clauses above say
+  sentence, the sixth is `read_git` and the seventh is the text-or-binary sniff of a read, which are
+  in `bravebot-agent` too. The clauses above say
   nothing may, so these are exceptions, and they are written down rather than left to be found.
 
   The first is splitting a processor's answer. A processor hands back a single piece of text that
@@ -821,3 +822,39 @@ arrives at all.
   The two claims the entry rests on, that only the counts and the incomplete notice follow what the
   blob holds and that the skip stays in the body, are pinned under
   [GIT-14](tools/read-git.md#GIT-14).
+
+- **The seventh is the text-or-binary decision on a read of a file nobody vouched for.** For a path
+  the map does not vouch for, `read_file` does not open the file to hand back text, it defers a
+  slot ([READ-1](tools/read-file.md#READ-1)). It still has to say now whether the file is text, as
+  [READ-3](tools/read-file.md#READ-3) requires, so `Workspace::survey` in `bravebot-agent` reads the
+  first 8 KiB and `bravebot_filetype::looks_binary` tests it for a NUL byte or more than 30 percent
+  control characters. A file that fails is refused to the planner in the driver's own words, "is a
+  binary file, so it cannot be read as text", and one that passes becomes a reference with a byte
+  count. The same test runs again over the whole file, followed by a check that it is valid UTF-8,
+  when a slot is filled or a page is read (`Workspace::read` and `page`). The comparison is in
+  `bravebot-agent`, which is the driver too ([LABEL-4](#LABEL-4)), and the `filetype` crate holds
+  no `declassify`, so no pinned count moves when it changes. Where the path is vouched for, the bytes
+  are trusted and the comparison is the case [LABEL-5](#LABEL-5) allows. The rest of this entry is
+  about a path nobody vouched for.
+
+  Suppose an attacker owns the file. Everything that buys them is on this list:
+
+  - **Choose which of two driver-worded results the planner is shown for the file.** A reference
+    with a size, or the refusal above. That is one bit, and the planner was already free to read a
+    different path.
+  - **Put the file out of reach of a processor.** A NUL in the first 8 KiB, or bytes that are not
+    valid UTF-8 anywhere, makes a later fill of the slot fail with the same refusal.
+
+  What is **not** on the list: the label, which depends on the path alone, any destination, any
+  argument of a later call, and any byte of the file. The size the planner is told is the file's own
+  size and already the attacker's to set, and the sentence is one the driver wrote. The search
+  skipping a file that is not valid text, in the fourth entry, is the same kind of decision.
+
+  The alternative costs behaviour and is a product decision for the maintainers, not made here: a
+  quarantined read decides from the path and the size alone, and the text-or-binary answer is found
+  when a processor or a write reads the bytes. That would give the planner one result shape for
+  every unvouched file, and it changes [READ-3](tools/read-file.md#READ-3). Moving the sniff into
+  `bravebot-core` is not another, since that crate is the driver as well.
+
+  The result shape is pinned by `a_binary_read_tells_the_model_it_is_binary` in
+  `crates/agent/tests/turn.rs`, which fails if the refusal stops being said.
