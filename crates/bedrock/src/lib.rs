@@ -14,6 +14,10 @@
 //! this crate speaks the wire protocol and mints no witness.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::disallowed_methods, reason = "the test names its program")
+)]
 
 pub mod credentials;
 pub mod eventstream;

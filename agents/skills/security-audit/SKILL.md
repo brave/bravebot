@@ -289,6 +289,7 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 | A job holding `id-token: write` or a secret that installs or runs a dependency | mechanical | error |
 | A checkout of a bare name a branch and a tag can share, rather than a `refs/` ref | mechanical | error |
 | A required context naming no job, or a job running a check that no context requires | mechanical | error |
+| A `clippy.toml` that does not refuse `std::process::Command::new`, a second clippy configuration inside a crate, or an allow of that refusal with no reason | mechanical | error |
 | A clause at `verified-by: none` | mechanical | warning |
 | A confirmer method, a remembered set or a trust question with no row in the register, an entry naming a row the table lacks, one member listed twice or a list in another spec, a cell left empty, or a row naming no test or a test that does not exist | mechanical | error |
 | A register entry for a question or a set that is no longer declared | mechanical | warning |

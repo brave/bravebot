@@ -4,6 +4,8 @@
 //! saves: the unit that builds the record and the unit that reads it each look right alone, and
 //! only a save after a resume shows the history that was there before it gone.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;

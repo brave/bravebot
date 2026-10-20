@@ -65,6 +65,11 @@ fn pipe_into_found_by(
     let Some(program) = find(OsStr::new(program)) else {
         return false;
     };
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the program `find` returned, and the caller passes \
+                      `bravebot_sandbox::programs::find` (SANDBOX-30)"
+    )]
     let Ok(mut child) = Command::new(program)
         .args(arguments)
         .stdin(Stdio::piped())
@@ -373,6 +378,11 @@ fn run_bytes_found_by(
     arguments: &[&str],
 ) -> Option<Vec<u8>> {
     let program = find(OsStr::new(program))?;
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the program `find` returned, and the caller passes \
+                      `bravebot_sandbox::programs::find` (SANDBOX-30)"
+    )]
     let output = Command::new(program)
         .args(arguments)
         .stdin(Stdio::null())

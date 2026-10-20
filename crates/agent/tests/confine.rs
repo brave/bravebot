@@ -6,6 +6,8 @@
 //! inside another profile. On Windows a test does not skip: a machine that cannot create a
 //! container profile fails them, since a job that confined nothing must not report green.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use bravebot_agent::confine::Confinement;
 use bravebot_agent::exec;
 use bravebot_core::cancel::Cancel;

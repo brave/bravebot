@@ -122,6 +122,11 @@ impl Drop for Held {
 pub fn start_program(program: &str, arguments: &[OsString]) -> io::Result<Held> {
     let program = bravebot_sandbox::programs::find(std::ffi::OsStr::new(program))
         .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the program `bravebot_sandbox::programs::find` returned, which leaves out \
+                      every directory a stage may write (SANDBOX-30)"
+    )]
     let child = Command::new(program)
         .args(arguments)
         .stdin(Stdio::piped())

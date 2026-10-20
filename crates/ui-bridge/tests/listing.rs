@@ -3,6 +3,8 @@
 //! Driven through the binary, because the store is keyed by a lossy mangling of a path and only a
 //! real home shows two different paths landing in one store.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};

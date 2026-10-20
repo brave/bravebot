@@ -5,6 +5,10 @@
 //! conversation history can never become routing for a later one.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::disallowed_methods, reason = "the test names its program")
+)]
 
 #[cfg(test)]
 mod testutil;

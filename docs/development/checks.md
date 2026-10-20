@@ -19,6 +19,11 @@ pre-commit hook that refuses a commit failing either. The hook skips a commit th
 but files under `docs/` or `agents/`, Markdown, `LICENSE` or `CODEOWNERS`, which nothing compiled
 reads; a commit that stages anything else, or nothing, runs both.
 
+Clippy also refuses every call the tree starts a program with (`clippy.toml`,
+[SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A start that stays has
+`#[allow(clippy::disallowed_methods, reason = "...")]` beside it, and the reason says who chose the
+program. A reviewer reads that line in the diff, and `make check-security` fails one with no reason.
+
 Then run the tests the diff is under, scoped as tightly as the diff is: `cargo test -p bravebot-tui
 --lib` for the interface, `cargo test -p bravebot-agent --test workspace` for one test binary. A
 commit still has to be a state that stands up, and a change nothing covers is a change to be
@@ -171,8 +176,11 @@ reach as the clause deciding that does, whether a field documented as read in on
 one place, whether a trait reaches into a `Labelled`, whether a spec pins the constructors of one as
 well as the releases, whether every gate handing released content to a closure the driver wrote is
 counted rather than merely named and so is every function forwarding its caller's closure to one,
-whether every workflow step is on a commit rather than a tag its owner can move, whether every
-container image this tree runs
+whether `clippy.toml` still refuses the calls that start a program and no second clippy
+configuration hides them from a crate, and whether every allow of that refusal covers one start and
+carries a reason, since `make check` fails the start and cannot read the reason, whether every
+workflow step is on a commit
+rather than a tag its owner can move, whether every container image this tree runs
 names a digest rather than a tag its publisher can move, and whether a job holding `id-token: write`
 or a secret installs or runs an npm or pnpm dependency, which every step in that job could read the
 credential from, whether a checkout of this tree names a kind of ref rather than a bare name a

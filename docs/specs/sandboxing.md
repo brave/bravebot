@@ -3149,18 +3149,27 @@ the session only; and whether a covered line is announced in the transcript befo
 <a id="SANDBOX-30"></a>
 ### SANDBOX-30: a program bravebot starts itself is never one a confined stage could have written
 
-The programs bravebot starts on its own account, unconfined and with the person's access to `~/.ssh`,
-`~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`), the clipboard tools, `osascript`, the
-inhibitor `/caffeinate` starts, a hook's program, a language server, the editor Ctrl-G opens, the
-`ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs ([SANDBOX-16](#SANDBOX-16)), and
-what `doctor --sandbox-check` runs with no sandbox ([SANDBOX-21](#SANDBOX-21)): the `gh` of the
-stored-login row, the programs of a workflow's setup stages, and the programs of a workflow run
-again without the sandbox as the control, `git`, `sh`, `cat` and `touch` among them.
-Each is resolved to an absolute path before it is started, from the absolute entries of `PATH` that
-lie outside every directory a confined stage may write.
-That list is the whole of it: a program started by a bare name in production code is one this
-clause does not cover, and `make check-security` fails on a `Command::new("name")` outside tests, so
-a new spawn is added to the list here, in the same change, or resolved first.
+The programs bravebot starts on its own account and looks up by name, unconfined and with the
+person's access to `~/.ssh`, `~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`), the clipboard
+tools, `osascript`, the inhibitor `/caffeinate` starts, a hook's program, a language server, the
+editor Ctrl-G opens, the `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs
+([SANDBOX-16](#SANDBOX-16)), and what `doctor --sandbox-check` runs with no sandbox
+([SANDBOX-21](#SANDBOX-21)): the `gh` of the stored-login row, the programs of a workflow's setup
+stages, and the programs of a workflow run again without the sandbox as the control, `git`, `sh`,
+`cat` and `touch` among them. Each is resolved to an absolute path before it is started, from the
+absolute entries of `PATH` that lie outside every directory a confined stage may write.
+
+`clippy.toml` refuses every call the tree starts a program with, `std::process::Command::new` and
+`CreateProcessW`, whatever names the program: a string literal, a variable, an alias, or a helper
+that passes it on. `make check` fails a start that has no
+`#[allow(clippy::disallowed_methods, reason = "...")]` beside it. `make check-security` fails a mark
+whose reason is empty, a mark that covers more than one start, and a second clippy configuration
+that hides the refusal from a crate. The reason says who chose the program, and a start outside the
+list above says why it needs no lookup of this kind: it is this program's own executable, a path
+written in the source or given by the person, the program of a `run` line found when the line was
+planned, or a program a confined stage is asked to run. Tests are allowed at the root of their
+crate or file. A new spawn that looks a name up through `PATH` is added to the list above, in the
+same change, or resolved first, and its mark is what a reviewer reads.
 
 - **Those directories are the session's.** Each directory the session was opened on, added, or
   moved to, its scratch directory, the system temporary directory, and every row a stage's policy
@@ -3273,6 +3282,9 @@ the lookup would have searched.
 `verified-by: bravebot_agent::usability_path::a_gh_found_only_in_a_directory_a_stage_may_write_gives_no_login_row`
 `verified-by: bravebot_agent::usability_path::the_login_is_asked_of_the_gh_behind_a_directory_a_stage_may_write`
 `verified-by: bravebot_agent::usability_path::the_gh_asked_for_the_login_looks_up_the_programs_it_starts_only_behind_the_directory`
+`verified-by: bravebot_sandbox::process_start_lint::a_start_is_refused_whatever_names_its_program`
+`verified-by: bravebot_sandbox::process_start_lint::the_same_starts_with_a_mark_and_a_reason_pass`
+`verified-by: by-construction (make check, make check-linux and make check-windows run clippy over every target, so a start with no mark fails them; make check-security fails a clippy.toml that no longer lists std::process::Command::new, a second clippy configuration inside a crate, which clippy reads in place of the root one, and a mark with no reason, and its selftest pins each)`
 
 <a id="SANDBOX-31"></a>
 ### SANDBOX-31: on macOS a confined process looks up a fixed list of Mach services and no others

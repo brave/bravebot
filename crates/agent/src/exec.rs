@@ -606,6 +606,11 @@ impl<'a> Running<'a> {
             // Started by the path the name was found by, which some programs read
             // ([`Step::started_as`]). A second lookup here would let a `$PATH` changed since the
             // question decide what runs.
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "the program of a `run` line, found once when the line was planned \
+                              (`Step::started_as`)"
+            )]
             let mut command = Command::new(started_as);
             // The vector, never a string. Nothing here builds a command line, so nothing has to
             // unbuild one.
@@ -1547,6 +1552,11 @@ pub fn start_steps(
             environment: _,
             routes: _,
         } = step;
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the program of a `run` line, found once when the line was planned \
+                          (`Step::started_as`)"
+        )]
         let mut command = Command::new(started_as);
         command.args(&step.args).current_dir(directory);
         // In front of the step's own assignments, as in the foreground.

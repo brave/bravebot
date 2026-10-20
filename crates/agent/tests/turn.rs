@@ -4,6 +4,8 @@
 //! a reply. The injection test is the important one: it asserts that a file whose
 //! contents try to redirect the turn cannot do so.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 mod repository;
 
 #[allow(dead_code)]

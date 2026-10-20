@@ -81,6 +81,10 @@ fn doctor() -> Said {
     // The report is of this same program; nothing is trusted from where it says it is.
     // nosemgrep: rust.lang.security.current-exe.current-exe
     let me = std::env::current_exe().ok()?;
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "this program's own executable, `std::env::current_exe()`"
+    )]
     let output = Command::new(me)
         .arg("doctor")
         .stdin(Stdio::null())
