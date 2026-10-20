@@ -168,9 +168,13 @@ pub struct Output {
     /// Recorded by the turn loop only once the planner was shown the result (READ-8): a read that
     /// was quarantined, refused or answered with a notice shows no window.
     pub window: Option<crate::conversation::ReadWindow>,
-    /// Whether this is the planner's task list, accepted, so that a compaction can carry it
-    /// across the cut (COMPACT-16). False for a `todo_write` that was refused.
-    pub task_list: bool,
+    /// How many tasks the planner's task list leaves open, where this is the list, accepted, so
+    /// that a compaction can carry it across the cut (COMPACT-16) and the turn can ask about it
+    /// when it answers (TURN-12). `None` for a `todo_write` that was refused.
+    ///
+    /// Counted inside the kernel and labelled as the list is, so the turn holds a number it may
+    /// read only through [`Policy::read_trusted_content`].
+    pub task_list: Option<Labelled<usize>>,
     /// Whether the text is workspace content rather than the driver's own words about the call.
     pub content: bool,
     /// Whether this call left a file on disk different from how it found it.
@@ -1172,9 +1176,10 @@ struct Produced {
     glimpsed: Option<Labelled<String>>,
     /// The window of a file `text` shows, for the record of what the planner has been shown.
     window: Option<crate::conversation::ReadWindow>,
-    /// Whether `text` is the planner's task list, accepted. A fact about the call rather than
-    /// anything inside `text`, so the turn can record where the list sits without reading it.
-    task_list: bool,
+    /// The count of tasks left open, where `text` is the planner's task list, accepted. A fact
+    /// about the call rather than anything the turn reads out of `text`, so it can record where
+    /// the list sits, and how much of it is open, without reading it.
+    task_list: Option<Labelled<usize>>,
     /// Whether `text` is workspace content rather than the driver's own words about the call.
     ///
     /// What the kernel does with a result is worth reporting only where the result is content:
@@ -1260,7 +1265,7 @@ impl Produced {
             substituted: None,
             glimpsed: None,
             window: None,
-            task_list: false,
+            task_list: None,
             content: false,
             usage: Usage::default(),
             inference_interval: None,
@@ -5535,8 +5540,14 @@ fn todo_write<S: Sink, R: Reporter>(
 
     let note = note_for(policy, "todo_write", &list, |list| counted(&list));
 
+    // How many tasks are open, counted where the statuses can be looked at and labelled as the list
+    // is. The turn asks about it when it answers (TURN-12), and may read it only where the list is
+    // trusted: whether to say something to the planner is a decision, and a decision may not come
+    // from content that is not.
+    let open = policy.render_in_place("todo_write", &list, |list| list.open());
+
     let mut produced = Produced::new(summary, "", note);
-    produced.task_list = true;
+    produced.task_list = Some(open);
     produced
 }
 
@@ -16102,6 +16113,103 @@ mod tests {
                  out, or the driver is naming rows it has already been handed: {:?}",
                 sink.events()
             );
+        }
+
+        /// TURN-12. The count the turn asks the planner about is made where the statuses can be
+        /// read and carries the list's label, so the turn reads it through the trusted-read gate.
+        /// Started and unstarted tasks are open, finished and dropped ones are not.
+        #[test]
+        fn an_accepted_list_carries_the_count_of_its_open_tasks_at_its_own_label() {
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy");
+            let mut reporter = RecordingReporter::default();
+            let produced = todo_write(
+                &mut policy,
+                &mut reporter,
+                &SlotStore::new(),
+                &list(&[
+                    ("Read the file", "completed"),
+                    ("Make the change", "in_progress"),
+                    ("Run the tests", "pending"),
+                    ("Document it", "cancelled"),
+                ]),
+            );
+
+            let open = produced
+                .task_list
+                .expect("an accepted list carries its count");
+            assert_eq!(open.label(), policy.context_label());
+            assert_eq!(
+                policy
+                    .read_trusted_content("todo_write", &open)
+                    .expect("the context is trusted, so the count may be read"),
+                2
+            );
+        }
+
+        /// TURN-12. A list written in a context that has met something untrusted is labelled
+        /// untrusted, and so is its count, which the turn's trusted read then refuses. A count
+        /// labelled trusted whatever the list's label would let the driver decide from content it
+        /// may not read.
+        #[test]
+        fn the_count_of_open_tasks_in_an_untrusted_list_is_refused_to_the_driver() {
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy")
+            .resuming(Integrity::Untrusted);
+            let mut reporter = RecordingReporter::default();
+            let produced = todo_write(
+                &mut policy,
+                &mut reporter,
+                &SlotStore::new(),
+                &list(&[
+                    ("Make the change", "in_progress"),
+                    ("Run the tests", "pending"),
+                ]),
+            );
+
+            let open = produced
+                .task_list
+                .expect("an accepted list carries its count");
+            assert_eq!(open.label().integrity, Integrity::Untrusted);
+            assert!(
+                policy.read_trusted_content("todo_write", &open).is_err(),
+                "the driver was handed a count made from an untrusted list"
+            );
+        }
+
+        /// TURN-12. A call the tool refused is not the list, so it carries no count and the turn
+        /// asks about the list before it.
+        #[test]
+        fn a_refused_call_carries_no_count_of_open_tasks() {
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy");
+            let mut reporter = RecordingReporter::default();
+            for arguments in [json!({}), json!({"todos": [{"status": "pending"}]})] {
+                let produced =
+                    todo_write(&mut policy, &mut reporter, &SlotStore::new(), &arguments);
+                assert!(
+                    produced.task_list.is_none(),
+                    "a refused call counted tasks: {arguments}"
+                );
+            }
         }
 
         #[test]

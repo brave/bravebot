@@ -1125,6 +1125,14 @@ The whole list every time: it replaces the previous one. There is no routing her
 touched. An unrecognised status reads as outstanding work. A task marked `cancelled` is struck
 through and counted apart from the finished ones.
 
+A turn whose last list still has a task pending or in progress when the planner answers is not
+ended there. The planner is told how many tasks are open, and nothing about them, and is asked to
+send the list again with each task marked completed or cancelled. Where work remains it leaves the
+tasks open and says in its answer what is left. This happens once for each list: a list the planner
+sends in answer to the question is not asked about, in that turn or in a later one. A list the
+planner wrote in a session that has read something untrusted is not counted. A reply that stopped at
+the output limit ends the turn as it stands.
+
 ## `schedule_next`
 
 Says when this turn should be asked again: the pace of the next tick of a self-paced
