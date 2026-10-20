@@ -1569,8 +1569,8 @@ an answer in their place: it is the answer, given before the run and for the one
 On Unix a session holds a lock on its own directory for as long as it runs, and opening a session
 removes every directory in the account's directory for them ([TRUST-14](#TRUST-14)) that nothing
 holds, whose name is one this build gives, and that is this account's at mode `0700`. A start that
-made the account's directory removes such directories from the system temporary directory as well,
-once, since an earlier build made its directories there. A directory reaches that mode only once
+made the account's directory removes such directories that stand directly in the system temporary
+directory as well, once. A directory reaches that mode only once
 its lock is held, so one still being made is left, and a program a session starts does not inherit
 the lock. A link under such a name is judged as a link rather than as what it points at. A local MCP
 server's home is removed on the same terms. On Windows nothing is removed.
@@ -1595,6 +1595,12 @@ The owner and the mode keep the sweep to what a session of this account made. A 
 account made is theirs however it is named, and on Linux the temporary directory is one every
 account can create a name in. A name the sweep does not give could be a person's own or a test's, so
 it is left however much it resembles one.
+
+A directory under this build's names that stands directly in the temporary directory is out of reach
+of a sweep of the account's directory, and nothing else removes it, so it is looked for once, by the
+start that makes the account's directory. Looking for it at every start would read the whole
+temporary directory each time, which costs what the account's directory is there to save
+([TRUST-14](#TRUST-14)).
 
 A build from before the lock names its directories `scratch` and `mcp` and holds nothing on them,
 so to this build one still running would look exactly like a leftover. Naming this build's `session`
