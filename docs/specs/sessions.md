@@ -659,7 +659,13 @@ record incomplete command coverage. For changes that give up points, `/undo` the
 nothing left to undo rather than reaching a different session. Every point goes rather than the most recent alone,
 since such a change lands after the most recent point and so before none of them. `/rename` typed
 while a turn runs is carried out then ([CMD-8](commands.md#CMD-8)), and the point that turn opened
-goes with the rest: it holds the old name too.
+goes with the rest: it holds the old name too. The desktop's compaction, the bridge's
+`session.compact`, gives them up the same way: a compaction that summarised anything answers with
+no rewind points, and a rewind asked for afterwards is refused rather than reaching a conversation
+from before the summary. One that found nothing old enough to give up leaves them where they were.
+
+`verified-by: bravebot_ui_bridge::compact::compacting_summarises_the_earlier_exchanges_and_the_next_turn_carries_the_summary`
+`verified-by: bravebot_ui_bridge::compact::a_session_with_nothing_old_enough_to_summarise_is_told_so_and_nothing_is_sent`
 
 **Why.** A turn that went wrong is the case with no clean recovery: `git checkout` takes the
 user's own uncommitted work with it, and `/clear` throws away the context that was worth keeping.

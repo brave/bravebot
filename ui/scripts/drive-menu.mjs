@@ -127,6 +127,8 @@ const ALLOWED_IDS = [
   'mode.cycle',
   // Opens a dialog that names every file it would put back. Only that dialog's button rewinds.
   'turn.rewind',
+  // Summarises the conversation's earlier part; it touches no file and answers nothing asked.
+  'turn.compact',
 ]
 const ours = every.filter((i) => i.id && !i.role).map((i) => i.id)
 check(
@@ -141,10 +143,11 @@ check(
 // has taken on and it reaches no agent method at all. Forking is the opposite case and the
 // reason the number became 15. Model discovery adds one read-only method, `models.list`.
 // `session.rewind` puts files back to what they held, and only after a dialog naming each one.
+// `session.compact` summarises the conversation and touches nothing on disk but its record.
 const allowed = (readFileSync('src/main/index.ts', 'utf8').match(/const ALLOWED = new Set\(\[([^\]]*)\]/) ?? [])[1]
 check(
-  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 42,
-  'the main-process allow-list is 42 methods including model discovery and rewind, none of which decides anything',
+  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 47,
+  'the main-process allow-list is 47 methods including model discovery, rewind and compaction, none of which decides anything',
 )
 
 // --- accelerators are declared (they cannot be *dispatched* from here) -----------------

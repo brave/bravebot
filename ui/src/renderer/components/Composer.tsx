@@ -4,7 +4,7 @@ import { projectLabel } from '../../shared/recents'
 import { acceptMention, type MentionEntry, type MentionOffer } from '../../shared/mentions'
 import { useContextWindow } from '../context-window'
 import type { Staged } from '../staging'
-import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
+import { Button, ButtonMenu, Hr, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
 import { MentionList } from './MentionList'
@@ -35,6 +35,9 @@ export interface ComposerProps {
   compacting: boolean
   contextTokens?: number
   archived?: number
+  /** Offered where a session holds a conversation to summarise; greyed by `canCompact`. */
+  onCompact?: () => void
+  canCompact?: boolean
   /** A card is waiting on the reader, which the placeholder says. */
   pending: boolean
   /** The message is being sent and a conversation made for it, so it cannot be sent again yet. */
@@ -162,7 +165,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
     draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
     queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
-    canAttach = true, footer, starting = false,
+    canAttach = true, footer, starting = false, onCompact, canCompact = false,
   } = props
   // Read by the key handler, which Leo may keep from the first render.
   const latest = useRef(props)
@@ -386,7 +389,8 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             <IconButton icon="attachment" label="Attach files" className="attach-files" onClick={onAttach}
               disabled={!canAttach} tooltip={!canAttach ? 'Send a first message, then attach files' : 'Attach files'} />
             <span className="toolbar-spacer" />
-            <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
+            <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting}
+              canCompact={canCompact} onCompact={onCompact} />
             {permissionMode && onMode && <PermissionModePicker key={`mode-${session}`} mode={permissionMode} onChoose={onMode} />}
             {sandboxMode && onSandbox && <SandboxModePicker key={`sandbox-${session}`} mode={sandboxMode} onChoose={onSandbox} />}
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
@@ -521,19 +525,22 @@ export function BackendTray({ onSetup, onCheckBackend, onDiagnostics }: {
 }
 
 /**
- * How full the model's context was at the last request, as a ring.
+ * How full the model's context was at the last request, as a ring, and the way to summarise it.
  *
  * The sentence is kept, in text a screen reader and a driver can find, and in the tooltip: a ring
  * alone says "most of it" and not how much. The fraction is drawn only against a window the
  * catalogue gave; without one the ring is an empty track rather than a guess.
  */
-function ContextMeter({ session, model, tokens, archived, compacting }: {
+function ContextMeter({ session, model, tokens, archived, compacting, canCompact, onCompact }: {
   session: string
   model: string | null
   tokens?: number
   archived?: number
   compacting: boolean
+  canCompact: boolean
+  onCompact?: () => void
 }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
   const size = useContextWindow(session, model, (tokens ?? 0) > 0)
   const said = compacting ? 'Summarising context…'
     : tokens === undefined ? 'Context measurement unavailable'
@@ -544,16 +551,37 @@ function ContextMeter({ session, model, tokens, archived, compacting }: {
   const level = fraction >= 0.95 ? 'full' : fraction >= 0.8 ? 'high' : ''
   const tooltip = [said, share, archived ? 'Earlier context summarised' : null].filter(Boolean).join(' · ')
     + '. The size of the model’s last request, not the tokens used so far.'
+  const compact = () => { setOpen(false); onCompact?.() }
   return (
-    <span className={`context-meter ${level}`} tabIndex={0} data-tooltip={tooltip} data-test="context-meter">
-      <span className="meter-ring" aria-hidden="true">
-        <ProgressRing mode={compacting ? 'indeterminate' : 'determinate'} progress={fraction} />
-      </span>
-      <span className="visually-hidden">
-        <span>{said}</span>
-        {share && <span> · {share}</span>}
-        {!!archived && <span> · Earlier context summarised</span>}
-      </span>
-    </span>
+    <ButtonMenu className="context-menu" isOpen={open} placement="top-end" positionStrategy="fixed"
+      onChange={({ isOpen }) => setOpen(isOpen)}>
+      <button type="button" slot="anchor-content" className={`context-meter ${level}`} data-tooltip={open ? undefined : tooltip}
+        aria-haspopup="dialog" aria-expanded={open} data-test="context-meter">
+        <span className="meter-ring" aria-hidden="true">
+          <ProgressRing mode={compacting ? 'indeterminate' : 'determinate'} progress={fraction} />
+        </span>
+        <span className="visually-hidden">
+          <span>{said}</span>
+          {share && <span> · {share}</span>}
+          {!!archived && <span> · Earlier context summarised</span>}
+        </span>
+      </button>
+      {/* Drawn only while open, so a closed popover adds no second copy of the reading to the page. */}
+      {open && <div className="context-popover" data-test="context-popover">
+        <p className="context-said">{said}</p>
+        {share && <p className="context-detail">{share} context tokens</p>}
+        {!!archived && <p className="context-detail">Earlier context summarised</p>}
+        <p className="context-detail">The size of the model’s last request, not the tokens used so far.</p>
+        {onCompact && (
+          <>
+            <Hr />
+            <div className="context-actions">
+              <Button size="small" kind="outline" isDisabled={!canCompact} onClick={compact} data-test="compact-now">Compact now</Button>
+              <span className="context-detail">Summarises earlier messages and keeps the latest word for word. Undo points before it are cleared.</span>
+            </div>
+          </>
+        )}
+      </div>}
+    </ButtonMenu>
   )
 }

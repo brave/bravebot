@@ -61,6 +61,8 @@ export interface CommandActions {
   rewindEntry: (id: string) => void
   /** Ask to put the session back to before its latest turn. */
   undoTurn: () => void
+  /** Summarise the open session's earlier conversation, as the terminal's `/compact`. */
+  compact: () => void
   /** Write the open session's conversation to a file, in one of three formats. */
   exportSession: (format: ExportFormat) => void
   /** Flip whether an export carries the tool calls as well as the conversation. */
@@ -129,6 +131,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.cycleMode()
         case 'turn.rewind':
           return act.undoTurn()
+        case 'turn.compact':
+          return act.compact()
         case 'view.fold-left':
           return act.toggle('left')
         case 'view.fold-right':

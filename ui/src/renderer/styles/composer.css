@@ -232,12 +232,18 @@
 
 /* ---- context meter */
 
+.context-menu { flex: none; }
 .context-meter {
   flex: none;
   display: grid;
   place-items: center;
   width: var(--hit);
   height: var(--hit);
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
   border-radius: var(--radius-control);
   --leo-progressring-size: var(--icon-control);
   --leo-progressring-stroke-width: 2px;
@@ -251,6 +257,17 @@
 .context-meter.high { --leo-progressring-color: var(--status-warning); }
 .context-meter.full { --leo-progressring-color: var(--status-error); }
 .meter-ring { display: grid; }
+.context-popover {
+  display: grid;
+  gap: var(--leo-spacing-s);
+  width: 280px;
+  box-sizing: border-box;
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
+}
+.context-popover p { margin: 0; }
+.context-said { font: var(--type-body); color: var(--ink-primary); }
+.context-detail { font: var(--type-caption); color: var(--ink-tertiary); }
+.context-actions { display: grid; gap: var(--leo-spacing-s); justify-items: start; padding-top: var(--leo-spacing-s); }
 
 /* ---- attachments */
 

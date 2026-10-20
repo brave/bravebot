@@ -48,6 +48,7 @@ import { isSessionId, parseForkResult } from '../shared/forks'
 import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
 import { sanitised } from './sanitise'
+import { compactedBot, holding } from './holding'
 import { SendRefused, forgetDrops, stageDrops, withDrops } from './drops'
 import { clipboardPng, forgetPastes, stagePaste, withPastes } from './pastes'
 import { isSubpath } from '../shared/files'
@@ -358,8 +359,9 @@ function createWindow(): void {
   window.webContents.on('will-navigate', (event) => event.preventDefault())
 
   bridge = new Bridge((message) => {
-    if (message.session && message.event === 'turn.started') runningHandles.add(message.session)
-    if (message.session && (message.event === 'turn.done' || message.event === 'turn.error')) runningHandles.delete(message.session)
+    const held = holding(message)
+    if (held?.begins) runningHandles.add(held.session)
+    else if (held) runningHandles.delete(held.session)
     // What this app has to say about the event, held until the event itself has been sent. See
     // the note where it is called.
     let after: (() => void) | null = null
@@ -405,6 +407,19 @@ function createWindow(): void {
           message.data.consolidating = true
           after = () => void consolidate(handle, slug, carryOverPrompt)
         }
+      }
+    }
+    // A compaction somebody asked for owes the bot the same consolidation as one a turn made.
+    const compacted = compactedBot(message, (handle) => {
+      const slug = botHandles.get(handle)
+      return slug && rootForSession(handle) ? { slug, archived: bot(slug)?.archived ?? 0 } : null
+    })
+    if (compacted && message.event === 'compact.done') {
+      const { handle, slug, archived } = compacted
+      noteBotArchived(slug, archived)
+      if (compacted.consolidate) {
+        message.data.consolidating = true
+        after = () => void consolidate(handle, slug)
       }
     }
     // A turn this app sent can fail like any other, and a flag left set would mean the next
@@ -479,6 +494,7 @@ const ALLOWED = new Set([
   'session.mode',
   'session.sandbox',
   'session.rewind',
+  'session.compact',
   'turn.send',
   'turn.cancel',
   'mentions.offer',

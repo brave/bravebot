@@ -32,7 +32,7 @@ import { TooltipLayer } from './components/TooltipLayer'
 import { useEvent, useStableValue } from './hooks'
 import { About, type AboutInfo } from './components/About'
 import { conversationModel, rememberModel } from './models'
-import { canSend } from './can-send'
+import { canCompact, canSend } from './can-send'
 import { useCommandRouter, usePublishedState } from './commands'
 import { type Fork, forkedSessions } from '../shared/forks'
 import { activeBots, botProjects, type Bot } from '../shared/bots'
@@ -157,7 +157,7 @@ export function App(): React.JSX.Element {
       // The list holds two things this window did not write — the session behind a bot and how
       // much compaction has taken from it — and a turn is when either can have changed. Read back
       // rather than assumed, since the main process is the one that saw the agent's answer.
-      if (message.event === 'turn.done' || message.event === 'turn.error') void readBots()
+      if (message.event === 'turn.done' || message.event === 'turn.error' || message.event === 'compact.done') void readBots()
     })
 
     // Turns nobody on this side asked for. The main process answers a compaction by asking the bot
@@ -642,6 +642,21 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
+  /** Summarise the earlier conversation now, rather than waiting for the window to fill. */
+  const compact = useCallback(async () => {
+    const handle = handleRef.current
+    const current = handle ? openedLives.current.get(handle) : undefined
+    if (!handle || !current || current.running) return
+    // Marked before the call, since the compaction can end before the call answers.
+    updateSession(handle, (old) => old ? { ...old, running: true, phase: 'compacting' } : old)
+    try {
+      await call('session.compact', { session: handle, model: current.model ?? null })
+    } catch (error) {
+      if (error instanceof Unconfigurable) setUnconfigured(error.message)
+      updateSession(handle, (old) => old ? { ...old, running: false, phase: null, entries: [...old.entries, t.errored(error instanceof Unconfigurable ? error.message : String(error))] } : old)
+    }
+  }, [])
+
   /** Start a run from whatever is in the composer, where a run can take it. */
   const submitPlan = useCallback(() => {
     const task = draft.trim()
@@ -1004,6 +1019,7 @@ export function App(): React.JSX.Element {
     forkEntry: (id) => void forkFrom(id),
     rewindEntry,
     undoTurn: () => { const newest = live?.rewind?.[0]; if (newest) askRewind(newest.steps) },
+    compact: () => void compact(),
     exportSession: (format) => void exportSession(format),
     toggleExportTools: toggleTools,
     theme: () => openSettingsPage('general'),
@@ -1019,6 +1035,7 @@ export function App(): React.JSX.Element {
       canExport,
       includeTools,
       canRewind: live !== null && !live.running && (live.rewind?.length ?? 0) > 0,
+      canCompact: canCompact(live),
       folded: collapsed,
     }),
     [live, draft, collapsed, canExport, includeTools, backendReady],
@@ -1184,6 +1201,8 @@ export function App(): React.JSX.Element {
         onTrustRemembered={(handle, kept) => updateSession(handle, (old) => (old ? { ...old, trustRemembered: old.trustRemembered && kept } : old))}
         onFork={(id) => void forkFrom(id)}
         onRewind={askRewind}
+        onCompact={() => void compact()}
+        canCompact={menuState.canCompact}
         onOpenParent={openParent}
         onFocused={clearFocus}
         onDecide={answer}
