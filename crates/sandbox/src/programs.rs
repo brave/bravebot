@@ -92,6 +92,32 @@ pub fn find_on(program: &OsStr, path: &OsStr) -> Option<PathBuf> {
     find_in_with(program, path, &registered(), &held_where_the_account_can())
 }
 
+/// Whether a file found in a `PATH` entry is one [`find_on`] would return: the entry is outside
+/// every directory a stage may write, and so is the file once its links are followed.
+///
+/// For a caller that walks a `PATH` itself, as a Windows lookup that tries each of `PATHEXT` does.
+pub fn outside_stage_writable(candidate: &Path) -> bool {
+    outside_stage_writable_with(candidate, &registered(), &held_where_the_account_can())
+}
+
+/// [`outside_stage_writable`] against given sets of writable directories.
+pub fn outside_stage_writable_with(
+    candidate: &Path,
+    writable: &[PathBuf],
+    where_the_account_can: &[PathBuf],
+) -> bool {
+    let out = kept_out(writable);
+    let Some(entry) = candidate.parent() else {
+        return false;
+    };
+    let Ok(resolved) = candidate.canonicalize() else {
+        return false;
+    };
+    is_searched(entry, &out, where_the_account_can)
+        && !within_any(&resolved, &out)
+        && !planted(&resolved, where_the_account_can)
+}
+
 /// Every path recorded with [`keep_out_where_writable`] so far.
 ///
 /// Copied out, so the lock is not held while every entry on `PATH` is read.
@@ -620,6 +646,25 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// A file in a stage-writable `PATH` entry, or a link from a safe one into it, is not outside
+    /// the directories a stage may write. The regression it rejects: checking only the entry, which
+    /// accepts a link in a safe directory that points at a planted file.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_in_or_linked_into_a_writable_directory_is_not_outside_it() {
+        let session = scratch_dir("programs-outside");
+        let planted = executable(&session.join("venv").join("bin"), "npx");
+        let safe = scratch_dir("programs-outside-safe");
+        let genuine = executable(&safe, "npx");
+        let link = safe.join("linked-npx");
+        std::os::unix::fs::symlink(&planted, &link).unwrap();
+        let writable = std::slice::from_ref(&session);
+
+        assert!(!outside_stage_writable_with(&planted, writable, &[]));
+        assert!(!outside_stage_writable_with(&link, writable, &[]));
+        assert!(outside_stage_writable_with(&genuine, writable, &[]));
     }
 
     #[cfg(unix)]
