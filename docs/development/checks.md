@@ -330,7 +330,8 @@ sandbox is the cause. A test that fails under `run` and has no such skip is a bu
 [Test determinism](../../.github/workflows/test-determinism.yml) workflow runs the suite a hundred
 times against one build, on Linux at four threads and at sixteen and on macOS and Windows at cargo's
 default, and names every test whose outcome changed, with the rate, the platform and the panic it
-produced. Each one gets an issue titled `Flaky test: <name>`, except from the Windows leg, which
+produced. Each one gets an issue titled `Flaky test: <name>`, filed by a separate job that holds the issue
+grant and compiles nothing, except from the Windows leg, which
 files nothing because the suite is not expected to pass there yet (#88). A test that already has an
 issue gets nothing further, so the list of open flakes is the search rather than
 a job summary somebody has to remember to read. Search the issues before treating a failure as a

@@ -1093,6 +1093,106 @@ def test_privileged_job_runs_only_its_own_code():
     )
 
 
+def project_code_workflow(permissions, steps, job_env=""):
+    return (
+        "permissions:\n  contents: read\n\njobs:\n  measure:\n    runs-on: ubuntu-latest\n"
+        f"    permissions:\n{permissions}\n{job_env}    steps:\n{steps}"
+    )
+
+
+CHECKOUT_PERSISTING = "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
+CHECKOUT_CLEAN = CHECKOUT_PERSISTING + "        with:\n          persist-credentials: false\n"
+ISSUES_WRITE = "      contents: read\n      issues: write"
+
+
+def test_privileged_job_runs_project_code():
+    def run(workflow):
+        tree = in_tree({".github/workflows/test-determinism.yml": workflow})
+        return with_cwd(tree, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+
+    token_step = (
+        CHECKOUT_CLEAN
+        + "      - name: Test\n        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"
+        "        run: cargo test --all --locked\n"
+    )
+    found = run(project_code_workflow(ISSUES_WRITE, token_step))
+    evidence = " | ".join(found[0]["evidence"]) if found else "(nothing)"
+    check(
+        "a cargo step whose environment holds the workflow token is reported, naming the step",
+        kinds(found) == ["privileged-job-runs-project-code"] and "cargo test --all --locked" in evidence,
+        f"{kinds(found)}: {evidence}",
+    )
+
+    script_step = (
+        CHECKOUT_CLEAN
+        + "      - name: Measure\n        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"
+        "        run: |\n          python3 contrib/measure-flakes.py --runs 100 --file-issues x/y\n"
+    )
+    found = run(project_code_workflow(ISSUES_WRITE, script_step))
+    check(
+        "the measuring script is reported where it holds the token, since it runs cargo",
+        kinds(found) == ["privileged-job-runs-project-code"],
+        str(kinds(found)),
+    )
+
+    check(
+        "the same build in a job holding only contents: read is clean",
+        run(
+            project_code_workflow(
+                "      contents: read", CHECKOUT_CLEAN + "      - run: cargo test --all --locked\n"
+            )
+        )
+        == [],
+    )
+
+    found = run(
+        project_code_workflow(
+            ISSUES_WRITE, CHECKOUT_PERSISTING + "      - run: cargo test --all --locked\n"
+        )
+    )
+    check(
+        "a write grant is reported when the checkout leaves its credential for the build to read",
+        kinds(found) == ["privileged-job-runs-project-code"],
+        str(kinds(found)),
+    )
+    check(
+        "the same job with persist-credentials: false is clean",
+        run(
+            project_code_workflow(
+                ISSUES_WRITE, CHECKOUT_CLEAN + "      - run: cargo test --all --locked\n"
+            )
+        )
+        == [],
+    )
+
+    found = run(
+        project_code_workflow(
+            ISSUES_WRITE,
+            CHECKOUT_CLEAN + "      - run: cargo build\n",
+            job_env="    env:\n      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n",
+        )
+    )
+    check(
+        "a token in the job's own environment reaches every step, so a build in it is reported",
+        kinds(found) == ["privileged-job-runs-project-code"],
+        str(kinds(found)),
+    )
+
+    split = (
+        CHECKOUT_CLEAN
+        + "      - name: Measure\n        run: cargo test --all --locked\n"
+        "      - name: File\n        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"
+        "        run: contrib/measure-flakes.py --load measured.json --file-issues x/y\n"
+    )
+    check(
+        "a token in the step that only files, beside a build step that has none, is clean",
+        run(project_code_workflow(ISSUES_WRITE, split)) == [],
+    )
+
+    found = run(project_code_workflow(ISSUES_WRITE, CHECKOUT_CLEAN + "      - run: cargo fmt --all --check\n"))
+    check("a cargo command that compiles nothing is not reported", found == [], str(kinds(found)))
+
+
 # A real reference and the digest it resolved to, because a fixture written with a made-up hash
 # would pass a check that only counted hex digits and say nothing about the one that runs.
 ZIGBUILD = "ghcr.io/rust-cross/cargo-zigbuild:0.23.0"
@@ -3197,6 +3297,7 @@ def main():
         test_pinned_actions,
         test_pinned_images,
         test_privileged_job_runs_only_its_own_code,
+        test_privileged_job_runs_project_code,
         test_checkout_ref_is_qualified,
         test_required_checks_are_the_gates,
         test_construction_pinned,

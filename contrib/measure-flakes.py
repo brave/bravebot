@@ -190,6 +190,12 @@ def system():
     return {"Darwin": "macOS"}.get(platform.system(), platform.system())
 
 
+# Set when the measurement is read from a file, because the host that files is not the one that ran
+# the suite, and an issue naming the filing host's CPUs would credit a rate to a machine that never
+# produced it.
+MEASURED_ON = None
+
+
 def machine():
     """What the machine reports, since a rate without it invites the wrong conclusion.
 
@@ -197,6 +203,8 @@ def machine():
     runner and a container on a developer's laptop can pass the identical flag and put a different
     number of tests in flight, and the rate is a property of that, not only of the test.
     """
+    if MEASURED_ON:
+        return MEASURED_ON
     count = os.cpu_count()
     cpus = f"{count} CPUs" if count else "an unknown number of CPUs"
     return f"{cpus} running {system()}"
@@ -474,9 +482,18 @@ def file_issues(flaky, samples, threads, repo, assign, limit, gh):
     return "\n".join(heading + (lines or ["Nothing to file."]) + [""]), delivered
 
 
+# What the filing step holds and nothing that runs project code may: `gh` reads either name.
+TOKENS = ("GH_TOKEN", "GITHUB_TOKEN")
+
+
 def cargo_env():
-    """Colour off, so the parse reads test names rather than escape sequences."""
-    env = dict(os.environ)
+    """Colour off, so the parse reads test names rather than escape sequences.
+
+    The token that files issues is left out. Cargo runs every build script and proc macro in
+    Cargo.lock, and each measured run executes their code again, so whatever is in this environment
+    is readable by bytes nobody here wrote (#2789).
+    """
+    env = {key: value for key, value in os.environ.items() if key not in TOKENS}
     env["CARGO_TERM_COLOR"] = "never"
     return env
 
@@ -568,6 +585,17 @@ def main():
         help="a file to append the report to, such as $GITHUB_STEP_SUMMARY",
     )
     parser.add_argument(
+        "--save",
+        metavar="FILE",
+        help="write what was measured to FILE, so a later step holding a token can file issues "
+        "from it without this one ever holding one",
+    )
+    parser.add_argument(
+        "--load",
+        metavar="FILE",
+        help="file issues from what --save wrote, and run nothing: no cargo, so no project code",
+    )
+    parser.add_argument(
         "--file-issues",
         metavar="OWNER/REPO",
         # Empty rather than absent, because the workflow matrix passes this per leg and only one leg
@@ -600,9 +628,30 @@ def main():
     if args.selftest:
         return selftest()
 
-    per_run, samples, lost = measure(args.runs, args.test_threads)
+    if args.load:
+        with open(args.load, encoding="utf-8") as handle:
+            saved = json.load(handle)
+        per_run, samples, lost = saved["per_run"], saved["samples"], saved["lost"]
+        args.test_threads = saved["threads"]
+        global MEASURED_ON
+        MEASURED_ON = saved["machine"]
+    else:
+        per_run, samples, lost = measure(args.runs, args.test_threads)
     if not per_run:
         return 1
+
+    if args.save:
+        with open(args.save, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "per_run": per_run,
+                    "samples": samples,
+                    "lost": lost,
+                    "threads": args.test_threads,
+                    "machine": machine(),
+                },
+                handle,
+            )
 
     counts = tally(per_run)
     flaky, broken = disagreed(counts, len(per_run))
@@ -618,9 +667,11 @@ def main():
             args.issue_limit,
             dry_gh if args.dry_run else run_gh,
         )
-        report = f"{report}\n{section}"
+        # A filing step reports the filing only: the step that measured has already written the
+        # rest of the report to the same summary.
+        report = section if args.load else f"{report}\n{section}"
     detail = failures(flaky, broken, samples)
-    if detail:
+    if detail and not args.load:
         report = f"{report}\n{detail}"
 
     print(report)
@@ -1016,6 +1067,29 @@ def selftest():
             "Test determinism workflow" in by_job
             and "Test determinism workflow" not in by_hand
             and "run by hand" in by_hand,
+        )
+    )
+
+    # Cargo runs every build script and proc macro in Cargo.lock, and each measured run executes
+    # their code again, so the token that files issues must not be in the environment they inherit.
+    saved = {key: os.environ.get(key) for key in (*TOKENS, "MEASURE_SELFTEST")}
+    try:
+        for key in TOKENS:
+            os.environ[key] = "secret"
+        os.environ["MEASURE_SELFTEST"] = "kept"
+        child = cargo_env()
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    checks.append(
+        (
+            "no token reaches the environment cargo and the tests inherit",
+            not any(key in child for key in TOKENS)
+            and child.get("MEASURE_SELFTEST") == "kept"
+            and child.get("CARGO_TERM_COLOR") == "never",
         )
     )
 
