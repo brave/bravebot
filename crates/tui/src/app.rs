@@ -28537,6 +28537,30 @@ mod tests {
         );
     }
 
+    /// MOUSE-4: `tui.mouse` reaches the session through `adopt_settings`. The editor and the pager
+    /// take the terminal back with the session's choice, so a session that kept the default after
+    /// its settings turned capture off would capture the mouse again after the first round trip.
+    #[test]
+    fn adopting_settings_puts_the_mouse_choice_in_force() {
+        let off = bravebot_config::Settings::parse(r#"{"tui": {"mouse": false}}"#);
+        let on = bravebot_config::Settings::parse(r#"{"tui": {"mouse": true}}"#);
+        let unset = bravebot_config::Settings::parse("{}");
+
+        let mut turned_off = Session::new("none");
+        adopt_settings(&mut turned_off, &off, None);
+        let mut turned_on = Session::new("none");
+        adopt_settings(&mut turned_on, &on, None);
+        let mut unnamed = Session::new("none");
+        adopt_settings(&mut unnamed, &unset, None);
+
+        assert!(
+            !turned_off.mouse_captured(),
+            "tui.mouse off was not adopted"
+        );
+        assert!(turned_on.mouse_captured());
+        assert!(unnamed.mouse_captured(), "an absent key turned capture off");
+    }
+
     /// A loop repeats a line somebody endorsed. The sentence this program writes to carry a goal
     /// on is not one, so a turn running that sentence and asking for a later look gets no loop:
     /// otherwise the driver's own words would come back every quarter of an hour, and the person
