@@ -799,6 +799,69 @@ jobs:
     )
 
 
+def test_grant_is_behind_an_environment():
+    def run(files):
+        return with_cwd(in_tree(files), lambda: list(audit.check_grant_is_behind_an_environment()))
+
+    bare = run({".github/workflows/publish-npm.yml": GRANT_BESIDE_THE_INSTALL})
+    check(
+        "a job holding id-token: write and no environment is an error naming the job",
+        kinds(bare) == ["grant-without-environment"]
+        and "`publish`" in bare[0]["summary"]
+        and bare[0]["evidence"] == [
+            ".github/workflows/publish-npm.yml:14 job `publish` holds id-token: write"
+        ],
+        str([one["summary"] for one in bare]),
+    )
+
+    named = run(
+        {
+            ".github/workflows/publish-npm.yml": GRANT_BESIDE_THE_INSTALL.replace(
+                "    permissions:\n      contents: read\n      id-token: write",
+                "    environment: npm-publish\n    permissions:\n      contents: read\n"
+                "      id-token: write",
+            )
+        }
+    )
+    check("the same job naming an environment is clean", named == [], str(kinds(named)))
+
+    mapping = run(
+        {
+            ".github/workflows/publish-npm.yml": GRANT_BESIDE_THE_INSTALL.replace(
+                "    permissions:\n      contents: read\n      id-token: write",
+                "    environment:\n      name: npm-publish\n    permissions:\n"
+                "      contents: read\n      id-token: write",
+            )
+        }
+    )
+    check("the mapping form of environment is clean", mapping == [], str(kinds(mapping)))
+
+    # The environment of another job is that job's, and a workflow-level grant reaches every job.
+    other = run(
+        {
+            ".github/workflows/publish-npm.yml": GRANT_OVER_THE_INSTALL
+            + "  other:\n    runs-on: ubuntu-latest\n    environment: npm-publish\n"
+            "    steps:\n      - run: true\n"
+        }
+    )
+    check(
+        "a job without an environment is reported although a sibling names one",
+        kinds(other) == ["grant-without-environment"] and "`publish`" in other[0]["summary"],
+        str(kinds(other)),
+    )
+
+    check(
+        "a job holding only contents: read needs no environment",
+        run({".github/workflows/ci.yml": GRANT_BESIDE_THE_INSTALL.replace("id-token: write", "")})
+        == [],
+    )
+
+    check(
+        "the tree's own workflows put every grant behind an environment",
+        with_cwd(ROOT, lambda: list(audit.check_grant_is_behind_an_environment())) == [],
+    )
+
+
 # The publish workflow in the two shapes that matter. In the first the grant is declared once for a
 # whole workflow whose single job also installs the lockfile and runs what it installed; in the second
 # those two commands are a job of their own and the grant is on the job that publishes. The second is
@@ -3327,6 +3390,7 @@ def main():
         test_privileged_job_runs_only_its_own_code,
         test_privileged_job_runs_project_code,
         test_checkout_ref_is_qualified,
+        test_grant_is_behind_an_environment,
         test_required_checks_are_the_gates,
         test_construction_pinned,
         test_gates_pinned,

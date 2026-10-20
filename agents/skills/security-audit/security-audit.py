@@ -230,6 +230,8 @@ PINNED = re.compile(r"^[\w.-]+/[\w.:/-]+@[0-9a-f]{40}$")
 JOBS = re.compile(r"^jobs:\s*$")
 JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 PERMISSIONS = re.compile(r"^\s*permissions:\s*(.*)$")
+# Either `environment: name` or the mapping form with `name:` beneath it.
+ENVIRONMENT = re.compile(r"^\s*environment:")
 RUN = re.compile(r"^\s*(?:-\s+)?run:\s*(.*)$")
 BLOCK = ("", "|", "|-", "|+", ">", ">-", ">+")
 # A job's own `name:`, which is the name its check run reports under and so the name a required
@@ -1821,6 +1823,7 @@ def workflow_jobs(lines):
                 "name": found.group(1),
                 "line": number + 1,
                 "grants": None,
+                "environment": False,
                 "secret": everywhere,
                 "secret_above_steps": everywhere,
                 "persists": False,
@@ -1844,6 +1847,8 @@ def workflow_jobs(lines):
         found = PERMISSIONS.match(raw) if column == 4 else None
         if found:
             current["grants"] = [found.group(1)] + nested(lines, number)
+        if column == 4 and ENVIRONMENT.match(raw):
+            current["environment"] = True
         found = RUN.match(raw)
         if found:
             inline = found.group(1).strip()
@@ -2103,6 +2108,46 @@ def check_privileged_job_runs_only_its_own_code():
                 gain="whoever owns one of the installed packages runs code beside the credential "
                 "this job exists to mint, and what they publish with it carries this repository's "
                 "provenance",
+            )
+
+
+def check_grant_is_behind_an_environment():
+    """A job that can mint an OIDC token names an `environment:`, so a reviewer stands in front of it.
+
+    `workflow_dispatch` runs the file at the ref it is dispatched on, and the registry's trusted
+    publisher keys on the repository and the filename, not the ref. A person with write access can
+    push a branch holding a copy of the publish workflow without its refusals and dispatch that, and
+    the token it mints is accepted. An `environment:` is the one control the dispatcher's copy of the
+    file cannot remove for the real one to keep: the environment's required reviewer is a setting of
+    the repository, and the registry compares the environment claim once the job declares one.
+
+    Only the key is read. That the environment has a reviewer, and that npmjs.com names it, are
+    settings of the repository and the registry that no checkout holds, which is recorded in
+    `docs/development/branch-protection.md`.
+    """
+    if not WORKFLOWS.is_dir():
+        return
+    for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
+        for job in workflow_jobs(path.read_text(encoding="utf-8").split("\n")):
+            if not any(GRANT.search(raw) for raw in job["grants"]) or job["environment"]:
+                continue
+            yield finding(
+                ERROR,
+                "grant-without-environment",
+                f"{path.name} gives {job['name']} id-token: write and no environment, so no "
+                "reviewer stands between a writer and the credential",
+                f"`{job['name']}` in `{path}` can request an OIDC token and names no "
+                "`environment:`, so a dispatch of a branch's copy of this file mints a token the "
+                "registry or cloud account accepts, with nothing waiting for an approval",
+                "infrastructure",
+                "medium",
+                evidence=[f"{path}:{job['line']} job `{job['name']}` holds id-token: write"],
+                fix="add `environment: <name>` to the job and give that GitHub environment a "
+                "required reviewer who is not the person dispatching. Name the environment on the "
+                "registry's trusted-publisher record too, and record both in "
+                "`docs/development/branch-protection.md`",
+                gain="whoever can push a branch to this repository publishes under this "
+                "repository's identity from a copy of the workflow nobody reviewed",
             )
 
 
@@ -3392,6 +3437,7 @@ def mechanical_findings(specs, sources):
     findings += list(check_pinned_images())
     findings += list(check_privileged_job_runs_only_its_own_code())
     findings += list(check_checkout_ref_is_qualified())
+    findings += list(check_grant_is_behind_an_environment())
     findings += list(check_required_checks_are_the_gates())
     findings += list(check_guarantee_specs_exist())
     findings += list(check_unpinned_guarantee_clauses(specs))
