@@ -54765,6 +54765,165 @@ fn the_lines_a_vetting_prompt_states_are_counted_inside_the_kernel() {
     );
 }
 
+/// What a command printed holds text a person cannot see: a tag-character message, a zero-width
+/// space, a bidirectional override and a variation selector. The output prompt shows each written
+/// out and says how many there are, and the planner is handed the bytes the command printed.
+///
+/// The count and the spelling are taken in the reshape the lines are counted in, so the test also
+/// holds that the planner's copy is the slot's own bytes: spelling it would hand the model a
+/// different text from the one the person agreed to.
+#[test]
+fn an_output_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes() {
+    let scratch = Scratch::new("output-hidden-characters");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let hidden_message = "\u{E0064}\u{E006F}";
+    let printed = format!(
+        "first line\nplain {hidden_message} tags\nzero\u{200B}width and bidi\u{202E}x and selector\u{FE0F}\n"
+    );
+    std::fs::write(scratch.path.join("where.txt"), &printed).unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(true);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the output prompt was put");
+    assert_eq!(
+        request.output,
+        "first line\nplain \u{2039}U+E0064 d\u{203A}\u{2039}U+E006F o\u{203A} tags\n\
+         zero\u{2039}U+200B\u{203A}width and bidi\u{2039}U+202E\u{203A}x and \
+         selector\u{2039}U+FE0F\u{203A}\n",
+        "a character the person cannot see was drawn as nothing, or the text was changed otherwise"
+    );
+    assert_eq!(
+        request.hidden, 5,
+        "the prompt would say the wrong number of characters draw as nothing"
+    );
+    assert_eq!(
+        request.lines, 3,
+        "writing the characters out changed how many lines the prompt says there are"
+    );
+    drop(asked);
+
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let _check = received.recv().expect("the check before the question");
+    let third = received.recv().expect("third request");
+    assert!(
+        third.contains(&format!("plain {hidden_message} tags")),
+        "the planner was not handed the bytes the command printed: {third}"
+    );
+    assert!(
+        !third.contains("U+E0064"),
+        "the planner was handed the person's spelling of the bytes instead of the bytes: {third}"
+    );
+}
+
+/// The same on the vetting prompt, which has a release of its own: what it shows is the slot with
+/// the characters that draw as nothing written out, and what the planner is handed is the slot.
+#[test]
+fn a_vetting_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes() {
+    let scratch = Scratch::new("vet-hidden-characters");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let hidden_message = "\u{E0064}\u{E006F}";
+    let printed = format!(
+        "first line\nplain {hidden_message} tags\nzero\u{200B}width and bidi\u{202E}x and selector\u{FE0F}\n"
+    );
+    std::fs::write(scratch.path.join("where.txt"), &printed).unwrap();
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "three lines"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the lines the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the user was asked");
+    assert_eq!(
+        request.content,
+        "first line\nplain \u{2039}U+E0064 d\u{203A}\u{2039}U+E006F o\u{203A} tags\n\
+         zero\u{2039}U+200B\u{203A}width and bidi\u{2039}U+202E\u{203A}x and \
+         selector\u{2039}U+FE0F\u{203A}\n",
+        "a character the person cannot see was drawn as nothing, or the text was changed otherwise"
+    );
+    assert_eq!(
+        request.hidden, 5,
+        "the prompt would say the wrong number of characters draw as nothing"
+    );
+    assert_eq!(
+        request.lines, 3,
+        "writing the characters out changed how many lines the prompt says there are"
+    );
+    drop(asked);
+
+    let _first = received.recv().expect("the first round");
+    let _second = received.recv().expect("the second round");
+    let _check = received.recv().expect("the check's own call");
+    let third = received.recv().expect("the round after the approval");
+    assert!(
+        third.contains(&format!("plain {hidden_message} tags")),
+        "the planner was not handed the bytes the command printed: {third}"
+    );
+    assert!(
+        !third.contains("U+E0064"),
+        "the planner was handed the person's spelling of the bytes instead of the bytes: {third}"
+    );
+}
+
 /// And on the other tool that writes, because it is a third call site with a release of its own.
 ///
 /// An edit reports what it changed exactly as a whole-file write does, off the same comparison,

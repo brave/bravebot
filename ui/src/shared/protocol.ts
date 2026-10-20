@@ -361,7 +361,22 @@ export interface Vetting { verdict: string; reason?: string | null; label?: stri
  */
 export interface VetPicture { path: string; media: string; bytes: number }
 
-export interface VetRequest { request: number; origin: string; summary?: string; expects: string; content: string; label?: string | null; lines: number; picture?: VetPicture | null; vetting: Vetting }
+export interface VetRequest {
+  request: number
+  origin: string
+  summary?: string
+  expects: string
+  /** The content with each character that draws as nothing written out as `‹U+XXXX›`, as the agent spelled it. */
+  content: string
+  label?: string | null
+  lines: number
+  /** How many characters of `content` drew as nothing before the agent wrote them out. Counted by the agent. */
+  hidden?: number
+  /** The sentence saying so, in the agent's words, or null where none did. Draw this and not a copy. */
+  hiddenNote?: string | null
+  picture?: VetPicture | null
+  vetting: Vetting
+}
 
 export interface ConfirmRequest {
   remark?: { preview: string[]; lines: number; label: string } | null
@@ -791,6 +806,11 @@ export interface OutputRequest {
   command: string
   reference: string
   lines: number
+  /** How many characters of `output` drew as nothing before the agent wrote them out. Counted by the agent. */
+  hidden?: number
+  /** The sentence saying so, in the agent's words, or null where none did. Draw this and not a copy. */
+  hiddenNote?: string | null
+  /** The output with each character that draws as nothing written out as `‹U+XXXX›`, as the agent spelled it. */
   output: string
   /** The label the output was released under, as the trail writes it. */
   label: string
