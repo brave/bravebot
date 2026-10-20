@@ -626,8 +626,9 @@ undoes what it holds has to do so after the stage itself has gone. Whatever is l
 that is killed with `SIGKILL`. A group is signalled by its number only while its stage has not been
 waited for, or, for a stage that exited during the stop, while the group still has a member, since a
 member holds the number against reuse. A stage that ended by itself therefore leaves what it started
-as it was. A turn that ends with several jobs running asks every job before it waits for any, so
-the jobs share the two seconds. On Windows a stage in a container is killed with every process it
+as it was. A turn that ends with several jobs running reports each of them first, as it would have
+without a stop, and then stops them together: every job is asked before any is waited for, and the
+jobs share the two seconds. On Windows a stage in a container is killed with every process it
 started, and a stage that is not confined is killed on its own. A run stopped at its deadline, or by
 the person ([RUN-27](#RUN-27)), is reported with a sentence saying that a stop can leave lock files
 or partly written output behind, and that programs the line started may need checking.
@@ -954,6 +955,7 @@ the job names the driver minted.
 `verified-by: bravebot_agent::exec::background_stages_are_chained_so_one_feeds_the_next`
 `verified-by: bravebot_agent::exec::dropping_a_background_pipeline_kills_it`
 `verified-by: bravebot_agent::exec::killing_a_background_job_ends_what_its_stage_started`
+`verified-by: bravebot_agent::tools::jobs_that_ignore_the_request_to_end_share_one_grace_at_the_turns_end`
 `verified-by: bravebot_agent::exec::a_background_pipeline_with_missing_resolutions_does_not_start`
 `verified-by: bravebot_agent::turn::a_job_a_session_keeps_is_running_in_the_next_turn_and_ends_with_the_session`
 `verified-by: bravebot_tui::state::a_kept_job_is_still_running_and_listed_in_the_next_turn`

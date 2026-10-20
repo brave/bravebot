@@ -1010,11 +1010,6 @@ impl Jobs {
     /// stop and recorded in the trail as one (RUN-27), so their stop is not told back to them as
     /// the turn's.
     pub fn stop_all<S: Sink, R: Reporter>(&mut self, policy: &mut Policy<'_, S>, reporter: &mut R) {
-        // Every job is asked to end before any is waited for, so jobs that take their time to end
-        // share one grace period.
-        for job in self.running.values() {
-            job.running.ask_to_end();
-        }
         for (name, job) in self.running.iter_mut() {
             if job.reported {
                 continue;
@@ -1038,6 +1033,15 @@ impl Jobs {
             };
             reporter.job(event);
         }
+        // After every job is classified, since a job that exits on the request would otherwise be
+        // reported by how it exited. Stopped together, so jobs that ignore the request share one
+        // grace period; each is then dropped with nothing left to wait for.
+        let mut jobs: Vec<&mut crate::exec::Background> = self
+            .running
+            .values_mut()
+            .map(|job| &mut job.running)
+            .collect();
+        crate::exec::Background::stop_together(&mut jobs);
         self.running.clear();
     }
 }
@@ -11603,6 +11607,53 @@ mod tests {
         .expect("policy");
         jobs.stop_all(&mut policy, &mut reporter);
         reporter.jobs
+    }
+
+    /// Ending a turn over jobs that ignore the request to end takes one grace period for all of
+    /// them. Each job is stopped with the same deadline and not given a fresh one after the job
+    /// before it, so two such jobs take about two seconds and not four. Every job is still
+    /// reported as the turn's stop, since each was classified before any was asked.
+    #[cfg(unix)]
+    #[test]
+    fn jobs_that_ignore_the_request_to_end_share_one_grace_at_the_turns_end() {
+        use crate::report::JobEvent;
+
+        let mut jobs = Jobs::new();
+        let names: Vec<String> = (0..2)
+            .map(|_| {
+                jobs.start_for_a_test(
+                    "sh -c 'trap \"\" TERM; echo ready; while :; do sleep 1; done'",
+                    Label::trusted_public(),
+                )
+                .0
+            })
+            .collect();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        for name in &names {
+            while !jobs.running[name].running.printed().contains("ready") {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "{name} never became ready"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+
+        let started = std::time::Instant::now();
+        let told = end_the_turn_over(&mut jobs);
+        let took = started.elapsed();
+
+        assert!(
+            took < std::time::Duration::from_millis(3500),
+            "ending the turn over two jobs that ignore the request took {took:?}, one grace each"
+        );
+        assert!(
+            matches!(
+                told.as_slice(),
+                [JobEvent::Dropped { .. }, JobEvent::Dropped { .. }]
+            ),
+            "{told:?}"
+        );
     }
 
     /// RUN-26. A job whose steps exited before the turn ended is reported at its end as what it

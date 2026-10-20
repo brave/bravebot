@@ -1214,6 +1214,11 @@ pub struct Seen {
 /// (RUN-11). The grace lasts while the group has a member, since a stage that ends at once on the
 /// request can leave programs it started that are still undoing what they hold.
 fn stop(children: &mut [Process]) {
+    stop_processes(children.iter_mut().collect());
+}
+
+/// [`stop`] over stages that may belong to several jobs, which then share the one grace.
+fn stop_processes(mut children: Vec<&mut Process>) {
     #[cfg(unix)]
     {
         let asked: Vec<(usize, rustix::process::Pid)> = children
@@ -1429,15 +1434,17 @@ impl Background {
         stop(&mut self.children);
     }
 
-    /// Ask every step to end, without waiting for any of them to.
+    /// Stop several jobs at once and keep what each printed.
     ///
-    /// For a caller about to stop several jobs one after another: each job's own stop then finds
-    /// its steps already asked, and the grace the jobs are given runs together.
-    pub(crate) fn ask_to_end(&self) {
-        #[cfg(unix)]
-        for child in &self.children {
-            let _ = child.ask_to_end();
-        }
+    /// Every job is asked to end before any is waited for, and their process groups share one
+    /// grace period, so jobs that ignore the request take two seconds together and not two seconds
+    /// each. Stopping them one after another with [`Background::kill`] gives each its own.
+    pub fn stop_together(jobs: &mut [&mut Background]) {
+        stop_processes(
+            jobs.iter_mut()
+                .flat_map(|job| job.children.iter_mut())
+                .collect(),
+        );
     }
 
     /// Wait for something to happen, and return at the first of five things.
