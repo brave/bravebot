@@ -2070,7 +2070,8 @@ a program to it.
 
 Each `run` on a session that confines records a gate, `sandbox`, whose detail names the mode
 the programs ran in ([TRACE-1](trace.md#TRACE-1)), or `unconfined` for a line that asked to start
-with no profile ([SANDBOX-29](#SANDBOX-29)). A run whose stages were given
+with no profile ([SANDBOX-29](#SANDBOX-29)). The entry is written once the line is approved and
+about to start, so a line the person does not approve has none. A run whose stages were given
 what a `request_path` for writing would be granted ([SANDBOX-28](#SANDBOX-28)) records a second
 `sandbox` entry saying so.
 
@@ -3016,6 +3017,9 @@ none to add to.
   The sentence does not suggest the argument: the planner learns it from the `run` description. The
   trail records the refusal under `sandbox`, naming `unconfined` and each cause that held
   ([TRACE-1](trace.md#TRACE-1)).
+- **A line not approved is recorded as not run.** The `sandbox` entry saying the programs ran
+  `unconfined` is written only once the person has approved the line. A line they do not approve
+  leaves a refusal under `approval` instead ([TRACE-1](trace.md#TRACE-1)).
 - **What it prints is quarantined** as an unvouched line's output is ([RUN-4](tools/run.md#RUN-4)).
 - **A redirection may leave the workspace.** `printf 'howdy\n' > ../hello.txt` writes the file when
   the person approves the line. The confinement that keeps a redirection's destination inside the
