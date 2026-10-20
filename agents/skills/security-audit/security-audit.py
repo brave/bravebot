@@ -355,6 +355,11 @@ REGISTERED = {
         None,
         ASKS,
     ),
+    "Asker": (
+        Path("crates/agent/src/servers.rs"),
+        re.compile(r"^pub trait Asker\s*\{"),
+        re.compile(r"^    fn ([a-z_][a-z0-9_]*)\s*[<(]"),
+    ),
 }
 # Where a kept answer is filed, looked up, or carried across `/cd`, `/clear` and a resume, beside the
 # declarations above.
