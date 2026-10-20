@@ -66,6 +66,7 @@ KIND_LABEL = {
     "labelled-impl": "bug",
     "unpinned-action": "bug",
     "unpinned-image": "bug",
+    "unverified-download": "bug",
     "exception-count-disagreement": "documentation",
     "exception-count-unstated": "documentation",
     "construction-unpinned": "spec-coverage",

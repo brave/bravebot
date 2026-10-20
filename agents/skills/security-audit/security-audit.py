@@ -2443,6 +2443,66 @@ def check_pinned_images():
             )
 
 
+DOWNLOAD = re.compile(r"\b(curl|wget)\b")
+# What turns downloaded bytes into code that runs: piped straight into an interpreter or unpacker,
+# or later made executable or unpacked.
+DOWNLOAD_PIPED = re.compile(r"\|\s*(sudo\s+)?(tar|unzip|sh|bash|zsh|python3?|ruby|node)\b")
+DOWNLOAD_RUN = re.compile(r"\bchmod\s+(-\w+\s+)?(\+\w*x|[0-7]*[1357][0-7]{0,2}\b)|\b(tar|unzip)\s+-?[xz]")
+DOWNLOAD_COMPARED = re.compile(r"sha256|sha512|shasum|dgst|matches_pin|cosign|gpg\s+--verify|minisign")
+
+
+def download_files():
+    """The scripts under `contrib/` and the Makefile: what a person or the bot runs on a checkout."""
+    yield from sorted(Path("contrib").glob("*.sh"))
+    if Path("Makefile").is_file():
+        yield Path("Makefile")
+
+
+def check_downloads_verified():
+    """Nothing fetched with `curl` or `wget` is made executable or unpacked without a digest check.
+
+    The tree pins its actions to commits and its images to digests so that whoever owns a tag cannot
+    decide what runs here. A release asset fetched by tag in a helper script is the same decision
+    left to the same person, and the script runs as whoever invokes it. A download piped into an
+    interpreter or `tar` has nowhere to compare anything, so it is always a finding; one written to
+    a file is a finding unless a comparison appears between the fetch and the `chmod` or unpacking.
+    """
+    for path in download_files():
+        lines = [
+            (number, line) for number, line in joined_lines(path.read_text(encoding="utf-8"))
+            if not line.lstrip().startswith("#")
+        ]
+        for index, (number, line) in enumerate(lines):
+            fetch = DOWNLOAD.search(line)
+            if not fetch:
+                continue
+            if DOWNLOAD_PIPED.search(line[fetch.end():]):
+                unverified = "is piped into a program that runs it"
+            else:
+                unverified = None
+                for _, later in lines[index + 1:]:
+                    if DOWNLOAD_COMPARED.search(later):
+                        break
+                    if DOWNLOAD_RUN.search(later):
+                        unverified = "is made executable or unpacked with no digest compared first"
+                        break
+                if unverified is None:
+                    continue
+            yield finding(
+                ERROR,
+                "unverified-download",
+                f"{path.name} fetches a file that {unverified}, so whoever can replace it decides "
+                "what runs as the invoking user",
+                f"the download at {path}:{number} {unverified}, and nothing fixes its content: a "
+                "release tag can be re-pointed by its owner",
+                "infrastructure",
+                "high",
+                evidence=[f"{path}:{number}"],
+                fix="pin the sha256 of the asset in the script and compare it before `chmod` or "
+                "unpacking, failing closed on a mismatch or a missing pin",
+            )
+
+
 def job_display_names(lines):
     """Every job in a workflow by the name its check run reports under, with the targets it runs.
 
@@ -3489,6 +3549,7 @@ def mechanical_findings(specs, sources):
     findings += list(check_key_sites_exhaustive(specs, sources))
     findings += list(check_pinned_actions())
     findings += list(check_pinned_images())
+    findings += list(check_downloads_verified())
     findings += list(check_privileged_job_runs_only_its_own_code())
     findings += list(check_checkout_ref_is_qualified())
     findings += list(check_grant_is_behind_an_environment())

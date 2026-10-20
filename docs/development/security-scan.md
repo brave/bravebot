@@ -26,6 +26,13 @@ passes it.
 The first run downloads opengrep, reviewdog and the rules into `~/.cache`; later runs re-use them
 and take about half a minute. No model is involved, so both are deterministic.
 
+The two tools are release assets, so the script compares each with a sha256 written in it before
+anything is made executable or extracted, and compares a cached binary again before running it. A
+mismatch, or a platform with no pin, stops the scan. Moving a version means moving its digests in
+`pinned_sha256`, taken from the release and, for opengrep, from `installOpengrep.js` in
+brave/security-action. The rules are cloned at `main` on purpose, because the required `security`
+check runs that same ref.
+
 A runner failure makes the check fail, including a scanner failure hidden by a later
 formatter in its pipeline or by reviewdog filtering out all of its findings. Runner stderr
 also fails the check so a partial scan cannot report a clean result. The one line it may

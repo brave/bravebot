@@ -1507,6 +1507,52 @@ def test_pinned_images():
     )
 
 
+def test_downloads_verified():
+    def found_in(files):
+        return with_cwd(in_tree(files), lambda: list(audit.check_downloads_verified()))
+
+    bare = found_in({"contrib/get.sh": "curl -sfL -o x https://example.com/x\nchmod +x x\n"})
+    check(
+        "a download made executable with no digest compared is one error",
+        kinds(bare) == ["unverified-download"] and "contrib/get.sh:1" in bare[0]["evidence"],
+        str(bare),
+    )
+    check(
+        "a download compared with a digest before the chmod is clean",
+        found_in({
+            "contrib/get.sh": "curl -sfL -o x https://example.com/x\n"
+            '[ "$(sha256sum x | cut -d" " -f1)" = "$want" ] || exit 1\nchmod +x x\n'
+        }) == [],
+    )
+    check(
+        "a comparison after the chmod does not count",
+        kinds(found_in({
+            "contrib/get.sh": "curl -o x https://example.com/x\nchmod +x x\nsha256sum x\n"
+        })) == ["unverified-download"],
+    )
+    check(
+        "a download piped into tar has nowhere to compare, so it is an error",
+        kinds(found_in({
+            "contrib/get.sh": "curl -sfL https://example.com/x.tgz \\\n  | tar xz -C bin x\n"
+        })) == ["unverified-download"],
+    )
+    check(
+        "a download piped into a shell is an error",
+        kinds(found_in({"Makefile": "install:\n\tcurl -fsSL https://example.com/i | sh\n"}))
+        == ["unverified-download"],
+    )
+    check(
+        "a fetch whose bytes are never run, and a comment naming one, are clean",
+        found_in({
+            "contrib/get.sh": "# curl -o x URL; chmod +x x\ncurl -sf -o data.json https://example.com/d\n"
+        }) == [],
+    )
+    check(
+        "the tree's own scripts verify what they download",
+        with_cwd(ROOT, lambda: list(audit.check_downloads_verified())) == [],
+    )
+
+
 def test_construction_pinned():
     sources = {
         Path("crates/agent/src/tools.rs"): [
@@ -3481,6 +3527,7 @@ def main():
         test_labelled_impls,
         test_pinned_actions,
         test_pinned_images,
+        test_downloads_verified,
         test_privileged_job_runs_only_its_own_code,
         test_privileged_job_runs_project_code,
         test_checkout_ref_is_qualified,
