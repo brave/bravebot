@@ -423,6 +423,7 @@ who has already decided to vouch for the tree, on a screen that names what a yes
 `verified-by: bravebot_session::sessions::a_record_that_predates_the_map_has_none_rather_than_an_empty_one`
 `verified-by: bravebot_session::sessions::a_distrusted_path_inside_a_trusted_tree_survives_the_record`
 `verified-by: bravebot_session::sessions::two_recorded_spellings_of_one_path_resume_as_untrusted`
+`verified-by: bravebot_session::sessions::a_recorded_rule_resumes_as_a_rule_about_the_name_it_is_stored_under`
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
 
 <a id="TRUST-7"></a>
@@ -1679,10 +1680,9 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   reach only each other. And a path on a share that no open directory holds, such as one a `run`
   line writes to, is asked about under the project, so the answer about the project decides a
   file it does not decide on a drive letter. Giving a share a key is what closes both.
-- **A record saved before whitespace was kept in names holds those names without it.** A session
-  record keeps each rule under the name spelled relative to the working directory (TRUST-2). One
-  saved by a build older than this change wrote a name with whitespace at an end, or made only of
-  whitespace, without it, and does not say which spelling the rule was about, so it cannot be
-  rewritten. Resumed, such a rule decides the name without the whitespace, as it did when it was
-  saved. A session started afterwards records names as written, and a person who wants a record
-  without those rules starts a new session.
+- **A recorded rule is about the name it is stored under, and the record does not say which file
+  it was written for.** A session record keeps each rule under the name spelled relative to the
+  working directory (TRUST-2). A record that holds a name without the whitespace its file had
+  applies the rule to the name without the whitespace, and resuming cannot correct it. A record
+  this build writes keeps names as written. A person who wants a resumed session without such a
+  rule starts a new one.
