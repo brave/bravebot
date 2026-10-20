@@ -46,7 +46,7 @@ help:
 	@echo
 	@echo "Development:"
 	@echo "  make init                  Configure bravebot, Claude Code, Codex and Cursor; install hooks"
-	@echo "  make hooks                 Point git at the checked-in git hooks"
+	@echo "  make hooks                 Copy the checked-in git hooks into the git directory and point git at them"
 	@echo "  make build                 Debug build"
 	@echo "  make test                  Run all tests"
 	@echo "  make check                 Format check, clippy, tests, and toolchain age"
@@ -114,9 +114,22 @@ init: hooks
 
 # .git/hooks is not versioned, so a fresh clone commits with nothing checking it
 # until this runs. Idempotent, and part of `init` so nobody has to know it exists.
+#
+# The hooks are copied into the repository's common git directory and git is pointed at the
+# copy by absolute path. A relative path is resolved against each worktree's own top level, so
+# in the worktree of a pull request git would run the hooks that pull request tracks, as
+# whoever runs git there. No branch tracks the copy. Run this again after .githooks changes.
+# A linked worktree installs nothing, since the copy would come from its branch. The directory
+# name is the one agents/pr_worktree.py reads (HOOKS_DIR).
 .PHONY: hooks
 hooks:
-	git config core.hooksPath .githooks
+	@common="$$(cd "$$(git rev-parse --git-common-dir)" && pwd -P)" && \
+	if [ "$$(git rev-parse --absolute-git-dir)" != "$$common" ]; then \
+		echo "hooks: nothing installed from a linked worktree, whose branch may track hooks nobody reviewed; run make hooks in the main checkout" >&2; \
+	else \
+		mkdir -p "$$common/bravebot-hooks" && cp -p .githooks/* "$$common/bravebot-hooks/" && \
+		git config core.hooksPath "$$common/bravebot-hooks" && echo "hooks: $$common/bravebot-hooks"; \
+	fi
 
 .PHONY: build
 build:
