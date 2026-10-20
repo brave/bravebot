@@ -471,6 +471,101 @@ fn two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_
     );
 }
 
+/// Names a rule's text cannot spell, each with the issue that tracks it. A rule line is trimmed
+/// when it is read and so is the specifier inside the brackets, so a name with whitespace at an end
+/// is read as the name without it and a name of whitespace alone is read as `./`, which names no
+/// file. A `*` is always a wildcard, so no rule is about the file called `*.md` and nothing else.
+/// The test below fails for a name listed here that a rule can spell, so the list is revised with
+/// the fix.
+const NOT_SPELLABLE_IN_A_RULE: &[(&str, &str)] = &[
+    ("a.md ", "#2864"),
+    ("a.md\t", "#2864"),
+    ("a.md\n", "#2864"),
+    ("a.md\u{a0}", "#2864"),
+    ("a.md\u{3000}", "#2864"),
+    ("*.md", "#2864"),
+    (" ", "#2864"),
+    ("\t", "#2864"),
+    ("\u{a0}", "#2864"),
+    ("\u{3000}", "#2864"),
+];
+
+/// A rule about one name is a rule about no other file the volume holds apart from it, whatever
+/// the polarity (TRUST-2, PERM-7). Deny and ask rules are about every canonically equivalent
+/// spelling of a name, which is one group of the awkward names, and an allow rule is about the
+/// spelling it was written in. The key a rule is matched under is built apart from the trust map's,
+/// so a step in it that trims, folds or decodes would join two files there without showing in the
+/// pair tests above.
+#[test]
+fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
+    use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject};
+
+    let mut asked = 0;
+    for (index, (first, first_group)) in aliases::AWKWARD_NAMES.iter().enumerate() {
+        for (second, second_group) in &aliases::AWKWARD_NAMES[index + 1..] {
+            let scratch = Scratch::new(&format!("rule-pairs-{index}-{asked}"));
+            if !aliases::two_files(&scratch.path, first, second) {
+                continue;
+            }
+            asked += 1;
+            let folds_case = bravebot_agent::workspace::trust_store(&scratch.path).folds_case();
+
+            for (named, other) in [(first, second), (second, first)] {
+                let spellable = !NOT_SPELLABLE_IN_A_RULE
+                    .iter()
+                    .any(|(listed, _)| listed == named);
+                for ruling in [Ruling::Deny, Ruling::Ask, Ruling::Allow] {
+                    for (subject, verb) in [(Subject::Read, "Read"), (Subject::Edit, "Edit")] {
+                        let text = vec![format!("{verb}(./{named})")];
+                        let none: Vec<String> = Vec::new();
+                        let (deny, ask, allow) = match ruling {
+                            Ruling::Deny => (&text, &none, &none),
+                            Ruling::Ask => (&none, &text, &none),
+                            Ruling::Allow => (&none, &none, &text),
+                        };
+                        let (permissions, rejected) = Permissions::parse(
+                            deny,
+                            ask,
+                            allow,
+                            &Anchors {
+                                folds_case,
+                                ..Anchors::none()
+                            },
+                        );
+                        let decides = |path: &str| {
+                            permissions.for_path(subject, path) == Decision::Ruled(ruling)
+                        };
+                        if !spellable {
+                            let about_that_file_alone = decides(named)
+                                && aliases::AWKWARD_NAMES
+                                    .iter()
+                                    .all(|(another, _)| another == named || !decides(another));
+                            assert!(
+                                rejected.is_empty() && !about_that_file_alone,
+                                "a rule for {named:?} is now rejected or is about that file alone: \
+                                 remove it from NOT_SPELLABLE_IN_A_RULE"
+                            );
+                            continue;
+                        }
+                        assert!(rejected.is_empty(), "{text:?} did not parse");
+                        assert!(decides(named), "{text:?} did not decide {named:?}");
+                        let joined = first_group == second_group && ruling != Ruling::Allow;
+                        assert_eq!(
+                            decides(other),
+                            joined,
+                            "{text:?} ({ruling:?}) decided the other file {other:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        asked > 100,
+        "only {asked} pairs were two files: the alphabet is not being used"
+    );
+}
+
 /// Fetched bytes written through one name of a file are what every name of it reads back, so the
 /// trust the earlier trusted write recorded cannot stay on the other name (TRUST-4). A row the map
 /// does not join lists the issue that tracks it.
