@@ -9,6 +9,15 @@
 
 const range = (count) => [...Array(count).keys()]
 const pad = (n) => String(n).padStart(2, '0')
+// How the agent writes out a character that draws as nothing, in the content of an output or vetting
+// request: a tag character with the letter it stands for, and a zero-width space. The card draws
+// the request's text as it comes, so these are in the rows the person is deciding about.
+const TAG_A = '\u2039U+E0041 A\u203A'
+const ZERO_WIDTH = '\u2039U+200B\u203A'
+// The sentence the agent words from its catalog for a count of two and of one, which the card draws
+// as it comes and holds no copy of.
+const TWO_HIDDEN = '2 characters in this text draw as nothing. Each is written out below as \u2039U+XXXX\u203A, and a tag character also as the letter it stands for. The model reads them as they are.'
+const ONE_HIDDEN = '1 character in this text draws as nothing. It is written out below as \u2039U+XXXX\u203A, and a tag character also as the letter it stands for. The model reads it as it is.'
 const filler = (words) => range(words).map((n) => ['the', 'checker', 'read', 'this', 'and', 'found', 'nothing', 'that', 'gives', 'orders'][n % 10]).join(' ')
 
 export const CASES = {
@@ -44,22 +53,22 @@ export const CASES = {
     kind: 'output',
     event: 'output.request',
     request: {
-      request: 103, command: 'cat zqo03.md', reference: 'output-1', lines: 120, summary: 'the notes',
-      output: ['zqo02 is the first line of the output', ...range(119).map((n) => `line ${n + 2} of the output`)].join('\n'),
+      request: 103, command: 'cat zqo03.md', reference: 'output-1', lines: 120, summary: 'the notes', hidden: 2, hiddenNote: TWO_HIDDEN,
+      output: [`zqo02 is the first line of the output ${TAG_A}${ZERO_WIDTH}`, ...range(119).map((n) => `line ${n + 2} of the output`)].join('\n'),
       vetting: { verdict: 'safe', reason: `zqo01 ${filler(80)}` },
     },
-    tokens: ['zqo01', 'zqo02', 'zqo03'],
+    tokens: ['zqo01', 'zqo02', 'zqo03', TAG_A, ZERO_WIDTH],
     standing: [],
   },
   vet: {
     kind: 'vet',
     event: 'vet.request',
     request: {
-      request: 104, origin: 'zqv03.md', expects: 'zqv04 release notes', lines: 120,
-      content: ['zqv02 is the first line of the content', ...range(119).map((n) => `line ${n + 2} of the content`)].join('\n'),
+      request: 104, origin: 'zqv03.md', expects: 'zqv04 release notes', lines: 120, hidden: 1, hiddenNote: ONE_HIDDEN,
+      content: [`zqv02 is the first line of the content ${TAG_A}`, ...range(119).map((n) => `line ${n + 2} of the content`)].join('\n'),
       vetting: { verdict: 'safe', reason: `zqv01 ${filler(80)}` },
     },
-    tokens: ['zqv01', 'zqv02', 'zqv03', 'zqv04'],
+    tokens: ['zqv01', 'zqv02', 'zqv03', 'zqv04', TAG_A],
     standing: [],
   },
   'vet-picture': {

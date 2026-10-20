@@ -1776,33 +1776,39 @@ mod tests {
     #[test]
     fn a_name_a_provider_block_chose_is_shown_without_a_service_added() {
         let mut config = config_for("http://127.0.0.1:1", None);
-        config.bedrock = Some(bravebot_config::bedrock::Bedrock::from_provider(
-            "us-west-2".to_string(),
-            None,
-            vec![bravebot_config::bedrock::Entry {
-                tier: None,
-                id: "openai.gpt-5.6-sol".to_string(),
-                name: Some("GPT-5.6 Sol (Bedrock)".to_string()),
-                context_window: None,
-                output_limit: None,
-            }],
-        ));
+        config.bedrock = Some(
+            bravebot_config::bedrock::Bedrock::from_provider(
+                "us-west-2".to_string(),
+                None,
+                vec![bravebot_config::bedrock::Entry {
+                    tier: None,
+                    id: "openai.gpt-5.6-sol".to_string(),
+                    name: Some("GPT-5.6 Sol (Bedrock)".to_string()),
+                    context_window: None,
+                    output_limit: None,
+                }],
+            )
+            .expect("a valid region"),
+        );
         assert_eq!(
             model_label(&config, "openai.gpt-5.6-sol").as_deref(),
             Some("GPT-5.6 Sol (Bedrock)")
         );
 
-        config.bedrock = Some(bravebot_config::bedrock::Bedrock::from_provider(
-            "us-west-2".to_string(),
-            None,
-            vec![bravebot_config::bedrock::Entry {
-                tier: None,
-                id: "openai.gpt-5.6-sol".to_string(),
-                name: None,
-                context_window: None,
-                output_limit: None,
-            }],
-        ));
+        config.bedrock = Some(
+            bravebot_config::bedrock::Bedrock::from_provider(
+                "us-west-2".to_string(),
+                None,
+                vec![bravebot_config::bedrock::Entry {
+                    tier: None,
+                    id: "openai.gpt-5.6-sol".to_string(),
+                    name: None,
+                    context_window: None,
+                    output_limit: None,
+                }],
+            )
+            .expect("a valid region"),
+        );
         assert_eq!(
             model_label(&config, "openai.gpt-5.6-sol"),
             None,

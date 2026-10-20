@@ -913,6 +913,12 @@ fn text_of<'a>(data: &'a Value, key: &str) -> &'a str {
     data[key].as_str().unwrap_or_default()
 }
 
+/// How many characters of the text drew as nothing before the agent wrote them out, as the bridge
+/// carried it. Absent from a request an older agent sent, which drew none.
+fn hidden_of(data: &Value) -> usize {
+    data["hidden"].as_u64().map_or(0, |n| n as usize)
+}
+
 /// What a check made of the content, read from the verdict word the bridge sent. The checker's own
 /// sentence is not read, for the reason the terminal leaves it out.
 fn check_of(data: &Value) -> bravebot_approval::Check {
@@ -978,6 +984,7 @@ fn vet_text(data: &Value) -> String {
         expects: text_of(data, "expects"),
         check: check_of(data),
         content: text_of(data, "content"),
+        hidden: hidden_of(data),
         picture: picture.map(|(path, pdf)| bravebot_approval::Picture { path, pdf }),
     })
     .join("\n")
@@ -1062,8 +1069,13 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
         "output" => (
             format!("read the output of {}", text("command")),
             "read",
-            bravebot_approval::output_lines(text("summary"), check_of(data), text("output"))
-                .join("\n"),
+            bravebot_approval::output_lines(
+                text("summary"),
+                check_of(data),
+                text("output"),
+                hidden_of(data),
+            )
+            .join("\n"),
         ),
         "vouch" => (
             format!("trust {}", text("path")),
@@ -1555,6 +1567,7 @@ mod tests {
             command: "tail -n 100 build.log".to_string(),
             output: output.clone(),
             lines: 100,
+            hidden: 0,
             reference: "ref:1".to_string(),
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
@@ -1581,6 +1594,7 @@ mod tests {
             expects: "a build log".to_string(),
             content: content.clone(),
             lines: 100,
+            hidden: 0,
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
             picture: None,
@@ -1595,6 +1609,58 @@ mod tests {
             content.lines().collect::<Vec<_>>(),
             "{text}"
         );
+    }
+
+    /// PROMPT-1: an editor is told how many characters of the text it is shown drew as nothing,
+    /// above the text, and a text with none is not told of any. The agent wrote each one out as a
+    /// token, so what the editor draws is the same text the terminal draws.
+    #[test]
+    fn an_editor_is_told_how_many_characters_of_a_text_draw_as_nothing() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A} text";
+        let said = bravebot_i18n::t!(hidden_characters, count = 2usize).to_string();
+        for hidden in [2, 0] {
+            let output = bravebot_agent::confirm::OutputRequest {
+                command: "cat notes".to_string(),
+                output: text.to_string(),
+                lines: 1,
+                hidden,
+                reference: "ref:1".to_string(),
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+                label: String::new(),
+                reason_label: None,
+            };
+            let vet = bravebot_agent::confirm::VetRequest {
+                origin: "notes".to_string(),
+                expects: "notes".to_string(),
+                content: text.to_string(),
+                lines: 1,
+                hidden,
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+                picture: None,
+                label: None,
+                reason_label: None,
+            };
+            for (stem, wire) in [
+                ("output", crate::wire::output_request(4, &output)),
+                ("vet", crate::wire::vet_request(5, &vet)),
+            ] {
+                let (_, _, shown) = shown(stem, wire);
+                let rows: Vec<&str> = shown.lines().collect();
+                let saying = rows.iter().position(|row| *row == said);
+                let margin = format!("{} {text}", bravebot_approval::QUARANTINE_BAR);
+                let text_at = rows.iter().position(|row| *row == margin);
+                assert!(text_at.is_some(), "`{stem}`: {shown}");
+                match hidden {
+                    0 => assert!(saying.is_none(), "`{stem}`: {shown}"),
+                    _ => assert!(
+                        saying.is_some() && saying < text_at,
+                        "`{stem}` did not say {hidden} characters drew as nothing above the text: {shown}"
+                    ),
+                }
+            }
+        }
     }
 
     /// A hundred lines with an instruction on the seventieth, past the head a prompt might show.

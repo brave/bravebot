@@ -6282,7 +6282,11 @@ fn release_output<S: Sink, C: Confirmer>(
         // The count is taken here, inside the reshape, rather than off the bytes afterwards.
         // Counting released bytes is the read LABEL-6 refuses, and it is the same question the
         // kernel already answers for a slot: how much there is, not what it says.
-        let (shown, lines, label) = {
+        //
+        // The characters that draw as nothing are written out in the same reshape, and counted
+        // there for the same reason. What the person reads is the copy with them spelled, and
+        // what the planner receives below is the slot's own bytes, which this does not touch.
+        let (shown, lines, hidden, label) = {
             let content = match policy.resolve("read_output", slot, slots) {
                 Ok(content) => content,
                 Err(denial) => {
@@ -6291,13 +6295,14 @@ fn release_output<S: Sink, C: Confirmer>(
             };
             let measured = policy.render_in_place("read_output", &content, |text| {
                 let lines = text.lines().count();
-                (text, lines)
+                let spelled = bravebot_core::invisible::spelled(text);
+                (spelled.text, lines, spelled.hidden)
             });
             let label = measured.label().to_string();
             let proof =
                 policy.authorise_display_release("command output the planner asked to read");
-            let (shown, lines) = measured.declassify(&proof);
-            (shown, lines, label)
+            let (shown, lines, hidden) = measured.declassify(&proof);
+            (shown, lines, hidden, label)
         };
 
         counted = lines;
@@ -6307,6 +6312,7 @@ fn release_output<S: Sink, C: Confirmer>(
             output: shown,
             label,
             lines,
+            hidden,
             reference: slot.to_string(),
             verdict,
             reason,
@@ -6477,23 +6483,27 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         // at all where the mode answers without drawing anything: bypassing answers this from the
         // verdict alone, so a copy there would be a file written for nobody to open, and a machine
         // naming no cache directory would refuse what the mode answers yes.
-        let (shown, lines, shown_picture, label) = match &picture {
+        let (shown, lines, hidden, shown_picture, label) = match &picture {
             None => {
                 let content = match policy.resolve("vet_content", &slot, tools.slots) {
                     Ok(content) => content,
                     Err(denial) => return Produced::problem(format!("refused: {denial}")),
                 };
+                // Counted and spelled in the reshape, as `release_output` does and for the same
+                // reason: the person reads the copy with the characters that draw as nothing
+                // written out, and the planner is handed the slot's own bytes.
                 let measured = policy.render_in_place("vet_content", &content, |text| {
                     let lines = text.lines().count();
-                    (text, lines)
+                    let spelled = bravebot_core::invisible::spelled(text);
+                    (spelled.text, lines, spelled.hidden)
                 });
                 let label = measured.label().to_string();
                 let proof =
                     policy.authorise_display_release("content the planner asked to be shown");
-                let (shown, lines) = measured.declassify(&proof);
-                (shown, lines, None, Some(label))
+                let (shown, lines, hidden) = measured.declassify(&proof);
+                (shown, lines, hidden, None, Some(label))
             }
-            Some(_) if mode == crate::PermissionMode::Bypass => (String::new(), 0, None, None),
+            Some(_) if mode == crate::PermissionMode::Bypass => (String::new(), 0, 0, None, None),
             Some(media) => match copy_a_picture(policy, tools.slots, tools.cache, &slot, media) {
                 Ok((copy, bytes)) => {
                     let shown = crate::confirm::PictureShown {
@@ -6502,7 +6512,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                         bytes,
                     };
                     _copy = Some(copy);
-                    (String::new(), 0, Some(shown), None)
+                    (String::new(), 0, 0, Some(shown), None)
                 }
                 Err(detail) => {
                     return Produced::refused_with_a_note(
@@ -6555,6 +6565,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
             content: shown,
             label,
             lines,
+            hidden,
             verdict,
             reason,
             reason_label,

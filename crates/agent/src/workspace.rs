@@ -24,6 +24,8 @@ use bravebot_core::spelling::to_key;
 use bravebot_core::trust::is_absolute_key;
 use bravebot_core::value::Labelled;
 use bravebot_filetype::{SNIFF_BYTES, looks_binary};
+#[cfg(unix)]
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
@@ -1248,6 +1250,56 @@ impl Workspace {
             return Some(Vec::new());
         }
         let mut names = Vec::new();
+        self.each_regular_file(|path, other| {
+            if other.dev() == found.dev() && other.ino() == found.ino() {
+                // A name that is not UTF-8 has no spelling a rule can be written about, and its
+                // lossy rendering would be matched as a different file's name, so the walk gives
+                // up on it like any other it cannot finish.
+                path.to_str()?;
+                names.push(self.relative_display(path));
+            }
+            Some(())
+        })?;
+        Some(names)
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn hard_links(&self, _named: &str) -> Option<Vec<String>> {
+        Some(Vec::new())
+    }
+
+    /// Every name of each file under the open directories that has more than one, by device and
+    /// inode (PERM-7), for a walk that asks the rules about the other names of each entry it meets.
+    ///
+    /// Built in one pass over the same files [`Workspace::hard_links`] searches, so a tree with
+    /// many files of two names costs one walk. `None` where that walk could not finish.
+    #[cfg(unix)]
+    fn multi_link_names(&self) -> Option<HashMap<(u64, u64), LinkNames>> {
+        use std::os::unix::fs::MetadataExt;
+
+        let mut index: HashMap<(u64, u64), LinkNames> = HashMap::new();
+        self.each_regular_file(|path, found| {
+            if found.nlink() >= 2 {
+                index
+                    .entry((found.dev(), found.ino()))
+                    .or_default()
+                    .record(self, path);
+            }
+            Some(())
+        })?;
+        Some(index)
+    }
+
+    /// Calls `visit` with the path and metadata of each regular file under the open directories.
+    ///
+    /// A symbolic link is not followed, and every directory is walked, an ignored one included,
+    /// because a link can be made anywhere a stage may write. `None` where the walk stopped at the
+    /// search cap, could not list a directory, or `visit` gave up.
+    #[cfg(unix)]
+    fn each_regular_file(
+        &self,
+        mut visit: impl FnMut(&Path, &std::fs::Metadata) -> Option<()>,
+    ) -> Option<()> {
         let mut budget = self.search_files;
         let roots = std::iter::once(self.root.clone()).chain(self.added_directories());
         for root in roots {
@@ -1262,26 +1314,14 @@ impl Workspace {
                     if kind.is_dir() {
                         pending.push(entry.path());
                     } else if kind.is_file()
-                        && entry.metadata().is_ok_and(|other| {
-                            other.dev() == found.dev() && other.ino() == found.ino()
-                        })
+                        && let Ok(found) = entry.metadata()
                     {
-                        // A name that is not UTF-8 has no spelling a rule can be written about, and
-                        // its lossy rendering would be matched as a different file's name, so the
-                        // walk gives up on it like any other it cannot finish.
-                        let path = entry.path();
-                        path.to_str()?;
-                        names.push(self.relative_display(&path));
+                        visit(&entry.path(), &found)?;
                     }
                 }
             }
         }
-        Some(names)
-    }
-
-    #[cfg(not(unix))]
-    pub(crate) fn hard_links(&self, _named: &str) -> Option<Vec<String>> {
-        Some(Vec::new())
+        Some(())
     }
 
     /// The names `named` has under the other open directories that are the same directory, found by
@@ -1298,29 +1338,32 @@ impl Workspace {
     /// as "no other name".
     #[cfg(unix)]
     pub(crate) fn same_tree_names(&self, named: &str) -> Option<Vec<String>> {
-        use std::os::unix::fs::MetadataExt;
-
         if self.added_directories().is_empty() {
             return Some(Vec::new());
         }
         let Ok(resolved) = self.resolve(named) else {
             return Some(Vec::new());
         };
+        self.same_tree_names_of(&resolved, directory_identity)
+    }
+
+    /// [`Workspace::same_tree_names`] for a path that is already resolved, as a walk meets one,
+    /// with the lookup of a directory's device and inode supplied so a walk can keep the answers.
+    #[cfg(unix)]
+    fn same_tree_names_of(
+        &self,
+        resolved: &Path,
+        identity: impl Fn(&Path) -> Option<(u64, u64)>,
+    ) -> Option<Vec<String>> {
         let roots: Vec<PathBuf> = std::iter::once(self.root.clone())
             .chain(self.added_directories())
             .collect();
-        let identity = |directory: &Path| {
-            std::fs::metadata(directory)
-                .ok()
-                .filter(|found| found.is_dir())
-                .map(|found| (found.dev(), found.ino()))
-        };
         let opened: Vec<_> = roots
             .iter()
             .filter_map(|root| Some((root, identity(root)?)))
             .collect();
         self.displayed_if_utf8(&Self::names_in_the_same_directories(
-            &resolved, &opened, identity,
+            resolved, &opened, identity,
         ))
     }
 
@@ -1393,6 +1436,17 @@ impl Workspace {
             || self
                 .landing(named)
                 .is_some_and(|landed| policy.read_is_denied(&landed))
+    }
+
+    /// Whether a rule covers reading any of `names`, the other names a file has. Where they could
+    /// not be found (`None`), a rule about a path may be about the file, so it is covered while
+    /// any rule about reading a path is in force, as for a call that names the file.
+    #[cfg(unix)]
+    fn any_name_denied<S: Sink>(policy: &Policy<'_, S>, names: Option<Vec<String>>) -> bool {
+        match names {
+            Some(names) => names.iter().any(|name| policy.read_is_denied(name)),
+            None => policy.any_read_is_denied(),
+        }
     }
 
     /// Where an attachment's bytes are.
@@ -3275,6 +3329,170 @@ impl Collected<'_> {
     }
 }
 
+/// The names a file has under the open directories, for a file with more than one.
+#[cfg(unix)]
+#[derive(Default)]
+struct LinkNames {
+    /// Each name that is text, spelled as [`Workspace::relative_display`] spells it.
+    spelled: Vec<String>,
+    /// Whether a name is not UTF-8. No rule can be written about it, so a rule may cover the file
+    /// under it.
+    unspellable: bool,
+}
+
+#[cfg(unix)]
+impl LinkNames {
+    /// Record `path` as a name of the file. A name that is not UTF-8 is noted and not spelled,
+    /// since its lossy rendering is the name of a different file (PATH-001).
+    fn record(&mut self, workspace: &Workspace, path: &Path) {
+        match path.to_str() {
+            Some(_) => self.spelled.push(workspace.relative_display(path)),
+            None => self.unspellable = true,
+        }
+    }
+
+    /// Whether `denied` covers the file under a name it has, or a name it cannot be asked about.
+    fn covered_by(&self, denied: impl Fn(&str) -> bool) -> bool {
+        self.unspellable || self.spelled.iter().any(|name| denied(name))
+    }
+}
+
+/// The device and inode of `directory`, or `None` where it is not one that can be read.
+#[cfg(unix)]
+fn directory_identity(directory: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+
+    std::fs::metadata(directory)
+        .ok()
+        .filter(|found| found.is_dir())
+        .map(|found| (found.dev(), found.ino()))
+}
+
+/// The permission rules a walk holds each entry to.
+///
+/// A rule is about a file (PERM-7), so an entry is covered when any name the file has is. The
+/// walk reads a file's own name from the directory it is in. The others are a hard link's, from a
+/// map of the files with more than one name built the first time the walk meets such a file, and
+/// the file's name beneath a second path to an open tree. Neither is looked up unless a rule about
+/// reading a path is in force.
+struct WalkRules<'a, 'p, S: Sink> {
+    policy: &'a Policy<'p, S>,
+    /// Whether any rule about reading a path is in force. With none, no name covers a file, so no
+    /// other name is looked up.
+    #[cfg(unix)]
+    any_rule: bool,
+    /// Whether a directory is open beside the root, so a file can have a name under another path
+    /// to the same tree.
+    #[cfg(unix)]
+    second_trees: bool,
+    /// The names of each file that has more than one, or `None` where the walk for them could not
+    /// finish.
+    #[cfg(unix)]
+    links: std::cell::OnceCell<Option<HashMap<(u64, u64), LinkNames>>>,
+    /// What the rules said of each file with more than one name, so the walk asks once per file
+    /// whichever of its names it meets first.
+    #[cfg(unix)]
+    verdicts: std::cell::RefCell<HashMap<(u64, u64), bool>>,
+    /// The device and inode of each directory asked about, so the directories above the entries
+    /// of one directory are looked up once for the walk.
+    #[cfg(unix)]
+    identities: std::cell::RefCell<HashMap<PathBuf, Option<(u64, u64)>>>,
+}
+
+impl<'a, 'p, S: Sink> WalkRules<'a, 'p, S> {
+    fn of(workspace: &Workspace, policy: &'a Policy<'p, S>) -> Self {
+        #[cfg(not(unix))]
+        let _ = workspace;
+        Self {
+            policy,
+            #[cfg(unix)]
+            any_rule: policy.any_read_is_denied(),
+            #[cfg(unix)]
+            second_trees: !workspace.added_directories().is_empty(),
+            #[cfg(unix)]
+            links: std::cell::OnceCell::new(),
+            #[cfg(unix)]
+            verdicts: std::cell::RefCell::default(),
+            #[cfg(unix)]
+            identities: std::cell::RefCell::default(),
+        }
+    }
+
+    /// Whether a rule covers reading the directory at `path`, spelled `relative`, under that name
+    /// or under its name beneath a second path to an open tree.
+    fn covers_directory(&self, workspace: &Workspace, path: &Path, relative: &str) -> bool {
+        self.policy.read_is_denied(relative) || self.covers_under_another_tree(workspace, path)
+    }
+
+    /// Whether a rule covers reading the file at `path`, spelled `relative`, under that name or
+    /// under another name of the file.
+    fn covers_file(&self, workspace: &Workspace, path: &Path, relative: &str) -> bool {
+        self.policy.read_is_denied(relative) || self.covers_another_name(workspace, path)
+    }
+
+    /// Whether a rule covers the file at `path` under a hard link's name, or under its name
+    /// beneath a second path to an open tree.
+    ///
+    /// A file whose other names cannot be found, or that has a name no rule can be written about,
+    /// is covered: a rule about a path may be about it, as for a call that names the file.
+    #[cfg(unix)]
+    fn covers_another_name(&self, workspace: &Workspace, path: &Path) -> bool {
+        use std::os::unix::fs::MetadataExt;
+
+        if !self.any_rule {
+            return false;
+        }
+        let Ok(found) = std::fs::symlink_metadata(path) else {
+            return true;
+        };
+        self.covers_under_another_tree(workspace, path)
+            || (found.nlink() >= 2
+                && self.covers_a_hard_link(workspace, (found.dev(), found.ino())))
+    }
+
+    /// Whether a rule covers the entry at `path` under its name beneath a second path to an open
+    /// tree.
+    #[cfg(unix)]
+    fn covers_under_another_tree(&self, workspace: &Workspace, path: &Path) -> bool {
+        if !self.any_rule || !self.second_trees {
+            return false;
+        }
+        let identity = |directory: &Path| {
+            *self
+                .identities
+                .borrow_mut()
+                .entry(directory.to_path_buf())
+                .or_insert_with(|| directory_identity(directory))
+        };
+        Workspace::any_name_denied(self.policy, workspace.same_tree_names_of(path, identity))
+    }
+
+    #[cfg(unix)]
+    fn covers_a_hard_link(&self, workspace: &Workspace, identity: (u64, u64)) -> bool {
+        if let Some(&verdict) = self.verdicts.borrow().get(&identity) {
+            return verdict;
+        }
+        let verdict = match self.links.get_or_init(|| workspace.multi_link_names()) {
+            Some(index) => index
+                .get(&identity)
+                .is_some_and(|names| names.covered_by(|name| self.policy.read_is_denied(name))),
+            None => true,
+        };
+        self.verdicts.borrow_mut().insert(identity, verdict);
+        verdict
+    }
+
+    #[cfg(not(unix))]
+    fn covers_another_name(&self, _workspace: &Workspace, _path: &Path) -> bool {
+        false
+    }
+
+    #[cfg(not(unix))]
+    fn covers_under_another_tree(&self, _workspace: &Workspace, _path: &Path) -> bool {
+        false
+    }
+}
+
 /// Which files a walk reports: a glob already expanded, read from the workspace root and from the
 /// directory the call named.
 ///
@@ -3359,7 +3577,7 @@ impl Workspace {
                 patterns,
                 under: &under,
             });
-            let denied = |path: &str| policy.read_is_denied(path);
+            let rules = WalkRules::of(self, policy);
             let mut collected = Collected {
                 files: &mut found,
                 stopped_at: &mut stopped_at,
@@ -3367,7 +3585,7 @@ impl Workspace {
                 unreadable: false,
             };
             let _ =
-                self.walk_filtered(&root, wanted, depth, MAX_ENTRIES, &denied, &mut collected)?;
+                self.walk_filtered(&root, wanted, depth, MAX_ENTRIES, &rules, &mut collected)?;
             let unreadable = collected.unreadable;
             found.sort();
             stopped_at.sort();
@@ -3447,7 +3665,7 @@ impl Workspace {
             });
             let mut paths = Vec::new();
             let mut ignored = Vec::new();
-            let denied = |path: &str| policy.read_is_denied(path);
+            let rules = WalkRules::of(self, policy);
             let mut collected = Collected {
                 files: &mut paths,
                 stopped_at: &mut ignored,
@@ -3459,7 +3677,7 @@ impl Workspace {
                 wanted,
                 None,
                 self.search_files,
-                &denied,
+                &rules,
                 &mut collected,
             )?;
             let unreadable = collected.unreadable;
@@ -3725,7 +3943,7 @@ impl Workspace {
                     patterns,
                     under: &under,
                 });
-                let denied = |path: &str| policy.read_is_denied(path);
+                let rules = WalkRules::of(self, policy);
                 let mut collected = Collected {
                     files: &mut paths,
                     stopped_at: &mut ignored,
@@ -3737,7 +3955,7 @@ impl Workspace {
                     wanted,
                     None,
                     self.search_files,
-                    &denied,
+                    &rules,
                     &mut collected,
                 )?;
                 (unvisited, collected.withheld)
@@ -4638,11 +4856,12 @@ impl Workspace {
     /// Filtering afterwards would make a narrow pattern return nothing in a large tree, which
     /// looks identical to the file being absent.
     ///
-    /// `denied` answers whether a permission rule covers reading a path, and an entry it covers is
+    /// `rules` answer whether a permission rule covers reading an entry, and an entry they cover is
     /// left out. Asked of every entry rather than of the root alone, because a rule names a file
-    /// and a walk arrives at that file from whichever directory the call happened to name. A
-    /// directory the rule covers is not descended into at all, so nothing under it is opened or
-    /// reported. The root is the caller's to gate: it is the argument a call named, so it is
+    /// and a walk arrives at that file from whichever directory the call happened to name. A file
+    /// is covered under any name it has, so a hard link to a covered file is left out as the file
+    /// is. A directory the rule covers is not descended into at all, so nothing under it is opened
+    /// or reported. The root is the caller's to gate: it is the argument a call named, so it is
     /// refused where the call is rather than filtered out from under it.
     ///
     /// Answers whether it stopped at the cap with entries still unvisited, which the length of
@@ -4662,13 +4881,13 @@ impl Workspace {
     /// reaches contributes its own contents before the walk disappears into the first subtree
     /// under it. A partial answer cannot be helped once the cap is reached. Which part it
     /// is can.
-    fn walk_filtered(
+    fn walk_filtered<S: Sink>(
         &self,
         directory: &Path,
         wanted: Option<Wanted<'_>>,
         remaining: Option<usize>,
         limit: usize,
-        denied: &dyn Fn(&str) -> bool,
+        rules: &WalkRules<'_, '_, S>,
         collected: &mut Collected<'_>,
     ) -> Result<bool, WorkspaceError> {
         let entries = std::fs::read_dir(directory).map_err(|e| WorkspaceError::Io {
@@ -4709,24 +4928,24 @@ impl Workspace {
                 return Ok(true);
             }
             let relative = self.relative_display(&path);
-            // A rule is about the file, not about the directory the call named, so a walk that
-            // reached this one from above drops it exactly as a read of it by name is refused.
-            // Dropped before the pattern is consulted and never charged to the cap: a denied
-            // file is not a file this walk may report, so it is not one the budget is spent on
-            // either.
-            if denied(&relative) {
-                // Only a file the include selected is one the rule kept from this search. One it
-                // did not select is not what the empty answer is about, and saying a rule is the
-                // reason would tell the planner not to rewrite a glob that is the actual problem.
-                if wanted.is_none_or(|wanted| wanted.admits(&relative)) {
-                    collected.withheld = true;
-                }
+            // A file the include does not select is left out whatever a rule says of it, so the
+            // rules, which look the file up on disk, are not asked.
+            if wanted.is_some_and(|wanted| !wanted.admits(&relative)) {
                 continue;
             }
-            match wanted {
-                Some(wanted) if !wanted.admits(&relative) => continue,
-                _ => collected.files.push(relative),
+            // A rule is about the file, not about the directory the call named, so a walk that
+            // reached this one from above drops it exactly as a read of it by name is refused.
+            // Dropped before it is collected and never charged to the cap: a denied file is not a
+            // file this walk may report, so it is not one the budget is spent on either.
+            //
+            // Only a file the include selected is one the rule kept from this search. One it did
+            // not select is not what the empty answer is about, and saying a rule is the reason
+            // would tell the planner not to rewrite a glob that is the actual problem.
+            if rules.covers_file(self, &path, &relative) {
+                collected.withheld = true;
+                continue;
             }
+            collected.files.push(relative);
         }
 
         for path in directories {
@@ -4737,7 +4956,7 @@ impl Workspace {
             // A rule that covers a directory fences the tree under it, so the walk neither
             // descends into it nor names it: a rule reaching one file of a directory is written
             // against the files, and one reaching the directory is written against all of them.
-            if denied(&relative) {
+            if rules.covers_directory(self, &path, &relative) {
                 if wanted.is_none_or(|wanted| self.selects_beneath(&path, wanted)) {
                     collected.withheld = true;
                 }
@@ -4759,7 +4978,7 @@ impl Workspace {
                 wanted,
                 remaining.map(|left| left - 1),
                 limit,
-                denied,
+                rules,
                 collected,
             ) {
                 Ok(true) => return Ok(true),
@@ -6324,6 +6543,41 @@ mod tests {
         assert_eq!(
             workspace.displayed_if_utf8(&[lookalike]),
             Some(vec!["x-\u{FFFD}".to_string()])
+        );
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// A file with a name that is not UTF-8 is covered where a walk is held to rules, since no rule
+    /// can be written about that name and its lossy rendering is the name of a different file
+    /// (PATH-003). A file whose names are all text is covered by a name the rules cover.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_with_a_name_that_is_not_utf8_is_covered_and_not_spelled_as_its_lossy_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let (path, workspace) = tree("link-names-bytes");
+        let invalid = workspace.root().join(OsStr::from_bytes(b"x-\xff"));
+        let lookalike = workspace.root().join("x-\u{FFFD}");
+
+        let mut names = LinkNames::default();
+        names.record(&workspace, &lookalike);
+        assert_eq!(names.spelled, ["x-\u{FFFD}"]);
+        assert!(
+            !names.covered_by(|_| false),
+            "a file whose names are all text was covered by no rule"
+        );
+        assert!(names.covered_by(|name| name == "x-\u{FFFD}"));
+
+        names.record(&workspace, &invalid);
+        assert_eq!(
+            names.spelled,
+            ["x-\u{FFFD}"],
+            "a name that is not UTF-8 was spelled as its lossy rendering"
+        );
+        assert!(
+            names.covered_by(|_| false),
+            "a file with a name no rule can be written about was covered by no rule"
         );
         let _ = std::fs::remove_dir_all(path);
     }

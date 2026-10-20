@@ -2148,6 +2148,8 @@ function Card({
             instruction will be read there as one.</span>
           </p>
 
+          <HiddenCharacters note={request.hiddenNote} />
+
           {/* In full, never truncated. The answer to this question rests on the bytes, so
               a preview would be asking for an approval of what nobody saw. */}
           <pre className="preview" data-deciding="first">{request.output}</pre>
@@ -2192,6 +2194,7 @@ function Card({
         </>}>
         <VettingReason vetting={request.vetting} />
         <p className="permission-scope" data-deciding="all">Expected contents: {request.expects}</p>
+        <HiddenCharacters note={request.hiddenNote} />
         <pre className="preview" data-deciding="first">{request.content}</pre>
         <Collapse className="card-details" title="Details" isOpen={undefined}>
           <p className="permission-scope">Approval lets the planner read only this content. It does not trust this file for future reads.</p>
@@ -2979,6 +2982,21 @@ function VettingVerdict({ vetting }: { vetting?: import('../../shared/protocol')
     : verdict === 'unsafe'
       ? <Label mode="loud" color="red" className="vetting-verdict unsafe"><Icon name="warning-triangle-filled" slot="icon-before" />Possible instructions detected</Label>
       : <Label mode="outline" color="yellow" className="vetting-verdict">Check inconclusive</Label>
+}
+
+/**
+ * What the tokens in the text below are, where some of it draws as nothing. The agent wrote each
+ * such character out as `‹U+XXXX›` and worded this sentence, so this draws it and reads none of the
+ * text. A row the answer waits on: the planner is given the characters themselves.
+ */
+function HiddenCharacters({ note }: { note?: string | null }): React.JSX.Element | null {
+  if (!note) return null
+  return (
+    <p className="warn" data-deciding="all" data-test="hidden-characters">
+      <Icon name="warning-triangle-filled" />
+      <span>{note}</span>
+    </p>
+  )
 }
 
 /** The checker's one-sentence reason, beside the content it is about: it is the evidence for the verdict. */

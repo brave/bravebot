@@ -842,7 +842,9 @@ impl RunRequest {
 pub struct OutputRequest {
     /// The command that produced it, as it was approved.
     pub command: String,
-    /// What it printed, in full.
+    /// What it printed, in full, with each character that draws as nothing written out as a
+    /// visible token ([`bravebot_core::invisible::spelled`]). The planner's copy is the slot's own
+    /// bytes and is not this.
     pub output: String,
     /// The label it was released under, in the same short form the trail uses (LABEL-10).
     pub label: String,
@@ -853,6 +855,9 @@ pub struct OutputRequest {
     /// count is made in the policy layer, on the still-labelled content, in the same reshape
     /// that produced the rows above.
     pub lines: usize,
+    /// How many characters of it draw as nothing, which are the tokens `output` holds. Counted in
+    /// the same reshape that wrote them out, for the reason `lines` is.
+    pub hidden: usize,
     /// The reference the planner named, for the account given afterwards.
     pub reference: String,
     /// What a check said about the same bytes, or that it did not complete.
@@ -897,7 +902,9 @@ pub struct VetRequest {
     pub origin: String,
     /// What the planner said it expects the slot to hold, in its own words.
     pub expects: String,
-    /// The content, in full. Empty for a picture, which is shown as a file to open instead.
+    /// The content, in full, with each character that draws as nothing written out as a visible
+    /// token ([`bravebot_core::invisible::spelled`]). Empty for a picture, which is shown as a
+    /// file to open instead.
     pub content: String,
     /// The label the content was released under, in the same short form the trail uses
     /// (LABEL-10). `None` for a picture, which is opened in the person's own viewer and has no
@@ -906,6 +913,8 @@ pub struct VetRequest {
     /// How many lines that is, counted before the bytes were released, as
     /// [`OutputRequest::lines`] is.
     pub lines: usize,
+    /// How many characters of it draw as nothing, as [`OutputRequest::hidden`] is.
+    pub hidden: usize,
     /// What the check said, or that it did not complete.
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
@@ -1063,20 +1072,17 @@ impl ServerRequest {
 /// is drawn as what it is.
 ///
 /// A name that is empty, has whitespace at either end, or holds a character that draws as nothing
-/// (a zero-width character, a bidirectional control, a no-break space) comes back quoted with each
-/// such character spelled `\u{..}`, a space at an edge as `␣`, and a control character as its
-/// picture (DEL as its own, a C1 control as `\u{..}`). Any other name comes back unchanged, so the plain case reads as it always did. Every
+/// (a zero-width character, a bidirectional control, a tag character, a no-break space) comes back
+/// quoted with each such character spelled `\u{..}`, a space at an edge as `␣`, and a control
+/// character as its picture (DEL as its own, a C1 control as `\u{..}`). Any other name comes back
+/// unchanged, so the plain case reads as it always did. Every
 /// front end that names a path in a prompt draws it through this, so the three cannot disagree
 /// about which names are marked.
 pub fn shown_name(name: &str) -> String {
     let invisible = |c: char| {
         c.is_control()
             || (c.is_whitespace() && c != ' ')
-            || matches!(
-                c,
-                '\u{ad}' | '\u{61c}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}'
-                    | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{feff}'
-            )
+            || bravebot_core::invisible::draws_as_nothing(c)
     };
     let edge = name.starts_with(char::is_whitespace) || name.ends_with(char::is_whitespace);
     if !name.is_empty() && !edge && !name.chars().any(invisible) {
@@ -2909,6 +2915,9 @@ mod tests {
             ("a\u{200b}b", "\"a\\u{200b}b\""),
             ("a\u{202e}b", "\"a\\u{202e}b\""),
             ("a\u{2066}b", "\"a\\u{2066}b\""),
+            ("a\u{e0041}b", "\"a\\u{e0041}b\""),
+            ("a\u{fe0f}b", "\"a\\u{fe0f}b\""),
+            ("a\u{3164}b", "\"a\\u{3164}b\""),
             ("a\u{1b}b", "\"a\u{241b}b\""),
             ("a\u{7f}b", "\"a\u{2421}b\""),
             ("a\u{85}b", "\"a\\u{85}b\""),
@@ -3181,6 +3190,7 @@ mod tests {
             command: "git log".to_string(),
             output: "one line\n".to_string(),
             lines: 1,
+            hidden: 0,
             reference: "output_1".to_string(),
             verdict: Verdict::Safe,
             reason: None,

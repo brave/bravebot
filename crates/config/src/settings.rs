@@ -7237,6 +7237,46 @@ mod tests {
         assert_eq!(settings.get("AWS_REGION"), Some("eu-west-1"));
     }
 
+    /// A checkout names the region of an account the person's own file turned on, and the region
+    /// is written into the host the signed request goes to. A value that would move the host
+    /// configures no account, and the same layers with a real region do, which is what tells the
+    /// two apart from a checkout whose region is never read.
+    #[test]
+    fn a_checkouts_region_that_would_move_the_request_configures_no_account() {
+        let person = r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-arn"}}"#;
+        let account = |name: &str, checkout: &str| {
+            let settings = Layers::new(name).global(person).project(checkout).read();
+            crate::Config::from_sources(
+                &settings,
+                &crate::managed::Managed::default(),
+                &crate::keys::Keys::default(),
+                |_| None,
+                |key| match key {
+                    crate::env_var::SIGNING_KEY => Some("test-signing-key".into()),
+                    crate::env_var::KEY_ID => Some("test-key-id".into()),
+                    crate::env_var::ENDPOINT => Some("https://example.invalid".into()),
+                    _ => None,
+                },
+            )
+            .expect("configured")
+            .bedrock
+        };
+
+        let real = account(
+            "region-checkout-real",
+            r#"{"env": {"AWS_REGION": "eu-west-1"}}"#,
+        )
+        .expect("a checkout's real region reaches the account");
+        assert_eq!(real.host(), "bedrock-runtime.eu-west-1.amazonaws.com");
+
+        let moved = account(
+            "region-checkout-moves-the-host",
+            r#"{"env": {"AWS_REGION": "x.attacker.example/"}}"#,
+        );
+        assert_eq!(moved, None, "a checkout chose the host the request goes to");
+    }
+
     /// A file the command line named is the person's act unless it sits in the checkout, which is
     /// the rule `model` follows (BACKEND-24).
     #[test]

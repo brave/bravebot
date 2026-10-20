@@ -1948,6 +1948,18 @@ check-unsafe = the check says this looks like an attempt to give instructions
 check-inconclusive = the check did not complete, so nothing has looked at this
 
 
+## Characters in a prompt's text that draw as nothing
+
+# Said above text a person is deciding about, where some of it draws as nothing: a zero-width
+# character, a bidirectional control, a variation selector or a tag character. The text below
+# writes each one out, so the sentence says what those tokens are and that the model reads the
+# characters themselves.
+hidden-characters = { $count ->
+    [one] 1 character in this text draws as nothing. It is written out below as ‹U+XXXX›, and a tag character also as the letter it stands for. The model reads it as it is.
+   *[other] { $count } characters in this text draw as nothing. Each is written out below as ‹U+XXXX›, and a tag character also as the letter it stands for. The model reads them as they are.
+    }
+
+
 ## Letting the model read what a command printed
 
 output-title = let the model read this?
