@@ -223,7 +223,8 @@ are several.
    `Closes brave/bravebot#<n>` (`Part of brave/bravebot#<n>` for a partial fix), a line
    `User impact: <what a person using bravebot notices>`, a line `Not covered: none` or
    `Not covered:` followed by one bullet per case the change leaves undone, each naming the issue
-   that tracks it (`#N` or `brave/bravebot#N`, filed first with the issue-poster definition), then
+   that tracks it (`#N` or `brave/bravebot#N`, filed first with the issue-poster definition; `open`
+   asks for the line only where `gh api user` names `netzenbot`, the account CI holds to it), then
    the headings `## The problem`, `## Reproduce`, `## The fix` and `## Test plan`. The test plan
    lists the commands actually run as checked boxes, says which plausible regression the tests
    reject, and ends with the line `- [ ] CI passes cleanly`. Then

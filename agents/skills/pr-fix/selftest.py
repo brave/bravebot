@@ -1101,6 +1101,48 @@ def test_a_branch_is_pushed_to_origin_and_the_pull_request_opened_on_brave_brave
         assert "--draft" not in create and "--label" not in create, create
 
 
+def test_a_pull_request_by_an_account_that_is_not_held_may_leave_out_the_not_covered_line():
+    without = GOOD_BODY.replace("Not covered: none\n\n", "")
+    assert "`Not covered:` line" in pr_fix.body_problem(without, 5, "netzenbot")
+    assert "`Not covered:` line" in pr_fix.body_problem(without, 5, "")
+    assert pr_fix.body_problem(without, 5, "bbondy") is None
+    assert "first line" in pr_fix.body_problem(without.replace("Closes", "Fixes"), 5, "bbondy"), "the rest of the shape still applies"
+
+
+def test_open_asks_for_the_not_covered_line_only_of_the_account_that_opens_the_pull_request():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        world(root)
+        clone, remotes = root / "bravebot", ISSUE_REMOTES(root)
+        body = root / "body.md"
+        body.write_text(GOOD_BODY.replace("Not covered: none\n\n", ""))
+        login = {"is": "netzenbot", "code": 0}
+
+        def handler(args):
+            if args[1:3] == ("api", "user"):
+                return login["is"], login["code"]
+            return "[]" if args[1] == "pr" and args[2] == "list" else "https://github.com/brave/bravebot/pull/30\n"
+
+        seen, patched = gh_calls(handler)
+        with patched:
+            quietly(pr_fix.issue_worktree, 5, "fix-thing", clone, remotes)
+            tree = clone / ".worktrees" / "issue-5"
+            (tree / "b.txt").write_text("fix\n")
+            git("add", "b.txt", cwd=tree)
+            git("commit", "-q", "-m", "fix the thing", cwd=tree)
+            args = (5, "fix-thing", "Fix the thing", body, clone, remotes)
+
+            for who, code_of_lookup in (("netzenbot", 0), ("", 1)):
+                login.update({"is": who, "code": code_of_lookup})
+                code, out = quietly(pr_fix.open_pull, *args)
+                assert code == 1 and "`Not covered:` line" in out, (who, out)
+            assert not any(call[1:3] == ("pr", "create") for call in seen), "a held account opens nothing without the line"
+
+            login.update({"is": "bbondy", "code": 0})
+            code, out = quietly(pr_fix.open_pull, *args)
+            assert code == 0 and "pull/30" in out, out
+
+
 def test_an_issue_worktree_that_is_locked_is_refused_until_the_person_agrees():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()

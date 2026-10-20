@@ -546,7 +546,7 @@ check-narration:
 # naming the issue that tracks it. The body is read from PR_BODY, as check-narration reads it, and
 # a run with no PR_BODY and not in a pull request has no body to read, so locally this runs the
 # selftest and checks a draft only where it is given one: PR_BODY="$(cat body.md)" make check-pr-body.
-# The dependency bot's pull requests have a body of their own, and PR_AUTHOR is how they are told apart.
+# Only pull requests opened by netzenbot are held to the line, and PR_AUTHOR says who opened one.
 .PHONY: check-pr-body
 check-pr-body:
 	python3 contrib/check-pr-body.py --selftest

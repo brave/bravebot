@@ -259,7 +259,7 @@ entry, the index row and nothing else, with no co-attribution trailer and no em 
    )"
    ```
    The first line is the pull request's `Not covered:` line, which `make check-pr-body` requires of
-   every body. Where the rule leaves a case undone, write `Not covered:` alone on that line and a
+   a pull request opened by `netzenbot`, the account this skill opens it as. Where the rule leaves a case undone, write `Not covered:` alone on that line and a
    bullet per case below it, each naming the issue that tracks it, as
    [commits.md](../../../docs/development/commits.md#opening-the-pull-request) describes.
 4. Report the pull request URL.

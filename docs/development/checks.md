@@ -286,12 +286,12 @@ base with `upstream/main`, or `origin/main` without one, or `BASE=<ref>`, and re
 only where `PR_TITLE` and `PR_BODY` are set. It carries a `--selftest`, which `make check-narration`
 runs first.
 
-`make check-pr-body` fails a pull request whose body has no `Not covered:` line, or has a case under
+`make check-pr-body` fails a pull request opened by `netzenbot` whose body has no `Not covered:` line, or has a case under
 it that names no issue, which is the rule in [commits.md](commits.md) about cases a change leaves
 undone. The line is `none`, or a bullet per case each naming `#N` or `brave/bravebot#N`. CI runs it
 as the second step of the narration workflow, so it is read again when the body is edited, and it
-fails a body that is empty. The pull request's author arrives as `PR_AUTHOR`, and the dependency
-bot's, which has a body of its own, is not held to the line. Text inside a fenced code block or an
+fails a body that is empty. The pull request's author arrives as `PR_AUTHOR`. Only `netzenbot`'s
+pull requests are held to the line, and a run that cannot name the author holds the body to it. Text inside a fenced code block or an
 HTML comment is not read, and a number is not looked up, so it does not show that the issue exists. Locally it reads a draft where `PR_BODY` is set, as in
 `PR_BODY="$(cat body.md)" make check-pr-body`, and otherwise runs its `--selftest` alone. The script
 is [../../contrib/check-pr-body.py](../../contrib/check-pr-body.py), which

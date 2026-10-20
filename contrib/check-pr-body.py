@@ -19,6 +19,10 @@ against the diff (docs/best-practices/gaps.md), and it does not look an issue nu
 fenced code block or an HTML comment is not read, since a person reading the body does not see it as
 the line, so a body can quote it.
 
+Only pull requests opened by netzenbot, the account the agent's work goes through, are held to the
+line. Other authors may write it and a reviewer still reads their description for the cases it
+leaves (docs/best-practices/gaps.md). A run that cannot name the author holds the body to the line.
+
 The body reaches this as the PR_BODY environment variable and the author's login as PR_AUTHOR,
 never interpolated into a command. Standard library only, like the other checks CI runs without a
 toolchain.
@@ -43,9 +47,9 @@ BULLET = re.compile(r"(?:[-*+]|[0-9]+[.)])(?:\s|$)")
 COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 FENCE = re.compile(r"\s{0,3}(`{3,}|~{3,})(.*)$")
 
-# Accounts that open pull requests with a body of their own and no way to be asked for another.
-# The login is the one GitHub gives the app, which a person cannot choose for a branch or a title.
-AUTOMATED = ("renovate[bot]",)
+# The accounts whose pull requests have to carry the line. A login is the one GitHub reports for the
+# opener, which a person cannot choose for a branch or a title, and it ignores case.
+HELD = ("netzenbot",)
 
 SHAPE = (
     f"`{LABEL} none`, or `{LABEL}` followed by one bullet per case, each naming the issue that "
@@ -142,8 +146,14 @@ def has_body(env):
     return "PR_BODY" in env or env.get("GITHUB_EVENT_NAME") == "pull_request"
 
 
+def author_is_held(author):
+    """Whether a pull request opened by `author` has to carry the line. An author that is not given
+    is held, so a draft checked locally and a workflow that lost PR_AUTHOR both fail rather than pass."""
+    return not author or author.lower() in HELD
+
+
 def body_problem(env):
-    if env.get("PR_AUTHOR") in AUTOMATED:
+    if not author_is_held(env.get("PR_AUTHOR")):
         return None
     return not_covered_problem(env.get("PR_BODY", ""))
 
@@ -305,7 +315,7 @@ def selftest():
         "Not covered:\r\n- `aws` keeps the PATH (#2756)\r\n\r\n## The problem\r\n",
     )
 
-    pull = {"GITHUB_EVENT_NAME": "pull_request", "PR_BODY": "Not covered: none", "PR_AUTHOR": "someone"}
+    pull = {"GITHUB_EVENT_NAME": "pull_request", "PR_BODY": "Not covered: none", "PR_AUTHOR": "netzenbot"}
     expect("a pull request body that passes", body_problem(pull), None)
     expect("a pull request with no line", body_problem(dict(pull, PR_BODY="text")) is not None, True)
     expect("a pull request with an empty body is read", has_body(dict(pull, PR_BODY="")), True)
@@ -319,15 +329,14 @@ def selftest():
     expect("a local run with no body has nothing to read", has_body({}), False)
     expect("a local run given a body reads it", has_body({"PR_BODY": "text"}), True)
     expect("a push has nothing to read", has_body({"GITHUB_EVENT_NAME": "push"}), False)
-    renovate = dict(pull, PR_BODY="Update the crate", PR_AUTHOR="renovate[bot]")
-    expect("the dependency bot's body is not held to the line", body_problem(renovate), None)
-    for author in ("someone", "renovate", "evil-renovate[bot]", "renovate[bot]-x", "", "RENOVATE[BOT]"):
-        expect(
-            f"{author!r} is held to the line",
-            body_problem(dict(renovate, PR_AUTHOR=author)) is not None,
-            True,
-        )
+    bot = dict(pull, PR_BODY="Update the crate")
+    for author in ("netzenbot", "Netzenbot", "NETZENBOT", ""):
+        expect(f"{author!r} is held to the line", body_problem(dict(bot, PR_AUTHOR=author)) is not None, True)
     expect("a missing author is held to the line", body_problem({"PR_BODY": "text"}) is not None, True)
+    expect("the bot's body with the line passes", body_problem(dict(bot, PR_BODY="Not covered: none")), None)
+    for author in ("bbondy", "aekeus", "renovate[bot]", "netzenbot-reviewer", "evil-netzenbot", "netzenbot[bot]"):
+        expect(f"{author!r} is not held to the line", body_problem(dict(bot, PR_AUTHOR=author)), None)
+    expect("no author is held and another account is not", [author_is_held(None), author_is_held("bbondy")], [True, False])
 
     workflow = (ROOT / ".github/workflows/narration.yml").read_text(encoding="utf-8")
     expect(

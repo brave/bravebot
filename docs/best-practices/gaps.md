@@ -27,10 +27,10 @@ that:
 - an accepted case points to a bullet under Known costs in the spec that governs it, which the same
   pull request adds where it does not exist yet.
 
-The body lists such cases under its `Not covered:` line, and `make check-pr-body` checks that the
-line exists and that each case under it names an issue
-([commits.md](../development/commits.md#opening-the-pull-request)). It cannot read whether the list
-is complete, whether a number is an issue, whether the issue is about that case, or a statement of this kind made elsewhere in the
+A pull request opened by netzenbot lists such cases under its `Not covered:` line, and
+`make check-pr-body` checks that the line exists and that each case under it names an issue
+([commits.md](../development/commits.md#opening-the-pull-request)). It does not hold other authors to
+the line, and it cannot read whether the list is complete, whether a number is an issue, whether the issue is about that case, or a statement of this kind made elsewhere in the
 description, which the reviewer checks.
 
 [PATH-004](paths.md#PATH-004) is this rule for the other spellings of a path, with an issue as the

@@ -43,7 +43,7 @@ git remote get-url origin
 A worker that was handed a branch to push does not open the pull request unless its brief says to.
 It reports the branch, and whoever owns the pull request opens it with the command above.
 
-**Say which cases the pull request leaves undone, with an issue for each.** The body has a line
+**A pull request opened by `netzenbot` says which cases it leaves undone, with an issue for each.** The body has a line
 `Not covered: none`, or `Not covered:` followed by one bullet per case, each naming the issue that
 tracks it as `#N` or `brave/bravebot#N`:
 
@@ -60,10 +60,12 @@ body is written. A case that a spec records as accepted under Known costs is cit
 it is described, as [GAP-001](../best-practices/gaps.md#GAP-001) says, and is not a bullet, since an
 accepted case has no issue.
 
-`make check-pr-body` fails a pull request whose body has no such line, or has a bullet that names
-no issue. CI runs it when the body is edited as well as when the branch is pushed. It cannot read
-whether the list is complete, whether a number is an issue, or whether an issue is about its case, so
-the reviewer reads the diff for the cases it leaves. Pull requests opened by the dependency bot are not held to the line.
+`make check-pr-body` fails a pull request opened by `netzenbot` whose body has no such line, or has
+a bullet that names no issue. CI runs it when the body is edited as well as when the branch is
+pushed. Pull requests by other authors are not held to the line, and
+[GAP-001](../best-practices/gaps.md#GAP-001) still applies to what their description says. The check
+cannot read whether the list is complete, whether a number is an issue, or whether an issue is about
+its case, so the reviewer reads the diff for the cases it leaves.
 
 **No co-attribution markers for Claude Code or other tools**, in a commit message or a pull request
 body.

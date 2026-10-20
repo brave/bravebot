@@ -134,7 +134,8 @@ contributes; `make check-narration` runs it first.
 
 ## check-pr-body.py
 
-Fails a pull request whose body does not say which cases it leaves undone, with an issue for each.
+Fails a pull request opened by `netzenbot` whose body does not say which cases it leaves undone, with an
+issue for each.
 
 The body has a line `Not covered: none`, or `Not covered:` followed by one bullet per case, each
 naming the issue that tracks it as `#N` or `brave/bravebot#N`. The rule is in
@@ -149,8 +150,8 @@ make check-pr-body                            # the selftest alone, where there 
 ```
 
 In CI the [narration workflow](../.github/workflows/narration.yml) runs it with the event's body and
-author, when the pull request is opened, pushed to or edited. A body that is empty fails there. The
-dependency bot's pull requests, read from `PR_AUTHOR`, are not held to the line. `pr-fix.py` loads
+author, when the pull request is opened, pushed to or edited. A body that is empty fails there. Only
+pull requests whose `PR_AUTHOR` is `netzenbot` are held to the line, and a run with no author holds the body. `pr-fix.py` loads
 this file to check the body it opens a pull request with. `--selftest` checks the verdict on known
 bodies and that the workflow runs the check on an edit.
 

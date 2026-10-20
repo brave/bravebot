@@ -1,11 +1,11 @@
 name: Narration
 
 # Whether what a pull request writes narrates its writer's process: its commit messages, its title
-# and body, and every line it adds. Also whether its body has the Not covered line, with an issue for
-# each case it lists. Its own workflow rather than a job in ci.yml because the title and body are
-# part of what it reads, and an edit to either has to run it again without running every other job
-# in ci.yml with it. Standard library Python over the checkout, so it needs no toolchain and answers
-# in seconds.
+# and body, and every line it adds. Also whether the body of one opened by netzenbot has the Not
+# covered line, with an issue for each case it lists. Its own workflow rather than a job in ci.yml
+# because the title and body are part of what it reads, and an edit to either has to run it again
+# without running every other job in ci.yml with it. Standard library Python over the checkout, so it
+# needs no toolchain and answers in seconds.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
