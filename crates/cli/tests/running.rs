@@ -2176,9 +2176,11 @@ fn accept_edits_is_refused_with_the_bypass_flag_and_outside_a_one_shot_run() {
 /// CLI-6: a write nobody could approve is an effect a gate refused, so the run exits on status 4
 /// and says `BB1004`, however calmly the planner then reports it. The reply still reaches stdout.
 ///
-/// The tool answers a declined question with a problem for the planner and never calls the
-/// policy, so a run that read only the policy's refusals ended on 0 with `"refusals":[]`: what a
-/// script piping this command into the next saw was a success with no file.
+/// The policy records the refusal (TRACE-1) and the object lists it once, as the trail's entry. The
+/// one-shot confirmer keeps its own record of the same question for the status alone, since a
+/// delegate's refusals stay in the delegate's policy, so a result that listed both would count one
+/// refusal twice and one that listed neither would be a success with no file to a script piping
+/// this command into the next.
 #[test]
 fn a_write_nobody_could_approve_exits_on_the_refused_status_and_says_so() {
     let gateway = a_gateway_asking_for_a_write();
@@ -2214,7 +2216,17 @@ fn a_write_nobody_could_approve_exits_on_the_refused_status_and_says_so() {
     let object: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
     assert_eq!(object["ok"], false, "{stdout}");
     assert_eq!(object["status"], 4, "{stdout}");
-    assert_eq!(object["refusals"][0]["gate"], "file_write", "{stdout}");
+    let refusals = object["refusals"].as_array().expect(&stdout);
+    assert_eq!(
+        refusals.len(),
+        1,
+        "the refusal was listed twice, or not at all: {stdout}"
+    );
+    assert_eq!(refusals[0]["gate"], "approval", "{stdout}");
+    assert_eq!(
+        refusals[0]["reason"], "write_file: the write was not approved, so nothing was written",
+        "{stdout}"
+    );
 }
 
 /// CLI-6: a manifest plan nobody could approve is a gate refusing it, not a failure to run, so the
@@ -2252,8 +2264,9 @@ fn a_manifest_plan_nobody_could_approve_exits_on_the_refused_status() {
 }
 
 /// CLI-24: a run that is refused a write writes its events while it goes and ends on the result
-/// object. Streaming a gate's refusal is covered in `json.rs`: the approval a one-shot run lacks
-/// ends the call without a gate event.
+/// object. The write nobody could approve is recorded as a refusal (TRACE-1), so the stream
+/// carries it as a `refusal` event before the call it ended. Streaming a gate's refusal in general
+/// is covered in `json.rs`.
 ///
 /// Pinned against the object a `--json` run writes for the same task, so the last line is what a
 /// caller of the other flag would have read. The same gateway answers both runs, which is why the
@@ -2300,6 +2313,15 @@ fn a_stream_writes_each_event_as_it_happens_and_ends_on_the_result_object() {
     assert_eq!(lines[call]["tool"], "write_file", "{streamed}");
     assert_eq!(lines[call]["target"], "out.txt", "{streamed}");
     assert_eq!(lines[call]["refused"], true, "{streamed}");
+    let refusals: Vec<usize> = (0..lines.len())
+        .filter(|at| kinds[*at] == "refusal")
+        .collect();
+    assert_eq!(refusals.len(), 1, "{streamed}");
+    assert!(
+        refusals[0] < call,
+        "the refusal came after the call: {streamed}"
+    );
+    assert_eq!(lines[refusals[0]]["gate"], "approval", "{streamed}");
     // The first request finished before the call it asked for ran, and the cumulative figure
     // after the second is the sum of both.
     let usage: Vec<&serde_json::Value> = lines

@@ -4388,6 +4388,7 @@ fn write_file<S: Sink, C: Confirmer>(
         policy,
         tools,
         confirmer,
+        "write_file",
         Landing {
             path,
             destination,
@@ -4439,11 +4440,13 @@ struct Body {
 /// are the same whatever the body came from.
 ///
 /// `always_ask` puts the write to a person even where the trust map's table would ask nothing
-/// (CHECKOUT-14).
+/// (CHECKOUT-14). `call` is the tool the write is made for, which names it where the person does
+/// not approve it (TRACE-1).
 fn put_in_the_workspace<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
     confirmer: &mut C,
+    call: &str,
     landing: Landing,
     given: Body,
     always_ask: bool,
@@ -4613,6 +4616,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         );
         keep_the_note(policy, "write_file", answer.approved(), answer.note());
         if !answer.approved() {
+            policy.refuse_unapproved_write(call);
             return credential_aware_rejection(&shown_path, &scanned, answer.note().is_some());
         }
         standing.keep(policy, answer);
@@ -5021,6 +5025,7 @@ fn bring_back<S: Sink, C: Confirmer>(
                 policy,
                 tools,
                 confirmer,
+                "apply_checkout",
                 Landing {
                     path: found.path,
                     destination: found.destination,
@@ -5336,6 +5341,7 @@ fn edit_file<S: Sink, C: Confirmer>(
         if answer.approved() {
             standing.keep(policy, answer);
         } else {
+            policy.refuse_unapproved_write("edit_file");
             let told = answer.note().is_some();
             if !scanned.to_approve().is_empty() {
                 return credential_aware_rejection(&shown_path, &scanned, told);
@@ -8697,11 +8703,12 @@ fn fetch_rules_refusal<S: Sink>(policy: &mut Policy<'_, S>, url: &str) -> Option
 }
 
 /// Puts a host that needs approval to the person (FETCH-2, FETCH-4) and returns the refusal when
-/// they reject it, shared by `fetch_url` and `download_url`. The answer is the person's, so no
-/// labelled content is read here.
+/// they reject it, shared by `fetch_url` and `download_url`, which `call` names for the trail
+/// (TRACE-1). The answer is the person's, so no labelled content is read here.
 fn fetch_not_approved<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     confirmer: &mut C,
+    call: &str,
     url: &str,
     host: &str,
 ) -> Option<Produced> {
@@ -8712,13 +8719,15 @@ fn fetch_not_approved<S: Sink, C: Confirmer>(
         url: url.to_string(),
         host: host.to_string(),
     };
-    (confirmer.confirm_fetch(&request) == Decision::Reject).then(|| {
-        Produced::problem(
-            "refused: the user did not approve fetching this. Do not retry the same URL; \
-             ask what they would prefer."
-                .to_string(),
-        )
-    })
+    if confirmer.confirm_fetch(&request) != Decision::Reject {
+        return None;
+    }
+    policy.refuse_unapproved_fetch(call);
+    Some(Produced::problem(
+        "refused: the user did not approve fetching this. Do not retry the same URL; \
+         ask what they would prefer."
+            .to_string(),
+    ))
 }
 
 fn fetch_url<S: Sink, C: Confirmer>(
@@ -8753,7 +8762,7 @@ fn fetch_url<S: Sink, C: Confirmer>(
     if let Some(refusal) = fetch_rules_refusal(policy, &url) {
         return refusal;
     }
-    if let Some(refusal) = fetch_not_approved(policy, confirmer, &url, &host) {
+    if let Some(refusal) = fetch_not_approved(policy, confirmer, "fetch_url", &url, &host) {
         return refusal;
     }
 
@@ -8912,7 +8921,7 @@ fn download_url<S: Sink, C: Confirmer>(
 
     // After the destination is known to be admissible, so the person is not asked about a host
     // for a path that would have been refused.
-    if let Some(refusal) = fetch_not_approved(policy, confirmer, &url, &host) {
+    if let Some(refusal) = fetch_not_approved(policy, confirmer, "download_url", &url, &host) {
         return refusal;
     }
 
@@ -8955,6 +8964,7 @@ fn download_url<S: Sink, C: Confirmer>(
     );
     keep_the_note(policy, "download_url", answer.approved(), answer.note());
     if !answer.approved() {
+        policy.refuse_unapproved_write("download_url");
         return Produced::problem(format!(
             "refused: the user did not approve saving this there. Do not retry the same \
              download{}",
