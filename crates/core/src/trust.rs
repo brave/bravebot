@@ -546,14 +546,17 @@ pub fn is_absolute_key(key: &str) -> bool {
 ///
 /// An absolute path **keeps** its leading slash, which is what makes it a key already rather than
 /// a name to be read under the working directory.
+///
+/// Whitespace is kept wherever it is. At either end of a segment it is part of the name wherever a
+/// path is bytes, so `note.md ` is a file of its own, apart from `note.md`, and so is a name made
+/// only of whitespace, apart from the directory it is in.
 pub(crate) fn normalise(path: &str) -> String {
-    let trimmed = path.trim();
-    let segments = trimmed
+    let segments = path
         .split('/')
         .filter(|segment| !segment.is_empty() && *segment != ".")
         .collect::<Vec<_>>()
         .join("/");
-    match is_absolute_key(trimmed) {
+    match is_absolute_key(path) {
         true => format!("/{segments}"),
         false => segments,
     }
@@ -990,6 +993,130 @@ mod tests {
                 "{spelling} missed the rule, so the workspace root rule decided instead"
             );
         }
+    }
+
+    /// Whitespace at either end of a name is part of the name where a path is bytes, so a name
+    /// carrying it is a file of its own, and a name made only of it is not the directory it is in.
+    ///
+    /// Each row is a name and the neighbouring name it differs from by that whitespace. A rule about
+    /// one leaves the other as it was, in both polarities, and a sibling of either stays undecided,
+    /// whether or not the volume folds case.
+    #[test]
+    fn a_name_with_whitespace_at_an_end_is_not_the_name_without_it() {
+        let ends = [
+            " ", "\t", "\n", "\u{a0}", "\u{2000}", "\u{2001}", "\u{3000}",
+        ];
+        let mut rows = vec![
+            ("./ ".to_string(), ".".to_string()),
+            ("x/ ".to_string(), "x".to_string()),
+            (" a.md".to_string(), "a.md".to_string()),
+            ("a.md ".to_string(), "a.md".to_string()),
+            (" /abs".to_string(), "/abs".to_string()),
+            ("/tmp/added ".to_string(), "/tmp/added".to_string()),
+            ("x /y.md".to_string(), "x/y.md".to_string()),
+            ("x/ /y.md".to_string(), "x/y.md".to_string()),
+        ];
+        for end in ends {
+            rows.push((end.to_string(), ".".to_string()));
+            rows.push((format!("x/{end}"), "x".to_string()));
+            rows.push((format!("a.md{end}"), "a.md".to_string()));
+            rows.push((format!("{end}a.md"), "a.md".to_string()));
+        }
+
+        for folds in [false, true] {
+            let store = || TrustStore::new("/work").folding_case(folds);
+            for (name, neighbour) in &rows {
+                let mut trusted = store();
+                trusted.trust(name);
+                assert!(
+                    trusted.is_trusted(name),
+                    "{name:?} (folds case {folds}): trusting the name did not record a rule about it"
+                );
+                assert_eq!(
+                    trusted.integrity_of(neighbour),
+                    None,
+                    "{name:?} (folds case {folds}): trusting the name decided {neighbour:?}"
+                );
+                assert!(
+                    !trusted.is_trusted("sibling.md"),
+                    "{name:?} (folds case {folds}): a rule about the name decided a sibling file"
+                );
+
+                let mut over_a_distrust = store();
+                over_a_distrust.distrust(neighbour);
+                over_a_distrust.trust(name);
+                assert_eq!(
+                    over_a_distrust.integrity_of(neighbour),
+                    Some(Integrity::Untrusted),
+                    "{name:?} (folds case {folds}): trusting the name lifted the distrust of {neighbour:?}"
+                );
+
+                let mut under_a_trust = store();
+                under_a_trust.trust(neighbour);
+                under_a_trust.distrust(name);
+                assert_eq!(
+                    under_a_trust.integrity_of(neighbour),
+                    Some(Integrity::Trusted),
+                    "{name:?} (folds case {folds}): distrusting the name withdrew the trust of {neighbour:?}"
+                );
+            }
+        }
+    }
+
+    /// U+2000 and U+2002 are canonically equivalent spaces, so a distrust of a name ending in one is a
+    /// distrust of the same name ending in the other, and still none of the name without either. A
+    /// trust reaches the spelling it was written about and no other (TRUST-2).
+    #[test]
+    fn a_name_ending_in_a_space_follows_the_rules_for_canonically_equivalent_names() {
+        let mut distrusted = TrustStore::new("/work");
+        distrusted.trust(".");
+        distrusted.distrust("a.md\u{2000}");
+        assert_eq!(
+            distrusted.integrity_of("a.md\u{2002}"),
+            Some(Integrity::Untrusted),
+            "an equivalent spelling of a distrusted name was read as trusted"
+        );
+        assert_eq!(
+            distrusted.integrity_of("a.md"),
+            Some(Integrity::Trusted),
+            "a distrust of a name ending in a space reached the name without it"
+        );
+
+        let mut trusted = TrustStore::new("/work");
+        trusted.trust("a.md\u{2000}");
+        assert!(
+            !trusted.is_trusted("a.md\u{2002}"),
+            "a trust reached an equivalent spelling it was not written about"
+        );
+    }
+
+    /// A working directory is a name like any other, so one that ends in whitespace is a directory
+    /// of its own, apart from the one without it.
+    #[test]
+    fn a_working_directory_with_whitespace_at_an_end_is_not_the_one_without_it() {
+        let mut store = TrustStore::new("/work ");
+        store.trust(".");
+
+        assert!(store.is_trusted("a.md"));
+        assert!(
+            !store.is_trusted("/work/a.md"),
+            "a rule about a directory decided the directory named without the whitespace"
+        );
+
+        let moved = store.rebased(Path::new("/work"), false);
+        assert!(
+            !moved.is_trusted("a.md"),
+            "a map moved to `/work` read the rule about `/work ` as its own"
+        );
+        assert!(moved.is_trusted("/work /a.md"));
+
+        let elsewhere = store.rebased(Path::new("/other "), false);
+        assert_eq!(
+            elsewhere.key("a.md"),
+            "/other /a.md",
+            "a map moved to a directory ending in whitespace read it as the one without"
+        );
+        assert_eq!(elsewhere.key(""), "/other ");
     }
 
     /// On a volume that answers to either spelling of a name, two spellings differing only in case

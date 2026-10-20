@@ -1923,6 +1923,32 @@ mod tests {
         );
     }
 
+    /// Whitespace at either end of a name is part of it where a path is bytes, so a rule about a
+    /// name is not about the same name with whitespace at an end of it, and the path is matched as
+    /// it was written (TRUST-2).
+    #[test]
+    fn a_rule_about_a_name_does_not_cover_the_name_with_whitespace_at_an_end() {
+        let denied = rules(&["Read(.env)", "Read(secrets/**)"], &[], &[]);
+        assert_eq!(
+            denied.for_path(Subject::Read, ".env"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        for beneath in ["secrets/a", "secrets/ "] {
+            assert_eq!(
+                denied.for_path(Subject::Read, beneath),
+                Decision::Ruled(Ruling::Deny),
+                "a file named {beneath:?} is beneath `secrets`"
+            );
+        }
+        for other in [".env ", " .env", ".env\u{a0}", "secrets /a"] {
+            assert_eq!(
+                denied.for_path(Subject::Read, other),
+                Decision::Unmatched,
+                "a rule about `.env` or `secrets` decided {other:?}"
+            );
+        }
+    }
+
     /// A volume that folds case compares the two forms and the two cases together.
     #[test]
     fn a_canonical_spelling_is_covered_in_any_case_on_a_folding_volume() {

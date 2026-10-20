@@ -1471,6 +1471,41 @@ fn a_planned_answer_cannot_be_written_to_a_file_it_is_not_about() {
     );
 }
 
+/// Where a path is bytes, `in.md ` is not `in.md`, so an answer about one is not for the other, and
+/// a plan that sends it to the second is refused like one that sends it to any other file.
+#[cfg(unix)]
+#[test]
+fn a_planned_answer_cannot_be_written_to_a_name_that_differs_by_trailing_whitespace() {
+    let scratch = Scratch::new("write-spaced");
+    let original = "raw text";
+    std::fs::write(scratch.path.join("in.md"), original).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md ", "from_slot": "loud"}},
+        ])),
+        processor_reply("RAW TEXT"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let failure = run(&config, &workspace, "shout in.md", &mut sink).expect_err("must refuse");
+    assert!(
+        failure
+            .to_string()
+            .contains("cannot be written anywhere else"),
+        "unhelpful message: {failure}"
+    );
+    assert!(
+        !scratch.path.join("in.md ").exists(),
+        "an answer about one file was written to a file named with trailing whitespace"
+    );
+}
+
 /// A value that declares itself: AWS's own documentation key, which is the provider's prefix over
 /// the provider's alphabet at the provider's length. A refusal needs a declared kind, because a
 /// value merely inferred from its name goes to whoever is watching instead, and an unattended run

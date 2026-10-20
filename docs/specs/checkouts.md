@@ -494,6 +494,7 @@ Removing a checkout withdraws its rules except those that distrust a path.
 `verified-by: bravebot_core::trust::a_copy_of_an_undecided_root_is_not_answered_by_a_broader_rule`
 `verified-by: bravebot_core::trust::withdrawing_a_subtree_keeps_what_distrusts_a_path`
 `verified-by: bravebot_core::file_authority::a_rooted_handle_files_a_relative_name_under_its_root`
+`verified-by: bravebot_core::file_authority::a_rooted_handle_keeps_whitespace_at_the_end_of_a_name_and_of_its_root`
 `verified-by: bravebot_core::file_authority::copying_a_subtree_moves_no_revision`
 
 <a id="CHECKOUT-9"></a>
