@@ -480,6 +480,12 @@ impl Notice {
         Self::new(t!(sources_large_together, bytes = bytes, limit = limit))
     }
 
+    /// That `~/.bravebot/AGENTS.md` was not read, because the way to it goes through the workspace
+    /// (SKILL-3).
+    pub(crate) fn home_agents_file_reached_through_the_workspace() -> Self {
+        Self::new(t!(home_agents_file_reached_through_the_workspace))
+    }
+
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -899,7 +905,7 @@ const MAX_LINKS_TO_A_HOME_SKILL: usize = 40;
 /// inside the workspace is found wherever it leads. A turn can change such a link, so where it
 /// leads says nothing about who wrote what is there. An entry whose place cannot be resolved, and
 /// a path with too many links, count as going through.
-fn goes_through_the_workspace(workspace: &Workspace, path: &Path) -> bool {
+pub(crate) fn goes_through_the_workspace(workspace: &Workspace, path: &Path) -> bool {
     let steps = |path: &Path| -> Vec<PathBuf> {
         path.components()
             .rev()

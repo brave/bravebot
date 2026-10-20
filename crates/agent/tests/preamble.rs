@@ -101,6 +101,52 @@ fn the_home_agents_file_is_read_before_the_project_one() {
     );
 }
 
+/// INSTR-1, SKILL-3. A working directory that holds the home directory holds `~/.bravebot/AGENTS.md`
+/// too, and a turn can write it, so the trust map would record it untrusted. It is not read from
+/// provenance and the person is told. The same file in a directory outside the working directory,
+/// as in the test above, is read.
+#[test]
+fn a_home_agents_file_inside_the_working_directory_is_not_read_as_the_persons_own() {
+    let scratch = Scratch::new("home-agents-inside");
+    let project = scratch.directory("project");
+    let state = project.join("people").join("somebody").join(".bravebot");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("AGENTS.md"), "PLANTED-CONVENTION").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            Some(&state),
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    assert!(
+        !preamble.text.contains("PLANTED-CONVENTION"),
+        "a file the workspace can write was read as the person's own: {}",
+        preamble.text
+    );
+    let told: Vec<&str> = preamble
+        .notices
+        .iter()
+        .map(|n| n.message.as_str())
+        .collect();
+    assert!(
+        told.contains(
+            &"~/.bravebot/AGENTS.md was not read: the way to it goes through a directory this \
+              session can write to"
+        ),
+        "{told:?}"
+    );
+}
+
 /// A directory opened with `/add-dir` is somewhere to read files from, not a second project. Its
 /// conventions are not the ones this work is being done under, and treating them as standing
 /// instructions would let opening a directory silently change how every later turn behaves.

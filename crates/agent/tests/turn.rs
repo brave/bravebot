@@ -57492,11 +57492,13 @@ fn a_style_takes_the_place_of_the_opening_alone_and_yields_to_system_prompt() {
 #[test]
 fn a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt() {
     let scratch = Scratch::new("style-file-opens");
-    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
     let home = scratch.path.join("home");
     std::fs::create_dir_all(home.join("styles")).unwrap();
     std::fs::write(home.join("styles/terse.md"), "FILE-STYLE-WORDS").unwrap();
-    let style = bravebot_agent::styles::find(Some(&home), "terse");
+    let style = bravebot_agent::styles::find(&workspace, Some(&home), "terse");
     assert!(style.is_some());
 
     let (endpoint, received) = serve_sequence(vec![reply_with("done"), reply_with("done")]);
@@ -57536,7 +57538,9 @@ fn a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt() {
 #[test]
 fn a_turn_records_the_output_style_that_opened_it() {
     let scratch = Scratch::new("style-recorded");
-    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
     let home = scratch.path.join("home");
     std::fs::create_dir_all(home.join("styles")).unwrap();
     std::fs::write(home.join("styles/terse.md"), "SECRET-FILE-WORDS").unwrap();
@@ -57559,7 +57563,7 @@ fn a_turn_records_the_output_style_that_opened_it() {
         let egress = bravebot_net::Egress::new();
         let mut sink = RecordingSink::new();
         let task = Task::new("go")
-            .with_style(bravebot_agent::styles::find(Some(&home), name))
+            .with_style(bravebot_agent::styles::find(&workspace, Some(&home), name))
             .with_system_prompts(prompts(replacing, None));
         turns::run(
             &config,

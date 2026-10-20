@@ -282,7 +282,7 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
             session.answer_while_working(|session| set_advisor(session, beside.config, &word));
         }
         Action::Style(word) => {
-            session.answer_while_working(|session| set_style(session, &word));
+            session.answer_while_working(|session| set_style(session, beside.workspace, &word));
         }
         Action::CopyReply(text) => session.answer_while_working(|session| {
             copy_reply(session, &text, crate::clipboard::copy);
@@ -2179,7 +2179,6 @@ fn adopt_settings(
         say_if_unread(session);
     }
     session.adopt_limit(settings);
-    adopt_style(session, settings.style());
     // Settled here too, and once, for the reason the mode is read once per turn: what decides
     // whether somebody is asked must not change under a prompt already on the screen. The command
     // line's switch is read here and nowhere else in the interface.
@@ -2348,6 +2347,8 @@ fn begin_session(
     }
 
     adopt_settings(&mut session, &settings, asked.effort);
+    // Beside the settings, with the workspace in hand: a style file reached through it is not read.
+    adopt_style(&mut session, &workspace, settings.style());
     crate::title::adopt(
         settings.terminal_title(),
         bravebot_core::incognito::engaged(),
@@ -2694,7 +2695,7 @@ fn event_loop(
             Action::ChooseEffort => choose_effort(terminal, held.session),
             Action::SetEffort(level) => set_effort(held.session, &level),
             Action::Advisor(word) => set_advisor(held.session, config, &word),
-            Action::Style(word) => set_style(held.session, &word),
+            Action::Style(word) => set_style(held.session, held.workspace, &word),
             Action::ChooseEditing => choose_editing(terminal, held.session),
             Action::AddDirectory(directory) => held.add_directory_command(&directory),
             Action::CloseDirectory(directory) => held.close_directory_command(&directory),
@@ -14198,7 +14199,7 @@ mod tests {
         let mut session = Session::new("none");
         assert_eq!(with_session_style(Task::new("p"), &session).style, None);
 
-        set_style(&mut session, "concise");
+        set_style(&mut session, &a_workspace(), "concise");
         assert_eq!(
             with_session_style(Task::new("p"), &session)
                 .style
@@ -14206,20 +14207,20 @@ mod tests {
             Some("concise".to_string())
         );
 
-        set_style(&mut session, "explanatory");
+        set_style(&mut session, &a_workspace(), "explanatory");
         assert_eq!(
             session.style().map(|style| style.name.to_string()),
             Some("explanatory".to_string())
         );
 
-        set_style(&mut session, "no-such-style");
+        set_style(&mut session, &a_workspace(), "no-such-style");
         assert_eq!(
             session.style().map(|style| style.name.to_string()),
             Some("explanatory".to_string()),
             "an unknown name replaced the style in force"
         );
 
-        set_style(&mut session, "off");
+        set_style(&mut session, &a_workspace(), "off");
         assert_eq!(with_session_style(Task::new("p"), &session).style, None);
     }
 
@@ -14363,14 +14364,14 @@ mod tests {
     #[test]
     fn a_style_the_settings_name_is_in_force_from_the_first_turn_and_a_wrong_name_is_said() {
         let mut session = Session::new("none");
-        adopt_style_in(&mut session, None, None);
+        adopt_style_in(&mut session, &a_workspace(), None, None);
         assert!(session.style().is_none());
 
-        adopt_style_in(&mut session, Some("concise"), None);
+        adopt_style_in(&mut session, &a_workspace(), Some("concise"), None);
         assert_eq!(session.style().map(|s| s.name.as_ref()), Some("concise"));
 
         let mut wrong = Session::new("none");
-        adopt_style_in(&mut wrong, Some("no-such-style"), None);
+        adopt_style_in(&mut wrong, &a_workspace(), Some("no-such-style"), None);
         assert!(wrong.style().is_none());
         let said = wrong
             .transcript
@@ -14391,8 +14392,8 @@ mod tests {
         std::fs::write(home.join("styles/terse.md"), "Answer in one line.").unwrap();
 
         let mut session = Session::new("none");
-        set_style_in(&mut session, "", Some(&home));
-        set_style_in(&mut session, "terse", Some(&home));
+        set_style_in(&mut session, &a_workspace(), "", Some(&home));
+        set_style_in(&mut session, &a_workspace(), "terse", Some(&home));
         let task = with_session_style(Task::new("p"), &session);
         let style = task.style.expect("the file's style reaches the task");
         assert_eq!(
@@ -14403,8 +14404,8 @@ mod tests {
                 bravebot_agent::styles::Origin::Home
             )
         );
-        set_style_in(&mut session, "../terse", Some(&home));
-        set_style_in(&mut session, "other", Some(&home));
+        set_style_in(&mut session, &a_workspace(), "../terse", Some(&home));
+        set_style_in(&mut session, &a_workspace(), "other", Some(&home));
         assert_eq!(
             session.style().map(|style| style.name.to_string()),
             Some("terse".to_string()),
@@ -14428,15 +14429,15 @@ mod tests {
     #[test]
     fn a_project_style_is_listed_and_picked_by_name_only_where_one_was_vouched_for() {
         let mut session = Session::new("none").holding_project_styles(&["house"]);
-        set_style_in(&mut session, "", None);
-        set_style_in(&mut session, "house", None);
+        set_style_in(&mut session, &a_workspace(), "", None);
+        set_style_in(&mut session, &a_workspace(), "house", None);
         let task = with_session_style(Task::new("p"), &session);
         let style = task.style.expect("the pick reaches the task");
         assert_eq!(
             (style.name.as_ref(), style.words.as_ref(), style.origin),
             ("house", "", bravebot_agent::styles::Origin::Project)
         );
-        set_style_in(&mut session, "unvouched", None);
+        set_style_in(&mut session, &a_workspace(), "unvouched", None);
         assert_eq!(
             session.style().map(|style| style.name.to_string()),
             Some("house".to_string()),
@@ -14453,7 +14454,7 @@ mod tests {
             "{said}"
         );
         let mut none = Session::new("none");
-        set_style_in(&mut none, "house", None);
+        set_style_in(&mut none, &a_workspace(), "house", None);
         assert!(none.style().is_none(), "no vouched list, no project style");
     }
 
@@ -14466,9 +14467,9 @@ mod tests {
             appending: None,
         };
         let mut replaced = Session::new("none").with_system_prompts(words);
-        set_style(&mut replaced, "concise");
+        set_style(&mut replaced, &a_workspace(), "concise");
         let mut plain = Session::new("none");
-        set_style(&mut plain, "concise");
+        set_style(&mut plain, &a_workspace(), "concise");
 
         let said = |session: &Session| {
             session
