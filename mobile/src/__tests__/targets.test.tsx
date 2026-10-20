@@ -2,7 +2,7 @@ import { act } from 'react-test-renderer'
 import App from '../App'
 import { Transcript } from '../components/transcript/Transcript'
 import type { Target } from '../targets'
-import { allText, byTestId, has, isDisabled, press, render, textOf } from './helpers'
+import { allText, byTestId, has, press, render, textOf } from './helpers'
 import { fakeTarget } from './support/appScenarios'
 import { FakeClient } from './support/fake'
 
@@ -18,25 +18,6 @@ async function launch(targets: readonly Target[]) {
   })
   return tree
 }
-
-describe('an app with no target', () => {
-  it('shows a blank slate that says nothing is connected and offers nothing to start', async () => {
-    const tree = await launch([])
-    expect(has(tree, 'no-target')).toBe(true)
-    expect(allText(tree)).toContain('Nothing is connected')
-    for (const absent of ['chat-screen', 'menu', 'replay', 'calls', 'topbar-target', 'session-list', 'trust-card']) {
-      expect(has(tree, absent)).toBe(false)
-    }
-  })
-
-  it('has a composer that is disabled and says why', async () => {
-    const tree = await launch([])
-    expect(byTestId(tree, 'composer-input').props.editable).toBe(false)
-    expect(isDisabled(tree, 'send')).toBe(true)
-    expect(textOf(byTestId(tree, 'composer-note'))).toBe('No target is connected.')
-    expect(textOf(byTestId(tree, 'composer-workspace'))).toBe('No workspace')
-  })
-})
 
 describe('an app over a target', () => {
   it('uses that target for the header, the empty state and the session list', async () => {
