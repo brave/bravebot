@@ -453,6 +453,7 @@ and the content has no say in it.
 | a file read from the workspace | private, and trusted only where somebody vouched for the path | `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted` |
 | a listing or a search across several paths | private, and trusted only where every path it visited is | `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is` |
 | the file names a language server reported | private, and trusted only where every path it names is, so one nobody vouched for quarantines the answer; the same road as a listing, and the capability's `(U,priv)` is where it starts | `verified-by: bravebot_agent::lsp::locations_are_labelled_by_the_files_they_name` |
+| the severities and line numbers a language server reported for a file it was asked about | trusted and private, from the capability's own label and not from the queried file's entry, because a severity is a fixed enumeration and a line is an integer and the sentence carries no word the server wrote; the numbers are still computed from bytes nobody may have vouched for, which is the fifth entry of [Known costs](#known-costs) | `verified-by: bravebot_agent::lsp::diagnostics_for_a_file_nobody_vouched_for_report_lines_and_not_messages` |
 | a file the user named in a prompt or dropped on the window | trusted, because naming a file is vouching for it | `verified-by: bravebot_core::policy::a_file_the_user_named_is_read_as_trusted_though_nothing_else_is` |
 | what a program printed | untrusted and private, since what it did is unknown | `verified-by: bravebot_core::policy::an_opaque_program_always_yields_untrusted_private_output` |
 | what a program that can only transform its input printed, fed content | private, and trusted only where what was fed in is, because a program prints what it was given and a run is not a release | `verified-by: bravebot_core::policy::a_filter_fed_an_untrusted_label_prints_untrusted_output` `verified-by: bravebot_core::policy::a_filter_fed_a_trusted_label_prints_trusted_private_output` |
@@ -568,8 +569,9 @@ arrives at all.
 
 ## Known costs
 
-- **Four places do look at untrusted bytes in order to decide something.** Three are in the policy
-  layer and the fourth is the search, which is in `bravebot-agent`. The clauses above say nothing
+- **Five places do look at untrusted bytes in order to decide something.** Three are in the policy
+  layer, the fourth is the search, which is in `bravebot-agent`, and the fifth is the diagnostics
+  sentence, which is in `bravebot-agent` too. The clauses above say nothing
   may, so these are exceptions, and they are written down rather than left to be found.
 
   The first is splitting a processor's answer. A processor hands back a single piece of text that
@@ -721,3 +723,39 @@ arrives at all.
   search run as a processor job is a model call that produces a document or a remark, so it would no
   longer be a pattern match. Moving the comparison into `bravebot-core` is not a third, since that
   crate is the driver as well.
+
+- **The fifth is the diagnostics sentence, whose numbers a language server computed from files
+  nobody vouched for.** The `lsp` tool's `diagnostics` operation tells the planner how many errors a
+  server found, the line each starts on (up to 20, then "and N more"), a warning count and a count of
+  notes of any other kind ([LSP-13](tools/lsp.md#LSP-13)). The sentence is worded by `bravebot-agent`
+  from those numbers, so the driver's wording branches on them, and it is labelled from the
+  capability's own `(T,priv)` because it names no path the server reported
+  ([LABEL-8](#LABEL-8)). The server computes the numbers from the queried file and from every file it
+  indexed that file against, so a file in a vendored, cloned or distrusted tree, or a dependency of a
+  vouched-for one, sets them. Suppose an attacker owns such a file. Everything that buys them is on
+  this list:
+
+  - **Set how many errors, warnings and other notes the planner is told about.** Any count the server
+    can be made to publish.
+  - **Set which line numbers are named.** Up to 20 error lines per call, and whether an "and N more"
+    clause follows. That is a few hundred bits per call.
+  - **Choose whether the sentence says "no errors reported yet".** It is worded as nothing stronger,
+    so it is not a statement that the file is clean ([LSP-12](tools/lsp.md#LSP-12)).
+
+  The driver supplies every word around those numbers, and none of the server's text is carried: a
+  diagnostic's message, code and source travel as a reference the planner cannot read
+  ([LSP-13](tools/lsp.md#LSP-13)). So the gain is attention and not content. It can move the planner
+  toward a build or a read, and it is a covert channel with no decoder in the attacker's hands.
+
+  What is **not** on the list is the thing that would matter. The planner picks the `path`, a routing
+  field, and the attacker's bytes never choose it. No destination is chosen, since `edit_file` refuses
+  an untrusted file ([EDIT-2](tools/edit-file.md#EDIT-2)) and every effect is still approved. No text
+  the attacker wrote reaches the planner. The residue is that the planner reads these numbers and can
+  be moved by them, as far as an error count and a list of lines can move it. This is the same shape
+  as the search entry above: a handful of numbers decided by untrusted bytes.
+
+  Two alternatives cost more. Labelling the sentence from the capability's `(U,priv)` quarantines it
+  whole for any unvouched answer, and the planner then cannot be told that a file it is working on has
+  errors. Gating the sentence on the queried file's trust-map entry, as the write-time sentence is
+  gated, does not close it, since the counts depend on other files too and
+  [LSP-3](tools/lsp.md#LSP-3) rules out borrowing the queried file's entry for what a server computed.

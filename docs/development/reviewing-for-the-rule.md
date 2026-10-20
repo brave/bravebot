@@ -55,8 +55,9 @@ data, so it is used everywhere legitimately, and only a reader can say which is 
 that count and `make check-spec` fails until somebody records it, which puts the question in front
 of a reviewer without answering it.
 
-Four places do branch on untrusted bytes, deliberately. Three are in the kernel and the fourth is
-the search in `bravebot-agent`. All four are named under Known costs in
+Five places do branch on untrusted bytes, deliberately. Three are in the kernel, the fourth is
+the search in `bravebot-agent`, and the fifth is the wording of the `lsp` diagnostics sentence from
+the counts a server computed, in `crates/agent/src/lsp.rs`. All five are named under Known costs in
 [specs/labels.md](../specs/labels.md), because an unlisted exception is indistinguishable from a
 violation. A further one that mints a witness of its own moves a pinned count and so cannot arrive
 quietly. One added inside a function that already holds a counted `declassify` moves nothing: the
