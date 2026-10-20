@@ -711,6 +711,27 @@ A pending confirmation checks cancellation at most every 50 ms and resolves to r
 No approval is sent, and no additional client reply is required. Cancellation also
 covers the race where the question is registered just after the stop request.
 
+#### `turn.interject`
+
+```json
+{ "id": 7, "method": "turn.interject", "params": { "session": "s1", "prompt": "no, the other one", "target": 12 } }
+→ { "accepted": true }
+```
+
+Sends words into the turn that is running, for the planner to read at the turn's next round
+boundary, after the round's calls have run (INPUT-10, INPUT-46). The words are the person's own,
+read under the routing the turn began with, and carry no file: a front-end writes a dropped file as
+its name before sending. `target` is optional and names the turn as in `turn.cancel`; absent, the
+line is for whatever is running.
+
+`accepted` is `true` when a running turn took it in, and `false` when nothing is running, the turn is
+being stopped, the target names something else, or the work is a manifest run, which asks nothing
+between rounds. A `false` means nobody will read the line, and the caller makes a turn of it. A
+`true` is not a promise: a turn that answers without another round ends with the line unread. The
+`turn.interjected` event says when the planner was given one, and lines are read in the order
+they were sent. A blank `prompt` is `bad_request`, and a session with a session view is refused with
+`bad_request`.
+
 #### `mentions.offer`
 
 ```json
@@ -926,6 +947,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 |---|---|---|
 | `agent.ready` | `{ build, version, home, configured, defaultModel }` | startup, no `session` |
 | `turn.started` | `{ turn, mode }` | `turn.send` accepted |
+| `turn.interjected` | `{ prompt }` | the planner was given the oldest line sent with `turn.interject` |
 | `phase` | `{ phase }` | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
 | `narration` | `{ text }` | `Reporter::narration`, **empty ones dropped** |

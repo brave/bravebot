@@ -56,6 +56,12 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
     const { directory: _directory, ...rest } = held
     return rest
   }
+  // Words typed into a turn that is running. The turn is already running with the reach it began
+  // with, so a line carries no file under any key: the three fields it reads are all that is
+  // forwarded, and the window has already put any marker into words (DROP-8).
+  if (method === 'turn.interject') {
+    return { session: held.session, target: held.target, prompt: held.prompt }
+  }
   if (method !== 'turn.send') return held
   // `recall` and `definition` join the lists for a smaller reason than theirs. `recall` decides
   // whether a prompt is one a person can find again, and `definition` decides which definition a

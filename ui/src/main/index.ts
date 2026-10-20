@@ -481,6 +481,7 @@ const ALLOWED = new Set([
   'session.rewind',
   'turn.send',
   'turn.cancel',
+  'turn.interject',
   'mentions.offer',
   'mentions.named',
   'confirm.reply',
