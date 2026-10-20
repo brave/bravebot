@@ -388,6 +388,89 @@ fn two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group() {
     );
 }
 
+/// The key of every awkward name, the label a read of it gets and whether a second writer to it is
+/// refused have to tell two files the volume holds apart from one file with two names (TRUST-2).
+/// The test above asks the trust map about the names alone. A step that joins two files can sit
+/// in the key the workspace builds for a name, or in the key a writer is reserved under, which that
+/// test does not call, so the same pairs are asked of both. A refusal and a writer in flight reach
+/// the other name of a group on purpose, and nothing else.
+#[test]
+fn two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group()
+{
+    let mut asked = 0;
+    for (index, (first, first_group)) in aliases::AWKWARD_NAMES.iter().enumerate() {
+        for (second, second_group) in &aliases::AWKWARD_NAMES[index + 1..] {
+            let scratch = Scratch::new(&format!("two-keys-{index}-{asked}"));
+            if !aliases::two_files(&scratch.path, first, second) {
+                continue;
+            }
+            asked += 1;
+            let joined = first_group == second_group;
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let through = |name: &str| format!("./{name}");
+
+            let authority =
+                FileAuthority::new(bravebot_agent::workspace::trust_store(workspace.root()));
+            assert_ne!(
+                authority.key(first),
+                authority.key(second),
+                "{first:?} and {second:?} are two files and have one key"
+            );
+
+            for (named, other) in [(first, second), (second, first)] {
+                let mut sink = RecordingSink::new();
+                let mut policy = alias_policy(&workspace, &mut sink, Some(&through(named)));
+                let read = workspace
+                    .read(&mut policy, &trusted_text(&through(other)))
+                    .unwrap_or_else(|error| panic!("{other:?} did not open: {error}"));
+                assert_eq!(
+                    read.label().integrity,
+                    if joined {
+                        Integrity::Untrusted
+                    } else {
+                        Integrity::Trusted
+                    },
+                    "a distrust of {named:?} did not leave a read of {other:?} as the table says"
+                );
+
+                let authority =
+                    FileAuthority::new(bravebot_agent::workspace::trust_store(workspace.root()));
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    all_file_capabilities(),
+                    &mut sink,
+                )
+                .expect("policy")
+                .with_file_authority(authority.clone())
+                .with_root(workspace.root());
+                let held = authority
+                    .capture()
+                    .begin(named)
+                    .unwrap_or_else(|| panic!("the first writer to {named:?} was refused"));
+                let refused = matches!(
+                    workspace.write(
+                        &mut policy,
+                        &trusted_text(&through(other)),
+                        &trusted_text("a second writer"),
+                    ),
+                    Err(WorkspaceError::Contended { .. })
+                );
+                assert_eq!(
+                    refused, joined,
+                    "a writer to {named:?} did not leave a write to {other:?} as the table says"
+                );
+                held.complete(Integrity::Trusted);
+            }
+        }
+    }
+    assert!(
+        asked > 100,
+        "only {asked} pairs were two files: the alphabet is not being used"
+    );
+}
+
 /// Fetched bytes written through one name of a file are what every name of it reads back, so the
 /// trust the earlier trusted write recorded cannot stay on the other name (TRUST-4). A row the map
 /// does not join lists the issue that tracks it.

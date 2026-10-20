@@ -40,6 +40,7 @@ governs:
   - ui/src/renderer/components/Permissions.tsx
   - ui/scripts/remembered-trust-list.test.mjs
   - crates/tui/src/command_table.rs
+  - crates/agent/test-support/aliases.rs
 guards:
   - symbol: TrustStore::trust
   - symbol: TrustStore::distrust
@@ -174,6 +175,23 @@ the host's own answer, so only a Windows host takes the refusing branch there; t
 tested on every host with the answer supplied. A short name for a directory a person opened is
 accepted, since it names that one directory.
 
+**Names the volume holds apart.** The table lists the names one file has. The other direction is a
+rule too: two names a volume holds apart are two files, so the step that turns a name into a key
+gives them two keys, and a rule about one decides nothing about the other. Only a refusal and a
+writer in flight reach a name on purpose, and only the canonically equivalent spellings of the NFC
+and NFD row. Whitespace, a trailing dot, a leading `-`, a glob character, a backslash, a colon and
+a character Unicode gives no width are part of a name where a path is bytes. A step that trims,
+folds case or decodes lossily joins two such files, and no row of the table lists a join of two
+files.
+
+The names are `AWKWARD_NAMES` in `crates/agent/test-support/aliases.rs`. One test makes every pair in
+a directory, asks the volume whether it is two files, and asks the map about a rule for one of them
+in both polarities. A second asks the same pairs of the key the workspace builds for a name, of a
+read, and of a second writer, where a step that joins two files can sit with the map seeing
+nothing, and compares the two keys. The vouch prompt is asked about four of the names.
+
+Deny and ask rules key a path of their own and are not yet asked the same question (#2761).
+
 **Why.** Per-file exceptions in both directions are the only way `@vendor/lib.js` can be trusted
 inside a `vendor` a person marked untrusted, without that answer leaking to its siblings.
 
@@ -193,6 +211,8 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_core::trust::a_rule_matches_whole_segments_only`
 `verified-by: bravebot_core::trust::equivalent_path_spellings_are_the_same_rule`
 `verified-by: bravebot_core::trust::a_name_with_whitespace_at_an_end_is_not_the_name_without_it`
+`verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group`
+`verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group`
 `verified-by: bravebot_core::trust::a_name_ending_in_a_space_follows_the_rules_for_canonically_equivalent_names`
 `verified-by: bravebot_core::trust::a_working_directory_with_whitespace_at_an_end_is_not_the_one_without_it`
 `verified-by: bravebot_core::trust::every_equivalent_spelling_of_a_path_reaches_the_same_rule`
@@ -548,6 +568,7 @@ check and caught the attempt. The prompt that grants the most was the one saying
 `verified-by: bravebot_agent::turn::a_path_that_names_no_file_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::declining_to_vouch_leaves_the_file_quarantined`
 `verified-by: bravebot_agent::turn::a_vouch_for_a_file_named_with_whitespace_leaves_its_siblings_asking`
+`verified-by: bravebot_agent::turn::a_vouch_for_a_file_with_an_awkward_name_is_a_rule_about_that_file_alone`
 `verified-by: bravebot_agent::turn::a_trusted_file_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::the_same_file_is_offered_once_per_turn`
 `verified-by: bravebot_tui::confirm::a_preview_with_nothing_in_it_says_so`
