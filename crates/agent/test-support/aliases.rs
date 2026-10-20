@@ -244,6 +244,12 @@ pub fn expect(row: &Alias, consumer: Consumer, handled: bool) {
 /// refusal recorded about one is about every canonically equivalent spelling (TRUST-2). Every
 /// other pair is two files wherever the volume holds them apart, and a key that joins them is a
 /// rule about one file deciding another.
+///
+/// Every name is text, because a trust key is a `&str`: a name that is not UTF-8 never reaches the
+/// map, and the step before it refuses to render one. That step is covered by
+/// `a_second_tree_name_with_invalid_utf8_is_not_matched_as_its_lossy_lookalike` and
+/// `a_hard_link_named_with_invalid_utf8_is_not_matched_as_its_lossy_lookalike` in
+/// `crates/agent/src/workspace.rs` (PATH-003).
 pub const AWKWARD_NAMES: &[(&str, &str)] = &[
     ("a.md", "plain"),
     ("A.md", "upper"),
