@@ -21,7 +21,7 @@ import re
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -3786,48 +3786,108 @@ def test_a_mark_is_one_start_with_a_reason():
     )
 
 
-def main():
-    for test in (
-        test_exception_counts,
-        test_network_clients_are_recorded,
-        test_process_starts_are_refused_by_the_configuration,
-        test_nothing_makes_clippy_read_another_configuration,
-        test_a_mark_is_one_start_with_a_reason,
-        test_prompt_split,
-        test_exhaustive_reader_docs,
-        test_labelled_impls,
-        test_pinned_actions,
-        test_pinned_images,
-        test_downloads_verified,
-        test_privileged_job_runs_only_its_own_code,
-        test_privileged_job_runs_project_code,
-        test_checkout_ref_is_qualified,
-        test_grant_is_behind_an_environment,
-        test_required_checks_are_the_gates,
-        test_construction_pinned,
-        test_gates_pinned,
-        test_key_sites_exhaustive,
-        test_key_steps_join_no_names,
-        test_guarantee_specs_are_read,
-        test_declassify_counts_match_the_spec,
-        test_every_lane_prompt_composes,
-        test_the_prompt_lane_starts_from_every_prompt,
-        test_answers_registered,
-        test_changes_under_a_yes,
-        test_the_stop_hook,
-        test_verifier_prompt_composes,
-        test_impact_sets_severity,
-        test_labels,
-        test_titles,
-        test_a_name_stays_a_name,
-        test_bodies_say_where_and_why,
-        test_a_draft_key_is_one_its_title_keeps,
-        test_a_run_writes_a_manifest_and_posts_nothing,
-        test_the_manifest_is_read_from_the_work_directory,
-        test_verifying_saves_the_candidates_the_collector_reads,
-    ):
-        print(test.__name__)
-        test()
+@contextmanager
+def contained_temporary_files():
+    """Put every temporary file the tests make, and every one a program they run makes, in one directory.
+
+    The fixtures are made with `mkdtemp`, which nothing removes, so a run that used the system
+    temporary directory directly left one directory for each fixture there, on every run. This
+    one is removed when the run ends, however it ends.
+    """
+    was = tempfile.tempdir, os.environ.get("TMPDIR")
+    with tempfile.TemporaryDirectory(prefix="security-audit-selftest-", ignore_cleanup_errors=True) as holding:
+        tempfile.tempdir = holding
+        os.environ["TMPDIR"] = holding
+        try:
+            yield holding
+        finally:
+            tempfile.tempdir = was[0]
+            if was[1] is None:
+                os.environ.pop("TMPDIR", None)
+            else:
+                os.environ["TMPDIR"] = was[1]
+
+
+def test_a_run_leaves_nothing_in_the_temporary_directory():
+    """The fixtures a test makes go when the run does, in whatever directory the run was given."""
+    with tempfile.TemporaryDirectory() as given:
+        done = subprocess.run(
+            [sys.executable, str(HERE / "selftest.py"), "test_exception_counts"],
+            cwd=ROOT,
+            env={**os.environ, "TMPDIR": given},
+            capture_output=True,
+            text=True,
+        )
+        left = sorted(os.listdir(given))
+    check("the run that was given a temporary directory passes", done.returncode == 0, done.stdout + done.stderr)
+    check("a run leaves nothing in the temporary directory it was given", left == [], str(left))
+
+
+def test_a_name_selects_the_tests_that_run():
+    with tempfile.TemporaryDirectory() as given:
+        done = subprocess.run(
+            [sys.executable, str(HERE / "selftest.py"), "test_nothing_has_this_name"],
+            cwd=ROOT,
+            env={**os.environ, "TMPDIR": given},
+            capture_output=True,
+            text=True,
+        )
+    check("a name no test has is refused", done.returncode == 2 and "test_nothing_has_this_name" in done.stderr, done.stdout + done.stderr)
+
+
+TESTS = (
+    test_exception_counts,
+    test_network_clients_are_recorded,
+    test_process_starts_are_refused_by_the_configuration,
+    test_nothing_makes_clippy_read_another_configuration,
+    test_a_mark_is_one_start_with_a_reason,
+    test_prompt_split,
+    test_exhaustive_reader_docs,
+    test_labelled_impls,
+    test_pinned_actions,
+    test_pinned_images,
+    test_downloads_verified,
+    test_privileged_job_runs_only_its_own_code,
+    test_privileged_job_runs_project_code,
+    test_checkout_ref_is_qualified,
+    test_grant_is_behind_an_environment,
+    test_required_checks_are_the_gates,
+    test_construction_pinned,
+    test_gates_pinned,
+    test_key_sites_exhaustive,
+    test_key_steps_join_no_names,
+    test_guarantee_specs_are_read,
+    test_declassify_counts_match_the_spec,
+    test_every_lane_prompt_composes,
+    test_the_prompt_lane_starts_from_every_prompt,
+    test_answers_registered,
+    test_changes_under_a_yes,
+    test_the_stop_hook,
+    test_verifier_prompt_composes,
+    test_impact_sets_severity,
+    test_labels,
+    test_titles,
+    test_a_name_stays_a_name,
+    test_bodies_say_where_and_why,
+    test_a_draft_key_is_one_its_title_keeps,
+    test_a_run_writes_a_manifest_and_posts_nothing,
+    test_the_manifest_is_read_from_the_work_directory,
+    test_verifying_saves_the_candidates_the_collector_reads,
+    test_a_run_leaves_nothing_in_the_temporary_directory,
+    test_a_name_selects_the_tests_that_run,
+)
+
+
+def main(names):
+    by_name = {test.__name__: test for test in TESTS}
+    unknown = [name for name in names if name not in by_name]
+    if unknown:
+        print(f"no test is named {', '.join(unknown)}", file=sys.stderr)
+        return 2
+    with contained_temporary_files():
+        for test in [by_name[name] for name in names] or TESTS:
+            print(test.__name__)
+            test()
     print("")
     if FAILURES:
         print(f"{len(FAILURES)} failed: {', '.join(FAILURES)}")
@@ -3837,4 +3897,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))
