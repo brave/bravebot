@@ -26,6 +26,7 @@ pub mod event;
 pub mod fence;
 pub mod file_authority;
 pub mod incognito;
+pub mod invisible;
 pub mod label;
 pub mod manifest;
 pub mod message;

@@ -2983,6 +2983,7 @@ mod tests {
             expects: "the release notes for version 2".into(),
             content: content.into(),
             lines: content.lines().count(),
+            hidden: 0,
             verdict,
             reason: reason.map(str::to_string),
             picture: None,
@@ -3106,6 +3107,36 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    /// PROMPT-1, CHECK-10: content holding characters that draw as nothing is shown with each one
+    /// written out, and the prompt says how many there are above them. Content with none says
+    /// nothing about any.
+    #[test]
+    fn the_vet_prompt_says_how_many_characters_draw_as_nothing_and_shows_each() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A} text";
+        let mut request = a_vetting(Verdict::Safe, None, text);
+        request.hidden = 2;
+        let rows = rows_of(100, 40, |frame| {
+            draw_vet(frame, &request, 0, None, &mut Seen::default());
+        });
+        let drawn = box_text(&rows);
+        assert!(
+            drawn.contains(&squeezed(&t!(hidden_characters, count = 2usize))),
+            "the prompt did not say characters drew as nothing: {rows:#?}"
+        );
+        assert!(
+            drawn.replace('┃', "").contains(&squeezed(text)),
+            "the characters were not written out in the text: {rows:#?}"
+        );
+        request.hidden = 0;
+        let rows = rows_of(100, 40, |frame| {
+            draw_vet(frame, &request, 0, None, &mut Seen::default());
+        });
+        assert!(
+            !box_text(&rows).contains("U+XXXX"),
+            "a prompt with nothing hidden in it said something was: {rows:#?}"
+        );
     }
 
     /// VET-4: whatever the terminal draws, the prompt names a copy to open and says what a person
@@ -3584,6 +3615,7 @@ mod tests {
             command: "find /Applications -name 'Brave Browser Nightly.app'".into(),
             output: text.into(),
             lines: text.lines().count(),
+            hidden: 0,
             reference: "ref:5".into(),
             verdict: Verdict::Safe,
             reason: None,
@@ -3638,6 +3670,36 @@ mod tests {
     #[test]
     fn output_that_is_empty_says_so() {
         assert!(rendered_output(&an_output("")).contains("printed nothing"));
+    }
+
+    /// PROMPT-1, OUTPUT-1: output holding characters that draw as nothing is shown with each one
+    /// written out, and the prompt says how many there are above them. Output with none says
+    /// nothing about any.
+    #[test]
+    fn the_output_prompt_says_how_many_characters_draw_as_nothing_and_shows_each() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A} text";
+        let mut request = an_output(text);
+        request.hidden = 2;
+        let rows = rows_of(100, 24, |frame| {
+            draw_output(frame, &request, 0, &mut Seen::default());
+        });
+        let drawn = box_text(&rows);
+        assert!(
+            drawn.contains(&squeezed(&t!(hidden_characters, count = 2usize))),
+            "the prompt did not say characters drew as nothing: {rows:#?}"
+        );
+        assert!(
+            drawn.replace('┃', "").contains(&squeezed(text)),
+            "the characters were not written out in the text: {rows:#?}"
+        );
+        request.hidden = 0;
+        let rows = rows_of(100, 24, |frame| {
+            draw_output(frame, &request, 0, &mut Seen::default());
+        });
+        assert!(
+            !box_text(&rows).contains("U+XXXX"),
+            "a prompt with nothing hidden in it said something was: {rows:#?}"
+        );
     }
 
     /// The person has to be told what approving does, since the consequence is not visible in the
@@ -5494,6 +5556,17 @@ mod tests {
         grants: Vec<(char, Vec<String>)>,
     }
 
+    /// The first and the last few words of a sentence that wraps over several rows, squeezed, which
+    /// are the pieces [`scroll_through`] can ask for: a piece is drawn once a draw shows it whole,
+    /// and a sentence longer than a box is not whole in any one draw.
+    fn sentence_ends(sentence: &str) -> [String; 2] {
+        let words: Vec<&str> = sentence.split_whitespace().collect();
+        [
+            squeezed(&words[..3].join(" ")),
+            squeezed(&words[words.len() - 3..].join(" ")),
+        ]
+    }
+
     /// Each question with its deciding fields grown past what one screen holds.
     fn oversized(kind: Kind) -> Option<Case> {
         match kind {
@@ -5572,10 +5645,12 @@ mod tests {
                 let request = OutputRequest {
                     verdict: Verdict::Unsafe,
                     reason: Some(reason.join(" ")),
+                    hidden: 3,
                     ..an_output(&numbered('o', 100).join("\n"))
                 };
                 let drawn = request.clone();
                 let mut deciding = reason;
+                deciding.extend(sentence_ends(&t!(hidden_characters, count = 3usize)));
                 deciding.push("o0000".to_string());
                 Some(Case {
                     draw: pinned(move |frame, scroll, memory| {
@@ -5592,13 +5667,17 @@ mod tests {
             }
             Kind::Vet => {
                 let reason = numbered('r', 500);
-                let request = a_vetting(
-                    Verdict::Unsafe,
-                    Some(&reason.join(" ")),
-                    &numbered('c', 50).join("\n"),
-                );
+                let request = VetRequest {
+                    hidden: 3,
+                    ..a_vetting(
+                        Verdict::Unsafe,
+                        Some(&reason.join(" ")),
+                        &numbered('c', 50).join("\n"),
+                    )
+                };
                 let drawn = request.clone();
                 let mut deciding = reason;
+                deciding.extend(sentence_ends(&t!(hidden_characters, count = 3usize)));
                 deciding.push("c0000".to_string());
                 Some(Case {
                     draw: pinned(move |frame, scroll, memory| {

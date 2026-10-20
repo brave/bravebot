@@ -420,7 +420,9 @@ for example a tool run from a project's `node_modules/.bin`, is not found by it.
 `ssh-keygen`, `ssh` and `git` the same way, leaving out the directory it ran in and the checkout
 holding it, reports one found only there as absent, and starts them without Brave Bot's own credentials and
 with a `PATH` of those same entries only, so a `ProxyCommand` in your ssh configuration that names a bare
-program does not find one a stage wrote.
+program does not find one a stage wrote. The inhibitor `/caffeinate` starts is given a `PATH` of those
+same entries only as well, so a program `systemd-inhibit` starts by name is not found in a directory a
+stage may write.
 
 **The remote scope can write `~/.ssh/known_hosts`.** A stage that carries it can add a host key or a
 `@cert-authority` line to that file, and your own ssh trusts the line afterwards. Read the

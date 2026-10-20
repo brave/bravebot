@@ -14,6 +14,7 @@ governs:
   - crates/tui/src/confirm/write.rs
   - crates/tui/src/trust_prompt.rs
   - crates/tui/src/remote_confirm.rs
+  - crates/core/src/invisible.rs
   - ui/src/renderer/shown.ts
   - ui/src/renderer/components/Transcript.tsx
   - ui/src/renderer/components/Diff.tsx
@@ -90,11 +91,11 @@ from.
 
 The vouch prompt draws the name it asks about through one function, `shown_name`, which every front
 end that names a path uses. A name that is empty, is only whitespace, has whitespace at either end,
-or holds a character that draws as nothing (a zero-width character, a bidirectional control, a
-no-break space) is drawn quoted with each such character spelled, so it cannot read as another
-name. Under the name the prompt draws the rule a yes writes, the full path the trust map will hold
-it under ([TRUST-8](trust-map.md#TRUST-8)), so a rule wider than the name reads as wider. The rule
-is shown and nothing branches on it.
+or holds a character that draws as nothing (a zero-width character, a bidirectional control, a tag
+character, a variation selector, a no-break space) is drawn quoted with each such character spelled,
+so it cannot read as another name. Under the name the prompt draws the rule a yes writes, the full
+path the trust map will hold it under ([TRUST-8](trust-map.md#TRUST-8)), so a rule wider than the
+name reads as wider. The rule is shown and nothing branches on it.
 
 Every prompt a check was run for shows what it said, and the three are drawn out of one row builder
 rather than three, so a prompt cannot carry a verdict and forget to say what it was. Which prompts
@@ -710,3 +711,54 @@ message that arrives as a separate turn.
 `verified-by: bravebot_agent::turn::a_note_beside_an_edit_answer_is_told_to_the_planner`
 `verified-by: bravebot_agent::turn::a_note_beside_a_run_answer_is_told_to_the_planner`
 `verified-by: bravebot_agent::mcp::a_note_beside_a_call_answer_is_told_to_the_planner`
+
+<a id="PROMPT-13"></a>
+### PROMPT-13: text that draws as nothing is written out where a person decides about it
+
+Some characters have no glyph in a terminal or a window: the tag block, which writes ASCII in
+characters a model reads as the letters they stand for, zero-width characters, bidirectional
+controls and variation selectors. Text holding them draws the same with or without them, so a yes
+could cover an instruction the person could not see.
+
+The output prompt and the vetting prompt for text write out each such character in the text they
+show, as `‹U+XXXX›` with the character's code point in hex. A tag character that stands for a
+printable ASCII character also names it, as in `‹U+E0041 A›`. A sentence above the text says how
+many characters were written out. It is one of the rows the answer waits on, with the rest of what
+the prompt says about the content ([PROMPT-4](#PROMPT-4)), and a text with none has no such
+sentence. The terminal, a session in lines, the editor bridge and the desktop window draw the same
+text and the same sentence.
+
+The planner receives the bytes the slot holds, without the spelling. The spelling and the count are
+made where the text is released for the screen, in the reshape that counts its lines
+([labels.md](labels.md)), so the driver reads the text for neither and no front end has to.
+
+One list names the characters. An MCP server's tool descriptions, a vouch prompt's file name and
+pasted text use it too. A paste removes fewer of them than a prompt writes out, because scripts and
+emoji sequences are written with some of them.
+
+**Why.** A person who answers yes agrees to the text the planner reads, and a character they cannot
+see is part of that text. Writing it out puts it among the rows the answer waits on.
+
+**Known cost.** Text that uses these characters on purpose, such as an emoji sequence joined with a
+zero-width joiner, is written out and counted too, which makes it harder to read, and a file name
+holding one, such as an emoji with its variation selector, is quoted in a vouch prompt. Text that
+holds the written-out form itself draws like a character that was written out, and the count says
+how many were. A vouch prompt's preview is not written out: it is the head of a file and a yes
+covers everything beneath the path, so a character in the preview hides nothing that text after the
+cut does not already hide.
+
+`verified-by: bravebot_core::invisible::each_character_that_draws_as_nothing_is_written_out`
+`verified-by: bravebot_core::invisible::a_message_written_in_tag_characters_is_spelled_letter_by_letter`
+`verified-by: bravebot_core::invisible::text_with_no_hidden_character_is_left_as_it_is`
+`verified-by: bravebot_core::invisible::spelling_keeps_the_lines_the_text_had`
+`verified-by: bravebot_core::invisible::the_list_holds_every_block_that_draws_as_nothing_and_no_ordinary_character`
+`verified-by: bravebot_tui::invisible::every_character_removed_from_a_paste_is_one_that_draws_as_nothing`
+`verified-by: bravebot_agent::turn::an_output_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes`
+`verified-by: bravebot_agent::turn::a_vetting_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes`
+`verified-by: bravebot_tui::confirm::the_output_prompt_says_how_many_characters_draw_as_nothing_and_shows_each`
+`verified-by: bravebot_tui::confirm::the_vet_prompt_says_how_many_characters_draw_as_nothing_and_shows_each`
+`verified-by: bravebot_tui::confirm::no_question_takes_a_yes_before_every_row_deciding_it_has_been_drawn`
+`verified-by: bravebot_cli::plain::the_plain_prompts_say_how_many_characters_of_the_text_draw_as_nothing`
+`verified-by: bravebot_ui_bridge::acp::an_editor_is_told_how_many_characters_of_a_text_draw_as_nothing`
+`verified-by: bravebot_ui_bridge::wire::an_output_and_a_vet_request_carry_how_many_characters_drew_as_nothing`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs draws the output and vetting cards from requests carrying the spelled text and the agent's sentence, holds the spelled characters and the sentence to the rows each card marks as deciding, holds a request with no sentence to drawing none and a sentence to being drawn as sent, and make check-ui runs it)`

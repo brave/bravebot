@@ -46,7 +46,7 @@ use bravebot_config::hooks::{Hook, Hooks, Moment};
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// How long a hook that states no `timeout` may run before it is stopped.
@@ -202,12 +202,9 @@ fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<T
             std::io::Error::from(std::io::ErrorKind::NotFound).to_string(),
         ));
     };
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "a hook's own program: a path the person wrote, or a bare name found by \
-                      `bravebot_sandbox::programs::find` (SANDBOX-30)"
-    )]
-    let mut command = Command::new(program);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::named_by_person(program),
+    );
     // The vector, never a string. There is no shell between the file and the process, so an
     // argument holding a space or a semicolon is one argument and arrives as one.
     command.args(arguments).current_dir(directory);
@@ -342,7 +339,7 @@ mod tests {
         let path = std::env::join_paths([planted, system.clone()]).unwrap();
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env("PATH", &path)
@@ -436,7 +433,7 @@ mod tests {
         .unwrap();
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env(INSTALLED, &installed)

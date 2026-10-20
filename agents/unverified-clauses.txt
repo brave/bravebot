@@ -8,7 +8,6 @@
 # lines, or read the warnings check-spec prints.
 
 docs/specs/background-sessions.md:BG-1: a background session is an ordinary session in a process the terminal does not own
-docs/specs/background-sessions.md:BG-7: a question the session would ask is held until a person answers it
 docs/specs/background-sessions.md:BG-9: attaching draws the session as a foreground one, and detaching leaves it running
 docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers nothing that was asked
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own

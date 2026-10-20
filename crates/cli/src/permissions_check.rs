@@ -5,6 +5,7 @@
 //! typed, so the match is on routing alone (PERM-1).
 
 use crate::exit::{Ending, fail};
+use crate::progress::{printable, printable_path};
 use bravebot_agent::granted::Proposed;
 use bravebot_config::Settings;
 use bravebot_core::permissions::{Permissions, Rule, Ruling, Subject};
@@ -109,19 +110,20 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
             // person granted a checkout's rule at the question (PERM-15).
             match settings.rule_source(ruling.as_str(), rule.written()) {
                 Some((file, written)) => {
-                    println!("{}: {written}", t!(permissions_check_rule));
-                    println!("{}: {}", t!(permissions_check_file), file.display());
+                    println!("{}: {}", t!(permissions_check_rule), printable(written));
+                    println!("{}: {}", t!(permissions_check_file), printable_path(file));
                 }
                 None => {
-                    println!("{}: {}", t!(permissions_check_rule), rule.written());
+                    println!(
+                        "{}: {}",
+                        t!(permissions_check_rule),
+                        printable(rule.written())
+                    );
                     if let Some(from) = granted.iter().find(|g| g.rule.trim() == rule.written()) {
                         println!(
                             "{}: {}",
                             t!(permissions_check_file),
-                            t!(
-                                permissions_check_granted,
-                                path = from.path.display().to_string()
-                            )
+                            t!(permissions_check_granted, path = printable_path(&from.path))
                         );
                     }
                 }
@@ -149,9 +151,9 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
                 "{}",
                 t!(
                     permissions_check_not_in_force,
-                    rule = rule.written(),
+                    rule = printable(rule.written()),
                     path = from
-                        .map(|from| from.path.display().to_string())
+                        .map(|from| printable_path(&from.path))
                         .unwrap_or_default()
                 )
             );

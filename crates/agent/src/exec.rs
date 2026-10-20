@@ -61,7 +61,7 @@ use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
 use std::fmt;
 use std::io::{Read, Write};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -606,12 +606,9 @@ impl<'a> Running<'a> {
             // Started by the path the name was found by, which some programs read
             // ([`Step::started_as`]). A second lookup here would let a `$PATH` changed since the
             // question decide what runs.
-            #[allow(
-                clippy::disallowed_methods,
-                reason = "the program of a `run` line, found once when the line was planned \
-                              (`Step::started_as`)"
-            )]
-            let mut command = Command::new(started_as);
+            let mut command = bravebot_sandbox::programs::start(
+                &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
+            );
             // The vector, never a string. Nothing here builds a command line, so nothing has to
             // unbuild one.
             command.args(&step.args).current_dir(self.directory);
@@ -1552,12 +1549,9 @@ pub fn start_steps(
             environment: _,
             routes: _,
         } = step;
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "the program of a `run` line, found once when the line was planned \
-                          (`Step::started_as`)"
-        )]
-        let mut command = Command::new(started_as);
+        let mut command = bravebot_sandbox::programs::start(
+            &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
+        );
         command.args(&step.args).current_dir(directory);
         // In front of the step's own assignments, as in the foreground.
         if let Some(directory) = scratch {

@@ -335,6 +335,10 @@ the trust map's rule is the largest grant of them. The planner does not ask for 
 but a server wrote every word on it, and a yes puts those words in front of the planner for every
 turn after.
 
+The two prompts that show a slot's bytes write out each character in them that draws as nothing and
+say how many there are, so a person decides on what the planner would read
+([prompting.md](prompting.md)).
+
 The one exemption is [permission-modes.md](permission-modes.md#MODE-4)'s bypassing mode, which draws
 no prompt at all. A check is still made for the two promotion prompts where that run asked for
 auto-vetting, because there the word answers in the absent person's place and an unscreened promotion

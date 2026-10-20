@@ -645,9 +645,11 @@ The inhibitor is a fixed argument vector, and only idle sleep is held off:
 | Windows | `powershell -NoProfile -NonInteractive -EncodedCommand <script>`, the script calling `SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED)` and then reading its standard input to the end |
 | every other platform | `systemd-inhibit --what=idle --who=bravebot --why=/caffeinate --mode=block <cat>`, `<cat>` being the absolute path of `cat` |
 
-`<cat>` is found as [SANDBOX-30](sandboxing.md#SANDBOX-30) says, because `systemd-inhibit` starts it
-and would otherwise look the name up on the `PATH` it inherited. When no `cat` is found that way the
-inhibitor does not start.
+`<cat>` is found as [SANDBOX-30](sandboxing.md#SANDBOX-30) says and passed as an absolute path,
+because a lookup of the bare name by `systemd-inhibit` would not judge where a link in a searched
+entry leads. When no `cat` is found that way the inhibitor does not start. Whichever platform's
+program it is, it is started with only the `PATH` entries that lookup searches, so a program it
+looks up by name is found only among them.
 
 Each one's standard input is a pipe this process holds, and each ends the hold when this process
 ends, so a crash leaves no machine held awake. An inhibitor that will not start, and one that exits
@@ -681,6 +683,7 @@ did not write ([sandboxing.md](sandboxing.md)).
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_holds_idle_sleep_and_starts_the_cat_it_was_found_at_byte_for_byte`
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`
 `verified-by: bravebot_tui::caffeinate::an_inhibitor_with_no_cat_but_a_planted_one_is_not_started`
+`verified-by: bravebot_tui::caffeinate::a_program_the_inhibitor_starts_by_name_is_never_one_a_stage_may_have_written`
 `verified-by: bravebot_session::store::only_the_confirmed_word_is_an_agreement_to_caffeinate`
 
 ## Drafting the project's instructions

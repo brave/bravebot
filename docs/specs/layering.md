@@ -88,6 +88,11 @@ replaced, so the content cannot draw its own.
 `verified-by: bravebot_cli::progress::quarantined_content_is_shown_and_marked_on_every_line`
 `verified-by: bravebot_cli::progress::quarantined_content_cannot_paint_its_own_margin`
 `verified-by: bravebot_cli::layering::every_presentation_crate_is_named_by_the_clause_that_marks_content`
+`verified-by: bravebot_cli::progress::a_dropped_rule_and_the_file_it_was_written_in_are_described_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures`
+`verified-by: bravebot_cli::running::a_one_shot_run_draws_the_control_characters_of_a_checkouts_rule_as_pictures`
+`verified-by: bravebot_cli::running::permissions_check_draws_the_control_characters_of_a_checkouts_rules_as_pictures`
+`verified-by: bravebot_cli::running::a_session_in_lines_draws_a_checkouts_settings_as_pictures_before_the_startup_question`
 
 <a id="LAYER-4"></a>
 ### LAYER-4: a crate root says what it does about unsafe

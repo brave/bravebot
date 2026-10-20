@@ -2030,6 +2030,277 @@ def test_key_sites_exhaustive():
     )
 
 
+def key_tree(**bodies):
+    """Sources holding the functions that key a name, each with the body given or a clean one.
+
+    `normalise`, `key` (the trust map's), `file_authority_key` and `key_of` are the names a body is
+    given under, and the helpers that fold and decompose a name are there with clean bodies. The
+    map's `key` sits in an `impl` and a second function follows it, so a body that ran on would be
+    read for a construct that belongs to the neighbour.
+    """
+    clean = {
+        "normalise": "    path.split('/').collect::<Vec<_>>().join(\"/\")",
+        "key": "    format!(\"{}/{}\", self.root, normalise(path))",
+        "file_authority_key": "    self.state().trust.key(path)",
+        "key_of": "    spelling::to_key(path, backslash_separates).into_owned()",
+    }
+    clean.update(bodies)
+    return {
+        Path("crates/core/src/trust.rs"): [
+            "pub(crate) fn normalise(path: &str) -> String {",
+            *clean["normalise"].split("\n"),
+            "}",
+            "pub fn fold_case(key: &str) -> String {",
+            "    key.to_string()",
+            "}",
+            "pub(crate) fn canonical_form(key: &str, folds_case: bool) -> Cow<'_, str> {",
+            "    Cow::Borrowed(key)",
+            "}",
+            "impl TrustStore {",
+            "    pub(crate) fn key(&self, path: &str) -> String {",
+            *clean["key"].split("\n"),
+            "    }",
+            "    fn other(&self, text: &str) -> String {",
+            "        text.trim().to_string()",
+            "    }",
+            "}",
+        ],
+        Path("crates/core/src/file_authority.rs"): [
+            "impl FileAuthority {",
+            "    pub fn key(&self, path: &str) -> String {",
+            *clean["file_authority_key"].split("\n"),
+            "    }",
+            "}",
+        ],
+        Path("crates/core/src/permissions.rs"): [
+            "fn key_of(path: &str, backslash_separates: bool, folds_case: bool) -> String {",
+            *clean["key_of"].split("\n"),
+            "}",
+            "fn fold(path: &str, folds: bool) -> String {",
+            "    path.to_string()",
+            "}",
+            "fn drive_in_upper_case(key: &str, backslash_separates: bool) -> Cow<'_, str> {",
+            "    Cow::Borrowed(key)",
+            "}",
+            "fn elsewhere(text: &str) -> String {",
+            "    text.to_lowercase()",
+            "}",
+        ],
+    }
+
+
+def allowing(*entries, spec_id="TRUST"):
+    spec = FakeSpec([])
+    spec.front = {"id": spec_id, audit.KEY_STEP_ALLOWED: list(entries)}
+    return spec
+
+
+def key_findings(tree, *specs):
+    return list(audit.check_key_steps_join_no_names(list(specs) or [FakeSpec([])], tree))
+
+
+def test_key_steps_join_no_names():
+    """The check that keeps a trim, a fold or a lossy decode out of the functions that key a name."""
+    check("keys that only split and rejoin the segments are clean", key_findings(key_tree()) == [])
+
+    found = key_findings(
+        key_tree(
+            normalise="    path.trim().split('/').collect::<Vec<_>>().join(\"/\")",
+        )
+    )
+    check(
+        "a trim in `normalise` is an error naming the function and the construct",
+        kinds(found) == ["key-step-joins-names"]
+        and found[0]["severity"] == audit.ERROR
+        and "normalise" in found[0]["title"]
+        and "trim" in found[0]["title"],
+        str(kinds(found)),
+    )
+    check(
+        "the finding says where the call is and what to do about a deliberate one",
+        found
+        and found[0]["evidence"]
+        == ["crates/core/src/trust.rs:2: path.trim().split('/').collect::<Vec<_>>().join(\"/\")"]
+        and "key_step_allowed" in found[0]["fix"]
+        and "PATH-007" in found[0]["fix"],
+        str(found[0]) if found else "no finding",
+    )
+
+    for construct, body in (
+        ("trim", "    path.split('/').map(str::trim).collect::<Vec<_>>().join(\"/\")"),
+        ("trim_left", "    path.trim_left().to_string()"),
+        ("trim_matches", "    path.trim_matches(' ').to_string()"),
+        ("trim_end_matches", "    path.trim_end_matches('.').to_string()"),
+        ("to_lowercase", "    path.to_lowercase()"),
+        ("to_lowercase", "    str::to_lowercase(path)"),
+        ("to_ascii_lowercase", "    path.to_ascii_lowercase()"),
+        ("to_string_lossy", "    path_buf.to_string_lossy().into_owned()"),
+        ("to_string_lossy", "    Path::to_string_lossy(&path_buf).into_owned()"),
+        ("from_utf8_lossy", "    String::from_utf8_lossy(bytes).into_owned()"),
+        ("fold_case", "    fold_case(path)"),
+        ("to_lowercase", "    path.chars().flat_map(char::to_lowercase).collect()"),
+        ("canonical_form", "    canonical_form(path, true).into_owned()"),
+        ("decompose", "    crate::canonical::decompose(path)"),
+        ("nfc", "    path.nfc().collect()"),
+    ):
+        found = key_findings(key_tree(key=body))
+        check(
+            f"`{construct}` as `{body.strip()}` in the map's `key` is an error",
+            kinds(found) == ["key-step-joins-names"] and construct in found[0]["title"],
+            f"{kinds(found)}",
+        )
+
+    check(
+        "an iterator's `.fold(` is not a case fold",
+        key_findings(
+            key_tree(key_of="    path.split('/').fold(String::new(), |all, one| all + one)")
+        )
+        == [],
+    )
+    check(
+        "a construct named in a string or a comment is not one",
+        key_findings(
+            key_tree(
+                key='    // never call .trim() here\n    panic!("expected no .to_lowercase() in {}", path)'
+            )
+        )
+        == [],
+    )
+    check(
+        "a construct in the function after a key function is not read as the key's",
+        key_findings(key_tree()) == [],
+        "`other` and `elsewhere` call trim and to_lowercase in the clean tree",
+    )
+    check(
+        "a brace in a string or a character does not carry the body into the next function",
+        key_findings(
+            key_tree(key='    let open = \'{\';\n    format!("{open}/{}", self.root)')
+        )
+        == [],
+    )
+    check(
+        "a quote character does not pair with the next string and move the brace depth",
+        key_findings(key_tree(key='    let quote = \'"\';\n    let open = "{";\n    quote.to_string()'))
+        == [],
+    )
+
+    generic = key_tree(key="    path.trim().to_string()")
+    generic[Path("crates/core/src/trust.rs")] = [
+        line.replace("fn key(&self,", "fn key<'a>(&'a self,")
+        for line in generic[Path("crates/core/src/trust.rs")]
+    ]
+    check(
+        "a key function with generics is still read",
+        kinds(key_findings(generic)) == ["key-step-joins-names"],
+    )
+
+    in_a_test = key_tree()
+    in_a_test[Path("crates/core/src/trust.rs")] += [
+        "#[cfg(test)]",
+        "mod tests {",
+        '    const OPEN: &str = "{";',
+        "    fn key(text: &str) -> String {",
+        "        text.trim().to_string()",
+        "    }",
+        "}",
+    ]
+    check(
+        "a function of the same name in a test module is not a key function",
+        key_findings(in_a_test) == [],
+    )
+
+    folding = key_tree(key_of="    fold(&keyed, folds_case)")
+    reason = "crates/core/src/permissions.rs::key_of fold: case is folded where the volume folds it"
+    check(
+        "a construct the spec allows with a reason is clean",
+        key_findings(folding, allowing(reason)) == [],
+    )
+    check(
+        "the same construct with no allowance is an error",
+        kinds(key_findings(folding)) == ["key-step-joins-names"],
+    )
+    found = key_findings(folding, allowing("crates/core/src/permissions.rs::key_of fold:"))
+    check(
+        "an allowance with no reason is reported even though it matches a call",
+        kinds(found) == ["key-step-allowance-unexplained"] and found[0]["severity"] == audit.ERROR,
+        str(kinds(found)),
+    )
+    found = key_findings(key_tree(), allowing(reason))
+    check(
+        "an allowance the function no longer needs is a warning",
+        kinds(found) == ["key-step-allowance-stale"] and found[0]["severity"] == audit.WARNING,
+        str(kinds(found)),
+    )
+    check(
+        "an allowance for one construct does not cover another in the same function",
+        kinds(
+            key_findings(
+                key_tree(key_of="    fold(&keyed, folds_case).trim().to_string()"), allowing(reason)
+            )
+        )
+        == ["key-step-joins-names"],
+    )
+
+    twice = key_tree(key_of="    fold(&fold(&keyed, true), folds_case)")
+    found = key_findings(twice, allowing(reason))
+    check(
+        "a second call of an allowed construct is an error, since the entry allows one",
+        kinds(found) == ["key-step-joins-names"] and "allows 1" in found[0]["summary"],
+        str(kinds(found)),
+    )
+    check(
+        "an entry saying how many calls it allows covers that many",
+        key_findings(twice, allowing(reason.replace("fold:", "fold x2:"))) == [],
+    )
+    found = key_findings(folding, allowing(reason.replace("fold:", "fold x2:")))
+    check(
+        "an entry allowing more calls than the function makes is a warning",
+        kinds(found) == ["key-step-allowance-stale"],
+        str(kinds(found)),
+    )
+
+    found = key_findings(folding, allowing(reason), allowing(reason, spec_id="OTHER"))
+    check(
+        "an entry in a spec other than the trust spec is reported and does not count",
+        kinds(found) == ["key-step-allowance-misplaced"],
+        str(kinds(found)),
+    )
+    check(
+        "an entry in only another spec leaves the construct unallowed",
+        kinds(key_findings(folding, allowing(reason, spec_id="OTHER")))
+        == ["key-step-allowance-misplaced", "key-step-joins-names"],
+    )
+    scalar = FakeSpec([])
+    scalar.front = {"id": "TRUST", audit.KEY_STEP_ALLOWED: reason}
+    check(
+        "a single entry written as a scalar is read as one entry, not letter by letter",
+        key_findings(folding, scalar) == [],
+    )
+
+    missing = key_tree()
+    del missing[Path("crates/core/src/permissions.rs")]
+    found = key_findings(missing)
+    check(
+        "a key function that cannot be found is reported rather than silently passing",
+        kinds(found) == ["key-function-missing"] * 3
+        and any("key_of" in one["title"] for one in found),
+        str(kinds(found)),
+    )
+
+    check(
+        "the tree's own key functions keep no construct the spec does not allow",
+        with_cwd(
+            ROOT,
+            lambda: list(
+                audit.check_key_steps_join_no_names(
+                    audit.load_specs(), audit.mechanics.load_sources()
+                )
+            ),
+        )
+        == [],
+    )
+
+
 # One job, named the way a check run is named, running a target the documentation makes a promise
 # about. The promise is prose, so the fixture is prose: a rewording that stops matching is the thing
 # being caught, the same as the exception counts above.
@@ -3536,6 +3807,7 @@ def main():
         test_construction_pinned,
         test_gates_pinned,
         test_key_sites_exhaustive,
+        test_key_steps_join_no_names,
         test_guarantee_specs_are_read,
         test_declassify_counts_match_the_spec,
         test_every_lane_prompt_composes,
