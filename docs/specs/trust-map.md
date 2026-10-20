@@ -635,6 +635,22 @@ Confinement is decided by where an operation lands and not by how its path is sp
 for a file that does not exist yet: a write creates what it names, and a symlink out of the tree is
 refused whether or not there is anything at the other end of it.
 
+`write_file`, `download_url` and `apply_checkout` confine the destination before anyone is asked
+about it. Each resolves it as soon as it is read, and one the working directory and the opened
+directories do not reach is refused there, whether it was named or came out of a reference: before
+the body is scanned or released into it, before the person is asked about the host or about the
+file, and before a grant is issued. No answer to those questions makes the path reachable, so
+asking would show a person a write that cannot land, and would tell the planner a no was the person
+declining rather than that the path is out of reach and what the person can do. The refusal is worded
+as the refusal of the same destination at the end of the write is, about the reference where the
+path came from one, and is recorded in the trail as a path refused for leaving the workspace. The
+write resolves the destination again after the answer, since a directory on the way can have become
+a link while the person read the question.
+
+A `write` step of a manifest ([manifest.md](manifest.md)) confines its destination only when it
+writes, after its question. Plan validation refuses a path that names a root, a home directory or a
+`..`, so what reaches that question and cannot land is a path through a link out of the workspace.
+
 An absolute path refused for landing outside the root and every opened directory is refused with
 what the person can do about it: open the directory it is in with `/add-dir` or `--add-dir`, after
 which the same path reaches the file. Where the path names a directory, that directory is the one to
@@ -718,6 +734,13 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::workspace::a_path_climbing_to_a_sibling_directory_reaches_it_once_the_directory_is_open`
 `verified-by: bravebot_agent::workspace::a_path_climbing_into_a_directory_that_is_not_open_is_refused`
 `verified-by: bravebot_agent::workspace::a_climb_into_an_opened_directory_is_the_absolute_path_it_lands_on_everywhere`
+`verified-by: bravebot_agent::turn::a_write_outside_every_opened_directory_is_refused_before_the_person_is_asked`
+`verified-by: bravebot_agent::turn::a_quarantined_body_is_not_released_into_a_file_outside_the_workspace`
+`verified-by: bravebot_agent::turn::a_reference_destination_a_link_carries_out_is_refused_before_the_person_is_asked`
+`verified-by: bravebot_agent::turn::a_write_whose_directory_leaves_the_workspace_while_asked_is_refused_at_the_write`
+`verified-by: bravebot_agent::turn::a_download_to_a_file_outside_the_workspace_is_refused_before_the_person_is_asked`
+`verified-by: bravebot_agent::turn::a_checkout_file_whose_directory_leaves_the_working_directory_is_refused_before_the_person_is_asked`
+`verified-by: bravebot_agent::turn::a_checkout_file_that_cannot_land_does_not_stop_the_files_after_it`
 `verified-by: bravebot_agent::workspace::a_climb_is_reported_as_the_absolute_path_only_where_it_is_taken_out_and_admitted`
 `verified-by: bravebot_agent::workspace::a_climb_through_a_link_or_back_into_the_working_directory_is_not_taken_out`
 `verified-by: bravebot_agent::workspace::a_climb_onto_a_name_that_is_not_text_is_not_taken_as_its_lookalike`

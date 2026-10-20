@@ -563,7 +563,10 @@ Writes a UTF-8 text file in the workspace. **You approve every write before it h
 
 Contents **or** a reference, never both. A reference that names no file is not a destination. The
 planner never chooses a destination on its own, and a write through a `path_ref` is always shown,
-since you are the only one who sees which file it is.
+since you are the only one who sees which file it is. A path outside the working directory and the
+directories you opened with [`/add-dir`](commands.md) is refused before you are asked, and the
+refusal says how to open the directory, since no answer to the question would make the write
+possible.
 
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
@@ -881,7 +884,8 @@ that answer it are [`fetch_url`](#fetch_url)'s: an `allow` rule matching the hos
 `deny` rule refuses without asking, a redirect may not leave the approved host, and a name that
 resolves to a non-public address is not fetched. The destination is put to you every time, whatever
 the trust map says about the path, as `url -> path`, and an existing file is shown as an overwrite.
-Nothing is sent before you answer.
+Nothing is sent before you answer. A path outside the working directory and the directories you
+opened is refused before either question.
 
 **The bytes go from the network to the file.** They are written as they arrive and are never held by
 the agent or shown to the model. The file is recorded as not vouched for, so reading it later is

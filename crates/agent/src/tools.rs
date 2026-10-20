@@ -3647,6 +3647,48 @@ fn path_field(destination: Destination) -> &'static str {
     }
 }
 
+/// The result of a write the workspace turned away, worded about `shown_path` and recorded as
+/// [`file_tool_failure`] records it.
+///
+/// A write that leaves the workspace can still be made by a line the person approves with no
+/// sandbox, which the planner has no other way to learn of (SANDBOX-29). A path inside the
+/// workspace does not leave it, and its relative spelling is the way.
+fn write_refused<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    tool: &str,
+    destination: Destination,
+    e: &crate::workspace::WorkspaceError,
+    shown_path: &str,
+) -> Produced {
+    use crate::workspace::{Remedy, WorkspaceError};
+    let way_out = match e {
+        WorkspaceError::Escapes {
+            remedy: Remedy::Inside,
+            ..
+        } => "",
+        WorkspaceError::Escapes { .. } => unconfined_way_out(policy, tools),
+        _ => "",
+    };
+    Produced::problem(format!(
+        "error: {}{way_out}",
+        file_tool_failure(policy, tool, path_field(destination), e, shown_path)
+    ))
+}
+
+/// The result of a download whose destination the workspace turned away, worded about `shown_path`
+/// and recorded as [`workspace_failure`] records it.
+fn download_refused<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    e: &crate::workspace::WorkspaceError,
+    shown_path: &str,
+) -> Produced {
+    Produced::problem(format!(
+        "error: {}",
+        workspace_failure(policy, "download_url", "path", e, shown_path)
+    ))
+}
+
 /// Whether a write to `path` is to be put to a person, asked about the name as given and about
 /// the name it lands on and the other names of a file with a hard link. A rule that asks, or a table that does, about either one is enough: the
 /// second name can add a question and never removes one (PERM-7).
@@ -4253,6 +4295,20 @@ fn write_file<S: Sink, C: Confirmer>(
     // gate that released it ran where the argument was read.
     let (path, destination, shown_path, proposed_path) =
         (found.path, found.destination, found.shown, found.released);
+    // Resolved as the write resolves it, before the body is released into the path or anybody is
+    // asked: no answer makes a destination the workspace does not reach possible. The write
+    // resolves it again once the person has answered, since a directory on the way can have become
+    // a link while they read the question (TRUST-10).
+    if let Err(unreachable) = tools.workspace.resolve(&proposed_path) {
+        return write_refused(
+            policy,
+            tools,
+            "write_file",
+            destination,
+            &unreachable,
+            &shown_path,
+        );
+    }
 
     let written = argument(arguments, "contents");
     let named = named_argument(arguments, "contents_ref");
@@ -4595,31 +4651,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
                 .marked_untrusted(!body_label.is_trusted())
                 .having_changed_a_file()
         }
-        Err(e) => {
-            // A write that leaves the workspace can still be made by a line the person approves
-            // with no sandbox, which the planner has no other way to learn of (SANDBOX-29). A
-            // path inside the workspace does not leave it, and its relative spelling is the way.
-            let way_out = match e {
-                crate::workspace::WorkspaceError::Escapes {
-                    remedy: crate::workspace::Remedy::Inside,
-                    ..
-                } => "",
-                crate::workspace::WorkspaceError::Escapes { .. } => {
-                    unconfined_way_out(policy, tools)
-                }
-                _ => "",
-            };
-            Produced::problem(format!(
-                "error: {}{way_out}",
-                file_tool_failure(
-                    policy,
-                    "write_file",
-                    path_field(destination),
-                    &e,
-                    &shown_path
-                )
-            ))
-        }
+        Err(e) => write_refused(policy, tools, "write_file", destination, &e, &shown_path),
     }
 }
 
@@ -4941,42 +4973,56 @@ fn bring_back<S: Sink, C: Confirmer>(
                 continue;
             }
         };
-        let body = match workspace.read_checkout_file(policy, id, relative, &offered.listed) {
-            Ok(body) => body,
-            Err(why) => {
-                said.push(format!(
-                    "{relative}: not brought back, since {}",
-                    why.describe()
-                ));
-                continue;
-            }
-        };
-        let body = policy.declassify_checkout_into_workspace(
-            &format!("{id}/{relative}"),
-            &found.shown,
-            body,
-        );
-        let produced = put_in_the_workspace(
-            policy,
-            tools,
-            confirmer,
-            Landing {
-                path: found.path,
-                destination: found.destination,
-                shown_path: found.shown,
-                proposed_path: found.released,
-            },
-            Body {
-                check_with_server: false,
+        // A path the working directory does not reach, which a directory made a link since the
+        // checkout was made can be, is refused before its file is read out of the checkout and
+        // released into the path, and before the person is asked (TRUST-10).
+        let produced = if let Err(unreachable) = workspace.resolve(&found.released) {
+            write_refused(
+                policy,
+                tools,
+                "apply_checkout",
+                found.destination,
+                &unreachable,
+                &found.shown,
+            )
+        } else {
+            let body = match workspace.read_checkout_file(policy, id, relative, &offered.listed) {
+                Ok(body) => body,
+                Err(why) => {
+                    said.push(format!(
+                        "{relative}: not brought back, since {}",
+                        why.describe()
+                    ));
+                    continue;
+                }
+            };
+            let body = policy.declassify_checkout_into_workspace(
+                &format!("{id}/{relative}"),
+                &found.shown,
                 body,
-                changes_anything: true,
-                remark: None,
-                body_from: format!("checkout {id}"),
-                written_since_checkout: workspace.written_since_checkout(id, relative),
-                planner_written: false,
-            },
-            true,
-        );
+            );
+            put_in_the_workspace(
+                policy,
+                tools,
+                confirmer,
+                Landing {
+                    path: found.path,
+                    destination: found.destination,
+                    shown_path: found.shown,
+                    proposed_path: found.released,
+                },
+                Body {
+                    check_with_server: false,
+                    body,
+                    changes_anything: true,
+                    remark: None,
+                    body_from: format!("checkout {id}"),
+                    written_since_checkout: workspace.written_since_checkout(id, relative),
+                    planner_written: false,
+                },
+                true,
+            )
+        };
         // The driver's own sentence about one file, which is trusted whichever way the write
         // went: no byte of the file is in it.
         said.push(
@@ -8767,6 +8813,11 @@ fn download_url<S: Sink, C: Confirmer>(
     };
     let (path, shown_path, proposed_path) = (found.path, found.shown, found.released);
 
+    // Before anybody is asked about the host or the file, as a write's is (TRUST-10).
+    if let Err(unreachable) = tools.workspace.resolve(&proposed_path) {
+        return download_refused(policy, &unreachable, &shown_path);
+    }
+
     // After the destination is known to be admissible, so the person is not asked about a host
     // for a path that would have been refused.
     if let Some(refusal) = fetch_not_approved(policy, confirmer, &url, &host) {
@@ -8913,10 +8964,7 @@ fn download_url<S: Sink, C: Confirmer>(
         (Err(_), Some(DownloadStopped::Failed(error))) => Produced::problem(format!(
             "error: downloading {url} failed part-way: {error}. Nothing was saved."
         )),
-        (Err(e), None) => Produced::problem(format!(
-            "error: {}",
-            workspace_failure(policy, "download_url", "path", &e, &shown_path)
-        )),
+        (Err(e), None) => download_refused(policy, &e, &shown_path),
     }
 }
 
