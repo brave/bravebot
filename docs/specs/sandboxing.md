@@ -164,12 +164,15 @@ confined process signals the processes its own profile started and no other: not
 another stage, and no other process of the account. A backend that cannot
 enforce the network denial refuses the policy instead, so the guarantee never degrades into one
 that is not in force. On Linux the network is denied by a new user and network namespace, in which
-the stage has its own loopback and nothing else, whatever the address, port or protocol. Landlock's
-network rules are not used: they filter a TCP connect by port and not by address, and leave UDP
-open. A kernel that does not let an unprivileged user make the namespace (Ubuntu 24.04 restricts
-it by default, and many containers block it) cannot deny the network, and `doctor` says so. On
-Windows the network is the container's internet client capability, and a container without it is
-refused a host name lookup as well as a connection. Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
+the stage has its own loopback and nothing else, whatever the address, port or protocol. A stage
+held to a proxy ([SANDBOX-24](#SANDBOX-24)) has one more process in its namespace, the forwarder,
+which no ruleset confines. It relays only to the proxy's own listener, so it is not a way to a
+socket the stage's rows refuse. Landlock's network rules are not used: they filter a TCP connect
+by port and not by address, and leave UDP open. A kernel that does not let an unprivileged user
+make the namespace (Ubuntu 24.04 restricts it by default, and many containers block it) cannot
+deny the network, and `doctor` says so. On Windows the network is the container's internet client
+capability, and a container without it is refused a host name lookup as well as a connection.
+Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
 
 On macOS the profile also refuses binding a port and accepting on it, so a confined stage cannot
 listen on the loopback interface, and a server it starts, such as the one `sccache` runs, or a test
@@ -209,6 +212,7 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused_where_no_namespace_can_be_made`
 `verified-by: bravebot_sandbox::linux::a_kernel_that_refuses_the_namespace_refuses_the_stage`
 `verified-by: bravebot_sandbox::linux::a_stage_with_no_network_cannot_connect_to_anything`
+`verified-by: bravebot_sandbox::linux::a_stage_that_replaces_the_proxys_socket_with_a_link_is_not_relayed_to_what_it_leads_to`
 `verified-by: bravebot_sandbox::linux::a_confined_process_runs`
 `verified-by: bravebot_sandbox::linux::a_confined_process_can_write_inside_its_grants`
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_write_outside_its_grants`
@@ -2405,11 +2409,19 @@ remote can. A unix socket a write row already names is still reached. macOS appl
 this in the profile. Linux applies it with a network namespace ([SANDBOX-3](#SANDBOX-3)): the
 proxy listens on a unix socket as well as its loopback port, in a directory only the account can
 enter, and a forwarder started in the namespace listens on the proxy's port on the namespace's
-loopback and relays each connection to that socket. The stage reaches no other address and no
-other protocol, and holds the loopback services it starts itself, since they live in the
-namespace. The forwarder is started before the stage's filesystem rules are installed, so the
-stage needs no grant to the socket, cannot attach to it, and it ends with the stage. Where the
-kernel will not make the namespace, a stage is refused while a list is set, with
+loopback and relays each connection to that socket. The directory is made under the account's
+runtime directory (`XDG_RUNTIME_DIR`) where that is an absolute path outside the temporary
+directory that can be written, which is in none of a stage's rows unless the person names it,
+and under the temporary directory otherwise. The stage reaches no other address and no other protocol, and holds the loopback
+services it starts itself, since they live in the namespace. The forwarder is started before the
+stage's filesystem rules are installed, so the stage needs no grant to the socket, cannot attach
+to it, and it ends with the stage. The forwarder is not confined, so it reaches whatever the
+socket's path leads to, and a stage that can write where the path is can make it lead to the
+session bus, an agent, a container runtime or another proxy. After each connect the forwarder
+reads what the kernel recorded of the socket that answered, and relays only if the process that
+listens on it is the one that runs the proxy and the name it is bound to is the proxy's path. It
+closes the stage's connection and that one, having sent and read nothing, when either differs.
+Where the kernel will not make the namespace, a stage is refused while a list is set, with
 `sandbox.network.allowedHosts` named, as a stage is refused where the network cannot be closed
 ([SANDBOX-20](#SANDBOX-20)), and `doctor` says why. Windows keeps that refusal: letting an
 AppContainer reach loopback takes a loopback exemption, which is machine-wide and needs
@@ -2451,12 +2463,19 @@ and the trail, the planner is told nothing about them, and nothing branches on o
 
 **What it costs.** A proxy holds no secret: it serves whatever connects to its port or its socket,
 so a process that reaches one is held to that proxy's list and not to its own. That is any process
-of another user that can reach the loopback port; on Linux a stage of any list, or one with no
-network, since the socket's directory is under the temporary directory every stage writes and a
-write row reaches a socket beneath it; and on macOS a stage lent loopback and held to no proxy,
-which connects to every loopback port. A proxy starts a thread for each connection with no limit on
-how many it holds, and keeps a tunnel open until one side closes it, so a stage can open connections
-until the session process has no thread or descriptor left to give. No entry can spell an IPv6
+of another user that can reach the loopback port; on Linux, where the account has no runtime
+directory outside the temporary directory that can be written, a stage of any list, or one with
+no network, since the socket's directory is then under the temporary directory every stage writes
+and a write row reaches a socket beneath it, and a stage that can write there can also remove the
+socket, which leaves that list's proxy out of reach of every later stage; and on macOS a stage
+lent loopback and held to no proxy, which connects to every loopback port. The system removes the
+runtime directory when the account's last login session ends and nothing lingers, and a session
+that outlives it has no socket for its proxies: a stage held to a list then reaches nothing, and
+the proxy is not made again. The forwarder connects to whatever the socket's path leads to before
+it can tell that it is not the proxy's, so a stage that makes the path lead to a service a
+connection starts, as socket activation does, starts it, and nothing is sent to it. A proxy starts a thread for each connection with no
+limit on how many it holds, and keeps a tunnel open until one side closes it, so a stage can open
+connections until the session process has no thread or descriptor left to give. No entry can spell an IPv6
 address, so a name whose answer holds one that is not public is refused whatever the list holds:
 `localhost` resolves to `::1` as well as `127.0.0.1` on most machines, so a program reaches a
 loopback service through the proxy as `127.0.0.1`, with that address listed.
@@ -2479,6 +2498,10 @@ says nothing about them.
 `verified-by: bravebot_sandbox::linux::a_stage_with_no_network_cannot_connect_to_anything`
 `verified-by: bravebot_cli::doctor::doctor_says_when_network_namespaces_are_unavailable_and_what_that_costs`
 `verified-by: bravebot_sandbox::netns::the_forwarder_relays_to_the_proxy_and_ends_with_the_process_that_started_it`
+`verified-by: bravebot_sandbox::netns::the_forwarder_relays_to_no_listener_that_another_process_made`
+`verified-by: bravebot_sandbox::netns::the_forwarder_relays_to_no_socket_a_link_at_the_proxys_path_leads_to`
+`verified-by: bravebot_sandbox::linux::a_stage_that_replaces_the_proxys_socket_with_a_link_is_not_relayed_to_what_it_leads_to`
+`verified-by: bravebot_sandbox::proxy::the_socket_is_made_under_the_runtime_directory_and_the_temporary_one_is_the_fallback`
 `verified-by: bravebot_agent::confine::a_platform_that_cannot_hold_a_program_to_the_proxy_is_refused_naming_the_setting`
 `verified-by: bravebot_agent::confine::a_stage_under_a_host_list_is_prepared_limited_to_the_proxy_port`
 `verified-by: bravebot_agent::confine::the_profile_line_names_the_host_list_setting_and_no_host`
