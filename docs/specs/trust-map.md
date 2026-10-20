@@ -199,13 +199,27 @@ in both polarities. A second asks the same pairs of the key the workspace builds
 read, and of a second writer, where a step that joins two files can sit with the map seeing
 nothing, and compares the two keys. The vouch prompt is asked about four of the names.
 
+A turn that names each of the names with `@` is asked which files the rule it leaves covers, and
+`crates/mentions` is asked whether the line a completion writes for each name names that file
+([NAME-8](naming-files.md#NAME-8)). A reference cannot hold a whitespace character other than a
+space, so the names that do are listed in that test against #2863, and it fails once one reads back.
+
+A rule written about one of the names is asked in the deny, ask and allow lists and for `Read` and
+`Edit`, since a rule is matched under a key built apart from the map's. A deny or ask rule reaches
+the other name of the NFC and NFD group on purpose and an allow rule does not. A rule's text is
+trimmed and a `*` in it is a wildcard, so a name with whitespace at an end, a name of whitespace
+alone and a name holding `*` cannot be written as a rule. The test lists them against #2864 and
+fails once one can.
+
+A listing is asked the same pairs. It reports two entries for two files, and a refusal of one reaches
+a listing of the other only within a group.
+
 `make check-security` fails a `trim`, a case fold, a Unicode normalisation or a lossy conversion
 in the functions that key a name or fold or decompose it: `normalise`, `TrustStore::key`,
 `fold_case`, `canonical_form`, `FileAuthority::key`, and the permission rule's `key_of`, `fold` and
 `drive_in_upper_case`. One those functions keep is listed under `key_step_allowed` in this spec's
 front matter, for the number of calls it names, with the files it joins and why. A step in any
-other function is for a reviewer to find. Deny and ask rules key a path of their own and are not
-yet asked the same question (#2761).
+other function is for a reviewer to find.
 
 **Why.** Per-file exceptions in both directions are the only way `@vendor/lib.js` can be trusted
 inside a `vendor` a person marked untrusted, without that answer leaking to its siblings.
@@ -228,6 +242,9 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_core::trust::a_name_with_whitespace_at_an_end_is_not_the_name_without_it`
 `verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group`
 `verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group`
+`verified-by: bravebot_agent::workspace::a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it`
+`verified-by: bravebot_agent::workspace::a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule`
+`verified-by: bravebot_agent::turn::a_file_named_with_an_at_sign_is_vouched_for_alone_whatever_its_name`
 `verified-by: bravebot_core::trust::a_name_ending_in_a_space_follows_the_rules_for_canonically_equivalent_names`
 `verified-by: bravebot_core::trust::a_working_directory_with_whitespace_at_an_end_is_not_the_one_without_it`
 `verified-by: bravebot_core::trust::every_equivalent_spelling_of_a_path_reaches_the_same_rule`

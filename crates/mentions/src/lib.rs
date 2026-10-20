@@ -442,7 +442,13 @@ pub fn enter_completes(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../agent/test-support/aliases.rs"]
+mod aliases;
+
+#[cfg(test)]
 mod tests {
+    use super::aliases;
     use super::*;
 
     /// A scratch workspace, removed with the test.
@@ -762,6 +768,65 @@ mod tests {
             assert_eq!(referenced(&line), vec![path.to_string()], "{line}");
             assert_eq!(typed_reference(&line).as_deref(), Some(path), "{line}");
         }
+    }
+
+    /// Names whose completion does not read back as the file, each with the issue that tracks it.
+    /// A backslash is written before a space and before nothing else, so a reference ends at the
+    /// first other whitespace character and names the file without it, or none, and a name ending in
+    /// a backslash takes the space after it into the name. The test below fails for a name listed
+    /// here that reads back, so the list is revised with the fix.
+    const NOT_READ_BACK: &[(&str, &str)] = &[
+        ("a.md\t", "#2863"),
+        ("a.md\n", "#2863"),
+        ("a.md\u{a0}", "#2863"),
+        ("a.md\u{3000}", "#2863"),
+        ("a.md\\", "#2863"),
+        ("\t", "#2863"),
+        ("\u{a0}", "#2863"),
+        ("\u{3000}", "#2863"),
+    ];
+
+    /// What a person picks from the list is the file the sent line names, whatever the name holds
+    /// (NAME-8, TRUST-2). The reference a naming records a rule for is read out of the line, so a
+    /// step there that ends a name early names the file without the rest of it, which is another
+    /// file where the volume holds both.
+    #[test]
+    fn every_awkward_name_is_offered_and_read_back_as_the_file_it_is() {
+        let mut asked = 0;
+        for (index, (name, _)) in aliases::AWKWARD_NAMES.iter().enumerate() {
+            let scratch = Scratch::new(&format!("awkward-{index}"));
+            let file = scratch.path.join(name);
+            std::fs::create_dir_all(file.parent().expect("a name is in a directory"))
+                .expect("directory");
+            if std::fs::write(&file, "").is_err() {
+                continue;
+            }
+            asked += 1;
+
+            assert!(
+                paths(&matching(&scratch.path, name, &[])).contains(name),
+                "{name:?} is not offered under its own name"
+            );
+            assert!(
+                names_a_file(&scratch.path, name, &[]),
+                "{name:?} is not found as a finished name"
+            );
+            let written = escape(name);
+            let reads_back = referenced(&format!("see @{written} now")) == [name.to_string()]
+                && typed_reference(&format!("see @{written}")).as_deref() == Some(*name);
+            match NOT_READ_BACK.iter().find(|(listed, _)| listed == name) {
+                None => assert!(
+                    reads_back,
+                    "the line a completion writes for {name:?} does not name that file"
+                ),
+                Some((_, issue)) => assert!(
+                    !reads_back,
+                    "the line a completion writes for {name:?} now names that file: remove it from \
+                     NOT_READ_BACK; {issue} tracked it"
+                ),
+            }
+        }
+        assert!(asked > 20, "only {asked} names were made");
     }
 
     /// A name with a space is offered, found as finished, and is the word a completion replaces.
