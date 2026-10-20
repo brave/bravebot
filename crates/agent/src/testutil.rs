@@ -1,6 +1,8 @@
 //! Scratch directories for tests.
 
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
 /// An absolute path under the workspace `target/test-scratch/`.
 ///

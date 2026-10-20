@@ -971,6 +971,10 @@ a directory anybody on the machine can list.
 Saying so rather than refusing to open the session, because a session with nowhere to put an
 intermediate file can still do everything else.
 
+A local MCP server in a session that keeps nothing is given a directory on the same terms, as its
+home ([SERVERS-10](mcp-servers.md#SERVERS-10)). That one is the server's and not the session's: it
+is not opened beside the working directory, and its name says it was made for a server.
+
 The session keeps which directory it made, the device and inode of the directory it holds the lock
 on, with the name. Every stage may write the temporary directory, so what stands at the name can
 change, and a grant of the directory holds only while the name still leads to the one the session
