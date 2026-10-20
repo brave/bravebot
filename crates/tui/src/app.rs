@@ -1232,7 +1232,14 @@ fn copy_selection(
                 render::draw(frame, session);
             })
             .map_err(io::Error::other)?;
-        select::text(completed.buffer, &selection)
+        let joined = session
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == select::Pane::Panel)
+            .map(|(_, rect)| crate::panel::continued_rows(session, *rect))
+            .unwrap_or_default();
+        select::text_joining(completed.buffer, &selection, &joined)
     };
 
     // Nothing but the padding between widgets, which is not something to put on a clipboard and
@@ -10643,6 +10650,52 @@ mod tests {
         let text = crate::select::text(&buffer, &selection);
         assert!(text.contains("PANELMARK"), "copied {text:?}");
         assert!(!text.contains("TRANSCRIPTMARK"), "copied {text:?}");
+    }
+
+    /// Dragging across the session id in the panel copies the id and nothing else: no border, no
+    /// indent, no padding, and no line break where the id is drawn over two rows.
+    #[test]
+    fn a_drag_over_the_session_id_copies_the_id_alone() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        const ID: &str = "d23f56fe-8328-429c-b51b-74cb8431957b";
+        let (mut session, _) = two_panes();
+        session.name_id(Some(ID));
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = render::draw(frame, &session))
+            .expect("draw");
+        session.note_layout(laid);
+        let buffer = terminal.backend().buffer().clone();
+        let panel = session
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+            .expect("panel recorded")
+            .1;
+        let first = (panel.top()..panel.bottom())
+            .find(|&row| {
+                (panel.left()..panel.right())
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+                    .contains("d23f56fe")
+            })
+            .expect("the id is drawn");
+        // Press on the border and drag past the end of the second half of the id.
+        swept(
+            &mut session,
+            (first, panel.left()),
+            (first + 1, panel.right() - 1),
+        );
+        let selection = session.selection.expect("selection");
+        let joined = crate::panel::continued_rows(&session, panel);
+        assert_eq!(
+            crate::select::text_joining(&buffer, &selection, &joined),
+            ID
+        );
     }
 
     /// Dragging past the bottom of the transcript stops at its last row, which is above the box.
