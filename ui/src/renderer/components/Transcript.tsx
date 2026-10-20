@@ -1955,10 +1955,10 @@ function Card({
         <DecisionCard
           className={`confirm ${request.untrusted ? 'untrusted' : ''}`}
           answerable={answerable}
-          subject={request.path}
+          subject={request.shownPath}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You approved this write' : 'You refused this write' }}
           head={<CardHead icon="edit-box" intent={INTENT_WORD[request.intent]} deciding
-            subject={<code className="path" data-tooltip={request.path}>{request.path}</code>}
+            subject={<code className="path" data-tooltip={request.shownPath}>{request.shownPath}</code>}
             counts={<span className="counts" aria-label={`${stats.added} added, ${stats.removed} removed`}><span className="stat added">+{stats.added}</span><span className="stat removed">−{stats.removed}</span></span>}
             trust={request.untrusted && <Label mode="loud" color="yellow" className="trust-label"><Icon name="warning-triangle-filled" slot="icon-before" />Untrusted source</Label>} />}
           actions={<>
@@ -2004,7 +2004,7 @@ function Card({
             <pre>{request.remark.preview.join('\n')}</pre>
             <small>{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
           </div>}
-          <Diff changes={request.changes} path={request.path} untrusted={request.untrusted} deciding />
+          <Diff changes={request.changes} path={request.path} shownPath={request.shownPath} untrusted={request.untrusted} deciding />
           <Collapse className="card-details" title="Details" isOpen={undefined}>
             <p className="permission-scope">{request.existing ? 'Update an existing project file.' : 'Create a new project file.'} This decision applies to the change shown above.</p>
           </Collapse>
@@ -2378,7 +2378,7 @@ function Card({
         <div className="confirm exposure">
           <div className="confirm-head" data-deciding="all">
             <span className="intent">send file</span>
-            <code className="path">{request.path}</code>
+            <code className="path">{request.shownPath}</code>
             <span className="counts">
               {found} finding{found === 1 ? '' : 's'}
             </span>
@@ -2820,7 +2820,7 @@ function Card({
         <DecisionCard
           className="confirm vouch"
           answerable={answerable}
-          subject={request.path}
+          subject={request.shownPath}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You vouched for this path' : 'You left it confined' }}
           head={<CardHead icon="shield-done" intent="Vouch for" deciding
             subject={<code className="path">{request.shownPath}</code>}

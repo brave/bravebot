@@ -1068,7 +1068,7 @@ fn opening_trust<R: BufRead, W: Write>(
     // asked to answer it. That includes what a yes keeps and where.
     let keeping = keeping(root);
     let mut lines = vec![
-        root.display().to_string(),
+        bravebot_agent::confirm::shown_path(root),
         t!(trust_directory_explained).to_string(),
         t!(trust_directory_regardless).to_string(),
         t!(trust_directory_confined_lines).to_string(),
@@ -1548,7 +1548,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
     /// The path as the person will see it granted, the planner's reason under it, and what a yes
     /// does not do.
     fn confirm_path(&mut self, request: &bravebot_agent::confirm::PathRequest) -> Decision {
-        let shown_path = shown(&request.path.display().to_string());
+        let shown_path = bravebot_agent::confirm::shown_path(&request.path);
         let lines = [
             match request.write {
                 true => t!(path_writes, path = shown_path.as_str()).to_string(),
@@ -2690,6 +2690,88 @@ mod tests {
             !lines.contains('\x1b'),
             "an escape sequence in the body reached the screen: {lines:?}"
         );
+    }
+
+    /// The names a question in lines has to draw as what they are, with the form a person is shown.
+    const UNSEEN_NAMES: [(&str, &str); 4] = [
+        (" ", "\"\u{2423}\""),
+        ("note.md ", "\"note.md\u{2423}\""),
+        ("a\u{202e}b", "\"a\\u{202e}b\""),
+        ("a\u{200b}b", "\"a\\u{200b}b\""),
+    ];
+
+    /// PROMPT-1: the question for a write, a credential read, a path and a directory draws a name
+    /// that would draw as nothing, or as another name, quoted and spelled, so a yes to `note.md `
+    /// cannot be read as one to `note.md`.
+    #[test]
+    fn a_question_in_lines_spells_a_name_that_would_draw_as_another() {
+        let write = |path: &str| {
+            change(&WriteRequest {
+                written_since_checkout: false,
+                path: path.to_string(),
+                contents: "a\n".to_string(),
+                existing: None,
+                diff: bravebot_agent::diff::Diff::compute("", "a\n"),
+                intent: bravebot_agent::confirm::Intent::Create,
+                untrusted: false,
+                remark: None,
+                protected: false,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+            })
+            .join("\n")
+        };
+        let asking = || {
+            Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(b"n\n".to_vec())),
+                Vec::new(),
+            )
+        };
+        let exposure = |path: &str| {
+            let mut asking = asking();
+            asking.confirm_exposing_read(&ExposureRequest {
+                path: path.to_string(),
+                credentials: vec!["an API key at line 1".to_string()],
+            });
+            String::from_utf8(asking.output).expect("text")
+        };
+        let granted = |path: &str| {
+            let mut asking = asking();
+            asking.confirm_path(&bravebot_agent::confirm::PathRequest {
+                path: std::path::PathBuf::from(format!("/opt/{path}")),
+                write: true,
+                why: "the build".to_string(),
+            });
+            String::from_utf8(asking.output).expect("text")
+        };
+        let directory = |path: &str| {
+            let mut asking = asking();
+            opening_trust(
+                &mut asking,
+                PermissionMode::Ask,
+                std::path::Path::new(&format!("/work/{path}")),
+                |_| None,
+                |_| None,
+                "",
+            );
+            String::from_utf8(asking.output).expect("text")
+        };
+        // `before` is what the quotation holds ahead of the name where the name ends a longer path.
+        let check = |kind: &str, put: &dyn Fn(&str) -> String, before: &str| {
+            let plain = put("note.md");
+            assert!(plain.contains("note.md"), "{kind}: {plain}");
+            for (name, spelled) in UNSEEN_NAMES {
+                let drawn = put(name);
+                assert_ne!(drawn, plain, "{kind} {name:?}");
+                let spelled = format!("\"{before}{}", &spelled[1..]);
+                assert!(drawn.contains(&spelled), "{kind} {name:?}\n{drawn}");
+            }
+        };
+        check("write", &write, "");
+        check("exposure", &exposure, "");
+        check("path", &granted, "/opt/");
+        check("directory", &directory, "/work/");
     }
 
     /// CHECKOUT-14. The question for a file brought back from a checkout says the session wrote the

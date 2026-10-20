@@ -634,6 +634,53 @@ fn a_write_request_carries_whether_the_path_was_written_since_the_checkout() {
     );
 }
 
+/// PROMPT-1: the desktop is handed the name of a write and of a credential read already spelled,
+/// beside the raw one, so a card that draws it draws what the other front ends draw. A name that
+/// needs no spelling is sent as it is.
+#[test]
+fn a_write_and_a_credential_read_carry_the_name_spelled_for_a_person() {
+    use bravebot_agent::confirm::ExposureRequest;
+    let write = |path: &str| {
+        wire::write_request(
+            1,
+            &WriteRequest {
+                written_since_checkout: false,
+                path: path.into(),
+                contents: "a\n".into(),
+                existing: None,
+                diff: Diff::compute("", "a\n"),
+                intent: Intent::Create,
+                untrusted: false,
+                remark: None,
+                protected: false,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+            },
+        )
+    };
+    let exposure = |path: &str| {
+        wire::exposure_request(
+            2,
+            &ExposureRequest {
+                path: path.into(),
+                credentials: vec!["an API key at line 1".into()],
+            },
+        )
+    };
+    for sent in [write("note.md"), exposure("note.md")] {
+        assert_eq!(sent["path"], json!("note.md"));
+        assert_eq!(sent["shownPath"], json!("note.md"));
+    }
+    for sent in [write("note.md "), exposure("note.md ")] {
+        assert_eq!(sent["path"], json!("note.md "));
+        assert_eq!(sent["shownPath"], json!("\"note.md\u{2423}\""));
+    }
+    for sent in [write("a\u{202e}b"), exposure("a\u{202e}b")] {
+        assert_eq!(sent["shownPath"], json!("\"a\\u{202e}b\""));
+    }
+}
+
 /// An edit to a CRLF file keeps its terminators, which the diff cannot show because it compares
 /// lines without them. The request tells the front-end in words, and says nothing for LF files.
 #[test]
@@ -1479,6 +1526,7 @@ fn an_exposure_prompt_carries_the_file_and_the_findings_and_no_text_of_the_file(
         json!({
             "request": 9,
             "path": "config/.env",
+            "shownPath": "config/.env",
             "credentials": [
                 "an AWS access key id at config/.env:1, AKIA…MPLE",
                 "a private key at config/.env:4, ----…----",

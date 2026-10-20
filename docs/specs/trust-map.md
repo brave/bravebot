@@ -834,12 +834,18 @@ the workspace. Asking it about one would be laundering.
 
 Every rule the session holds is readable back, so what a line vouched for does not have to be
 remembered. So is a kept answer about the working directory ([TRUST-24](#TRUST-24)), there and in
-the permissions a desktop session lists.
+the permissions a desktop session lists. A rule is listed under its name spelled as a prompt spells
+one ([PROMPT-1](prompting.md#PROMPT-1)), so a rule about a name made of whitespace, or ending in
+it, is not a row that reads as nothing or as another name. The project root is the empty name and
+is listed as `.` in the terminal and as the project root in the window.
 
 `verified-by: bravebot_tui::status::an_added_directory_is_reported`
 `verified-by: bravebot_tui::status::the_report_says_a_directory_is_trusted_by_a_remembered_answer`
 `verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_yes_settles_the_next_session_started_there`
 `verified-by: bravebot_tui::status::every_trust_rule_is_listed_however_many_there_are`
+`verified-by: bravebot_tui::status::a_rule_about_a_name_that_would_draw_as_another_is_listed_as_what_it_is`
+`verified-by: bravebot_ui_bridge::bridge::the_permissions_list_sends_each_rule_spelled_beside_the_name_it_holds`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the permissions list through react-dom and asserts each rule is drawn as the bridge spelled it and the root as the project root, and make check-ui runs it)`
 
 ## Moving the working directory
 

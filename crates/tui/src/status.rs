@@ -555,7 +555,13 @@ pub fn report(facts: &Facts<'_>) -> Report {
                 t!(count_rules, count = rules.len()),
             ));
             for (path, integrity) in rules.iter() {
-                let shown = if path.is_empty() { "." } else { path };
+                // The empty name is the project root and is drawn as `.`. Any other name goes
+                // through `shown_name`, so a rule about a name made of whitespace, or ending in
+                // one, is not a row that reads as another name or as nothing.
+                let shown = match path.is_empty() {
+                    true => ".".to_string(),
+                    false => bravebot_agent::confirm::shown_name(path),
+                };
                 lines.push(match integrity {
                     Some(Integrity::Trusted) => Line::new("", shown).with_note(t!(status_trusted)),
                     Some(Integrity::Untrusted) => {
@@ -3210,6 +3216,27 @@ mod tests {
         for index in 0..12 {
             assert!(shown.contains(&format!("file{index}.txt")), "{shown}");
         }
+    }
+
+    /// PROMPT-1: a rule about a name made of whitespace, or ending in it, is a row that says so. The
+    /// name as held draws as an empty row for the first and as another name for the second.
+    #[test]
+    fn a_rule_about_a_name_that_would_draw_as_another_is_listed_as_what_it_is() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let mut trust = trusting();
+        trust.distrust(" ");
+        trust.distrust("note.md ");
+        trust.distrust("a\u{202e}b");
+        trust.distrust("note.md");
+
+        let shown = rendered(&report(&facts(&config, &trust)));
+        for spelled in ["\"\u{2423}\"", "\"note.md\u{2423}\"", "\"a\\u{202e}b\""] {
+            assert!(shown.contains(spelled), "{spelled}\n{shown}");
+        }
+        // The plain name and the root keep the rows they had, and the whitespace-ended one is not
+        // one of them.
+        assert!(shown.contains("note.md untrusted"), "{shown}");
+        assert!(!shown.contains("note.md  untrusted"), "{shown}");
     }
 
     /// A directory opened with /add-dir is reachable and vouched for, so a panel that omitted it

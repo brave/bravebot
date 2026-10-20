@@ -213,7 +213,7 @@ const CARDS = {
     why: 'the task the person typed, and the agent’s rendering of a plan made from that task alone before anything was read',
   },
   exposure: {
-    entry: () => t.askedExposure({ request: 1, path: FORGED_CHROME, credentials: [FORGED_CHROME], summary: 'let the model read a file' }),
+    entry: () => t.askedExposure({ request: 1, path: FORGED_CHROME, shownPath: FORGED_CHROME, credentials: [FORGED_CHROME], summary: 'let the model read a file' }),
     marks: null,
     // docs/specs/credential-protection.md CRED-19: a finding is a kind, a location and a mask.
     why: 'the path the planner named, and the agent’s own line about each finding, which holds no text of the file',
@@ -532,7 +532,7 @@ test('a failure card reads the category and never the wording of the detail', ()
 test('undecided path exceptions are not shown as refusals or grants', () => {
   const { PathPermissions } = load('src/renderer/components/Permissions.tsx')
   const markup = renderToStaticMarkup(React.createElement(PathPermissions, {
-    paths: [{ path: 'vendor', integrity: 'untrusted' }, { path: 'vendor/ours', integrity: 'undecided' }],
+    paths: [{ path: 'vendor', shownPath: 'vendor', integrity: 'untrusted' }, { path: 'vendor/ours', shownPath: 'vendor/ours', integrity: 'undecided' }],
     busy: false,
     onRevoke() {},
   }))

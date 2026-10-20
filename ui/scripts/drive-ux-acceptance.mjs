@@ -58,7 +58,7 @@ try {
   const changes=[{kind:'kept',text:'Alpha'},{kind:'removed',text:'Beta'},{kind:'added',text:'Delta'},{kind:'kept',text:'Gamma'}]
   const activity={verb:'Update',target:'ref:1(U,pub):src/nested/sample.txt',note:null,failed:false,untrusted:true,changes:[]}
   await emit('tool.started',activity)
-  await emit('confirm.request',{request:2,path:'src/nested/sample.txt',intent:'update',untrusted:true,existing:true,added:1,removed:1,exact:true,changes})
+  await emit('confirm.request',{request:2,path:'src/nested/sample.txt',shownPath:'src/nested/sample.txt',intent:'update',untrusted:true,existing:true,added:1,removed:1,exact:true,changes})
   await page.getByRole('button',{name:'Expand diff'}).click();await snap('28-expanded-diff');await page.getByRole('button',{name:'Done',exact:true}).click()
   await page.getByRole('tab',{name:'Overview',exact:true}).click();await snap('29-waiting-write')
   await page.getByRole('button',{name:'Apply this change',exact:true}).click();await page.locator('.files .applying').waitFor();await snap('30-approved-write')

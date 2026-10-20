@@ -399,6 +399,9 @@ export interface ConfirmRequest {
   lineEndings?: string | null
   request: number
   path: string
+  /** The path with whitespace at either end, zero-width and bidi characters made visible and
+   *  the name quoted, as the agent spelled it. Draw this and not `path`. */
+  shownPath: string
   intent: Intent
   untrusted: boolean
   existing: boolean
@@ -635,6 +638,8 @@ export interface ManifestError {
 export interface ExposureRequest {
   request: number
   path: string
+  /** `path` spelled as `ConfirmRequest.shownPath` is. Draw this and not `path`. */
+  shownPath: string
   credentials: string[]
   summary: string
 }

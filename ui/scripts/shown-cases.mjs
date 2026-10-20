@@ -25,7 +25,7 @@ export const CASES = {
     kind: 'confirm',
     event: 'confirm.request',
     request: {
-      request: 101, path: 'docs/zqc04-notes.txt', intent: 'edit', untrusted: false, existing: true, added: 81, removed: 0, exact: true,
+      request: 101, path: 'docs/zqc04-notes.txt', shownPath: 'docs/zqc04-notes.txt', intent: 'edit', untrusted: false, existing: true, added: 81, removed: 0, exact: true,
       lineEndings: 'zqc05 the file keeps its CRLF line endings',
       remark: { preview: ['zqc06 changed blue to green'], lines: 1, label: 'zqc07 from the isolated processor' },
       credentials: range(24).map((n) => `api key at line ${n + 1}: sk-…${pad(n)}${n === 0 ? ' zqc01' : n === 23 ? ' zqc02' : ''}`),
@@ -128,7 +128,7 @@ export const CASES = {
     kind: 'exposure',
     event: 'exposure.request',
     request: {
-      request: 110, path: 'zqe41.env', summary: 'send the env file',
+      request: 110, path: 'zqe41.env', shownPath: 'zqe41.env', summary: 'send the env file',
       credentials: range(40).map((n) => `api key at line ${n + 1}: sk-…${pad(n)}${n === 0 ? ' zqe01' : n === 39 ? ' zqe40' : ''}`),
     },
     tokens: ['zqe01', 'zqe40', 'zqe41'],

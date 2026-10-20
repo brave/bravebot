@@ -643,7 +643,7 @@ fn permission_review_can_only_remove_existing_grants() {
     let before = call(&mut bridge, "permissions.list", json!({"session": session})).unwrap();
     assert_eq!(
         before["paths"],
-        json!([{"path": "", "integrity": "trusted"}])
+        json!([{"path": "", "shownPath": "\"\"", "integrity": "trusted"}])
     );
     assert_eq!(before["commands"], json!([]));
     assert_eq!(
@@ -670,7 +670,7 @@ fn permission_review_can_only_remove_existing_grants() {
     .unwrap();
     assert_eq!(
         after["paths"],
-        json!([{"path": "", "integrity": "untrusted"}])
+        json!([{"path": "", "shownPath": "\"\"", "integrity": "untrusted"}])
     );
     assert_eq!(
         call(
