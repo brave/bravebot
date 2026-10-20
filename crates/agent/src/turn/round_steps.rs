@@ -527,6 +527,19 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
     // compared is the last round's, so this is one round late by construction, which is why
     // the budget sits below any window rather than at it.
     let mut shortened = false;
+    // The cheaper step first (COMPACT-18): drop what old tool results hold, and summarise only
+    // if that was not enough. A refused request has no figure to lower, so it goes straight on.
+    if retries.refused.is_none()
+        && *may_compact
+        && account.context_tokens >= config.context_budget
+        && conversation.mask_old_results().is_some()
+    {
+        account.context_tokens = conversation.last_request_tokens();
+        reporter.spent(crate::outcome::Spent {
+            timing: spent.finish(),
+            ..*account
+        });
+    }
     if retries.refused.is_some() || *may_compact && account.context_tokens >= config.context_budget
     {
         reporter.phase(Phase::Compacting);

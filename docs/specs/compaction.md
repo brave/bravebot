@@ -469,3 +469,50 @@ following them once the result is replaced, and nothing tells it or the user.
 `verified-by: bravebot_ui_bridge::fork::a_fork_inside_the_archive_leaves_out_the_skills_a_compaction_sent_again`
 `verified-by: bravebot_agent::turn::a_skill_the_planner_was_shown_is_tagged_and_a_refused_load_is_not`
 `verified-by: bravebot_agent::turn::a_skill_loaded_in_a_turn_is_sent_again_when_that_conversation_is_compacted`
+
+<a id="COMPACT-18"></a>
+### COMPACT-18: old tool results are dropped from the request before a summary is asked for
+
+When the budget says to compact ([COMPACT-8](#COMPACT-8)), the results of tool calls older than the
+recent part of the conversation are first sent as a stub, and a summary is asked for only if the
+conversation is still over the budget. "Older" is before the start of the last two exchanges or of
+the last six rounds, whichever is later, which are the points [COMPACT-4](#COMPACT-4) cuts at. The
+step is made only when it frees at least a fixed floor, about 4,000 tokens, so a rewrite of the
+request that gains little is not made ([COMPACT-5](#COMPACT-5)). Nothing has measured the shortened
+request, so the figure compared is lowered by the bytes dropped at four to a token, which is the
+estimate used elsewhere in this file and errs towards summarising.
+
+The stub is a fixed sentence with the tool's name and the size dropped, and nothing of the result:
+no prefix, no excerpt. The decision uses the role, the tag, the position and the length of the
+message, so the driver branches on nothing a result says. The name is the planner's own call or the
+driver's own prefix, and is repeated only if it is made of the characters a tool name is made of. A
+result shorter than about 500 tokens stays, which keeps every reference to quarantined content
+([COMPACT-3](#COMPACT-3)), and so does the planner's latest task list ([COMPACT-16](#COMPACT-16)).
+A skill, a message to another session and a vetted answer are not plain results and are not
+touched.
+
+The message stays, with the stub as its body, so a call is never separated from its result
+([COMPACT-4](#COMPACT-4)). The request is shortened and the record is not ([COMPACT-6](#COMPACT-6)):
+the stored messages, the transcript and the session file hold the whole result. A window of a file
+whose result was dropped is no longer recorded as shown, so reading it again sends its lines. A
+summary asked for afterwards is written from the request as sent.
+
+**Why.** A result the planner has already acted on is the bulk of a long session, and a summary
+that gives it up also gives up what the person said and decided. Dropping it first needs no model
+call.
+
+**Not recorded.** The step writes no line to the trail and no narration. The request view shows the
+stubs.
+
+`verified-by: bravebot_agent::conversation::an_old_tool_result_is_a_stub_in_the_request_and_whole_in_the_record`
+`verified-by: bravebot_agent::conversation::a_tool_result_in_the_recent_exchanges_is_left_alone`
+`verified-by: bravebot_agent::conversation::dropping_results_that_free_too_little_is_not_done`
+`verified-by: bravebot_agent::conversation::a_short_result_is_kept_however_old`
+`verified-by: bravebot_agent::conversation::the_planners_latest_task_list_is_not_dropped`
+`verified-by: bravebot_agent::conversation::a_read_whose_result_was_dropped_is_forgotten`
+`verified-by: bravebot_agent::conversation::a_prose_shaped_result_is_dropped_the_same_way`
+`verified-by: bravebot_agent::conversation::the_stub_repeats_nothing_but_a_well_formed_tool_name`
+`verified-by: bravebot_agent::conversation::results_already_dropped_are_not_dropped_again`
+`verified-by: bravebot_agent::conversation::a_compaction_moves_the_line_with_the_messages`
+`verified-by: bravebot_agent::conversation::a_cut_is_judged_on_what_the_request_holds`
+`verified-by: bravebot_agent::turn::old_tool_results_are_dropped_before_a_summary_is_asked_for`
