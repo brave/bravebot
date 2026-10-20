@@ -3218,6 +3218,26 @@ same change, or resolved first, and its mark is what a reviewer reads.
   that program's absolute path, found the same way. The inhibitor `/caffeinate` starts on Linux is given `cat` that way
   ([CMD-12](commands.md#CMD-12)). Where `cat` is found only in such a directory the inhibitor is not
   started, and `/caffeinate` reports it as it does an inhibitor that is not installed.
+- **Each start's `PATH` is stated here.** A program that starts others by name through the `PATH` it
+  inherits is given one of three, and a start added to the list at the head of this clause is added
+  to this list with its answer in the same change:
+
+  | Start | `PATH` it is given |
+  |---|---|
+  | The editor Ctrl-G opens | reduced to the entries the lookup searches |
+  | A hook's program, named bare or by a path | reduced to the entries the lookup searches |
+  | `gh`, `sh` and the programs of a workflow's setup stages, and a workflow run again without the sandbox, in `doctor --sandbox-check` | reduced to the entries the lookup searches |
+  | The AWS CLI | bravebot's own, unreduced. A program `aws` starts by name can be one a stage wrote. Tracked in #2756. |
+  | `ssh-keygen`, `ssh` and `git` in `doctor --push-identity` | bravebot's own, unreduced. Tracked in #2754. |
+  | The connector authority | bravebot's own, unreduced. Tracked in #2755. |
+  | A language server | bravebot's own, accepted: it runs code the project carries, and pyright is meant to use the virtualenv's `python3` ([LSP-5](tools/lsp.md#LSP-5), [Known costs](tools/lsp.md#known-costs)) |
+  | The clipboard tools and `osascript` | bravebot's own. They are given fixed arguments that name no program, so there is no lookup to reduce `PATH` for. |
+  | The inhibitor `/caffeinate` starts | bravebot's own, with the one name it is given, `cat`, resolved first. Other programs `systemd-inhibit` starts by name resolve through bravebot's unreduced `PATH`. Tracked in #2835. |
+  | The background supervisor, the host and a bug report | not applicable: each starts this program's own executable or a path stored by it |
+
+  A row that says unreduced is a known gap, not a decision, and it comes out of the table when the
+  start goes through `bravebot_sandbox::programs::restrict_path` and a test plants an interpreter in a
+  directory left out and checks it is not run.
 - **The stage's grants are not narrowed.** Withholding `PATH` directories from the write grants
   would stop `pip install` in an activated environment, which is what the grants are for.
 
