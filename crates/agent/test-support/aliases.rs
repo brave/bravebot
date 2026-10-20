@@ -235,3 +235,73 @@ pub fn expect(row: &Alias, consumer: Consumer, handled: bool) {
         ),
     }
 }
+
+/// Legal but awkward file names, shared by every test that asks what a name is held under. Each is
+/// a relative name for a file, and none is a directory another entry sits in, so any two can be
+/// created side by side. A host that cannot hold a name skips the pair it is in.
+///
+/// The second field is the name's group: names of one group are one name on purpose, because a
+/// refusal recorded about one is about every canonically equivalent spelling (TRUST-2). Every
+/// other pair is two files wherever the volume holds them apart, and a key that joins them is a
+/// rule about one file deciding another.
+///
+/// Every name is text, because a trust key is a `&str`: a name that is not UTF-8 never reaches the
+/// map, and the step before it refuses to render one. That step is covered by
+/// `a_second_tree_name_with_invalid_utf8_is_not_matched_as_its_lossy_lookalike` and
+/// `a_hard_link_named_with_invalid_utf8_is_not_matched_as_its_lossy_lookalike` in
+/// `crates/agent/src/workspace.rs` (PATH-003).
+pub const AWKWARD_NAMES: &[(&str, &str)] = &[
+    ("a.md", "plain"),
+    ("A.md", "upper"),
+    ("a.md ", "trailing space"),
+    (" a.md", "leading space"),
+    ("a.md\t", "trailing tab"),
+    ("a.md\n", "trailing newline"),
+    ("a.md\u{a0}", "trailing no-break space"),
+    ("a.md\u{3000}", "trailing ideographic space"),
+    ("a.md.", "trailing dot"),
+    ("a.md\u{200b}", "trailing zero-width space"),
+    ("\u{202e}a.md", "right-to-left override"),
+    ("-a.md", "leading dash"),
+    ("*.md", "glob"),
+    ("a\\b.md", "backslash"),
+    ("a:b.md", "colon"),
+    (" ", "one space"),
+    ("\t", "one tab"),
+    ("\u{a0}", "one no-break space"),
+    ("\u{3000}", "one ideographic space"),
+    ("x/a.md", "in a directory"),
+    ("x /a.md", "in a directory with a trailing space"),
+    ("x/ /a.md", "in a directory under a space"),
+    ("caf\u{e9}.md", "accent"),
+    ("cafe\u{301}.md", "accent"),
+];
+
+/// Whether the volume holds `first` and `second` as two files, made side by side under `root`.
+///
+/// False where the second name opens the first (the TRUST-2 table covers those pairs), where the
+/// host cannot make either name, and on a host with no file identity to compare.
+#[cfg(unix)]
+pub fn two_files(root: &Path, first: &str, second: &str) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let make = |name: &str| -> bool {
+        let path = root.join(name);
+        std::fs::create_dir_all(path.parent().expect("a name is in a directory")).is_ok()
+            && std::fs::write(&path, CONTENT).is_ok()
+    };
+    if !make(first) || root.join(second).exists() || !make(second) {
+        return false;
+    }
+    match (
+        std::fs::metadata(root.join(first)),
+        std::fs::metadata(root.join(second)),
+    ) {
+        (Ok(one), Ok(other)) => (one.dev(), one.ino()) != (other.dev(), other.ino()),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+pub fn two_files(_: &Path, _: &str, _: &str) -> bool {
+    false
+}

@@ -158,3 +158,22 @@ for the spellings of a path.
 
 **Why:** the programs on the list are started from different code, so a fix at one start does not
 reach the others unless it is made in code they share.
+
+---
+
+<a id="PATH-007"></a>
+
+## A step that turns a name into a key says which different files it joins
+
+**A change to a step that turns a name into a key (trimming, case folding, a lossy rendering, a
+normalisation) states which different files the step joins and why, and carries a test in which
+two names that must stay different do.** The test makes both names in a directory, asks the volume
+whether they are one file, and asserts two keys when it holds them apart. A step that joins files on
+purpose says so in the clause that governs it, as a distrust joining canonically equivalent forms
+does in [TRUST-2](../specs/trust-map.md#TRUST-2). [PATH-004](#PATH-004) covers one file with many
+names; this covers many files with one key. The names to build the pairs from are `AWKWARD_NAMES` in
+`crates/agent/test-support/aliases.rs`.
+
+**Why:** a table of the names one file has cannot show a step that merges two files, because every
+row in it is a pair the volume already opens as one. Each such step was found by a report after it
+shipped, and an extra rule about the wrong file decides what the person never agreed to.
