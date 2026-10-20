@@ -22515,6 +22515,16 @@ fn requests_for_one_run_at(
     command: &str,
     mode: bravebot_sandbox::SandboxMode,
 ) -> (String, String) {
+    requests_for_one_run_trusting(root, command, mode, trusting_the_workspace())
+}
+
+/// [`requests_for_one_run_at`] with the trust map the session starts with.
+fn requests_for_one_run_trusting(
+    root: &std::path::Path,
+    command: &str,
+    mode: bravebot_sandbox::SandboxMode,
+    trust: bravebot_core::trust::TrustStore,
+) -> (String, String) {
     let workspace = Workspace::new(root).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
         tool_request(
@@ -22545,7 +22555,7 @@ fn requests_for_one_run_at(
         &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut RecordingSink::new(),
-        trusting_the_workspace(),
+        trust,
         bravebot_core::programs::TrustedPrograms::new(),
         None,
         &bravebot_core::cancel::Cancel::new(),
@@ -24857,6 +24867,89 @@ fn the_failure_sentence_names_the_menu_under_workspace_write() {
     }
 }
 
+/// The `run` tool's description in `request`, the first a planner is sent.
+fn run_description(request: &str) -> String {
+    let request: serde_json::Value = serde_json::from_str(request).expect("json");
+    request["tools"]
+        .as_array()
+        .expect("tools offered")
+        .iter()
+        .find(|tool| tool["function"]["name"] == "run")
+        .expect("run offered")["function"]["description"]
+        .as_str()
+        .expect("a description")
+        .to_string()
+}
+
+/// SANDBOX-19, PATHREQ-5: in a workspace the person has not trusted the session refuses a `scopes`
+/// argument and a `request_path` call, so neither the `run` description nor the sentence after a
+/// failed run names either as a way to reach more, and both name the routes the person has instead.
+/// The control is the same turn in a trusted workspace, which names both: a sentence left out
+/// whatever the session accepts fails it. The faults it rejects are a description or a failure
+/// sentence still pointing the planner at the closed routes, which the first call it makes then
+/// spends, and the read-only ending of the fixed text, which is a text of its own. The read-only
+/// arm needs a `read-only` stage to start, which a platform that cannot deny the network refuses
+/// (SANDBOX-5), so it runs only where one starts.
+#[test]
+fn in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path() {
+    if cannot_confine_here() {
+        return;
+    }
+    for (mode_name, mode) in [
+        (
+            "workspace-write",
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        ),
+        ("read-only", bravebot_sandbox::SandboxMode::ReadOnly),
+    ] {
+        if mode == bravebot_sandbox::SandboxMode::ReadOnly && read_only_cannot_run_here() {
+            continue;
+        }
+        let told = |trust_name: &str, trust| {
+            let scratch = Scratch::new(&format!("requests-offered-{mode_name}-{trust_name}"));
+            let (first, second) =
+                requests_for_one_run_trusting(&scratch.path, "sh -c 'exit 1'", mode, trust);
+            let result = message_from(&second, "Result of run").to_string();
+            assert!(result.contains("exited 1"), "{mode_name}: {result}");
+            let at = result.find("Confinement:").expect("a confinement sentence");
+            (run_description(&first), result[at..].to_string())
+        };
+        let (trusted_description, trusted_failure) = told("trusted", trusting_the_workspace());
+        let (description, failure) =
+            told("untrusted", bravebot_core::trust::TrustStore::new("/work"));
+
+        for (where_, said) in [
+            ("description", &trusted_description),
+            ("failure", &trusted_failure),
+        ] {
+            assert!(
+                said.contains("asked for with the `request_path` tool"),
+                "{mode_name} {where_}: {said}"
+            );
+            assert!(
+                said.contains("`scopes` argument"),
+                "{mode_name} {where_}: {said}"
+            );
+        }
+        for (where_, said) in [("description", &description), ("failure", &failure)] {
+            assert!(
+                !said.contains("asked for with the `request_path` tool"),
+                "{mode_name} {where_}: {said}"
+            );
+            assert!(
+                !said.contains("A line that needs more can ask"),
+                "{mode_name} {where_}: {said}"
+            );
+            for route in ["not trusted", "`/add-dir`", "`--add-dir`"] {
+                assert!(
+                    said.contains(route),
+                    "{mode_name} {where_}: {route} missing from {said}"
+                );
+            }
+        }
+    }
+}
+
 /// A job's failure reaches the planner in a later round, from the turn's own account of it, and
 /// that is a second place the line has to be attached.
 #[test]
@@ -24900,6 +24993,70 @@ fn a_failed_job_on_a_confining_turn_says_what_it_ran_under() {
         account.contains("It failed: step 1 exited 1. Confinement: programs could read and write"),
         "{account}"
     );
+}
+
+/// SANDBOX-19, PATHREQ-5: the account of a failed job is a second place the confinement sentence is
+/// attached, and it names `request_path` only where the session would accept a call, as the account
+/// of a foreground run does. The control is the same job in a trusted workspace. The fault it rejects
+/// is a job account built from the session's confinement without the facts a request is refused on.
+#[test]
+fn in_an_untrusted_workspace_a_failed_job_names_no_request_path() {
+    if cannot_confine_here() {
+        return;
+    }
+    let account = |name: &str, trust| {
+        let scratch = Scratch::new(name);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+            "run",
+            r#"{"command":"false","background":true}"#,
+        ));
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("start it and get on with something else").with_confined_runs(true),
+            &mut bravebot_agent::Conversation::new(),
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trust,
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+        let told = bodies
+            .iter()
+            .find(|body| body.contains(JOB_1_FINISHED))
+            .expect("the turn was never told the job ended");
+        let account = message_from(told, JOB_1_FINISHED).to_string();
+        assert!(account.contains("It failed: step 1 exited 1."), "{account}");
+        assert!(account.contains("Confinement:"), "{account}");
+        account
+    };
+
+    let trusted = account("background-failed-trusted", trusting_the_workspace());
+    assert!(
+        trusted.contains("asked for with the `request_path` tool"),
+        "{trusted}"
+    );
+    let untrusted = account(
+        "background-failed-untrusted",
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    assert!(
+        !untrusted.contains("asked for with the `request_path` tool"),
+        "{untrusted}"
+    );
+    assert!(untrusted.contains("not trusted"), "{untrusted}");
+    assert!(untrusted.contains("`/add-dir`"), "{untrusted}");
 }
 
 /// A command that printed nothing has nothing to keep from anybody. Handed a reference to its

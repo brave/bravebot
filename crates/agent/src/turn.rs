@@ -2745,7 +2745,19 @@ where
         }
     };
 
-    tools::state_confinement(&mut offered, task.confine_runs, task.sandbox);
+    // Decided as the turn starts, from the same facts a `scopes` argument and a `request_path` call
+    // are refused on, so the description does not name a route the session turns down. A turn is
+    // built for each message, so a workspace trusted since the last one is named from the next.
+    tools::state_confinement(
+        &mut offered,
+        task.confine_runs,
+        task.sandbox,
+        tools::requests_are_accepted(
+            task.confine_runs,
+            task.sandbox,
+            tools::workspace_is_trusted(policy, workspace),
+        ),
+    );
     tools::state_withheld_variables(&mut offered);
 
     // Who answers a read of what a run printed: nobody in a bypass with no screening, a check's

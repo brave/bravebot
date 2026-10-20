@@ -1739,12 +1739,18 @@ pub fn offer_tool_loader(tools: &mut Vec<Tool>, names: &[String]) {
 /// Appended to the table's description rather than a parameter of it, so the many callers that
 /// build a table for another reason are untouched. Nothing where the list does not offer `run` or
 /// the turn does not confine, since a planner is not told of a boundary its programs do not have.
+///
+/// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call,
+/// so the description names them only where it would.
 pub fn state_confinement(
     tools: &mut [Tool],
     confine_runs: bool,
     sandbox: bravebot_sandbox::SandboxMode,
+    requests_offered: bool,
 ) {
-    let Some(stated) = crate::confine::stated_to_the_planner(confine_runs, sandbox) else {
+    let Some(stated) =
+        crate::confine::stated_to_the_planner(confine_runs, sandbox, requests_offered)
+    else {
         return;
     };
     if let Some(run) = tools.iter_mut().find(|tool| tool.function.name == "run") {

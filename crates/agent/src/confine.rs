@@ -35,6 +35,7 @@ use bravebot_sandbox::scope::{
 };
 use bravebot_sandbox::signing;
 use bravebot_sandbox::toolchain::Toolchain;
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -101,6 +102,12 @@ pub struct Confinement {
     /// What the planner asked this one line to add to every stage that has no assignment in front
     /// of it, from the fixed menu. Empty for every line that asked for nothing.
     requested: Vec<Requested>,
+    /// Whether the session would accept a `scopes` argument and a `request_path` call, which the
+    /// failure sentence names only where it would (SANDBOX-19). Off unless the caller says the
+    /// session accepts them, so a sentence is never worded for a route the session refuses. A
+    /// confinement exists only where runs are confined in a mode other than `off`, so the cause
+    /// left for it to be off is a workspace that is not trusted.
+    requests_offered: bool,
     /// The key the person chose for each owner's repositories (`git.identities`), offered by a
     /// `git` stage whose argv names an ssh address of that owner (SANDBOX-16).
     identities: Identities,
@@ -171,6 +178,7 @@ impl Confinement {
             unasked_writes: false,
             host_grants: Vec::new(),
             requested: Vec::new(),
+            requests_offered: false,
             identities: Identities::default(),
             chosen_keys: Vec::new(),
             #[cfg(test)]
@@ -688,6 +696,14 @@ impl Confinement {
                 .position(|name| *name == request.name())
         });
         self.requested = kept;
+        self
+    }
+
+    /// This confinement with whether the session would accept a `scopes` argument and a
+    /// `request_path` call, which decides whether the failure sentence names either (SANDBOX-19).
+    #[must_use]
+    pub fn with_requests_offered(mut self, offered: bool) -> Self {
+        self.requests_offered = offered;
         self
     }
 
@@ -1391,7 +1407,7 @@ impl Confinement {
             "{}{source}{refusal}{}{commit}{git}{}",
             self.reach(steps),
             self.identity_sentence(steps, unconfined_offered, environment),
-            credential_locations_sentence(self.mode),
+            credential_locations_sentence(self.mode, self.requests_offered),
         )
     }
 
@@ -1706,12 +1722,12 @@ impl Confinement {
         )
     }
 
-    /// The sentence naming what a line may ask for, or nothing where this session names no home to
-    /// apply a request under.
+    /// The sentence naming what a line may ask for, or nothing where this session would not accept
+    /// a request or names no home to apply one under.
     ///
     /// The same words follow every failure of the line, the exit code not among its inputs.
     fn menu_sentence(&self) -> String {
-        match self.accepts_requests() {
+        match self.requests_offered && self.accepts_requests() {
             true => format!(" {}", requests_menu_sentence(self.mode)),
             false => String::new(),
         }
@@ -2030,12 +2046,21 @@ impl Container {
 /// programs do not have. Where the platform has no base to confine on, it is told the opposite.
 ///
 /// The `off` mode says nothing either, for the same reason: the programs have no boundary to state.
-pub fn stated_to_the_planner(confine_runs: bool, mode: SandboxMode) -> Option<String> {
+///
+/// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call.
+/// Where it would not, the description names neither and says which routes the person has instead
+/// (SANDBOX-19).
+pub fn stated_to_the_planner(
+    confine_runs: bool,
+    mode: SandboxMode,
+    requests_offered: bool,
+) -> Option<String> {
     let said = stated(
         confine_runs,
         Prelude::current(),
         bravebot_config::run_network(),
         mode,
+        requests_offered,
     )?;
     Some(with_temporary_held_back_said(
         said,
@@ -2078,11 +2103,42 @@ const READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE: &str = " A credential location su
      read is asked for with the `request_path` tool: the person is asked, and a yes lasts for this \
      session. A request for a path to write is refused in this mode before anyone is asked.";
 
-/// The fixed text that ends every profile line under `mode`.
-fn credential_locations_sentence(mode: SandboxMode) -> &'static str {
-    match mode {
-        SandboxMode::ReadOnly => READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE,
-        _ => CREDENTIAL_LOCATIONS_SENTENCE,
+/// Said in place of the sentences that name the `scopes` menu and `request_path` where the session
+/// would accept neither (SANDBOX-19, PATHREQ-5). Names the routes the person has instead, and no
+/// argument the session would turn down.
+///
+/// Says the workspace is not trusted because that is the only fact left to refuse on where this is
+/// reached: a description or a failure sentence is written only for a turn that confines its runs
+/// in a mode other than `off`. Under `read-only` a directory is added to read, and a request to
+/// read a path is the one a trusted workspace accepts (SANDBOX-22).
+fn requests_refused_sentence(mode: SandboxMode) -> String {
+    let (directory, request) = match mode {
+        SandboxMode::ReadOnly => ("a directory to read", "a request to read a path"),
+        _ => ("a directory", "a request"),
+    };
+    format!(
+        " This workspace is not trusted, so `run` accepts no `scopes` argument and the \
+         `request_path` tool is refused, and nobody is asked. Say which path or credential the \
+         command needs and what for: the person can trust the workspace, so that {request} is \
+         accepted, or add {directory} with `/add-dir` or `--add-dir`."
+    )
+}
+
+/// The first sentence of [`CREDENTIAL_LOCATIONS_SENTENCE`], which holds whether or not a request is
+/// accepted.
+const CREDENTIAL_LOCATIONS_NOT_ADDABLE_SENTENCE: &str = " A credential location such as `~/.ssh`, \
+     `~/.aws` or `~/.kube` cannot be added with `/add-dir` or `--add-dir`.";
+
+/// The fixed text that ends every profile line under `mode`, where the session would accept a
+/// request (`requests_offered`) or would not.
+fn credential_locations_sentence(mode: SandboxMode, requests_offered: bool) -> Cow<'static, str> {
+    match (requests_offered, mode) {
+        (false, _) => Cow::Owned(format!(
+            "{CREDENTIAL_LOCATIONS_NOT_ADDABLE_SENTENCE}{}",
+            requests_refused_sentence(mode)
+        )),
+        (true, SandboxMode::ReadOnly) => Cow::Borrowed(READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE),
+        (true, _) => Cow::Borrowed(CREDENTIAL_LOCATIONS_SENTENCE),
     }
 }
 
@@ -2334,6 +2390,7 @@ fn stated(
     prelude: Option<Prelude>,
     network: Network,
     mode: SandboxMode,
+    requests_offered: bool,
 ) -> Option<String> {
     if !confine_runs || mode == SandboxMode::Off {
         return None;
@@ -2406,8 +2463,13 @@ fn stated(
     });
     if prelude.is_some() {
         said.push_str(commit_sentence(mode));
-        said.push(' ');
-        said.push_str(&requests_menu_sentence(mode));
+        match requests_offered {
+            true => {
+                said.push(' ');
+                said.push_str(&requests_menu_sentence(mode));
+            }
+            false => said.push_str(&requests_refused_sentence(mode)),
+        }
     }
     if prelude == Some(Prelude::MacOs) {
         said.push_str(MACOS_LISTENING_SENTENCE);
@@ -2840,6 +2902,7 @@ mod tests {
             roots.iter().map(PathBuf::from).collect(),
             Some(Path::new("/var/scratch")),
         )
+        .with_requests_offered(true)
     }
 
     /// Every directory a stage is granted writes in is out of the search for a program bravebot
@@ -2915,6 +2978,7 @@ mod tests {
             roots.iter().map(PathBuf::from).collect(),
             Some(Path::new("/var/scratch")),
         )
+        .with_requests_offered(true)
     }
 
     fn held(confined: &Confinement, steps: &[&Step]) -> Containment {
@@ -3889,8 +3953,14 @@ mod tests {
     #[test]
     fn the_planner_is_told_a_read_only_stage_cannot_write_the_project() {
         for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
-            let said = stated(true, Some(prelude), Network::Open, SandboxMode::ReadOnly)
-                .expect("a statement");
+            let said = stated(
+                true,
+                Some(prelude),
+                Network::Open,
+                SandboxMode::ReadOnly,
+                true,
+            )
+            .expect("a statement");
             assert!(said.contains("cannot write the project"), "{said}");
             assert!(said.contains("choosing another sandbox mode"), "{said}");
             assert!(
@@ -3906,6 +3976,7 @@ mod tests {
                 Some(prelude),
                 Network::Open,
                 SandboxMode::WorkspaceWrite,
+                true,
             )
             .expect("a statement");
             assert!(!writing.contains("cannot write the project"), "{writing}");
@@ -3930,8 +4001,14 @@ mod tests {
     fn under_read_only_the_description_offers_no_remedy_that_cannot_write() {
         let any_path = "A path outside the workspace that a command needs is asked for";
         for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
-            let said = stated(true, Some(prelude), Network::Open, SandboxMode::ReadOnly)
-                .expect("a statement");
+            let said = stated(
+                true,
+                Some(prelude),
+                Network::Open,
+                SandboxMode::ReadOnly,
+                true,
+            )
+            .expect("a statement");
             for refused in [
                 "(`/add-dir`, `--add-dir`)",
                 "by choosing another sandbox mode (",
@@ -3970,6 +4047,7 @@ mod tests {
                 Some(prelude),
                 Network::Open,
                 SandboxMode::WorkspaceWrite,
+                true,
             )
             .expect("a statement");
             assert!(writing.contains("(`/add-dir`, `--add-dir`)"), "{writing}");
@@ -3977,7 +4055,7 @@ mod tests {
             assert!(!writing.contains("refused in this mode"), "{writing}");
             assert!(!writing.contains("`git commit`"), "{writing}");
         }
-        let macos = |mode| stated(true, Some(Prelude::MacOs), Network::Open, mode).unwrap();
+        let macos = |mode| stated(true, Some(Prelude::MacOs), Network::Open, mode, true).unwrap();
         assert!(
             macos(SandboxMode::ReadOnly).contains(MACOS_READ_ONLY_GIT_SENTENCE),
             "{}",
@@ -4007,7 +4085,8 @@ mod tests {
             None,
             roots.iter().map(PathBuf::from).collect(),
             Some(Path::new("/var/scratch")),
-        );
+        )
+        .with_requests_offered(true);
         let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
         let machine_written = "and write /work/project, /var/scratch and the temporary directory";
         let machine_held = "and nothing else of /work/project or the toolchain caches";
@@ -4475,6 +4554,7 @@ mod tests {
                 Some(prelude),
                 Network::Open,
                 SandboxMode::WorkspaceWrite,
+                true,
             )
             .expect("says something")
         };
@@ -4487,6 +4567,7 @@ mod tests {
                 Some(prelude),
                 Network::Closed,
                 SandboxMode::WorkspaceWrite,
+                true,
             )
             .expect("says something")
         };
@@ -4508,8 +4589,9 @@ mod tests {
             (SandboxMode::ReadOnly, MACOS_READ_ONLY_GIT_SENTENCE),
             (SandboxMode::Strict, MACOS_GIT_SENTENCE),
         ] {
-            let described =
-                |prelude| stated(true, Some(prelude), Network::Open, mode).expect("says something");
+            let described = |prelude| {
+                stated(true, Some(prelude), Network::Open, mode, true).expect("says something")
+            };
             let failed = |prelude| {
                 reading_confinement(prelude, &["/work/project"])
                     .with_mode(mode)
@@ -4703,7 +4785,7 @@ mod tests {
     /// `strict`, `read-only` and `workspace-write`, and not in `off`.
     #[test]
     fn the_planner_is_told_of_the_menu_in_every_mode_but_off() {
-        let told = |mode| stated(true, Some(Prelude::MacOs), Network::Open, mode);
+        let told = |mode| stated(true, Some(Prelude::MacOs), Network::Open, mode, true);
         for mode in [
             SandboxMode::Strict,
             SandboxMode::ReadOnly,
@@ -4721,6 +4803,104 @@ mod tests {
             "{workspace_write}"
         );
         assert_eq!(told(SandboxMode::Off), None);
+    }
+
+    /// SANDBOX-19, PATHREQ-5: where the session would accept no request, as in a workspace that is
+    /// not trusted, the sentence after a failed step names neither the menu nor `request_path`, and
+    /// names the routes the person has. The control is the same line where requests are accepted,
+    /// which names both, so a sentence left out whatever the session accepts fails it. Each mode is
+    /// walked because the read-only ending of the fixed text is a text of its own. The faults it
+    /// rejects are a menu sentence or a fixed ending that still names a route the session refuses.
+    #[test]
+    fn a_session_that_accepts_no_request_is_told_of_no_menu_and_no_request_path_after_a_failure() {
+        let script = step("/bin/sh", &["-c", "false"]);
+        for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
+            for mode in [
+                SandboxMode::Strict,
+                SandboxMode::ReadOnly,
+                SandboxMode::WorkspaceWrite,
+            ] {
+                let session = reading_confinement(prelude, &["/work/project"]).with_mode(mode);
+                let refused = session
+                    .clone()
+                    .with_requests_offered(false)
+                    .profile(&[&script]);
+                let accepted = session.with_requests_offered(true).profile(&[&script]);
+                let at = format!("{prelude:?} {mode:?}");
+
+                for route in [
+                    "A line that needs more can ask",
+                    "asked for with the `request_path` tool",
+                    "a credential scope is how a line reaches one",
+                ] {
+                    assert!(accepted.contains(route), "{at}: {route} not in {accepted}");
+                    assert!(!refused.contains(route), "{at}: {route} in {refused}");
+                }
+                for name in ["kubernetes", "gradle"] {
+                    assert!(!refused.contains(name), "{at}: {name} in {refused}");
+                }
+                assert!(
+                    refused.ends_with(&requests_refused_sentence(mode)),
+                    "{at}: {refused}"
+                );
+                for route in ["`/add-dir`", "`--add-dir`", "trust the workspace"] {
+                    assert!(refused.contains(route), "{at}: {route} not in {refused}");
+                }
+                // A directory added under `read-only` is read and not written.
+                assert_eq!(
+                    refused.contains("add a directory to read with"),
+                    mode == SandboxMode::ReadOnly,
+                    "{at}: {refused}"
+                );
+                assert_eq!(
+                    refused.matches("cannot be added").count(),
+                    1,
+                    "{at}: {refused}"
+                );
+            }
+        }
+    }
+
+    /// SANDBOX-19, PATHREQ-5: the `run` description names neither the menu nor `request_path`
+    /// where the session would accept no request, and keeps the rest of what it says, such as the
+    /// sentence about `.git` that follows it on macOS. The control is the same description where
+    /// requests are accepted. The faults it rejects are a description that still names a route
+    /// the session refuses, and one that names it whatever the session accepts.
+    #[test]
+    fn a_session_that_accepts_no_request_is_told_of_no_menu_and_no_request_path_in_the_description()
+    {
+        for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
+            for mode in [
+                SandboxMode::Strict,
+                SandboxMode::ReadOnly,
+                SandboxMode::WorkspaceWrite,
+            ] {
+                let told = |offered| {
+                    stated(true, Some(prelude), Network::Open, mode, offered)
+                        .expect("says something")
+                };
+                let (refused, accepted) = (told(false), told(true));
+                let at = format!("{prelude:?} {mode:?}");
+
+                for route in [
+                    "A line that needs more can ask",
+                    "asked for with the `request_path` tool",
+                ] {
+                    assert!(accepted.contains(route), "{at}: {route} not in {accepted}");
+                    assert!(!refused.contains(route), "{at}: {route} in {refused}");
+                }
+                assert!(
+                    refused.contains(&requests_refused_sentence(mode)),
+                    "{at}: {refused}"
+                );
+                if prelude == Prelude::MacOs {
+                    assert!(
+                        refused.contains(macos_git_sentence(mode)),
+                        "{at}: {refused}"
+                    );
+                }
+            }
+        }
     }
 
     /// A tool's own scope lifts its own directory and no other, and a stage that names none keeps
@@ -4789,13 +4969,15 @@ mod tests {
                 true,
                 Some(Prelude::Linux),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             ),
             stated(
                 true,
                 Some(Prelude::Windows),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             )
         );
         assert_eq!(
@@ -4803,7 +4985,8 @@ mod tests {
                 true,
                 Some(Prelude::Linux),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             )
             .map(|linux| format!(
                 "{linux}{MACOS_LISTENING_SENTENCE}{MACOS_GIT_SENTENCE}{TRUSTED_DIRECTORY_LINE_SENTENCE}"
@@ -4812,7 +4995,8 @@ mod tests {
                 true,
                 Some(Prelude::MacOs),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             )
         );
         assert!(
@@ -4820,7 +5004,8 @@ mod tests {
                 true,
                 Some(Prelude::Linux),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             )
             .is_some_and(|said| said.contains("except the places that hold a credential"))
         );
@@ -5890,6 +6075,7 @@ mod tests {
             Some(Prelude::Linux),
             Network::Open,
             SandboxMode::WorkspaceWrite,
+            true,
         )
         .expect("a confining turn says something");
 
@@ -5911,6 +6097,7 @@ mod tests {
             Some(Prelude::MacOs),
             Network::Open,
             SandboxMode::WorkspaceWrite,
+            true,
         )
         .expect("says something");
         let closed = stated(
@@ -5918,6 +6105,7 @@ mod tests {
             Some(Prelude::MacOs),
             Network::Closed,
             SandboxMode::WorkspaceWrite,
+            true,
         )
         .expect("says something");
         assert!(!open.contains("The network is closed"), "{open}");
@@ -5935,6 +6123,7 @@ mod tests {
             Some(Prelude::Linux),
             Network::Open,
             SandboxMode::WorkspaceWrite,
+            true,
         )
         .expect("says something");
         assert!(
@@ -5946,12 +6135,19 @@ mod tests {
                 false,
                 Some(Prelude::MacOs),
                 Network::Closed,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             ),
             None
         );
-        let unconfined = stated(true, None, Network::Closed, SandboxMode::WorkspaceWrite)
-            .expect("says something");
+        let unconfined = stated(
+            true,
+            None,
+            Network::Closed,
+            SandboxMode::WorkspaceWrite,
+            true,
+        )
+        .expect("says something");
         assert!(!unconfined.contains("network is closed"), "{unconfined}");
     }
 
@@ -5964,7 +6160,8 @@ mod tests {
                 false,
                 Some(Prelude::Linux),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             ),
             None
         );
@@ -5973,12 +6170,19 @@ mod tests {
                 false,
                 Some(Prelude::MacOs),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             ),
             None
         );
         assert_eq!(
-            stated(false, None, Network::Open, SandboxMode::WorkspaceWrite),
+            stated(
+                false,
+                None,
+                Network::Open,
+                SandboxMode::WorkspaceWrite,
+                true,
+            ),
             None
         );
     }
@@ -5987,7 +6191,7 @@ mod tests {
     /// is the confined sentence on a platform whose programs run with the person's own access.
     #[test]
     fn a_platform_with_no_base_says_its_programs_are_not_confined() {
-        let said = stated(true, None, Network::Open, SandboxMode::WorkspaceWrite)
+        let said = stated(true, None, Network::Open, SandboxMode::WorkspaceWrite, true)
             .expect("a confining turn says something");
 
         assert!(said.contains("not confined"), "{said}");
@@ -6059,6 +6263,7 @@ mod tests {
                 roots.iter().map(PathBuf::from).collect(),
                 Some(Path::new("/var/scratch")),
             )
+            .with_requests_offered(true)
         };
         let writing = CREDENTIAL_LOCATIONS_SENTENCE;
         let read_only = READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE;
@@ -7201,7 +7406,8 @@ mod tests {
             vec![PathBuf::from("/work/project")],
             Some(Path::new("/var/scratch")),
         )
-        .with_network(Network::Closed);
+        .with_network(Network::Closed)
+        .with_requests_offered(true);
         (home, confined)
     }
 
@@ -7957,6 +8163,7 @@ mod tests {
                 Some(prelude),
                 Network::Open,
                 SandboxMode::WorkspaceWrite,
+                true,
             )
             .expect("a statement");
             let held = with_temporary_held_back_said(said.clone(), Some(prelude), true);
@@ -8053,6 +8260,7 @@ mod tests {
                 None,
             )
             .with_identities(Some(settings.git_identities()))
+            .with_requests_offered(true)
         }
 
         fn work_key(&self) -> PathBuf {
