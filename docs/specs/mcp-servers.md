@@ -1753,6 +1753,11 @@ This spec cannot land without these. Each is named by what the clause says rathe
   a tool answered about before goes unasked to a server that is no longer the one the answer was
   given to, and the same holds when the server redefines the tool under its name. A call carrying the
   person's private data still asks.
+- **A project answer follows a path, not a directory.** Answer 2 is filed under the project's path
+  with its links followed and no identity of the directory. A directory removed and made again at
+  that path, or a checkout replaced by another at the same path, is the project the person answered
+  for. It reaches only a request for an alias the person's own `mcp.json` declares
+  ([SERVERS-1](#SERVERS-1)), and not one whose declaration was approved as something else.
 - **The standing answers do not travel.** Recording them outside the checkout means a second machine
   asks again and a wiped workspace does not forget. `mcp forget` is the deliberate road; there is no
   accidental one.

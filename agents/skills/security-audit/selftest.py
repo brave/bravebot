@@ -2114,6 +2114,7 @@ KEPT = [
     "Confirmer::interjection: nothing",
     "Answers::trust: the trust map",
     "trust_prompt::ask: the trust map",
+    "Asker::ask_to_start: one effect",
 ]
 
 
@@ -2124,6 +2125,7 @@ def register_findings(
     methods=("confirm_write", "interjection"),
     fields=("trust",),
     asks=("ask",),
+    questions=("ask_to_start",),
     spec_id="PROMPT",
     elsewhere="",
     visibility="pub ",
@@ -2144,6 +2146,9 @@ def register_findings(
             + "}\n",
             "crates/agent/src/answers.rs": "pub struct Answers<Rules = ()> {\n"
             + "".join(f"    /// Kept.\n    {visibility}{one}: Kept,\n" for one in fields)
+            + "}\n",
+            "crates/agent/src/servers.rs": "pub trait Asker {\n"
+            + "".join(f"    /// Asks.\n    fn {one}(&mut self) -> Answer;\n" for one in questions)
             + "}\n",
             "crates/tui/src/trust_prompt.rs": "".join(
                 f"{one}<B: Backend>(terminal: &mut Terminal<B>) -> Answer {{\n}}\n"
@@ -2174,6 +2179,7 @@ def test_answers_registered():
 
     cases = [
         ("a confirmer method nobody listed", {"methods": ("confirm_write", "interjection", "confirm_new")}, ["answer-unregistered"]),
+        ("a server question nobody listed", {"questions": ("ask_to_start", "ask_to_move")}, ["answer-unregistered"]),
         ("a remembered set nobody listed", {"fields": ("trust", "granted")}, ["answer-unregistered"]),
         ("a trust question nobody listed", {"asks": ("ask", "ask_again")}, ["answer-unregistered"]),
         ("a field with no visibility nobody listed", {"fields": ("trust", "granted"), "visibility": ""}, ["answer-unregistered"]),
@@ -2185,7 +2191,7 @@ def test_answers_registered():
         ("an entry for a member that is gone", {"kept": KEPT + ["Answers::gone: the trust map"]}, ["kept-in-stale"]),
         (
             "an entry landing in a row the table does not have",
-            {"kept": KEPT[:2] + ["Answers::trust: a row nobody wrote", KEPT[3]]},
+            {"kept": KEPT[:2] + ["Answers::trust: a row nobody wrote", KEPT[3], KEPT[4]]},
             ["register-row-unknown"],
         ),
         ("an entry that is not member and row", {"kept": KEPT + ["the trust map"]}, ["kept-in-malformed"]),
@@ -2232,6 +2238,28 @@ def test_answers_registered():
         "the finding names the member and where it is declared",
         unlisted and "Answers::granted" in unlisted[0]["title"] and "crates/agent/src/answers.rs" in unlisted[0]["summary"],
         str(unlisted[0] if unlisted else "no finding"),
+    )
+
+    asker = register_findings(kept=[one for one in KEPT if not one.startswith("Asker::")])
+    check(
+        "a question asked through the servers' asker with no entry is named by the finding",
+        kinds(asker) == ["answer-unregistered"] and "Asker::ask_to_start" in asker[0]["title"],
+        str(asker),
+    )
+
+    def tool_list_cells():
+        spec = next(one for one in audit.load_specs() if one.id == audit.PROMPT_SPEC)
+        return [
+            line
+            for line in spec.lines
+            if line.startswith("| MCP tool lists approved |")
+        ]
+
+    cells = with_cwd(ROOT, tool_list_cells)
+    check(
+        "no cell of the tool list row says a yes is kept in a file, which SERVERS-8 says it is not",
+        len(cells) == 2 and not any("a yes lives in a file every later session reads" in one for one in cells),
+        str(len(cells)),
     )
 
     missing = with_cwd(ROOT, lambda: [one for one in audit.REMEMBERED_SETS if not Path(one).is_file()])
