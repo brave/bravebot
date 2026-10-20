@@ -652,19 +652,15 @@ mod tests {
         let owner = owner_of(root.path());
         let before = reserved_name(root.path(), SESSION);
         left_by_a_killed_session(&before);
+        let home = root.path().join(format!("bravebot-{owner}"));
 
-        let first = places_in(root.path(), owner);
-        let later = places_in(root.path(), owner);
-
-        assert_eq!(
-            first.sweeps,
-            [first.home.clone(), root.path().to_path_buf()]
-        );
+        // Each pass opens a session as the first one does, with no account's directory yet, and a
+        // pass that finds the leftover held for a moment is followed by another.
         let deadline = std::time::Instant::now() + SETTLE;
         while before.exists() && std::time::Instant::now() < deadline {
-            for place in &first.sweeps {
-                sweep(place, owner);
-            }
+            let _ = std::fs::remove_dir_all(&home);
+            let _opened =
+                SessionScratch::made_in(root.path(), SESSION).expect("a scratch directory");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(
@@ -672,6 +668,8 @@ mod tests {
             "{} was left where an earlier build made it",
             before.display()
         );
+
+        let later = places_in(root.path(), owner);
         assert_eq!(later.sweeps, std::slice::from_ref(&later.home));
     }
 
