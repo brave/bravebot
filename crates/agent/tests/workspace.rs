@@ -8040,19 +8040,29 @@ fn a_second_spelling_of_a_file_in_the_sessions_own_directory_reaches_the_same_ru
     );
 }
 
-/// The reach is that directory and nothing around it. The temporary directory holds every other
-/// session's, and whatever else on the machine puts files there.
+/// The reach is that directory and nothing around it. The directory it sits in holds every other
+/// session's, and the temporary directory around that holds whatever else on the machine puts
+/// files there.
 #[test]
 fn the_temporary_directory_around_it_stays_unreachable() {
     let project = Scratch::new("scratch-neighbours");
     let given = SessionScratch::create().expect("a directory of its own");
-    // The temporary directory is shared, so the name carries this process and the moment: a fixed
-    // one is a name a concurrent run of this suite writes and removes underneath us.
-    let neighbour = given
-        .path()
-        .parent()
-        .expect("a temporary directory")
-        .join(format!(
+    let around = [
+        given
+            .path()
+            .parent()
+            .expect("the directory it sits in")
+            .to_path_buf(),
+        std::env::temp_dir().canonicalize().expect("temporary"),
+    ];
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(Some(given.path().to_path_buf()));
+
+    for directory in around {
+        // The temporary directory is shared, so the name carries this process and the moment: a
+        // fixed one is a name a concurrent run of this suite writes and removes underneath us.
+        let neighbour = directory.join(format!(
             "bravebot-workspace-scratch-neighbour-{}-{}.txt",
             std::process::id(),
             std::time::SystemTime::now()
@@ -8060,29 +8070,31 @@ fn the_temporary_directory_around_it_stays_unreachable() {
                 .expect("a clock past the epoch")
                 .as_nanos()
         ));
-    std::fs::write(&neighbour, "somebody else's").unwrap();
+        std::fs::write(&neighbour, "somebody else's").unwrap();
 
-    let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
 
-    let mut sink = RecordingSink::new();
-    let mut policy = Policy::begin(
-        routing(),
-        ReleasePlan::new(),
-        all_file_capabilities(),
-        &mut sink,
-    )
-    .expect("policy");
+        let read = workspace.read(
+            &mut policy,
+            &Labelled::trusted(neighbour.display().to_string()),
+        );
+        // Before the assertion, so a failing run leaves nothing behind in a shared directory either.
+        let _ = std::fs::remove_file(&neighbour);
+        let error = read.expect_err("a file beside the session's directory must be refused");
 
-    let read = workspace.read(
-        &mut policy,
-        &Labelled::trusted(neighbour.display().to_string()),
-    );
-    // Before the assertion, so a failing run leaves nothing behind in a shared directory either.
-    let _ = std::fs::remove_file(&neighbour);
-    let error = read.expect_err("a file beside the session's directory must be refused");
-
-    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+        assert!(
+            matches!(error, WorkspaceError::Escapes { .. }),
+            "{}: {error:?}",
+            directory.display()
+        );
+    }
 }
 
 /// A symlink out of it is refused, exactly as one out of an added directory is: the reach is where

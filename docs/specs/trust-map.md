@@ -918,11 +918,14 @@ line and makes no directory reachable or trusted.
 ### TRUST-14: a session is given a directory of its own, outside the project
 
 A session has a directory of its own in the system temporary directory, created as the session
-opens. Its name carries this program's prefix and enough besides to tell two sessions apart. It is
-created rather than adopted, so a name something else holds is refused, and on Unix nobody but its
-owner can enter it: it is made at a mode that lets nobody else in, and is at `0700` once the session
-holds it ([TRUST-25](#TRUST-25)). `/status` reports it as the session's own. A one-shot run has
-one for as long as it runs. A session that cannot be given one runs without one and says so.
+opens. On Unix it is made in a directory of the account's own inside the temporary directory, named
+`bravebot-` and the account's numeric id, and in the temporary directory itself where that one
+cannot be used. Its name carries this program's prefix and enough besides to tell two sessions
+apart. It is created rather than adopted, so a name something else holds is refused, and on Unix
+nobody but its owner can enter it: it is made at a mode that lets nobody else in, and is at `0700`
+once the session holds it ([TRUST-25](#TRUST-25)). `/status` reports it as the session's own. A
+one-shot run has one for as long as it runs. A session that cannot be given one runs without one
+and says so.
 
 **Why.** Both of the other places to put an intermediate file cost more than this one. In the
 project it is a file a build, a test run, a `git add -A` and a reviewer each have to deal with, and
@@ -936,6 +939,19 @@ Which directory the platform keeps temporary files in is a question the standard
 answers: `TMPDIR` on Unix, falling back to `/tmp`, and on Windows the operating system's own answer,
 which resolves `TMP`, then `TEMP`, then the profile directory. An undefined `TMPDIR` therefore needs
 nothing written here.
+
+The account's directory is there so that opening a session does not wait on how many entries the
+temporary directory holds. Other programs fill a temporary directory with entries nothing removes,
+and in one holding hundreds of thousands, making a directory took seconds and every session
+waited for it. Every session after the first finds the account's directory by name, and the sweep
+([TRUST-25](#TRUST-25)) reads it alone instead of the whole temporary directory. It is made at
+`0700` and used only where what stands at its name is a directory the account owns, opened without
+following a link. A directory of the account's own at another mode is set back to `0700`. A name
+another account created first, a link and a file are not used, and the session's directory is made
+in the temporary directory itself, so the name cannot be used to refuse a session its directory or
+to point it elsewhere. The account's directory serves the
+session, server and checkout directories alike, and is not removed with any of them. Windows has no
+account's directory, since its temporary path is the account's own already.
 
 Created rather than adopted, and its owner's alone, because that directory is shared. On macOS it is the
 account's own, but on Linux it is ordinarily the world-writable `/tmp`, where a name this program
@@ -962,6 +978,11 @@ is not opened beside the working directory, and its name says it was made for a 
 `verified-by: bravebot_agent::scratch::a_session_is_given_a_directory_of_its_own`
 `verified-by: bravebot_agent::scratch::a_name_something_else_holds_is_refused`
 `verified-by: bravebot_agent::scratch::nobody_else_may_read_what_a_session_writes_there`
+`verified-by: bravebot_agent::scratch::a_session_is_given_its_directory_inside_one_of_this_accounts_own`
+`verified-by: bravebot_agent::scratch::the_sessions_of_one_account_are_given_directories_in_the_same_one`
+`verified-by: bravebot_agent::scratch::a_link_under_the_accounts_directorys_name_is_not_followed`
+`verified-by: bravebot_agent::scratch::a_directory_of_another_accounts_under_the_name_is_not_used`
+`verified-by: bravebot_agent::scratch::an_account_directory_that_cannot_be_written_is_put_back_to_private`
 `verified-by: bravebot_tui::status::the_sessions_scratch_directory_is_reported_for_what_it_is`
 `verified-by: bravebot_tui::status::a_session_with_no_scratch_directory_reports_none`
 `verified-by: bravebot_ui_bridge::dispatch::a_desktop_session_is_given_a_directory_of_its_own`
@@ -1546,8 +1567,10 @@ an answer in their place: it is the answer, given before the run and for the one
 ### TRUST-25: a session opening removes the directories killed sessions left
 
 On Unix a session holds a lock on its own directory for as long as it runs, and opening a session
-removes every directory in the system temporary directory that nothing holds, whose name is one
-this build gives, and that is this account's at mode `0700`. A directory reaches that mode only once
+removes every directory in the account's directory for them ([TRUST-14](#TRUST-14)) that nothing
+holds, whose name is one this build gives, and that is this account's at mode `0700`. A start that
+made the account's directory removes such directories from the system temporary directory as well,
+once, since an earlier build made its directories there. A directory reaches that mode only once
 its lock is held, so one still being made is left, and a program a session starts does not inherit
 the lock. A link under such a name is judged as a link rather than as what it points at. A local MCP
 server's home is removed on the same terms. On Windows nothing is removed.
@@ -1588,6 +1611,7 @@ keeps if its session is killed. The removal has a thread of its own because a le
 large as whatever a turn unpacked there, and nothing in the opening session needs it gone first.
 
 `verified-by: bravebot_agent::scratch::a_session_opening_removes_what_a_killed_one_left`
+`verified-by: bravebot_agent::scratch::the_temporary_directory_is_swept_once_and_then_only_the_accounts_own`
 `verified-by: bravebot_agent::scratch::a_directory_nothing_holds_is_taken_for_a_leftover`
 `verified-by: bravebot_agent::scratch::a_live_sessions_directory_is_left_alone`
 `verified-by: bravebot_agent::scratch::a_directory_still_being_made_is_left_alone`
