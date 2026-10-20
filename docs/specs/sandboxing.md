@@ -31,12 +31,13 @@ guards:
     sites:
       - crates/agent/src/confine.rs: 1
       - crates/agent/src/workspace.rs: 1
-      - crates/sandbox/src/programs.rs: 17
+      - crates/agent/tests/workspace.rs: 1
+      - crates/sandbox/src/programs.rs: 19
       - crates/tui/src/clipboard.rs: 8
       - crates/tui/src/editor.rs: 2
   - symbol: find_in_with
     sites:
-      - crates/sandbox/src/programs.rs: 7
+      - crates/sandbox/src/programs.rs: 8
 documented-by: docs/website/docs/security/security.md
 ---
 
@@ -3187,7 +3188,17 @@ same change, or resolved first, and its mark is what a reviewer reads.
   starts is also started without this agent's own credentials
   ([CRED-14](credential-protection.md#CRED-14)).
 - **A link is judged where it leads.** A `PATH` entry that links into one of them is left out,
-  and so is a file in another directory that links into one.
+  and so is a file in another directory that links into one. An entry that does not exist yet leads
+  where the part of it that exists does, since a stage can make the rest.
+- **A directory is judged by the directory it reaches, not only by its name.** A volume can open two
+  spellings of a name as one directory: ext4 or tmpfs with `casefold`, vfat, exFAT, and on macOS a
+  firmlink such as `/System/Volumes/Data/Users` for `/Users`. Resolving a path there returns the
+  spelling it was given, so an entry written another way than a recorded directory shares no name
+  with it. On Unix an entry, and the file the lookup resolves to, is also left out when a
+  directory above where it leads is a recorded directory by device and inode. The names are
+  compared first, so a recorded directory that no longer exists is still left out under the name
+  it was recorded under. The `PATH` given to the editor, a hook and the suite's unconfined
+  programs, and a row held where the account can write, are judged the same way.
 - **An entry that is not absolute is not searched,** and neither is an empty one, which a shell
   reads as the current directory. A name carrying a separator is not looked up, and an absolute
   path is started as given. A hook's relative path is the person's own and runs from the directory
@@ -3254,6 +3265,13 @@ An editor or a hook that is a script starts its interpreter the same way, and `s
 `ProxyCommand`'s program so, so each is given the `PATH`
 the lookup would have searched.
 
+**What it costs.** A directory is compared by device and inode, so a filesystem that reports the
+same pair for two directories (some FUSE, 9p and network mounts) leaves out an entry that should be
+searched, and the program reads as not installed. Off Unix there is no comparison by identity,
+because the file index is not in the standard library, so only names are compared there, after a
+path is resolved as far as it exists. A recorded directory that does not exist has no identity, so
+another spelling of it is compared by name only until it exists.
+
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
 `verified-by: bravebot_sandbox::programs::a_program_is_found_when_no_writable_directory_is_involved`
@@ -3273,6 +3291,16 @@ the lookup would have searched.
 `verified-by: bravebot_sandbox::programs::a_started_programs_path_holds_exactly_the_entries_the_lookup_searches`
 `verified-by: bravebot_sandbox::programs::a_started_program_with_no_searched_entry_is_given_no_path_at_all`
 `verified-by: bravebot_sandbox::programs::a_started_programs_path_carries_an_entry_that_is_not_utf8_as_its_bytes`
+`verified-by: bravebot_sandbox::programs::a_path_entry_the_volume_opens_as_a_directory_a_stage_may_write_is_not_searched`
+`verified-by: bravebot_sandbox::programs::a_started_programs_path_leaves_out_an_entry_the_volume_opens_as_a_writable_directory`
+`verified-by: bravebot_sandbox::programs::a_program_the_volume_opens_in_a_row_held_where_the_account_can_write_is_not_found`
+`verified-by: bravebot_sandbox::programs::a_started_programs_path_leaves_out_a_link_into_another_spelling_of_a_writable_directory`
+`verified-by: bravebot_sandbox::programs::a_link_in_a_safe_directory_to_a_program_under_another_spelling_is_not_found`
+`verified-by: bravebot_sandbox::programs::a_path_is_within_a_directory_a_volume_opens_under_another_name`
+`verified-by: bravebot_sandbox::programs::a_started_programs_path_leaves_out_an_entry_not_yet_made_below_a_link_into_a_writable_directory`
+`verified-by: bravebot_sandbox::programs::a_directory_that_is_not_text_is_judged_by_what_it_is_and_not_by_its_lossy_lookalike`
+`verified-by: bravebot_sandbox::programs::a_recorded_directory_that_does_not_exist_is_still_compared_by_name`
+`verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_left_out_of_a_program_lookup_unless_it_is_a_listed_gap`
 `verified-by: bravebot_bedrock::credentials::an_aws_a_confined_stage_wrote_at_the_front_of_path_is_not_the_one_run`
 `verified-by: bravebot_bedrock::credentials::an_aws_where_a_stage_given_the_whole_machine_may_write_is_not_the_one_run`
 `verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`

@@ -499,6 +499,80 @@ fn each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_g
     }
 }
 
+/// The lookup of a program bravebot starts itself leaves out a `PATH` entry that is a directory a
+/// stage may write under every name the volume opens it by (SANDBOX-30). The rows that spell a
+/// directory another way are asked: the directory spelled as the name is recorded, and the entry is
+/// spelled as the alias. The installed copy of the program beside it is the one found, so a lookup
+/// that leaves out every entry fails the row rather than passing it. A row the lookup does not
+/// leave out lists the issue that tracks it. The scratch directory is below `target`, since the
+/// system temporary directory is left out whatever is recorded and would pass every row.
+#[cfg(unix)]
+#[test]
+fn each_alias_in_the_table_that_spells_a_directory_is_left_out_of_a_program_lookup_unless_it_is_a_listed_gap()
+ {
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Removes the directory when a row fails as well as when it passes.
+    struct Removed(PathBuf);
+    impl Drop for Removed {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    for (index, row) in aliases::ALIASES.iter().enumerate() {
+        let directory = |spelling: &str| {
+            std::path::Path::new(spelling)
+                .parent()
+                .expect("a name is in a directory")
+                .to_path_buf()
+        };
+        let (recorded, spelled) = (directory(row.name), directory(row.alias));
+        if recorded == spelled {
+            continue;
+        }
+        let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("bravebot-alias-program-{index}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let _removed = Removed(root.clone());
+        if aliases::prepare(&root, row) {
+            let stored = match row.made {
+                aliases::Made::StoredAsTheAlias => row.alias,
+                _ => row.name,
+            };
+            let program = std::path::Path::new(stored)
+                .file_name()
+                .expect("a name is a file");
+            let executable = std::fs::Permissions::from_mode(0o755);
+            std::fs::set_permissions(root.join(stored), executable.clone()).expect("mode");
+            let installed = root.join("installed");
+            std::fs::create_dir_all(&installed).expect("directory");
+            std::fs::write(installed.join(program), "#!/bin/sh\n").expect("installed copy");
+            std::fs::set_permissions(installed.join(program), executable).expect("mode");
+            let entry = root.join(&spelled);
+            let path = std::env::join_paths([&entry, &installed]).expect("a PATH");
+
+            let found = bravebot_sandbox::programs::find_in(
+                program,
+                &path,
+                std::slice::from_ref(&root.join(&recorded)),
+            );
+
+            let left_out = match found {
+                Some(found) if found == installed.join(program) => true,
+                Some(found) if found == entry.join(program) => false,
+                other => panic!(
+                    "{}: the lookup found {other:?}, which is neither the file in the entry nor \
+                     the installed copy",
+                    row.kind
+                ),
+            };
+            aliases::expect(row, aliases::Consumer::ProgramLookup, left_out);
+        }
+    }
+}
+
 /// One file in two Unicode forms of its name: `cafe` followed by a combining acute accent, and
 /// `caf` followed by the precomposed letter. APFS stores a name as it was created and opens it
 /// under any canonically equivalent form, and so does a Linux directory with `casefold` set.
