@@ -31,6 +31,7 @@ guards:
       - crates/mcp/src/stdio.rs: 2
       - crates/net/src/lib.rs: 2
   - symbol: Labelled::declassify
+    every-spelling: yes
     sites:
       - crates/agent/src/aside.rs: 3
       - crates/agent/src/manifest.rs: 5
@@ -281,8 +282,11 @@ and where the slot came from a quarantined listing every one of them is a filena
 never shown. So each accessor that hands one back takes a witness minted in the same module the
 declassification witness is minted in, and the `guards` list above pins their uses file by file,
 the way it pins a declassification. A decision relocated into the kernel and taken from a slot's
-address therefore moves a pinned count, and one relocated into any module of `bravebot-core`
-outside the gates does not compile at all, bar the single release named next.
+address moves a pinned count where it releases the address again, and one relocated into any module
+of `bravebot-core` outside the gates does not compile at all, bar the single release named next.
+The counts pin releases, not the decisions taken from bytes a counted release already produced, so
+a branch added inside a function that holds a counted use moves nothing and is found by reading the
+diff ([reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md)).
 
 Three gates let a slot's address leave the kernel, each recorded and each pinned file by file in
 `guards`, so a further reader of a slot's address anywhere downstream is a line in a diff rather

@@ -51,6 +51,7 @@ governs:
   - crates/demo/src/lib.rs
 guards:
   - symbol: Gate::open
+    every-spelling: yes
     sites:
       - crates/demo/src/lib.rs: 1
   - symbol: Gate::new
@@ -230,6 +231,20 @@ def use_the_gate_twice_on_one_line(root):
         encoding="utf-8",
     )
     edit_spec(root, "crates/demo/src/lib.rs: 1", "crates/demo/src/lib.rs: 2")
+
+
+def open_the_gate_by_another_spelling(spelling):
+    """One use written in a form the count does not read, with the pin raised to what a count that
+    did read it would give. The count is then right about every spelling it knows, so the one thing
+    that can report the use is a check of the spelling itself."""
+
+    def write(root):
+        path = root / "crates" / "demo" / "src" / "lib.rs"
+        path.write_text(
+            path.read_text(encoding="utf-8") + f"\n{spelling}\n", encoding="utf-8"
+        )
+
+    return write
 
 
 def build_the_gate(root):
@@ -743,6 +758,53 @@ CASES = [
     (
         "a guarded associated function used more times than its allowlist pins",
         build_the_gate,
+        "guard-site-count",
+    ),
+    (
+        "an every-spelling that is not yes",
+        lambda root: edit_spec(root, "every-spelling: yes", "every-spelling: true"),
+        "guard-every-spelling-malformed",
+    ),
+    (
+        "a guarded method called through a generic path",
+        open_the_gate_by_another_spelling("fn reach(g: &Gate) {\n    <Gate>::open(g);\n}"),
+        "guard-spelling-unseen",
+    ),
+    (
+        "a guarded method called through an alias",
+        open_the_gate_by_another_spelling("use Gate as G;\n\nfn reach(g: &Gate) {\n    G::open(g);\n}"),
+        "guard-spelling-unseen",
+    ),
+    (
+        "a guarded method called inside a macro body",
+        open_the_gate_by_another_spelling(
+            "macro_rules! reach {\n    ($g:expr) => {\n        $g.open()\n    };\n}"
+        ),
+        "guard-spelling-unseen",
+    ),
+    (
+        "a guarded method named as a function value through an alias",
+        open_the_gate_by_another_spelling(
+            "use Gate as G;\n\nfn reach(gates: &[Gate]) {\n    gates.iter().for_each(G::open);\n}"
+        ),
+        "guard-spelling-unseen",
+    ),
+    (
+        "a guarded method called with a turbofish",
+        open_the_gate_by_another_spelling("fn reach(g: &Gate) {\n    g.open::<u8>();\n}"),
+        "guard-spelling-unseen",
+    ),
+    (
+        "a macro body holding a brace in a string, then a later call",
+        open_the_gate_by_another_spelling(
+            'macro_rules! shout {\n    () => {\n        println!("{")\n    };\n}\n\n'
+            "fn reach(g: &Gate) {\n    g.open();\n}"
+        ),
+        {"guard-site-count"},
+    ),
+    (
+        "a guarded method called through the qualified name",
+        open_the_gate_by_another_spelling("fn reach(g: &Gate) {\n    Gate::open(g);\n}"),
         "guard-site-count",
     ),
     ("another type's constructor of the same name", build_something_else, None),

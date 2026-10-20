@@ -102,6 +102,18 @@ class Spec:
         return {entry["symbol"]: entry["sites"] for entry in self.pinned_guards}
 
     @property
+    def every_spelling(self):
+        """The pinned symbols whose entry says `every-spelling: yes`: for those, a use written in a
+        form the count does not read is an error rather than a count that quietly misses it. Opt-in
+        because it asks that the bare method name be written nowhere else in the tree, which is
+        true of `declassify` and false of `present`."""
+        return {
+            entry["symbol"]
+            for entry in self.pinned_guards
+            if entry.get("every-spelling") == "yes"
+        }
+
+    @property
     def commentary(self):
         """Everything outside a clause. Binds nobody, but still gets read."""
         clause_lines = {c.line for c in self.clauses}
