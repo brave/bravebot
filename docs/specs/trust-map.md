@@ -144,8 +144,11 @@ deny-rule cell that is not covered, is a defect. A change that fixes a spelling 
 a spelling with no row gets one in the same commit as its test.
 
 The rows a volume can make without a person opening another directory are `ALIASES` in
-`crates/agent/test-support/aliases.rs`. Four tests ask each consumer about every row, skip a row
-the volume holds apart, and fail on a row listed as unhandled once it is handled. The other rows are
+`crates/agent/test-support/aliases.rs`. Five tests ask each consumer about every row, skip a row
+the volume holds apart, and fail on a row listed as unhandled once it is handled. The fifth is the
+lookup of a program bravebot starts itself ([SANDBOX-30](sandboxing.md#SANDBOX-30)), which is asked
+of the rows that spell a directory another way and leaves out an entry under every spelling of a
+directory a stage may write, by device and inode where the names differ. The other rows are
 pinned by the test the last column names.
 
 | Alias | Example | Map and writer reservation | Deny rules | Pinned by, or tracked in |
@@ -159,7 +162,7 @@ pinned by the test the last column names.
 | NFC and NFD | `café.md` in either form | a distrust, an undecided boundary and the writer reservation join the forms; a trust reaches only the spelling it was written about | covered, whichever form the rule and the file are in | `bravebot_agent::workspace::a_canonically_equivalent_spelling_of_a_distrusted_file_is_read_as_untrusted`, `bravebot_core::permissions::a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name` |
 | Symbolic link | a link to the file, or on the way to it | not handled (Known cost) | covered | #2328 |
 | Hard link | a second entry for the file | not handled (Known cost) | covered on Unix, by device and inode | #2328 |
-| Another path to the same tree | a macOS firmlink, a Linux bind mount, once both are open | not handled (Known cost) | covered on Unix, by device and inode of the directory | `bravebot_agent::workspace::a_name_is_respelled_under_each_open_directory_that_is_the_same_directory`, #2328 |
+| Another path to the same tree | a macOS firmlink, a Linux bind mount, once both are open | not handled (Known cost) | covered on Unix, by device and inode of the directory | `bravebot_agent::workspace::a_name_is_respelled_under_each_open_directory_that_is_the_same_directory`, `bravebot_sandbox::programs::a_path_entry_the_volume_opens_as_a_directory_a_stage_may_write_is_not_searched` for the program lookup, #2328 |
 | 8.3 short name | `ENV~1` for `.env` | refused on Windows, never reaches the map | refused | `bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only` |
 | Alternate data stream | `.env::$DATA` | refused on Windows | refused | same |
 | Trailing dot or space | `.env.` | refused on Windows | refused | same |
@@ -208,6 +211,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::turn::each_alias_in_the_table_is_refused_by_a_deny_rule_unless_it_is_a_listed_gap`
+`verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_left_out_of_a_program_lookup_unless_it_is_a_listed_gap`
 `verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
 `verified-by: bravebot_agent::workspace::a_path_a_run_opens_is_refused_where_windows_reads_a_name_in_it_as_another_file`
 `verified-by: bravebot_core::trust::a_refusal_recorded_about_one_form_of_a_name_decides_the_other`
