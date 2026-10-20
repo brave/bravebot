@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/preamble.rs
   - crates/agent/src/agents.rs
   - crates/agent/src/home.rs
+  - crates/agent/src/styles.rs
 documented-by: docs/website/docs/customize/instructions.md
 ---
 
