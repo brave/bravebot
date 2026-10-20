@@ -73,6 +73,9 @@ fn values_that_are_not_lists(settings: &Settings) -> impl Iterator<Item = Reject
 ///
 /// The entry is quoted in the spelling the file used: a line of three spaces and a line of none
 /// are two entries somebody has to find, and a report that trimmed both names neither.
+///
+/// The entry and the file are put in as they are. A caller that writes the result straight to a
+/// terminal hands it a `Rejected` whose text has had its control characters replaced (LAYER-3).
 pub fn describe(rejected: &Rejected) -> String {
     let problem = problem(rejected.reason);
     match &rejected.file {

@@ -222,7 +222,9 @@ imported subscription, it is `bravebot auth login` or `bravebot auth logout`
 ([CLI-18](#CLI-18)). The signing key
 is named as never transmitted, and a value from a settings file is never printed: where a credential
 decides whether a backend works, what is reported is that one was found. A configuration error makes
-it fail rather than pass with a warning.
+it fail rather than pass with a warning. Text it names from a settings file, such as a rule, a key
+or an environment name, is drawn with its control characters replaced ([LAYER-3](layering.md#LAYER-3)),
+because the project and local files belong to whoever made the checkout.
 
 The state directory is reported with the variable that named it, and on a platform where the files
 under it cannot be restricted to one account the report says which of them carry the permissions of
@@ -258,6 +260,7 @@ that is not `<host>/<owner>` is refused with the status an argument error has.
 `verified-by: bravebot_cli::doctor::doctor_accepts_current_windows_copies_and_reports_stale_ones`
 `verified-by: bravebot_cli::doctor::doctor_checks_resolved_agent_link_targets`
 `verified-by: bravebot_cli::doctor::doctor_finds_direnv_only_when_path_contains_an_executable`
+`verified-by: bravebot_cli::running::doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures`
 
 **Why.** It exists to answer "what will this actually use", so reporting a default when a choice
 is in force would explain the wrong thing, and naming one backend where two are reachable would
@@ -1570,7 +1573,8 @@ the startup notice already follows by saying nothing to such a copy
 
 `bravebot permissions check <Family> <what>` loads the `permissions` rules the way a session started in
 this directory loads them, and prints which of deny, ask or allow decides the call, the rule that
-decides it as its file spelled it, and the file that wrote it. The family is `Read`, `Edit`, `Bash`,
+decides it as its file spelled it, with each control character drawn as its picture
+([LAYER-3](layering.md#LAYER-3)), and the file that wrote it. The family is `Read`, `Edit`, `Bash`,
 `WebFetch` or `Mcp`. `Read` and `Edit` take one path, `Bash` takes a program and its arguments as
 separate words, as a stage is matched ([PERM-5](permissions.md#PERM-5)), `WebFetch` takes a host or a
 URL and is decided on the host alone, and `Mcp` takes `server:tool`. The rule named is the one
@@ -1607,6 +1611,7 @@ that is written down is still asking.
 `verified-by: bravebot_cli::running::permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force`
 `verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`
 `verified-by: bravebot_cli::running::permissions_check_prints_a_reason_only_from_the_persons_own_file`
+`verified-by: bravebot_cli::running::permissions_check_draws_the_control_characters_of_a_checkouts_rules_as_pictures`
 
 <a id="CLI-31"></a>
 ### CLI-31: `-i <prompt>` opens the interface that draws and sends the prompt as its first turn

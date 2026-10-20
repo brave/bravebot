@@ -497,8 +497,9 @@ impl Rule {
 
 /// A rule that was not one, and what was wrong with it.
 ///
-/// Carries the text so a report can name it. The text came from the user's own settings file, so
-/// there is nothing untrusted in it.
+/// Carries the text so a report can name it. The text is whatever a settings file spelled, and the
+/// project and local layers are a checkout's, so it can hold control characters. A front end that
+/// writes it straight to a terminal pictures them first (LAYER-3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejected {
     pub text: String,
