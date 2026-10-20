@@ -181,6 +181,12 @@ happens, the clause quoted, the code it happens in, where the bytes come from an
 code does with them, how to reproduce it, what it buys an attacker, the argument for its own
 kind label, and the fix. Read none of them.
 
+A body never says a case is left undone without citing the issue that tracks it. It is written
+from the candidate's fields and the verifier's verdict, so a lane covers every site with the same
+weakness in the candidate or reports it as a candidate of its own, and neither a lane nor a verifier
+writes one into a field as a case left for later. The poster reads each body for such a statement
+in step 9.
+
 ### Step 8: capture the screens that were asked for
 
 The table names any draft whose verifier said the failure is something a person can look at. A
@@ -217,9 +223,10 @@ draft that got one shows it and a draft that did not is unchanged.
 Hand each draft to the [issue-poster](../../agents/issue-poster.md) definition, one delegate at a
 time and no more than twelve in a run, with the draft's title, its body file, the labels the
 draft names, the assignee only where the user named somebody, and this instruction: the issue is
-a finding nobody has read, so apply no `importance`, `urgency` or `size`. A lane that
-malfunctions malfunctions at scale and a shared tracker is the wrong place to find that out, so
-stop at twelve and list the titles left.
+a finding nobody has read, so apply no `importance`, `urgency` or `size`, and where its body says a
+case is left undone that no issue covers, file nothing for the case, post nothing and report the
+statement. A lane that malfunctions malfunctions at scale and a shared tracker is the wrong place to
+find that out, so stop at twelve and list the titles left.
 
 The poster does what no model can be relied on to do here:
 
@@ -242,8 +249,9 @@ for is in their queue either way.
 ### Step 10: say what happened
 
 In two or three lines: how many lanes ran, how many candidates were dropped by the verifiers,
-what to look at first, and how many issues were filed against how many the tracker already had.
-Nothing else. The report is the deliverable.
+what to look at first, and how many issues were filed against how many the tracker already had, and
+any draft a poster held back for a statement about an undone case. Nothing else. The report is the
+deliverable.
 
 ---
 

@@ -121,6 +121,11 @@ Write JSON to `{results_file}` and nothing else. Do not edit any file in the tre
 }}
 ```
 
+`reason`, the fields of `corrected` and `test_that_would_pin_it` are written into the issue as they
+stand. Do not use one to say that another site, platform, program or defect may have the same
+weakness or is left for later. The verdict is about this candidate, and the issue cannot cite an
+issue for a case nobody filed.
+
 `reproduce` is a shell command and nothing else: a test that fails, a `cargo run` with an argument, a
 `grep` that returns the site. Leave it out rather than inventing one.
 
