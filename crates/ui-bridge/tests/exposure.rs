@@ -5,6 +5,8 @@
 //! Driven through the binary against a model service of the test's own. Everything the bridge
 //! writes is kept, so a test can say that the value was in none of it.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -244,7 +246,10 @@ impl FrontEnd {
             json!({"directory": scratch.project().display().to_string()}),
         );
         let session = opened["session"].as_str().expect("a handle").to_string();
-        self.call("trust.reply", json!({"session": session, "trusted": true}));
+        // A yes an earlier session here gave is kept, and settles the next one without asking.
+        if opened["remembered"].is_null() {
+            self.call("trust.reply", json!({"session": session, "trusted": true}));
+        }
         session
     }
 

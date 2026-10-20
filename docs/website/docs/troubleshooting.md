@@ -47,7 +47,10 @@ A failed turn is announced as `turn N failed` with a reason, and a turn you stop
 scroll or resize.
 
 The reason is drawn from a fixed set rather than from whatever the service said, so no error body,
-header, URL or credential is ever quoted back at you. Where the status is known it is appended as
+header, URL or credential is ever quoted back at you. The one figure that comes from a service is
+how long a rate limit asked you to wait: bravebot reads it as a number, waits it out itself when it
+is two minutes or less, and when it is longer says `the service asked for fewer requests, and for a wait of
+about N minutes` so you know when to ask again. Where the status is known it is appended as
 `(HTTP 429)`, and where requests were sent it says `after 3 attempts`, counting retries and
 capability probes.
 

@@ -251,6 +251,49 @@ fn a_redirect_that_leads_nowhere_names_the_url_that_was_asked_for() {
     );
 }
 
+/// A failure on the first hop, where no redirect has been followed, is worded by this crate and
+/// not by the transport. The transport's text for a TLS handshake that fails on the name is the
+/// names the server's certificate presented, and a failure's text reaches the planner as the
+/// driver's own words. A TLS server cannot be stood up here, so this pins the wiring with the
+/// failure that can be: the transport words a refused connection with the operating system's
+/// message, and the failure must carry this crate's sentence instead.
+#[test]
+fn a_first_hop_failure_is_worded_by_this_crate_and_not_the_transport() {
+    let port = TcpListener::bind("127.0.0.1:0")
+        .expect("bind loopback")
+        .local_addr()
+        .expect("addr")
+        .port();
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let egress = Egress::new();
+    let error = egress
+        .fetch(
+            &mut policy,
+            Request::get(format!("http://127.0.0.1:{port}/start")),
+            Label::untrusted_public(),
+        )
+        .expect_err("nothing is listening");
+
+    let reported = error.to_string();
+    assert!(
+        reported.ends_with("failed: the connection was refused"),
+        "the failure was not worded by this crate: {reported}"
+    );
+    assert!(
+        reported.contains("/start"),
+        "the failure did not name the request it was about: {reported}"
+    );
+}
+
 /// The same property for the arm an attacker reaches with an ordinary reply rather than a
 /// malformed one: a status the caller can act on, about the URL it asked for.
 #[test]

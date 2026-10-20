@@ -28,6 +28,24 @@ const RESUME: &str = "resume";
 /// getting a condition wrong is ten turns rather than an afternoon.
 const MAX_ROUNDS: usize = 10;
 
+/// How many rounds in a row may make no tool call before the goal stops sending the work back.
+///
+/// A turn that answers the judge in prose without running anything is sent back again with the
+/// whole conversation, and nothing about the next round makes it likelier to run something. Three
+/// leaves room for one reply that was only a question or a summary.
+const MAX_IDLE_ROUNDS: usize = 3;
+
+/// What a verdict of not-yet comes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Next {
+    /// Send the work back for another turn.
+    SendBack,
+    /// The rounds are spent, which ends the goal.
+    Spent,
+    /// Consecutive rounds made no tool call. The goal stays set and waits for the next prompt.
+    Stalled,
+}
+
 /// What the argument to `/goal` asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Asked {
@@ -71,6 +89,8 @@ pub struct Running {
     rounds: usize,
     /// What the judge said last time it was asked.
     last: Option<String>,
+    /// How many rounds in a row ended with no tool call made.
+    idle: usize,
     /// Whether the person has held the goal still. The condition and the count are kept either way.
     paused: bool,
     /// When the goal was armed. Counted through a pause, since the goal is still set.
@@ -89,6 +109,7 @@ impl Running {
             condition,
             rounds: 0,
             last: None,
+            idle: 0,
             paused: false,
             started: std::time::Instant::now(),
             tokens_at_start: tokens,
@@ -145,17 +166,24 @@ impl Running {
         MAX_ROUNDS.saturating_sub(self.rounds)
     }
 
-    /// Record a verdict of not-yet, and say whether there is budget to send the work back.
+    /// Record a verdict of not-yet, and say what to do about it.
     ///
-    /// The reason is kept either way, because a goal that has just run out of rounds is exactly
-    /// when a person wants to read what the judge kept saying.
-    pub fn not_met(&mut self, reason: String) -> bool {
+    /// `tool_calls` is how many calls the turn just judged made, a count the driver holds and not
+    /// anything a reply said. The reason is kept either way, because a goal that has just run out
+    /// of rounds is exactly when a person wants to read what the judge kept saying.
+    pub fn not_met(&mut self, reason: String, tool_calls: usize) -> Next {
         self.last = Some(reason);
         if self.left() == 0 {
-            return false;
+            return Next::Spent;
+        }
+        self.idle = if tool_calls == 0 { self.idle + 1 } else { 0 };
+        if self.idle >= MAX_IDLE_ROUNDS {
+            // Counted again from the next prompt: that turn is judged on its own.
+            self.idle = 0;
+            return Next::Stalled;
         }
         self.rounds += 1;
-        true
+        Next::SendBack
     }
 }
 
@@ -205,7 +233,7 @@ mod tests {
     #[test]
     fn pausing_keeps_the_condition_and_the_rounds_and_resuming_arms_it_again() {
         let mut goal = Running::begin("the tests pass".to_string(), 0);
-        goal.not_met("nothing ran them".to_string());
+        goal.not_met("nothing ran them".to_string(), 1);
         assert!(goal.pause());
         assert!(!goal.pause(), "a second pause reported a change");
         assert!(goal.is_paused());
@@ -237,7 +265,10 @@ mod tests {
     #[test]
     fn a_verdict_of_not_yet_is_kept_and_counted() {
         let mut goal = Running::begin("the tests pass".to_string(), 0);
-        assert!(goal.not_met("nothing ran them".to_string()));
+        assert_eq!(
+            goal.not_met("nothing ran them".to_string(), 1),
+            Next::SendBack
+        );
         assert_eq!(goal.rounds(), 1);
         assert_eq!(goal.last_reason(), Some("nothing ran them"));
     }
@@ -248,13 +279,14 @@ mod tests {
     fn a_goal_stops_sending_the_work_back_once_its_rounds_are_spent() {
         let mut goal = Running::begin("the tests pass".to_string(), 0);
         for round in 1..=MAX_ROUNDS {
-            assert!(
-                goal.not_met("still nothing".to_string()),
+            assert_eq!(
+                goal.not_met("still nothing".to_string(), 1),
+                Next::SendBack,
                 "the goal gave up on round {round} of {MAX_ROUNDS}"
             );
         }
         assert_eq!(goal.left(), 0);
-        assert!(!goal.not_met("still nothing".to_string()));
+        assert_eq!(goal.not_met("still nothing".to_string(), 1), Next::Spent);
     }
 
     /// The round that runs out of budget is the one whose reason a person most wants to read, so
@@ -263,9 +295,9 @@ mod tests {
     fn the_reason_from_the_round_that_gave_up_is_still_kept() {
         let mut goal = Running::begin("the tests pass".to_string(), 0);
         for _ in 0..MAX_ROUNDS {
-            goal.not_met("still nothing".to_string());
+            goal.not_met("still nothing".to_string(), 1);
         }
-        goal.not_met("the linker is missing".to_string());
+        goal.not_met("the linker is missing".to_string(), 1);
         assert_eq!(goal.last_reason(), Some("the linker is missing"));
     }
 
@@ -282,5 +314,27 @@ mod tests {
             goal.elapsed(goal.started() + std::time::Duration::from_secs(125)),
             std::time::Duration::from_secs(125)
         );
+    }
+
+    /// A turn that answers in prose is sent back, and one that keeps doing it is not: the goal
+    /// stays set for the next prompt and the count starts again.
+    #[test]
+    fn rounds_with_no_tool_call_in_a_row_stop_the_goal_without_clearing_it() {
+        let mut goal = Running::begin("the tests pass".to_string(), 0);
+        for _ in 1..MAX_IDLE_ROUNDS {
+            assert_eq!(goal.not_met("say it".to_string(), 0), Next::SendBack);
+        }
+        assert_eq!(goal.not_met("say it".to_string(), 0), Next::Stalled);
+        assert_eq!(goal.last_reason(), Some("say it"));
+        assert_eq!(goal.not_met("say it".to_string(), 0), Next::SendBack);
+    }
+
+    /// Only consecutive rounds count: a round that ran something starts the count over.
+    #[test]
+    fn a_round_that_made_a_call_starts_the_count_again() {
+        let mut goal = Running::begin("the tests pass".to_string(), 0);
+        for calls in [0, 0, 1, 0, 0, 1] {
+            assert_eq!(goal.not_met("say it".to_string(), calls), Next::SendBack);
+        }
     }
 }

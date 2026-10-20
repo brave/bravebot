@@ -31,7 +31,9 @@ use bravebot_agent::workspace::MAX_ATTACHMENT_BYTES;
 use image::ImageFormat;
 use ratatui::Frame;
 use ratatui::layout::{Rect, Size};
+use ratatui_image::picker::cap_parser::QueryStdioOptions;
 use ratatui_image::{Image, Resize, picker::Picker, picker::ProtocolType, protocol::Protocol};
+use std::ffi::OsStr;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -77,8 +79,22 @@ pub fn sense() {
         if theme::no_color() {
             return None;
         }
-        Picker::from_query_stdio().ok()
+        let term_program = std::env::var_os("TERM_PROGRAM");
+        Picker::from_query_stdio_with_options(query_options(term_program.as_deref())).ok()
     });
+}
+
+/// What the terminal is asked, given the `TERM_PROGRAM` it set.
+///
+/// Apple's Terminal prints the text of the Kitty graphics query at the top of the screen instead
+/// of ignoring it, and it draws no protocol that query could find, so it is not sent there. The
+/// rest of the exchange is, because the last question in it is what ends the wait for a reply.
+fn query_options(term_program: Option<&OsStr>) -> QueryStdioOptions {
+    let mut options = QueryStdioOptions::default();
+    if crate::apple_terminal(term_program) {
+        options.blacklist_protocols.push(ProtocolType::Kitty);
+    }
+    options
 }
 
 fn picker() -> Option<&'static Picker> {
@@ -441,6 +457,29 @@ pub(crate) mod tests {
         assert!(!preview.settle());
         assert!(!preview.is_pending());
         assert!(preview.thumb().is_none());
+    }
+
+    /// What goes to the terminal for a given `TERM_PROGRAM`, as the picker writes it.
+    fn query_for(term_program: Option<&str>) -> String {
+        ratatui_image::picker::cap_parser::Parser::query(
+            false,
+            query_options(term_program.map(OsStr::new)),
+        )
+    }
+
+    /// Apple's Terminal prints the Kitty query as text, so it is not sent there, while the question
+    /// that ends the exchange still is. The terminals that answer it are asked as before.
+    #[test]
+    fn apple_terminal_is_not_sent_the_kitty_query_and_other_terminals_are() {
+        let apple = query_for(Some("Apple_Terminal"));
+        assert!(!apple.contains("_G"), "{apple:?}");
+        assert!(apple.ends_with("\x1b[5n"), "{apple:?}");
+
+        for other in [Some("iTerm.app"), Some("ghostty"), Some("WezTerm"), None] {
+            let query = query_for(other);
+            assert!(query.contains("\x1b_Gi=31,"), "{other:?}: {query:?}");
+            assert!(query.ends_with("\x1b[5n"), "{other:?}: {query:?}");
+        }
     }
 
     #[test]

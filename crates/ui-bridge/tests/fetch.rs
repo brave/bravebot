@@ -5,6 +5,8 @@
 //! property is about a request leaving the machine or not leaving it, and the only honest witness
 //! to that is the server it would have reached.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;

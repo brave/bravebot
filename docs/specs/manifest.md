@@ -8,10 +8,16 @@ governs:
   - crates/agent/src/manifest.rs
   - crates/agent/src/mode.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/finish.rs
+  - crates/cli/src/one_shot.rs
   - crates/session/src/sessions.rs
   - crates/tui/src/resume.rs
   - crates/tui/src/confirm.rs
+  - crates/tui/src/confirm/grants.rs
+  - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
   - crates/tui/src/manifest_run.rs
   - crates/ui-bridge/src/manifest.rs
 guards:
@@ -97,7 +103,9 @@ never half adopted, and a step is never repaired to make a plan usable.
 `verified-by: bravebot_core::manifest::a_path_outside_the_workspace_is_refused`
 `verified-by: bravebot_core::manifest::a_read_after_an_action_is_refused`
 `verified-by: bravebot_core::manifest::validation_is_deterministic`
+`verified-by: bravebot_core::manifest::a_body_field_must_hold_text`
 `verified-by: bravebot_agent::manifest::a_plan_that_fails_validation_runs_nothing`
+`verified-by: bravebot_agent::manifest::a_plan_whose_body_field_is_not_text_is_refused`
 
 <a id="MANIFEST-5"></a>
 ### MANIFEST-5: the driver adds nothing
@@ -156,11 +164,21 @@ There is no planner left to show anything to. A step result is stored, whatever 
 the only ways out of a slot are a later processor, a write back into the workspace, and a
 release the plan named in advance.
 
-An unmarked processor answer is a remark, not a document. Treating it as the slot would write an
-explanation over whatever the plan named next.
+An unmarked processor answer is a remark, not a document, except for a slot an answer reads and
+nothing else does. Treating it as the slot would write an explanation over whatever the plan named
+next. Such an answer is asked for once more, with the plan's instruction and one fixed sentence,
+both trusted, and a second answer without the mark fails the step. An empty reply is asked for once
+more as it stands, sharing that one further try. A slot only shown to the person has no file for a
+remark to land on, and what the processor said reaches the person either way, so there it stands as
+the answer.
 
 `verified-by: bravebot_core::policy::a_step_result_is_quarantined_whatever_its_label`
 `verified-by: bravebot_agent::manifest::an_unmarked_transform_does_not_become_a_file`
+`verified-by: bravebot_agent::manifest::an_unmarked_transform_is_asked_once_more_for_its_document`
+`verified-by: bravebot_agent::manifest::an_empty_processor_reply_is_asked_for_once_more`
+`verified-by: bravebot_agent::manifest::a_processor_gets_one_further_try_whatever_went_wrong`
+`verified-by: bravebot_agent::manifest::an_unmarked_answer_for_a_slot_only_shown_stands_as_the_answer`
+`verified-by: bravebot_agent::manifest::an_unmarked_answer_for_a_slot_a_write_also_reads_still_fails`
 `verified-by: bravebot_agent::manifest::a_slot_no_step_reads_is_never_opened`
 
 <a id="MANIFEST-9"></a>
@@ -260,8 +278,9 @@ leaves the continuing session with the file decisions the run ended with: attach
 unrelated grants, explicit distrust, and the downgrade of any path a completed write changed. A stop
 before any effect keeps the earlier decisions. A downgrade survives a later error or stop, and a
 session save and resume. The terminal and the desktop bridge adopt these decisions before the
-session continues or is saved, and the bridge reports them in `trust.rules` on both `manifest.done`
-and `manifest.error`. Trust comes from the retained authority and effect metadata, never from file
+session continues or is saved. The bridge writes the session's record as the run ends, where the
+session has one, so a session closed before its next turn resumes with them, and it reports them in
+`trust.rules` on both `manifest.done` and `manifest.error`. Trust comes from the retained authority and effect metadata, never from file
 contents or hashes.
 
 A panic or a lost worker is not one of these endings. A release build aborts on a panic, and when
@@ -291,6 +310,7 @@ anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 `verified-by: bravebot_tui::sessions::cancellation_before_manifest_effect_keeps_exact_file_decisions`
 `verified-by: bravebot_tui::sessions::a_lost_manifest_worker_leaves_the_session_map_as_it_was`
 `verified-by: bravebot_ui_bridge::manifest::ordinary_manifest_endings_keep_file_trust_in_the_bridge`
+`verified-by: bravebot_ui_bridge::manifest::a_downgrade_a_run_records_survives_close_and_resume_without_another_turn`
 `verified-by: bravebot_session::sessions::failed_manifest_records_distinguish_unknown_timing_from_measured_zero`
 `verified-by: bravebot_cli::running::failed_manifest_usage_survives_json_and_reload`
 `verified-by: bravebot_cli::running::manifest_usage_controls_survive_storage`

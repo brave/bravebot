@@ -1,7 +1,9 @@
 //! What a key press or a mouse event does: to the input box, to the modes that stand over it, and
 //! to a turn or a command in flight.
 
-use crate::command_table::{command_typed, runs_while_working, waits_behind_the_queue};
+use crate::command_table::{
+    command_typed, runs_while_working, waits_behind_the_queue, why_it_waits,
+};
 use crate::state::{Session, Status};
 use crate::{input, render};
 use bravebot_core::cancel::Cancel;
@@ -108,6 +110,9 @@ pub enum Action {
     HandOver(String),
     /// Call this session something else. Needs the session record, which the loop owns.
     Rename(String),
+    /// Add a note to the session record, kept beside the conversation (SESSION-36). Needs the
+    /// session record, which the loop owns.
+    Note(String),
     /// Copy this session and carry on in the copy, named as given or marked as a fork. Needs the
     /// conversation and the session record, which the loop owns.
     Branch(String),
@@ -122,6 +127,10 @@ pub enum Action {
     /// List, add or remove the reach remembered for commands. Carries the argument unparsed, since
     /// what it says back goes in the transcript, and needs the session's id and working directory.
     Reach(String),
+    /// Show the MCP servers, start one that is not running, or turn one off for the session.
+    /// Carries the argument unparsed, since what it says back goes in the transcript, and needs the
+    /// servers the session holds and the terminal to ask on, which the loop owns.
+    Mcp(String),
     /// Report the sandbox mode, or move it from the next turn. Carries the word unparsed, since the
     /// answer depends on the managed file and may need the screen to ask.
     Sandbox(String),
@@ -153,24 +162,26 @@ pub enum Action {
     /// is why the argument is carried unparsed: a number that is not one is answered with a line
     /// in the transcript, and the transcript is the loop's.
     Rewind(String),
+    /// List the hunks the last turn wrote, or put one back. Needs the workspace, the trust map and
+    /// the audit, which the loop owns, and carries the argument unparsed for the same reason as
+    /// `Rewind`.
+    Hunks(String),
     Quit,
 }
 
 /// The scope chord as the prompt history's switch, and the answer to the key if it was that.
 ///
-/// One key toggles: it narrows to this session's prompts from the wide walk, and widens back to
-/// every stored prompt from the narrow one. Only where the history can use it (INPUT-40): on a sent
-/// prompt, and for narrowing only where this session has sent one. Anywhere else the chord is not
+/// One key cycles: every stored prompt, this project's, this session's, and back, skipping a scope
+/// that holds nothing. Only where the history can use it (INPUT-40): on a sent prompt, and where
+/// another scope holds a prompt. Anywhere else the chord is not
 /// a switch, so the key is what `edit_line` makes of it, and when that is nothing it is swallowed
 /// rather than typed.
 fn change_history_scope(session: &mut Session, key: KeyEvent) -> Option<Action> {
     if !session.bindings().is_scope(&key) {
         return None;
     }
-    if session.history.can_widen() {
-        session.widen_history();
-    } else if session.history.can_narrow() {
-        session.narrow_history();
+    if session.history.next_scope().is_some() {
+        session.cycle_history_scope();
     } else if !edit_line(session, key) {
         return Some(Action::None);
     }
@@ -299,9 +310,9 @@ fn cycles_the_mode(key: KeyEvent) -> bool {
 /// the view to see what a delegate was doing, or the search to find a prompt that has scrolled
 /// away is not asking for the turn to end when they close it again, and the press that reaches
 /// the turn is the next one. Watching is also the mode most likely to be open while something is
-/// going wrong.
+/// going wrong. A picker opened mid-turn is left the same way.
 ///
-/// Each of the three names these keys itself, and this is what lets them have them: the loops read
+/// Each of the four names these keys itself, and this is what lets them have them: the loops read
 /// this before any ladder, so a mode left out here is one whose way out ends the turn instead.
 ///
 /// Named rather than written out at each loop, because there are three of them and a condition
@@ -321,6 +332,7 @@ pub(super) fn stops_a_command(session: &Session, key: KeyEvent) -> bool {
     !session.scrolling()
         && session.watching().is_none()
         && !session.searching_history()
+        && session.picking().is_none()
         && (is_ctrl_c(key) || is_escape(session, key))
 }
 
@@ -833,10 +845,14 @@ fn suggestion_key(session: &mut Session, key: KeyEvent) -> Option<Action> {
 /// The answer to a key that a mode standing over the session takes, and `None` where no mode is
 /// open.
 ///
-/// A mode owns every key before anything edits the line: while a delegate is being watched, the
-/// scroller is open or a history search is, there is no line being edited, and a letter belongs to
-/// the mode rather than to a box nobody can see. Checked in that order.
+/// A mode owns every key before anything edits the line: while a picker is open, a delegate is
+/// being watched, the scroller is open or a history search is, there is no line being edited, and a
+/// letter belongs to the mode rather than to a box nobody can see. Checked in that order.
 fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<Action> {
+    if session.picking().is_some() {
+        session.press_in_picking(key.code, key.modifiers);
+        return Some(Action::Redraw);
+    }
     if session.watching().is_some() {
         return Some(watching_key(session, key));
     }
@@ -853,6 +869,7 @@ fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<Action> {
 ///
 /// Separated from the loop so it can be tested without a terminal.
 pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
+    session.reread_offers();
     // Before the key edits anything: a brief whose box was emptied is no longer being edited.
     session.drop_a_wiped_handoff();
     // At rest, so the modes are the whole of what stands between the key and the box.
@@ -1152,6 +1169,17 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
             session.stash();
             Action::Redraw
         }
+        // In the shared ladder so it works mid-turn, like every other key that edits the line
+        // rather than sends it. Reaches vi's own undo stack as well as the ordinary box's, so a
+        // change already on it comes back in INSERT mode without first pressing Escape to reach
+        // `u` from NORMAL mode; `undo_last_change` says whether there was a step to put back.
+        _ if session.bindings().is_undo(&key) => {
+            if session.undo_last_change() {
+                Action::Redraw
+            } else {
+                Action::None
+            }
+        }
         // What a turn did, drawn per entry as the turn fills in. In the shared ladder because it
         // sets a render flag and sends nothing, and because the trail is *for* watching a turn:
         // refused mid-turn, a person who wanted to see which tools a turn was calling had to wait
@@ -1305,6 +1333,9 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
 /// therefore watched their words go nowhere, with nothing on the screen to say why, which is
 /// indistinguishable from an interface that has stopped responding.
 pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action {
+    // Where the idle path asks, and for the reason it does: a turn can begin with the brief `/handoff`
+    // wrote still in the box, and an edit that empties it mid-turn must end it as it does at rest.
+    session.drop_a_wiped_handoff();
     // None of the modes sends anything, and sending is the whole of what a running turn refuses.
     // Mid-turn is also when a delegate is there to watch, since one does not outlive the turn that
     // spawned it, and when the prompt somebody wants back is most likely one they can no longer
@@ -1387,6 +1418,13 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
         return Action::Redraw;
     }
 
+    // The brief `/handoff` wrote is a line the planner wrote, so no arm below may carry it out as a
+    // command or queue it (CMD-1). It starts a new session, which a running turn cannot, so Enter
+    // leaves it in the box for the press that follows the turn, as the idle ladder answers it.
+    if key.code == KeyCode::Enter && !session.shell && session.handoff_pending() {
+        return Action::None;
+    }
+
     // Before every arm that queues anything else, because in shell mode the line is a command line
     // and nothing else, which is the order the idle ladder answers the two in: `/status` there is a
     // path to a program somebody may have. The line waits, as every line Enter is pressed on
@@ -1430,12 +1468,14 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     //
     // Not in shell mode, where the line is a command line and `/status` is a path to a program, for
     // the reason the arm above answers that mode first.
-    if key.code == KeyCode::Enter
-        && !session.shell
-        && command_typed(session.input()).is_some()
-        && session.queue_command()
-    {
-        return queued(session, key);
+    if key.code == KeyCode::Enter && !session.shell && command_typed(session.input()).is_some() {
+        let why = why_it_waits(session, session.input());
+        if session.queue_command() {
+            if let Some(why) = why {
+                session.answer_while_working(|session| session.note(why));
+            }
+            return queued(session, key);
+        }
     }
 
     // A prompt file expands mid-turn as it does at rest, into the box, so the text is read before it
@@ -1523,6 +1563,21 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             session.scroll_down(session.wheel_rows());
             Action::Redraw
         }
+        // The border between the transcript and the panel is the panel's handle, and a press on
+        // it starts neither a selection nor a copy (PANEL-6).
+        MouseEventKind::Down(MouseButton::Left)
+            if session.begin_panel_drag(mouse.row, mouse.column) =>
+        {
+            Action::Redraw
+        }
+        MouseEventKind::Drag(MouseButton::Left) if session.dragging_panel() => {
+            session.drag_panel_to(mouse.column);
+            Action::Redraw
+        }
+        MouseEventKind::Up(MouseButton::Left) if session.dragging_panel() => {
+            session.end_panel_drag();
+            Action::Redraw
+        }
         MouseEventKind::Down(MouseButton::Left) => {
             session.begin_selection(mouse.row, mouse.column);
             Action::Redraw
@@ -1563,6 +1618,14 @@ pub(super) fn took_input(session: &mut Session, taken: &TermEvent) {
     }
 
     session.key_arrived_alone = input::the_last_event_arrived_alone();
+
+    // Every loop that reads an event comes through here, so a terminal left or returned to while a
+    // turn, a command or a picker is running is recorded as it is while at rest (CMD-20).
+    match taken {
+        TermEvent::FocusLost => session.away.focus(false),
+        TermEvent::FocusGained => session.away.focus(true),
+        _ => {}
+    }
 
     let asks_to_leave = input::key_of(taken).is_some_and(|key| {
         holds_ctrl_without_alt(key.modifiers)

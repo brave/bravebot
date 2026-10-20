@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""The checks and the call that every poster of an issue on brave/bravebot shares.
+"""The checks and the call the `issue-poster` definition makes to file an issue on brave/bravebot.
 
     python3 agents/issue_helper.py post --title TITLE --body-file FILE --label NAME [--label NAME ...]
         [--assignee LOGIN] [--repo OWNER/NAME]
 
-The `issue-poster` definition (agents/agents/issue-poster.md) runs this to file an issue, and the
-scripted posters under agents/skills/ import it, so a label or a login the repository would refuse
-is turned away the same way whichever of them posts. `gh issue create` fails on both, and finding
-that out on the fourth of six issues leaves half a report filed.
+Only the `issue-poster` definition (agents/agents/issue-poster.md) runs this, to file an issue. No
+script under agents/skills/ files one. `gh issue create` fails on a label or a login the repository
+refuses, so both are checked before the create is attempted.
 
 Creating a label changes what everybody sees, so a missing label is a refusal that prints the
 `gh label create` line for a person to run, never something this does.
@@ -60,7 +59,7 @@ def refusal(repo, labels, assignee=None, *, have=None, can_assign=None):
     """Why nothing should be posted, as the lines to print, or None when it is clear to post.
 
     `have` and `can_assign` default to the real lookups. A caller that was handed its own, such as a
-    poster under test, passes them.
+    test, passes them.
     """
     have = have or existing_labels
     can_assign = can_assign or assignable

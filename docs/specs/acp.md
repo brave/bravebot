@@ -52,6 +52,7 @@ declared in a person's own directory and asked about before it starts.
 
 `verified-by: bravebot_ui_bridge::acp::what_an_editor_attaches_is_carried_as_a_paste_and_a_drop_are`
 `verified-by: bravebot_ui_bridge::acp::a_block_that_could_only_be_carried_as_words_is_refused`
+`verified-by: bravebot_ui_bridge::acp::a_list_of_servers_in_a_new_session_is_not_started`
 
 <a id="ACP-3"></a>
 ### ACP-3: a question is put as a permission request, and only a selected approval approves
@@ -104,8 +105,11 @@ the input refuses every question still waiting, so a write that was waiting does
 
 The first prompt of a session whose directory has no recorded answer puts the trust question to the
 editor as a permission request, and no turn starts and no model is asked until it is answered. A
-refusal is an answer: the session runs with no path trusted. The question is put once per session
-and an answer is never remembered. Stopping the prompt at that question answers it no, so the session still takes a prompt afterwards. A question of the planner's own is not a permission, so it is
+refusal is an answer: the session runs with no path trusted. The question is put once per session.
+A yes is kept as it is at the other front ends' question ([TRUST-23](trust-map.md#TRUST-23)), and
+the question says so before the editor is asked: the option reads "Trust and remember" and the
+question names the file the yes is written to, or the option reads "Trust for this session" and the
+question says the answer cannot be kept here. A refusal is never kept. Stopping the prompt at that question answers it no, so the session still takes a prompt afterwards. A question of the planner's own is not a permission, so it is
 not put to the editor; the turn continues as it does where nobody could be asked.
 
 The trust question is sent as a permission request of kind `other`. An editor that approves such
@@ -117,8 +121,12 @@ directory before they reach the editor ([MODE-2](permission-modes.md#MODE-2)).
 
 `verified-by: bravebot_ui_bridge::acp::no_turn_starts_before_the_trust_question_is_answered`
 `verified-by: bravebot_ui_bridge::acp::a_session_asks_about_trust_once`
+`verified-by: bravebot_ui_bridge::acp::a_yes_is_kept_where_the_question_says_so_and_a_later_session_is_not_asked`
+`verified-by: bravebot_ui_bridge::acp::a_refusal_at_the_trust_question_is_not_kept`
+`verified-by: bravebot_ui_bridge::acp::the_trust_question_says_when_a_yes_cannot_be_kept`
 `verified-by: bravebot_ui_bridge::acp::a_session_stopped_at_the_trust_question_can_still_take_a_prompt`
 `verified-by: bravebot_ui_bridge::acp::a_question_of_the_planners_is_not_put_to_the_editor_as_a_permission`
+`verified-by: bravebot_ui_bridge::acp::the_trust_question_is_of_kind_other_and_a_standing_answer_to_it_is_not_kept`
 
 <a id="ACP-6"></a>
 ### ACP-6: the standard output holds protocol messages and nothing a model said as one
@@ -129,9 +137,11 @@ nothing read from a model or a tool is ever interpreted as a message of the prot
 messages an editor writes are read as requests, notifications and answers.
 
 Text a model wrote is also sent without what makes an editor fetch something on arrival. A
-markdown image and an HTML tag that loads a resource are cut by a space, so that an address the
-model built from what it read is shown and not requested, and a control character is pictured as in
-the terminal. A link is sent as written, since drawing one loads nothing.
+markdown image and every HTML tag, closing tag, comment and instruction are cut by a space, except
+a bare tag, one with no attribute, whose kind loads nothing (so `<script>`, `<style>` and `<img>`
+are cut even bare), so that an address the model built from what it read is shown and not
+requested, and a control character is pictured as in the terminal. A link is sent as written,
+since drawing one loads nothing.
 
 `verified-by: bravebot_ui_bridge::acp::a_reply_that_looks_like_a_protocol_message_is_only_text`
 `verified-by: bravebot_ui_bridge::acp::a_reply_that_would_make_an_editor_fetch_something_is_cut`

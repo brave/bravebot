@@ -745,6 +745,96 @@ fn a_foreign_skills_directory_below_the_root_is_not_a_source() {
     );
 }
 
+/// INSTR-13 with INSTR-14's record: working in a directory adds its `.bravebot/skills` and nothing
+/// else. A `.claude/skills` or `.agents/skills` under a directory the session has worked in is
+/// still an ordinary directory, at every level down to the file, while the root's own are read.
+#[test]
+fn a_foreign_skills_directory_under_a_touched_directory_is_not_a_source() {
+    let scratch = Scratch::new("foreign-touched");
+    let project = scratch.workspace();
+    write_skill(&project.join(".claude"), "rootc", "rootc", "root", "ROOT-C");
+    write_skill(&project.join(".agents"), "roota", "roota", "root", "ROOT-A");
+    let pkg = project.join("pkg");
+    let inner = pkg.join("inner");
+    write_skill(&pkg.join(".bravebot"), "own", "own", "native", "OWN-BODY");
+    write_skill(&pkg.join(".claude"), "pkgc", "pkgc", "foreign", "PKG-C");
+    write_skill(&pkg.join(".agents"), "pkga", "pkga", "foreign", "PKG-A");
+    write_skill(
+        &inner.join(".claude"),
+        "innerc",
+        "innerc",
+        "foreign",
+        "IN-C",
+    );
+    write_skill(
+        &inner.join(".agents"),
+        "innera",
+        "innera",
+        "foreign",
+        "IN-A",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+    workspace.record_touch("pkg/inner/a.rs");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    let mut offered = from_disk(&catalogue);
+    offered.sort_unstable();
+    assert_eq!(offered, ["own", "roota", "rootc"]);
+    assert!(notices.is_empty(), "{notices:?}");
+}
+
+/// Two levels of nested skills shadow one another deepest last (INSTR-14), whatever order the
+/// session worked in them, and a package's own skill the deeper one does not name stays offered.
+#[test]
+fn a_deeper_nested_skill_shadows_a_shallower_one_of_its_name() {
+    let scratch = Scratch::new("nested-two-levels");
+    let project = scratch.workspace();
+    let pkg = project.join("pkg");
+    let inner = pkg.join("inner");
+    write_skill(
+        &project.join(".bravebot"),
+        "fmt",
+        "fmt",
+        "root",
+        "ROOT-BODY",
+    );
+    write_skill(&pkg.join(".bravebot"), "fmt", "fmt", "package", "PKG-BODY");
+    write_skill(
+        &pkg.join(".bravebot"),
+        "lint",
+        "lint",
+        "package",
+        "PKG-LINT",
+    );
+    write_skill(
+        &inner.join(".bravebot"),
+        "fmt",
+        "fmt",
+        "inner",
+        "INNER-BODY",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+    let discover = |workspace: &Workspace| {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, workspace, None).0
+    };
+
+    workspace.record_touch("pkg/a.rs");
+    assert_eq!(body_of(&discover(&workspace), "fmt"), "PKG-BODY");
+
+    // The deeper directory is named first, so an order of touching would put it the wrong way.
+    workspace.record_touch("pkg/inner/b.rs");
+    let both = discover(&workspace);
+    assert_eq!(body_of(&both, "fmt"), "INNER-BODY");
+    assert_eq!(body_of(&both, "lint"), "PKG-LINT");
+}
+
 /// The trust map's rules are workspace-relative, so a rule about the project must not decide
 /// anything about the user's own directory. Declining the working directory says nothing about
 /// the skills someone installed globally, and they must still load.
@@ -1402,6 +1492,85 @@ fn the_set_an_interface_resolves_is_the_one_a_turn_would() {
     }
 }
 
+/// The input box draws names and descriptions and never loads a skill, so it does not walk each
+/// skill's directory for the files beside it. It still offers exactly the skills a turn resolves,
+/// and the turn's own set keeps the listing `load_skill` hands back.
+#[test]
+fn the_set_the_box_offers_is_the_turns_without_the_files_beside_each_skill() {
+    let scratch = Scratch::new("offered");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_skill(
+        &home,
+        "commit-style",
+        "commit-style",
+        "how commits read",
+        "sign",
+    );
+    write_skill(
+        &project.join(".bravebot"),
+        "release-notes",
+        "release-notes",
+        "draft the notes",
+        "draft",
+    );
+    for beside in [
+        home.join("skills/commit-style/template.md"),
+        project.join(".bravebot/skills/release-notes/template.md"),
+    ] {
+        std::fs::write(beside, "template").expect("write file beside a skill");
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+    let trusted = || {
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store
+    };
+    let mut sink = RecordingSink::new();
+    let resolved = skills::resolved(
+        &workspace,
+        Some(&home),
+        trusted(),
+        Default::default(),
+        &mut sink,
+    );
+    let offered = skills::offered(
+        &workspace,
+        Some(&home),
+        trusted(),
+        Default::default(),
+        &mut sink,
+    );
+
+    let names = |catalogue: &skills::Catalogue| {
+        catalogue
+            .iter()
+            .map(|skill| (skill.name.clone(), skill.description.clone(), skill.source))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&offered), names(&resolved));
+    assert_eq!(
+        from_disk(&offered),
+        ["commit-style", "release-notes"],
+        "both skills are offered"
+    );
+    for skill in resolved.iter().filter(|skill| skill.origin != "built-in") {
+        assert_eq!(
+            skill.files,
+            ["template.md"],
+            "{} in the turn's set",
+            skill.name
+        );
+    }
+    for skill in offered.iter() {
+        assert!(
+            skill.files.is_empty(),
+            "{} was walked for its files",
+            skill.name
+        );
+    }
+}
+
 /// A skill is read before anything is asked, so nobody named the file, and a link from the skills
 /// directory to a file a deny rule covers would put that file in the prompt of a project the person
 /// trusted (PERM-7). The interface reads the same rules, so it does not offer the skill either
@@ -1762,5 +1931,40 @@ fn a_nested_skill_on_the_list_covers_a_distrusted_project_entry_of_its_name() {
     assert!(
         notices.is_empty(),
         "an entry the nested skill covered was counted: {notices:?}"
+    );
+}
+
+/// The documentation skill is offered in a directory nobody vouched for with no home, and the
+/// description is the whole of when the planner loads it, so it names one condition and ends with it.
+#[test]
+fn the_help_skill_is_offered_everywhere_for_a_question_about_bravebot_and_nothing_else() {
+    let scratch = Scratch::new("help-skill-offered");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    let skill = catalogue.get("bravebot-help").expect("the help skill");
+    assert_eq!(skill.source, skills::Source::BuiltIn);
+    assert!(notices.is_empty(), "a notice about a built-in: {notices:?}");
+    assert!(
+        skill
+            .description
+            .ends_with("Load it when the user asks a question about using bravebot itself."),
+        "something follows the condition: {}",
+        skill.description
+    );
+    assert_eq!(
+        skill.description.to_lowercase().matches("load").count(),
+        1,
+        "the description invites a load more than once: {}",
+        skill.description
+    );
+    assert!(
+        !catalogue.describe_for_prompt().contains("using/watches"),
+        "the pages are advertised with the skill instead of waiting for load_skill"
     );
 }

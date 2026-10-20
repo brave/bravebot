@@ -28,6 +28,7 @@ fn opening_answers(
         state: Some(state.to_path_buf()),
         named: None,
         started: root.to_path_buf(),
+        managed: bravebot_config::Managed::default(),
     };
     let settings = sources.settings(root);
     let permissions = rules_from(
@@ -122,7 +123,9 @@ fn a_turn_the_session_sends(
         match message {
             ToMain::Write(request) => {
                 asked.push(request);
-                answer_tx.send(Reply::Write(answer)).expect("answered");
+                answer_tx
+                    .send(Reply::Write(answer.clone()))
+                    .expect("answered");
             }
             ToMain::Run(_)
             | ToMain::ReadOutput(_)

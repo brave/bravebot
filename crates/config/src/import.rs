@@ -256,6 +256,8 @@ pub struct Found {
     pub read: Vec<PathBuf>,
     /// The server that answered, for that line where no file was read.
     pub running_at: Option<String>,
+    /// The context window, in tokens, the running server holds [`Found::model`] loaded with.
+    pub window: Option<u64>,
     /// Names under `env`, with their values.
     pub env: Vec<(String, String)>,
     /// The top-level `model` key.
@@ -435,6 +437,9 @@ pub struct Installed {
     /// What it can do, or `None` where the listing reported nothing, which an Ollama older than
     /// the field does.
     pub capabilities: Option<Vec<String>>,
+    /// The context window it is loaded with, in tokens, or `None` where it is not loaded or the
+    /// server did not say.
+    pub window: Option<u64>,
 }
 
 /// Everything the sources hold, Claude Code first and Ollama last.
@@ -481,7 +486,7 @@ pub fn running(host: &str, listed: Vec<Installed>) -> Found {
                     .as_ref()
                     .is_some_and(|can| can.iter().any(|capability| capability == TOOLS))
         })
-        .max_by_key(|model| moment(&model.modified_at));
+        .max_by_key(|model| crate::time::rfc3339(&model.modified_at));
     let Some(chosen) = chosen else {
         return ollama_left(host, Reason::NoToolModel, Some(host));
     };
@@ -489,6 +494,14 @@ pub fn running(host: &str, listed: Vec<Installed>) -> Found {
     let endpoint = format!("{host}/v1");
     let mut options = Map::new();
     options.insert("baseURL".to_string(), Value::from(endpoint.as_str()));
+    // A window above the assumed one is left unwritten: the assumed one is deliberately low, and
+    // a figure read once from a loaded model goes stale when the person reloads it larger.
+    if let Some(window) = chosen
+        .window
+        .filter(|window| *window < crate::provider::CONTEXT_WINDOW)
+    {
+        options.insert("contextWindow".to_string(), Value::from(window));
+    }
     let mut entry = Map::new();
     entry.insert("name".to_string(), Value::from("Ollama (local)"));
     entry.insert("options".to_string(), Value::Object(options));
@@ -496,6 +509,7 @@ pub fn running(host: &str, listed: Vec<Installed>) -> Found {
         source: Source::Ollama,
         read: Vec::new(),
         running_at: Some(host.to_string()),
+        window: chosen.window,
         env: Vec::new(),
         model: Some(format!("{OLLAMA_ID}/{}", chosen.name)),
         model_gateway: Some(OLLAMA_ID.to_string()),
@@ -515,6 +529,7 @@ fn ollama_left(name: &str, reason: Reason, running_at: Option<&str>) -> Found {
         source: Source::Ollama,
         read: Vec::new(),
         running_at: running_at.map(str::to_string),
+        window: None,
         env: Vec::new(),
         model: None,
         model_gateway: None,
@@ -524,91 +539,6 @@ fn ollama_left(name: &str, reason: Reason, running_at: Option<&str>) -> Found {
             reason,
         }],
     }
-}
-
-/// An RFC 3339 time as seconds and nanoseconds since the epoch, or `None` where it is not one.
-///
-/// Compared as a time rather than as text, because each carries its own offset: a model pulled
-/// later in New York can read as earlier than one pulled in Paris. Anything unreadable is `None`,
-/// which sorts before every time.
-fn moment(text: &str) -> Option<(i64, u32)> {
-    let bytes = text.as_bytes();
-    let digits = |range: std::ops::Range<usize>| {
-        let part = text.get(range)?;
-        part.bytes()
-            .all(|byte| byte.is_ascii_digit())
-            .then(|| part.parse::<i64>().ok())
-            .flatten()
-    };
-    if [4, 7].iter().any(|&at| bytes.get(at) != Some(&b'-'))
-        || !matches!(bytes.get(10), Some(b'T' | b't'))
-        || [13, 16].iter().any(|&at| bytes.get(at) != Some(&b':'))
-    {
-        return None;
-    }
-    let (year, month, day) = (digits(0..4)?, digits(5..7)?, digits(8..10)?);
-    let (hour, minute, second) = (digits(11..13)?, digits(14..16)?, digits(17..19)?);
-    if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || hour > 23
-        || minute > 59
-        || second > 60
-    {
-        return None;
-    }
-
-    let mut at = 19;
-    let mut nanos = 0;
-    if bytes.get(at) == Some(&b'.') {
-        let start = at + 1;
-        at = start;
-        while bytes.get(at).is_some_and(u8::is_ascii_digit) {
-            at += 1;
-        }
-        let fraction = text
-            .get(start..at)
-            .filter(|fraction| !fraction.is_empty())?;
-        let mut padded: String = fraction.chars().take(9).collect();
-        while padded.len() < 9 {
-            padded.push('0');
-        }
-        nanos = padded.parse::<u32>().ok()?;
-    }
-    let offset = match text.get(at..)? {
-        "Z" | "z" => 0,
-        zone => {
-            let sign = match zone.as_bytes().first() {
-                Some(b'+') => 1,
-                Some(b'-') => -1,
-                _ => return None,
-            };
-            if zone.len() != 6 || zone.as_bytes()[3] != b':' {
-                return None;
-            }
-            let (hours, minutes) = (digits(at + 1..at + 3)?, digits(at + 4..at + 6)?);
-            if hours > 23 || minutes > 59 {
-                return None;
-            }
-            sign * (hours * 3600 + minutes * 60)
-        }
-    };
-    let days = days_from_civil(year, month, day);
-    Some((
-        days * 86_400 + hour * 3600 + minute * 60 + second - offset,
-        nanos,
-    ))
-}
-
-/// Days since 1970-01-01 for a civil date: Howard Hinnant's `days_from_civil`, which shifts the
-/// epoch to 0000-03-01 so leap days fall at the end of the year and the arithmetic needs no table.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let shifted_month = if month > 2 { month - 3 } else { month + 9 };
-    let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
 }
 
 /// A parse of a source file, which clears itself when it goes: a source may hold a key.
@@ -820,6 +750,7 @@ fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Opt
         source: Source::ClaudeCode,
         read: file.map(|_| path.to_path_buf()).into_iter().collect(),
         running_at: None,
+        window: None,
         env,
         model,
         model_gateway: None,
@@ -961,6 +892,7 @@ fn opencode(configs: &[PathBuf], auth: Option<&Path>) -> Option<Found> {
         source: Source::Opencode,
         read: read_from,
         running_at: None,
+        window: None,
         env: Vec::new(),
         model,
         model_gateway,
@@ -1781,6 +1713,64 @@ mod tests {
         assert_eq!(left(&found), [("google-vertex", Reason::Vertex)]);
     }
 
+    /// IMPORT-3: opencode reads an `openai` entry naming no SDK, and bravebot reaches the same host
+    /// through its chat-completions route. The entry arrives naming the variable opencode reads the
+    /// key from, since this program reads only what an entry names.
+    #[test]
+    fn an_openai_entry_naming_no_sdk_is_offered_at_openais_endpoint() {
+        let home = Scratch::new("import-openai");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"openai": {"name": "OpenAI"}}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert_eq!(ids(&found), ["openai"]);
+        let openai = gateway(&found, "openai");
+        assert_eq!(openai.endpoint, "https://api.openai.com/v1");
+        assert_eq!(openai.variables(), ["OPENAI_API_KEY"]);
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+    }
+
+    /// IMPORT-3: `@ai-sdk/openai` speaks the Responses API, which this program does not send, so an
+    /// entry naming it is left even though the host it would reach is one this program knows.
+    #[test]
+    fn an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk() {
+        let home = Scratch::new("import-openai-sdk");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"openai": {"npm": "@ai-sdk/openai"}}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(left(&found), [("openai", Reason::AnotherSdk)]);
+    }
+
+    /// IMPORT-3: `opencode auth login` keeps an OpenAI key in `auth.json` and writes no config
+    /// entry. The endpoint is compiled in, so the key is a gateway rather than a `NoEndpoint`.
+    #[test]
+    fn an_auth_json_key_for_openai_is_a_provider() {
+        let home = Scratch::new("import-openai-auth");
+        home.write(
+            ".local/share/opencode/auth.json",
+            r#"{"openai": {"type": "api", "key": "a-held-key"}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        let openai = gateway(&found, "openai");
+        assert_eq!(openai.endpoint, "https://api.openai.com/v1");
+        match &openai.key {
+            Key::Held(key) => assert_eq!(key.expose(), "a-held-key"),
+            other => panic!("the key was not held: {other:?}"),
+        }
+        assert_eq!(openai.fallback(), Some("OPENAI_API_KEY"));
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+    }
+
     /// IMPORT-3: an entry for another SDK would be kept by `Provider::all` and then sent requests in
     /// a protocol it does not speak.
     #[test]
@@ -2393,6 +2383,7 @@ mod tests {
             name: name.to_string(),
             modified_at: modified_at.to_string(),
             capabilities: capabilities.map(|can| can.iter().map(|it| it.to_string()).collect()),
+            window: None,
         }
     }
 
@@ -2432,6 +2423,53 @@ mod tests {
             listed
         });
         (found, asked.into_inner())
+    }
+
+    /// IMPORT-10: the window shown is the one of the model that is written, not of another model
+    /// the server happens to have loaded.
+    #[test]
+    fn the_window_is_the_one_of_the_model_chosen() {
+        let mut listed = three_pulled();
+        let newest = listed
+            .iter()
+            .position(|model| model.name == "qwen3-coder-oc:latest")
+            .expect("the newest");
+        listed[newest].window = Some(4096);
+        for (index, model) in listed.iter_mut().enumerate() {
+            if index != newest {
+                model.window = Some(777);
+            }
+        }
+
+        let found = running("http://localhost:11434", listed);
+
+        assert_eq!(found.model.as_deref(), Some("ollama/qwen3-coder-oc:latest"));
+        assert_eq!(found.window, Some(4096));
+    }
+
+    /// IMPORT-3: a window below the assumed one is written as the entry's `contextWindow`, because
+    /// the entry lists no models to carry it. A window at or above the assumed one, and none at all,
+    /// write the documented block alone, so a figure that later grows is not held down. The
+    /// regressions rejected are writing nothing, and writing every figure.
+    #[test]
+    fn a_window_below_the_assumed_one_is_written_into_the_entry() {
+        let options = |window: Option<u64>| {
+            let mut listed = three_pulled();
+            listed[0].window = window;
+            let found = running("http://localhost:11434", listed);
+            let chosen = found.model.clone();
+            assert_eq!(chosen.as_deref(), Some("ollama/qwen3-coder-oc:latest"));
+            found.gateways[0].entry["options"].clone()
+        };
+
+        assert_eq!(
+            options(Some(4096)),
+            serde_json::json!({"baseURL": "http://localhost:11434/v1", "contextWindow": 4096})
+        );
+        let plain = serde_json::json!({"baseURL": "http://localhost:11434/v1"});
+        assert_eq!(options(Some(crate::provider::CONTEXT_WINDOW)), plain);
+        assert_eq!(options(Some(1_000_000)), plain);
+        assert_eq!(options(None), plain);
     }
 
     /// IMPORT-10: nothing configured and Ollama running is the case the configuration guide

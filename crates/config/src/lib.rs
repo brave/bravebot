@@ -35,6 +35,7 @@ pub mod scrub;
 mod settings;
 #[cfg(test)]
 mod testutil;
+pub mod time;
 
 pub use managed::{Managed, ModelRefusal, Models, Refusal, Rule, Server, managed_file};
 pub use run_network::{
@@ -42,8 +43,9 @@ pub use run_network::{
     settle_run_network_in, settled_run_network,
 };
 pub use sandbox_filesystem::{
-    Filesystem, resolve as resolve_sandbox_filesystem, sandbox_filesystem,
-    settle_sandbox_filesystem, settle_sandbox_filesystem_in, settled_sandbox_filesystem,
+    Filesystem, holds_back_temporary_directory, resolve as resolve_sandbox_filesystem,
+    sandbox_filesystem, settle_sandbox_filesystem, settle_sandbox_filesystem_in,
+    settled_sandbox_filesystem,
 };
 pub use settings::{
     Attribution, Narrowing, NotADocument, PermissionLists, Reference, ReferenceFault, RunDeadlines,
@@ -1045,6 +1047,11 @@ pub struct Config {
     /// `None` leaves both on the session's own model. [`Config::summary`] resolves a tier word in
     /// it.
     pub summary_model: Option<String>,
+    /// The model the settings in force name for processors to run on, as the file spelled it.
+    ///
+    /// `None`, and `inherit`, leave a processor on the turn's own model. [`Config::processor`]
+    /// resolves a tier word in it.
+    pub processor_model: Option<String>,
     /// The cache lifetime the settings in force chose for requests to a gateway, if they chose one.
     ///
     /// `None` sends no lifetime, so every service keeps its own default. Bedrock accounts carry the
@@ -1287,6 +1294,7 @@ impl Config {
         config.defer_mcp_tools_above = settings.defer_mcp_tools_above();
         config.fallback_model = settings.fallback_model().map(str::to_string);
         config.summary_model = settings.summary_model().map(str::to_string);
+        config.processor_model = settings.processor_model().map(str::to_string);
         let ttl = settings.prompt_cache_ttl();
         config.prompt_cache_ttl = ttl;
         config.bedrock = config.bedrock.map(|account| account.with_cache_ttl(ttl));
@@ -1416,6 +1424,7 @@ impl Config {
             defer_mcp_tools_above: None,
             fallback_model: None,
             summary_model: None,
+            processor_model: None,
             prompt_cache_ttl: None,
             context_budget,
             budget_was_chosen,
@@ -1464,6 +1473,22 @@ impl Config {
         let changed = budget != self.context_budget;
         self.context_budget = budget;
         changed
+    }
+
+    /// Take the window of the model that answers a request: `model` where one is named, otherwise
+    /// the configured default, which is what a request naming none asks for. `advertised` is given
+    /// that model's name and reports the window its roster states, or `None` where the roster does
+    /// not describe it or could not be fetched, which leaves the default budget in place.
+    ///
+    /// The rule both clients apply, so the roster each one reads is the only part that differs
+    /// between them. Returns whether the budget changed, as [`Config::adopt_window`] does.
+    pub fn adopt_window_of_model_in_force(
+        &mut self,
+        model: Option<&str>,
+        advertised: impl FnOnce(&str) -> Option<u64>,
+    ) -> bool {
+        let in_force = model.unwrap_or(&self.default_model).to_string();
+        self.adopt_window(advertised(&in_force))
     }
 
     /// The gateway serving `model`, and the name to ask it for.
@@ -1650,6 +1675,19 @@ impl Config {
             .map(|name| self.model_named(name))
     }
 
+    /// The model an isolated processor runs on, resolved like `--model`.
+    ///
+    /// `None` where the settings name none, which leaves a processor on the turn's own model.
+    ///
+    /// A model the machine-level layer refuses is still returned, as it is by [`Config::summary`]
+    /// and for the same reason: the setting is a cost boundary, so a name that cannot be used stops
+    /// the call and the refusal is the caller's to make (PROC-13).
+    pub fn processor(&self) -> Option<String> {
+        self.processor_model
+            .as_deref()
+            .map(|name| self.model_named(name))
+    }
+
     /// Why the machine-level layer refuses `name`, and the file that refuses it (BACKEND-48).
     ///
     /// `name` is resolved here before being compared, so a tier word is checked as the model it names:
@@ -1661,7 +1699,14 @@ impl Config {
     /// [`Config::model_named`] is shared: a name means the same model wherever it was written down,
     /// and an answer that differed per route would be an answer per route to get wrong.
     pub fn model_refused(&self, name: &str) -> Option<(&std::path::Path, managed::ModelRefusal)> {
-        self.models.refuses(&self.model_named(name))
+        let name = self.model_named(name);
+        // A gateway model has two spellings, the qualified one and the one the gateway is sent, and
+        // an entry may name either whichever the model was asked for as.
+        let Some((provider, wire)) = self.provider_for(&name) else {
+            return self.models.refuses(&name);
+        };
+        let qualified = format!("{}/{wire}", provider.id);
+        self.models.refuses_any(&[&name, wire, &qualified])
     }
 
     /// What to write down for a chosen model: the tier word where a tier variable named it, so the
@@ -1770,6 +1815,25 @@ mod tests {
         let mut config = Config::from_lookup(complete_env).unwrap();
         assert!(config.adopt_window(Some(102_400)));
         assert_eq!(config.context_budget, 102_400);
+    }
+
+    /// The model in force is the one named, or the configured default where none is: the roster is
+    /// asked about that name. Asking about the pick alone, or about the first row, is the fault.
+    #[test]
+    fn the_window_taken_is_that_of_the_named_model_or_else_the_default() {
+        let mut config = Config::from_lookup(complete_env).unwrap();
+        config.default_model = "the-default".into();
+        let mut asked = Vec::new();
+        assert!(config.adopt_window_of_model_in_force(Some("named"), |m| {
+            asked.push(m.to_string());
+            Some(102_400)
+        }));
+        config.adopt_window_of_model_in_force(None, |m| {
+            asked.push(m.to_string());
+            None
+        });
+        assert_eq!(asked, ["named", "the-default"]);
+        assert_eq!(config.context_budget, DEFAULT_CONTEXT_BUDGET);
     }
 
     /// A cramped window is taken at its word. Raising it to something more comfortable would put
@@ -3233,6 +3297,55 @@ mod tests {
         assert!(config.providers.is_empty());
     }
 
+    /// BACKEND-48: a gateway model is asked for as `openrouter/z-ai/glm-4.6` and sent as
+    /// `z-ai/glm-4.6`, and a list entry written either way answers for the one model.
+    ///
+    /// Each list in each spelling, and a model of the same gateway that no entry names, because a
+    /// build that matched only the asked-for name lets the denied model through and one that
+    /// matched only the wire name refuses what an allow entry in the qualified form permits.
+    #[test]
+    fn a_gateway_model_is_matched_by_either_of_its_spellings() {
+        let settings = Settings::parse(
+            r#"{"model": "openrouter/z-ai/glm-4.6",
+                "provider": {"openrouter": {"options": {"apiKey": "test-token"},
+                    "models": {"z-ai/glm-4.6": {}, "z-ai/other": {}}}}}"#,
+        );
+        let resolved = |name: &str, list: &str| {
+            let managed = managed::scratch(name, &format!(r#"{{"models": {{{list}}}}}"#));
+            let config =
+                resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
+            (config, managed)
+        };
+        for entry in ["z-ai/glm-4.6", "openrouter/z-ai/glm-4.6"] {
+            let (config, _) = resolved("gateway-spelling-deny", &format!(r#""deny": ["{entry}"]"#));
+            for asked in ["z-ai/glm-4.6", "openrouter/z-ai/glm-4.6"] {
+                assert_eq!(
+                    config.model_refused(asked).map(|(_, why)| why),
+                    Some(ModelRefusal::Denied),
+                    "deny {entry}, asked {asked}"
+                );
+            }
+            let (config, _) = resolved(
+                "gateway-spelling-allow",
+                &format!(r#""allow": ["{entry}"]"#),
+            );
+            for asked in ["z-ai/glm-4.6", "openrouter/z-ai/glm-4.6"] {
+                assert_eq!(
+                    config.model_refused(asked),
+                    None,
+                    "allow {entry}, asked {asked}"
+                );
+            }
+            assert_eq!(
+                config
+                    .model_refused("openrouter/z-ai/other")
+                    .map(|(_, why)| why),
+                Some(ModelRefusal::NotAllowed),
+                "allow {entry}"
+            );
+        }
+    }
+
     /// BACKEND-48, and the whole reason the check is placed after tier resolution: `opus` is not a
     /// name any service knows, so a list matched against what a settings file wrote would let
     /// `{"model": "opus"}` reach the pinned account whatever either list said.
@@ -3893,6 +4006,26 @@ mod tests {
             let settings = Settings::parse(&format!(r#"{{"summaryModel": "{written}"}}"#));
             let config = resolved(&settings, bedrock, complete_env).expect("configured");
             assert_eq!(config.summary().as_deref(), Some(expected), "{written}");
+        }
+    }
+
+    /// PROC-13: `processorModel` is resolved as `model` is, so a tier word means that tier's
+    /// configured model and nothing named leaves a processor on the turn's own model.
+    #[test]
+    fn the_processor_model_is_resolved_like_a_model_name() {
+        let bedrock = |key: &str| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+            other => complete_env(other),
+        };
+        let unset = resolved(&Settings::default(), bedrock, complete_env).expect("configured");
+        assert_eq!(unset.processor(), None);
+
+        for (written, expected) in [("haiku", "haiku-arn"), ("some-model", "some-model")] {
+            let settings = Settings::parse(&format!(r#"{{"processorModel": "{written}"}}"#));
+            let config = resolved(&settings, bedrock, complete_env).expect("configured");
+            assert_eq!(config.processor().as_deref(), Some(expected), "{written}");
         }
     }
 

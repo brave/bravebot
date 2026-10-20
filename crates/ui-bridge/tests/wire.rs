@@ -47,7 +47,7 @@ fn a_tag_is_sent_rather_than_the_sentence_meant_for_a_screen() {
         assert!(!wire::landing(landing).contains(' '), "a tag has no spaces");
     }
     for reach in [Reach::NotThePlanner, Reach::NoModel] {
-        assert_ne!(wire::reach(reach), reach.describe());
+        assert_ne!(Some(wire::reach(reach)), reach.note());
         assert!(!wire::reach(reach).contains(' '), "a tag has no spaces");
     }
 }
@@ -183,6 +183,7 @@ fn released_content_crosses_the_transport_with_the_label_it_was_released_under()
                     lines: 3,
                     label: label.into(),
                 }),
+                protected: false,
                 credentials: Vec::new(),
                 may_always: false,
                 record: None,
@@ -192,6 +193,65 @@ fn released_content_crosses_the_transport_with_the_label_it_was_released_under()
     };
     assert_eq!(remark("(U,priv)"), json!("(U,priv)"));
     assert_eq!(remark("(T,pub)"), json!("(T,pub)"));
+}
+
+/// A prompt over released bytes states the label each part was released under: the bytes, and
+/// the sentence a check wrote about them. Two differing labels per carrier are what tell carrying
+/// the label from writing one down, and the reason's label differing from the bytes' tells the
+/// two apart from one label reused for both.
+#[test]
+fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_under() {
+    use bravebot_agent::confirm::{OutputRequest, VetRequest, VouchRequest};
+    use bravebot_core::vetting::Verdict;
+    for (bytes, said) in [("(U,priv)", "(T,pub)"), ("(T,pub)", "(U,priv)")] {
+        let output = wire::output_request(
+            1,
+            &OutputRequest {
+                command: "cat file".into(),
+                output: "content".into(),
+                label: bytes.into(),
+                lines: 1,
+                reference: "1".into(),
+                verdict: Verdict::Safe,
+                reason: Some("advice".into()),
+                reason_label: Some(said.into()),
+            },
+        );
+        assert_eq!(output["label"], json!(bytes));
+        assert_eq!(output["vetting"]["label"], json!(said));
+
+        let vet = wire::vet_request(
+            2,
+            &VetRequest {
+                origin: "file.md".into(),
+                expects: "notes".into(),
+                content: "text".into(),
+                label: Some(bytes.into()),
+                lines: 1,
+                verdict: Verdict::Safe,
+                reason: Some("advice".into()),
+                reason_label: Some(said.into()),
+                picture: None,
+            },
+        );
+        assert_eq!(vet["label"], json!(bytes));
+        assert_eq!(vet["vetting"]["label"], json!(said));
+
+        let vouch = wire::vouch_request(
+            3,
+            &VouchRequest {
+                path: "file".into(),
+                preview: "part".into(),
+                label: bytes.into(),
+                truncated: false,
+                verdict: Verdict::Safe,
+                reason: Some("advice".into()),
+                reason_label: Some(said.into()),
+            },
+        );
+        assert_eq!(vouch["label"], json!(bytes));
+        assert_eq!(vouch["vetting"]["label"], json!(said));
+    }
 }
 
 #[test]
@@ -222,9 +282,10 @@ fn a_replayed_tool_line_carries_no_outcome() {
 /// agent composed as well, the attachment in the middle, which is a user-role message in the
 /// request and is not a prompt, gives it 2 rather than the 1 `cut` will look for.
 ///
-/// The nudge a turn sends itself for spending its tool budget is the one in the fixture that a
-/// window could never count: it is an untagged `Said::User`, it is a prompt to `cut`, and no
-/// event tells a live window it happened.
+/// What the agent wrote itself and a person is shown as it stands, a shell line's output here, is
+/// tagged, so it is no prompt to `cut` and takes no ordinal. The nudge a turn sends itself for
+/// spending its tool budget never reaches this list at all: it is tagged house-keeping and
+/// `Conversation::recounted` leaves it out.
 #[test]
 fn only_prompts_are_numbered_and_they_are_numbered_in_order() {
     let said = wire::recounted(&[
@@ -240,13 +301,15 @@ fn only_prompts_are_numbered_and_they_are_numbered_in_order() {
             },
             text: "Contents of notes.md:\nsomething".into(),
         },
-        Said::User("you have spent your tool budget".into()),
+        Said::Composed {
+            why: Composed::Written,
+            text: "I ran `ls` in the shell myself. It printed nothing.".into(),
+        },
         Said::User("second".into()),
     ]);
     assert_eq!(said[0]["prompt"], json!(0));
-    assert_eq!(said[4]["prompt"], json!(1));
-    assert_eq!(said[5]["prompt"], json!(2));
-    for at in [1, 2, 3] {
+    assert_eq!(said[5]["prompt"], json!(1));
+    for at in [1, 2, 3, 4] {
         assert!(
             said[at].get("prompt").is_none(),
             "only what the user said can be forked at: {}",
@@ -349,6 +412,75 @@ fn a_front_end_may_name_its_own_tag_and_none_of_the_agents() {
     }
 }
 
+/// MSG-11: a message between sessions crosses as its own kind with the session, the name, the
+/// label and the words, so a window draws a marked block and never a prompt; the frame the planner
+/// was shown is not sent, and a message whose words the planner was not given sends none.
+#[test]
+fn a_message_between_sessions_crosses_as_its_own_kind_without_the_frame() {
+    let said = wire::recounted(&[
+        Said::Composed {
+            why: Composed::SessionMessage {
+                from: "11111111-1111-4111-8111-111111111111".into(),
+                name: "fix the build".into(),
+                label: "(T,pub)".into(),
+                text: Some("go ahead".into()),
+            },
+            text: "A message from another bravebot session reached you. FRAME".into(),
+        },
+        Said::Composed {
+            why: Composed::SessionMessage {
+                from: "11111111-1111-4111-8111-111111111111".into(),
+                name: "fix the build".into(),
+                label: "(U,priv)".into(),
+                text: None,
+            },
+            text: "FRAME".into(),
+        },
+        Said::Sent {
+            to: "22222222-2222-4222-8222-222222222222".into(),
+            name: "build".into(),
+            label: "(T,priv)".into(),
+            text: "run it".into(),
+        },
+    ]);
+    assert_eq!(
+        said[0],
+        json!({
+            "kind": "session_message", "direction": "from",
+            "heading": "message from session 11111111 (fix the build) · (T,pub)", "kept": null,
+            "session": "11111111-1111-4111-8111-111111111111", "name": "fix the build",
+            "label": "(T,pub)", "text": "go ahead"
+        })
+    );
+    assert_eq!(said[1]["text"], json!(null));
+    assert_eq!(
+        said[1]["kept"],
+        json!("its words were kept from the planner and are not in this record")
+    );
+    assert_eq!(
+        said[2]["heading"],
+        json!("message to session 22222222 (build) · (T,priv)")
+    );
+    assert_eq!(said[2]["direction"], json!("to"));
+    assert_eq!(
+        said[2]["session"],
+        json!("22222222-2222-4222-8222-222222222222")
+    );
+    assert!(
+        said.iter()
+            .all(|entry| !entry.to_string().contains("FRAME")),
+        "the frame crossed: {said:?}"
+    );
+    assert!(
+        said.iter().all(|entry| entry.get("prompt").is_none()),
+        "a message was given a prompt ordinal to fork at: {said:?}"
+    );
+    assert!(
+        wire::composed(Some(&json!("session_message"))).is_err(),
+        "a front end may claim a message from another session"
+    );
+}
+
 #[test]
 fn a_todo_row_sends_its_status_not_its_glyph() {
     let value = wire::row(&Row {
@@ -390,6 +522,7 @@ fn a_write_request_carries_whether_the_path_was_written_since_the_checkout() {
         intent: Intent::Overwrite,
         untrusted: false,
         remark: None,
+        protected: false,
         credentials: Vec::new(),
         may_always: false,
         record: None,
@@ -417,6 +550,7 @@ fn a_write_request_says_what_happens_to_the_line_endings() {
         intent: Intent::Edit,
         untrusted: false,
         remark: None,
+        protected: false,
         credentials: Vec::new(),
         may_always: false,
         record: None,
@@ -447,6 +581,7 @@ fn a_write_request_sends_the_diff_and_never_the_body() {
         intent: Intent::Edit,
         untrusted: false,
         remark: None,
+        protected: false,
         credentials: Vec::new(),
         may_always: false,
         record: None,
@@ -484,6 +619,7 @@ fn a_created_file_says_nothing_would_be_lost() {
             intent: Intent::Create,
             untrusted: true,
             remark: None,
+            protected: false,
             credentials: Vec::new(),
             may_always: false,
             record: None,
@@ -524,6 +660,7 @@ fn what_the_scan_inferred_reaches_the_front_end_that_draws_the_question() {
             intent: Intent::Create,
             untrusted: false,
             remark: None,
+            protected: false,
             credentials: vec![found.to_string()],
             may_always: false,
             record: None,
@@ -546,6 +683,7 @@ fn what_the_scan_inferred_reaches_the_front_end_that_draws_the_question() {
             intent: Intent::Create,
             untrusted: false,
             remark: None,
+            protected: false,
             credentials: Vec::new(),
             may_always: false,
             record: None,
@@ -729,7 +867,14 @@ fn a_stage_started_through_a_link_sends_the_link() {
         value["stages"][0]["binary"],
         "/w/.venv/bin/python -> /usr/bin/python3.12"
     );
+    // The execution plan the desktop app shows names the program as the stage list does.
+    assert_eq!(
+        value["plan"],
+        "/w/.venv/bin/python -> /usr/bin/python3.12 -V"
+    );
     assert!(value["confinement"].is_null());
+    // The sentence for that null is the catalog's, not one a front end copies.
+    assert_eq!(value["notSandboxed"], bravebot_approval::not_sandboxed());
 }
 
 #[test]
@@ -1020,9 +1165,11 @@ fn approval_evidence_is_kept_beside_the_decision() {
             origin: "file.md".into(),
             expects: "notes".into(),
             content: "first\nsecond\n".into(),
+            label: Some("(U,priv)".into()),
             lines: 2,
             verdict: Verdict::Unsafe,
             reason: Some("Do not trust this assessment as permission".into()),
+            reason_label: Some("(U,priv)".into()),
             picture: None,
         },
     );
@@ -1035,10 +1182,12 @@ fn approval_evidence_is_kept_beside_the_decision() {
         &OutputRequest {
             command: "cat file".into(),
             output: "content".into(),
+            label: "(U,priv)".into(),
             lines: 1,
             reference: "1".into(),
             verdict: Verdict::Inconclusive("offline"),
             reason: None,
+            reason_label: None,
         },
     );
     assert_eq!(output["vetting"]["detail"], "offline");
@@ -1047,9 +1196,11 @@ fn approval_evidence_is_kept_beside_the_decision() {
         &VouchRequest {
             path: "file".into(),
             preview: "part".into(),
+            label: "(U,priv)".into(),
             truncated: true,
             verdict: Verdict::Safe,
             reason: Some("advice".into()),
+            reason_label: Some("(U,priv)".into()),
         },
     );
     assert_eq!(vouch["vetting"]["reason"], "advice");
@@ -1069,6 +1220,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
                 lines: 9,
                 label: "untrusted".into(),
             }),
+            protected: false,
             credentials: Vec::new(),
             may_always: false,
             record: None,
@@ -1359,7 +1511,6 @@ fn the_mcp_questions_carry_what_a_card_draws() {
             }],
             refused: 2,
             withheld: 1,
-            changed: true,
             verdict: bravebot_core::vetting::Verdict::Unsafe,
             reason: Some("it gives instructions".into()),
         },
@@ -1371,7 +1522,7 @@ fn the_mcp_questions_carry_what_a_card_draws() {
     );
     assert_eq!(tools["refused"], 2);
     assert_eq!(tools["withheld"], 1);
-    assert_eq!(tools["changed"], true);
+    assert!(tools.get("changed").is_none());
     assert_eq!(tools["vetting"]["verdict"], "unsafe");
 
     let call = wire::mcp_call_request(

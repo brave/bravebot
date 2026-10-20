@@ -5,7 +5,12 @@ use serde_json::{Value, json};
 use std::path::Path;
 
 pub fn layers(project: Option<&Path>, selected: Option<&Path>) -> Settings {
-    Settings::layered(bravebot_agent::home::directory(), project, selected)
+    layers_under(project, selected, &Managed::load())
+}
+
+/// As [`layers`], under the given managed file, so a test needs no machine-level one.
+fn layers_under(project: Option<&Path>, selected: Option<&Path>, managed: &Managed) -> Settings {
+    Settings::layered(bravebot_agent::home::directory(), project, selected).under(managed)
 }
 
 /// Settle, for the life of the process and before a session is assembled, the answers every turn
@@ -27,6 +32,9 @@ pub fn settle_for_process(project: Option<&Path>, selected: Option<&Path>) {
     );
     bravebot_config::sandbox_network::settle(&layers);
     bravebot_config::git_identities::settle(&layers);
+    // Before the first request: the transport reads its answer once, and a window or an editor
+    // starts this process from a launcher whose environment holds no proxy (NET-8).
+    bravebot_agent::transport::settle(&layers);
 }
 
 /// Whether a safe verdict releases quarantined content with nobody asked, resolved as the terminal does.
@@ -85,6 +93,10 @@ fn ignored(settings: &Settings) -> Vec<Value> {
         settings.fallback_ignored().collect(),
     ));
     ignored.extend(named("summaryModel", settings.summary_ignored().collect()));
+    ignored.extend(named(
+        "processorModel",
+        settings.processor_ignored().collect(),
+    ));
     ignored.extend(named("agent", settings.agent_ignored().collect()));
     ignored.extend(named("style", settings.style_ignored().collect()));
     ignored.extend(named("references", settings.references_ignored().collect()));
@@ -169,6 +181,22 @@ pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// PERM-19: the managed file's deny rule is in the layers a window reads. Without the
+    /// `.under(...)` the stack holds only the person's own rules.
+    #[test]
+    fn the_layers_a_window_reads_carry_the_managed_deny_rules() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("managed.json");
+        std::fs::write(&file, r#"{"permissions": {"deny": ["Bash(ls)"]}}"#).unwrap();
+        let settings = layers_under(None, None, &Managed::at(&file));
+        assert!(
+            settings
+                .permissions()
+                .deny
+                .contains(&"Bash(ls)".to_string())
+        );
+    }
     #[test]
     fn selected_files_cannot_exceed_the_agents_read_limit() {
         let mut builder = tempfile::Builder::new();

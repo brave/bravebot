@@ -18,7 +18,7 @@ impl Answers {
 impl Confirmer for Answers {
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
         self.runs.push(request.clone());
-        self.run
+        self.run.clone()
     }
     fn confirm_exposing_read(&mut self, _: &ExposureRequest) -> Decision {
         self.exposures += 1;
@@ -65,6 +65,13 @@ impl Confirmer for Answers {
         _request: &bravebot_agent::confirm::HostRequest,
     ) -> bravebot_agent::confirm::Decision {
         bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
     }
 
     fn confirm_move(

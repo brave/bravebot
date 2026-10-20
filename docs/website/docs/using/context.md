@@ -153,20 +153,27 @@ What happens depends on the type:
 
 | Dropped | Result |
 |---|---|
-| an image or a PDF | carried as bytes, so the model looks at it |
+| an image or a PDF | carried as bytes, so the model looks at it, with a line before them naming the file as `Dropped file: <path>` |
 | a text file | its contents enter the turn as trusted input |
 | anything else | its path is written into the line, as dropping a file always did |
 
 Extensions are recognised whatever their case. Dropping a directory attaches nothing. A dropped PNG
 or JPEG also gets a thumbnail under the box, as a pasted picture does.
 
+The path line goes ahead of the bytes in a turn's prompt, in a question beside the work, and in a plan's
+task. A file that cannot be shown to the model is replaced by the sentence `<path> could not be shown to
+you.` A pasted picture carries no path, so on a line that pastes and drops, the numbers in the markers
+can differ from the order the pictures are sent in.
+
 **Onto a line armed with `!`, a drop writes each file's path and attaches nothing**, as dropping a
 file into a shell does. The shell is handed the line as it stands, so there is no marker and no
-trust or reach is granted. A path holding a space, a quote or anything else a shell would read as
-syntax is written in single quotes, so the name reaches the command as one word. The quotes are
-written for the place a word starts: drop the file there, not inside a quote you opened. When a
-dropped file's name holds a control character or a character the terminal draws as nothing, no path
-from that drop is written, and a note says so.
+trust or reach is granted. A path made only of ASCII letters, digits and `_@+:,./-` is written as it
+is. Any other path is written in single quotes, with each `'` and `\` written outside the quotes as
+`\'` and `\\`, so the name reaches the command as one word. This is the quoting `sh`, `bash`, `zsh`
+and `fish` read. Nushell and PowerShell quote differently, `csh` and `tcsh` still expand `!`, and
+the quotes are written for the place a word starts: drop the file there, not inside a quote you
+opened. When a dropped file's name holds a control character or a character the terminal draws as
+nothing, no path from that drop is written, and a note says so.
 
 **A prompt recalled from your history names the file rather than the marker.** Nothing staged beside
 a line outlives the session that staged it. The name is enough: the planner reads it and goes to the
@@ -181,6 +188,27 @@ nothing, an unterminated quote or more than one line makes it a paste instead.
 A screenshot somebody sent you is content you have not read and are vouching for. It goes into the
 turn as trusted input on the strength of the gesture alone.
 :::
+
+### Dropping a file on the desktop app
+
+Drag files onto a conversation in the desktop app and they attach the same way, with the same
+types, markers and grants. Each file gets a marker in the message box where the cursor is and a
+chip above it, with a thumbnail for a picture. Delete the marker, or remove the chip, to take the
+file off. A file whose type nothing takes has its path written into the box. A folder is left out,
+and the app says so. **Plan** is off while a file is attached.
+
+A message you send while a turn is running waits in the queue and keeps its files: it goes as its
+own turn when the running one ends, and carries them then.
+
+### Pasting a picture into the desktop app
+
+Paste a picture into the message box of the desktop app, with Command-V on macOS or Ctrl-V elsewhere, and it attaches
+the way a paste does in the terminal. It gets an `[Image #2]` marker where the cursor is, numbered
+with any files dropped into the same message, and a chip above the box with a thumbnail. Delete the
+marker, or remove the chip, to take it off. A picture wins over the text copied beside it, and a
+paste of text alone lands as text. A picture over 10 MB is refused, and the app says how large it
+was. **Plan** is off while a picture is attached, and a message you send while a turn is
+running keeps its pictures, as it keeps dropped files.
 
 ## Pictures and files on a slash command
 

@@ -7,6 +7,8 @@
 //! Driven through the binary against a model service and a website of the test's own. Whether a
 //! fetch went out is read off the website, and whether a write landed is read off the disk.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -323,7 +325,10 @@ impl FrontEnd {
             json!({"directory": scratch.project().display().to_string()}),
         );
         let session = opened["session"].as_str().expect("a handle").to_string();
-        self.call("trust.reply", json!({"session": session, "trusted": true}));
+        // A yes an earlier session here gave is kept, and settles the next one without asking.
+        if opened["remembered"].is_null() {
+            self.call("trust.reply", json!({"session": session, "trusted": true}));
+        }
         (session, opened["settingsRules"].clone())
     }
 

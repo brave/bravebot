@@ -12,6 +12,7 @@ governs:
   - crates/session/src/store.rs
   - crates/session/src/sessions.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
   - crates/cli/src/auth.rs
 documented-by: docs/website/docs/using/sessions.md
 ---
@@ -108,8 +109,8 @@ would add one is not offered either. So is the record of reach a person remember
 which [sandboxing.md](sandboxing.md#SANDBOX-23) governs: a grant already in it is attached as it is
 anywhere, and `/reach` adds none and says so. So is the record of answers to the startup question
 somebody asked to be kept, which [trust-map.md](trust-map.md#TRUST-23) governs: a kept answer settles
-the question here as anywhere, the session says so as it opens, the key that would keep one is not
-offered, and `/forget-trust` writes nothing and names the file.
+the question here as anywhere, the session says so as it opens, a yes is not kept and the question
+says so, and `/forget-trust` writes nothing and names the file.
 
 **The one read refused is the standing answer about whether a check answers in somebody's place.**
 The word a person's own directory holds about that is not read in this mode, so a session here asks
@@ -168,6 +169,8 @@ cleared and by what, and one missed ordering writes the thing the mode exists no
 registering a device. Forgetting an existing import is still allowed. Storing a gateway key with
 `bravebot auth login gateway` is refused the same way, before the key is asked for, and forgetting
 one with `bravebot auth logout gateway` is allowed.
+Deleting a stored session with `bravebot sessions delete` or `sessions purge` is allowed for the same
+reason ([CLI-33](cli.md#CLI-33)).
 
 **Why.** An import is a write by definition: a credential that did not outlive the session would not
 be an import. Doing it and discarding the result would mint a batch on Brave's service that nothing

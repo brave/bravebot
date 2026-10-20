@@ -6,17 +6,27 @@ governs:
   - crates/agent/src/backend.rs
   - crates/agent/src/outcome.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
+  - crates/agent/src/turn/setup.rs
+  - crates/agent/src/turn/round_steps.rs
   - crates/agent/src/turn/prompts.rs
   - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/agent/src/subscription.rs
   - crates/cli/src/import.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/model.rs
   - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
   - crates/bedrock/src/credentials.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/models.rs
+  - crates/tui/src/app/terminal.rs
   - crates/tui/src/status.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/accounts.rs
+  - crates/tui/src/state/settings.rs
   - crates/config/src/bedrock.rs
   - crates/config/src/env_var.rs
   - crates/config/src/lib.rs
@@ -174,6 +184,7 @@ repeated down a hundred rows.
 `verified-by: bravebot_tui::app::a_configured_tier_is_not_confusable_with_a_brave_model_served_through_bedrock`
 `verified-by: bravebot_tui::app::a_tier_with_no_profile_configured_still_names_the_account`
 `verified-by: bravebot_tui::app::a_gateway_row_says_which_service_answers_it`
+`verified-by: bravebot_tui::app::the_note_left_on_choosing_a_model_names_its_service`
 `verified-by: bravebot_aichat::models::a_fetched_row_carries_the_gateway_that_serves_it`
 
 <a id="BACKEND-7"></a>
@@ -408,6 +419,15 @@ Stating one still has to be possible, because one gateway serves models whose wi
 than an order of magnitude, and pinning a request to a particular upstream can cap the window well
 below what the model offers elsewhere.
 
+A provider's `options.contextWindow` states the window of every model of that provider that states
+none, for a server whose window is one setting of the server, such as a local Ollama. It is the only
+place to keep a figure for an entry that lists no models, since `limit` belongs to a listed model
+and listing models turns off the roster. A model's own `limit.context` outranks it, and it outranks
+a window the roster reports. A value that is not a whole number above zero states nothing.
+
+`verified-by: bravebot_config::provider::a_provider_window_is_the_default_for_models_that_state_none`
+`verified-by: bravebot_config::provider::an_unusable_provider_window_is_not_read`
+`verified-by: bravebot_aichat::models::a_provider_window_is_taken_for_fetched_models`
 `verified-by: bravebot_config::provider::a_model_without_a_stated_window_gets_the_assumed_one`
 `verified-by: bravebot_config::provider::a_stated_window_is_read`
 `verified-by: bravebot_tui::app::a_gateway_entry_carries_the_window_the_budget_is_taken_from`
@@ -488,7 +508,7 @@ offering its models is not offering rows that fail when picked.
 `verified-by: bravebot_agent::backend::a_gateway_naming_no_credential_sends_unauthenticated`
 `verified-by: bravebot_aichat::lib::a_gateway_needing_no_credential_sends_no_authorization_header`
 `verified-by: bravebot_aichat::client::a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated`
-`verified-by: bravebot_cli::main::a_gateway_needing_no_credential_is_reported_as_needing_none`
+`verified-by: bravebot_cli::doctor::a_gateway_needing_no_credential_is_reported_as_needing_none`
 
 <a id="BACKEND-17"></a>
 ### BACKEND-17: a gateway named by a name this system knows needs no endpoint written down
@@ -497,8 +517,18 @@ A block naming a gateway this system already knows an endpoint for reaches it wi
 endpoint the block does state is where its requests go regardless. Where neither holds, the entry
 configures no service.
 
-The set of known names is compiled in. Nothing is fetched to resolve one, and no service is asked what
-its own endpoint is.
+The set of known names is compiled in: `openrouter`, reached at `https://openrouter.ai/api/v1`, and
+`openai`, reached at `https://api.openai.com/v1`. Nothing is fetched to resolve one, and no service is
+asked what its own endpoint is.
+
+A known name supplies an endpoint. An `openai` entry is otherwise reached as any other gateway is,
+with its key as a bearer token in `authorization`, and names where that key lives as
+[BACKEND-16](#BACKEND-16) says. Its models are asked for as [BACKEND-19](#BACKEND-19) says, and
+[Known costs](#known-costs) records what that offers for this service.
+
+One thing differs for `openai`: the name a reply reports is not compared with the name asked for, as
+[BACKEND-18](#BACKEND-18) compares a gateway's. A name such as `gpt-4o` is an alias for a dated model,
+and the reply names the model behind it, which is the alias working and not a substitution.
 
 **Why.** The tool this block's shape is borrowed from resolves an endpoint from a registry it fetches,
 so a block copied out of it names one nowhere and requiring the field refuses a block that tool
@@ -514,6 +544,9 @@ what keeps a known name usable against a proxy or a private deployment.
 
 `verified-by: bravebot_config::provider::a_known_provider_name_supplies_its_own_endpoint`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in`
+`verified-by: bravebot_config::provider::an_openai_entry_is_reached_at_openais_host_like_any_other_gateway`
+`verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in_for_openai`
+`verified-by: bravebot_agent::backend::an_openai_alias_is_not_expected_to_be_the_name_that_comes_back`
 `verified-by: bravebot_config::provider::a_provider_without_a_base_url_is_not_offered`
 
 <a id="BACKEND-18"></a>
@@ -598,6 +631,7 @@ the same conservative default a stated roster gets.
 `verified-by: bravebot_aichat::models::a_window_the_block_stated_outranks_the_one_reported`
 `verified-by: bravebot_aichat::models::a_gateway_model_that_cannot_call_tools_is_not_offered`
 `verified-by: bravebot_aichat::models::a_gateway_that_reports_no_capabilities_still_offers_its_models`
+`verified-by: bravebot_aichat::client::an_openai_listing_that_reports_no_capabilities_offers_every_model_it_lists`
 `verified-by: bravebot_aichat::models::a_fetched_entry_with_no_usable_name_is_dropped`
 `verified-by: bravebot_aichat::models::fetched_gateway_models_are_not_marked_premium`
 `verified-by: bravebot_aichat::client::a_gateway_with_a_credential_is_asked_what_that_account_may_reach`
@@ -814,9 +848,9 @@ every file that was found. The flag that names one, and the path it refuses, are
 
 | What | How layers combine |
 |---|---|
-| `env`, `attribution`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
+| `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `processorModel`, `attribution` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | anything else | the closest layer that set it wins |
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
@@ -835,16 +869,18 @@ is restating an entire configuration to change a host. Going deeper than a name 
 request's destination the product of two files with no single place to read that says where it goes,
 which is why a gateway entry is replaced whole and a project file naming one must name its host too.
 
-`provider`, `model`, `advisorModel`, `fallbackModel` and `summaryModel` are the exception on the other side: which host every request goes to and
+`provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel` and `processorModel` are the exception on the other side: which host every request goes to and
 which credential signs it is exactly what a file nobody opened must not decide, and the credential
 value comes from the person's own environment under names the layer would choose. A project or
 local layer naming one is dropped whole and reported, so the destination of every request stays
 something the person's own files or command line named. The file `--settings` names is the person's
 own act and is read.
 
-The two names under `attribution` combine per name for the same reason `env` does: they are
-unrelated destinations that happen to share a block, and a file answering for one must not answer
-for the other by omission. The chords under `keybindings` and the two caps under `search` are the
+`attribution` is the exception for the reason [BACKEND-30](#BACKEND-30) gives: its free text reaches
+the planner on every round, so a project or local layer carrying one is dropped whole and reported.
+Between the two files that may write it, the two names under it combine per name for the same
+reason `env` does: they are unrelated destinations that happen to share a block, and a file
+answering for one must not answer for the other by omission. The chords under `keybindings` and the two caps under `search` are the
 same case: a file moving one action's key is no statement about the other six, and a checkout
 widening a search's walk for its own size is none about how long a read may take.
 
@@ -906,6 +942,8 @@ with it.
 `verified-by: bravebot_config::settings::a_project_or_local_layer_cannot_name_an_advisor`
 `verified-by: bravebot_config::settings::an_unparseable_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::an_oversized_project_layer_leaves_the_global_one_in_force`
+`verified-by: bravebot_config::settings::a_project_layer_that_is_a_device_is_skipped`
+`verified-by: bravebot_config::settings::a_read_stops_one_byte_past_the_bound`
 `verified-by: bravebot_config::settings::a_directory_with_no_project_layer_reads_the_global_one_alone`
 `verified-by: bravebot_config::settings::a_command_line_file_adds_to_the_names_kept_from_a_program`
 `verified-by: bravebot_config::settings::a_command_line_file_is_reported_as_the_layer_that_won_a_name`
@@ -939,6 +977,7 @@ is the thing that knows.
 `verified-by: bravebot_aichat::lib::a_request_without_a_gateway_is_still_signed`
 `verified-by: bravebot_aichat::lib::a_gateway_request_goes_to_the_configured_host_with_a_bearer_token`
 `verified-by: bravebot_aichat::client::the_model_listing_is_fetched_from_the_models_path`
+`verified-by: bravebot_aichat::client::a_gateways_roster_request_carries_no_brave_product_header`
 
 
 <a id="BACKEND-26"></a>
@@ -1134,15 +1173,21 @@ Absence is kept distinct from empty because they ask for different things. Empty
 nothing is carried; unset leaves the decision with whoever writes the commit, and collapsing the two
 would make a file that mentions the block at all speak for names it never named.
 
+**Only the person's own files may write the block.** It is read from the home file and from the
+file `--settings` names, and removed from the project and local layers before the merge, each file
+that wrote one being reported. The string reaches the planner on every round, and untrusted bytes
+never enter that context: a checkout arrives with whatever produced it, and nobody vouched for what
+it says. [references.md](references.md) refuses `references` from a checkout for the same reason. A
+named file that resolves inside the workspace is a checkout's file under another name.
+
 **A stated value is handed over as text to copy rather than as a sentence addressed to the
-planner.** The block resolves over the three layers of [BACKEND-24](#BACKEND-24) and the middle of
-them is a file in the tree being worked on, so the string is whatever that checkout says. It is
-configuration rather than content, on the footing `env` and the permission rules are read on, but
-it is free text where those are structured, so it is quoted and the planner is told in the same
-breath that nothing inside it is addressed to it.
+planner.** The string is the person's own, so this is presentation rather than a defence: it is
+quoted and the planner is told in the same breath that nothing inside it is addressed to it.
 
 `verified-by: bravebot_config::settings::an_empty_attribution_is_a_choice_of_nothing`
 `verified-by: bravebot_config::settings::an_attribution_name_no_file_wrote_is_unset`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_set_attribution`
+`verified-by: bravebot_config::settings::a_named_file_inside_the_workspace_cannot_set_attribution`
 `verified-by: bravebot_agent::preamble::an_empty_attribution_tells_the_planner_to_carry_nothing_on_a_commit`
 `verified-by: bravebot_agent::preamble::an_attribution_no_file_named_is_not_stated_at_all`
 `verified-by: bravebot_agent::preamble::an_attribution_a_file_named_is_carried_word_for_word`
@@ -1214,6 +1259,8 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_tui::status::the_panel_says_which_cache_lifetime_the_settings_asked_for`
 `verified-by: bravebot_tui::status::a_backend_that_reports_nothing_about_a_cache_gets_no_cache_lines`
 `verified-by: bravebot_tui::status::a_turn_that_only_wrote_to_the_cache_does_not_report_a_read_of_zero`
+`verified-by: bravebot_tui::panel::a_zero_cache_figure_is_not_drawn`
+`verified-by: bravebot_tui::panel::a_turn_ended_before_any_request_reports_no_cache_figures`
 `verified-by: bravebot_tui::render::the_hint_line_shows_the_last_turns_cache_hit_rate`
 `verified-by: bravebot_tui::render::the_hint_line_says_nothing_for_a_write_only_cache_turn`
 `verified-by: bravebot_tui::render::the_hint_line_says_nothing_where_the_backend_reported_nothing`
@@ -1316,7 +1363,7 @@ sent.
 `verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
 
 <a id="BACKEND-33"></a>
-### BACKEND-33: an `env` block names these sixteen variables
+### BACKEND-33: an `env` block names these twenty-two variables
 
 The `env` block of a settings file sets variables under their own names, and these are the names
 something reads:
@@ -1339,6 +1386,22 @@ something reads:
 | `GOOGLE_API_KEY` | the key a request to Google Vertex AI is sent with |
 | `GOOGLE_CLOUD_PROJECT` | the Google Cloud project that request is made under |
 | `VERTEX_LOCATION` | the location it is made in, where that is not `global` |
+| `SSL_CERT_FILE` | a bundle of certificate authorities to trust in place of the built-in set |
+| `SSL_CERT_DIR` | a directory of them |
+| `ALL_PROXY` | the proxy every request is routed through, ahead of the two below |
+| `HTTPS_PROXY` | the proxy, where `ALL_PROXY` is not set |
+| `HTTP_PROXY` | the proxy, where neither is set |
+| `NO_PROXY` | the hosts the proxy is not used for |
+
+The last six are the network names, and they are read from the person's own layers alone: the
+user's settings file and a file the command line named that is not inside the checkout. The project
+and local files arrive with a clone, and a proxy or an authority they chose would decide where
+conversation content is sent and who may read it, so a network name in either is reported by
+`doctor` with the file that wrote it and decides nothing, and it does not displace what a layer
+entitled to state it said. An exported variable still wins, as for every name here, and each of the
+two answers comes whole from one place: [NET-7](network-egress.md#NET-7) and
+[NET-8](network-egress.md#NET-8) say how. The names are spelled as the environment spells them in
+upper case, and a lower-case spelling is not read from a file.
 
 A gateway is not configured from this block: it is a `provider` entry, whose shape BACKEND-13
 states and whose credential BACKEND-16 names. The three Google names are the one exception, and only
@@ -1349,7 +1412,7 @@ choice rather than a variable, and BACKEND-11 is what ranks it.
 reading the source. Anything written *about* this system (the site somebody installs it from, a
 message telling a person what to set) is written from what is stated here, so a backend whose
 variables are named nowhere is a backend that reaches people undocumented however completely its
-behaviour is specified. Naming them is also what makes the set reviewable: a seventeenth variable is
+behaviour is specified. Naming them is also what makes the set reviewable: a twenty-third variable is
 a change to this table, which a person reads, rather than a constant added to a file nobody is
 asked to look at.
 
@@ -1360,6 +1423,13 @@ belongs to this program and must not collide with whatever else a shared shell p
 
 `verified-by: bravebot_config::lib::every_name_a_settings_block_may_set_reaches_the_configuration`
 `verified-by: bravebot_config::settings::an_env_block_is_read`
+`verified-by: bravebot_config::settings::a_proxy_and_an_authority_in_the_persons_own_file_are_handed_over`
+`verified-by: bravebot_config::settings::a_checkouts_proxy_and_authority_are_reported_and_never_handed_over`
+`verified-by: bravebot_config::settings::a_checkouts_proxy_alone_leaves_nothing_handed_over_and_its_other_names_alone`
+`verified-by: bravebot_config::settings::a_named_file_states_the_network_unless_it_sits_in_the_checkout`
+`verified-by: bravebot_config::settings::a_blank_or_non_string_network_value_states_nothing`
+`verified-by: bravebot_agent::transport::the_settings_and_the_transport_name_the_same_variables`
+`verified-by: bravebot_agent::transport::a_proxy_in_the_persons_file_is_the_one_a_client_carries_and_a_checkouts_is_not`
 
 <a id="BACKEND-34"></a>
 ### BACKEND-34: a settings value is a string, and anything else is not a value
@@ -1620,6 +1690,8 @@ that path rather than with the person in front of the screen.
 
 `verified-by: bravebot_config::managed::an_endpoint_is_pinnable`
 `verified-by: bravebot_config::managed::a_name_outside_the_pinnable_set_pins_nothing`
+`verified-by: bravebot_config::managed::every_name_the_clause_lists_is_pinnable_and_the_set_holds_no_other`
+`verified-by: bravebot_config::managed::the_file_is_read_from_the_directory_the_platform_reserves`
 `verified-by: bravebot_config::managed::the_switch_that_reaches_a_personal_account_is_pinnable`
 `verified-by: bravebot_config::managed::an_empty_gateway_block_says_there_are_no_gateways`
 `verified-by: bravebot_config::managed::a_file_with_no_gateway_block_leaves_the_gateways_alone`
@@ -1645,7 +1717,8 @@ subscription is in hand to spend on it, nothing is configured to serve the turn 
 A session does not open and a one-shot run asks nothing. What is said instead is the three ways to
 configure a service that can answer, each naming the thing to type or to write: an AWS account
 through Bedrock, an OpenAI-compatible gateway, and importing a Leo Premium subscription. `doctor`
-says the same and fails, which is [CLI-7](cli.md#CLI-7).
+says the same and fails, which is [CLI-7](cli.md#CLI-7). `bravebot --bg <prompt>` is refused the same
+way, in the terminal that typed it, before the background process is started.
 
 The model decides, as it does everywhere here: a model a configured service serves is not this
 case, whatever the aichat fields hold. The model asked about is the one the run will actually
@@ -1715,6 +1788,7 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::running::a_model_named_on_the_command_line_is_not_refused`
 `verified-by: bravebot_cli::running::a_session_in_lines_with_no_service_configured_says_how_to_configure_one`
 `verified-by: bravebot_cli::running::a_session_in_lines_with_a_configured_gateway_opens`
+`verified-by: bravebot_cli::running::a_background_session_with_no_service_configured_says_how_to_configure_one`
 
 <a id="BACKEND-40"></a>
 ### BACKEND-40: completed replies keep reported usage even when their content is unusable
@@ -2114,6 +2188,9 @@ model under their pick is one the layer allows.
 **How it is built.** The keys are `"models": { "allow": [...], "deny": [...] }` in `managed.json`,
 the file [BACKEND-38](#BACKEND-38) reads. An entry is the model's name as a request carries it,
 compared exactly once trimmed: an inference-profile ARN, or a roster slug such as `z-ai/glm-4.6`.
+A gateway model has two spellings, `openrouter/z-ai/glm-4.6` and the `z-ai/glm-4.6` the gateway is
+sent, and an entry naming either one answers for the model however it was asked for: a deny entry
+refuses it and an allow entry permits it.
 
 Without an `allow` list, every model not denied is requested as before. With one, a model no entry
 names is refused, and `"allow": []` refuses every model. A deny entry wins over an allow entry naming
@@ -2130,6 +2207,7 @@ which is one fewer model requested rather than a list that decides nothing.
 `verified-by: bravebot_config::managed::a_model_allow_entry_adds_nothing_to_any_roster`
 `verified-by: bravebot_config::lib::a_tier_word_is_checked_as_the_model_it_names`
 `verified-by: bravebot_config::lib::a_managed_layer_silent_on_models_refuses_none`
+`verified-by: bravebot_config::lib::a_gateway_model_is_matched_by_either_of_its_spellings`
 `verified-by: bravebot_agent::backend::a_model_the_managed_layer_refuses_is_served_by_nothing`
 `verified-by: bravebot_agent::backend::a_pick_the_managed_layer_refuses_is_set_aside_with_the_file_that_refused_it`
 `verified-by: bravebot_cli::import::a_start_on_a_model_the_managed_layer_refuses_is_ended`
@@ -2198,7 +2276,7 @@ exactly what is offered, as for any other gateway.
 `verified-by: bravebot_tui::app::a_google_vertex_block_naming_models_is_offered_those_alone`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_the_compiled_models_for_a_google_vertex_service_naming_none`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_a_google_vertex_block_its_own_models_alone`
-`verified-by: bravebot_cli::main::doctor_names_the_compiled_models_a_google_vertex_service_is_offered`
+`verified-by: bravebot_cli::doctor::doctor_names_the_compiled_models_a_google_vertex_service_is_offered`
 `verified-by: bravebot_config::lib::a_name_qualified_by_the_google_vertex_id_names_that_service_and_the_rest_is_sent`
 
 <a id="BACKEND-50"></a>
@@ -2328,6 +2406,40 @@ as the `model` key is, and the switch is decided by a category the driver derive
 `verified-by: bravebot_agent::backend::two_models_share_a_service_only_where_one_account_answers_for_both`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_fallback_model_is_not_obeyed`
 
+<a id="BACKEND-54"></a>
+### BACKEND-54: a rate limit is waited out for as long as the service asked, up to a ceiling
+
+A reply that is refused with a status that means not now ([NET-6](network-egress.md#NET-6)) is
+sent again, at most twice. Where the answer was a 429 and carried a `Retry-After`
+header the wait before the next request is the one it asked for instead of the doubling from one
+second; any other status keeps the doubling whatever the header said. The
+header is read by the egress layer, as whole seconds or an HTTP date in the IMF-fixdate form, and
+is carried on the failure as a duration of at most one hour. A value that is neither, and a header
+that is absent, leave the doubling in force.
+
+The wait is never shorter than that doubling, so `Retry-After: 0` sends the next request after the
+pause it would have had. A wait of more than two minutes is not taken: the request is not sent
+again and the failure ends the call at once. For the category `rate-limited` the failure line then
+says the service asked for a wait of about that many minutes, rounded up. The figure is a number this program parsed
+and bounded and the sentence around it is the fixed one of [BACKEND-37](#BACKEND-37), so no text the
+service wrote is repeated. The wait only sets a timer and a line a person reads: it is never given
+to the planner, and nothing branches on the header's text. The wait is announced as the retry it
+is, and a stop ends it as it ends any pause between attempts.
+
+**Why.** A limit that lifts in a minute otherwise ends the turn after three seconds, and a limit
+that lifts in an hour gives the person nothing to act on. The status decides whether to wait, the
+parsed number only how long.
+
+`verified-by: bravebot_aichat::client::a_rate_limit_is_waited_out_for_as_long_as_the_service_asked`
+`verified-by: bravebot_aichat::client::a_rate_limit_is_waited_out_before_a_whole_reply_is_asked_for_again`
+`verified-by: bravebot_aichat::client::a_wait_past_the_ceiling_fails_at_once_and_carries_the_figure`
+`verified-by: bravebot_aichat::client::a_retry_after_that_does_not_parse_falls_back_to_the_backoff`
+`verified-by: bravebot_aichat::client::a_retry_after_of_zero_still_takes_the_backoff`
+`verified-by: bravebot_aichat::client::a_retry_after_on_another_status_is_not_waited_for_or_refused`
+`verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_a_service_asked_for`
+`verified-by: bravebot_agent::backend::a_rate_limit_keeps_the_wait_the_service_asked_for`
+`verified-by: bravebot_session::sessions::a_rate_limit_says_how_long_the_service_asked_for`
+
 ## Known costs
 
 - **A fallback no service offers is tried anyway.** Where the name belongs to no gateway and no AWS
@@ -2447,16 +2559,9 @@ as the `model` key is, and the switch is decided by a category the driver derive
   capability, so the worst it does is send a request somewhere useless or somewhere watching.
 
   The one field that is not a destination is `attribution`, whose value [BACKEND-30](#BACKEND-30)
-  states to the planner. A checkout can therefore put a string of its own choosing in front of every
-  round, which is a wider thing than naming a host, and it is the one place a settings layer reaches
-  the planner's context at all. What is quoted is fenced and said to be text to copy rather than
-  written in as a sentence addressed to the planner, and the fence is sized to the value so a value
-  holding one cannot close it. That is a presentation, not a guarantee, and it is the whole of the
-  mitigation: the standing instructions the same checkout carries go through a trust gate that can
-  refuse them and this does not, because it is configuration and the resolution being copied reads
-  configuration the same wherever it came from. Stating only the layer in the person's own directory
-  is the fix if that trade stops being worth it, and it would cost a checkout the ability to say what
-  its own history carries.
+  states to the planner. It is free text that reaches the planner's context on every round, so it is
+  refused from the project layers outright, as `references` is, and reported by `doctor`. A checkout
+  cannot say what its own history carries; the person says it once in their own file.
 
 - **The aichat endpoint Brave runs discards the effort level.** Measured against that endpoint: a
   nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits
@@ -2637,3 +2742,39 @@ as the `model` key is, and the switch is decided by a category the driver derive
   can write, so an `aws` in a directory the account owns, such as a Homebrew prefix, is found before
   the first stage runs and not after, and every Bedrock request from then until bravebot exits gets
   `NotInstalled`.
+  An editor found outside those directories still starts, with a `PATH` of the searched entries
+  alone, so a program it starts by name that lives only in a directory left out is not found by it:
+  a tool a plugin runs from a project's `node_modules/.bin`, or one in `~/.local/bin` under a
+  session opened on the home directory. A program the editor leaves running keeps that `PATH`.
+
+- **An `openai` entry naming no models is offered everything OpenAI's listing returns.** The listing
+  states an id and an owner for each model and nothing about what it can do, so BACKEND-19 has
+  nothing to drop on, and the picker holds embedding, speech and image models beside the chat ones.
+  That waives BACKEND-5's promise that picking a listed name works, for the rows of this one
+  service. Filtering by id would be a guess about OpenAI's naming, and a model named otherwise would
+  be hidden from somebody who could use it. A list compiled into the binary, as BACKEND-49 compiles
+  one for Vertex AI, would go stale with each release, and each id on it would first have to be
+  answered with a tool call and its result by the service. A block naming `models` is offered those
+  and no others.
+
+- **A model OpenAI serves only through its Responses API is offered and fails when picked.** The
+  route is chat completions, and the listing does not say which models take it. A block naming
+  `models` offers only the ones it names.
+
+- **Each OpenAI roster costs a request that is expected to be refused.** BACKEND-19 asks what the
+  credential may reach at `/models/user` before it asks for the whole listing, and OpenAI is not
+  known to serve that route. The listing is asked second.
+
+- **A refusal of the `cache_control` markers of BACKEND-32 by OpenAI costs one refused request.**
+  Whether OpenAI reads them is not known here. A refusal with an invalid-request status is asked
+  again without them, once for each model in each process, and an accepted request is marked as
+  BACKEND-32 says.
+
+- **The name `openai` means OpenAI's behaviour at any endpoint.** An entry keyed `openai` is not
+  checked for a substituted model, even where its `baseURL` names a proxy that does substitute
+  one. A proxy whose replies should be compared is reached by keying the entry with another name.
+
+- **A bare name beginning `openai/` reaches an `openai` entry.** BACKEND-18 reads a name as
+  qualified before it reads it as a bare name a block lists, so `openai/gpt-oss-120b` listed by
+  another gateway and written without that gateway's id goes to OpenAI. A name picked from `/model`
+  is recorded qualified, as `openrouter/openai/gpt-oss-120b`, and is not affected.

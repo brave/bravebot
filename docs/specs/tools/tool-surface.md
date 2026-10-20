@@ -4,10 +4,12 @@ title: The tool surface
 status: normative
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 235
+      - crates/agent/src/tools.rs: 240
+      - crates/agent/src/tools/message.rs: 14
   - symbol: Produced::refused_with_a_note
     sites:
       - crates/agent/src/tools.rs: 8
@@ -41,7 +43,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`spawn_processor`](spawn-processor.md) | `reads`, `about` | `instruction` | a reference |
 | [`spawn_agent`](spawn-agent.md) | `kind`, `mcp_servers` | `task`, `each` | one report per delegate |
 | [`run`](run.md) | every stage's program and arguments, `directory`, `background`, `deadline_seconds`, `stdin_ref` | standard input | a reference |
-| [`read_output`](read-output.md) | the reference naming the result | none | the bytes, if a person allows it |
+| [`read_output`](read-output.md) | the reference naming the result, `offset`, `pattern` | none | the bytes, if a person allows it |
 | [`vet_content`](vet-content.md) | the reference naming the slot | none | the bytes, if a person allows it |
 | [`job_output`](run.md#RUN-15) | `job`, `kill`, `wait_seconds` | none | what it has printed since the last look |
 | [`fetch_url`](fetch-url.md) | `url` | none | a reference |
@@ -52,8 +54,10 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`schedule_next`](schedule-next.md) | `delay_seconds`, `noop` | `reason` | the wait that will happen |
 | [`watch_file`](watch-file.md) | `path` | none | confirmation that the watch exists |
 | [`advisor`](advisor.md) | none | `question` | the advisor's reply |
+| [`message_session`](../session-messages.md#MSG-1) | `target` | `text` | confirmation that the message is queued in the other session's process |
 | [`ask_user`](ask-user.md) | `questions` | none | what the user answered |
 | [`request_path`](request-path.md) | `path`, `write` | none | what the person answered |
+| [`propose_plan`](../permission-modes.md#MODE-14) | `plan` | none | what the person answered, and whether plan mode ended |
 
 Every tool also takes `why`, which is content on every one of them and is left out of the table for
 that reason. [TOOL-5](#TOOL-5) is where that is settled.

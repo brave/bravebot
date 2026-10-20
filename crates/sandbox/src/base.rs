@@ -250,10 +250,25 @@ pub fn base(
 /// The name of the directory under the home directory where the program keeps its own state.
 ///
 /// It holds the gateway keys, the premium token and the server list, so a program a stage starts
-/// is refused it like any other credential location. The state helper in `bravebot-agent` takes its
+/// is refused it like any other credential location, except the entries of [`STATE_READABLE`],
+/// which are read. The state helper in `bravebot-agent` takes its
 /// name from here, which is what keeps this table and the place the files are written from naming
 /// two different directories.
 pub const STATE_DIRECTORY: &str = ".bravebot";
+
+/// The entries of the state directory that a stage reads, each with everything beneath it.
+///
+/// The directory as a whole stays refused ([`CREDENTIAL_DIRECTORIES`]) and these are lifted out of
+/// it, as the files of `~/.ssh` that hold no secret are. A file the program starts writing into the
+/// state directory is therefore refused until someone adds it here. Only reading is lifted: no
+/// write row, `allowWrite` entry or request to write reaches the state directory.
+///
+/// `sessions` holds the session records, which carry the conversation and no credential or
+/// command that runs. Everything else the program writes there is a gateway key, the premium
+/// token, a job's attach token, a setting, a server, hook or language-server declaration, a
+/// standing permission, a remembered command or a trust answer, which a read exposes or a later
+/// run acts on, or the prompt history and the other files the sessions' records are not.
+const STATE_READABLE: &[&str] = &["sessions"];
 
 /// The name of the directory under the home directory that holds the browser relay's socket and
 /// the secret a peer presents to it, so a program that reads the secret can drive the browser.
@@ -444,6 +459,14 @@ const SSH_READABLE: &[&str] = &[
     ".ssh/id_ed25519_sk.pub",
 ];
 
+/// The places in the state directory under `home` that a stage reads ([`STATE_READABLE`]).
+pub fn readable_state_locations(home: &Path) -> Vec<PathBuf> {
+    STATE_READABLE
+        .iter()
+        .map(|row| under(&under(home, STATE_DIRECTORY), row))
+        .collect()
+}
+
 /// Every row of the four tables, whatever platform keeps it.
 pub(crate) fn every_credential_directory() -> impl Iterator<Item = &'static &'static str> {
     CREDENTIAL_DIRECTORIES
@@ -510,6 +533,9 @@ pub fn run_base(
         }
         for row in SSH_READABLE {
             policy = policy.allow_read(under(home, row));
+        }
+        for location in readable_state_locations(home) {
+            policy = policy.allow_read(location);
         }
         if prelude == Prelude::MacOs {
             policy = policy.allow_read(under(home, MACOS_LOGIN_KEYCHAIN));
@@ -781,6 +807,107 @@ mod tests {
         .collect();
 
         assert_eq!(lifted, expected);
+    }
+
+    /// Whether the run base's rows leave `path` readable: a read row at or above it that no
+    /// refusal at or beneath that row's depth overrides, or a lift beneath a refusal.
+    fn state_path_is_read(policy: &SandboxPolicy, path: &Path) -> bool {
+        let lifted = policy.readable.iter().any(|row| {
+            row.starts_with(under(Path::new(A_HOME), STATE_DIRECTORY)) && path.starts_with(row)
+        });
+        let refused = policy
+            .unreadable
+            .iter()
+            .any(|refusal| path.starts_with(refusal));
+        lifted || !refused
+    }
+
+    /// The regression it rejects: the state directory lifted whole or by a glob, which reads the
+    /// gateway keys, the Leo token, the MCP configuration and the files read back to decide what
+    /// runs; or a lift list that stops covering `sessions`, which sends back every script that
+    /// reads the session records for a request. Every file the product keeps in the state
+    /// directory is named here, with whether a stage reads it, and a name that is not in the
+    /// table (a file the product starts to write later) must be refused: the directory is
+    /// refused unless a name is lifted, so a new file is covered without anyone updating a list.
+    #[test]
+    fn the_run_base_reads_the_session_records_and_no_other_file_in_the_state_directory() {
+        let state = under(Path::new(A_HOME), STATE_DIRECTORY);
+        let readable = [
+            "sessions",
+            "sessions/-repo",
+            "sessions/-repo/1.json",
+            "sessions/-repo/1.audit.jsonl",
+            "sessions/.host-started",
+        ];
+        let refused = [
+            "gateway-keys.json",
+            "leo-premium.json",
+            "leo-premium.lock",
+            "mcp.json",
+            "mcp-approved",
+            "mcp-projects",
+            "mcp-tools",
+            "settings.json",
+            "hooks.json",
+            "lsp.json",
+            "granted/key.jsonl",
+            "remembered/key.jsonl",
+            "reach.jsonl",
+            "trusted/key.jsonl",
+            "untrusted/key.jsonl",
+            "agents/helper.md",
+            "skills/skill/SKILL.md",
+            "AGENTS.md",
+            "styles/style.md",
+            "vetting",
+            "jobs/1/attach.token",
+            "jobs/1/state.json",
+            "history",
+            "shell/1",
+            "checkouts/1",
+            "logs/log",
+            "findings/1",
+            "model",
+            "a-file-the-product-writes-later",
+            "sessions-like-name",
+            "sessionsx/1.json",
+        ];
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let policy = a_run_base(prelude);
+            for name in readable {
+                assert!(
+                    state_path_is_read(&policy, &state.join(name)),
+                    "{prelude:?} {name}"
+                );
+            }
+            for name in refused {
+                assert!(
+                    !state_path_is_read(&policy, &state.join(name)),
+                    "{prelude:?} {name}"
+                );
+            }
+            // The directory itself, which lists every name in it, stays refused.
+            assert!(policy.unreadable.contains(&state), "{prelude:?}");
+            assert!(!policy.readable.contains(&state), "{prelude:?}");
+            // The browser relay's directory holds the secret that drives the browser.
+            assert!(
+                !state_path_is_read(
+                    &policy,
+                    &under(Path::new(A_HOME), ".bravebot-browser/secret")
+                ),
+                "{prelude:?}"
+            );
+        }
+    }
+
+    /// The regression it rejects: a lift in the table that names more than the session records
+    /// without this list, which a reviewer reads, being changed with it.
+    #[test]
+    fn the_state_directory_entries_a_stage_reads_are_the_session_records_alone() {
+        assert_eq!(
+            readable_state_locations(Path::new(A_HOME)),
+            vec![under(Path::new(A_HOME), ".bravebot/sessions")]
+        );
     }
 
     /// The regression it rejects: the login keychain refused, which is `gh` and git's

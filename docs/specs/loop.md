@@ -5,8 +5,11 @@ status: normative
 governs:
   - crates/tui/src/loops.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/entry.rs
+  - crates/tui/src/state/standing.rs
   - crates/tui/src/status.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/hint.rs
@@ -58,6 +61,7 @@ press. A loop that could run commands would be a way to make this program act on
 nobody was watching, with each firing endorsed by a keystroke made once, long ago.
 
 `verified-by: bravebot_tui::state::a_loop_whose_prompt_looks_like_a_command_still_sends_it_as_a_prompt`
+`verified-by: bravebot_tui::state::a_later_tick_of_a_loop_over_a_command_is_sent_as_a_prompt_and_runs_nothing`
 
 <a id="LOOP-3"></a>
 ### LOOP-3: an interval is read off the front of the argument, or off an `every` clause at its end
@@ -256,7 +260,8 @@ arriving after its loop has gone would otherwise start a new loop on the line ju
 `verified-by: bravebot_tui::state::stopping_a_loop_says_so_and_says_nothing_when_there_was_none`
 `verified-by: bravebot_tui::state::clearing_a_session_with_no_loop_says_nothing_of_one`
 `verified-by: bravebot_tui::state::a_loop_past_its_age_ends_and_says_so_instead_of_ticking`
-`verified-by: bravebot_tui::app::stopping_a_turn_ends_the_loop_and_says_so`
+`verified-by: bravebot_tui::app::stopping_a_tick_ends_the_loop_and_says_so`
+`verified-by: bravebot_tui::app::stopping_a_prompt_typed_during_a_loop_ends_the_loop_and_says_so`
 `verified-by: bravebot_tui::loops::a_loop_older_than_a_week_has_aged_out`
 `verified-by: bravebot_tui::loops::a_turn_that_says_the_loop_is_finished_ends_it_without_a_keepalive`
 `verified-by: bravebot_tui::state::a_turn_that_says_the_loop_is_finished_ends_it_and_says_so`

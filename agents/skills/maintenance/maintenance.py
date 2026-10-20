@@ -41,6 +41,7 @@ def _load(name, path):
 
 specs = _load("check_spec_specs", HERE.parent / "check-spec" / "specs.py")
 drafting = _load("check_spec_draft_issues", HERE.parent / "check-spec" / "draft-issues.py")
+workdir = _load("work_dir", HERE.parents[1] / "work_dir.py")
 
 LANES = ("unreferenced", "test-only", "allowances", "duplicates", "literals", "size")
 PREFIX = {
@@ -369,6 +370,48 @@ def body_start(text, start):
     return len(text)
 
 
+ITEM = re.compile(
+    r"(?:pub(?:\([^)]*\))?\s+)?(?:(?:unsafe|async|const|extern(?:\s+\"[^\"]*\")?)\s+)*"
+    r"(?:fn|mod|use|impl|struct|enum|trait|type|static|const|union|macro_rules!)\b"
+)
+ATTRIBUTES = re.compile(r"(?:\s*#!?\[[^\]]*\])*\s*")
+FIELD = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?[A-Za-z_]\w*\s*(?::(?!:)|,)")
+
+
+def field_end(text, start):
+    """The index just past a field that begins at `start`: its `,` outside parentheses, brackets,
+    braces and angle brackets, or the end of the text before the `}` closing the struct it is in."""
+    depth = 0
+    for i in range(start, len(text)):
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                return i
+            depth -= 1
+        elif c == "<":
+            depth += 1
+        elif c == ">" and text[i - 1] not in "-=":
+            depth = max(depth - 1, 0)
+        elif c == "," and depth == 0:
+            return i + 1
+    return len(text)
+
+
+def attributed_end(bare, after):
+    """The index where the item or field attributed by an attribute ending at `after` ends, and
+    whether it is a `{ }` block. A field of a struct, or of a struct literal, ends at its `,` and
+    the next `{` belongs to something else; anything else runs to its body's end or its `;`."""
+    first = ATTRIBUTES.match(bare, after).end()
+    if FIELD.match(bare, first) and not ITEM.match(bare, first):
+        return field_end(bare, first), False
+    at = body_start(bare, after)
+    if at < len(bare) and bare[at] == "{":
+        return matching_brace(bare, at), True
+    return at + 1, False
+
+
 def rust_modules(bare):
     """The lines of items under `#[cfg(test)]`, or under a `cfg` that needs `test` to be set, and
     the names of the `mod name;` declarations in the file: every one, and those under such a `cfg`.
@@ -379,11 +422,8 @@ def rust_modules(bare):
         condition = found.group(1)
         if not re.search(r"\btest\b", condition) or re.search(r"not\s*\(\s*test\b", condition):
             continue
-        at = body_start(bare, found.end())
-        if at < len(bare) and bare[at] == "{":
-            end = matching_brace(bare, at)
-        else:
-            end = at + 1
+        end, braced = attributed_end(bare, found.end())
+        if not braced:
             declared = MODULE.search(bare, found.end(), end)
             if declared:
                 test_modules.append(declared.group(1))
@@ -1116,8 +1156,7 @@ def prepare(root, lanes, prefixes, work_dir, limit, size_limit):
             f"{lane}: {len(candidates)} candidates for {len(prompts)} reviewers"
             + (f", {entry['left_out']} more past the cap" if entry["left_out"] else "")
         )
-    path = work_dir / "manifest.json"
-    path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    path = workdir.write_manifest(work_dir, manifest)
     return result, path
 
 
@@ -1304,14 +1343,6 @@ def render_drafts(drafts, out):
     return "\n".join(lines)
 
 
-def read_manifest(work_dir):
-    path = Path(work_dir) / "manifest.json"
-    if not path.exists():
-        print(f"no manifest at {path}", file=sys.stderr)
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     command = argv.pop(0) if argv and argv[0] in ("prepare", "collect", "draft") else "prepare"
@@ -1343,7 +1374,7 @@ def main(argv=None):
         print(json.dumps({"work_dir": str(work_dir), "manifest": str(manifest)}))
         return 0
 
-    manifest = read_manifest(args.work_dir)
+    manifest = workdir.read_manifest(args.work_dir)
     if manifest is None:
         return 2
     os.chdir(manifest["root"])

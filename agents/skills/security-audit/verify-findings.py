@@ -114,7 +114,7 @@ def main():
         )
 
     manifest["verifications"] = verifications
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    collect.workdir.write_manifest(work_dir, manifest)
 
     if args.json:
         print(json.dumps({"verifications": verifications}, indent=2))

@@ -161,6 +161,7 @@ export function AgentSettings({ session, onChanged, onDirty }: {
             <leo-option value="turn-started">Turn starts</leo-option>
             <leo-option value="tool-finished">Tool finishes</leo-option>
             <leo-option value="turn-finished">Turn ends</leo-option>
+            <leo-option value="prompt-shown">Question waiting</leo-option>
           </Dropdown>
           {(hook.on === 'tool-finished' || hook.tool !== null) &&
             <Input value={hook.tool ?? ''} placeholder="All tools" disabled={busy || !editable}

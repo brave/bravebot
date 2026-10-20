@@ -36,6 +36,7 @@ still had to be endorsed on its own.
 `verified-by: bravebot_agent::turn::a_quarantined_file_is_rewritten_by_a_processor`
 `verified-by: bravebot_agent::turn::a_write_that_names_two_bodies_or_none_is_refused`
 `verified-by: bravebot_agent::turn::a_write_with_blank_references_beside_its_path_and_contents_goes_through`
+`verified-by: bravebot_agent::turn::a_blank_contents_is_the_body_and_writes_an_empty_file`
 
 <a id="WRITE-2"></a>
 ### WRITE-2: a reference that names no file is not a destination
@@ -51,7 +52,8 @@ choosing where an effect lands.
 
 A write needs a person's approval, which mints a single-use endorsement bound to that exact path,
 so it cannot be replayed or redirected. Where nobody can be asked, writes are refused rather than
-applied unseen.
+applied unseen. A path the workspace does not reach is refused before anybody is asked, since no
+answer makes it reachable ([TRUST-10](../trust-map.md#TRUST-10)).
 
 **Why.** The wrong file destroys work rather than wasting a step.
 
@@ -59,6 +61,7 @@ applied unseen.
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
 `verified-by: bravebot_agent::turn::a_refused_overwrite_leaves_the_original`
 `verified-by: bravebot_agent::turn::an_approved_write_cannot_escape_the_workspace`
+`verified-by: bravebot_agent::turn::a_write_outside_every_opened_directory_is_refused_before_the_person_is_asked`
 `verified-by: bravebot_agent::turn::an_approved_write_does_not_authorise_a_write_somewhere_else`
 `verified-by: bravebot_core::policy::an_unendorsed_destination_is_refused`
 `verified-by: bravebot_core::policy::an_endorsement_does_not_outlive_the_destination_it_authorised`
@@ -90,3 +93,29 @@ approval on something the server already knew.
 `verified-by: bravebot_agent::lsp::a_write_reports_the_error_lines_a_running_server_found`
 `verified-by: bravebot_agent::lsp::a_write_starts_no_language_server`
 `verified-by: bravebot_agent::lsp::a_write_of_quarantined_bytes_reports_no_diagnostics`
+
+<a id="WRITE-6"></a>
+### WRITE-6: a replaced file keeps its line endings and its byte order mark
+
+Where `contents` replaces a file the trust map vouches for, the body takes that file's format
+before the diff is built: its line endings become the ones the file uses, and it begins with a
+byte order mark where the file began with one. A file holding `\r\n` anywhere uses CRLF, and any
+other file uses LF. A body that begins with a byte order mark keeps it whatever the file had.
+
+WRITE-1 still says `contents` becomes the file. The normalised text is what lands and is what the
+person approves, because the detection happens before the diff: the diff then shows the lines the
+write changes rather than every line of the file.
+
+Nothing is converted in three cases. A file nobody vouched for is left alone, since its ending is
+a fact about untrusted bytes and converting on it would be the driver branching on content, which
+the rule in `agents/AGENTS.md` forbids. A body from `contents_ref` is left alone, since it is
+bytes nobody has read. A path with no file yet is written as given.
+
+**Why.** A planner that sends LF text over a CRLF file changes every line, and the approval diff
+then shows the whole file as changed. The person has to decline and ask again, or accept a diff
+they cannot read and a change of format nobody wanted.
+
+`verified-by: bravebot_agent::turn::a_crlf_file_rewritten_with_lf_contents_keeps_crlf`
+`verified-by: bravebot_agent::turn::an_untrusted_pre_image_converts_nothing`
+`verified-by: bravebot_agent::turn::a_contents_ref_write_over_a_trusted_crlf_file_keeps_its_own_endings`
+`verified-by: bravebot_agent::workspace::a_replaced_files_format_is_detected_and_applied`

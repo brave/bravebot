@@ -53,6 +53,10 @@ the directory,
 [incognito.md](incognito.md) for the mode that writes none of it. This file covers the directory
 itself.
 
+The programs a `run` starts are refused the whole directory except `sessions/`, which they read and
+never write ([SANDBOX-12](sandboxing.md#SANDBOX-12)). A file added to the directory later is refused
+without a change to any list.
+
 ## Clauses
 
 <a id="STATE-1"></a>

@@ -149,6 +149,7 @@ act on:
 | Keys | The stretch |
 |---|---|
 | a motion | from the caret to wherever that motion would take it |
+| `;`, `,` | up to where the last `f`, `F`, `t` or `T` jump goes again, or the same jump reversed, so `d;` takes up to and including the next match. With no jump made yet they change nothing. `d,` leaves the jump that `;` repeats as it was |
 | `j`, `k`, `G`, `gg`, `_` | every row from the caret's to the one the key reaches, whole |
 | the operator's own letter doubled | the whole line: `dd`, and `guu` or `gugu` |
 | `D`, `C`, `x`, `s` | to the end of the line, and the character under the caret |

@@ -153,6 +153,30 @@ pub struct Task {
     /// delegate's turn: a delegate is not shown the tool and a call to it is answered as an
     /// unknown name.
     pub advisor: Option<String>,
+    /// Where messages from other sessions wait for this session's planner (MSG-6).
+    ///
+    /// `None` for every session that is not a background one, and for every delegate: a delegate's
+    /// task came from a planner, so a message aimed at the session is for the planner that started
+    /// it and stays in the inbox for that planner's next request.
+    ///
+    /// A caller that sets one also implements [`Reporter::session_message`], which is the only thing
+    /// that shows the person a message going in: the default says nothing, and a planner that
+    /// changes course on a message nobody saw arrive reads as one that changed its mind unprompted.
+    ///
+    /// [`Reporter::session_message`]: crate::report::Reporter::session_message
+    pub inbox: Option<std::sync::Arc<dyn crate::messages::Inbox>>,
+    /// How this session reaches the other background sessions, or `None` where it cannot send
+    /// (MSG-12).
+    ///
+    /// `None` for every session that is not a background one and for every delegate, so none of
+    /// them is offered `message_session` and a call to it by name is answered as an unknown name.
+    /// A caller that sets one also implements [`Reporter::message_sent`] and answers
+    /// [`Confirmer::confirm_message`]: the first is the only thing that shows the person a message
+    /// going out under a standing answer, and the second is where the person approves the target.
+    ///
+    /// [`Reporter::message_sent`]: crate::report::Reporter::message_sent
+    /// [`Confirmer::confirm_message`]: crate::confirm::Confirmer::confirm_message
+    pub courier: Option<std::sync::Arc<dyn crate::messages::Courier>>,
     /// The model to request, when the user has chosen one.
     ///
     /// `None` means the configured default applies. Supplied per turn rather than read here for
@@ -226,6 +250,13 @@ pub struct Task {
     ///
     /// Read only where `confine_runs` is true. A delegate inherits it with `confine_runs`.
     pub sandbox: bravebot_sandbox::SandboxMode,
+    /// Whether the front end can put a line that starts with no sandbox to a person (SANDBOX-29).
+    ///
+    /// Off unless the caller turns it on. The terminal interface and a session in lines draw the
+    /// question; a window refuses the request without asking, and a run with nobody to ask refuses
+    /// every question. A refusal names the `unconfined` argument only where this is on, so a planner
+    /// is not pointed at a request its front end would turn down. A delegate is never pointed at it.
+    pub asks_about_unconfined: bool,
     /// Rules the user wrote in advance about which actions to ask them about.
     ///
     /// Supplied per turn for the reason `home` and `model` are: which file they came from is the
@@ -442,6 +473,8 @@ impl Task {
             // which is the caller saying there is somebody a prompt could be put to.
             remembering: None,
             advisor: None,
+            inbox: None,
+            courier: None,
             model: None,
             effort: None,
             output_schema: None,
@@ -469,6 +502,7 @@ impl Task {
             // Unconfined, which is what a turn has always done.
             confine_runs: false,
             sandbox: bravebot_sandbox::SandboxMode::default(),
+            asks_about_unconfined: false,
             permissions: Permissions::new(),
             // Asking, which is what a turn has always done.
             permission_mode: crate::LiveMode::default(),
@@ -616,6 +650,21 @@ impl Task {
         self
     }
 
+    /// Give the turn the inbox of the background session it runs in, or `None` for any other.
+    pub fn with_inbox(mut self, inbox: Option<std::sync::Arc<dyn crate::messages::Inbox>>) -> Self {
+        self.inbox = inbox;
+        self
+    }
+
+    /// Give the turn the courier of the background session it runs in, or `None` for any other.
+    pub fn with_courier(
+        mut self,
+        courier: Option<std::sync::Arc<dyn crate::messages::Courier>>,
+    ) -> Self {
+        self.courier = courier;
+        self
+    }
+
     /// Address a definition by the name a person typed, or `None` for the session's own planner.
     pub fn addressing(mut self, name: Option<String>) -> Self {
         self.addressing = name;
@@ -716,6 +765,13 @@ impl Task {
     /// Hold those programs to `mode`'s profile. See [`Task::sandbox`].
     pub fn with_sandbox_mode(mut self, mode: bravebot_sandbox::SandboxMode) -> Self {
         self.sandbox = mode;
+        self
+    }
+
+    /// Say the front end can ask about a line that starts with no sandbox. See
+    /// [`Task::asks_about_unconfined`].
+    pub fn asking_about_unconfined(mut self, asks: bool) -> Self {
+        self.asks_about_unconfined = asks;
         self
     }
 

@@ -8,6 +8,7 @@
 //! off the disk and not off words the model was handed.
 
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};

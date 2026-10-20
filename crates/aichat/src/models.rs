@@ -352,6 +352,7 @@ fn offered_by_gateway(
                 provider
                     .model(&entry.id)
                     .and_then(|model| model.context_window)
+                    .or(provider.context_window)
                     .or(entry.context_length)
                     .unwrap_or(bravebot_config::provider::CONTEXT_WINDOW),
             ),
@@ -704,6 +705,30 @@ mod tests {
             r#"{"data": [{"id": "z-ai/glm-4.6", "context_length": 262144}]}"#,
         );
         assert_eq!(models[0].conversation_tokens, Some(32_000));
+    }
+
+    /// A block listing no models keeps the window of a local server in `options.contextWindow`.
+    /// It outranks the window a roster reports, and a roster that reports none gets it instead of
+    /// the assumed one, which is the regression an Ollama import's figure would otherwise suffer.
+    #[test]
+    fn a_provider_window_is_taken_for_fetched_models() {
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"ollama": {
+                "options": {"baseURL": "http://localhost:11434/v1", "contextWindow": 4096}
+            }}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        let provider = bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider");
+        let models = from_gateway(
+            &provider,
+            r#"{"data": [{"id": "plain"}, {"id": "reported", "context_length": 262144}]}"#,
+        );
+        assert_eq!(models[0].conversation_tokens, Some(4096));
+        assert_eq!(models[1].conversation_tokens, Some(4096));
     }
 
     /// Every turn here calls tools, so a chat-only model is a choice that produces an agent which

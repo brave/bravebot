@@ -11,7 +11,9 @@
 //! Width is measured in display columns rather than characters, so a line of CJK or emoji wraps
 //! where it actually reaches the edge rather than twice as late.
 
-use unicode_width::UnicodeWidthChar;
+use ratatui::style::Style;
+use ratatui::text::Span;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Rows the input may occupy before it scrolls instead of growing.
 ///
@@ -159,9 +161,36 @@ pub(crate) fn boundary_at_or_before(text: &str, offset: usize) -> usize {
     offset
 }
 
-/// Display columns a string occupies.
+/// Display columns a string occupies, counted the way the terminal paragraph draws it.
+///
+/// Per grapheme cluster rather than per character: an emoji presentation sequence such as U+2764
+/// U+FE0F is two columns wide while its characters sum to one, and ratatui wraps and draws by the
+/// cluster. A width that disagrees lets a row the caller laid out overflow when it is drawn.
 pub fn display_width(text: &str) -> usize {
-    text.chars().map(|c| c.width().unwrap_or(0)).sum()
+    clusters(text).map(|(_, width)| width).sum()
+}
+
+/// The grapheme clusters of `text` as (bytes, columns), in the units ratatui draws them in.
+///
+/// A cluster is as wide as ratatui's `cell_width` says: its string width, plus one for each
+/// halfwidth voiced sound mark, which `unicode-width` counts as zero and terminals draw in a cell
+/// of its own.
+pub(crate) fn clusters(text: &str) -> impl Iterator<Item = (usize, usize)> {
+    let span = Span::raw(text);
+    // Collected because the graphemes borrow the span, which does not outlive this call. Control
+    // characters are dropped from the iteration exactly as the paragraph drops them, so a caller
+    // that needs byte offsets passes text `printable` has already been over.
+    span.styled_graphemes(Style::default())
+        .map(|g| {
+            let marks = g
+                .symbol
+                .chars()
+                .filter(|c| matches!(c, '\u{ff9e}' | '\u{ff9f}'))
+                .count();
+            (g.symbol.len(), g.symbol.width() + marks)
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/preamble.rs
   - crates/agent/src/agents.rs
   - crates/agent/src/home.rs
+  - crates/agent/src/styles.rs
 documented-by: docs/website/docs/customize/instructions.md
 ---
 
@@ -198,6 +199,8 @@ exactly that.
 `verified-by: bravebot_agent::preamble::a_one_line_file_naming_another_is_a_pointer`
 `verified-by: bravebot_agent::preamble::a_document_that_merely_mentions_a_file_is_not_a_pointer`
 `verified-by: bravebot_agent::preamble::a_file_pointing_at_itself_is_not_followed`
+`verified-by: bravebot_agent::preamble::a_pointer_naming_a_file_outside_the_workspace_is_not_followed`
+`verified-by: bravebot_agent::preamble::a_pointer_in_an_untrusted_directory_is_a_notice_and_no_text`
 `verified-by: bravebot_agent::preamble::punctuation_around_the_name_is_not_part_of_it`
 `verified-by: bravebot_agent::preamble::a_short_file_naming_nothing_is_not_a_pointer`
 `verified-by: bravebot_agent::turn::a_denied_file_an_agents_file_points_at_does_not_reach_the_system_prompt`
@@ -384,10 +387,10 @@ gate and reads each import through it, so nothing untrusted decides what is read
 <a id="INSTR-12"></a>
 ### INSTR-12: an output style stands where `--system-prompt` stands, and yields to it
 
-`/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`)
-or one of the person's own, `/style off` clears the pick and `/style` alone says which is in force and lists the names. The
-pick lasts for the session and is not stored. A `style` key in `~/.bravebot/settings.json`, or in the file `--settings` names, is the style a session starts in, named as `/style` names one: a project's or a local settings file naming it is ignored and reported, since which words open the prompt is the person's to say, and a name that is no style is said and starts none. A resumed session starts in that style or none. Each turn whose prompt opens with a style's words records it in the trail by name and by whether it is built in or the person's own file, never by its words ([TRACE-7](trace.md#TRACE-7)); a turn where `--system-prompt` stood in its place records none. A name is
-compared whole against the built-in list and the person's own files, and nothing a person types after
+`/style <name>` picks one of the styles this build ships (`concise`, `explanatory` and `proactive`),
+one of the person's own or one of the project's, `/style off` clears the pick and `/style` alone says which is in force and lists the names. The
+pick lasts for the session and is not stored. A `style` key in `~/.bravebot/settings.json`, or in the file `--settings` names, is the style a session starts in, named as `/style` names one: a project's or a local settings file naming it is ignored and reported, since which words open the prompt is the person's to say, and a name that is no style is said and starts none. A resumed session starts in that style or none. Each turn whose prompt opens with a style's words records it in the trail by name and by whether it is built in, the person's own file or the project's, never by its words ([TRACE-7](trace.md#TRACE-7)); a turn where `--system-prompt` stood in its place records none. A name is
+compared whole against the built-in list, the person's own files and the project's, and nothing a person types after
 `/style` reaches the prompt.
 
 A person's own style is a file `~/.bravebot/styles/<name>.md`. Its name is a slug (lowercase letters
@@ -396,8 +399,21 @@ never joined to a path before it has been checked as one, so nothing typed can n
 that directory. A file is a style only where it is a regular file, not a symbolic link, of at most
 4096 bytes of UTF-8 with some words in it. A file called by a built-in name is ignored, so a file
 cannot take the place of one this build ships. Its words are the person's own configuration and
-trusted for sitting in `~/.bravebot`, as `~/.bravebot/AGENTS.md` is. A style a project holds is
-not read: nothing under the workspace is looked at for one.
+trusted for sitting in `~/.bravebot`, as `~/.bravebot/AGENTS.md` is.
+
+A project's own style is a file `<workspace>/.bravebot/styles/<name>.md`, of the same shape, and it
+is read only where the trust map vouches for it ([TRUST-1](trust-map.md#TRUST-1)). Neither the
+directory nor the file is opened until the map has been asked, a deny rule covering the file leaves
+it out, and its bytes arrive through the read and the gate the project's `AGENTS.md` goes through,
+so a file that is not trusted is no style and nothing of it is looked at, listed or counted. A name
+a built-in style or one of the person's own files already has is not offered from the project, so a
+project cannot take the place of either. `/style` lists the project's names after the others, from
+what the map vouched for when the line was typed, and picks one by its name alone: the words are not
+held. A turn reads the file again when it begins, under its own map, so vouching withdrawn after
+the pick, or a file an earlier turn wrote and so distrusted ([TRUST-4](trust-map.md#TRUST-4)),
+takes the style out of that turn. That turn opens with the usual words, records no style, and says
+in its notices that the style was not used. A project's style is not a `style` setting's to name:
+the setting is read before the map is, so it names a built-in style or one of the person's own.
 
 A style's words stand in for the opening of the system prompt, as `--system-prompt` does
 ([CLI-19](cli.md#CLI-19), [INSTR-10](#INSTR-10)), and for nothing after it. Where both are present
@@ -413,14 +429,17 @@ refuses it, and the guidance on reading a tool's output is not in the opening, s
 remove it. `proactive` says so in its own words and does not change the mode.
 
 **Why.** Wording for tone and format is a thing a person wants to switch between tasks, and
-`--system-prompt` can only be given when the program starts. Taking a style only from this build or
-from `~/.bravebot` keeps the rule INSTR-10 relies on, that the words in the opening are written by
-this program or by the person, typed or kept in the person's own configuration, and that nothing
-read from a project reaches that place.
+`--system-prompt` can only be given when the program starts. A project's style is the one source
+that is not the person's own, so it has the standing the project's `AGENTS.md` has and no more:
+vouched for by the map or not read at all, and read again at each turn so the vouching is not one
+the pick outlives. The rule INSTR-10 relies on, that nothing read from a project reaches the opening
+without the trust map saying so, is the one that holds.
 
-**Known costs.** Only the terminal interface has `/style` and reads the `style` setting. Styles are
-not read from a project: that needs the trust map to say who may put words in the opening, and none
-is built.
+**Known costs.** Only the terminal interface has `/style` and reads the `style` setting. A project's
+styles are offered from a list read when a `/style` line is typed, so one picked while a turn runs
+is taken on the list last read, and a name that list never held is refused. The trail names a
+project's style and not its file, so a reader cannot tell two files of one name apart across a
+change of the file.
 
 `verified-by: bravebot_agent::turn::a_style_takes_the_place_of_the_opening_alone_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::styles::a_style_is_found_by_its_whole_name_only`
@@ -430,6 +449,13 @@ is built.
 `verified-by: bravebot_agent::styles::a_name_that_is_not_a_slug_never_reaches_a_path`
 `verified-by: bravebot_agent::styles::a_link_an_empty_file_and_a_long_file_are_not_styles`
 `verified-by: bravebot_agent::styles::the_offered_names_are_the_built_ins_then_the_accepted_files_in_order`
+`verified-by: bravebot_agent::styles::a_project_style_is_read_only_where_the_trust_map_vouches`
+`verified-by: bravebot_agent::styles::a_project_file_cannot_take_the_place_of_a_built_in_or_a_home_style`
+`verified-by: bravebot_agent::styles::a_project_link_an_empty_file_a_long_file_and_a_bad_name_are_not_styles`
+`verified-by: bravebot_agent::styles::a_deny_rule_over_a_project_style_neither_offers_nor_resolves_it`
+`verified-by: bravebot_agent::turn::a_project_style_opens_the_prompt_only_where_the_trust_map_vouches`
+`verified-by: bravebot_tui::app::a_project_style_is_listed_and_picked_by_name_only_where_one_was_vouched_for`
+`verified-by: bravebot_tui::state::the_project_styles_are_read_once_per_style_line_and_held_after_it`
 `verified-by: bravebot_agent::turn::a_style_from_a_file_opens_the_prompt_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::turn::a_turn_records_the_output_style_that_opened_it`
 `verified-by: bravebot_tui::app::a_style_file_in_the_home_directory_is_listed_and_picked_by_name`
@@ -473,6 +499,7 @@ here.
 
 `verified-by: bravebot_agent::skills::a_bravebot_skill_shadows_a_foreign_one_of_the_same_name`
 `verified-by: bravebot_agent::skills::a_foreign_skills_directory_below_the_root_is_not_a_source`
+`verified-by: bravebot_agent::skills::a_foreign_skills_directory_under_a_touched_directory_is_not_a_source`
 `verified-by: bravebot_agent::skills::a_foreign_skill_in_an_untrusted_project_is_counted_and_not_named`
 `verified-by: bravebot_agent::skills::a_skill_a_vouched_root_offers_is_not_also_reported_as_not_loaded`
 `verified-by: bravebot_agent::skills::an_untrusted_entry_named_like_a_vouched_skill_is_still_counted`
@@ -516,7 +543,12 @@ which file is read.
 `verified-by: bravebot_agent::preamble::a_distrusted_nested_agents_file_never_reaches_the_prompt`
 `verified-by: bravebot_agent::preamble::a_nested_agents_file_a_deny_rule_covers_never_reaches_the_prompt`
 `verified-by: bravebot_agent::preamble::a_path_outside_the_root_does_not_make_its_directory_a_source`
+`verified-by: bravebot_agent::preamble::the_directories_worked_in_stop_at_sixty_four`
+`verified-by: bravebot_agent::preamble::a_link_in_a_touched_name_is_not_followed_to_where_it_lands`
+`verified-by: bravebot_agent::preamble::a_nested_agents_file_is_not_followed_to_a_pointer_or_expanded_for_an_import`
 `verified-by: bravebot_agent::skills::a_nested_skill_is_offered_after_the_session_works_in_its_directory`
+`verified-by: bravebot_agent::skills::a_deeper_nested_skill_shadows_a_shallower_one_of_its_name`
+`verified-by: bravebot_agent::skills::a_foreign_skills_directory_under_a_touched_directory_is_not_a_source`
 `verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_and_not_named`
 `verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_beside_a_shallower_one_of_its_name`
 `verified-by: bravebot_agent::skills::a_nested_skill_on_the_list_covers_a_distrusted_project_entry_of_its_name`
@@ -525,6 +557,51 @@ which file is read.
 `verified-by: bravebot_agent::workspace::moving_the_working_directory_forgets_the_directories_worked_in`
 `verified-by: bravebot_agent::safe::a_safe_session_offers_no_nested_skill`
 `verified-by: bravebot_agent::safe::a_safe_session_reads_no_nested_agents_file`
+
+<a id="INSTR-15"></a>
+### INSTR-15: a standing source long enough to matter is said out loud
+
+After a source has passed the trust gate, its byte length is compared against two fixed figures.
+Over 16384 bytes a notice names the file and its size. The byte lengths of all the sources are
+added up, and over 32768 bytes in all one further notice says the total. The combined notice is
+said once for the turn, at the source that crosses the figure. Neither figure keeps a file out of
+the prompt: every source that passes the trust gate reaches it, whatever its size.
+
+The sources measured are the ones [INSTR-4](#INSTR-4) orders: `~/.bravebot/AGENTS.md`, the
+project's file, and each nested `AGENTS.md` of [INSTR-14](#INSTR-14). Words from
+`--append-system-prompt` are not measured, for the reason [INSTR-10](#INSTR-10) does not read them
+through the gate: a person who typed them for this run has said what this run carries. A source an
+untrusted directory holds is already out before this rule is reached, so nothing untrusted is
+measured and nothing untrusted is named.
+
+The notices are said before the first request, as [SKILL-11](skills.md#SKILL-11) requires of every
+notice, and composed per turn like every other part of this ([INSTR-7](#INSTR-7)), so shortening a
+file ends them.
+
+This is a length and nothing else. The driver compares the byte count of text that has already
+passed the gate, which is the test [INSTR-8](#INSTR-8) already rests on, and a notice carries a
+path from [INSTR-1](#INSTR-1)'s fixed set and a number. Nothing a file says decides whether it is
+loaded or what is said about it. A path is named here where [SKILL-6](skills.md#SKILL-6) counts
+rather than names, because that rule is about a path an untrusted project chose; these paths are
+fixed by [INSTR-1](#INSTR-1) and a nested one passed the trust map before it was measured.
+
+[INSTR-6](#INSTR-6) keeps the absence of a source silent and is untouched: this concerns a file
+that is there.
+
+**Why.** [INSTR-5](#INSTR-5) puts every source in every request of the session, so a file nobody
+meant to be long is paid for on every turn and nothing today says its size. Codex stops adding
+instruction files at 32 KiB in all and Claude Code warns over a recommended length, which is the
+same judgement about the same cost: a warning, not a refusal. A file nobody meant to write that
+long is still a file somebody wrote on purpose, and a half-read set of instructions is worse than
+a whole one that cost a sentence to say so: the planner cannot tell which rules a drop left out,
+and a rule cut off mid-sentence still reads as a rule.
+
+**Known costs.** Nothing here accounts for the prompt against the model's context window, and
+compaction ([compaction.md](compaction.md)) is where that question belongs.
+
+`verified-by: bravebot_agent::preamble::a_long_instructions_file_loads_and_its_size_is_said`
+`verified-by: bravebot_agent::preamble::a_very_large_instructions_file_still_loads`
+`verified-by: bravebot_agent::preamble::sources_long_together_are_reported_once`
 
 ## Known costs
 
@@ -559,3 +636,6 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   says nothing that contradicts it. Deleting the global file, or narrowing it, is the only way to
   remove it, since a project is not the right place to be granted power over the user's own
   configuration.
+- **There is no ceiling past which a source of [INSTR-15](#INSTR-15) is left out.** A file of any
+  size is paid for in full on every request of the session, because dropping or truncating it is a
+  worse cost than carrying it whole.

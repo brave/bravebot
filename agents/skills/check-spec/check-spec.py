@@ -19,6 +19,7 @@ files and prints a pointer to them.
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -41,6 +42,12 @@ from specs import (  # noqa: E402
     crate_directories,
     load_specs,
 )
+
+_shared = importlib.util.spec_from_file_location(
+    "work_dir", Path(__file__).resolve().parents[2] / "work_dir.py"
+)
+workdir = importlib.util.module_from_spec(_shared)
+_shared.loader.exec_module(workdir)
 
 ERROR = "error"
 WARNING = "warning"
@@ -841,6 +848,57 @@ def guard_sites(symbol, sources):
     return hits
 
 
+def unseen_spellings(symbol, sources):
+    """Uses of a guarded method that `guard_sites` cannot count, as `(path, line, text, why)`.
+
+    The count is textual: `.name(` and `Type::name`. Rust has other ways to write the same call,
+    `Type::<T>::name(`, `<Type<T>>::name(`, an alias such as `L::name(` after `use Type as L`, and
+    a `macro_rules!` body, which is one occurrence however many times the macro is invoked. None
+    of them is rare enough to rely on nobody writing it, and each leaves every pinned count where
+    it was, so a use in one of them would land with the allowlist still true. Reporting them here
+    is what lets the count stand for every spelling instead of the two it reads.
+
+    Only a method that is called on a receiver is held to this, and only where the entry says
+    `every-spelling: yes`. An associated function is counted where its qualified name is written,
+    and a bare name such as `present` or `path_of` is a free function in other modules too, so
+    asking that of every guard reports those instead of a use of the guarded method."""
+    parts = symbol.split("::")
+    if len(parts) < 2:
+        return []
+    qualifier, bare = parts[-2], parts[-1]
+    owned = owned_definitions(bare, qualifier, sources)
+    if not owned or associated_sites(owned) is not None:
+        return []
+    spelled = re.compile(rf"(?<![\w\"]){re.escape(bare)}(?![\w\"])")
+    qualified = re.compile(rf"\b{re.escape(qualifier)}::$")
+    defined = re.compile(r"\bfn\s+$")
+    literal = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)'")
+    found = []
+    for path, lines in sources.items():
+        code = strip_comments(lines)
+        depth = 0
+        for number, raw in enumerate(code, start=1):
+            in_macro = depth > 0 or "macro_rules!" in raw
+            if in_macro:
+                bare_code = literal.sub("", raw)
+                depth += sum(bare_code.count(c) for c in "{([") - sum(bare_code.count(c) for c in "})]")
+                depth = max(depth, 0)
+            for match in spelled.finditer(raw):
+                before = raw[: match.start()]
+                if in_macro:
+                    why = "inside a `macro_rules!` body, where one use is counted however often the macro is invoked"
+                elif defined.search(before) or (
+                    before.endswith(".") and raw.startswith("(", match.end())
+                ):
+                    continue
+                elif qualified.search(before):
+                    continue
+                else:
+                    why = f"spelled in a form the count does not read; write `.{bare}(` or `{qualifier}::{bare}`"
+                found.append((str(path), number, raw.strip(), why))
+    return found
+
+
 def check_guards(spec, sources):
     """A guarded symbol exists, and where the entry pins its call sites, they are the sites
     it has. Presence alone catches a rename and nothing else: a new use of an escape hatch
@@ -856,6 +914,17 @@ def check_guards(spec, sources):
             "some `guards` entries pin their call sites and some do not",
             fix="an unpinned entry beside pinned ones reads as though it were checked too",
         )
+
+    for entry in entries:
+        if isinstance(entry, dict) and "every-spelling" in entry:
+            if str(entry["every-spelling"]) != "yes" or "sites" not in entry:
+                yield finding(
+                    spec.rel,
+                    ERROR,
+                    "guard-every-spelling-malformed",
+                    f"`{entry['symbol']}` has an `every-spelling` that is not `yes` on an entry with `sites:`",
+                    fix="the key is read only as `every-spelling: yes` beside a pinned `sites:` list",
+                )
 
     for symbol in spec.guards:
         sites = guard_sites(symbol, sources)
@@ -879,6 +948,17 @@ def check_guards(spec, sources):
             continue
         if symbol in allowlists:
             yield from check_allowlist(spec, symbol, allowlists[symbol], sites)
+            if symbol not in spec.every_spelling:
+                continue
+            for path, number, text, why in unseen_spellings(symbol, sources):
+                yield finding(
+                    spec.rel,
+                    ERROR,
+                    "guard-spelling-unseen",
+                    f"`{symbol}` is used in `{path}` {why}",
+                    evidence=f"{path}:{number}: {text}",
+                    fix="a pinned count that does not see a use says the use was reviewed",
+                )
 
 
 def check_allowlist(spec, symbol, listed, sites):
@@ -1428,8 +1508,7 @@ def main():
             f"{len(findings)} mechanical findings"
         ],
     }
-    manifest_path = work_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    manifest_path = workdir.write_manifest(work_dir, manifest)
 
     print(render(findings, chosen, args.strict), file=sys.stderr)
     print(json.dumps({"work_dir": str(work_dir), "manifest": str(manifest_path)}))

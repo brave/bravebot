@@ -10,8 +10,12 @@ governs:
   - crates/agent/src/subscription.rs
   - crates/agent/src/backend.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
+  - crates/agent/src/turn/setup.rs
+  - crates/agent/src/turn/round_steps.rs
   - crates/agent/src/turn/prompts.rs
   - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/shared.rs
   - crates/tui/src/status.rs

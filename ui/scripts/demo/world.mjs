@@ -25,6 +25,7 @@ import { _electron as electron } from 'playwright-core'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { COMPOSER_INPUT, SIDEBAR_TAB } from '../drive-support.mjs'
 
 /// A pattern matching exactly this name, with every metacharacter in it taken literally.
 ///
@@ -237,7 +238,7 @@ async function ensureResidents(world) {
         console.log('  the agent has no credentials built in, so the residents stay unspoken to')
         return
       }
-      await page.locator('.sidebar-tabs [role="option"]').nth(1).click()
+      await page.locator(SIDEBAR_TAB).nth(1).click()
       await page.waitForTimeout(600)
       for (const bot of unspoken) {
         const row = page
@@ -259,7 +260,7 @@ async function ensureResidents(world) {
         await page.waitForTimeout(400)
         for (const [index, prompt] of bot.prompts.entries()) {
           console.log(`  ${bot.name}: ${prompt.slice(0, 62)}…`)
-          await page.locator('.composer textarea').fill(prompt)
+          await page.locator(COMPOSER_INPUT).fill(prompt)
           await page.locator('.composer .send').click()
           // The first message starts the conversation, which asks the trust question first.
           if (index === 0) {
@@ -276,7 +277,7 @@ async function ensureResidents(world) {
         }
         // The bots tab again, for the next one — opening a bot shows its transcript and leaves
         // the sessions list in the column.
-        await page.locator('.sidebar-tabs [role="option"]').nth(1).click()
+        await page.locator(SIDEBAR_TAB).nth(1).click()
         await page.waitForTimeout(400)
       }
     }
@@ -374,7 +375,7 @@ async function build(world) {
 
       for (const prompt of recipe.prompts) {
         console.log(`  ${recipe.project}: ${prompt.slice(0, 62)}…`)
-        await page.locator('.composer textarea').fill(prompt)
+        await page.locator(COMPOSER_INPUT).fill(prompt)
         await page.locator('.composer .send').click()
         if (!(await settle(page))) {
           console.log('    the turn did not finish in time; keeping what it managed')

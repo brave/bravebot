@@ -16,7 +16,7 @@ use crate::bridge::Bridge;
 use crate::protocol::{Event, Request};
 use bravebot_agent::diff::Change;
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -74,8 +74,9 @@ struct Shared {
     write: Writer,
     wake: Box<dyn Fn() + Send>,
     sessions: HashMap<String, Session>,
-    /// Sessions the bridge asked the trust question about before `session/new` had returned.
-    unasked: HashSet<String>,
+    /// Sessions the bridge asked the trust question about before `session/new` had returned, with
+    /// the record a yes is kept in where the question offered to keep it.
+    unasked: HashMap<String, Option<String>>,
     asked: HashMap<u64, Asked>,
     next: u64,
     queued: Vec<Queued>,
@@ -134,7 +135,7 @@ impl Acp {
             write,
             wake,
             sessions: HashMap::new(),
-            unasked: HashSet::new(),
+            unasked: HashMap::new(),
             asked: HashMap::new(),
             next: 0,
             queued: Vec::new(),
@@ -310,16 +311,40 @@ impl Acp {
             held.prompt = Some(id);
             held.cancelled = false;
             let directory = held.directory.clone();
-            shared.unasked.remove(&session).then_some(directory)
+            shared
+                .unasked
+                .remove(&session)
+                .map(|keeping| (directory, keeping))
         };
-        if let Some(directory) = trust {
+        if let Some((directory, keeping)) = trust {
             let mut shared = self.lock();
             let title = format!("Trust {}", plain(&directory));
+            // A yes is kept wherever the bridge offered to keep it, so the question says so and
+            // names the record, since nobody can endorse a record they were not shown.
+            let (allow, text) = match keeping {
+                Some(record) => (
+                    "Trust and remember",
+                    format!(
+                        "A yes is kept: later sessions started in this directory, or below it if it is a git root, are not asked. It is written to {}. Delete the lines naming this directory from that file to be asked again.",
+                        plain(&record)
+                    ),
+                ),
+                None => (
+                    "Trust for this session",
+                    "This answer cannot be kept here, so a session started in this directory later asks again.".to_string(),
+                ),
+            };
             shared.ask(
                 &session.clone(),
                 Asked::Trust { session, turn },
-                json!({ "toolCallId": "trust", "title": title, "kind": "other", "status": "pending" }),
-                options(false, "Trust this directory", "Do not trust"),
+                json!({
+                    "toolCallId": "trust",
+                    "title": title,
+                    "kind": "other",
+                    "status": "pending",
+                    "content": [{ "type": "content", "content": { "type": "text", "text": text } }],
+                }),
+                options(false, allow, "Do not trust"),
             );
             return;
         }
@@ -470,17 +495,35 @@ fn plain(text: &str) -> String {
     without_loading(&pictured(text))
 }
 
-/// The tags that make a renderer open a connection to draw them.
-const LOADING_TAGS: [&str; 14] = [
+/// Bare tags an editor still gets, because they carry no attribute to load anything from but
+/// whose content or kind does: a `<style>` body can `@import` an address and a `<script>` runs.
+const BARE_BUT_LOADING: [&str; 15] = [
     "img", "image", "picture", "source", "video", "audio", "track", "iframe", "frame", "embed",
-    "object", "link", "script", "svg",
+    "object", "link", "script", "svg", "style",
 ];
 
-/// `text` with no markdown image and no HTML tag that loads a resource. An editor draws an image
-/// the moment a message arrives, with no click, so `![](https://host/?q=<what the model read>)`
-/// would carry out whatever the model put in the address. Each is cut by a space, which is visible
-/// and leaves the address in the message for a reader to see. A link is left alone, since drawing
-/// one loads nothing.
+/// Whether `rest`, the text after a `<`, is a tag with no attribute at all, such as `<b>`,
+/// `</code>` or the `<String>` in `Vec<String>`. With nothing between the name and the `>` there
+/// is no `src`, `href`, `background` or `style` for an editor to fetch from.
+fn is_bare_tag(rest: &str) -> bool {
+    let rest = rest.strip_prefix('/').unwrap_or(rest);
+    let Some((name, _)) = rest.split_once('>') else {
+        return false;
+    };
+    name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !BARE_BUT_LOADING
+            .iter()
+            .any(|tag| tag.eq_ignore_ascii_case(name))
+}
+
+/// `text` with no markdown image and no HTML tag that could load a resource. An editor draws an
+/// image the moment a message arrives, with no click, so `![](https://host/?q=<what the model
+/// read>)` would carry out whatever the model put in the address. The same goes for a tag with an
+/// attribute that names an address (`<input type=image src=..>`, `<div style="background:url(..)">`,
+/// `<table background=..>`), so every `<` that starts a tag, a closing tag, a comment or an
+/// instruction is cut by a space unless the tag is bare. A cut is visible and leaves the address in
+/// the message for a reader to see. A link is left alone, since drawing one loads nothing.
 fn without_loading(text: &str) -> String {
     let text = text.replace("![", "! [");
     let mut out = String::with_capacity(text.len());
@@ -488,14 +531,8 @@ fn without_loading(text: &str) -> String {
     while let Some(at) = rest.find('<') {
         out.push_str(&rest[..=at]);
         rest = &rest[at + 1..];
-        let name = rest
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .next()
-            .unwrap_or_default();
-        if LOADING_TAGS
-            .iter()
-            .any(|tag| tag.eq_ignore_ascii_case(name))
-        {
+        let starts_tag = rest.starts_with(|c: char| c.is_ascii_alphabetic() || "/!?".contains(c));
+        if starts_tag && !is_bare_tag(rest) {
             out.push(' ');
         }
     }
@@ -557,7 +594,7 @@ fn turn_params(session: &str, blocks: Option<&Value>) -> Result<Value, String> {
                     .ok_or("a resource link holds a string `uri`")?;
                 let path = path_of(uri)
                     .ok_or_else(|| format!("only a file: link can be attached, not {uri}"))?;
-                if bravebot_agent::workspace::media_for(&path).is_some() {
+                if bravebot_filetype::by_name::media_for(&path).is_some() {
                     attachments.push(path);
                 } else {
                     dropped.push(path);
@@ -635,7 +672,8 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
     let data = &event.data;
     match event.name {
         "trust.request" => {
-            shared.unasked.insert(session);
+            let keeping = data["keeping"].as_str().map(str::to_string);
+            shared.unasked.insert(session, keeping);
         }
         "narration" => {
             if let Some(text) = data["text"].as_str() {
@@ -968,7 +1006,6 @@ fn tools_text(data: &Value) -> String {
         tools: &tools,
         refused: data["refused"].as_u64().map_or(0, |n| n as usize),
         withheld: data["withheld"].as_u64().map_or(0, |n| n as usize),
-        changed: data["changed"].as_bool() == Some(true),
         check: check_of(data),
     })
     .join("\n")
@@ -1166,6 +1203,7 @@ mod tests {
                 lines: 1,
                 label: "untrusted".to_string(),
             }),
+            protected: false,
             credentials: vec!["API_KEY on line 31".to_string()],
             may_always: false,
             record: None,
@@ -1428,7 +1466,7 @@ mod tests {
             (
                 "mcp-tools",
                 json!({"alias": "a", "tools": [{"name": "a:t", "arguments": ["q: string"],
-                    "description": "does it"}], "refused": 1, "changed": true,
+                    "description": "does it"}], "refused": 1,
                     "vetting": vetting}),
             ),
             (
@@ -1515,6 +1553,8 @@ mod tests {
             reference: "ref:1".to_string(),
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         };
 
         let (_, _, text) = shown("output", crate::wire::output_request(4, &request));
@@ -1539,6 +1579,8 @@ mod tests {
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
             picture: None,
+            label: None,
+            reason_label: None,
         };
 
         let (_, _, text) = shown("vet", crate::wire::vet_request(5, &request));
@@ -1592,7 +1634,7 @@ mod tests {
             write: Box::new(move |message| sink.lock().unwrap().push(message)),
             wake: Box::new(|| {}),
             sessions: HashMap::new(),
-            unasked: HashSet::new(),
+            unasked: HashMap::new(),
             asked: HashMap::new(),
             next: 0,
             queued: Vec::new(),
@@ -1622,7 +1664,7 @@ mod tests {
             write: Box::new(move |message| sink.lock().unwrap().push(message)),
             wake: Box::new(|| {}),
             sessions: HashMap::new(),
-            unasked: HashSet::new(),
+            unasked: HashMap::new(),
             asked: HashMap::new(),
             next: 0,
             queued: Vec::new(),
@@ -1650,6 +1692,22 @@ mod tests {
         assert_eq!(
             plain("<IMG src=x><picture><SvG/><iframe>"),
             "< IMG src=x>< picture>< SvG/>< iframe>"
+        );
+        assert_eq!(
+            plain(concat!(
+                "<input type=\"image\" src=\"https://h.test/?q=1\">",
+                "<div style=\"background:url(https://h.test/?q=2)\">x</div>",
+                "<style>@import url(https://h.test/?q=3);</style>",
+                "<table background=\"https://h.test/?q=4\"><td background=h>",
+                "<!-- c --><?x?>",
+            )),
+            concat!(
+                "< input type=\"image\" src=\"https://h.test/?q=1\">",
+                "< div style=\"background:url(https://h.test/?q=2)\">x</div>",
+                "< style>@import url(https://h.test/?q=3);< /style>",
+                "< table background=\"https://h.test/?q=4\">< td background=h>",
+                "< !-- c -->< ?x?>",
+            )
         );
         assert_eq!(
             plain("[a link](https://h.test/) Vec<String> <b>bold</b> 1 < 2"),

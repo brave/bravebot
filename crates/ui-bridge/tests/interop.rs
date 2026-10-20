@@ -156,7 +156,8 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
             | bravebot_agent::conversation::Said::Tool { line: t, .. } => Some(t.as_str()),
             // A message the agent composed reports the tag it was recorded with beside its words.
             // Nothing in this conversation is one.
-            bravebot_agent::conversation::Said::Composed { .. } => None,
+            bravebot_agent::conversation::Said::Composed { .. }
+            | bravebot_agent::conversation::Said::Sent { .. } => None,
         })
         .collect();
 
@@ -338,8 +339,8 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
             timing: &state.timing,
             model: None,
             todos: &state.todos,
-            trust: &state.trust,
-            programs: &state.programs,
+            trust: &state.answers.trust,
+            programs: &state.answers.programs,
             directories: &state.directories,
             manifest: None,
         },
@@ -809,8 +810,8 @@ fn a_fork_gets_an_id_of_its_own_rather_than_the_one_it_came_from() {
             timing: &BTreeMap::new(),
             model: None,
             todos: &state.todos,
-            trust: &state.trust,
-            programs: &state.programs,
+            trust: &state.answers.trust,
+            programs: &state.answers.programs,
             directories: &state.directories,
             manifest: None,
         },

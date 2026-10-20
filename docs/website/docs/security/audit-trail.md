@@ -58,6 +58,11 @@ BLOCK   confine: read_file.path: '/etc/hosts' resolves outside the workspace; re
         open its directory, or drop the file
 ```
 
+A `watch_file` on a path outside the workspace is recorded the same way, with the path as typed and
+the remedy, and the turn does not end as clean. An absolute path that lands inside the workspace is
+recorded as "is inside the workspace but not named relative to its root; remedy offered: name it
+relative to the workspace root".
+
 Three pieces of notation appear throughout:
 
 - `(T,pub)` and `(U,priv)` are the **label** on a value: trusted or untrusted on the first axis,
@@ -96,14 +101,27 @@ A planning call is a gate like any other and gets its own line, refusals include
 advance makes two of them, one for reading the goal in plain words and one for fitting that goal to the
 tool set, and both appear.
 
+## Messages between sessions are recorded
+
+A [`message_session`](../reference/tools.md#message_session) call that gets as far as a question or a
+send adds a `message` line to the sending session's trail. It holds the sender's session id, the
+receiver's, the label the message went under, its length in characters, what you answered, and how it
+ended: queued, full, too long, stopping, unknown, not reached, or not sent. It holds none of the text.
+
 ## The mode and what answered are recorded
 
 Each turn and each manifest run begins with a `permission_mode` line naming the mode it began in:
-`ask`, `accept-edits`, `plan` or `bypass`. A command or write that was put to you gets an `approval`
+`ask`, `accept-edits`, `plan` or `bypass`. A manifest run writes it before planning. A command or write that was put to you gets an `approval`
 line after it that says either `no mode answered, left to the confirmer` or
 `answered by <mode> mode, nobody was asked`, so an entry ending in "asking" is never the only thing
 the trail says about who answered. A fetch or a server start that a mode answers carries no such
-line.
+line. A `run` that asks to start with no sandbox is put to you in every mode, so its line says no mode
+answered.
+
+A turn whose prompt opens with a [`/style`](../reference/commands.md#style-name--off) output style adds an
+`output_style` line: `the turn began in the concise style (built in)`, `(a file of the person's
+own)`, or `(a file of the project's the trust map vouches for)`. It records the name and where the style came from, and no line when `--system-prompt`
+replaced the opening.
 
 A write call plan mode refused before the tool ran, and a planned run it refused for a step that
 writes, each get a blocked `permission_mode` line naming the tool, or the step and its tool, so the
@@ -120,6 +138,30 @@ refused for redirecting output into a file.
 ```
 BLOCK   sandbox: write_file: the read-only sandbox mode refuses a write, so nothing was written
 ```
+
+A `run` call that asks for no sandbox (`unconfined`) or for a credential scope (`scopes`) and is
+refused gets a blocked `sandbox` line naming the argument and every cause that held. The planner is
+told one sentence that names no setting, so this line is where to read which one withheld the
+request: the sandbox mode, a workspace you have not trusted, a managed closed network, a delegate,
+a turn that confines none of its runs, or for `scopes` a platform with no sandbox or a session with
+no profile directory.
+
+```
+BLOCK   sandbox: run.unconfined: the request was refused and the line did not run: the strict sandbox mode does not take it
+```
+
+## The hosts a run's programs asked for are recorded
+
+When the sandbox holds a run to [a list of hosts](../customize/configuration.md#sandboxnetwork), the
+trail records, once the foreground `run` has stopped, what the list decided for each host its programs
+asked for under `hosts`: the host, `allowed` or `refused`, the entry that decided it or `not listed`,
+`port not carried` or `not public`, and the stages that were served. Repeats are counted. A program
+chooses the name it asks for, so the record carries a name only where it is a host name or an address;
+any other request is recorded as a name that is not a host name, without its bytes. At most 256
+decisions are kept until they are taken, and the record says how many more there were. A decision taken
+for a job left running, or after a line was moved to the background, is recorded with the next
+foreground line that shares its proxy. Your answer to a question about an unlisted host is recorded as
+`host_grant`, with the hosts.
 
 ## Delegates and checkouts are recorded
 

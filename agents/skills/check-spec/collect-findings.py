@@ -8,9 +8,18 @@ same answer from the same place.
 """
 
 import argparse
+import importlib.util
 import json
 import sys
 from pathlib import Path
+
+_shared = importlib.util.spec_from_file_location(
+    "work_dir", Path(__file__).resolve().parents[2] / "work_dir.py"
+)
+workdir = importlib.util.module_from_spec(_shared)
+_shared.loader.exec_module(workdir)
+
+read_manifest = workdir.read_manifest
 
 ERROR = "error"
 WARNING = "warning"
@@ -143,15 +152,6 @@ def render(findings, manifest, reviewed):
     if not errors and not warnings:
         lines.append("the implementation matches the spec")
     return "\n".join(lines)
-
-
-def read_manifest(work_dir):
-    """The parsed `manifest.json` of a work directory, or None after saying there is none."""
-    path = Path(work_dir) / "manifest.json"
-    if not path.exists():
-        print(f"no manifest at {path}", file=sys.stderr)
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def main():

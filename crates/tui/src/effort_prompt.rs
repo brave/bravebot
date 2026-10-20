@@ -89,6 +89,11 @@ impl Picker {
     }
 }
 
+/// Draw the panel over whatever is already in the frame.
+pub fn draw(frame: &mut Frame, picker: &Picker) {
+    list_picker::draw(frame, picker, &panel());
+}
+
 /// Show the list as a centred panel over whatever `behind` draws, and return the row the person
 /// picked, or `None` if they kept what was in force.
 ///

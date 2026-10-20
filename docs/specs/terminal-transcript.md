@@ -3,7 +3,11 @@ id: VIEW
 title: The transcript
 status: normative
 governs:
+  - crates/tui/src/avatar.rs
+  - crates/tui/src/blocks.rs
   - crates/tui/src/indicator.rs
+  - crates/tui/src/logo.rs
+  - crates/tui/src/preview.rs
   - crates/tui/src/reasoning.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/watching.rs
@@ -14,6 +18,8 @@ governs:
   - crates/tui/src/render/beneath.rs
   - crates/tui/src/render/hint.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/entry.rs
+  - crates/tui/src/state/scroller.rs
   - crates/tui/src/theme.rs
   - crates/tui/src/theme_prompt.rs
   - crates/tui/src/list_picker.rs
@@ -157,7 +163,10 @@ because it is one release however many pieces it arrives in.
 ### VIEW-7: where a result went is drawn only where that is not the ordinary answer
 
 A call whose result the planner may read says nothing about it. A result the planner may not read
-says so, and so does a name that was never opened.
+says so on the call, and so does a name that was never opened. The marked block that holds the
+content of a result kept from the planner does not say it again: the heading names the content
+untrusted and the margin marks every row. A block whose content is in no model's context at all, as
+a processor's remark is, says so in its heading, since that is the exception among blocks.
 
 **Why.** Nearly every call reads into the planner's context, and a line under nearly every call
 distinguishes nothing while crowding out the lines that do. What the design turns on is the
@@ -169,6 +178,9 @@ went is still in the audit trail, which is what the record is for.
 
 `verified-by: bravebot_tui::render::the_ordinary_landing_is_not_given_a_line_of_its_own`
 `verified-by: bravebot_tui::render::a_result_the_planner_may_not_read_still_says_so`
+`verified-by: bravebot_tui::render::a_block_states_its_reach_only_where_that_is_the_exception`
+`verified-by: bravebot_cli::progress::a_block_states_its_reach_only_where_that_is_the_exception`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/marking.test.mjs, which renders the real transcript row through react-dom and asserts that a block of content kept from the planner draws no sentence about it, and that a block of content in no model's context draws that sentence in its heading and not under the content; make check-ui and the Front end CI job both run it)`
 
 <a id="VIEW-8"></a>
 ### VIEW-8: a note from the session is drawn in one ink of its own
@@ -289,6 +301,8 @@ list cannot carry, which is why it is the one the row does.
 `verified-by: bravebot_tui::theme_prompt::a_theme_that_paints_every_ink_itself_has_nothing_to_add`
 `verified-by: bravebot_tui::theme_prompt::the_picker_is_drawn_as_a_centred_panel`
 `verified-by: bravebot_tui::theme_prompt::the_panel_stays_inside_a_tiny_terminal`
+`verified-by: bravebot_tui::theme_prompt::the_session_stays_visible_around_a_list_sized_panel`
+`verified-by: bravebot_tui::render::moving_the_theme_cursor_repaints_the_session_behind_the_panel`
 `verified-by: bravebot_tui::theme_prompt::the_list_shows_names_a_person_reads`
 
 <a id="VIEW-13"></a>
@@ -748,3 +762,58 @@ holds no bytes of what the rows contain and the rule is kept ([SCROLL-5](scrolle
 
 `verified-by: bravebot_tui::render::a_held_view_says_how_many_rows_arrived_below_and_the_key_back`
 `verified-by: bravebot_tui::render::a_held_view_on_a_narrow_terminal_drops_the_cue_and_keeps_the_mode`
+
+
+<a id="VIEW-28"></a>
+### VIEW-28: block art is drawn from cell backgrounds in a terminal that leaves gaps between rows
+
+The wordmark and the face beside it on the opening screen are drawn in `█`, `▀` and `▄`. Where
+`TERM_PROGRAM` is `Apple_Terminal`, each cell is drawn from its background instead, so that no row
+of the art is cut by a stripe:
+
+- A full block is a space on the colour, or a space in reverse video where the colour is the
+  terminal's own ink.
+- An upper half block is a lower half block in reverse video.
+- A cell with two colours is a lower half block in the lower colour on a background of the upper
+  one.
+- A lower half block, the shadow and a blank cell are drawn as they were.
+
+Each cell shows the same colours in both forms. Every other terminal is drawn the block characters.
+
+**Why.** Apple's Terminal draws block characters from the font, in a band that starts a few pixels
+below the top of the cell. Stacked rows of `█` are separated by a stripe of the window's background,
+and a half block over a background colour shows that colour in the stripe, which makes the face look
+striped. A cell's background fills the whole cell and a lower half block is flush with the bottom of
+it, so a cell drawn from those two has no stripe. The size of the band depends on the font and the
+line spacing, which this program cannot read, so the choice is made by terminal and not by
+measuring.
+
+Other terminals keep the characters because reverse video fills the half it empties with the
+terminal's opaque background colour, which shows against a window the person made translucent.
+Inside tmux `TERM_PROGRAM` names tmux, so the characters are drawn there.
+
+Reverse video adds no colour, so `NO_COLOR` ([VIEW-20](#VIEW-20)) holds: the wordmark under it is
+drawn in the terminal's own ink.
+
+`verified-by: bravebot_tui::blocks::a_painted_cell_shows_the_same_two_halves_as_the_block_it_replaces`
+`verified-by: bravebot_tui::blocks::a_painted_cell_is_a_space_or_a_lower_half_block`
+`verified-by: bravebot_tui::blocks::the_terminals_own_ink_is_painted_by_reversing_the_cell`
+`verified-by: bravebot_tui::avatar::a_face_drawn_from_backgrounds_is_the_same_picture`
+`verified-by: bravebot_tui::logo::a_mark_drawn_from_backgrounds_is_the_same_picture`
+`verified-by: bravebot_tui::lib::only_the_name_apple_terminal_sets_is_apple_terminal`
+
+
+<a id="VIEW-29"></a>
+### VIEW-29: Apple's Terminal is not sent the Kitty graphics query
+
+At start-up the interface asks the terminal which graphics protocol it draws
+([VET-4](tools/vet-content.md#VET-4)). Where `TERM_PROGRAM` is `Apple_Terminal`, the question for the
+Kitty protocol is left out of that exchange and the rest of it is sent. Every other terminal is asked
+as before.
+
+**Why.** The Kitty question is an application program command. Apple's Terminal does not understand
+it and prints its text, `Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA`, at the top of the screen. That terminal
+draws no protocol the question could find, so leaving it out loses no picture.
+
+`verified-by: bravebot_tui::preview::apple_terminal_is_not_sent_the_kitty_query_and_other_terminals_are`
+`verified-by: bravebot_tui::lib::only_the_name_apple_terminal_sets_is_apple_terminal`

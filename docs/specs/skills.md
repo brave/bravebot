@@ -83,6 +83,13 @@ in a notice, as [SKILL-6](#SKILL-6) counts what it skips, except where `~/.brave
 itself one of the project skill directories read, whose own notices already account for each.
 The two are compared as directories, so no entry's name is held or compared.
 
+The same holds for the other files read from `~/.bravebot`. `~/.bravebot/AGENTS.md` whose path goes
+through the workspace is not put in the system prompt, and the person is told it was not read.
+A file in `~/.bravebot/agents` whose path goes through it is not a definition, and those passed
+over are counted as skills are ([DELEGATE-20](delegation.md#DELEGATE-20)). A file in
+`~/.bravebot/styles` whose path goes through it is not a style, is not offered by `/style` and is
+not found by name.
+
 `verified-by: bravebot_agent::skills::a_home_skill_is_not_labelled_by_a_rule_meant_for_the_workspace`
 `verified-by: bravebot_agent::skills::a_session_started_in_the_home_directory_reads_its_skills_through_the_trust_map`
 `verified-by: bravebot_agent::skills::a_skill_inside_a_working_directory_that_holds_the_home_directory_is_not_offered`
@@ -92,6 +99,9 @@ The two are compared as directories, so no entry's name is held or compared.
 `verified-by: bravebot_agent::skills::a_home_skill_inside_a_directory_opened_beside_the_project_is_not_offered`
 `verified-by: bravebot_agent::skills::a_home_directory_spelled_in_another_case_is_inside_the_workspace_it_is`
 `verified-by: bravebot_agent::skills::a_home_skill_passed_over_is_counted_beside_a_project_skill_of_the_same_name`
+`verified-by: bravebot_agent::preamble::a_home_agents_file_inside_the_working_directory_is_not_read_as_the_persons_own`
+`verified-by: bravebot_agent::agents::a_definition_in_a_working_directory_that_holds_the_home_directory_is_not_loaded`
+`verified-by: bravebot_agent::styles::a_style_file_the_workspace_can_write_is_not_read_as_the_persons_own`
 
 <a id="SKILL-4"></a>
 ### SKILL-4: a project's own files are read through the trust map
@@ -235,6 +245,29 @@ settled here.
 `verified-by: bravebot_agent::skills::the_loop_skill_is_advertised_for_a_tick_and_for_nothing_else`
 `verified-by: bravebot_agent::skills::the_loop_skill_description_names_one_condition_and_ends_with_it`
 
+<a id="SKILL-17"></a>
+### SKILL-17: the documentation is a built-in skill whose pages load one at a time
+
+The published documentation under `docs/website/docs` is compiled into the program as the built-in
+skill `bravebot-help`, so a session answers a question about using bravebot from the version that
+is running and not from the planner's memory. Its description names one condition, per
+[SKILL-13](#SKILL-13): the user asks a question about using bravebot itself.
+
+The skill's body is an index with one line per page. A page is loaded with `load_skill` by the name
+on its line, `bravebot-help/<place of the page>`, and a question costs the pages it needs and not the
+whole site. The name is matched exactly against the table compiled into the program, so it is never
+a path ([SKILL-8](#SKILL-8)), and a page is trusted for the reason the skill is: it is this
+program's own text ([SKILL-12](#SKILL-12)). A skill of the user's own named `bravebot-help` shadows
+the built-in, and the pages go with it.
+
+**What this clause does not do.** The clause headings of `docs/specs/` are not carried, and there
+is no `/help` command: the planner decides from the description when to load the skill.
+
+`verified-by: bravebot_agent::skills::the_help_skill_is_offered_everywhere_for_a_question_about_bravebot_and_nothing_else`
+`verified-by: bravebot_agent::help::every_published_page_is_carried_in_the_binary`
+`verified-by: bravebot_agent::tools::a_documentation_page_loads_by_the_name_the_index_gives_it`
+`verified-by: bravebot_agent::tools::a_users_skill_of_the_help_name_takes_the_pages_with_it`
+
 <a id="SKILL-14"></a>
 ### SKILL-14: an interface listing skills is shown the set a turn would advertise, read the same way
 
@@ -244,12 +277,17 @@ turn would offer is. Each skill records whether it was found in the project, in 
 directory or in this program, and one that shadowed another records where it was found, not where
 the one it shadowed was.
 
+The list draws names, descriptions and argument hints and loads no skill, so it does not list the
+files beside each skill. Everything else it reads is what a turn reads.
+
 **Why.** A list that found skills its own way would sooner or later name one the planner is never
 shown, and a skill in a project nobody trusts is exactly the one [SKILL-6](#SKILL-6) counts rather
 than names. Where it was found is what lets a person tell a skill of their own from one a checkout
-brought with it.
+brought with it. Walking every skill's directory for files only `load_skill` reads on each slash
+would make the list lag behind the keys.
 
 `verified-by: bravebot_agent::skills::the_set_an_interface_resolves_is_the_one_a_turn_would`
+`verified-by: bravebot_agent::skills::the_set_the_box_offers_is_the_turns_without_the_files_beside_each_skill`
 `verified-by: bravebot_agent::skills::each_skill_records_which_of_the_three_places_it_came_from`
 `verified-by: bravebot_agent::skills::a_skill_a_deny_rule_covers_is_offered_nowhere_through_a_link_to_it`
 
@@ -330,6 +368,8 @@ is read.
 `verified-by: bravebot_agent::skills::an_effort_word_naming_no_level_is_reported_and_the_skill_still_loads`
 `verified-by: bravebot_agent::skills::a_key_nothing_reads_is_carried_out_beside_the_skill_that_declared_it`
 `verified-by: bravebot_cli::running::doctor_names_a_skill_key_nothing_reads`
+`verified-by: bravebot_cli::running::doctor_says_nothing_of_a_skill_with_every_key_read_or_one_a_turn_drops`
+`verified-by: bravebot_cli::running::doctor_names_a_projects_unread_key_only_where_the_directory_is_trusted`
 `verified-by: bravebot_agent::turn::a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so`
 
 ## Known costs

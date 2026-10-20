@@ -234,6 +234,12 @@ pub struct Run<'a> {
     pub releases_private: bool,
 }
 
+/// The sentence for a run the turn does not confine, in the catalog's words, so a front end that
+/// draws it carries no copy of its own (SHARE-001).
+pub fn not_sandboxed() -> String {
+    t!(run_not_sandboxed).to_string()
+}
+
 /// The lines a run is read before approving: every step as the line wrote it, the binary each name
 /// resolved to, what it would write, and what it is not confined to.
 ///
@@ -260,7 +266,7 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
             }
             lines.extend(confined.sentences.iter().cloned());
         }
-        None => lines.push(t!(run_not_sandboxed).to_string()),
+        None => lines.push(not_sandboxed()),
     }
     // Which access in particular a yes hands over, where the line reaches one nothing here holds.
     // The line above says what confinement there is and is said every time; this says what is
@@ -410,6 +416,41 @@ pub fn host_lines(hosts: &[String]) -> Vec<String> {
     lines
 }
 
+/// A message the planner wants to send to another background session (MSG-3).
+pub struct Message<'a> {
+    /// The target's name, as the roster holds it.
+    pub name: &'a str,
+    /// The roster's word for what the target is doing.
+    pub state: &'a str,
+    /// Where the target works.
+    pub directory: &'a str,
+    /// The whole text, which is what the receiving planner will be told.
+    pub text: &'a str,
+    /// The label the text is sent under, in its own form.
+    pub label: &'a str,
+}
+
+/// The lines a message is read before it is sent: who it goes to, the whole text behind the margin,
+/// the label, and what a yes does and does not do.
+///
+/// Nothing of the text is left out. A yes sends every byte of it into another planner's context, so
+/// a line counted instead of shown would be approved unread.
+pub fn message_lines(message: &Message<'_>) -> Vec<String> {
+    let mut lines = vec![
+        t!(
+            message_to,
+            name = printable(message.name),
+            state = printable(message.state),
+            directory = printable(message.directory)
+        )
+        .to_string(),
+    ];
+    lines.extend(quarantined_in_full(message.text));
+    lines.push(t!(message_label, label = printable(message.label)).to_string());
+    lines.push(t!(message_explained).to_string());
+    lines
+}
+
 /// A language server the planner would like started.
 pub struct Server<'a> {
     /// The agent's one-line description of the server.
@@ -472,16 +513,13 @@ pub struct Tools<'a> {
     pub refused: usize,
     /// How many tools were withheld by the server's allow or deny list.
     pub withheld: usize,
-    /// A list was vouched for under this declaration before and this is not it.
-    pub changed: bool,
     /// What the check made of the list.
     pub check: Check,
 }
 
 /// The whole list, each description behind the margin and none of it cut.
 ///
-/// A yes puts exactly this text in front of the planner for every session the list stays the
-/// same, so what is read here has to be all of it. The description is behind the margin because it
+/// A yes puts exactly this text in front of the planner, so what is read here has to be all of it. The description is behind the margin because it
 /// is the server's words, and the names and arguments are not because the client drew them from a
 /// fixed alphabet.
 pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
@@ -493,9 +531,6 @@ pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
             count = list.tools.len()
         ),
     }];
-    if list.changed {
-        lines.push(t!(mcp_tools_changed).to_string());
-    }
     lines.push(checked(list.check));
     for tool in list.tools {
         lines.push(format!("  {}", printable(tool.name)));
@@ -603,6 +638,32 @@ pub fn manifest_lines(task: &str, steps: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MSG-3: a message is shown whole behind the margin, however long, with its control characters
+    /// pictured. A yes sends every byte of it into another planner's context, so a row counted and
+    /// left out would be approved unread.
+    #[test]
+    fn a_message_is_shown_in_full_behind_the_margin() {
+        let text: String = (0..MOST_CONTENT_LINES * 3)
+            .map(|n| format!("row {n}\u{1b}[31m\n"))
+            .collect();
+        let lines = message_lines(&Message {
+            name: "build",
+            state: "idle",
+            directory: "/work",
+            text: &text,
+            label: "(T,pub)",
+        });
+        let rows: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.starts_with(QUARANTINE_BAR))
+            .collect();
+        assert_eq!(rows.len(), MOST_CONTENT_LINES * 3);
+        assert_eq!(rows[0], "\u{2503} row 0\u{241b}[31m");
+        assert!(lines.iter().all(|line| !line.contains('\u{1b}')));
+        assert!(lines.first().is_some_and(|line| line.contains("build")));
+        assert!(lines.iter().any(|line| line.contains("(T,pub)")));
+    }
 
     #[test]
     fn a_word_that_names_no_check_reassures_least() {
@@ -760,7 +821,6 @@ mod tests {
             tools: &[tool],
             refused: 1,
             withheld: 2,
-            changed: false,
             check: Check::Safe,
         });
         assert!(lines.contains(&t!(mcp_tools_not_listed, count = 1).to_string()));

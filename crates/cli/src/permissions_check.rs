@@ -126,6 +126,12 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
                     }
                 }
             }
+            // Only the person's own file carries a reason, and only where they wrote one, so this
+            // line is absent for every other rule (PERM-1). It is display text and decides
+            // nothing.
+            if let Some(reason) = settings.rule_reason(ruling.as_str(), rule.written()) {
+                println!("{}: {reason}", t!(permissions_check_reason));
+            }
         }
     }
     // A rule that restricts decides before any grant, so one that could not grant yet is only

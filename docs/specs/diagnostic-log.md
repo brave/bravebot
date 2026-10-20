@@ -76,6 +76,7 @@ only after the failure they wanted it for.
 `verified-by: bravebot_diag::lib::no_file_is_made_until_a_line_is_written`
 `verified-by: bravebot_cli::main::the_log_level_flag_is_taken_out_with_its_word_and_refuses_any_other`
 `verified-by: bravebot_cli::running::a_log_level_that_is_not_one_is_refused`
+`verified-by: bravebot_cli::running::the_level_on_the_command_line_reaches_the_log_and_the_default_is_error`
 
 <a id="DIAG-4"></a>
 ### DIAG-4: an incognito session, or a machine with no home, writes no log
@@ -94,7 +95,7 @@ had been would be the trace the mode exists to avoid.
 **Why.** Asking somebody to attach the log is no use if they cannot be told where it is, and the
 state directory moves with the profile variable, so the path is not one to be assumed.
 
-`verified-by: bravebot_cli::main::doctor_names_the_diagnostic_log_directory`
+`verified-by: bravebot_cli::doctor::doctor_names_the_diagnostic_log_directory`
 `verified-by: bravebot_cli::running::doctor_names_the_log_directory`
 
 <a id="DIAG-6"></a>

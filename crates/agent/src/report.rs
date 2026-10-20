@@ -29,6 +29,25 @@ pub fn summary_model_refusal(refusal: &crate::compact::SideModelRefusal) -> Stri
     }
 }
 
+/// What a person is told when `processorModel` names a model a processor cannot run on.
+///
+/// Beside [`summary_model_refusal`] for the same reason: it names the key to correct, and a person
+/// reads it.
+pub fn processor_model_refusal(refusal: &crate::compact::SideModelRefusal) -> String {
+    use crate::compact::SideModelRefusal;
+    match refusal {
+        SideModelRefusal::NeedsSignIn(model) => {
+            bravebot_i18n::t!(processor_model_needs_sign_in, model = model).to_string()
+        }
+        SideModelRefusal::Refused(model) => {
+            bravebot_i18n::t!(processor_model_refused, model = model).to_string()
+        }
+        SideModelRefusal::NotServed(model) => {
+            bravebot_i18n::t!(processor_model_not_served, model = model).to_string()
+        }
+    }
+}
+
 use crate::diff::Change;
 use bravebot_core::todo::Row;
 use bravebot_core::vetting::Checking;
@@ -253,10 +272,15 @@ pub enum Reach {
 }
 
 impl Reach {
-    pub fn describe(self) -> &'static str {
+    /// The sentence a block's heading adds to "untrusted", where it adds one.
+    ///
+    /// Content kept from the planner is the ordinary reason for a block, and the heading and the
+    /// landing line under the call already say it, so repeating it on every block says nothing
+    /// new. Content in no model's context is the exception and states it.
+    pub fn note(self) -> Option<&'static str> {
         match self {
-            Self::NotThePlanner => t!(reach_not_the_planner),
-            Self::NoModel => t!(reach_no_model),
+            Self::NotThePlanner => None,
+            Self::NoModel => Some(t!(reach_no_model)),
         }
     }
 }
@@ -328,6 +352,14 @@ pub enum Outcome {
     },
 }
 
+/// What the planner is told a stop can leave behind, wherever a run is reported as stopped.
+///
+/// A stage that does not end when it is asked to is killed, and a program that was killed has not
+/// undone what it held: a `git` killed in the middle of a commit leaves its `index.lock`, and the
+/// next `git` command fails on it.
+const WHAT_A_STOP_LEAVES: &str = "A stop can leave lock files or partly written output behind, \
+     and programs the line started may need checking.";
+
 /// A whole number of seconds with its unit, pluralised.
 ///
 /// Every duration these sentences quote goes through here, so none of them can say "1 seconds".
@@ -355,12 +387,13 @@ impl Outcome {
             } => format!("It failed: {detail}. {confinement}"),
             Self::Stopped(after) => format!(
                 "It was still running after {} seconds and was stopped, so this is what it had \
-                 printed by then and not the whole of what it would print.",
+                 printed by then and not the whole of what it would print. {WHAT_A_STOP_LEAVES}",
                 after.as_secs()
             ),
             Self::StoppedByTheUser(after) => format!(
                 "The user stopped it after {}, so this is what it had printed by then and not the \
-                 whole of what it would print. Do not start it again unless the user asks you to.",
+                 whole of what it would print. {WHAT_A_STOP_LEAVES} Do not start it again unless \
+                 the user asks you to.",
                 seconds(*after)
             ),
             Self::Running {
@@ -449,9 +482,10 @@ pub struct Printed {
 
 /// What happened to a background job, for the person watching (RUN-26).
 ///
-/// Every field is the driver's own: a name it minted, the line the person endorsed, the clock and
-/// the exit codes. Nothing here was read out of a byte the job printed, so a display may draw it
-/// and decide from it.
+/// Every field but one is the driver's own: a name it minted, the line the person endorsed, the
+/// clock and the exit codes. Nothing in them was read out of a byte the job printed, so a display
+/// may draw them and decide from them. The exception is [`JobEvent::Printed`], whose lines are
+/// bytes the job printed, released for the screen and fit only to be drawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JobEvent {
     /// A job exists: started in the background, or moved there part way through a run.
@@ -469,6 +503,19 @@ pub enum JobEvent {
     Ended { name: String, outcome: Outcome },
     /// The turn ended with it still running, and it is stopped with the turn.
     Dropped { name: String },
+    /// What a running job has printed that no look has handed the planner, for the screen only
+    /// (WATCH-24).
+    ///
+    /// Released through the same gate as a look's lines, so a display draws them and decides
+    /// nothing from them: no mark, count or name is made or changed from what is in `lines`. The
+    /// planner's cursor does not move for them, and a look afterwards returns every one.
+    Printed {
+        name: String,
+        /// The last of the unread lines, each already trimmed to a sensible width.
+        lines: Vec<String>,
+        /// How many unread lines there were altogether, so the row can say what it left out.
+        total: usize,
+    },
 }
 
 /// A few lines of a result the planner read, for the person watching to see beside the call.
@@ -571,6 +618,40 @@ pub struct Delegation {
     pub task: String,
     /// The token that asks this delegate to stop, and no other and not the turn (DELEGATE-25).
     pub stop: bravebot_core::cancel::DelegateStop,
+}
+
+/// A message from another session, as it reached the planner of this one (MSG-11).
+///
+/// Drawn apart from the person's own prompts. The sender's id and name are the roster's and the
+/// label is the one the policy layer gave the message, so none of the three is the sender's word;
+/// the text is the sender's, released for a screen only where the planner was given it, and kept
+/// in the marked block every quarantined thing is drawn in where it was not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeardMessage {
+    pub from: String,
+    /// The sender's name, as the roster holds it.
+    pub name: String,
+    /// The label the message was given.
+    pub label: String,
+    /// The words, or the block that stands for them.
+    pub body: Reported,
+}
+
+/// A message this session's planner put to another session (MSG-11).
+///
+/// Drawn where the person reads the transcript, and drawn for every message, so one sent under a
+/// standing answer is seen as it goes. The target's id and name are the roster's, the label is the
+/// one the policy layer gave the words, and the words are the planner's own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentMessage {
+    /// The receiver's id.
+    pub to: String,
+    /// The receiver's name, as the roster holds it.
+    pub name: String,
+    /// The label the message was sent under.
+    pub label: String,
+    /// What the planner wrote.
+    pub text: String,
 }
 
 pub trait Reporter {
@@ -755,6 +836,19 @@ pub trait Reporter {
     /// its mind unprompted.
     fn interjected(&mut self, _said: String) {}
 
+    /// A message another session sent has reached the planner.
+    ///
+    /// Sent at the moment it goes in, for the reason [`Reporter::interjected`] is: a planner that
+    /// changes course on a message nobody saw arrive reads as one that changed its mind unprompted.
+    fn session_message(&mut self, _heard: HeardMessage) {}
+
+    /// A message this session's planner sent to another session has gone.
+    ///
+    /// Said once it is queued in the other session's process, and for every message: the person is
+    /// asked about the first to a session in a turn and may have said to send the rest, so this is
+    /// the only place the later ones are seen.
+    fn message_sent(&mut self, _sent: SentMessage) {}
+
     /// Whose work the reports that follow describe: one delegate, or the turn itself.
     ///
     /// Set by the driver immediately before each report, and the only thing that says where a
@@ -844,6 +938,10 @@ pub struct RecordingReporter {
     pub landed: Vec<Landing>,
     /// Everything the person said mid-turn, in the order it reached the planner.
     pub interjected: Vec<String>,
+    /// Every message from another session, in the order it reached the planner.
+    pub heard: Vec<HeardMessage>,
+    /// Every message this session's planner sent to another session, in the order it was sent.
+    pub sent: Vec<SentMessage>,
     /// Every delegate announced as starting, in order.
     pub delegated: Vec<Delegation>,
     /// How each delegate ended, in the order they finished.
@@ -953,6 +1051,14 @@ impl Reporter for RecordingReporter {
         self.interjected.push(said);
     }
 
+    fn session_message(&mut self, heard: HeardMessage) {
+        self.heard.push(heard);
+    }
+
+    fn message_sent(&mut self, sent: SentMessage) {
+        self.sent.push(sent);
+    }
+
     fn reporting_for(&mut self, delegate: Option<DelegateId>) {
         self.attributed_to = delegate;
     }
@@ -1010,6 +1116,8 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "schedule_next" => t!(verb_schedule_next),
         "watch_file" => t!(verb_watch_file),
         "advisor" => t!(verb_advisor),
+        "propose_plan" => t!(verb_propose_plan),
+        "message_session" => t!(verb_message_session),
         // Every server's tool is offered under a wire name of this shape, and no built-in is.
         server if server.starts_with("mcp__") => t!(verb_mcp_call),
         _ => t!(verb_unknown),
@@ -1102,6 +1210,43 @@ mod tests {
         );
     }
 
+    /// A planner told only that a run was stopped treats the repository as it was before the run,
+    /// and the next `git` command fails on the lock the stopped one left. The sentence is for a
+    /// stop, at the deadline or at the person's asking, and for no other ending: a job left running
+    /// has been stopped by nothing.
+    #[test]
+    fn a_stop_says_it_can_leave_files_behind_and_a_run_still_going_does_not() {
+        for (stopped, how) in [
+            (
+                Outcome::Stopped(std::time::Duration::from_secs(300)).describe(),
+                "at the deadline",
+            ),
+            (
+                Outcome::StoppedByTheUser(std::time::Duration::from_secs(40)).describe(),
+                "by the person",
+            ),
+        ] {
+            assert!(
+                stopped.contains("A stop can leave lock files or partly written output behind"),
+                "a run stopped {how} does not say what a stop can leave behind: {stopped}"
+            );
+            assert!(
+                stopped.contains("programs the line started may need checking"),
+                "a run stopped {how} does not say the programs it started may be running: {stopped}"
+            );
+        }
+
+        let going = Outcome::Running {
+            ran_for: std::time::Duration::from_secs(90),
+            waited: None,
+        }
+        .describe();
+        assert!(
+            !going.contains("lock files"),
+            "a run nothing stopped is warned about the effects of a stop: {going}"
+        );
+    }
+
     /// The first wait is the one that needs explaining: the model has the task and nothing
     /// else, and there is no tool call yet to show for it.
     #[test]
@@ -1157,7 +1302,13 @@ mod tests {
             crate::watch::Arming::Allowed { free: 1 },
             crate::exec::Deadlines::BUILT_IN,
             crate::tools::Running::Offered,
-        )) {
+        ))
+        .chain({
+            let mut added = Vec::new();
+            crate::tools::offer_advisor(&mut added);
+            crate::tools::offer_message_session(&mut added);
+            added
+        }) {
             let name = &tool.function.name;
             assert_ne!(
                 verb_for(name),

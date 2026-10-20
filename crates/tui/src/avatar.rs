@@ -685,10 +685,48 @@ pub fn look_at(seed: &str, seconds: f64) -> Look {
 
 /// How the face of this process is held now. Still where `NO_MOTION` is set.
 pub fn look_now() -> Look {
+    #[cfg(test)]
+    if let Some(look) = pinned::get() {
+        return look;
+    }
     static STARTED: OnceLock<Instant> = OnceLock::new();
     let seconds = STARTED.get_or_init(Instant::now).elapsed().as_secs_f64();
     held(startup_seed(), seconds, crate::indicator::stilled())
 }
+
+/// A look held fixed for the calling thread, so a test that draws the opening screen more than
+/// once does not see a blink or glance land between two draws.
+#[cfg(test)]
+mod pinned {
+    use super::Look;
+    use std::cell::Cell;
+
+    thread_local! {
+        static PINNED: Cell<Option<Look>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn get() -> Option<Look> {
+        PINNED.with(Cell::get)
+    }
+
+    /// Restores the previous pin when dropped, so a panic in the test leaves nothing behind.
+    struct Restore(Option<Look>);
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            PINNED.with(|pinned| pinned.set(self.0));
+        }
+    }
+
+    /// Runs `body` with [`super::look_now`] answering `look` on this thread.
+    pub(crate) fn holding<R>(look: Look, body: impl FnOnce() -> R) -> R {
+        let _restore = Restore(PINNED.with(|pinned| pinned.replace(Some(look))));
+        body()
+    }
+}
+
+#[cfg(test)]
+pub(crate) use pinned::holding as with_face_held;
 
 /// [`look_at`], or the face at rest where no motion was asked for. Taken as an argument so the rule
 /// can be checked without putting a process-wide switch in force under every other test.
@@ -702,7 +740,10 @@ fn held(seed: &str, seconds: f64, still: bool) -> Look {
 
 /// The face a seed describes, painted from `stops`, as terminal rows of [`WIDTH`] columns, held as
 /// `look` says.
-pub fn rows(seed: &str, look: Look, stops: &[Rgb; 3]) -> Vec<Vec<Span<'static>>> {
+///
+/// `painted` draws each cell from its background where the terminal leaves a gap between rows of
+/// blocks ([`crate::blocks`]), and with block characters otherwise.
+pub fn rows(seed: &str, look: Look, stops: &[Rgb; 3], painted: bool) -> Vec<Vec<Span<'static>>> {
     let face = build(seed, &mark(stops));
     let mut pixels: [[Option<Rgb>; GRID]; GRID] = [[None; GRID]; GRID];
     for (x, y, fill) in &face.cells {
@@ -723,13 +764,21 @@ pub fn rows(seed: &str, look: Look, stops: &[Rgb; 3]) -> Vec<Vec<Span<'static>>>
         .map(|row| {
             let (upper, lower) = (1 + lift + 2 * row, 2 + lift + 2 * row);
             (1..=WIDTH)
-                .map(|x| match (pixels[upper][x], pixels[lower][x]) {
-                    (None, None) => Span::raw(" "),
-                    (Some(top), None) => Span::styled("▀", Style::default().fg(colour(top))),
-                    (None, Some(bottom)) => Span::styled("▄", Style::default().fg(colour(bottom))),
-                    (Some(top), Some(bottom)) => {
-                        Span::styled("▀", Style::default().fg(colour(top)).bg(colour(bottom)))
-                    }
+                .map(|x| {
+                    let (character, style) = match (pixels[upper][x], pixels[lower][x]) {
+                        (None, None) => return Span::raw(" "),
+                        (Some(top), None) => ('▀', Style::default().fg(colour(top))),
+                        (None, Some(bottom)) => ('▄', Style::default().fg(colour(bottom))),
+                        (Some(top), Some(bottom)) => {
+                            ('▀', Style::default().fg(colour(top)).bg(colour(bottom)))
+                        }
+                    };
+                    let (character, style) = if painted {
+                        crate::blocks::painted(character, style)
+                    } else {
+                        (character, style)
+                    };
+                    Span::styled(character.to_string(), style)
                 })
                 .collect()
         })
@@ -911,7 +960,7 @@ mod tests {
 
     #[test]
     fn a_face_is_five_rows_of_ten_columns_with_the_eyes_on_it() {
-        let drawn = rows("v2:example-0", Look::default(), &BRAND_STOPS);
+        let drawn = rows("v2:example-0", Look::default(), &BRAND_STOPS, false);
         assert_eq!(drawn.len(), ROWS);
         assert!(drawn.iter().all(|row| row.len() == WIDTH));
         let eyes = drawn
@@ -941,6 +990,7 @@ mod tests {
                     blink: i % 3 == 0,
                 },
                 &BRAND_STOPS,
+                false,
             )
             .iter()
             .flatten()
@@ -955,6 +1005,42 @@ mod tests {
                 build(&seed, &mark(&BRAND_STOPS)).cells.len(),
                 "{seed}"
             );
+        }
+    }
+
+    /// Drawn from cell backgrounds for a terminal that leaves a gap between rows of blocks, a face
+    /// is the same picture: every cell shows the colours it showed as block characters, and none of
+    /// them is a character that leaves the gap.
+    #[test]
+    fn a_face_drawn_from_backgrounds_is_the_same_picture() {
+        use crate::blocks::shown::halves;
+        let cell = |span: &Span<'static>| {
+            let character = span.content.chars().next().expect("a cell has a character");
+            halves(character, span.style)
+        };
+        for i in 0..100 {
+            let seed = format!("v2:paint-{i}");
+            let look = Look {
+                away: i % 2 == 0,
+                blink: i % 3 == 0,
+            };
+            let blocks = rows(&seed, look, &BRAND_STOPS, false);
+            let painted = rows(&seed, look, &BRAND_STOPS, true);
+            assert_eq!(blocks.len(), painted.len(), "{seed}");
+            for (blocks, painted) in blocks.iter().zip(&painted) {
+                assert_eq!(blocks.len(), painted.len(), "{seed}");
+                for (before, after) in blocks.iter().zip(painted) {
+                    assert_eq!(
+                        cell(before),
+                        cell(after),
+                        "{seed}: {before:?} became {after:?}"
+                    );
+                    assert!(
+                        matches!(after.content.as_ref(), " " | "▄"),
+                        "{seed}: {after:?} leaves a gap"
+                    );
+                }
+            }
         }
     }
 
@@ -975,6 +1061,33 @@ mod tests {
         for toward in [0.0, 8.0, 10.0, 15.0, 25.0, 40.0] {
             assert!(!look_at(seed, toward).away, "{toward}");
         }
+    }
+
+    #[test]
+    fn a_held_face_answers_the_same_look_for_the_whole_closure_and_then_lets_go() {
+        let shut = Look {
+            away: true,
+            blink: true,
+        };
+        with_face_held(shut, || {
+            for _ in 0..3 {
+                assert_eq!(look_now(), shut);
+            }
+            with_face_held(Look::default(), || assert_eq!(look_now(), Look::default()));
+            assert_eq!(look_now(), shut);
+        });
+        assert_eq!(pinned::get(), None);
+    }
+
+    #[test]
+    fn a_held_face_is_let_go_when_the_closure_panics() {
+        let shut = Look {
+            away: false,
+            blink: true,
+        };
+        let outcome = std::panic::catch_unwind(|| with_face_held(shut, || panic!("test panic")));
+        assert!(outcome.is_err());
+        assert_eq!(pinned::get(), None);
     }
 
     #[test]
@@ -999,7 +1112,7 @@ mod tests {
 
     #[test]
     fn a_look_changes_the_eyes_and_nothing_else() {
-        let at_rest = rows("v2:example-0", Look::default(), &BRAND_STOPS);
+        let at_rest = rows("v2:example-0", Look::default(), &BRAND_STOPS, false);
         let shut = rows(
             "v2:example-0",
             Look {
@@ -1007,6 +1120,7 @@ mod tests {
                 blink: true,
             },
             &BRAND_STOPS,
+            false,
         );
         let turned = rows(
             "v2:example-0",
@@ -1015,6 +1129,7 @@ mod tests {
                 blink: false,
             },
             &BRAND_STOPS,
+            false,
         );
         let differing = |a: &[Vec<Span<'static>>], b: &[Vec<Span<'static>>]| {
             a.iter()

@@ -72,6 +72,10 @@
 //! ```
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::disallowed_methods, reason = "the test names its program")
+)]
 
 /// The catalog format and its parser, compiled only for tests.
 ///
@@ -83,6 +87,8 @@
 mod catalog;
 /// Which plural category a number falls into, per language.
 pub mod plural;
+/// The notes that say a size was too large to attach, which the terminal and the desktop share.
+pub mod sizes;
 
 /// The code the build script writes from those catalogs, compiled here so the rules it applies
 /// have tests. Build-script code that nothing can call is build-script code nothing can pin, and

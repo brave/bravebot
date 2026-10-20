@@ -23,7 +23,7 @@
 //!   ([`bravebot_core::policy::Policy::holding`]).
 
 use crate::request_view::Provenance;
-use bravebot_aichat::protocol::{Message, Role};
+use bravebot_aichat::protocol::{Content, Message, Role};
 #[cfg(test)]
 use bravebot_aichat::protocol::{ToolCallRequest, ToolCallRequestFunction};
 use bravebot_core::label::{Confidentiality, Integrity, Label};
@@ -126,6 +126,56 @@ pub enum Composed {
         /// The skill's name as the catalogue spells it.
         name: String,
     },
+    /// A message the driver wrote for the planner in the middle of a turn: a nudge after a stop or
+    /// a spent budget, the mode having changed, a delegate's report, a background job's output, the
+    /// jobs still running.
+    ///
+    /// House-keeping for the planner: it belongs to the round above it, so a transcript draws no
+    /// row for it, no fork is cut in front of it and no compaction cuts between the two.
+    Notice,
+    /// A message the agent or a front end wrote in its own words into the conversation, and that a
+    /// person is shown as it stands: the line a goal's carry-on or `/init` sends, the standard
+    /// input a run was given, a file the kernel would not show, and what a shell line the person
+    /// ran themselves printed.
+    ///
+    /// Drawn plainly, and not as a prompt: nobody typed it, so it is no place to fork from.
+    Written,
+    /// A message another background session's planner sent, as the frame the driver wrote around it
+    /// (MSG-7, MSG-11).
+    ///
+    /// The fields are the driver's: the sender's id, its name as the roster held it when the message
+    /// arrived and the label the policy layer gave the words. The words ride beside them in `text`,
+    /// which is where a surface finds them without reading the frame back. `None` where the planner
+    /// was given a reference and not the words, so that no content is written here.
+    SessionMessage {
+        /// The sender's full id.
+        from: String,
+        /// The sender's name, cut and made printable.
+        name: String,
+        /// The label the words arrived under, in the policy layer's own form.
+        label: String,
+        /// What the sender wrote, where the planner was shown it.
+        text: Option<String>,
+    },
+    /// The result of a `message_session` call that put its message in the receiver's process
+    /// (MSG-11).
+    ///
+    /// In the API's own shape, as [`Composed::Skill`] is. The fields are the driver's, the
+    /// roster's and the policy layer's, and `text` is what the planner wrote and the policy layer
+    /// let through. Only a call that was delivered carries it, so a transcript draws a refused or
+    /// declined call as the call and nothing more.
+    ///
+    /// House-keeping for the planner: the call above it is drawn as the message.
+    MessageSent {
+        /// The receiver's full id.
+        to: String,
+        /// The receiver's name, as the roster held it.
+        name: String,
+        /// The label the message was sent under.
+        label: String,
+        /// What the planner wrote.
+        text: String,
+    },
 }
 
 impl Composed {
@@ -140,6 +190,8 @@ impl Composed {
                 | Self::Summary
                 | Self::Skill { .. }
                 | Self::SkillKept { .. }
+                | Self::Notice
+                | Self::MessageSent { .. }
         )
     }
 }
@@ -270,6 +322,15 @@ pub struct Conversation {
     /// Carried word for word and put back after the summary (COMPACT-16). Model output the
     /// planner already held, so it comes back at the label of the context it came from.
     carried_task_list: Option<String>,
+    /// Where the turn now running put the end of its opening: what it read for the prompt, and the
+    /// prompt. A position in `messages`, so a compaction that moves them clears it.
+    opening_end: Option<usize>,
+    /// Tool results before this position are sent as a stub (COMPACT-18).
+    ///
+    /// A position, so nothing here records what a result said. The messages keep their words: the
+    /// stub is made as a request is assembled, which is what leaves the record whole (COMPACT-6).
+    /// Not part of a [`Snapshot`], for the reason `reads` is not.
+    masked_before: usize,
 }
 
 /// A window of a file as `read_file` showed it, for telling a repeat of the same read from a new one.
@@ -325,6 +386,13 @@ impl ShownReads {
     }
 }
 
+/// How many messages a conversation held when a turn began, for [`Conversation::forget_since`].
+///
+/// Taken from the live conversation rather than read off a rewind point, because a [`Snapshot`]
+/// leaves out the note a resume adds and so counts one message fewer than the conversation holds.
+#[derive(Debug, Clone, Copy)]
+pub struct Mark(usize);
+
 impl Default for Conversation {
     fn default() -> Self {
         Self::new()
@@ -348,6 +416,8 @@ impl Conversation {
             reads: ShownReads::default(),
             task_list: None,
             carried_task_list: None,
+            opening_end: None,
+            masked_before: 0,
         }
     }
 
@@ -369,7 +439,7 @@ impl Conversation {
     /// server rather than merely missing something. Filling the gap keeps the record of what
     /// was attempted, which is the reason the conversation survives a failed turn at all.
     pub fn with_system(&self, system: &str) -> Vec<Message> {
-        Self::assembled(system, &self.messages)
+        self.assembled(system, self.messages.len())
     }
 
     /// The same, and whose words each message after the system prompt holds.
@@ -377,7 +447,7 @@ impl Conversation {
     /// One list from one pass, so a mark cannot land on a message other than the one it was made
     /// for: a call answered here has the driver's sentence as its answer.
     pub fn with_system_marked(&self, system: &str) -> (Vec<Message>, Vec<Provenance>) {
-        let marked = Self::assembled_marked(system, &self.messages);
+        let marked = self.assembled_marked(system, self.messages.len());
         let marks = marked
             .iter()
             .skip(1)
@@ -389,26 +459,34 @@ impl Conversation {
         )
     }
 
-    /// The same, over some prefix of the exchange.
+    /// The same, over the first `end` messages of the exchange.
     ///
     /// Shared with [`Conversation::with_system`] rather than written twice, because the gap
     /// filling below is the difference between a well-formed request and one a server refuses,
     /// and a summariser sending a prefix needs it exactly as much as a turn sending the whole.
-    fn assembled(system: &str, exchange: &[Stored]) -> Vec<Message> {
-        Self::assembled_marked(system, exchange)
+    fn assembled(&self, system: &str, end: usize) -> Vec<Message> {
+        self.assembled_marked(system, end)
             .into_iter()
             .map(|(message, _)| message)
             .collect()
     }
 
     /// [`Conversation::assembled`] with each message's origin beside it.
-    fn assembled_marked(system: &str, exchange: &[Stored]) -> Vec<(Message, Provenance)> {
+    fn assembled_marked(&self, system: &str, end: usize) -> Vec<(Message, Provenance)> {
+        let exchange = &self.messages[..end];
         let mut messages = Vec::with_capacity(exchange.len() + 1);
         messages.push((Message::system(system), Provenance::Driver));
 
         for (index, stored) in exchange.iter().enumerate() {
             let message = &stored.message;
-            messages.push((message.clone(), stored.provenance()));
+            match self.stub_at(index) {
+                Some(stub) => {
+                    let mut stubbed = message.clone();
+                    stubbed.content = Content::Text(stub);
+                    messages.push((stubbed, Provenance::Driver));
+                }
+                None => messages.push((message.clone(), stored.provenance())),
+            }
 
             let Some(calls) = &message.tool_calls else {
                 continue;
@@ -472,6 +550,13 @@ impl Conversation {
     /// (COMPACT-17) without reading anything that was said.
     pub fn push_skill_result(&mut self, message: Message, name: String, source: Provenance) {
         self.push_composed_from(message, Composed::Skill { name }, source);
+    }
+
+    /// Add the result of a `message_session` call whose message was delivered, tagged with who it
+    /// went to and what it said (MSG-11).
+    pub fn push_message_result(&mut self, message: Message, sent: Composed, source: Provenance) {
+        debug_assert!(matches!(sent, Composed::MessageSent { .. }));
+        self.push_composed_from(message, sent, source);
     }
 
     /// The same as [`Conversation::push`], for a message whose composer knows whose words it holds.
@@ -543,6 +628,56 @@ impl Conversation {
         self.measured
     }
 
+    /// Where the conversation stands now, before a turn adds to it.
+    pub fn mark(&self) -> Mark {
+        Mark(self.messages.len())
+    }
+
+    /// Say that the turn has put its opening into the conversation: whatever it read for the
+    /// prompt, and the prompt itself.
+    ///
+    /// Everything pushed between the mark and this call is part of the opening, and a resend
+    /// pushes it again, so a message the turn pushes before the prompt that a resend would not
+    /// push again belongs after this call.
+    pub fn opening_done(&mut self) {
+        self.opening_end = Some(self.messages.len());
+    }
+
+    /// Take the opening of the turn that began at `mark` out of the conversation, so a prompt
+    /// handed back to the box is not in the next request as well as in the one sent from there.
+    /// Returns whether it did.
+    ///
+    /// Only the opening goes. What the driver said after it stays: a message from another session,
+    /// which was taken out of its inbox and has nowhere else to come from, and a notice, which is a
+    /// statement about the moment it was made.
+    ///
+    /// Nothing goes once the planner has replied or called a tool. What it did then is not undone
+    /// by taking the prompt back, and the next request should still say so. Nor does anything go
+    /// where a compaction ran, since it moved the position the opening was recorded at.
+    ///
+    /// What the conversation has met is not taken back: the planner was shown the prompt and what
+    /// came with it, so the integrity and confidentiality it holds, the quarantine and the
+    /// reference counter stay as they are, for the reason compaction leaves them.
+    pub fn forget_since(&mut self, mark: Mark) -> bool {
+        let Some(end) = self.opening_end.take() else {
+            return false;
+        };
+        let Some(after) = self.messages.get(end..) else {
+            return false;
+        };
+        // An opening at or before the mark is an earlier turn's.
+        if mark.0 >= end
+            || after
+                .iter()
+                .any(|stored| !matches!(stored.message.role, Role::User))
+        {
+            return false;
+        }
+        self.messages.drain(mark.0..end);
+        self.masked_before = self.masked_before.min(mark.0);
+        true
+    }
+
     /// Record that the planner has asked for a write.
     pub fn write_requested(&mut self) {
         self.asked_to_write = true;
@@ -599,16 +734,7 @@ impl Conversation {
     /// would take each of its results for the start of a round of its own, which both puts the
     /// cut inside a round and makes [`RECENT_ROUNDS_KEPT`] count results rather than rounds.
     fn by_round(&self) -> Option<usize> {
-        self.cut_keeping(
-            &self.boundaries(|stored| {
-                stored.message.tool_call_id.is_none()
-                    && !matches!(
-                        stored.composed,
-                        Some(Composed::ToolResult | Composed::SkillKept { .. })
-                    )
-            }),
-            RECENT_ROUNDS_KEPT,
-        )
+        self.cut_keeping(&self.boundaries(opens_a_round), RECENT_ROUNDS_KEPT)
     }
 
     /// The cut that keeps the last `kept` of these boundaries, if it is worth making.
@@ -640,7 +766,24 @@ impl Conversation {
             .iter()
             .filter(|&&index| !matches!(self.messages[index].composed, Some(Composed::Summary)))
             .count();
-        (given_up >= kept + self.skills_to_carry(cut).len()).then_some(cut)
+        let carried = self.skills_to_carry(cut);
+        if given_up < kept + carried.len() {
+            return None;
+        }
+
+        // Counts are not sizes: one exchange can be a repeated one-line prompt and the next
+        // eighty thousand tokens of file reads, so the same bound is applied to what each side
+        // weighs.
+        // What the request holds, so a result already sent as a stub counts as the stub.
+        let freed: usize = (0..cut)
+            .filter(|&index| !matches!(self.messages[index].composed, Some(Composed::Summary)))
+            .map(|index| self.sent_bytes(index))
+            .sum();
+        let retained: usize = (cut..self.messages.len())
+            .map(|index| self.sent_bytes(index))
+            .chain(carried.iter().map(stored_bytes))
+            .sum();
+        (freed >= retained).then_some(cut)
     }
 
     /// The skills a cut at `boundary` would have to carry, as the result of the newest load of
@@ -713,12 +856,132 @@ impl Conversation {
             .collect()
     }
 
+    /// Send the results of older tool calls as a stub from now on, where that frees enough to be
+    /// worth doing (COMPACT-18). Returns the tokens it estimates were freed.
+    ///
+    /// "Older" is the cut compaction would make, without the test of whether summarising is worth
+    /// a request: the last [`RECENT_EXCHANGES_KEPT`] exchanges and the last [`RECENT_ROUNDS_KEPT`]
+    /// rounds stay as they are, and whichever bound is later decides. Everything is decided from
+    /// roles, positions and byte counts.
+    ///
+    /// The measurement of the conversation is lowered by the estimate, since no request has
+    /// counted this one: [`BYTES_PER_TOKEN`] bytes to a token is the figure used everywhere else
+    /// here, and a result that is denser than that frees more than is claimed, which is the
+    /// direction to be wrong in.
+    pub fn mask_old_results(&mut self) -> Option<u64> {
+        let boundary = [
+            self.cut_point(&self.boundaries(opens_an_exchange), RECENT_EXCHANGES_KEPT),
+            self.cut_point(&self.boundaries(opens_a_round), RECENT_ROUNDS_KEPT),
+        ]
+        .into_iter()
+        .flatten()
+        .max()?;
+
+        let newly: Vec<usize> = (self.masked_before..boundary)
+            .filter(|&index| self.stub_for(index).is_some())
+            .collect();
+        let freed: usize = newly
+            .iter()
+            .map(|&index| stored_bytes(&self.messages[index]) - self.stub_len(index))
+            .sum();
+        if freed < MASK_FLOOR_BYTES {
+            return None;
+        }
+
+        // The lines of a read that was dropped are no longer in front of the planner, so a repeat
+        // of it has to send them.
+        self.reads
+            .shown
+            .retain(|(position, _)| !newly.contains(position));
+        self.masked_before = boundary;
+        let tokens = (freed / BYTES_PER_TOKEN) as u64;
+        self.measured = self.measured.saturating_sub(tokens);
+        Some(tokens)
+    }
+
+    /// The first of the last `kept` of these boundaries, which is where the recent part starts.
+    fn cut_point(&self, points: &[usize], kept: usize) -> Option<usize> {
+        points.get(points.len().checked_sub(kept)?).copied()
+    }
+
+    /// What the request holds for the message at `index`, in bytes.
+    fn sent_bytes(&self, index: usize) -> usize {
+        match self.stub_at(index) {
+            Some(stub) => stub.len(),
+            None => stored_bytes(&self.messages[index]),
+        }
+    }
+
+    fn stub_len(&self, index: usize) -> usize {
+        self.stub_for(index).map_or(0, |stub| stub.len())
+    }
+
+    /// The stub the request carries in place of the message at `index`, once it has been masked.
+    fn stub_at(&self, index: usize) -> Option<String> {
+        if index >= self.masked_before {
+            return None;
+        }
+        self.stub_for(index)
+    }
+
+    /// The stub the message at `index` would be replaced by, if it is a result worth replacing.
+    ///
+    /// Found from the role, the tag, the position and the length, never from what the result says.
+    /// Small results stay: a reference to quarantined content is one, and a stub would lose the
+    /// name. The planner's latest task list stays, since it is sent again only after a compaction.
+    /// A skill, a message sent to another session and anything that is not text are not plain
+    /// results and carry other tags.
+    ///
+    /// The stub is a fixed sentence, the name of the tool and a count. The name is the planner's
+    /// own call or the driver's own prefix, and is used only if it is made of the characters a
+    /// tool name is made of.
+    fn stub_for(&self, index: usize) -> Option<String> {
+        let stored = &self.messages[index];
+        let by_id = stored.message.role == Role::Tool && stored.composed.is_none();
+        let as_prose = matches!(stored.composed, Some(Composed::ToolResult));
+        if !(by_id || as_prose) || self.task_list == Some(index) {
+            return None;
+        }
+        let text = stored.message.content.as_text()?;
+        if text.len() < MASK_RESULT_MIN_BYTES {
+            return None;
+        }
+
+        let named = if by_id {
+            let id = stored.message.tool_call_id.as_deref()?;
+            self.messages[..index]
+                .iter()
+                .rev()
+                .flat_map(|earlier| earlier.message.tool_calls.iter().flatten())
+                .find(|call| call.id == id)
+                .map(|call| call.function.name.as_str())
+        } else {
+            text.strip_prefix(TOOL_RESULT_PREFIX)
+                .and_then(|rest| rest.split_once(':'))
+                .map(|(name, _)| name)
+        };
+        let tool = named
+            .filter(|name| {
+                !name.is_empty()
+                    && name.len() <= 64
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+            })
+            .unwrap_or("a tool");
+        Some(format!(
+            "{TOOL_RESULT_PREFIX}{tool}: {} bytes, dropped from the request to make room. The \
+             call ran and its result was shown to you earlier.",
+            text.len()
+        ))
+    }
+
     /// The part compaction would replace, as one request's messages.
     ///
     /// The system prompt is the summariser's, so it is passed in the same way a turn passes its
     /// own: the conversation stores neither.
     pub fn to_summarise(&self, boundary: usize, system: &str) -> Vec<Message> {
-        Self::assembled(system, &self.messages[..boundary])
+        self.assembled(system, boundary)
     }
 
     /// Put a summary in place of everything before `boundary`.
@@ -749,6 +1012,13 @@ impl Conversation {
             Some(at) => self.task_list = Some(at - boundary + 1 + carried.len()),
             None => {}
         }
+        // A position in the messages the drain below moves. What the summary and the carried
+        // skills stand in front of is the same message as before, so the line moves with it.
+        self.masked_before = match self.masked_before.checked_sub(boundary) {
+            Some(past) if past > 0 => past + 1 + carried.len(),
+            _ => 0,
+        };
+        self.opening_end = None;
         let replaced: Vec<Stored> = self.messages.drain(..boundary).collect();
         self.archive.extend(replaced);
         self.reads.compacted(boundary, 1 + carried.len());
@@ -851,6 +1121,20 @@ pub enum Said {
         /// What the agent composed it for.
         why: Composed,
         /// The message as the planner was sent it.
+        text: String,
+    },
+    /// A message this session's planner put to another session, and which one (MSG-11).
+    ///
+    /// Only a message that was delivered. A call that was refused, declined or never answered is
+    /// the call, drawn as a [`Said::Tool`].
+    Sent {
+        /// The receiver's full id.
+        to: String,
+        /// The receiver's name, as the roster held it.
+        name: String,
+        /// The label the message was sent under.
+        label: String,
+        /// What the planner wrote.
         text: String,
     },
 }
@@ -1012,6 +1296,8 @@ impl Conversation {
             reads: ShownReads::default(),
             task_list: None,
             carried_task_list: None,
+            opening_end: None,
+            masked_before: 0,
         }
     }
 
@@ -1042,7 +1328,8 @@ impl Conversation {
         let mut said = Vec::new();
         // The archive first: what compaction took out of the request is still the person's
         // session, and they are the one reading this.
-        for stored in self.archive.iter().chain(self.messages.iter()) {
+        let all: Vec<&Stored> = self.archive.iter().chain(self.messages.iter()).collect();
+        for (index, stored) in all.iter().copied().enumerate() {
             if let Some(why) = stored
                 .composed
                 .as_ref()
@@ -1073,6 +1360,13 @@ impl Conversation {
                         said.push(Said::Assistant(spoken));
                     }
                     for call in message.tool_calls.iter().flatten() {
+                        // A message the call put in another session's process is drawn as the
+                        // message, from the tag its result carries and never from the call's
+                        // arguments: a call that was refused or declined has the same arguments.
+                        if let Some(sent) = message_delivered(&all, index, &call.id) {
+                            said.push(sent);
+                            continue;
+                        }
                         said.push(Said::Tool {
                             line: crate::tools::describe_stored_call(
                                 &call.function.name,
@@ -1087,6 +1381,31 @@ impl Conversation {
         }
         said
     }
+}
+
+/// The message the call with this id put in another session's process, where its result says it did
+/// (MSG-11).
+///
+/// Looked up in the run of results immediately after the round, as [`answered`] does.
+fn message_delivered(exchange: &[&Stored], index: usize, id: &str) -> Option<Said> {
+    exchange[index + 1..]
+        .iter()
+        .take_while(|stored| stored.message.tool_call_id.is_some())
+        .filter(|stored| stored.message.tool_call_id.as_deref() == Some(id))
+        .find_map(|stored| match &stored.composed {
+            Some(Composed::MessageSent {
+                to,
+                name,
+                label,
+                text,
+            }) => Some(Said::Sent {
+                to: to.clone(),
+                name: name.clone(),
+                label: label.clone(),
+                text: text.clone(),
+            }),
+            _ => None,
+        })
 }
 
 /// Whether the round beginning at `index` answered the call with this id.
@@ -1115,6 +1434,15 @@ const RECENT_EXCHANGES_KEPT: usize = 2;
 /// last several rather than of the last one.
 const RECENT_ROUNDS_KEPT: usize = 6;
 
+/// The least that dropping old tool results has to free to be done (COMPACT-5's floor, applied to
+/// this cheaper step): about 4,000 tokens. Under it the request is rewritten, and its cache with
+/// it, for nothing worth having.
+const MASK_FLOOR_BYTES: usize = 4_000 * BYTES_PER_TOKEN;
+
+/// The shortest tool result worth replacing with a stub, about 500 tokens. Shorter ones, which is
+/// every reference to quarantined content, stay as they are.
+const MASK_RESULT_MIN_BYTES: usize = 500 * BYTES_PER_TOKEN;
+
 /// The skill a stored message is the result of loading, by its tag and its role.
 fn skill_loaded(stored: &Stored) -> Option<&String> {
     match &stored.composed {
@@ -1131,6 +1459,20 @@ const SKILL_KEPT_BYTES: usize = 5_000 * BYTES_PER_TOKEN;
 
 /// The most of all skills sent again after one summary, about 25,000 tokens.
 const SKILLS_KEPT_BYTES: usize = 25_000 * BYTES_PER_TOKEN;
+
+/// What a message adds to a request, in bytes: its text and the calls it carries.
+///
+/// A measure of shape, not of meaning: nothing here reads what the words say.
+fn stored_bytes(stored: &Stored) -> usize {
+    let calls: usize = stored
+        .message
+        .tool_calls
+        .iter()
+        .flatten()
+        .map(|call| call.function.name.len() + call.function.arguments.len())
+        .sum();
+    stored.message.content.text().len() + calls
+}
 
 /// The leading `limit` bytes of `text` at a character boundary, and whether any was left out.
 fn within(text: &str, limit: usize) -> (&str, bool) {
@@ -1161,6 +1503,16 @@ fn kept_skill(name: &str, body: &str, cut: bool) -> String {
     )
 }
 
+/// Whether a message begins a round, so a cut may fall in front of it: anything that is not the
+/// answer to a call, by its id or by the tag a prose-shaped result carries.
+fn opens_a_round(stored: &Stored) -> bool {
+    stored.message.tool_call_id.is_none()
+        && !matches!(
+            stored.composed,
+            Some(Composed::ToolResult | Composed::SkillKept { .. })
+        )
+}
+
 /// Whether a message begins an exchange, so compaction may cut in front of it.
 ///
 /// A prompt the user typed, or a summary standing in for the ones before it. A tool result sent
@@ -1170,7 +1522,12 @@ fn opens_an_exchange(stored: &Stored) -> bool {
     stored.message.role == Role::User
         && !matches!(
             stored.composed,
-            Some(Composed::ToolResult | Composed::Resumed | Composed::SkillKept { .. })
+            Some(
+                Composed::ToolResult
+                    | Composed::Resumed
+                    | Composed::SkillKept { .. }
+                    | Composed::Notice
+            )
         )
 }
 
@@ -1407,6 +1764,33 @@ mod tests {
         );
     }
 
+    /// LAYER-6: a note the driver wrote mid-turn is house-keeping and a line it wrote for a turn
+    /// is drawn plainly, and neither is a prompt, whatever the words are.
+    #[test]
+    fn a_notice_is_left_out_and_a_written_line_is_not_a_prompt() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("typed words"));
+        conversation.push_composed(
+            Message::user("(from the system, not the user) stop"),
+            Composed::Notice,
+        );
+        conversation.push_composed(Message::user("carry on"), Composed::Written);
+
+        assert_eq!(
+            conversation.recounted(),
+            vec![
+                Said::User("typed words".into()),
+                Said::Composed {
+                    why: Composed::Written,
+                    text: "carry on".into()
+                },
+            ]
+        );
+        let notice = &conversation.messages()[1];
+        assert!(!opens_an_exchange(notice), "compaction may cut at a nudge");
+        assert!(opens_an_exchange(&conversation.messages()[2]));
+    }
+
     /// And the tag is not sent. The messages are the request body, so a field inside one would be
     /// a field the backend was asked to accept.
     #[test]
@@ -1606,9 +1990,9 @@ mod tests {
     fn a_typed_prompt_that_opens_like_a_note_is_a_place_to_cut() {
         let mut conversation = Conversation::new();
         for (prompt, answer) in [
-            ("first", "a"),
-            ("second", "b"),
-            ("third", "c"),
+            ("first, a prompt as long as the one below", "a"),
+            ("second, a prompt as long as the one below", "b"),
+            ("third, a prompt as long as the one below", "c"),
             (
                 &format!("{TOOL_RESULT_PREFIX}my experiment: explain it") as &str,
                 "d",
@@ -2135,6 +2519,44 @@ mod tests {
         assert!(conversation.compaction_boundary().is_some());
     }
 
+    /// COMPACT-5 compares what each side weighs, not how many exchanges it holds. Four prompts
+    /// (three of them repeats) in front of eight huge reads pass a count of two against two, and
+    /// the summary written would be longer than the few bytes it replaced.
+    #[test]
+    fn a_cut_that_frees_a_few_bytes_and_keeps_huge_reads_is_not_made() {
+        let mut conversation = Conversation::new();
+        for _ in 0..4 {
+            conversation.push(Message::user("fix the build"));
+        }
+        for round in 0..8 {
+            let mut call = a_call("read_file", r#"{"path":"src/main.rs"}"#);
+            call.id = format!("r{round}");
+            conversation.push(Message::assistant_calling("looking", vec![call]));
+            conversation.push(Message::tool_result(
+                format!("r{round}"),
+                "x".repeat(40_000),
+            ));
+        }
+        assert_eq!(conversation.compaction_boundary(), None);
+    }
+
+    /// The size bound must not stop a cut that does free more than it keeps: many short exchanges
+    /// followed by one very large one is the shape the by-round fallback is for.
+    #[test]
+    fn a_cut_that_frees_more_than_it_keeps_is_still_made_after_a_large_exchange_is_given_up() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("read everything"));
+        let mut call = a_call("read_file", r#"{"path":"big.rs"}"#);
+        call.id = "big".to_string();
+        conversation.push(Message::assistant_calling("looking", vec![call]));
+        conversation.push(Message::tool_result("big", "x".repeat(40_000)));
+        conversation.push(Message::assistant("read it"));
+        for prompt in ["second", "third", "fourth"] {
+            an_exchange(&mut conversation, prompt);
+        }
+        assert!(conversation.compaction_boundary().is_some());
+    }
+
     /// The same bound on the round fallback, which is where it was actually costing something: a
     /// long turn added one round at a time, so each compaction gave up one round to keep twelve.
     #[test]
@@ -2354,7 +2776,13 @@ mod tests {
     /// second time in the summary would put two lists in front of the planner.
     #[test]
     fn a_task_list_the_cut_leaves_in_place_is_not_sent_twice() {
-        let mut conversation = four_exchanges();
+        // Heavy enough to give up more than the list weighs when it is sent again (COMPACT-5).
+        let mut conversation = Conversation::new();
+        for prompt in ["first", "second", "third"] {
+            an_exchange(&mut conversation, prompt);
+        }
+        conversation.push(Message::user("fourth"));
+        conversation.push(Message::assistant("d"));
         conversation.push(Message::tool_result("t1", "0 of 1 done\n[pending] a"));
         conversation.task_list_shown();
 
@@ -2490,6 +2918,165 @@ mod tests {
         assert_eq!(conversation.holds(), Confidentiality::Private);
     }
 
+    fn texts(conversation: &Conversation) -> Vec<String> {
+        conversation
+            .messages()
+            .iter()
+            .map(|stored| stored.message.content.text())
+            .collect()
+    }
+
+    /// A prompt handed back to the box is sent again from there. If the conversation keeps the
+    /// first copy, each send adds another and every later request carries all of them.
+    #[test]
+    fn a_turn_taken_back_leaves_the_messages_a_turn_that_never_ran_would_have() {
+        let mut conversation = four_exchanges();
+        let before = texts(&conversation);
+        let began = conversation.mark();
+
+        conversation.push(Message::user("Contents of notes.md: ..."));
+        conversation.push(Message::user("summarise the notes"));
+        conversation.opening_done();
+
+        assert!(conversation.forget_since(began));
+
+        assert_eq!(texts(&conversation), before);
+    }
+
+    /// A message another session sent is taken out of the inbox when the turn collects it, so it
+    /// is in no other place. Taking the turn's messages back wholesale would lose it.
+    #[test]
+    fn a_turn_taken_back_keeps_a_message_that_reached_it_after_its_opening() {
+        let mut conversation = four_exchanges();
+        let mut expected = texts(&conversation);
+        let began = conversation.mark();
+
+        conversation.push(Message::user("summarise the notes"));
+        conversation.opening_done();
+        conversation.push(Message::user("a message from another session"));
+        expected.push("a message from another session".to_string());
+
+        assert!(conversation.forget_since(began));
+
+        assert_eq!(texts(&conversation), expected);
+    }
+
+    /// Once the planner has replied or called a tool, what it did is part of the record. Taking the
+    /// prompt out from under it would leave a round of work with no request, and the next request
+    /// would not say the work was done.
+    #[test]
+    fn a_turn_the_planner_has_answered_is_not_taken_back() {
+        for answered in [
+            Message::assistant("it says hello"),
+            Message::assistant_calling(
+                "looking",
+                vec![a_call("read_file", r#"{"path":"notes.md"}"#)],
+            ),
+        ] {
+            let mut conversation = four_exchanges();
+            let began = conversation.mark();
+            conversation.push(Message::user("summarise the notes"));
+            conversation.opening_done();
+            conversation.push(answered);
+            let held = texts(&conversation);
+
+            assert!(!conversation.forget_since(began));
+
+            assert_eq!(texts(&conversation), held);
+        }
+    }
+
+    /// The planner was shown the prompt and what came with it, whether or not the next request
+    /// repeats it. What the conversation has met, and the names it has handed out, stay: the
+    /// quarantine holds content those names refer to.
+    #[test]
+    fn a_turn_taken_back_does_not_forget_what_the_planner_was_shown() {
+        let mut conversation = four_exchanges();
+        let began = conversation.mark();
+
+        conversation.push(Message::user("again"));
+        conversation.opening_done();
+        conversation.observed(Label::untrusted_private());
+        let handed_out = conversation.next_reference();
+
+        assert!(conversation.forget_since(began));
+
+        assert_eq!(conversation.context(), Integrity::Untrusted);
+        assert_eq!(conversation.holds(), Confidentiality::Private);
+        assert_ne!(
+            conversation.next_reference(),
+            handed_out,
+            "a name already handed out was handed out again"
+        );
+    }
+
+    /// The note a resume adds is in the conversation but not in its snapshot, so a length read off
+    /// a snapshot is one short and would take the note out with the prompt.
+    #[test]
+    fn a_turn_taken_back_keeps_the_note_a_resume_added() {
+        let mut first = four_exchanges();
+        first.next_reference();
+        let mut conversation = Conversation::restored(first.snapshot());
+        let noted = conversation.len();
+        assert_eq!(noted, 9, "the resume added no note");
+        let began = conversation.mark();
+
+        conversation.push(Message::user("again"));
+        conversation.opening_done();
+
+        assert!(conversation.forget_since(began));
+
+        assert_eq!(conversation.len(), noted);
+        assert_eq!(
+            conversation.messages().last().map(|m| m.composed.clone()),
+            Some(Some(Composed::Resumed))
+        );
+    }
+
+    /// A turn that never reached its opening has nothing to take back, and an opening left by an
+    /// earlier turn is not this one's.
+    #[test]
+    fn a_turn_that_put_in_no_opening_takes_back_nothing() {
+        let mut conversation = four_exchanges();
+        let began = conversation.mark();
+        assert!(!conversation.forget_since(began), "there was no opening");
+
+        let earlier = conversation.mark();
+        conversation.push(Message::user("an earlier prompt"));
+        conversation.opening_done();
+        let began = conversation.mark();
+        let held = texts(&conversation);
+
+        assert!(!conversation.forget_since(began));
+        assert!(!conversation.forget_since(earlier));
+
+        assert_eq!(texts(&conversation), held);
+    }
+
+    /// Compaction moved the messages the recorded position refers to. With enough after the
+    /// opening for the old position to fit the new layout, a drain at it would take out some other
+    /// message.
+    #[test]
+    fn a_turn_that_compacted_is_not_taken_back() {
+        let mut conversation = four_exchanges();
+        let began = conversation.mark();
+        conversation.push(Message::user("summarise the notes"));
+        conversation.opening_done();
+        for n in 0..6 {
+            conversation.push(Message::user(format!("a message from another session {n}")));
+        }
+        conversation.compacted(2, "they asked about the first thing");
+        let compacted = texts(&conversation);
+        assert!(
+            compacted.len() > 9,
+            "the layout no longer fits the old position"
+        );
+
+        assert!(!conversation.forget_since(began));
+
+        assert_eq!(texts(&conversation), compacted);
+    }
+
     /// Integrity is the one thing here that must never come back better than it went in, and a
     /// file is the easiest place to make that mistake.
     #[test]
@@ -2617,14 +3204,19 @@ mod tests {
     /// A prompt and an answer, the filler between the parts of the skill tests.
     fn an_exchange(conversation: &mut Conversation, prompt: &str) {
         conversation.push(Message::user(prompt));
-        conversation.push(Message::assistant("ok"));
+        // Long enough that a carried skill's wrapper is not heavier than an exchange (COMPACT-5
+        // weighs bytes), and the same for every exchange so a count still says what a size would.
+        conversation.push(Message::assistant("ok ".repeat(200)));
     }
 
     /// A round in which the planner loaded `name` and was shown `body`, recorded as a turn records it.
     fn a_skill_load(conversation: &mut Conversation, id: &str, name: &str, body: &str) {
         let mut call = a_call("load_skill", &format!(r#"{{"name":"{name}"}}"#));
         call.id = id.to_string();
-        conversation.push(Message::assistant_calling("loading", vec![call]));
+        // As long as the wrapper a carried copy is sent in, so that what a cut gives up is not
+        // lighter than the skill it brings back (COMPACT-5 weighs bytes).
+        let reason = "loading the skill ".repeat(20);
+        conversation.push(Message::assistant_calling(reason, vec![call]));
         conversation.push_skill_result(
             Message::tool_result(id, format!("{TOOL_RESULT_PREFIX}load_skill:\n\n{body}")),
             name.to_string(),
@@ -2652,7 +3244,11 @@ mod tests {
             let mut call = a_call("read_file", r#"{"path":"src/main.rs"}"#);
             call.id = format!("r{round}");
             conversation.push(Message::assistant_calling("looking", vec![call]));
-            conversation.push(Message::tool_result(format!("r{round}"), "some lines"));
+            // Long enough that a carried skill is not heavier than a round (COMPACT-5 weighs bytes).
+            conversation.push(Message::tool_result(
+                format!("r{round}"),
+                "some lines ".repeat(30),
+            ));
         }
     }
 
@@ -3097,7 +3693,7 @@ mod tests {
             },
         );
         conversation.push(Message::assistant("done"));
-        for prompt in ["second", "third", "fourth"] {
+        for prompt in ["second", "third", "fourth", "fifth"] {
             an_exchange(&mut conversation, prompt);
         }
 
@@ -3128,5 +3724,304 @@ mod tests {
                 .any(|said| matches!(said, Said::Composed { .. })),
             "a skill was drawn as a composed row"
         );
+    }
+
+    /// A call by id and its result, then the answer: one round of the old part of a session.
+    fn a_round_that_read(conversation: &mut Conversation, id: &str, tool: &str, result: String) {
+        let mut call = a_call(tool, r#"{"path":"big.log"}"#);
+        call.id = id.to_string();
+        conversation.push(Message::assistant_calling("looking", vec![call]));
+        conversation.push(Message::tool_result(id, result));
+        conversation.push(Message::assistant("read it"));
+    }
+
+    /// Four exchanges, the first of which read something large.
+    fn a_session_that_began_with_a_large_read(result: String) -> Conversation {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("look at the build log"));
+        a_round_that_read(&mut conversation, "call-1", "read_file", result);
+        for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+        conversation
+    }
+
+    fn sent_text(conversation: &Conversation) -> String {
+        conversation
+            .with_system("sys")
+            .iter()
+            .map(|m| m.content.text())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// COMPACT-18: the result of an old call is a stub in the request and whole in the record, and
+    /// the call keeps its answer.
+    #[test]
+    fn an_old_tool_result_is_a_stub_in_the_request_and_whole_in_the_record() {
+        let bulk = "BULK-LINE\n".repeat(5_000);
+        let mut conversation = a_session_that_began_with_a_large_read(bulk.clone());
+        let before = conversation.with_system("sys").len();
+        conversation.measured(30_000);
+
+        let freed = conversation.mask_old_results().expect("enough to free");
+        assert_eq!(freed, (50_000 - conversation.stub_len(2)) as u64 / 4);
+        assert_eq!(conversation.last_request_tokens(), 30_000 - freed);
+
+        let sent = conversation.with_system("sys");
+        assert_eq!(sent.len(), before, "a message was lost or added");
+        assert!(!sent_text(&conversation).contains("BULK-LINE"));
+        let answer = &sent[3];
+        assert_eq!(answer.tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(
+            answer.content.text(),
+            format!(
+                "{TOOL_RESULT_PREFIX}read_file: 50000 bytes, dropped from the request to make \
+                 room. The call ran and its result was shown to you earlier."
+            )
+        );
+        // The record is whole: what is stored, and what a snapshot writes.
+        assert_eq!(conversation.messages()[2].message.content.text(), bulk);
+        assert!(
+            serde_json::to_string(&conversation.snapshot())
+                .unwrap()
+                .contains("BULK-LINE")
+        );
+    }
+
+    /// The recent exchanges are what the planner is working from, so they are sent as they are.
+    #[test]
+    fn a_tool_result_in_the_recent_exchanges_is_left_alone() {
+        let mut conversation = Conversation::new();
+        for (prompt, answer) in [("first", "a"), ("second", "b")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+        conversation.push(Message::user("read it"));
+        a_round_that_read(
+            &mut conversation,
+            "call-1",
+            "read_file",
+            "BULK ".repeat(20_000),
+        );
+
+        assert_eq!(conversation.mask_old_results(), None);
+        assert!(sent_text(&conversation).contains("BULK"));
+    }
+
+    /// COMPACT-5's floor, applied to this step: a rewrite of the request that frees a little is
+    /// not worth the cache it costs.
+    #[test]
+    fn dropping_results_that_free_too_little_is_not_done() {
+        let mut conversation = a_session_that_began_with_a_large_read("SMALLISH ".repeat(1_000));
+
+        assert_eq!(conversation.mask_old_results(), None);
+        assert!(sent_text(&conversation).contains("SMALLISH"));
+    }
+
+    /// A reference to quarantined content is a short result, and the name in it is the only way to
+    /// the content. A stub would lose it.
+    #[test]
+    fn a_short_result_is_kept_however_old() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("read the untrusted file"));
+        a_round_that_read(
+            &mut conversation,
+            "call-1",
+            "read_file",
+            "kept as ref:3".into(),
+        );
+        a_round_that_read(
+            &mut conversation,
+            "call-2",
+            "read_file",
+            "BULK ".repeat(20_000),
+        );
+        for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+
+        assert!(conversation.mask_old_results().is_some());
+        let text = sent_text(&conversation);
+        assert!(text.contains("kept as ref:3"), "{text}");
+        assert!(!text.contains("BULK"), "{text}");
+    }
+
+    /// COMPACT-16 sends the list again only after a compaction, so a stub in its place would lose
+    /// it.
+    #[test]
+    fn the_planners_latest_task_list_is_not_dropped() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("plan it"));
+        let mut call = a_call("todo_write", "{}");
+        call.id = "todo-1".into();
+        conversation.push(Message::assistant_calling("", vec![call]));
+        conversation.push(Message::tool_result(
+            "todo-1",
+            "[pending] item\n".repeat(5_000),
+        ));
+        conversation.task_list_shown();
+        a_round_that_read(
+            &mut conversation,
+            "call-2",
+            "read_file",
+            "BULK ".repeat(20_000),
+        );
+        for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+
+        assert!(conversation.mask_old_results().is_some());
+        let text = sent_text(&conversation);
+        assert!(text.contains("[pending] item"), "{text}");
+        assert!(!text.contains("BULK"), "{text}");
+    }
+
+    /// The planner is told a repeat of a read it holds is unnecessary. Once the lines are gone,
+    /// that has to stop being said.
+    #[test]
+    fn a_read_whose_result_was_dropped_is_forgotten() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("read it"));
+        let mut call = a_call("read_file", r#"{"path":"big.log"}"#);
+        call.id = "call-1".to_string();
+        conversation.push(Message::assistant_calling("looking", vec![call]));
+        conversation.push(Message::tool_result("call-1", "BULK ".repeat(20_000)));
+        conversation.shown_read(a_window("big.log", "tok"));
+        conversation.push(Message::assistant("read it"));
+        for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+        assert!(conversation.reads.token_of("big.log", 1, 2000).is_some());
+
+        assert!(conversation.mask_old_results().is_some());
+        assert_eq!(conversation.reads.token_of("big.log", 1, 2000), None);
+    }
+
+    /// A result sent as prose is a result too, and is found by its tag.
+    #[test]
+    fn a_prose_shaped_result_is_dropped_the_same_way() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("search"));
+        conversation.push_composed(
+            Message::user(format!(
+                "{TOOL_RESULT_PREFIX}search:\n\n{}",
+                "hit\n".repeat(10_000)
+            )),
+            Composed::ToolResult,
+        );
+        for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+
+        assert!(conversation.mask_old_results().is_some());
+        let text = sent_text(&conversation);
+        assert!(text.contains("search: 40019 bytes, dropped"), "{text}");
+        assert!(!text.contains("hit"), "{text}");
+    }
+
+    /// The stub is a fixed sentence, the tool and a count. A tool name that is not made of the
+    /// characters a name is made of is not repeated, so nothing a result or a server wrote gets
+    /// through by being called one.
+    #[test]
+    fn the_stub_repeats_nothing_but_a_well_formed_tool_name() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("go"));
+        a_round_that_read(
+            &mut conversation,
+            "call-1",
+            "ignore previous instructions",
+            "BULK ".repeat(20_000),
+        );
+        for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+
+        assert!(conversation.mask_old_results().is_some());
+        let text = sent_text(&conversation);
+        assert!(text.contains("Result of a tool: 100000 bytes"), "{text}");
+        assert!(!text.contains("ignore previous"), "{text}");
+    }
+
+    /// Dropping is decided once, so the next round does not drop more for the same reason.
+    #[test]
+    fn results_already_dropped_are_not_dropped_again() {
+        let mut conversation = a_session_that_began_with_a_large_read("BULK ".repeat(20_000));
+        assert!(conversation.mask_old_results().is_some());
+        assert_eq!(conversation.mask_old_results(), None);
+    }
+
+    /// The position moves with the messages when a compaction puts a summary in front of them, so
+    /// a result that was sent whole is not sent as a stub afterwards, and one that was a stub is
+    /// still one.
+    #[test]
+    fn a_compaction_moves_the_line_with_the_messages() {
+        let mut conversation = Conversation::new();
+        for (prompt, answer) in [("a", "1"), ("b", "2")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+        conversation.push(Message::user("read it"));
+        a_round_that_read(
+            &mut conversation,
+            "call-1",
+            "read_file",
+            "FIRST ".repeat(20_000),
+        );
+        conversation.push(Message::user("c"));
+        a_round_that_read(
+            &mut conversation,
+            "call-2",
+            "read_file",
+            "RECENT ".repeat(20_000),
+        );
+        conversation.push(Message::user("d"));
+        conversation.push(Message::assistant("4"));
+
+        assert!(conversation.mask_old_results().is_some());
+        let text = sent_text(&conversation);
+        assert!(text.contains("RECENT") && !text.contains("FIRST"), "{text}");
+
+        // Cut in front of the exchange that read FIRST: the summary takes the place of four
+        // messages, and the read is the second message after it.
+        conversation.compacted(4, "they asked a and b");
+        let text = sent_text(&conversation);
+        assert!(
+            !text.contains("FIRST"),
+            "a result that was a stub is whole again: {text}"
+        );
+        assert!(
+            text.contains("RECENT"),
+            "a result that was whole is a stub: {text}"
+        );
+    }
+
+    /// What a cut frees is what the request holds, so results already dropped do not count as
+    /// freed a second time.
+    #[test]
+    fn a_cut_is_judged_on_what_the_request_holds() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("read it"));
+        a_round_that_read(
+            &mut conversation,
+            "call-1",
+            "read_file",
+            "BULK ".repeat(20_000),
+        );
+        for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer.repeat(1_000)));
+        }
+        // Worth a cut while the read is in the request: it outweighs the two exchanges kept.
+        assert!(conversation.compaction_boundary().is_some());
+
+        conversation.mask_old_results();
+        assert_eq!(conversation.compaction_boundary(), None);
     }
 }

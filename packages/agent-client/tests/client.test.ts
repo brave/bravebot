@@ -228,3 +228,18 @@ test('after a close, the detach ends the view and later events for the session a
   assert.equal(session.view, ended)
   assert.deepEqual(diagnostics, [])
 })
+
+test('the stdio client reports that it lists no sessions and refuses to list or open one without sending', async () => {
+  const sent: string[] = []
+  const client: RpcAgentClient = new RpcAgentClient({
+    write(line) {
+      const request = JSON.parse(line) as { id: number; method: string }
+      sent.push(request.method)
+      client.receive(JSON.stringify({ id: request.id, ok: { capabilities: { sessionView: contract.capability } } }) + '\n')
+    },
+  })
+  assert.equal((await client.describe()).sessionList, false)
+  await assert.rejects(client.listSessions(), UnsupportedError)
+  await assert.rejects(client.openSession('s1'), UnsupportedError)
+  assert.deepEqual(sent, ['agent.info'])
+})

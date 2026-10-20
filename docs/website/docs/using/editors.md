@@ -41,13 +41,20 @@ permission request in the editor with the same details. Only choosing an allow o
 Closing the request, an error, or no answer refuses it, and stopping the prompt refuses what is
 waiting. A planner's own question is not shown as an approval and is declined.
 
-The editor offers a standing allow only for a question that has something to record. Nothing
-you answer about trusting a directory is remembered.
+The editor offers a standing allow only for a question that has something to record. A yes to the
+trust question is kept: the option reads **Trust and remember** and the question names the file it is
+written to, so later sessions started in that directory are not asked. Where a yes cannot be kept, the
+option reads **Trust for this session** and the question says the answer cannot be kept here. A
+refusal is never kept. See [Remembering the answer](../security/trust.md#remembering-the-answer).
+
+A host that a sandboxed `run` line reaches and that [`sandbox.network`](../customize/configuration.md)
+does not list is also asked about in the editor. An allow there is labelled as lasting the session and
+writes no rule.
 
 Text the model or a command produced and nobody vouched for is shown behind a bar down the left
 side, as it is in the terminal. A question the editor integration has no lines for is refused
-without being shown. A picture or an HTML tag in a message is cut by a space, so the editor shows
-its address and does not load it.
+without being shown. A picture, an HTML tag with an attribute, and a `<script>` or `<style>` tag even with none, in a message is cut by a space, so the editor shows its
+address and does not load it.
 
 ## Settings that approve for you
 

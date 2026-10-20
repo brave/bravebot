@@ -14,6 +14,8 @@ governs:
   - crates/ui-bridge/src/wire.rs
   - crates/ui-bridge/src/turn.rs
   - ui/src/renderer/App.tsx
+  - ui/src/renderer/apply.ts
+  - ui/src/renderer/live.ts
   - ui/src/renderer/components/Transcript.tsx
   - ui/scripts/ux-state.test.mjs
 guards:
@@ -246,6 +248,8 @@ check or about a person reading them makes them fit to leave the machine or to b
 field.
 
 `verified-by: bravebot_core::policy::a_private_slot_promotes_to_private_and_never_to_public`
+`verified-by: bravebot_core::policy::a_public_slot_promotes_to_private_as_well`
+`verified-by: bravebot_core::policy::a_public_picture_is_attached_as_private_as_well`
 
 <a id="CHECK-8"></a>
 ### CHECK-8: an approval covers one slot once, and answers no other question
@@ -304,6 +308,8 @@ somebody who was never asked either question.
 `verified-by: bravebot_agent::turn::a_vouch_offer_carries_what_a_check_said_about_the_whole_file`
 `verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
 `verified-by: bravebot_tui::confirm::what_the_check_said_is_drawn_inside_the_margin_too`
+`verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_yes_whoever_gave_it_and_whatever_the_check_said`
+`verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_refusal_whoever_gave_it_and_whatever_the_check_said`
 
 <a id="CHECK-10"></a>
 ### CHECK-10: every prompt that would promote quarantined content runs a check first
@@ -316,7 +322,7 @@ prompt is drawn, not after it is answered:
 | [tools/vet-content.md](tools/vet-content.md) | promotes one slot's bytes once | the slot the planner named |
 | [tools/read-output.md](tools/read-output.md) | releases what a program printed to the planner | the slot the planner named |
 | the vouch offer in [tools/read-file.md](tools/read-file.md) | writes a rule about the path | **the whole file**, not the preview |
-| a server's tool list in [mcp-servers.md](mcp-servers.md#SERVERS-8) | offers the list to the planner, and records its digest | **the whole list**, as it is drawn |
+| a server's tool list in [mcp-servers.md](mcp-servers.md#SERVERS-8) | offers the list to the planner for the session | **the whole list**, as it is drawn |
 
 **Why the whole file.** A vouch prompt shows the head of the file and a yes grants all of it, so a
 check over the preview would report on the part an injection attempt has the least reason to be in.
@@ -454,7 +460,7 @@ same two prompts and no others: a vouch offer is not one of them here either.
 | [tools/vet-content.md](tools/vet-content.md) | promotes one slot's bytes once | a safe verdict answers |
 | [tools/read-output.md](tools/read-output.md) | promotes one slot's bytes once | a safe verdict answers |
 | the vouch offer in [tools/read-file.md](tools/read-file.md) | writes a rule about the path | still asks |
-| a server's tool list in [mcp-servers.md](mcp-servers.md#SERVERS-8) | offers the list for the session, and records it | still asks |
+| a server's tool list in [mcp-servers.md](mcp-servers.md#SERVERS-8) | offers the list for the session | still asks |
 
 **Why the line falls there.** It falls on the shape of the grant, not on which tool produced the
 bytes. Both promotions cover one slot's bytes once and leave nothing behind ([CHECK-6](#CHECK-6)),

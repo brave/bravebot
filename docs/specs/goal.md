@@ -7,8 +7,10 @@ governs:
   - crates/agent/src/preamble.rs
   - crates/tui/src/goals.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/entry.rs
   - crates/tui/src/command_table.rs
 guards:
   - symbol: Session::start_goal
@@ -195,6 +197,26 @@ pays for it.
 `verified-by: bravebot_tui::state::a_goal_that_runs_out_of_rounds_stops_rather_than_sending_the_work_back_again`
 `verified-by: bravebot_tui::state::a_goal_that_gives_up_says_what_the_last_check_said`
 
+<a id="GOAL-20"></a>
+### GOAL-20: three rounds in a row with no tool call stop the work going back, and leave the goal set
+
+A round that made no tool call is one the turn answered without running anything. After three of
+those in a row the goal sends nothing back, says so and keeps its condition, so the next prompt the
+person sends is judged against it as a stopped turn is ([GOAL-10](#GOAL-10)). A round that made a
+call starts the count again, and so does the stop.
+
+**Why.** A turn that answers the judge in prose is sent the same request with a longer
+conversation, and nothing about the next round makes it likelier to run something. Ten of those is
+the whole budget ([GOAL-9](#GOAL-9)) spent on a turn that is not working.
+
+**Why the count of calls.** The branch is on how many calls the driver recorded for the turn, never
+on what a reply or a result said, so no untrusted byte decides it.
+
+`verified-by: bravebot_tui::goals::rounds_with_no_tool_call_in_a_row_stop_the_goal_without_clearing_it`
+`verified-by: bravebot_tui::goals::a_round_that_made_a_call_starts_the_count_again`
+`verified-by: bravebot_tui::state::rounds_that_make_no_tool_call_stop_the_goal_and_leave_it_set`
+`verified-by: bravebot_tui::state::rounds_that_make_a_call_are_not_a_stall`
+
 <a id="GOAL-10"></a>
 ### GOAL-10: four things end a goal besides a verdict, and each of them says so
 
@@ -204,6 +226,9 @@ pays for it.
 | the person interrupts | Ctrl-C, read against the goal after a mode open over the session, the turn in flight and the line in the box, and before leaving; during a check Escape reaches the goal as well, where it would stop a turn ([INPUT-24](terminal-input.md#INPUT-24)), and neither key reaches it while a mode is open |
 | the session moves on | `/clear`, and leaving |
 | the rounds run out | [GOAL-9](#GOAL-9) |
+
+A goal also stops being sent back, and stays set, when rounds make no tool call
+([GOAL-20](#GOAL-20)).
 
 Pausing is not one of them: [GOAL-18](#GOAL-18) holds a goal still without ending it. A turn that
 failed is not one of them either, and neither is a turn somebody stopped. Both are recorded
@@ -217,20 +242,27 @@ watching a goal go somewhere wrong stops that turn and says something else, whic
 steer work that keeps going, and a key that took the condition off along with the turn would leave
 them retyping it every time. The press that ends the goal is the one made with nothing running.
 
-**A check in flight is one request and does not stop, but the goal behind it does.** A verdict that
-arrives about a goal somebody has just taken off is not acted on and not reported: the session they
-would be told about is not the one they are in. Without this, the key pressed while the ninth round
-was being judged would leave the session, and the tenth round would go out regardless.
+**A check in flight is stopped with the goal behind it.** Either key takes the goal off and walks
+away from the request ([INPUT-4](terminal-input.md#INPUT-4)). A verdict that arrives about a goal
+somebody has just taken off is not acted on and not reported: the stop and the verdict can cross,
+and the session they would be told about is not the one they are in. A stop that took only the
+request would leave the goal armed, and the tenth round would go out after the key pressed while
+the ninth was being judged.
 
-A mode open over the session is nearer than the goal here as well. A scroller, a delegate's view or
-a prompt search takes both keys itself, as [scroller.md](scroller.md), [watching.md](watching.md)
+A command the person typed while a turn ran waits in the queue and is carried out before the goal is
+judged, so a queued `/exit` or `/clear` ends the goal before another round is sent.
+
+A mode open over the session is nearer than the goal here as well. A picker, a scroller, a delegate's
+view or a prompt search takes both keys itself, as [scroller.md](scroller.md), [watching.md](watching.md)
 and [terminal-input.md](terminal-input.md) have them do everywhere else, and the check is the
 likeliest place to meet one: nothing closes a view when a turn ends, so one opened during the turn
 just judged is still standing there.
 
 `verified-by: bravebot_tui::state::clearing_a_goal_says_so_and_says_nothing_when_there_was_none`
 `verified-by: bravebot_tui::app::interrupting_takes_the_goal_off_before_it_leaves`
-`verified-by: bravebot_tui::app::the_goal_check_takes_the_goal_off_before_ctrl_c_means_leaving`
+`verified-by: bravebot_tui::app::a_stop_key_takes_the_goal_off_and_stops_the_check`
+`verified-by: bravebot_tui::app::a_stopped_goal_check_is_not_reported_as_a_failure`
+`verified-by: bravebot_agent::turn::a_stop_pressed_during_a_goal_check_reaches_the_request_and_no_verdict_comes_back`
 `verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_goal_check_does`
 `verified-by: bravebot_tui::app::the_search_answers_the_stop_keys_before_the_goal_check_does`
 `verified-by: bravebot_tui::app::stopping_a_turn_leaves_the_goal_set`
@@ -239,6 +271,7 @@ just judged is still standing there.
 `verified-by: bravebot_tui::state::clearing_a_session_with_no_goal_says_nothing_of_one`
 `verified-by: bravebot_tui::state::a_verdict_after_the_goal_was_cleared_is_neither_acted_on_nor_announced`
 `verified-by: bravebot_tui::app::a_goal_is_not_judged_after_the_person_asked_to_leave`
+`verified-by: bravebot_tui::app::a_goal_is_not_judged_while_a_command_waits_in_the_queue`
 
 <a id="GOAL-11"></a>
 ### GOAL-11: a goal and a loop are never both running
@@ -310,6 +343,7 @@ one copy of it in the conversation per round.
 
 `verified-by: bravebot_agent::turn::a_turn_under_a_goal_is_told_the_condition_it_is_working_towards`
 `verified-by: bravebot_agent::turn::a_turn_with_no_goal_is_told_nothing_about_a_condition`
+`verified-by: bravebot_agent::preamble::a_turn_under_a_goal_is_told_it_cannot_change_the_condition`
 
 <a id="GOAL-15"></a>
 ### GOAL-15: a turn is told to wait for the world inside the turn
@@ -409,7 +443,7 @@ requests, so a person capping what background work costs caps it once.
 
 A model needing a sign-in this machine has not made sends no check, and neither does one the
 machine-level layer excludes or one no configured service answers for. The goal ends, as it does for every other request that failed
-([GOAL-6](#GOAL-6)), and the reason says which model could not be reached and which of the two it
+([GOAL-6](#GOAL-6)), and the reason says which model could not be reached and which of the three it
 was.
 
 **What does not change with the model.** The verdict is still read as [GOAL-4](#GOAL-4) has it, and
@@ -422,6 +456,8 @@ model that answered. The judge is still offered no tools and still gets one roun
 `verified-by: bravebot_agent::turn::a_check_with_no_summary_model_runs_on_the_sessions_own`
 `verified-by: bravebot_agent::turn::a_summary_model_needing_a_sign_in_sends_no_check`
 `verified-by: bravebot_agent::compact::a_summary_model_the_machine_refuses_is_not_the_one_a_side_request_runs_on`
+`verified-by: bravebot_agent::turn::a_summary_model_the_machine_excludes_sends_no_check`
+`verified-by: bravebot_agent::compact::a_summary_model_no_configured_service_answers_for_is_refused_rather_than_sent`
 
 ## Known costs
 

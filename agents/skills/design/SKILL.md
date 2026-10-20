@@ -29,10 +29,13 @@ surface needs all of it.
 - **Layout can change, capability stays.** Restructure freely, but keep every capability,
   accessible name, security marking and `data-test` hook unless a deliberate evaluation removes it.
 - **Nothing approves for the person.** No approval accelerators (a keyboard shortcut that approves a
-  decision card), no card that takes focus from the composer, no drag or paste attach (a file goes
-  only through the native picker's grant or an `@` name the bridge reads back out of the sent
-  prompt and confines to the conversation's folder). See `docs/best-practices/ui.md#UI-003`,
-  `ui/docs/security.md` and `ui/docs/file-access-security.md`.
+  decision card), no card that takes focus from the composer, and no attach route but these four:
+  a file through the native picker's grant, an `@` name the bridge reads back out of the sent
+  prompt and confines to the conversation's folder, a file a person dropped, which the preload takes
+  only from a trusted drop event, and a picture a person pasted, which the preload takes only from a
+  trusted paste event and the main process reads off the clipboard itself. The main process grants
+  a drop or a paste by an opaque id, and the page never holds a path or the pasted bytes. See
+  `docs/best-practices/ui.md#UI-003`, `ui/docs/security.md` and `ui/docs/file-access-security.md`.
 
 ## The window
 
@@ -252,8 +255,9 @@ they differ. From `ui/`:
   `drive:panels`, `drive:models`, `drive:menu`, `drive:export`, `drive:fork`, `drive:tree`,
   `drive:theme`, `drive:bots`, `drive:about`, `drive:vetting`, `drive:remembered-trust`,
   `drive:markdown`, `drive:perf`, `drive:session-list`, `drive:visual`, and
-  `drive-ux-acceptance.mjs` and `drive-conversation-workflow.mjs`. If you moved a label or a DOM
-  location, update the drivers and demo scenes that assert on it.
+  `drive-ux-acceptance.mjs` and `drive-conversation-workflow.mjs`, which take their bridge fixture
+  from `acceptance-fixture.mjs`. If you moved a label or a DOM location, update the drivers and
+  demo scenes that assert on it.
 - Docs: update `ui/docs/interface.md` (layout, toolbar, keyboard model), `ui/docs/development.md`
   (tokens, components, check rules) and `ui/docs/testing.md` (drivers, fixtures, budgets) when the
   behaviour they describe changes. Update this file when the application's look changes.

@@ -5,12 +5,18 @@
 //! by the content it processes.
 
 #![deny(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::disallowed_methods, reason = "the test names its program")
+)]
 
 pub mod advisor;
 pub mod agents;
+pub mod answers;
 pub mod aside;
 pub mod attached;
 pub mod backend;
+mod calendar;
 pub mod cmdline;
 pub mod compact;
 pub mod confine;
@@ -24,18 +30,24 @@ pub mod git;
 pub mod glob;
 pub mod goal;
 pub mod granted;
+pub mod help;
 pub mod home;
 pub mod hooks;
 pub mod host_proxy;
+pub mod hunks;
+#[cfg(test)]
+mod kept_answers;
 pub mod lsp;
 pub mod manifest;
 pub mod mcp;
 pub mod memory;
+pub mod messages;
 pub mod mode;
 pub mod outcome;
 pub mod output_schema;
 pub mod permission_mode;
 pub mod permissions;
+pub mod plan_approval;
 pub mod preamble;
 pub mod processor;
 pub mod programs;
@@ -62,6 +74,7 @@ pub mod subscription;
 mod testutil;
 pub mod timing;
 pub mod tools;
+pub mod transport;
 pub mod trusted;
 pub mod turn;
 #[cfg(unix)]
@@ -79,8 +92,8 @@ pub mod workspace;
 pub use bravebot_sandbox::crash;
 
 pub use confirm::{
-    Carried, Confined, Confirmer, Decision, Intent, Remark, RunDecision, RunRequest, Unattended,
-    WriteDecision, WriteRequest,
+    Carried, Confined, Confirmer, Decision, Intent, PromptAlert, Remark, RunDecision, RunRequest,
+    Unattended, WriteDecision, WriteRequest,
 };
 pub use conversation::Conversation;
 pub use delegate::Delegated;

@@ -17,11 +17,15 @@ governs:
   - crates/core/src/permissions.rs
   - crates/core/src/policy.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/mcp.rs
   - crates/agent/src/permission_mode.rs
   - crates/cli/src/plain.rs
   - crates/tui/src/confirm.rs
+  - crates/tui/src/confirm/mcp.rs
+  - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/status.rs
+  - crates/tui/src/mcp_command.rs
   - crates/ui-bridge/src/connectors.rs
   - crates/ui-bridge/src/turn.rs
 documented-by:
@@ -69,9 +73,8 @@ terminal.
 
 At the first turn a person asks for, each started server's list of tools is put to them as the
 client drew it, every description whole and behind the margin, and nothing of the list reaches the
-planner until they say yes ([SERVERS-8](#SERVERS-8)). A yes offers each tool under the alias and
-records a digest of the list, so the same list is offered unasked in a later session and a changed
-one is asked about again. Each call is then put to them with three answers, after any permission
+planner until they say yes ([SERVERS-8](#SERVERS-8)). A yes offers each tool under the alias for the session
+and records nothing, so a later session asks again. Each call is then put to them with three answers, after any permission
 rule naming the server or the tool ([SERVERS-7](#SERVERS-7)). Bypassing answers both questions and
 records neither ([SERVERS-13](#SERVERS-13)).
 
@@ -86,8 +89,7 @@ Issue #83 is where the unwired client was written down, and it names the four th
 decided first: where a server is declared, what a name and an argv is trusted for, how the untrusted
 label [mcp.md](mcp.md) puts on a result reaches a slot, and whether servers are confined. Every
 clause below answers one of them. Whether a server's description reaches the planner at all was
-settled there too: the person vouches for the tool list after the handshake, and its digest is
-recorded beside the server's approval.
+settled there too: the person vouches for the tool list after the handshake, every session.
 
 Every clause names the tests that pin it. Where a built clause has an unbuilt half, the clause says
 which, and that sentence is what keeps a reader from taking the present tense as a claim about the
@@ -233,7 +235,6 @@ was recorded, and leaves every other project's as it was. An incognito session w
 |---|---|---|---|
 | A declaration: alias, transport, argv or url, the variable names it needs, the values it stores, the files it may read, its directory, its startup and call bounds, and the HTTP headers read from environment variables | `~/.bravebot/mcp.json` | the person's own directory | until they change it |
 | An approval of a server, one digest and the alias it was given about per line, and a `changed` line per alias whose approved declaration changed since | `~/.bravebot/mcp-approved` | the person's own directory | until the declaration changes |
-| The list of tools a person vouched for, a `tools` line holding the declaration's digest and the list's | `~/.bravebot/mcp-approved` | the person's own directory | until another list is vouched for under that declaration, or no declaration resolves to it |
 | "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` |
 | "stop asking for this tool here", one alias, tool and project path per line | `~/.bravebot/mcp-tools` | the person's own directory | until `mcp forget` |
 | What a local server writes in its own home, such as a runner's cache ([SERVERS-10](#SERVERS-10)) | `~/.bravebot/mcp-home/<digest>` | one declaration | until somebody removes it |
@@ -495,7 +496,11 @@ asks nobody and says so on stderr, naming `bravebot mcp approve <alias>` as the 
 terminal, and a session with no terminal says the same. A delegate asks nobody, and holds a
 server's grant only where the turn that spawned it holds one ([SERVERS-9](#SERVERS-9)), so it
 reaches no server the session did not start. An incognito session asks, and a yes there
-starts the server for that session and records nothing.
+starts the server for that session and records nothing. A session in lines
+([CLI-14](cli.md#CLI-14)) asks as it asks every question: the lines above, then `Use this MCP
+server? [y/N]`. Only `y` starts the server for that session; `1`, `2`, any other line and the end
+of the input decline. It offers no answer that records, and it records nothing about a server, a
+move or a tool the person answered, as an incognito session does.
 
 A yes whose record cannot be written still starts the server, since the person said yes and a file
 that would not take the answer does not unsay it, and a line says which record was not kept.
@@ -505,6 +510,7 @@ that would not take the answer does not unsay it, and a line says which record w
 `verified-by: bravebot_agent::servers::nobody_to_ask_leaves_the_server_absent_says_why_and_records_nothing`
 `verified-by: bravebot_agent::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
 `verified-by: bravebot_agent::servers::an_incognito_yes_is_for_this_session_and_writes_nothing`
+`verified-by: bravebot_agent::servers::a_yes_whose_record_cannot_be_written_still_starts_the_server_and_says_which_record`
 `verified-by: bravebot_config::mcp::a_project_reads_back_as_the_path_it_was_recorded_as`
 `verified-by: bravebot_config::mcp::forgetting_a_project_drops_it_and_no_other`
 `verified-by: bravebot_cli::mcp::forget_drops_a_projects_standing_answers_and_nobody_elses`
@@ -790,10 +796,11 @@ drawn above the list.
 
 A yes is the person vouching for the list, and it is the one road by which the list is promoted
 ([LABEL-8](labels.md#LABEL-8)). A no offers none of its tools for the rest of the session and is not
-asked again. A turn stopped at the question has not answered it, so the next turn asks again. The list's digest is recorded as a `tools` line in `mcp-approved`, beside the digest of
-the declaration it was listed under. A later session whose server sends the same list offers it with
-nobody asked. One whose list changed says so, and asks again. A project path that
-[SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a server and not for its list.
+asked again. A turn stopped at the question has not answered it, so the next turn asks again. Nothing is recorded, so a later session asks again about a list that is the
+same: the driver has no way to tell that it is, short of deciding from the server's bytes, and a
+decision taken from them is the one thing the driver may not do ([LABEL-8](labels.md#LABEL-8)). A
+`tools` line in `mcp-approved` is passed over and dropped the next time the file is written. A project path that [SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a
+server and not for its list.
 
 Each tool is offered as a function named `mcp__{alias}__{tool}`, which is what a backend's function
 names allow. Its description is a sentence this process writes, naming the alias and saying every
@@ -823,18 +830,15 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_mcp::stdio::a_confined_server_completes_the_handshake_and_lists_tools`
 `verified-by: bravebot_mcp::http::a_handshake_and_tool_list_round_trip`
 `verified-by: bravebot_config::mcp::a_tool_word_is_what_a_function_name_may_be`
-`verified-by: bravebot_config::mcp::a_vouched_list_reads_back_beside_the_approval_it_was_listed_by`
-`verified-by: bravebot_config::mcp::a_vouched_list_lasts_as_long_as_its_declaration_resolves`
-`verified-by: bravebot_config::mcp::a_line_that_is_not_a_vouch_is_passed_over`
+`verified-by: bravebot_config::mcp::a_tools_line_an_earlier_version_wrote_is_passed_over_and_dropped`
 `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement`
-`verified-by: bravebot_core::policy::a_recorded_tool_list_is_promoted_only_where_it_is_the_one_vouched_for`
 `verified-by: bravebot_core::policy::a_check_before_a_tool_list_reads_the_list_it_is_about`
 `verified-by: bravebot_agent::mcp::a_vouched_list_offers_its_tool_and_a_call_answers_quarantined`
 `verified-by: bravebot_agent::mcp::a_servers_tool_named_like_a_built_in_one_shadows_nothing`
 `verified-by: bravebot_agent::mcp::two_servers_composing_one_name_offer_neither_under_it`
 `verified-by: bravebot_agent::mcp::a_declined_list_offers_nothing_and_is_not_asked_again`
 `verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_leaves_it_to_be_asked_again`
-`verified-by: bravebot_agent::mcp::a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again`
+`verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
 `verified-by: bravebot_tui::confirm::a_tool_list_draws_every_description_row_behind_the_margin`
@@ -950,7 +954,13 @@ The process is confined under [MCP-3](mcp.md#MCP-3), and what it may reach is bu
 - The sandbox's base rows for this platform, which allow egress and children, with no home
   directory given, so the git configuration in it is not among them either, and no developer
   directory, so on macOS a server whose program is a `/usr/bin` shim such as `python3` does not
-  start. Egress is to IP
+  start. The session's network decision then applies to the server as it does to a stage
+  ([SANDBOX-20](sandboxing.md#SANDBOX-20), [SANDBOX-24](sandboxing.md#SANDBOX-24)): a closed
+  session gives it no egress, a runner's fetch included, since a server carries none of the
+  reasons a stage keeps the network for, and a session with `allowedHosts` holds it to the proxy
+  that applies the list, with the registry hosts of the toolchain its program is. A platform that
+  cannot apply the decision does not start the server, and the note names the setting. Egress
+  otherwise is to IP
   addresses, and a unix socket is reached only under a path the server may write
   ([SANDBOX-3](sandboxing.md#SANDBOX-3)), the temporary directory among them. A server that runs
   `docker` against the daemon's usual socket does not reach it, and one reaching a daemon on a
@@ -1017,9 +1027,15 @@ directory instead, on the terms [incognito.md](incognito.md#INCOG-8) states for 
 than adopted, readable by nobody else, and removed once the server has stopped. A runner there
 fetches its package again each session, which is the trade incognito already makes.
 
-A platform with no confinement for this, which is Windows today, starts no stdio server and says
-so, and asks nobody about one it could not start. Where the sandbox cannot be built, the server is
-not started either, and the line says why.
+A platform with no confinement for this starts no stdio server and says so, and asks nobody about
+one it could not start. On Windows the confinement is the AppContainer, and a program named without
+an extension is looked for as `.com` and `.exe` first, the `%PATHEXT%` spellings a container starts
+directly, and only then as written, so the extensionless shim beside `npx.exe` does not shadow it;
+`.bat` and `.cmd` are not, since they start through `cmd.exe`. Where the sandbox cannot be built,
+the server is not started either, and the line says why.
+
+`verified-by: bravebot_agent::servers::a_name_with_no_extension_is_found_under_the_extension_windows_would_add`
+`verified-by: bravebot_agent::servers::only_the_extensions_a_program_starts_under_directly_are_added`
 
 `verified-by: bravebot_config::mcp::a_value_is_stored_under_its_name_and_one_written_as_a_name_is_refused_unrepeated`
 `verified-by: bravebot_config::mcp::an_env_block_is_stored_values_and_an_object_of_variables_is_not_a_list_of_names`
@@ -1055,6 +1071,9 @@ not started either, and the line says why.
 `verified-by: bravebot_agent::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`
 `verified-by: bravebot_agent::mcp::a_servers_throwaway_home_lasts_as_long_as_the_session_holding_it`
 `verified-by: bravebot_mcp::stdio::a_server_receives_the_variables_it_was_handed_and_no_others`
+`verified-by: bravebot_agent::servers::a_closed_session_takes_the_network_from_a_local_server_or_refuses_it`
+`verified-by: bravebot_agent::servers::a_host_list_holds_a_local_server_to_the_proxy_or_refuses_it`
+`verified-by: bravebot_agent::servers::a_closed_session_starts_no_local_server_where_the_network_cannot_be_denied`
 `verified-by: bravebot_agent::servers::a_declared_directory_holding_a_repository_is_refused`
 `verified-by: bravebot_cli::mcp::add_declares_no_directory_inside_a_repository`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
@@ -1315,7 +1334,7 @@ Each call from then on is asked.
 **How it is built.** A requested server nothing approved is started without
 [SERVERS-4](#SERVERS-4)'s question being drawn, and nothing is written to `mcp-approved` or
 `mcp-projects`. A server's list is offered without [SERVERS-8](#SERVERS-8)'s question being drawn or
-a check being made, since nobody would read the check's verdict, and no `tools` line is written. A
+a check being made, since nobody would read the check's verdict. A
 call is made without [SERVERS-7](#SERVERS-7)'s question being drawn, as answer 1 and never answer 2,
 so nothing is written to `mcp-tools`, and out of the mode the next call is asked whatever was
 offered in it. A hop off a remote server's declaration is refused without
@@ -1728,6 +1747,17 @@ This spec cannot land without these. Each is named by what the clause says rathe
   of the instructions and inside a margin, and a planner that reads them has still read text somebody
   else wrote, which a person read before saying yes. The margin is a boundary for a person looking at a screen; for a model it is a
   convention, and conventions are what injection attacks are made of.
+- **A standing answer to a tool outlives a change to the server it was given for.** It is filed under
+  the alias, the tool and the project, and read whatever the alias is declared as. After the
+  declaration changes and the person answers [SERVERS-4](#SERVERS-4)'s question about the new list,
+  a tool answered about before goes unasked to a server that is no longer the one the answer was
+  given to, and the same holds when the server redefines the tool under its name. A call carrying the
+  person's private data still asks.
+- **A project answer follows a path, not a directory.** Answer 2 is filed under the project's path
+  with its links followed and no identity of the directory. A directory removed and made again at
+  that path, or a checkout replaced by another at the same path, is the project the person answered
+  for. It reaches only a request for an alias the person's own `mcp.json` declares
+  ([SERVERS-1](#SERVERS-1)), and not one whose declaration was approved as something else.
 - **The standing answers do not travel.** Recording them outside the checkout means a second machine
   asks again and a wiped workspace does not forget. `mcp forget` is the deliberate road; there is no
   accidental one.
@@ -1769,9 +1799,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
 - **A server's line is read whole.** The client reads each line a server writes to its end before
   looking at it, with no bound, so a started server that writes one line without end holds this
   process's memory while it does.
-- **No stdio server starts on Windows.** The sandbox there has no base rows to build a server's
-  policy on, so the line says the platform has no confinement for one yet, which is
-  [MCP-3](mcp.md#MCP-3) holding rather than failing.
+- **A Windows server's grants are changes to the filesystem.** A grant for the server's home, its
+  directory and the directories its program is found in changes the access list of each, so a run
+  that ends without cleanup leaves the entries behind. A server there may also start a
+  subprocess, since the container has no mechanism to deny one ([SANDBOX-5](sandboxing.md#SANDBOX-5)).
 - **Only the directories above a server's directory are searched for a repository.** A directory
   holding checkouts is not refused, so the server may write their work trees, a hook a relative
   `core.hooksPath` points at among them, on every platform.
@@ -1797,3 +1828,45 @@ This spec cannot land without these. Each is named by what the clause says rathe
   its own, since what a session started is not written to its record. A server's stderr is
   discarded, as the full-screen interface discards it, and a plan-first run is offered no server's
   tools.
+
+<a id="SERVERS-19"></a>
+### SERVERS-19: `/mcp` shows the servers, starts one that is not running, and turns one off for the session
+
+The full-screen interface has `/mcp`. Bare or as `list`, it names each server the session runs with
+how its tools stand, as `/status` does ([SERVERS-14](#SERVERS-14)), and each server the settings
+request that is not running, saying whether it was turned off. `reconnect` starts every requested
+server that is not running and was not turned off here, and `reconnect <alias>` starts that one,
+including one turned off. Each start takes the road a session takes as it opens: the declaration is
+read again, a server approved before starts unasked, one whose digest changed or that nobody
+approved is put to the person with the same three answers, and the managed layer refuses what it
+refuses ([SERVERS-4](#SERVERS-4), [SERVERS-5](#SERVERS-5), [SERVERS-12](#SERVERS-12),
+[SERVERS-13](#SERVERS-13)). A server started this way has a list nobody has read, so it is put to
+the person before the next turn plans ([SERVERS-8](#SERVERS-8)). A server the session already runs
+keeps its process and what was answered about its list. `disable <alias>` stops the server's
+process, drops the grant naming it ([SERVERS-9](#SERVERS-9)) and offers none of its tools. It writes
+nothing, so the next session starts the server as before.
+
+An alias the settings do not request is not started and not turned off by being named. Nothing a
+server sent decides what `/mcp` does: the person names the alias. Typed during a turn, `/mcp` waits
+for the turn to end, as the other commands that touch the network or the terminal do
+([CMD-8](commands.md#CMD-8)).
+
+**Why.** A server that failed its handshake or timed out is otherwise absent until the session
+ends, and a person who has fixed its install or sign-in would have to lose the conversation to try
+it. Starting through the road a session opens with keeps every question that road asks, so the
+command adds no way to start a server unasked. A grant that outlived `disable` would leave a server
+callable that the person turned off.
+
+`verified-by: bravebot_agent::mcp::a_session_joined_by_a_reconnect_keeps_the_first_servers_and_what_they_were_told`
+`verified-by: bravebot_agent::mcp::a_session_without_a_server_holds_no_grant_for_it_and_offers_none_of_its_tools`
+`verified-by: bravebot_agent::servers::a_reconnect_asks_about_the_named_servers_and_no_others`
+`verified-by: bravebot_tui::mcp_command::the_list_names_each_requested_server_and_how_to_start_the_one_that_is_not_running`
+`verified-by: bravebot_tui::mcp_command::the_list_says_so_where_nothing_is_requested_or_running`
+`verified-by: bravebot_tui::mcp_command::a_word_it_does_not_know_and_a_missing_alias_change_nothing`
+`verified-by: bravebot_tui::mcp_command::a_server_nothing_requests_is_neither_started_nor_turned_off`
+`verified-by: bravebot_tui::mcp_command::a_server_turned_off_stays_off_until_it_is_named`
+`verified-by: bravebot_tui::mcp_command::a_start_the_person_refuses_joins_nothing_and_clears_the_turn_off`
+`verified-by: bravebot_tui::mcp_command::reconnecting_a_running_server_says_so_and_changes_nothing`
+`verified-by: bravebot_tui::mcp_command::turning_off_a_running_server_removes_it_and_the_last_leaves_none`
+`verified-by: bravebot_tui::app::the_mcp_command_carries_its_words_unparsed`
+`verified-by: bravebot_tui::app::the_mcp_command_waits_for_the_turn_in_flight`

@@ -16,6 +16,11 @@ Write", by the word its own row will start with. The token count beside it moves
 arguments arrive, so a long file being written reads as work and not as a stall. The name goes once
 the call starts, the round ends, or the request has to be sent again.
 
+**While the turn waits for a delegate's report, the working indicator reads "Waiting on d1"**, with the
+delegate's number. A planner that has only delegates left ends its round with one line saying what is
+outstanding, and that line stays in the transcript. The turn then waits and asks the planner again once
+the report arrives.
+
 A resumed session redraws what the earlier turns did: each one keeps the prompt you sent and how it
 ended, failures and cancellations included, so reading a transcript back does not depend on
 remembering the session. A reply that opened with the model's working leaves that block off when it
@@ -38,8 +43,11 @@ Colour is never what makes that marking hold. A colour can be imitated by the co
 quarantine stands on the margin instead: no ink tells you whether something is quarantined, and a
 note drawn in the wrong one would still be outside a block.
 
-Where a result went is drawn only where that is not the ordinary answer. A quarantined read says so,
-and an ordinary one does not clutter the transcript saying what always happens.
+Where a result went is drawn only where that is not the ordinary answer. A quarantined read says so
+on its call, and an ordinary one does not clutter the transcript saying what always happens. The
+marked block holding quarantined content does not repeat it: its heading says `untrusted` and the
+margin marks every row. A block whose content is in no model's context at all, such as a
+processor's remark, says so in its heading.
 
 **Each call says why it was made.** In the terminal, and in a headless run's progress, the model's own
 words are the call's headline and the call itself (its verb and what it is about) is drawn under it,
@@ -52,6 +60,12 @@ of several lines is shown as its first line and `...`. A command line that carri
 declared, on any of its lines, is shown as the verb alone, because `run` refuses such a line before
 anyone is shown it.
 
+**A call to an [MCP server's](../customize/mcp-servers.md) tool that ran without a prompt** (an allow
+rule, a standing answer or bypass mode) is drawn as `alias:tool` followed by its arguments as compact
+JSON on one line. Arguments wider than a previewed line are cut with `...`, and a reference in them is
+shown as the planner wrote it. Where any key or string value in them holds a credential you declared,
+the arguments are left off. A resumed session draws the same row.
+
 **A call the model read shows a few lines of what it found**, drawn under the call behind a plain
 margin. A command shows its last five lines, because that is where a build or a test run says how it
 went. A file, a listing or a search shows its first five. A line under them says how many were left
@@ -61,6 +75,12 @@ out. A quarantined result shows its marked block instead, never a plain glimpse.
 came of it. That is a confined check before quarantined content is shown to you, and a processor's own
 round. Every other call waited on this machine and says nothing, and a wait too short to state is left
 off.
+
+**A message from another session is drawn apart from your own prompts.** A session that receives a
+[message](../reference/tools.md#message_session) draws it as a quoted block marked as a message from
+the sender, and the sender draws each message it sent with the target's name and the whole text. A
+resumed session draws both again. Control characters in a name or in the text are replaced by visible
+ones.
 
 ## The end of a turn
 
@@ -82,7 +102,9 @@ and takes none of the colour of the one before it.
 
 **A turn that changed files and ran nothing says so.** Where a run was possible, files changed and no
 program was run, the end of the turn tells you plainly that nothing was built or tested, whether it
-answered, failed, or you stopped it: the files are changed either way. Nothing else
+answered, failed, or you stopped it: the files are changed either way. A run line refused for a
+left-behind credential, and a line stopped with the turn, count as run; any other error does not.
+Nothing else
 on your screen distinguishes that diff from a checked one. It is not a reproach: plenty of turns have
 nothing to build, and one of those says nothing. A file a delegate changed and a program a delegate
 ran count as the turn's, except in a [checkout of its own](../customize/agents.md#a-checkout-of-its-own),
@@ -90,8 +112,16 @@ which holds none of the turn's changes.
 
 The planner is asked the same question while the turn is still going, a set number of rounds after its
 first write, and pointed at a [checker delegate](../reference/tools.md#spawn_agent) where the log
-would be long and the answer is one sentence. Two audiences and two moments: the planner can still
+would be long and the answer is one sentence. While a delegate sharing the workspace is still out,
+that question waits. Two audiences and two moments: the planner can still
 act, and you are about to.
+
+**A refusal the planner got past is not drawn under the turn.** If a gate refused a call and a later
+call to the same tool in that turn was not refused, the first refusal is left to the
+[audit trail](../security/audit-trail.md) and is not drawn. A refusal still standing at the end is
+counted, and the first is named as `gate: reason`. The same tool counts as the same purpose, so a later
+`run` of a different line also clears an earlier refused `run`. The audit trail holds every refusal
+either way.
 
 ## Themes
 
@@ -194,6 +224,14 @@ Under `NO_MOTION` the glyph is still drawn, and the elapsed time and the token c
 figure that moves when the thing it measures moves is information rather than animation. A row with
 nothing in it would be indistinguishable from a program that had hung.
 
+## In Apple's Terminal
+
+Apple's Terminal draws the block characters the wordmark and the face are made of from the font, and
+leaves a gap between rows. Where `TERM_PROGRAM` is `Apple_Terminal`, the opening screen draws them from
+cell backgrounds instead, so the letters and the face are solid. The terminal is also not asked about
+Kitty graphics, which it would print as text at the top of the screen. Inside tmux the variable names
+tmux, so neither applies there.
+
 ## Scrolling at rest
 
 | Key | Where the view goes |
@@ -223,7 +261,8 @@ the working indicator above it goes, and anything being offered beneath it goes;
 back the moment you close it.
 
 A turn goes on underneath while the scroller is open, and the view does not move to follow it. The
-footer says how much has arrived below, and that a turn is still running; `G` reaches it.
+footer says how much has arrived below, and that a turn is still running; `G` reaches it. A queued
+turn, a `/loop` tick, a watch, a goal round or an aside starting leaves the scroller where it is too.
 
 ### Moving
 
@@ -286,6 +325,11 @@ which the list says. A terminal too short for the list loses rows from the middl
 
 ### Getting the text out
 
+`x` expands the call nearest the top of the view to every line that was kept of its result, up to
+500 lines per result, instead of the few lines the transcript shows by default. Pressing `x` again
+collapses it. The extra lines are cleaned the same way the short view is: control characters are
+replaced and each line is cut to one row.
+
 `v` opens the transcript in your editor. What goes is the rows as they are drawn, margins and all,
 so untrusted content is marked in the file exactly the way it is marked on the screen. It is written
 to a temporary file **outside the workspace**, opened with `$VISUAL` or `$EDITOR` the same way a
@@ -294,6 +338,11 @@ an editor needs the screen, and a running turn is drawing it.
 
 Use it for anything past searching a screen: reading two passages side by side, keeping a copy,
 grepping the lot.
+
+**Dragging with the mouse** copies from the pane the press landed in: the transcript, the info
+panel, the prompt box or the footer. The selection stops at that pane's edge, so a drag down the
+transcript does not take the panel's text on every row. A press between panes starts nothing, and
+closing the panel or resizing the terminal drops a selection held in it.
 
 **Nothing comes back.** A transcript is a record of what happened, and a record you can edit back
 into the session is not one. No later turn reads that file, and no path in your workspace gains

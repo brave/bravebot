@@ -25,8 +25,9 @@ names a commit rather than a tag its owner can move, that every container image 
 digest rather than a tag its publisher can move, that no job holding a credential installs or runs a
 dependency beside it, that a checkout of this tree names a kind of ref rather than a bare name a
 branch and a tag can share, that the contexts a merge is held to are written down, name jobs
-that exist, and cover every job that runs a check, and that every question and remembered answer has
-a row in the register of kept answers. A rule that can be written as one of these belongs here
+that exist, and cover every job that runs a check, that clippy still refuses a program start by any
+name and every allow of that refusal says who chose the program, and that every question and
+remembered answer has a row in the register of kept answers. A rule that can be written as one of these belongs here
 rather than in a reviewer's head.
 """
 
@@ -36,8 +37,10 @@ import json
 import os
 import re
 import shlex
+import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
+import tomllib
 from itertools import zip_longest
 from pathlib import Path
 
@@ -50,6 +53,12 @@ _spec = importlib.util.spec_from_file_location(
 )
 mechanics = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mechanics)
+
+_shared = importlib.util.spec_from_file_location(
+    "work_dir", Path(__file__).resolve().parents[2] / "work_dir.py"
+)
+workdir = importlib.util.module_from_spec(_shared)
+_shared.loader.exec_module(workdir)
 
 ERROR = "error"
 WARNING = "warning"
@@ -113,7 +122,11 @@ RELEASE = "Labelled::declassify"
 # compare content without a witness, which is the guarantee the absent implementations are.
 # `labels.md` states this as holding by construction, so nothing fails today if one is added.
 ALLOWED_IMPLS = {"fmt::Debug"}
-IMPL_FOR_LABELLED = re.compile(r"^\s*impl(?:<[^>]*>)?\s+(?!Labelled\b)(.+?)\s+for\s+Labelled\b")
+IMPL_START = re.compile(r"^\s*impl\b")
+STRUCT_LABELLED = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+Labelled\b")
+# A derive writes the same implementation an `impl` does, inside the module that can see the
+# private fields, so it is held to the same list. `Clone` is the one the type derives.
+ALLOWED_DERIVES = {"Clone"}
 
 # The gates. A witness may be minted nowhere else, and reaching content through anything but one of
 # these is shape 3.
@@ -221,6 +234,8 @@ PINNED = re.compile(r"^[\w.-]+/[\w.:/-]+@[0-9a-f]{40}$")
 JOBS = re.compile(r"^jobs:\s*$")
 JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 PERMISSIONS = re.compile(r"^\s*permissions:\s*(.*)$")
+# Either `environment: name` or the mapping form with `name:` beneath it.
+ENVIRONMENT = re.compile(r"^\s*environment:")
 RUN = re.compile(r"^\s*(?:-\s+)?run:\s*(.*)$")
 BLOCK = ("", "|", "|-", "|+", ">", ">-", ">+")
 # A job's own `name:`, which is the name its check run reports under and so the name a required
@@ -269,6 +284,15 @@ PNPM_RUNS_NOTHING = {
     "unpublish", "patch", "patch-commit", "remove", "rm", "uninstall", "un", "unlink", "prune",
     "link", "ln", "version", "help", "update", "up", "upgrade", "dedupe", "fetch", "import",
 }
+# What a Rust job runs that executes bytes nobody here wrote: cargo compiles every build script and
+# proc macro in Cargo.lock and runs them, and the tests after them. `contrib/measure-flakes.py` is the
+# one script known to do it, and it does not when it is given `--load`, which is its filing mode.
+CARGO_RUNS = re.compile(
+    r"(?:^|[\s;&|(])cargo(?:\s+\+\S+)?\s+(?:build|b|test|t|clippy|run|r|nextest|install|check|c|bench|doc)\b"
+)
+MEASURES_FLAKES = re.compile(r"(?:^|[\s;&|(])(?:\S*/)?contrib/measure-flakes\.py\b(?![^;&|\n]*--load)")
+WRITE_GRANT = re.compile(r"\bwrite\b|\bwrite-all\b")
+NOT_PERSISTED = re.compile(r"persist-credentials\s*:\s*[\"']?false\b")
 DEPENDENCY = (
     (
         re.compile(
@@ -337,22 +361,30 @@ REGISTERED = {
         re.compile(r"^    fn ([a-z_][a-z0-9_]*)\s*[<(]"),
     ),
     "Answers": (
-        Path("crates/tui/src/app.rs"),
-        re.compile(r"^struct Answers\s*\{"),
-        re.compile(r"^    ([a-z_][a-z0-9_]*)\s*:"),
+        Path("crates/agent/src/answers.rs"),
+        re.compile(r"^pub struct Answers\b[^{]*\{"),
+        re.compile(r"^    (?:pub(?:\([a-z:]+\))? )?([a-z_][a-z0-9_]*)\s*:"),
     ),
     "trust_prompt": (
         Path("crates/tui/src/trust_prompt.rs"),
         None,
         ASKS,
     ),
+    "Asker": (
+        Path("crates/agent/src/servers.rs"),
+        re.compile(r"^pub trait Asker\s*\{"),
+        re.compile(r"^    fn ([a-z_][a-z0-9_]*)\s*[<(]"),
+    ),
 }
 # Where a kept answer is filed, looked up, or carried across `/cd`, `/clear` and a resume, beside the
 # declarations above.
 REMEMBERED_SETS = (
+    "crates/tui/src/app.rs",
+    "crates/tui/src/app/actions.rs",
     "crates/tui/src/state.rs",
     "crates/tui/src/sandbox_command.rs",
     "crates/cli/src/plain.rs",
+    "crates/ui-bridge/src/bridge.rs",
     "crates/ui-bridge/src/running.rs",
     "crates/session/src/sessions.rs",
     "crates/agent/src/tools.rs",
@@ -377,6 +409,28 @@ CITED_TEST = re.compile(r"verified-by:\s*([^`\s|]+)")
 ACCEPTED = re.compile(r"(?:^|;\s*)accepted: \[[^\]]*\]\(([^)#\s]+)#known-costs\)")
 # A cell that holds a mark rather than a statement.
 PLACEHOLDER = re.compile(r"^(?:[-?.\s]*|n/?a|tbd|todo|none)$", re.IGNORECASE)
+
+# The second table of the register: a row for each row above it and a column for each way the world
+# changes under a yes. Each cell is statements joined by `;`, and a statement opens with what
+# happens and says why.
+CHANGES = (
+    "Moved",
+    "New session",
+    "Subject replaced",
+    "Other directory",
+    "Invocation changed",
+    "Declaration changed",
+    "More than shown",
+)
+CHANGE_LEADERS = ("asked again", "not reached", "by design", "accepted")
+CHANGE_STATEMENT = re.compile(r"^(" + "|".join(CHANGE_LEADERS) + r"):\s*(.*)$", re.DOTALL)
+# A reason shorter than this is a mark, however it is spelled.
+CHANGE_REASON_WORDS = 3
+# The one test that applies a change to an answer for each cell citing it, and the file whose table
+# of cases is read for the row and change each case applies.
+CHANGES_TABLE_TEST = "bravebot_agent::kept_answers::changing_the_world_under_a_yes_asks_again"
+CHANGES_TABLE_FILE = Path("crates/agent/src/kept_answers.rs")
+CHANGES_TABLE_CASE = re.compile(r'Case\s*\{\s*row:\s*"([^"]+)",\s*change:\s*"([^"]+)"', re.DOTALL)
 
 
 REPRODUCE = "python3 agents/skills/security-audit/security-audit.py --mechanical-only"
@@ -757,6 +811,192 @@ def check_network_clients_are_recorded(sources):
                 )
 
 
+# The calls `clippy.toml` refuses, which are the ones this tree starts a program with. A path that
+# does not resolve in a crate that has the dependency is itself a warning, so a call is listed once
+# the tree uses it. `windows_sys` is silent in a crate that does not depend on it.
+START_CALLS = (
+    "std::process::Command::new",
+    "windows_sys::Win32::System::Threading::CreateProcessW",
+)
+START_LINT = "clippy::disallowed_methods"
+# Allowing a group that holds the lint, or every warning, refuses nothing either.
+WIDE_ALLOW = re.compile(r"\b(?:allow|expect)\s*\([^()]*\b(?:clippy::style|clippy::all|warnings)\b")
+REASON = re.compile(r'\breason\s*=\s*"((?:[^"\\]|\\.)*)"', re.DOTALL)
+TEST_ONLY = re.compile(r"#!\[\s*cfg_attr\(\s*test\s*,")
+HOLDS_ITEMS = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?(?:mod|impl|trait|extern)\b")
+LINT_ALLOWED_BY_CONFIG = re.compile(r'disallowed_methods\s*=\s*(?:"allow"|\{[^}]*level\s*=\s*"allow")')
+
+
+def attribute_around(text, offset):
+    """The attribute holding `offset`, as `(start, end)`, or `None` where none does.
+
+    Brackets are matched with strings skipped, since a reason may hold a `]`.
+    """
+    start = max(text.rfind("#[", 0, offset), text.rfind("#![", 0, offset))
+    if start < 0:
+        return None
+    depth, index, in_string = 0, text.index("[", start), False
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if char == "\\":
+                index += 1
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return (start, index + 1) if index >= offset else None
+        index += 1
+    return None
+
+
+def refused_calls():
+    """The calls `clippy.toml` lists under `disallowed-methods`, none where it cannot be read."""
+    try:
+        config = tomllib.loads(Path("clippy.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return set()
+    listed = config.get("disallowed-methods", [])
+    return {one if isinstance(one, str) else one.get("path") for one in listed}
+
+
+def hiding_the_refusal():
+    """What makes clippy read something other than `clippy.toml`, or turns the lint off beside it.
+
+    Clippy reads the nearest configuration file at or above a crate's manifest and does not merge a
+    second one into it. A file deeper than a manifest's directory is read for nothing.
+    """
+    manifests = sorted(Path("crates").rglob("Cargo.toml"))
+    for directory in [Path("crates"), *(one.parent for one in manifests)]:
+        for name in ("clippy.toml", ".clippy.toml"):
+            if (directory / name).is_file():
+                yield (
+                    directory / name,
+                    "is read by clippy for the crates beneath it, and the root `clippy.toml` is not",
+                )
+    if Path(".clippy.toml").is_file():
+        yield Path(".clippy.toml"), "is read by clippy before the root `clippy.toml`"
+    for one in [Path("Cargo.toml"), *manifests, Path(".cargo/config.toml"), Path(".cargo/config")]:
+        if not one.is_file():
+            continue
+        text = one.read_text(encoding="utf-8", errors="replace")
+        if "CLIPPY_CONF_DIR" in text or LINT_ALLOWED_BY_CONFIG.search(text):
+            yield one, "moves the configuration clippy reads or allows the lint"
+
+
+def check_process_starts_are_marked(sources):
+    """A program bravebot starts itself is refused by clippy, whatever names it, unless marked.
+
+    SANDBOX-30 keeps the programs bravebot starts unconfined from being a file a confined stage
+    wrote into a `PATH` directory. It was applied one report at a time (`aws`, the clipboard tools,
+    hooks, language servers, the editor, the inhibitor's `cat`, `doctor --push-identity`, the
+    workflow stages), because nothing asked of a new spawn whether it was resolved first. A check
+    that read `Command::new("name")` saw a string literal and nothing else, so a name held in a
+    variable and a start through a helper shipped. `clippy.toml` refuses the call itself, and
+    `make check` runs clippy over every target, so a start names who chose its program in a mark
+    beside it and a reviewer reads each one in the diff.
+
+    What this decides is what clippy cannot: that the ban is still configured, that nothing makes
+    a crate read another configuration, that a mark carries a reason, and that a mark covers a
+    start and not a crate or a module.
+    """
+    missing = [call for call in START_CALLS if call not in refused_calls()]
+    if missing:
+        yield finding(
+            ERROR,
+            "process-start-not-refused",
+            "nothing refuses a program started by a variable or through a helper, so the next "
+            "spawn is found by a report",
+            "`clippy.toml` does not list "
+            + ", ".join(f"`{call}`" for call in missing)
+            + " under `disallowed-methods`",
+            "sandbox",
+            "high",
+            evidence=["clippy.toml"],
+            fix="list each in `disallowed-methods` in `clippy.toml` "
+            "([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+            gain="a stage-written program run with the person's access to `~/.ssh` and `~/.aws`",
+        )
+    for one, what in hiding_the_refusal():
+        yield finding(
+            ERROR,
+            "process-start-refusal-hidden",
+            "clippy is made to read a configuration other than the one refusing program starts",
+            f"`{one}` {what}",
+            "sandbox",
+            "high",
+            evidence=[str(one)],
+            fix="move its settings into the `clippy.toml` at the root and remove it",
+            gain="a crate whose spawns no lint reads",
+        )
+    for path in sorted(sources):
+        raw = "\n".join(sources[path])
+        if START_LINT not in raw and not WIDE_ALLOW.search(raw):
+            continue
+        text = "\n".join(mechanics.strip_comments(sources[path]))
+        seen = set()
+        for found in [*re.finditer(re.escape(START_LINT), text), *WIDE_ALLOW.finditer(text)]:
+            around = attribute_around(text, found.start())
+            if around is None or around in seen:
+                continue
+            seen.add(around)
+            attribute = text[around[0] : around[1]]
+            if not re.search(r"\b(?:allow|expect)\s*\(", attribute):
+                continue
+            number = text.count("\n", 0, around[0]) + 1
+            shown = [f"{path}:{number} {' '.join(attribute.split())[:160]}"]
+            inner = attribute.startswith("#![")
+            test_only = (
+                bool(TEST_ONLY.match(attribute))
+                or "tests" in path.parts
+                or "test-support" in path.parts
+            )
+            rest = text[around[1] :]
+            while following := re.match(r"\s*#\[[^\]]*\]", rest):
+                rest = rest[following.end() :]
+            if not test_only and (
+                inner or WIDE_ALLOW.search(attribute) or HOLDS_ITEMS.match(rest.lstrip())
+            ):
+                yield finding(
+                    ERROR,
+                    "process-start-mark-too-wide",
+                    "an allow covering a crate, a module, an impl or a whole lint group lifts the "
+                    "refusal from every start inside it, so none of them is read in a diff",
+                    f"`{path}:{number}` allows the refusal for more than one start",
+                    "sandbox",
+                    "high",
+                    evidence=shown,
+                    fix="put `allow(clippy::disallowed_methods, reason = \"...\")` on the statement or "
+                    "function that starts the program; only `#![cfg_attr(test, allow(...))]` and a "
+                    "file under `tests` may allow more ([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+                    gain="a crate whose spawns are all unreviewed",
+                )
+            if START_LINT not in attribute:
+                continue
+            reason = REASON.search(attribute)
+            if reason and re.sub(r"\\\n\s*", "", reason.group(1)).strip():
+                continue
+            yield finding(
+                ERROR,
+                "process-start-mark-without-reason",
+                "a start allowed without saying who chose the program leaves a reviewer nothing "
+                "to read",
+                f"`{path}:{number}` allows `{START_LINT}` with no reason",
+                "sandbox",
+                "high",
+                evidence=shown,
+                fix="add `reason = \"...\"` saying who chose the program: a path from "
+                "`bravebot_sandbox::programs`, `current_exe()`, the person's own line, or a "
+                "program a person's setting names ([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+                gain="a mark nobody has to justify, which is how a spawn goes unreviewed",
+            )
+
+
 def paragraphs(lines):
     """Every block between blank lines, joined into one line, with the line it starts at.
 
@@ -790,24 +1030,34 @@ def clause_body(lines, clause):
     return body
 
 
-def table(lines):
-    """The rows of the first table in `lines`, header first, each one its cells.
+def tables(lines):
+    """Every table in `lines`, each one its rows, header first, each row its cells.
 
-    The dashes under the header are dropped, so what comes back is what the table says rather than
-    how it is drawn.
+    The dashes under a header are dropped, so what comes back is what a table says rather than how
+    it is drawn.
     """
+    found = []
     rows = []
     for raw in lines:
         stripped = raw.strip()
         if not stripped.startswith("|"):
             if rows:
-                break
+                found.append(rows)
+                rows = []
             continue
         cells = [cell.strip() for cell in stripped.strip("|").split("|")]
         if all(set(cell) <= set("-: ") for cell in cells) and any("-" in cell for cell in cells):
             continue
         rows.append(cells)
-    return rows
+    if rows:
+        found.append(rows)
+    return found
+
+
+def table(lines):
+    """The rows of the first table in `lines`, header first, each one its cells."""
+    found = tables(lines)
+    return found[0] if found else []
 
 
 def table_rows(lines):
@@ -963,19 +1213,69 @@ def check_exhaustive_reader_docs(sources):
             )
 
 
+def _impl_header(text):
+    """The trait an `impl` header implements for `Labelled`, or None when it is not for it.
+
+    `text` starts at the `impl` keyword. Generics are skipped by counting angle brackets, so a
+    bound such as `T: AsRef<str>` does not end them early, and the header runs to the first `{`
+    or `where` at the top level, which lets it wrap over any number of lines.
+    """
+    rest = text[len("impl"):].lstrip()
+    if rest.startswith("<"):
+        depth = 0
+        for at, char in enumerate(rest):
+            depth += char == "<"
+            depth -= char == ">" and rest[at - 1] != "-"
+            if depth == 0:
+                rest = rest[at + 1:]
+                break
+    header = re.split(r"\{|\bwhere\b", rest, maxsplit=1)[0]
+    header = " ".join(header.split())
+    found = re.match(r"(.+?)\s+for\s+Labelled\b", header)
+    if not found or re.match(r"Labelled\b", header):
+        return None
+    return found.group(1).strip()
+
+
+ATTRIBUTES_AT_END = re.compile(r"(?:#!?\[(?:[^\[\]]|\[[^\]]*\])*\]\s*)+\Z")
+
+
+def _derives_above(lines, struct_at):
+    """The traits derived by the attributes sitting directly above line `struct_at`, wherever
+    they wrap, whether bare or inside `cfg_attr`."""
+    above = "\n".join(lines[:struct_at])
+    run = ATTRIBUTES_AT_END.search(above)
+    names = []
+    for derive in re.finditer(r"\bderive\s*\(([^)]*)\)", run.group(0) if run else ""):
+        names += [n.rsplit("::", 1)[-1] for n in re.findall(r"[\w:]+", derive.group(1))]
+    return names
+
+
 def check_labelled_impls(sources):
     """Nothing may be implemented on `Labelled` that reads or compares its content.
 
     The guarantee is partly the implementations that are absent: no `Deref`, no `PartialEq`, no
     `Display`, so a caller cannot reach the value without a witness. `labels.md` records that as
-    holding by construction, which means no check fails if somebody adds one.
+    holding by construction, so the doctests on `Labelled` pin the common ones and this reads
+    what they cannot: an implementation written with nested generics or a header wrapped over
+    several lines, and a `#[derive(...)]` above the struct, which expands inside the module that
+    sees the private fields.
     """
     for path, lines in sources.items():
-        for number, raw in enumerate(mechanics.strip_comments(lines), start=1):
-            found = IMPL_FOR_LABELLED.match(raw)
-            if not found:
-                continue
-            trait = found.group(1).strip()
+        stripped = mechanics.strip_comments(lines)
+        candidates = []
+        for index, raw in enumerate(stripped):
+            if IMPL_START.match(raw):
+                held = " ".join(stripped[index:index + 8])
+                trait = _impl_header(held.lstrip())
+                if trait is not None:
+                    candidates.append((index, trait, raw))
+            elif STRUCT_LABELLED.match(raw):
+                for name in _derives_above(stripped, index):
+                    if name in ALLOWED_DERIVES:
+                        continue
+                    candidates.append((index, name, f"#[derive({name})] on {raw.strip()}"))
+        for index, trait, raw in candidates:
             if trait in ALLOWED_IMPLS:
                 continue
             yield finding(
@@ -986,7 +1286,7 @@ def check_labelled_impls(sources):
                 "label's content without a witness",
                 "trust",
                 "high",
-                evidence=[f"{path}:{number} {raw.strip()[:120]}"],
+                evidence=[f"{path}:{index + 1} {raw.strip()[:120]}"],
                 fix=f"remove it, or record it in `{LABELS_SPEC}` as an exception with what it costs",
                 gain="content the planner may not read can be compared against a guess, one guess at "
                 "a time, which is how a quarantined secret is read out of a program that never "
@@ -1313,7 +1613,7 @@ def test_regions(lines):
     counter = 0
     armed = False
     for number, raw in enumerate(lines, start=1):
-        if depth is None and raw.strip().startswith("#[cfg(test)]"):
+        if depth is None and raw.strip().startswith(("#[cfg(test)]", "#[cfg(all(test")):
             armed = True
         opens = raw.count("{")
         closes = raw.count("}")
@@ -1577,18 +1877,32 @@ def workflow_jobs(lines):
                 "name": found.group(1),
                 "line": number + 1,
                 "grants": None,
+                "environment": False,
                 "secret": everywhere,
+                "secret_above_steps": everywhere,
+                "persists": False,
+                "in_steps": False,
                 "steps": [],
             }
             jobs.append(current)
             continue
         if current is None:
             continue
+        if column == 4 and raw.strip() == "steps:":
+            current["in_steps"] = True
         if SECRET.search(raw):
             current["secret"] = True
+            if not current["in_steps"]:
+                current["secret_above_steps"] = True
+        found = USES.match(raw)
+        if found and CHECKOUT.match(unquoted(found.group(1))):
+            if not any(NOT_PERSISTED.search(line) for line in step_text(lines, number)):
+                current["persists"] = True
         found = PERMISSIONS.match(raw) if column == 4 else None
         if found:
             current["grants"] = [found.group(1)] + nested(lines, number)
+        if column == 4 and ENVIRONMENT.match(raw):
+            current["environment"] = True
         found = RUN.match(raw)
         if found:
             inline = found.group(1).strip()
@@ -1598,6 +1912,7 @@ def workflow_jobs(lines):
                     "body": nested(lines, number, base=raw.index("run:"))
                     if inline in BLOCK
                     else [inline],
+                    "secret": any(SECRET.search(line) for line in step_text(lines, number)),
                 }
             )
     for job in jobs:
@@ -1621,6 +1936,14 @@ COMMIT = re.compile(r"^[0-9a-f]{40}$")
 # resolution. The cost is an input actually called `sha` passing; the other direction, reporting
 # every workflow that rebuilds `github.sha`, would be noise nobody could act on.
 NAMES_A_COMMIT = re.compile(r"sha\b", re.IGNORECASE)
+
+
+def step_text(lines, number):
+    """The lines of the step a line is in, including a line that is the `- key:` opening it."""
+    found = STEP_START.match(lines[number])
+    if found:
+        return [lines[number]] + nested(lines, number, base=len(found.group(1)))
+    return enclosing_step(lines, number)
 
 
 def enclosing_step(lines, number):
@@ -1718,6 +2041,58 @@ def dependency_commands(body):
     return found
 
 
+def runs_project_code(path, job, granted):
+    """The steps of one job that compile or run this repository's dependencies beside a credential.
+
+    Reported for a step that runs `cargo build`, `test`, `clippy`, `run`, `nextest` or `install`, or
+    `contrib/measure-flakes.py` in its measuring mode (#2789), when what it can read is a token:
+
+    - `id-token: write` on the job, which every step is handed the means to use;
+    - a secret named by the step itself, or by the job above its steps, or the workflow above its
+      jobs, since each of those is in the step's environment. A secret in another step of the job is
+      not, which is what lets one job measure in one step and hold the token in none of the steps
+      that run code;
+    - a write grant on a job whose `actions/checkout` leaves its credential in the checkout, because
+      the checkout is what every later step reads and `persist-credentials: false` is the only way
+      the token is not in it.
+    """
+    write = any(WRITE_GRANT.search(raw) for raw in job["grants"])
+    for step in job["steps"]:
+        ran = [
+            line.strip()[:120]
+            for line in step["body"]
+            if not line.strip().startswith("#")
+            and (CARGO_RUNS.search(line) or MEASURES_FLAKES.search(line))
+        ]
+        if not ran:
+            continue
+        if granted:
+            holds = "id-token: write"
+        elif step["secret"] or job["secret_above_steps"]:
+            holds = "a secret in its environment"
+        elif write and job["persists"]:
+            holds = "a write grant its checkout leaves in the working tree"
+        else:
+            continue
+        yield finding(
+            ERROR,
+            "privileged-job-runs-project-code",
+            f"{path.name} runs the build or the tests in {job['name']}, a step that holds {holds}, "
+            "so a build script, proc macro or test of any crate in Cargo.lock can use it",
+            f"`{job['name']}` in `{path}` runs `{ran[0]}` where {holds} is readable, and cargo "
+            "runs the build script and proc macro of every crate in `Cargo.lock` and then their "
+            "tests, in the environment and working tree of that step",
+            "infrastructure",
+            "medium",
+            evidence=[f"{path}:{job['line']} job `{job['name']}`", f"{path}:{step['line']} {ran[0]}"],
+            fix="measure in a step or job that holds no token and writes what it found to a file, "
+            "and file from a job that holds the grant and runs only `gh`. Set "
+            "`persist-credentials: false` on the checkout either way",
+            gain="whoever owns one crate in the lockfile reads the token and acts as the workflow "
+            "on this repository for as long as the job runs",
+        )
+
+
 def check_privileged_job_runs_only_its_own_code():
     """A job that can mint a credential installs and runs nothing from `node_modules`.
 
@@ -1729,9 +2104,9 @@ def check_privileged_job_runs_only_its_own_code():
     same two commands in a job holding `contents: read` reach a green check and nothing else. So the
     finding is the pairing rather than either half.
 
-    What it reads is the npm and pnpm tree, which is the third-party code a workflow here installs and runs by
-    name. A job that compiled the tree would run a crate's build script in the same environment and
-    this says nothing about that, which is a widening of this check rather than a second one.
+    It reads the npm and pnpm tree, and the Rust one: a job that compiles the tree runs a crate's
+    build script in the same environment, so `runs_project_code` pairs `cargo` commands and
+    `contrib/measure-flakes.py` with the same credentials (#2789).
     """
     if not WORKFLOWS.is_dir():
         return
@@ -1756,6 +2131,7 @@ def check_privileged_job_runs_only_its_own_code():
             continue
         for job in jobs:
             granted = any(GRANT.search(raw) for raw in job["grants"])
+            yield from runs_project_code(path, job, granted)
             if not granted and not job["secret"]:
                 continue
             reached = [
@@ -1786,6 +2162,46 @@ def check_privileged_job_runs_only_its_own_code():
                 gain="whoever owns one of the installed packages runs code beside the credential "
                 "this job exists to mint, and what they publish with it carries this repository's "
                 "provenance",
+            )
+
+
+def check_grant_is_behind_an_environment():
+    """A job that can mint an OIDC token names an `environment:`, so a reviewer stands in front of it.
+
+    `workflow_dispatch` runs the file at the ref it is dispatched on, and the registry's trusted
+    publisher keys on the repository and the filename, not the ref. A person with write access can
+    push a branch holding a copy of the publish workflow without its refusals and dispatch that, and
+    the token it mints is accepted. An `environment:` is the one control the dispatcher's copy of the
+    file cannot remove for the real one to keep: the environment's required reviewer is a setting of
+    the repository, and the registry compares the environment claim once the job declares one.
+
+    Only the key is read. That the environment has a reviewer, and that npmjs.com names it, are
+    settings of the repository and the registry that no checkout holds, which is recorded in
+    `docs/development/branch-protection.md`.
+    """
+    if not WORKFLOWS.is_dir():
+        return
+    for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
+        for job in workflow_jobs(path.read_text(encoding="utf-8").split("\n")):
+            if not any(GRANT.search(raw) for raw in job["grants"]) or job["environment"]:
+                continue
+            yield finding(
+                ERROR,
+                "grant-without-environment",
+                f"{path.name} gives {job['name']} id-token: write and no environment, so no "
+                "reviewer stands between a writer and the credential",
+                f"`{job['name']}` in `{path}` can request an OIDC token and names no "
+                "`environment:`, so a dispatch of a branch's copy of this file mints a token the "
+                "registry or cloud account accepts, with nothing waiting for an approval",
+                "infrastructure",
+                "medium",
+                evidence=[f"{path}:{job['line']} job `{job['name']}` holds id-token: write"],
+                fix="add `environment: <name>` to the job and give that GitHub environment a "
+                "required reviewer who is not the person dispatching. Name the environment on the "
+                "registry's trusted-publisher record too, and record both in "
+                "`docs/development/branch-protection.md`",
+                gain="whoever can push a branch to this repository publishes under this "
+                "repository's identity from a copy of the workflow nobody reviewed",
             )
 
 
@@ -2339,9 +2755,9 @@ def check_answers_registered(specs, sources):
     A yes is kept under a key, and the defect this repository keeps being sent is a key that later
     matches something the person was never shown. Each was fixed where it was found, and none left
     anything that would make the next prompt, or the next set a session keeps, say what its answer
-    is kept under. So every method of the confirmer, every field of the terminal's remembered
-    answers and every question its trust prompts ask is listed against the row it lands in, or as
-    keeping nothing, and every row names the tests that pin it or the Known cost that accepts it.
+    is kept under. So every method of the confirmer, every field of the remembered answers and every
+    question the terminal's trust prompts ask is listed against the row it lands in, or as keeping
+    nothing, and every row names the tests that pin it or the Known cost that accepts it.
     """
     spec, header, rows, entries = register_of(specs)
 
@@ -2573,6 +2989,225 @@ def check_answers_registered(specs, sources):
             )
 
 
+def check_changes_under_a_yes(specs, sources):
+    """A kept answer with no statement of what each change to the world does to it, and one whose
+    statement is a mark.
+
+    A yes is kept under a key, and the defect this repository keeps being sent is a key that matches
+    something else after the world changed under it: a second checkout laid out like the first, a
+    file replaced, an argument added. The register says what each answer is kept under; this holds
+    it to saying, for every answer and every such change, that the person is asked again, that the
+    key cannot be reached by it, that the design keeps the answer, or that the cost is accepted.
+    """
+    spec, _, rows, _ = register_of(specs)
+    if spec is None or not rows:
+        return
+    found = tables(clause_body(spec.lines, REGISTER))
+    matrix = found[1] if len(found) > 1 else None
+
+    def unreadable(summary, fix):
+        return finding(
+            ERROR,
+            "changes-unreadable",
+            "the register's table of what changes do to a kept answer could not be read, so nothing "
+            "checks that each answer says what a change to the world does to it",
+            summary,
+            "trust",
+            "medium",
+            fix=fix,
+        )
+
+    if not matrix or len(matrix) < 2:
+        yield unreadable(
+            f"`{spec.rel}` {REGISTER} has no second table after the register",
+            "restore the table, one row for each row of the register",
+        )
+        return
+    header, body = matrix[0], matrix[1:]
+    if tuple(header[1:]) != CHANGES:
+        yield unreadable(
+            f"the columns of that table are {header[1:]}, and the check reads {list(CHANGES)}",
+            "restore the columns, or update `CHANGES` here to the ones the table has now",
+        )
+        return
+
+    named_rows = [row[0] for row in rows]
+    seen = set()
+    for row in body:
+        name = row[0]
+        if name in seen:
+            yield finding(
+                ERROR,
+                "changes-row-duplicate",
+                f"the table of what changes do has two rows for {name}",
+                f"`{spec.rel}` {REGISTER} says twice what a change to the world does to {name}",
+                "trust",
+                "low",
+                evidence=[f"{spec.rel} {REGISTER}: {name}"],
+                fix="keep one row",
+            )
+        seen.add(name)
+        if name not in named_rows:
+            yield finding(
+                ERROR,
+                "changes-row-unknown",
+                f"the table of what changes do has a row for {name}, which is not a row of the register",
+                f"`{spec.rel}` {REGISTER} says what changes do to {name}, and no row of the register "
+                "above it is called that",
+                "trust",
+                "low",
+                evidence=[f"{spec.rel} {REGISTER}: {name}"],
+                fix="name a row as its first cell spells it, or add the row to the register",
+            )
+    for name in named_rows:
+        if name not in seen:
+            yield finding(
+                ERROR,
+                "changes-row-missing",
+                f"the table of what changes do has no row for {name}",
+                f"`{spec.rel}` {REGISTER} puts {name} in the register and says nothing of what a "
+                "change to the world does to it",
+                "trust",
+                "medium",
+                evidence=[f"{spec.rel} {REGISTER}: {name}"],
+                fix="add the row, with a statement in every column",
+                gain="an answer whose key nobody has held against a moved checkout or a replaced file "
+                "is how a yes comes to cover something the person was never shown",
+            )
+
+    index = mechanics.TestIndex()
+    crates = mechanics.crate_directories()
+    cases = set()
+    table_source = sources.get(CHANGES_TABLE_FILE)
+    if table_source is not None:
+        cases = set(CHANGES_TABLE_CASE.findall("\n".join(table_source)))
+    cited_cases = set()
+
+    def cell_finding(kind, name, change, summary, fix, severity=ERROR):
+        return finding(
+            severity,
+            kind,
+            f"the register says nothing usable of {name} when {change.lower()}",
+            f"`{spec.rel}` {REGISTER}, {name} under '{change}': {summary}",
+            "trust",
+            "low",
+            evidence=[f"{spec.rel} {REGISTER}: {name} / {change}"],
+            fix=fix,
+        )
+
+    for row in body:
+        name = row[0]
+        for change, cell in zip_longest(CHANGES, row[1:]):
+            if change is None:
+                yield cell_finding(
+                    "changes-cell-unsaid",
+                    name,
+                    "a column is added",
+                    "the row has a cell past the last column",
+                    "drop the extra cell",
+                )
+                break
+            statements = [one.strip() for one in (cell or "").split(";") if one.strip()]
+            if not statements or PLACEHOLDER.match(cell or ""):
+                yield cell_finding(
+                    "changes-cell-unsaid",
+                    name,
+                    change,
+                    "the cell is empty or a mark",
+                    "say what happens: asked again, not reached, by design or accepted, and why",
+                )
+                continue
+            for statement in statements:
+                led = CHANGE_STATEMENT.match(statement)
+                if not led:
+                    yield cell_finding(
+                        "changes-cell-unsaid",
+                        name,
+                        change,
+                        f"`{statement[:60]}` does not open with one of {', '.join(CHANGE_LEADERS)}",
+                        "open the statement with what happens, then a colon",
+                    )
+                    continue
+                leader, rest = led.groups()
+                cited = CITED_TEST.findall(statement)
+                if leader == "accepted":
+                    for target in ACCEPTED.findall(statement):
+                        linked = spec.path.parent / target
+                        headed = linked.is_file() and any(
+                            line.strip() == KNOWN_COSTS
+                            for line in linked.read_text(encoding="utf-8").split("\n")
+                        )
+                        if not headed:
+                            yield cell_finding(
+                                "changes-cost-missing",
+                                name,
+                                change,
+                                f"it accepts a cost in `{target}`, which has none",
+                                "link the spec whose Known costs admit it, or write the entry there",
+                            )
+                    if not ACCEPTED.findall(statement):
+                        yield cell_finding(
+                            "changes-cost-missing",
+                            name,
+                            change,
+                            "it says accepted without linking the Known costs entry that admits it",
+                            "write `accepted: [spec.md](spec.md#known-costs)`",
+                        )
+                    continue
+                reason = CITED_TEST.sub("", rest)
+                if len(reason.split()) < CHANGE_REASON_WORDS or PLACEHOLDER.match(reason.strip()):
+                    yield cell_finding(
+                        "changes-cell-unsaid",
+                        name,
+                        change,
+                        f"`{leader}` is not followed by a reason",
+                        "say why in the cell",
+                    )
+                if leader == "asked again" and not cited:
+                    yield cell_finding(
+                        "changes-unpinned",
+                        name,
+                        change,
+                        "it says the person is asked again and cites no test",
+                        "cite the test as `verified-by: crate::module::test_name`",
+                    )
+                for reference in cited:
+                    if reference == CHANGES_TABLE_TEST:
+                        cited_cases.add((name, change))
+                        if (name, change) not in cases:
+                            yield cell_finding(
+                                "changes-case-missing",
+                                name,
+                                change,
+                                f"it cites the table test, and `{CHANGES_TABLE_FILE}` has no case "
+                                "for that row and change",
+                                "add the case, or cite the test that pins it",
+                            )
+                    status, detail = index.resolve(reference, crates)
+                    if status != "ok":
+                        yield cell_finding(
+                            "changes-test-missing",
+                            name,
+                            change,
+                            f"it names `{reference}`, which is not a test there ({status}"
+                            + (f": {detail}" if detail else "")
+                            + ")",
+                            "correct the name to the test as it is now",
+                        )
+    for name, change in sorted(cases - cited_cases):
+        yield finding(
+            ERROR,
+            "changes-case-unlisted",
+            f"a case in `{CHANGES_TABLE_FILE}` applies '{change}' to {name}, and no cell cites the table test",
+            f"`{CHANGES_TABLE_FILE}` runs a case for {name} under '{change}', which `{spec.rel}` "
+            f"{REGISTER} does not say is pinned by it",
+            "trust",
+            "low",
+            evidence=[f"{CHANGES_TABLE_FILE}: {name} / {change}"],
+            fix=f"cite `verified-by: {CHANGES_TABLE_TEST}` in that cell, or drop the case",
+        )
+
+
 def surface(sources, specs):
     """Everything the lanes are given, gathered once."""
     construction = []
@@ -2713,10 +3348,115 @@ def changed_lanes(base, specs):
         lanes.add("supply-chain")
     if touched & set(prompt_files(specs) + prompt_spec_files(specs)):
         lanes.add("shown-before-answered")
-    binding = set(REMEMBERED_SETS) | {str(one[0]) for one in REGISTERED.values()}
-    if touched & (binding | set(prompt_files(specs) + prompt_spec_files(specs))):
+    if touches_kept_answers(touched, specs):
         lanes.add("approval-binding")
     return sorted(lanes) or list(LANES)
+
+
+def touches_kept_answers(touched, specs):
+    """Whether any of these paths is where an answer is kept, asked for or registered."""
+    binding = (
+        set(REMEMBERED_SETS)
+        | {str(one[0]) for one in REGISTERED.values()}
+        | {str(CHANGES_TABLE_FILE)}
+    )
+    return bool(touched & (binding | set(prompt_files(specs) + prompt_spec_files(specs))))
+
+
+def uncommitted_files():
+    """Every path the working tree differs from `HEAD` in: staged, unstaged and untracked.
+
+    A rename names both paths, since the one it left is as much a change as the one it arrived at.
+    """
+    done = subprocess.run(
+        ["git", "status", "--porcelain", "-z", "--untracked-files=all"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    entries = done.stdout.split("\0")
+    paths = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if len(entry) < 4:
+            continue
+        paths.append(entry[3:])
+        if entry[0] in "RC" or entry[1] in "RC":
+            paths.append(entries[index])
+            index += 1
+    return paths
+
+
+def branch_files():
+    """Every path this branch has changed since it left the default branch, committed or not.
+
+    A session that commits before it stops leaves a clean working tree, so the uncommitted files
+    alone would say it touched nothing. The default branch is `upstream/main` where the checkout
+    has one and `origin/main` otherwise, as `make check-affected` measures from.
+    """
+    paths = set(uncommitted_files())
+    for base in ("upstream/main", "origin/main"):
+        done = subprocess.run(
+            ["git", "diff", "--name-only", f"{base}...HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if done.returncode == 0:
+            paths.update(line for line in done.stdout.split("\n") if line)
+            break
+    return paths
+
+
+def stop_response(payload, findings):
+    """What the `Stop` hook tells Claude Code about a tree the mechanical pass found fault with.
+
+    The first stop is blocked and given the findings, so the session fixes them before it ends. A
+    stop that follows a block is let through with the findings shown to the person, because a session
+    that cannot fix one would otherwise never end. CI runs the same pass and is the backstop.
+    """
+    errors = [one for one in findings if one["severity"] == ERROR]
+    if not errors:
+        return None
+    report = render(errors)
+    if payload.get("stop_hook_active"):
+        return {"systemMessage": f"make check-security still fails:\n{report}"}
+    return {
+        "decision": "block",
+        "reason": f"make check-security fails on this working tree. Fix these, then stop again.\n{report}",
+    }
+
+
+def stop_hook():
+    """Run for Claude Code's `Stop` event, from `agents/settings.json`.
+
+    Reads the event on standard input and writes the response on standard output. A branch that
+    touches none of the paths that bind an answer to a key is not checked, so a task that never went
+    near them stops as quickly as it would without the hook. Where git cannot say what changed the
+    hook says so on standard error and lets the stop through, since a hook that fails on every stop
+    in a checkout git will not read teaches its reader to ignore it.
+    """
+    os.chdir(Path(__file__).resolve().parents[3])
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        touched = branch_files()
+    except (OSError, subprocess.CalledProcessError) as problem:
+        print(f"the Stop hook could not ask git what changed: {problem}", file=sys.stderr)
+        return 0
+    specs = load_specs()
+    if not touches_kept_answers(touched, specs):
+        return 0
+    response = stop_response(payload, mechanical_findings(specs, mechanics.load_sources()))
+    if response:
+        print(json.dumps(response))
+    return 0
 
 
 def render(findings):
@@ -2736,25 +3476,12 @@ def render(findings):
     return "\n".join(lines)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("lanes", nargs="*", help=f"default: every lane. One of: {', '.join(LANES)}")
-    parser.add_argument("--work-dir", default=None)
-    parser.add_argument("--mechanical-only", action="store_true", help="no lanes, no model")
-    parser.add_argument("--changed", metavar="BASE", default=None, help="lanes for a branch's diff")
-    parser.add_argument("--json", action="store_true")
-    args = parser.parse_args()
-
-    if not Path("docs/specs").is_dir():
-        print("run this from the repository root", file=sys.stderr)
-        return 2
-
-    specs = load_specs()
-    sources = mechanics.load_sources()
-
+def mechanical_findings(specs, sources):
+    """Everything a tool can decide about the tree, which is what `make check-security` runs."""
     findings = list(check_exception_counts())
     findings += list(check_network_clients_are_recorded(sources))
     findings += list(check_prompt_split())
+    findings += list(check_process_starts_are_marked(sources))
     findings += list(check_labelled_impls(sources))
     findings += list(check_exhaustive_reader_docs(sources))
     findings += list(check_construction_pinned(specs, sources))
@@ -2764,10 +3491,40 @@ def main():
     findings += list(check_pinned_images())
     findings += list(check_privileged_job_runs_only_its_own_code())
     findings += list(check_checkout_ref_is_qualified())
+    findings += list(check_grant_is_behind_an_environment())
     findings += list(check_required_checks_are_the_gates())
     findings += list(check_guarantee_specs_exist())
     findings += list(check_unpinned_guarantee_clauses(specs))
     findings += list(check_answers_registered(specs, sources))
+    findings += list(check_changes_under_a_yes(specs, sources))
+    return findings
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("lanes", nargs="*", help=f"default: every lane. One of: {', '.join(LANES)}")
+    parser.add_argument("--work-dir", default=None)
+    parser.add_argument("--mechanical-only", action="store_true", help="no lanes, no model")
+    parser.add_argument("--changed", metavar="BASE", default=None, help="lanes for a branch's diff")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--stop-hook",
+        action="store_true",
+        help="answer Claude Code's Stop event: check a branch touching the paths that keep answers",
+    )
+    args = parser.parse_args()
+
+    if args.stop_hook:
+        return stop_hook()
+
+    if not Path("docs/specs").is_dir():
+        print("run this from the repository root", file=sys.stderr)
+        return 2
+
+    specs = load_specs()
+    sources = mechanics.load_sources()
+
+    findings = mechanical_findings(specs, sources)
 
     unknown = [one for one in args.lanes if one not in LANES]
     if unknown:
@@ -2815,8 +3572,7 @@ def main():
             f"{len(found['releases'])} releases, {len(lanes)} lanes",
         ],
     }
-    manifest_path = work_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    manifest_path = workdir.write_manifest(work_dir, manifest)
 
     print(render(findings), file=sys.stderr)
     if args.json:

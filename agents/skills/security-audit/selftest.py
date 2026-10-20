@@ -18,6 +18,7 @@ import io
 import json
 import os
 import re
+import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -42,7 +43,6 @@ audit = load("security-audit")
 verifying = load("verify-findings")
 collect = load("collect-findings")
 drafts = load("draft-issues")
-posting = load("post-issues")
 
 FAILURES = []
 
@@ -658,6 +658,48 @@ def test_labelled_impls():
         list(audit.check_labelled_impls(described)) == [],
     )
 
+    def labelled(*lines):
+        return {Path("crates/core/src/value.rs"): list(lines)}
+
+    for name, source in {
+        "a derived PartialEq": labelled("#[derive(Clone, PartialEq)]", "pub struct Labelled<T> {"),
+        "a derive wrapped over lines": labelled(
+            "#[derive(", "    Clone,", "    std::hash::Hash,", ")]", "pub struct Labelled<T> {"
+        ),
+        "a derive inside cfg_attr": labelled(
+            "#[cfg_attr(test, derive(Clone, Eq))]", "pub struct Labelled<T> {"
+        ),
+        "a derive above another attribute": labelled(
+            "#[derive(Debug)]", "#[must_use]", "pub struct Labelled<T> {"
+        ),
+        "an impl with a nested generic bound": labelled(
+            "impl<T: AsRef<str>> PartialEq<str> for Labelled<T> {"
+        ),
+        "an impl whose header wraps": labelled(
+            "impl<T>", "    std::ops::Deref", "    for Labelled<T>", "where", "    T: Clone,", "{"
+        ),
+        "an impl with a generic trait argument": labelled(
+            "impl<T: Into<Vec<u8>>> AsRef<[u8]> for Labelled<T> {"
+        ),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(f"{name} is an error", kinds(found) == ["labelled-impl"], str(kinds(found)))
+
+    for name, source in {
+        "a derive of Clone alone": labelled("#[derive(Clone)]", "pub struct Labelled<T> {"),
+        "a derive on another struct": labelled(
+            "#[derive(PartialEq)]", "pub struct Shape {", "}", "pub struct Labelled<T> {"
+        ),
+        "a wrapped impl of the one recorded trait": labelled(
+            "impl<T>", "    fmt::Debug", "    for Labelled<T> {"
+        ),
+        "an impl for another type that names Labelled in a bound": labelled(
+            "impl<T> Deref for Wrapper<T>", "where", "    T: Into<Labelled<String>>,", "{"
+        ),
+    }.items():
+        found = list(audit.check_labelled_impls(source))
+        check(f"{name} is clean", found == [], str(kinds(found)))
+
     # `impl Labelled` is the type's own block, not a trait reaching into it.
     own = {Path("crates/core/src/value.rs"): ["impl<T> Labelled<T> {", "}"]}
     check("the type's own impl block is not a trait", list(audit.check_labelled_impls(own)) == [])
@@ -796,6 +838,69 @@ jobs:
     check(
         "the tree's own checkouts name a kind of ref",
         with_cwd(ROOT, lambda: list(audit.check_checkout_ref_is_qualified())) == [],
+    )
+
+
+def test_grant_is_behind_an_environment():
+    def run(files):
+        return with_cwd(in_tree(files), lambda: list(audit.check_grant_is_behind_an_environment()))
+
+    bare = run({".github/workflows/publish-npm.yml": GRANT_BESIDE_THE_INSTALL})
+    check(
+        "a job holding id-token: write and no environment is an error naming the job",
+        kinds(bare) == ["grant-without-environment"]
+        and "`publish`" in bare[0]["summary"]
+        and bare[0]["evidence"] == [
+            ".github/workflows/publish-npm.yml:14 job `publish` holds id-token: write"
+        ],
+        str([one["summary"] for one in bare]),
+    )
+
+    named = run(
+        {
+            ".github/workflows/publish-npm.yml": GRANT_BESIDE_THE_INSTALL.replace(
+                "    permissions:\n      contents: read\n      id-token: write",
+                "    environment: npm-publish\n    permissions:\n      contents: read\n"
+                "      id-token: write",
+            )
+        }
+    )
+    check("the same job naming an environment is clean", named == [], str(kinds(named)))
+
+    mapping = run(
+        {
+            ".github/workflows/publish-npm.yml": GRANT_BESIDE_THE_INSTALL.replace(
+                "    permissions:\n      contents: read\n      id-token: write",
+                "    environment:\n      name: npm-publish\n    permissions:\n"
+                "      contents: read\n      id-token: write",
+            )
+        }
+    )
+    check("the mapping form of environment is clean", mapping == [], str(kinds(mapping)))
+
+    # The environment of another job is that job's, and a workflow-level grant reaches every job.
+    other = run(
+        {
+            ".github/workflows/publish-npm.yml": GRANT_OVER_THE_INSTALL
+            + "  other:\n    runs-on: ubuntu-latest\n    environment: npm-publish\n"
+            "    steps:\n      - run: true\n"
+        }
+    )
+    check(
+        "a job without an environment is reported although a sibling names one",
+        kinds(other) == ["grant-without-environment"] and "`publish`" in other[0]["summary"],
+        str(kinds(other)),
+    )
+
+    check(
+        "a job holding only contents: read needs no environment",
+        run({".github/workflows/ci.yml": GRANT_BESIDE_THE_INSTALL.replace("id-token: write", "")})
+        == [],
+    )
+
+    check(
+        "the tree's own workflows put every grant behind an environment",
+        with_cwd(ROOT, lambda: list(audit.check_grant_is_behind_an_environment())) == [],
     )
 
 
@@ -1091,6 +1196,106 @@ def test_privileged_job_runs_only_its_own_code():
         "no job in the tree's own workflows runs a dependency beside a credential",
         with_cwd(ROOT, lambda: list(audit.check_privileged_job_runs_only_its_own_code())) == [],
     )
+
+
+def project_code_workflow(permissions, steps, job_env=""):
+    return (
+        "permissions:\n  contents: read\n\njobs:\n  measure:\n    runs-on: ubuntu-latest\n"
+        f"    permissions:\n{permissions}\n{job_env}    steps:\n{steps}"
+    )
+
+
+CHECKOUT_PERSISTING = "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
+CHECKOUT_CLEAN = CHECKOUT_PERSISTING + "        with:\n          persist-credentials: false\n"
+ISSUES_WRITE = "      contents: read\n      issues: write"
+
+
+def test_privileged_job_runs_project_code():
+    def run(workflow):
+        tree = in_tree({".github/workflows/test-determinism.yml": workflow})
+        return with_cwd(tree, lambda: list(audit.check_privileged_job_runs_only_its_own_code()))
+
+    token_step = (
+        CHECKOUT_CLEAN
+        + "      - name: Test\n        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"
+        "        run: cargo test --all --locked\n"
+    )
+    found = run(project_code_workflow(ISSUES_WRITE, token_step))
+    evidence = " | ".join(found[0]["evidence"]) if found else "(nothing)"
+    check(
+        "a cargo step whose environment holds the workflow token is reported, naming the step",
+        kinds(found) == ["privileged-job-runs-project-code"] and "cargo test --all --locked" in evidence,
+        f"{kinds(found)}: {evidence}",
+    )
+
+    script_step = (
+        CHECKOUT_CLEAN
+        + "      - name: Measure\n        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"
+        "        run: |\n          python3 contrib/measure-flakes.py --runs 100 --file-issues x/y\n"
+    )
+    found = run(project_code_workflow(ISSUES_WRITE, script_step))
+    check(
+        "the measuring script is reported where it holds the token, since it runs cargo",
+        kinds(found) == ["privileged-job-runs-project-code"],
+        str(kinds(found)),
+    )
+
+    check(
+        "the same build in a job holding only contents: read is clean",
+        run(
+            project_code_workflow(
+                "      contents: read", CHECKOUT_CLEAN + "      - run: cargo test --all --locked\n"
+            )
+        )
+        == [],
+    )
+
+    found = run(
+        project_code_workflow(
+            ISSUES_WRITE, CHECKOUT_PERSISTING + "      - run: cargo test --all --locked\n"
+        )
+    )
+    check(
+        "a write grant is reported when the checkout leaves its credential for the build to read",
+        kinds(found) == ["privileged-job-runs-project-code"],
+        str(kinds(found)),
+    )
+    check(
+        "the same job with persist-credentials: false is clean",
+        run(
+            project_code_workflow(
+                ISSUES_WRITE, CHECKOUT_CLEAN + "      - run: cargo test --all --locked\n"
+            )
+        )
+        == [],
+    )
+
+    found = run(
+        project_code_workflow(
+            ISSUES_WRITE,
+            CHECKOUT_CLEAN + "      - run: cargo build\n",
+            job_env="    env:\n      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n",
+        )
+    )
+    check(
+        "a token in the job's own environment reaches every step, so a build in it is reported",
+        kinds(found) == ["privileged-job-runs-project-code"],
+        str(kinds(found)),
+    )
+
+    split = (
+        CHECKOUT_CLEAN
+        + "      - name: Measure\n        run: cargo test --all --locked\n"
+        "      - name: File\n        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"
+        "        run: contrib/measure-flakes.py --load measured.json --file-issues x/y\n"
+    )
+    check(
+        "a token in the step that only files, beside a build step that has none, is clean",
+        run(project_code_workflow(ISSUES_WRITE, split)) == [],
+    )
+
+    found = run(project_code_workflow(ISSUES_WRITE, CHECKOUT_CLEAN + "      - run: cargo fmt --all --check\n"))
+    check("a cargo command that compiles nothing is not reported", found == [], str(kinds(found)))
 
 
 # A real reference and the digest it resolved to, because a fixture written with a made-up hash
@@ -2074,8 +2279,8 @@ def test_the_prompt_lane_starts_from_every_prompt():
     )
     names = {(Path(site["path"]).name, site["function"]) for site in real}
     wanted = {
-        ("confirm.rs", "ask"),
-        ("confirm.rs", "ask_mcp_call"),
+        ("write.rs", "ask"),
+        ("mcp.rs", "ask_mcp_call"),
         ("trust_prompt.rs", "ask"),
         ("Transcript.tsx", "case 'confirm'"),
         ("Transcript.tsx", "case 'vet'"),
@@ -2114,6 +2319,7 @@ KEPT = [
     "Confirmer::interjection: nothing",
     "Answers::trust: the trust map",
     "trust_prompt::ask: the trust map",
+    "Asker::ask_to_start: one effect",
 ]
 
 
@@ -2124,8 +2330,10 @@ def register_findings(
     methods=("confirm_write", "interjection"),
     fields=("trust",),
     asks=("ask",),
+    questions=("ask_to_start",),
     spec_id="PROMPT",
     elsewhere="",
+    visibility="pub ",
 ):
     """Run the register check in a tree holding one of each declaration it reads."""
     front = "".join(f"  - {one}\n" for one in kept)
@@ -2141,8 +2349,11 @@ def register_findings(
             "crates/agent/src/confirm.rs": f"pub trait {trait} {{\n"
             + "".join(f"    /// Asks.\n    fn {one}(&mut self) -> Decision;\n" for one in methods)
             + "}\n",
-            "crates/tui/src/app.rs": "struct Answers {\n"
-            + "".join(f"    /// Kept.\n    {one}: Kept,\n" for one in fields)
+            "crates/agent/src/answers.rs": "pub struct Answers<Rules = ()> {\n"
+            + "".join(f"    /// Kept.\n    {visibility}{one}: Kept,\n" for one in fields)
+            + "}\n",
+            "crates/agent/src/servers.rs": "pub trait Asker {\n"
+            + "".join(f"    /// Asks.\n    fn {one}(&mut self) -> Answer;\n" for one in questions)
             + "}\n",
             "crates/tui/src/trust_prompt.rs": "".join(
                 f"{one}<B: Backend>(terminal: &mut Terminal<B>) -> Answer {{\n}}\n"
@@ -2173,12 +2384,19 @@ def test_answers_registered():
 
     cases = [
         ("a confirmer method nobody listed", {"methods": ("confirm_write", "interjection", "confirm_new")}, ["answer-unregistered"]),
+        ("a server question nobody listed", {"questions": ("ask_to_start", "ask_to_move")}, ["answer-unregistered"]),
         ("a remembered set nobody listed", {"fields": ("trust", "granted")}, ["answer-unregistered"]),
         ("a trust question nobody listed", {"asks": ("ask", "ask_again")}, ["answer-unregistered"]),
+        ("a field with no visibility nobody listed", {"fields": ("trust", "granted"), "visibility": ""}, ["answer-unregistered"]),
+        (
+            "a field visible to the crate nobody listed",
+            {"fields": ("trust", "granted"), "visibility": "pub(crate) "},
+            ["answer-unregistered"],
+        ),
         ("an entry for a member that is gone", {"kept": KEPT + ["Answers::gone: the trust map"]}, ["kept-in-stale"]),
         (
             "an entry landing in a row the table does not have",
-            {"kept": KEPT[:2] + ["Answers::trust: a row nobody wrote", KEPT[3]]},
+            {"kept": KEPT[:2] + ["Answers::trust: a row nobody wrote", KEPT[3], KEPT[4]]},
             ["register-row-unknown"],
         ),
         ("an entry that is not member and row", {"kept": KEPT + ["the trust map"]}, ["kept-in-malformed"]),
@@ -2223,8 +2441,30 @@ def test_answers_registered():
     unlisted = register_findings(fields=("trust", "granted"))
     check(
         "the finding names the member and where it is declared",
-        unlisted and "Answers::granted" in unlisted[0]["title"] and "crates/tui/src/app.rs" in unlisted[0]["summary"],
+        unlisted and "Answers::granted" in unlisted[0]["title"] and "crates/agent/src/answers.rs" in unlisted[0]["summary"],
         str(unlisted[0] if unlisted else "no finding"),
+    )
+
+    asker = register_findings(kept=[one for one in KEPT if not one.startswith("Asker::")])
+    check(
+        "a question asked through the servers' asker with no entry is named by the finding",
+        kinds(asker) == ["answer-unregistered"] and "Asker::ask_to_start" in asker[0]["title"],
+        str(asker),
+    )
+
+    def tool_list_cells():
+        spec = next(one for one in audit.load_specs() if one.id == audit.PROMPT_SPEC)
+        return [
+            line
+            for line in spec.lines
+            if line.startswith("| MCP tool lists approved |")
+        ]
+
+    cells = with_cwd(ROOT, tool_list_cells)
+    check(
+        "no cell of the tool list row says a yes is kept in a file, which SERVERS-8 says it is not",
+        len(cells) == 2 and not any("a yes lives in a file every later session reads" in one for one in cells),
+        str(len(cells)),
     )
 
     missing = with_cwd(ROOT, lambda: [one for one in audit.REMEMBERED_SETS if not Path(one).is_file()])
@@ -2243,6 +2483,7 @@ def test_answers_registered():
             ("crates/agent/src/tools.rs", True),
             ("crates/tui/src/asks.rs", True),
             ("crates/tui/src/app.rs", True),
+            ("crates/tui/src/app/actions.rs", True),
             ("docs/specs/asking.md", True),
             ("crates/core/src/label.rs", False),
         ]:
@@ -2257,6 +2498,328 @@ def test_answers_registered():
             )
     finally:
         audit.mechanics.changed_files = was
+
+
+CHANGED = (
+    "Moved",
+    "New session",
+    "Subject replaced",
+    "Other directory",
+    "Invocation changed",
+    "Declaration changed",
+    "More than shown",
+)
+CHANGES_HEADER = "| Answer kept | " + " | ".join(CHANGED) + " |"
+NOT_REACHED = "not reached: the key holds nothing of it"
+TABLE_TEST = "bravebot_agent::kept_answers::changing_the_world_under_a_yes_asks_again"
+
+
+def changes_row(name, **said):
+    """One row of the table of changes, every cell a reason unless the caller says otherwise."""
+    cells = {change: NOT_REACHED for change in CHANGED}
+    cells.update(said)
+    return "| " + name + " | " + " | ".join(cells[change] for change in CHANGED) + " |"
+
+
+def changes_findings(
+    rows=None,
+    header=CHANGES_HEADER,
+    table=True,
+    cases=(("the trust map", "Moved"),),
+    registered=("one effect", "the trust map"),
+):
+    """Run the check on what changes do to an answer in a tree holding a register and its cases."""
+    if rows is None:
+        rows = (
+            changes_row(
+                "one effect",
+                **{"Moved": "asked again: the key holds the root `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`"},
+            ),
+            changes_row(
+                "the trust map",
+                **{
+                    "Moved": f"asked again: a rule is a path made absolute `verified-by: {TABLE_TEST}`",
+                    "Subject replaced": "accepted: [costs.md](costs.md#known-costs)",
+                    "Other directory": "by design: a directory covers what is beneath it; asked again: a sibling is not reached `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`",
+                },
+            ),
+        )
+    register = "".join(
+        f"| {name} | `y` | the directory | the path | the session | accepted: [costs.md](costs.md#known-costs) |\n"
+        for name in registered
+    )
+    second = (
+        f"\nWhat changes do.\n\n{header}\n|---|{'---|' * len(CHANGED)}\n"
+        + "".join(f"{row}\n" for row in rows)
+        if table
+        else ""
+    )
+    literals = "".join(
+        f'        Case {{\n            row: "{row}",\n            change: "{change}",\n            asked_again: f,\n        }},\n'
+        for row, change in cases
+    )
+    tree = in_tree(
+        {
+            "docs/specs/asking.md": "---\nid: PROMPT\ntitle: Asking\nstatus: normative\n"
+            "governs:\n  - crates/tui/src/trust_prompt.rs\nkept_in:\n  - Answers::trust: the trust map\n---\n\n"
+            '<a id="PROMPT-11"></a>\n### PROMPT-11: the register\n\n'
+            "| Answer kept | Asked by | Shown | Kept under | Lasts | Evidence |\n"
+            "|---|---|---|---|---|---|\n" + register + second + "\n**Why.** So.\n",
+            "docs/specs/costs.md": "---\nid: COST\n---\n\n## Known costs\n\n- **One.** It costs.\n",
+            "docs/specs/plain.md": "---\nid: PLAIN\n---\n\n### Known costs\n\nNone.\n",
+            "crates/demo/Cargo.toml": '[package]\nname = "bravebot-demo"\n',
+            "crates/demo/src/keys.rs": "#[cfg(test)]\nmod tests {\n    #[test]\n"
+            "    fn a_key_tells_two_cases_apart() {}\n}\n",
+            "crates/agent/Cargo.toml": '[package]\nname = "bravebot-agent"\n',
+            "crates/agent/src/kept_answers.rs": "fn table() {\n    let cases = vec![\n" + literals + "    ];\n}\n"
+            "#[test]\nfn changing_the_world_under_a_yes_asks_again() {}\n",
+        }
+    )
+    return with_cwd(
+        tree,
+        lambda: list(
+            audit.check_changes_under_a_yes(audit.load_specs(), audit.mechanics.load_sources())
+        ),
+    )
+
+
+def test_changes_under_a_yes():
+    """A kept answer with nothing said of a moved checkout or a replaced file is how a yes covers more.
+
+    Each fixture is the clean table with one thing wrong, and the finding it expects is the one a
+    reader would otherwise find out by a person being asked nothing. The cells are read for the
+    leader and the reason because a cell holding a mark reads as decided when nobody decided it.
+    """
+    found = changes_findings()
+    check("a table with a reasoned cell for every answer and change is silent", found == [], str(kinds(found)))
+
+    good = {
+        "Other directory": "asked again: a sibling is not reached `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`",
+    }
+    cases = [
+        ("a register with no second table", {"table": False}, ["changes-unreadable"]),
+        (
+            "a table whose columns are not the changes",
+            {"header": CHANGES_HEADER.replace("Moved", "Relocated")},
+            ["changes-unreadable"],
+        ),
+        (
+            "an answer in the register with no row in the table",
+            {"registered": ("one effect", "the trust map", "hosts answered")},
+            ["changes-row-missing"],
+        ),
+        (
+            "a row for an answer the register does not have",
+            {"registered": ("one effect",)},
+            ["changes-row-unknown"],
+        ),
+        (
+            "a row written twice",
+            {
+                "rows": (
+                    changes_row("one effect", **good),
+                    changes_row("one effect", **good),
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-row-duplicate"],
+        ),
+        (
+            "a cell left empty",
+            {"rows": (changes_row("one effect", **{"Moved": ""}), changes_row("the trust map", **good)), "cases": ()},
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a cell holding n/a",
+            {"rows": (changes_row("one effect", **{"Moved": "n/a"}), changes_row("the trust map", **good)), "cases": ()},
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a cell that opens with none of the four words",
+            {
+                "rows": (changes_row("one effect", **{"Moved": "see the spec for this one"}), changes_row("the trust map", **good)),
+                "cases": (),
+            },
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a not reached with no reason",
+            {"rows": (changes_row("one effect", **{"Moved": "not reached: no"}), changes_row("the trust map", **good)), "cases": ()},
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "a cell past the last column",
+            {
+                "rows": (
+                    changes_row("one effect", **good).replace(" |\n", " | more |\n") + " more |",
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-cell-unsaid"],
+        ),
+        (
+            "an asked again that cites no test",
+            {
+                "rows": (changes_row("one effect", **{"Moved": "asked again: the key holds the root"}), changes_row("the trust map", **good)),
+                "cases": (),
+            },
+            ["changes-unpinned"],
+        ),
+        (
+            "an asked again citing a test that does not exist",
+            {
+                "rows": (
+                    changes_row("one effect", **{"Moved": "asked again: the key holds the root `verified-by: bravebot_demo::keys::a_key_tells_nothing`"}),
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-test-missing"],
+        ),
+        (
+            "an accepted that links no Known cost",
+            {
+                "rows": (changes_row("one effect", **{"Moved": "accepted: it is fine"}), changes_row("the trust map", **good)),
+                "cases": (),
+            },
+            ["changes-cost-missing"],
+        ),
+        (
+            "an accepted linking a spec that admits none",
+            {
+                "rows": (
+                    changes_row("one effect", **{"Moved": "accepted: [plain.md](plain.md#known-costs)"}),
+                    changes_row("the trust map", **good),
+                ),
+                "cases": (),
+            },
+            ["changes-cost-missing"],
+        ),
+        ("a cell citing the table test with no case for it", {"cases": ()}, ["changes-case-missing"]),
+        (
+            "a case that no cell cites",
+            {"cases": (("the trust map", "Moved"), ("one effect", "Other directory"))},
+            ["changes-case-unlisted"],
+        ),
+    ]
+    for name, change, expected in cases:
+        found = changes_findings(**change)
+        check(f"{name} is reported", kinds(found) == expected, str(kinds(found)))
+
+    found = changes_findings(
+        rows=(
+            changes_row("one effect", **{"Moved": "by design: the move keeps it; asked again: a copy forgets it `verified-by: bravebot_demo::keys::a_key_tells_two_cases_apart`"}),
+            changes_row("the trust map", **{"Moved": f"asked again: the root moves `verified-by: {TABLE_TEST}`"}),
+        ),
+    )
+    check("a cell of two statements is read as two", found == [], str(kinds(found)))
+
+
+def test_the_stop_hook():
+    """A task that ends with the register broken is sent back, and one that never went near it is not.
+
+    The hook decides two things a session depends on: whether the working tree's diff is one the
+    check is worth running for, and what to say when it fails. A hook that never blocks and one that
+    blocks forever both read as a quiet failure, so each is run against the input that tells it apart
+    from the other.
+    """
+    broken = audit.finding(audit.ERROR, "answer-unregistered", "t", "a set nobody listed", "trust", "low")
+    only_warned = audit.finding(audit.WARNING, "kept-in-stale", "t", "an entry outliving its member", "trust", "low")
+
+    check("a tree the pass finds nothing in is let stop", audit.stop_response({}, []) is None)
+    check("a warning alone is let stop", audit.stop_response({}, [only_warned]) is None)
+    blocked = audit.stop_response({}, [only_warned, broken])
+    check(
+        "an error blocks the stop and hands the session the finding to fix",
+        blocked is not None
+        and blocked.get("decision") == "block"
+        and "a set nobody listed" in blocked["reason"]
+        and "an entry outliving its member" not in blocked["reason"],
+        str(blocked),
+    )
+    again = audit.stop_response({"stop_hook_active": True}, [broken])
+    check(
+        "a stop after a block is let through with the finding shown, so a session that cannot fix it ends",
+        again is not None and "decision" not in again and "a set nobody listed" in again["systemMessage"],
+        str(again),
+    )
+
+    specs = with_cwd(ROOT, audit.load_specs)
+    for touched, wanted in [
+        ("crates/agent/src/answers.rs", True),
+        ("crates/agent/src/kept_answers.rs", True),
+        ("crates/ui-bridge/src/running.rs", True),
+        ("crates/cli/src/plain.rs", True),
+        ("crates/tui/src/app.rs", True),
+        ("crates/tui/src/app/actions.rs", True),
+        ("crates/tui/src/confirm.rs", True),
+        ("docs/specs/prompting.md", True),
+        ("crates/core/src/label.rs", False),
+        ("README.md", False),
+    ]:
+        check(
+            f"a working tree that touches {touched} "
+            + ("is checked" if wanted else "is not checked"),
+            audit.touches_kept_answers({touched}, specs) == wanted,
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        def git(*arguments):
+            subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *arguments],
+                cwd=tmp,
+                check=True,
+                capture_output=True,
+            )
+
+        git("init", "-q")
+        for name in ("edited.txt", "moved.txt", "same.txt"):
+            (Path(tmp) / name).write_text("before\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-q", "-m", "start")
+        none_yet = sorted(with_cwd(tmp, audit.branch_files))
+        check(
+            "a clean tree with no default branch to measure from has changed nothing",
+            none_yet == [],
+            str(none_yet),
+        )
+        git("update-ref", "refs/remotes/upstream/main", "HEAD")
+        (Path(tmp) / "committed.txt").write_text("kept\n", encoding="utf-8")
+        git("add", "committed.txt")
+        git("commit", "-q", "-m", "a change the session already committed")
+        (Path(tmp) / "edited.txt").write_text("after\n", encoding="utf-8")
+        git("mv", "moved.txt", "renamed.txt")
+        (Path(tmp) / "staged.txt").write_text("new\n", encoding="utf-8")
+        git("add", "staged.txt")
+        (Path(tmp) / "deep").mkdir()
+        (Path(tmp) / "deep" / "untracked.txt").write_text("new\n", encoding="utf-8")
+        got = sorted(with_cwd(tmp, audit.uncommitted_files))
+        check(
+            "the working tree's diff is the edited, staged, untracked and both ends of a renamed path",
+            got == sorted(["edited.txt", "moved.txt", "renamed.txt", "staged.txt", "deep/untracked.txt"]),
+            str(got),
+        )
+        whole = sorted(with_cwd(tmp, audit.branch_files))
+        check(
+            "the branch's changes are those and what it has already committed since the default branch",
+            whole == sorted(got + ["committed.txt"]),
+            str(whole),
+        )
+
+    wired = json.loads((ROOT / "agents" / "settings.json").read_text(encoding="utf-8"))
+    commands = [
+        hook.get("command", "")
+        for entry in wired.get("hooks", {}).get("Stop", [])
+        for hook in entry.get("hooks", [])
+    ]
+    check(
+        "the Stop hook in agents/settings.json runs this script in the mode that answers it",
+        commands == ['python3 "$CLAUDE_PROJECT_DIR/agents/skills/security-audit/security-audit.py" --stop-hook']
+        and (ROOT / "agents/skills/security-audit/security-audit.py").is_file(),
+        str(commands),
+    )
 
 
 def test_verifier_prompt_composes():
@@ -2527,40 +3090,12 @@ def test_bodies_say_where_and_why():
     )
 
 
-def test_posting_skips_what_the_tracker_already_holds():
-    """Dedup, on the pair of findings that break the obvious way of doing it.
+def test_a_draft_key_is_one_its_title_keeps():
+    """The key the issue-poster definition searches the tracker for has to be in the title.
 
-    Two specs with unpinned clauses produce one sentence with one word changed. Comparing wording
-    alone calls the second a duplicate of the first, and the second never gets filed.
+    The summary names a path and the title shortens it to the file name, so a key taken from the
+    summary can match no title on the tracker, and a search for it reads as nothing like this being filed.
     """
-    tracker = []
-
-    def fake_gh(args, repo):
-        """`gh issue list --search`, near enough: every term has to be in the title.
-
-        Returning the whole tracker whatever was asked for would pass a query that finds nothing,
-        which is the way a duplicate actually got filed: the search looked for a key that no title
-        holds, found none, and read that as nothing like this being on the tracker.
-        """
-        if args[:2] != ["issue", "list"]:
-            raise AssertionError(f"a dedup check called gh {' '.join(args[:2])}")
-        query = args[args.index("--search") + 1]
-        terms = [one.lower() for one in query.split() if ":" not in one]
-        return json.dumps(
-            [one for one in tracker if all(term in one["title"].lower() for term in terms)]
-        )
-
-    posting.gh = fake_gh
-
-    check(
-        "a run is paced to one issue every ten seconds and change",
-        posting.PACE == 10.0 and posting.JITTER == (1.0, 5.0),
-        f"{posting.PACE}, {posting.JITTER}",
-    )
-
-    # The shape the enumerator writes, including the part that makes this hard: the summary names a
-    # path and the title shortens it to the file name, so the summary's own string is not in the
-    # title and a key taken from it matches nothing on the tracker.
     findings = [
         {
             "kind": "unpinned-guarantee",
@@ -2576,95 +3111,20 @@ def test_posting_skips_what_the_tracker_already_holds():
             "title": "nothing pins 2 clauses of `processors.md`, so a change that breaks one passes every check",
             "summary": "`docs/specs/processors.md` has 2 clauses at `verified-by: none`",
         },
-        # And the case with nothing to anchor to: everything this one names is a path its title does
-        # not keep, so the wording is the whole of what dedup has.
-        {
-            "kind": "exception-count-disagreement",
-            "impact": "low",
-            "area": "trust",
-            "title": "the review pass names fewer admitted exceptions than the spec, so an unnamed one reads as a violation",
-            "summary": "`docs/development/reviewing-for-the-rule.md` says 2 and `docs/specs/labels.md` names 3",
-        },
     ]
     out = Path(tempfile.mkdtemp(prefix="security-audit-selftest-")) / "issues"
     written = with_cwd(ROOT, lambda: drafts.draft(findings, out))
     check(
         "a draft's key is one its own title keeps, where the finding names one at all",
-        all(one["key"].lower() in one["title"].lower() for one in written[:2]),
-        str([(one["key"], one["title"]) for one in written[:2]]),
+        all(one["key"].lower() in one["title"].lower() for one in written),
+        str([(one["key"], one["title"]) for one in written]),
     )
-
-    tracker = [{"number": 11, "state": "OPEN", "url": "u", "title": written[0]["title"]}]
+    report = drafts.report(written, out)
     check(
-        "a finding the tracker already holds is not filed again",
-        posting.already_filed("brave/bravebot", written[0]) is not None,
+        "the report sends each draft to the issue-poster definition",
+        "agents/agents/issue-poster.md" in report and "post-issues" not in report,
+        report,
     )
-    check(
-        "a finding whose wording matches another spec's is still filed",
-        posting.already_filed("brave/bravebot", written[1]) is None,
-    )
-
-    tracker = [{"number": 12, "state": "CLOSED", "url": "u", "title": written[0]["title"]}]
-    check(
-        "an issue somebody read and closed is an answer, not a gap",
-        posting.already_filed("brave/bravebot", written[0]) is not None,
-    )
-
-    tracker = [{"number": 13, "state": "OPEN", "url": "u", "title": written[2]["title"]}]
-    check(
-        "a finding with no key its title keeps is still recognised by its wording",
-        posting.already_filed("brave/bravebot", written[2]) is not None,
-        f"key {written[2]['key']!r} is not in {written[2]['title']!r}",
-    )
-
-    tracker = []
-    check(
-        "a finding nothing on the tracker names is filed",
-        posting.already_filed("brave/bravebot", written[0]) is None,
-    )
-
-
-def test_an_assignee_reaches_the_create():
-    """The login has to arrive at `gh issue create`, not just at the parser.
-
-    Nothing else in this file calls `post`, so an `--assignee` that is parsed and never threaded
-    through files every issue unassigned and still passes every other check here.
-    """
-    original = posting.helper.gh
-    calls = []
-
-    def fake_gh(args, repo=None):
-        calls.append(list(args))
-        return "https://github.com/brave/bravebot/issues/1"
-
-    posting.helper.gh = fake_gh
-    draft = {"title": "t", "body_file": "b", "labels": ["security"]}
-
-    posting.post("brave/bravebot", draft, "netzenbot")
-    passed = calls[-1]
-    check(
-        "the login a run was given is the one the create is passed",
-        "--assignee" in passed and passed[passed.index("--assignee") + 1] == "netzenbot",
-        str(passed),
-    )
-
-    posting.post("brave/bravebot", draft)
-    check(
-        "a run given no login names no assignee, so an unassigned issue stays the default",
-        "--assignee" not in calls[-1],
-        str(calls[-1]),
-    )
-
-    def refusing_gh(args, repo=None):
-        raise RuntimeError("Not Found")
-
-    posting.helper.gh = refusing_gh
-    check(
-        "a login the repository would refuse is caught before anything is posted",
-        not posting.assignable("brave/bravebot", "nobody"),
-    )
-
-    posting.helper.gh = original
 
 
 def test_a_run_writes_a_manifest_and_posts_nothing():
@@ -2712,17 +3172,319 @@ def test_the_manifest_is_read_from_the_work_directory():
         )
 
 
+def test_verifying_saves_the_candidates_the_collector_reads():
+    """The collector takes each candidate, and where its verdict goes, from the manifest.
+
+    A verify pass that pairs candidates with verifiers and does not save the pairing leaves a report
+    of no candidates, whatever the verifiers decided.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        lane_results = work / "gates_results.json"
+        lane_results.write_text(
+            json.dumps({"candidates": [{"summary": "a claim", "place": "crates/core/src/policy.rs:1"}]}),
+            encoding="utf-8",
+        )
+        collect.workdir.write_manifest(
+            work,
+            {
+                "lanes": [
+                    {
+                        "lane": "gates",
+                        "prompt_file": str(work / "gates_prompt.md"),
+                        "results_file": str(lane_results),
+                    }
+                ]
+            },
+        )
+        argv = sys.argv
+        sys.argv = ["verify-findings.py", "--work-dir", str(work)]
+        try:
+            with redirect_stdout(io.StringIO()):
+                status = verifying.main()
+        finally:
+            sys.argv = argv
+        check("pairing candidates with verifiers exits clean", status == 0, str(status))
+
+        pairs = collect.read_manifest(work).get("verifications", [])
+        if not check(
+            "the manifest keeps one verification for the one candidate",
+            len(pairs) == 1 and pairs[0]["lane"] == "gates" and Path(pairs[0]["prompt_file"]).is_file(),
+            str(pairs),
+        ):
+            return
+        Path(pairs[0]["results_file"]).write_text(
+            json.dumps({"verdict": "CONFIRMED", "impact": "low"}), encoding="utf-8"
+        )
+        findings = collect.load_verdicts(collect.read_manifest(work))[0]
+        check(
+            "a verdict written where the manifest says is collected as a finding",
+            [one["lane"] for one in findings] == ["gates"],
+            str(findings),
+        )
+
+
+LISTED = (
+    "disallowed-methods = [\n"
+    '    { path = "std::process::Command::new", reason = "r" },\n'
+    '    { path = "windows_sys::Win32::System::Threading::CreateProcessW", reason = "r" },\n'
+    "]\n"
+)
+MARKED = (
+    "fn go(program: &Path) {\n"
+    '    #[allow(clippy::disallowed_methods, reason = "the person named it")]\n'
+    "    let _ = std::process::Command::new(program);\n"
+    "}\n"
+)
+
+
+def audit_starts(files):
+    where = in_tree(files)
+    return with_cwd(
+        where,
+        lambda: list(audit.check_process_starts_are_marked(audit.mechanics.load_sources())),
+    )
+
+
+def test_process_starts_are_refused_by_the_configuration():
+    found = audit_starts({"clippy.toml": LISTED, "crates/cli/src/identity.rs": MARKED})
+    check("a start marked with a reason is not a finding", found == [], str(found))
+
+    found = audit_starts(
+        {
+            "clippy.toml": 'disallowed-methods = ["std::process::Command::new", '
+            '"windows_sys::Win32::System::Threading::CreateProcessW"]\n',
+        }
+    )
+    check("the calls listed as bare strings are read as listed", found == [], str(found))
+
+    for name, files in {
+        "no clippy.toml": {},
+        "a clippy.toml listing another call": {
+            "clippy.toml": 'disallowed-methods = [{ path = "std::env::var" }]\n'
+        },
+        "a clippy.toml naming both calls only in comments": {
+            "clippy.toml": "# std::process::Command::new\n"
+            "# windows_sys::Win32::System::Threading::CreateProcessW\n"
+            "disallowed-methods = []\n"
+        },
+        "a clippy.toml naming both calls only after a list that is empty": {
+            "clippy.toml": "disallowed-methods = [] # std::process::Command::new, "
+            "windows_sys::Win32::System::Threading::CreateProcessW\n"
+        },
+        "a clippy.toml banning both under another key": {
+            "clippy.toml": 'disallowed-types = [{ path = "std::process::Command::new" }, '
+            '{ path = "windows_sys::Win32::System::Threading::CreateProcessW" }]\n'
+        },
+        "a clippy.toml that cannot be read": {"clippy.toml": "disallowed-methods = [\n"},
+        "a clippy.toml without the Windows call": {
+            "clippy.toml": 'disallowed-methods = [{ path = "std::process::Command::new" }]\n'
+        },
+        "a clippy.toml without the Unix call": {
+            "clippy.toml": "disallowed-methods = "
+            '[{ path = "windows_sys::Win32::System::Threading::CreateProcessW" }]\n'
+        },
+    }.items():
+        found = audit_starts({**files, "crates/cli/src/identity.rs": MARKED})
+        check(
+            f"{name} is an error, since nothing refuses a start",
+            kinds(found) == ["process-start-not-refused"] and found[0]["severity"] == audit.ERROR,
+            str(kinds(found)),
+        )
+    found = audit_starts(
+        {
+            "clippy.toml": 'disallowed-methods = [{ path = "std::process::Command::new" }]\n',
+            "crates/cli/src/identity.rs": MARKED,
+        }
+    )
+    check(
+        "the call missing from clippy.toml is the one the error names",
+        bool(found)
+        and "CreateProcessW" in found[0]["summary"]
+        and "Command::new" not in found[0]["summary"],
+        str([one["summary"] for one in found]),
+    )
+
+
+def test_nothing_makes_clippy_read_another_configuration():
+    crate = {"clippy.toml": LISTED, "crates/agent/Cargo.toml": "[package]\n"}
+    for name, (files, hidden) in {
+        "a clippy.toml in a crate": ({"crates/agent/clippy.toml": 'msrv = "1.90"\n'}, "crates/agent/clippy.toml"),
+        "a .clippy.toml in a crate": ({"crates/agent/.clippy.toml": 'msrv = "1.90"\n'}, "crates/agent/.clippy.toml"),
+        "a clippy.toml above the crates": ({"crates/clippy.toml": 'msrv = "1.90"\n'}, "crates/clippy.toml"),
+        "a .clippy.toml beside the root one": ({".clippy.toml": 'msrv = "1.90"\n'}, ".clippy.toml"),
+        "a manifest that allows the lint": (
+            {"crates/agent/Cargo.toml": '[lints.clippy]\ndisallowed_methods = "allow"\n'},
+            "crates/agent/Cargo.toml",
+        ),
+        "a manifest that allows the lint with a level": (
+            {"Cargo.toml": '[workspace.lints.clippy]\ndisallowed_methods = { level = "allow", priority = 1 }\n'},
+            "Cargo.toml",
+        ),
+        "a cargo configuration that moves clippy's directory": (
+            {".cargo/config.toml": '[env]\nCLIPPY_CONF_DIR = "elsewhere"\n'},
+            ".cargo/config.toml",
+        ),
+    }.items():
+        found = audit_starts({**crate, **files})
+        check(
+            f"{name} is an error naming the file",
+            kinds(found) == ["process-start-refusal-hidden"] and hidden in found[0]["summary"],
+            str([one["summary"] for one in found]),
+        )
+
+    for name, files in {
+        "a clippy.toml deeper than any crate's manifest": {
+            "crates/agent/tests/fixtures/one/clippy.toml": 'msrv = "1.90"\n'
+        },
+        "a manifest that denies the lint": {
+            "crates/agent/Cargo.toml": '[lints.clippy]\ndisallowed_methods = "deny"\n'
+        },
+    }.items():
+        found = audit_starts({**crate, **files})
+        check(f"{name} is not a finding", found == [], str(found))
+
+
+def test_a_mark_is_one_start_with_a_reason():
+    def marks(attribute, path="crates/cli/src/identity.rs", after="fn start() {}\n"):
+        return audit_starts(
+            {"clippy.toml": LISTED, path: f"fn go() {{}}\n{attribute}\n{after}"}
+        )
+
+    def at_line_two(found):
+        return all("crates/cli/src/identity.rs:2" in one["summary"] for one in found)
+
+    for name, attribute in {
+        "no reason": "#[allow(clippy::disallowed_methods)]",
+        "an empty reason": '#[allow(clippy::disallowed_methods, reason = "")]',
+        "a blank reason": '#[allow(clippy::disallowed_methods, reason = "   ")]',
+        "a reason of only a line continuation": '#[allow(clippy::disallowed_methods, reason = "\\\n   ")]',
+        "an expect with no reason": "#[expect(clippy::disallowed_methods)]",
+        "another lint beside it": "#[allow(unused, clippy::disallowed_methods)]",
+        "a crate-wide test allow and no reason": "#![cfg_attr(test, allow(clippy::disallowed_methods))]",
+    }.items():
+        found = marks(attribute)
+        check(
+            f"an allow with {name} is an error naming the file and line",
+            kinds(found) == ["process-start-mark-without-reason"]
+            and found[0]["severity"] == audit.ERROR
+            and at_line_two(found),
+            str([one["summary"] for one in found]),
+        )
+
+    for name, attribute in {
+        "a reason": '#[allow(clippy::disallowed_methods, reason = "the person named it")]',
+        "a reason on its own lines": "#[allow(\n    clippy::disallowed_methods,\n"
+        '    reason = "a path written here, \\\n              and nothing a stage wrote"\n)]',
+        "a reason holding brackets": '#[allow(clippy::disallowed_methods, reason = "see [a] ] and )")]',
+        "an expect with a reason": '#[expect(clippy::disallowed_methods, reason = "the person named it")]',
+        "a deny, which loosens nothing": "#![deny(clippy::disallowed_methods)]",
+        "a warn, which loosens nothing": "#[warn(clippy::disallowed_methods)]",
+    }.items():
+        check(f"an attribute with {name} is not a finding", marks(attribute) == [], str(marks(attribute)))
+
+    for name, (attribute, after) in {
+        "a crate-wide allow": ('#![allow(clippy::disallowed_methods, reason = "needed")]', "fn start() {}\n"),
+        "an allow on a module": (
+            '#[allow(clippy::disallowed_methods, reason = "needed")]',
+            "mod inner {\n    fn start() {}\n}\n",
+        ),
+        "an allow on a public module behind another attribute": (
+            '#[allow(clippy::disallowed_methods, reason = "needed")]\n#[cfg(unix)]',
+            "pub(crate) mod inner {}\n",
+        ),
+        "an allow on an impl": (
+            '#[allow(clippy::disallowed_methods, reason = "needed")]',
+            "impl Thing {\n    fn start() {}\n}\n",
+        ),
+        "an allow of the style group": ('#[allow(clippy::style)]', "fn start() {}\n"),
+        "an allow of the all group": ('#![allow(clippy::all)]', "fn start() {}\n"),
+        "an allow of warnings": ('#[allow(warnings)]', "fn start() {}\n"),
+    }.items():
+        found = audit_starts(
+            {"clippy.toml": LISTED, "crates/cli/src/identity.rs": f"fn go() {{}}\n{attribute}\n{after}"}
+        )
+        check(
+            f"{name} is an error, since it lifts the refusal from more than one start",
+            kinds(found) == ["process-start-mark-too-wide"] and found[0]["severity"] == audit.ERROR,
+            str([one["summary"] for one in found]),
+        )
+
+    found = marks("#![allow(clippy::disallowed_methods)]")
+    check(
+        "a crate-wide allow with no reason is both too wide and unexplained",
+        kinds(found) == ["process-start-mark-too-wide", "process-start-mark-without-reason"],
+        str(kinds(found)),
+    )
+
+    for name, (attribute, path) in {
+        "a crate-wide test allow": (
+            '#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "a test"))]',
+            "crates/cli/src/identity.rs",
+        ),
+        "a crate-wide test allow of every lint": (
+            "#![cfg_attr(test, allow(clippy::all))]",
+            "crates/cli/src/identity.rs",
+        ),
+        "an integration test file's allow": (
+            '#![allow(clippy::disallowed_methods, reason = "a test")]',
+            "crates/cli/tests/running.rs",
+        ),
+        "a test support file's allow": (
+            '#![allow(clippy::disallowed_methods, reason = "a test")]',
+            "crates/session/test-support/profile.rs",
+        ),
+    }.items():
+        found = marks(attribute, path=path)
+        check(f"{name} is not a finding", found == [], str(found))
+
+    found = marks("#![allow(clippy::disallowed_methods)]", path="crates/cli/tests/running.rs")
+    check(
+        "an integration test file's allow still needs a reason",
+        kinds(found) == ["process-start-mark-without-reason"],
+        str(kinds(found)),
+    )
+
+    for name, body in {
+        "a comment": "// #[allow(clippy::disallowed_methods)]\nfn go() {}\n",
+        "a string": "fn go() -> &'static str { \"clippy::disallowed_methods\" }\n",
+        "a comment about warnings": "// #[allow(warnings)] is not used\nfn go() {}\n",
+    }.items():
+        found = audit_starts({"clippy.toml": LISTED, "crates/cli/src/identity.rs": body})
+        check(f"the lint named in {name} is not a finding", found == [], str(found))
+
+    found = audit_starts(
+        {
+            "clippy.toml": LISTED,
+            "crates/cli/src/a.rs": '#[allow(clippy::disallowed_methods, reason = "named")]\nfn a() {}\n',
+            "crates/cli/src/b.rs": "fn b() {}\n\n#[allow(clippy::disallowed_methods)]\nfn b2() {}\n"
+            '#[allow(clippy::disallowed_methods, reason = "named")]\nfn b3() {}\n',
+        }
+    )
+    check(
+        "only the mark without a reason is reported, at its own line",
+        kinds(found) == ["process-start-mark-without-reason"]
+        and "crates/cli/src/b.rs:3" in found[0]["summary"],
+        str([one["summary"] for one in found]),
+    )
+
+
 def main():
     for test in (
         test_exception_counts,
         test_network_clients_are_recorded,
+        test_process_starts_are_refused_by_the_configuration,
+        test_nothing_makes_clippy_read_another_configuration,
+        test_a_mark_is_one_start_with_a_reason,
         test_prompt_split,
         test_exhaustive_reader_docs,
         test_labelled_impls,
         test_pinned_actions,
         test_pinned_images,
         test_privileged_job_runs_only_its_own_code,
+        test_privileged_job_runs_project_code,
         test_checkout_ref_is_qualified,
+        test_grant_is_behind_an_environment,
         test_required_checks_are_the_gates,
         test_construction_pinned,
         test_gates_pinned,
@@ -2732,16 +3494,18 @@ def main():
         test_every_lane_prompt_composes,
         test_the_prompt_lane_starts_from_every_prompt,
         test_answers_registered,
+        test_changes_under_a_yes,
+        test_the_stop_hook,
         test_verifier_prompt_composes,
         test_impact_sets_severity,
         test_labels,
         test_titles,
         test_a_name_stays_a_name,
         test_bodies_say_where_and_why,
-        test_posting_skips_what_the_tracker_already_holds,
-        test_an_assignee_reaches_the_create,
+        test_a_draft_key_is_one_its_title_keeps,
         test_a_run_writes_a_manifest_and_posts_nothing,
         test_the_manifest_is_read_from_the_work_directory,
+        test_verifying_saves_the_candidates_the_collector_reads,
     ):
         print(test.__name__)
         test()

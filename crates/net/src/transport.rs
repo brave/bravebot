@@ -10,6 +10,7 @@
 //! and compile a root set into the binary, and a version that changed either would change what
 //! this program trusts with nothing in this repository saying so.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -32,6 +33,17 @@ pub const PROXY_VARIABLES: &[&str] = &["ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"]
 
 /// The variable naming the hosts a proxy is not used for.
 pub const NO_PROXY: &str = "NO_PROXY";
+
+/// The names a settings file may state in place of the environment, which is BACKEND-33's reading of
+/// these six and no others. A caller that owns the settings hands them to [`Transport::settle`].
+pub const SETTINGS_NAMES: [&str; 6] = [
+    CERTIFICATE_FILE,
+    CERTIFICATE_DIRECTORY,
+    "ALL_PROXY",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    NO_PROXY,
+];
 
 /// Which certificate authorities a server is validated against.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +113,12 @@ impl fmt::Display for TrustError {
 
 impl std::error::Error for TrustError {}
 
+/// What a settings file stated, set once by [`Transport::settle`].
+static FROM_FILE: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+
+/// What the environment and that file resolved to, read once for the whole process.
+static SHARED: OnceLock<Transport> = OnceLock::new();
+
 /// What every HTTP client in this process trusts, and what it goes through.
 pub struct Transport {
     roots: TrustRoots,
@@ -117,6 +135,10 @@ pub struct Transport {
     unparseable_proxies: Vec<String>,
     /// What `NO_PROXY` held, for the report. The transport library reads it for itself.
     no_proxy: Option<String>,
+    /// Whether the roots came from a settings file because the environment named none.
+    roots_from_file: bool,
+    /// Whether the proxy came from a settings file because the environment named none.
+    proxy_from_file: bool,
 }
 
 impl Transport {
@@ -126,32 +148,110 @@ impl Transport {
     /// turn, each model roster and each update check; and because two clients resolving the
     /// environment at different moments could disagree about what this process trusts.
     pub fn shared() -> &'static Self {
-        static SHARED: OnceLock<Transport> = OnceLock::new();
         SHARED.get_or_init(Self::from_env)
     }
 
+    /// Hand over what a settings file stated for [`SETTINGS_NAMES`], before the first call to
+    /// [`Transport::shared`] resolves them.
+    ///
+    /// Returns whether they will be read: false where something already resolved the transport, or
+    /// where an earlier call settled it, since a value arriving after the answer is a value that
+    /// decides nothing and the caller is the one to say so. A blank value names nothing, as it does
+    /// in the environment, and a name outside the six is not kept.
+    pub fn settle(values: impl IntoIterator<Item = (String, String)>) -> bool {
+        FROM_FILE.set(stated_names(values)).is_ok() && SHARED.get().is_none()
+    }
+
+    /// What a settings file states and the environment does not, resolved as [`Transport::shared`]
+    /// resolves it with an environment that names nothing.
+    ///
+    /// Exists so a test can hold the route and the roots a file produces to what a client is built
+    /// with, which is otherwise reachable only through the process-wide answer every other test in
+    /// the suite shares.
+    pub fn stated_by_file(values: impl IntoIterator<Item = (String, String)>) -> Self {
+        let stated = stated_names(values);
+        Self::from_sources(
+            &|_| None,
+            &|name| stated.get(name).map(OsString::from),
+            || None,
+        )
+    }
+
     fn from_env() -> Self {
-        let lookup = |name: &str| std::env::var_os(name);
-        // Which variables the reader below passes over, read for the report alone. It skips a value
-        // that is not a uri and goes on to the next variable, so without this the route it chose and
-        // the variable somebody set are two different statements and the report makes only the
-        // first.
-        let unparseable = unparseable_proxy_variables(&lookup);
-        let mut transport = Self::resolve(
-            TrustRoots::from_env(lookup),
+        let stated = FROM_FILE.get();
+        Self::from_sources(
+            &|name| std::env::var_os(name),
+            &|name| {
+                stated
+                    .and_then(|values| values.get(name))
+                    .map(OsString::from)
+            },
             // The transport library's own reader, so the variables it looks at and the `NO_PROXY`
             // exceptions it honours are the ones every other client of it honours. Called here
             // rather than left to its default, so a release that stopped calling it changes
             // nothing about this program and the tests below fail rather than the proxy quietly
             // going away.
-            Proxy::try_from_env(),
-        );
-        transport.unparseable_proxies = unparseable;
-        transport.no_proxy = [NO_PROXY, "no_proxy"]
-            .iter()
-            .find_map(|name| std::env::var(name).ok())
-            .filter(|value| !value.is_empty());
-        transport
+            Proxy::try_from_env,
+        )
+    }
+
+    /// The environment and a settings file, the environment first (NET-7, NET-8).
+    ///
+    /// Each answer comes whole from one of the two: the roots from the environment if it names
+    /// either path, and the proxy from the environment if it names any of the three variables,
+    /// whether or not they parse. Mixing them name by name would let a file's `ALL_PROXY` outrank an
+    /// exported `HTTPS_PROXY`, which is the file beating the environment through the order the
+    /// variables are read in.
+    fn from_sources(
+        environment: &impl Fn(&str) -> Option<OsString>,
+        file: &impl Fn(&str) -> Option<OsString>,
+        environment_proxy: impl FnOnce() -> Option<Proxy>,
+    ) -> Self {
+        let (roots, roots_from_file) = match TrustRoots::from_env(environment) {
+            TrustRoots::Bundled => match TrustRoots::from_env(file) {
+                TrustRoots::Bundled => (TrustRoots::Bundled, false),
+                named => (named, true),
+            },
+            named => (named, false),
+        };
+        let no_proxy_of = |lookup: &dyn Fn(&str) -> Option<OsString>| {
+            [NO_PROXY, "no_proxy"]
+                .iter()
+                .find_map(|name| lookup(name).and_then(|value| value.into_string().ok()))
+                .filter(|value| !value.is_empty())
+        };
+        let names_a_proxy = |lookup: &dyn Fn(&str) -> Option<OsString>| {
+            PROXY_VARIABLES.iter().any(|variable| {
+                [variable.to_string(), variable.to_ascii_lowercase()]
+                    .iter()
+                    .any(|name| lookup(name).is_some_and(|value| !value.is_empty()))
+            })
+        };
+
+        let from_the_file = !names_a_proxy(environment) && names_a_proxy(file);
+        if from_the_file {
+            // `NO_PROXY` in the environment still wins over the file's, as every name does, and
+            // applies to a route the file stated.
+            let no_proxy = no_proxy_of(environment).or_else(|| no_proxy_of(file));
+            let proxy = proxy_stated(file, no_proxy.as_deref());
+            let mut transport = Self::resolve(roots, proxy);
+            transport.unparseable_proxies = unparseable_proxy_variables(file);
+            transport.no_proxy = no_proxy;
+            transport.roots_from_file = roots_from_file;
+            transport.proxy_from_file = true;
+            transport
+        } else {
+            // Which variables the reader below passes over, read for the report alone. It skips a
+            // value that is not a uri and goes on to the next variable, so without this the route it
+            // chose and the variable somebody set are two different statements and the report makes
+            // only the first.
+            let unparseable = unparseable_proxy_variables(environment);
+            let mut transport = Self::resolve(roots, environment_proxy());
+            transport.unparseable_proxies = unparseable;
+            transport.no_proxy = no_proxy_of(environment);
+            transport.roots_from_file = roots_from_file;
+            transport
+        }
     }
 
     /// The transport a caller states rather than the environment's.
@@ -208,7 +308,20 @@ impl Transport {
             unusable_proxy,
             unparseable_proxies: Vec::new(),
             no_proxy: None,
+            roots_from_file: false,
+            proxy_from_file: false,
         }
+    }
+
+    /// Whether the roots in force are what a settings file named, the environment naming none, so
+    /// a report can say which file to edit.
+    pub fn roots_from_file(&self) -> bool {
+        self.roots_from_file
+    }
+
+    /// Whether the proxy in force is what a settings file named, on the same terms.
+    pub fn proxy_from_file(&self) -> bool {
+        self.proxy_from_file
     }
 
     /// Where the trust roots come from.
@@ -431,6 +544,47 @@ fn unparseable_proxy_variables(lookup: &impl Fn(&str) -> Option<OsString>) -> Ve
         }
     }
     named
+}
+
+/// The names of [`SETTINGS_NAMES`] a file stated with something in them. A blank value names nothing,
+/// as it does in the environment, and a name outside the six is not kept.
+fn stated_names(values: impl IntoIterator<Item = (String, String)>) -> BTreeMap<String, String> {
+    values
+        .into_iter()
+        .filter(|(name, value)| SETTINGS_NAMES.contains(&name.as_str()) && !value.trim().is_empty())
+        .collect()
+}
+
+/// The first of the proxy variables a lookup holds that reads as a proxy, carrying `no_proxy`'s
+/// exceptions where there are any.
+///
+/// The environment's own reader attaches `NO_PROXY` to the proxy it builds, and a proxy made from
+/// a string does not, so the exceptions are added here through the library's builder from the
+/// parts of the parsed proxy rather than by parsing the uri a second way.
+fn proxy_stated(
+    lookup: &impl Fn(&str) -> Option<OsString>,
+    no_proxy: Option<&str>,
+) -> Option<Proxy> {
+    PROXY_VARIABLES.iter().find_map(|variable| {
+        let value = lookup(variable)?.into_string().ok()?;
+        let proxy = Proxy::new(&value).ok()?;
+        let Some(exceptions) = no_proxy else {
+            return Some(proxy);
+        };
+        let mut builder = Proxy::builder(proxy.protocol())
+            .host(proxy.host())
+            .port(proxy.port());
+        if let Some(username) = proxy.username() {
+            builder = builder.username(username);
+        }
+        if let Some(password) = proxy.password() {
+            builder = builder.password(password);
+        }
+        for entry in exceptions.split(',').map(str::trim) {
+            builder = builder.no_proxy(entry);
+        }
+        Some(builder.build().unwrap_or(proxy))
+    })
 }
 
 /// Whether this build can actually connect through a proxy of this protocol.
@@ -971,5 +1125,196 @@ mod tests {
             config.tls_config().root_certs(),
             RootCerts::WebPki
         ));
+    }
+
+    /// The environment and a settings file as the process resolves them, with the exported proxy
+    /// reader stood in for by `exported`, which is what the library's own would have built from the
+    /// environment lookup.
+    fn resolved(
+        exported: &[(&str, &str)],
+        stated: &[(&str, &str)],
+        exported_proxy: Option<&str>,
+    ) -> Transport {
+        Transport::from_sources(&environment(exported), &environment(stated), || {
+            exported_proxy.and_then(|uri| Proxy::new(uri).ok())
+        })
+    }
+
+    fn proxy_port_of(transport: &Transport) -> Option<u16> {
+        transport
+            .agent_config_builder()
+            .build()
+            .proxy()
+            .map(Proxy::port)
+    }
+
+    fn bypasses(transport: &Transport, host: &str) -> bool {
+        let uri: ureq::http::Uri = format!("https://{host}/").parse().expect("a uri");
+        transport
+            .agent_config_builder()
+            .build()
+            .proxy()
+            .is_some_and(|proxy| proxy.is_no_proxy(&uri))
+    }
+
+    /// NET-8: a launcher that hands the process no shell profile is the case this exists for, so a
+    /// proxy a settings file states is the route a client is built with.
+    #[test]
+    fn a_proxy_a_settings_file_states_is_the_one_a_client_carries() {
+        let transport = resolved(&[], &[("HTTPS_PROXY", "http://proxy.corp:3128")], None);
+
+        assert_eq!(proxy_port_of(&transport), Some(3128));
+        assert_eq!(
+            transport.proxy_summary().as_deref(),
+            Some("http://proxy.corp:3128")
+        );
+        assert!(transport.proxy_from_file());
+    }
+
+    /// The environment wins as a whole: a file's `ALL_PROXY` is read before an exported
+    /// `HTTPS_PROXY` by the order the variables are read in, and has to lose to it all the same.
+    #[test]
+    fn an_exported_proxy_beats_the_file_whatever_names_each_used() {
+        let transport = resolved(
+            &[("HTTPS_PROXY", "http://exported.corp:3129")],
+            &[("ALL_PROXY", "http://stated.corp:3128")],
+            Some("http://exported.corp:3129"),
+        );
+
+        assert_eq!(proxy_port_of(&transport), Some(3129));
+        assert!(!transport.proxy_from_file());
+    }
+
+    /// An exported variable that names no usable route is still the environment speaking, and is
+    /// reported as such: falling through to the file would make the report deny what was exported.
+    #[test]
+    fn an_exported_proxy_that_does_not_parse_is_not_replaced_by_the_file() {
+        let transport = resolved(
+            &[("HTTPS_PROXY", "ht tp://proxy.corp")],
+            &[("ALL_PROXY", "http://stated.corp:3128")],
+            None,
+        );
+
+        assert_eq!(proxy_port_of(&transport), None);
+        assert_eq!(transport.unparseable_proxies(), ["HTTPS_PROXY"]);
+        assert!(!transport.proxy_from_file());
+    }
+
+    /// A file's value that is not a proxy address is named like the environment's, and is not a
+    /// route.
+    #[test]
+    fn a_proxy_in_the_file_that_does_not_parse_is_named_and_is_not_the_route() {
+        let transport = resolved(&[], &[("HTTPS_PROXY", "ht tp://proxy.corp")], None);
+
+        assert_eq!(proxy_port_of(&transport), None);
+        assert_eq!(transport.unparseable_proxies(), ["HTTPS_PROXY"]);
+    }
+
+    /// The exceptions go with a route the file stated, which the library attaches only to a proxy
+    /// it read itself, and the credential in the uri survives the rebuilding that attaches them.
+    #[test]
+    fn a_file_proxy_honours_the_no_proxy_it_is_given_and_keeps_its_credential() {
+        let transport = resolved(
+            &[],
+            &[
+                ("HTTPS_PROXY", "http://alice:s3cret@proxy.corp:3128"),
+                ("NO_PROXY", "internal.corp, .lan,"),
+            ],
+            None,
+        );
+
+        assert!(bypasses(&transport, "internal.corp"));
+        assert!(bypasses(&transport, "build.lan"));
+        assert!(!bypasses(&transport, "api.example"));
+        assert_eq!(transport.no_proxy(), Some("internal.corp, .lan,"));
+        assert!(transport.proxy_is_authenticated());
+        assert_eq!(
+            transport.proxy_summary().as_deref(),
+            Some("http://proxy.corp:3128")
+        );
+    }
+
+    /// `NO_PROXY` is the exception to the file's whole-answer rule: an exported one applies to a
+    /// route the file stated and the file's own is not consulted beside it.
+    #[test]
+    fn an_exported_no_proxy_applies_to_a_file_proxy_in_place_of_the_files() {
+        let transport = resolved(
+            &[("NO_PROXY", "exported.corp")],
+            &[
+                ("HTTPS_PROXY", "http://proxy.corp:3128"),
+                ("NO_PROXY", "stated.corp"),
+            ],
+            None,
+        );
+
+        assert!(bypasses(&transport, "exported.corp"));
+        assert!(!bypasses(&transport, "stated.corp"));
+        assert_eq!(transport.no_proxy(), Some("exported.corp"));
+    }
+
+    /// NET-7: a certificate bundle a settings file names is what is trusted where the environment
+    /// names none.
+    #[test]
+    fn a_certificate_file_a_settings_file_names_is_what_is_trusted() {
+        let transport = resolved(&[], &[("SSL_CERT_FILE", "/etc/corp/ca.pem")], None);
+
+        assert_eq!(
+            transport.roots(),
+            &TrustRoots::Named {
+                file: Some(PathBuf::from("/etc/corp/ca.pem")),
+                directory: None,
+            }
+        );
+        assert!(transport.roots_from_file());
+    }
+
+    /// The pair is taken whole from the environment, as the proxy is: an exported directory beside
+    /// a file's bundle is the exported statement, and the bundle is not added to it.
+    #[test]
+    fn exported_roots_replace_the_files_rather_than_joining_them() {
+        let transport = resolved(
+            &[("SSL_CERT_DIR", "/etc/exported")],
+            &[("SSL_CERT_FILE", "/etc/corp/ca.pem")],
+            None,
+        );
+
+        assert_eq!(
+            transport.roots(),
+            &TrustRoots::Named {
+                file: None,
+                directory: Some(PathBuf::from("/etc/exported")),
+            }
+        );
+        assert!(!transport.roots_from_file());
+    }
+
+    /// Nothing stated anywhere changes nothing: the built-in roots, no route, no file named.
+    #[test]
+    fn nothing_stated_in_either_place_leaves_the_defaults() {
+        let transport = resolved(&[], &[], None);
+
+        assert_eq!(transport.roots(), &TrustRoots::Bundled);
+        assert_eq!(proxy_port_of(&transport), None);
+        assert!(!transport.roots_from_file() && !transport.proxy_from_file());
+    }
+
+    /// Only the six names are read from a file, and a blank value names nothing, as in the
+    /// environment.
+    #[test]
+    fn a_settings_file_hands_over_the_six_names_and_nothing_else() {
+        let kept = stated_names([
+            (
+                "HTTPS_PROXY".to_string(),
+                "http://proxy.corp:3128".to_string(),
+            ),
+            ("ALL_PROXY".to_string(), "   ".to_string()),
+            ("https_proxy".to_string(), "http://lower.corp:1".to_string()),
+            ("AWS_REGION".to_string(), "eu-west-1".to_string()),
+        ]);
+
+        assert_eq!(
+            kept.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["HTTPS_PROXY"]
+        );
     }
 }

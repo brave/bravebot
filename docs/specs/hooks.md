@@ -6,9 +6,15 @@ governs:
   - crates/config/src/hooks.rs
   - crates/agent/src/hooks.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
+  - crates/agent/src/turn/setup.rs
+  - crates/agent/src/turn/round_steps.rs
   - crates/agent/src/turn/prompts.rs
   - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/agent/src/delegate.rs
+  - crates/agent/src/confirm.rs
+  - crates/agent/src/permission_mode.rs
   - crates/ui-bridge/src/hooks.rs
   - crates/ui-files/src/main.rs
   - ui/src/shared/agent-settings.ts
@@ -60,7 +66,7 @@ learn.
 `verified-by: by-construction (one path is ever built, by joining the file name onto the state directory the caller was given; nothing reads a hooks file from a working directory or an ancestor of one)`
 
 <a id="HOOK-2"></a>
-### HOOK-2: three moments, and each fires the hooks written for it
+### HOOK-2: four moments, and each fires the hooks written for it
 
 A declaration names one moment. These are the moments:
 
@@ -69,9 +75,10 @@ A declaration names one moment. These are the moments:
 | `turn-started` | before the turn a person asked for sends anything |
 | `tool-finished` | after one tool call has finished, whatever came of it |
 | `turn-finished` | when the turn a person asked for is over, however it ended |
+| `prompt-shown` | just before a prompt or an `ask_user` question is put to a person who can answer it |
 
 A `tool-finished` entry may name a `tool`, and then fires for calls of that name alone; one that
-names none fires for every call. A tool named on either of the other two moments is about a call
+names none fires for every call. A tool named on any of the other moments is about a call
 that does not happen there, and that entry fires for nothing. Two entries on one moment are two
 commands, run one after the other in the order the file listed them. A word this build does not
 fire declares no hook and leaves the rest of the file in force.
@@ -79,6 +86,13 @@ fire declares no hook and leaves the rest of the file in force.
 The turn moments belong to the turn a person asked for. A delegate is a run inside that turn,
 started by a call nobody typed, so a turn that spawns three delegates still fires `turn-started`
 once. A call a delegate made is a call, and fires `tool-finished` like any other.
+
+`prompt-shown` is about a question that reaches a person, so it fires once for each one that does and
+for none that is answered without them: not where nobody can be asked ([PROMPT-9](prompting.md#PROMPT-9)),
+and not where a permission mode answered in advance ([permission-modes.md](permission-modes.md)). A
+delegate's question reaches the same person through the same confirmer and fires it once. It fires
+before the question is drawn, so a notifier attached to it calls somebody back while the turn is
+waiting on them, and the question is the same whatever the hook does (HOOK-6).
 
 **Why.** A short vocabulary in a person's own terms, rather than the events the audit trail
 records: those say which gate decided what, and somebody wanting their formatter to run should not
@@ -102,6 +116,12 @@ and a turn that died is exactly when they want telling.
 `verified-by: bravebot_agent::turn::a_delegate_fires_neither_turn_moment`
 `verified-by: bravebot_agent::turn::a_hook_fires_when_the_turn_is_over_though_it_was_cancelled`
 `verified-by: bravebot_agent::turn::a_delegate_does_not_fire_the_turn_s_own_moments`
+`verified-by: bravebot_agent::turn::a_hook_fires_when_a_question_is_put_to_a_person`
+`verified-by: bravebot_agent::turn::an_unattended_run_fires_no_prompt_hook`
+`verified-by: bravebot_agent::permission_mode::the_alert_comes_before_a_question_the_mode_did_not_answer`
+`verified-by: bravebot_agent::permission_mode::no_alert_comes_before_a_question_the_inner_confirmer_refuses_unasked`
+`verified-by: bravebot_cli::main::a_one_shot_run_alerts_for_a_plan_it_puts_and_not_for_a_write_it_refuses`
+`verified-by: bravebot_agent::turn::a_delegate_s_question_fires_prompt_shown_once`
 
 <a id="HOOK-3"></a>
 ### HOOK-3: a hook is a program and its arguments, never a line a shell parses
@@ -132,13 +152,20 @@ Copying the spelling means copying the parse.
 A hook runs in the directory the turn is working in, so a relative path in one means what the
 person who wrote it meant. It is not confined, and its environment is the one it was started from
 less this agent's own credentials, which are the same names taken off a program the planner asked
-for, a gateway's token variables included ([RUN-12](tools/run.md#RUN-12)).
+for, a gateway's token variables included ([RUN-12](tools/run.md#RUN-12)), and with its `PATH`
+reduced as described below.
 
 A bare program name is the one exception to "the person's own shell would give it": it is looked up
 as every program bravebot starts unconfined is ([SANDBOX-30](sandboxing.md#SANDBOX-30)), so a
 `.venv/bin/ruff` a confined stage wrote is not the `ruff` that runs. A hook whose bare name is found
 only there is reported as not started. A name with a separator in it is the person's path and is
 never looked up.
+
+The names a hook starts itself are looked up the same way. A hook is started with bravebot's `PATH`
+reduced to the entries that lookup searches, whether it was named bare or by a path, so a
+`#!/usr/bin/env node` shebang finds `node` only among them and a `.venv/bin/node` a confined stage
+wrote is not the `node` that runs. A hook that starts a program by name found only in a directory
+left out does not find it.
 
 **Why.** The person named this command in a file in their own directory, so it is their program on
 their machine, and [sandboxing.md](sandboxing.md) confines processes running code we did not write.
@@ -156,6 +183,7 @@ A hook has no more use for one than a formatter has.
 `verified-by: bravebot_agent::hooks::two_hooks_on_one_moment_run_in_the_order_the_file_listed_them`
 `verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`
 `verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
+`verified-by: bravebot_agent::hooks::a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 
 <a id="HOOK-5"></a>
 ### HOOK-5: a hook is told which moment fired, and nothing else
@@ -193,6 +221,7 @@ one. A rule about what to refuse is written as a rule ([permissions.md](permissi
 decision is taken from something a person wrote rather than from something a program read.
 
 `verified-by: bravebot_agent::turn::a_turn_whose_hook_failed_still_answers`
+`verified-by: bravebot_agent::turn::a_failing_prompt_hook_leaves_the_question_alone`
 `verified-by: by-construction (a hook's standard output and standard error are discarded at the spawn and read by nothing; its status reaches one sentence said to the person and no branch)`
 
 <a id="HOOK-7"></a>
@@ -242,6 +271,8 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_config::hooks::an_unusable_entry_leaves_the_others_firing`
 `verified-by: bravebot_config::hooks::an_unparseable_file_declares_no_hooks`
 `verified-by: bravebot_config::hooks::an_oversized_file_declares_no_hooks`
+`verified-by: bravebot_config::hooks::a_hooks_file_is_read_up_to_64_kb_and_not_a_byte_past_it`
+`verified-by: bravebot_agent::hooks::the_default_bound_is_thirty_seconds`
 
 <a id="HOOK-8"></a>
 ### HOOK-8: one reader decides what a hook is, and what it read is what is shown
@@ -306,6 +337,11 @@ A check is announced the same way, for the same reason.
 `verified-by: bravebot_ui_bridge::reporting::a_running_hook_crosses_as_a_pair_naming_the_moment_and_the_program`
 `verified-by: bravebot_tui::state::a_running_hook_names_the_indicator_and_gives_it_back`
 
+`prompt-shown` is the exception to the first sentence: it fires from the confirmer, which has no
+display to hand, and a running status drawn over the prompt it precedes would be gone before the
+prompt is. What it says when it goes wrong is still said (HOOK-7), as soon as the turn next has
+somewhere to say it, which is the end of the call the question came up in.
+
 ## The file
 
 ```json
@@ -338,6 +374,23 @@ A check is announced the same way, for the same reason.
   confined stage left at that name. Looking such a name up as a bare name is would refuse the
   person's own script in their own project. A hook that must not run a file a stage could write
   names its program by an absolute path outside the session's directories.
+- **A tool a hook starts by name is found only among the entries bravebot searches.** A hook that is
+  a script with an `env` shebang, or a launcher that starts another program by name, has that name
+  looked up in the `PATH` entries a confined stage may not write (HOOK-4), as they stand when the
+  hook fires: a directory a stage is given writes in later in the session leaves them from then on.
+  A formatter that starts a tool from a project's `node_modules/.bin`, or from an activated
+  virtualenv's `bin`, does not find it there. A hook that needs a tool from one of them names it by a
+  path in its `run`, which runs whatever is at that path, as the entry above says.
+- **`prompt-shown` holds the prompt back while it runs.** The hook runs before the question is
+  drawn, up to the bound in HOOK-7, so a slow notifier delays the prompt it was meant to announce.
+  Starting one in the background is not offered, for the reason a hook that does not wait is not.
+  A hook that must return at once starts its own long work and exits.
+- **`prompt-shown` covers questions the turn raises, and no others.** The trust question asked when
+  an interface opens, and a question put to a person outside a turn, fire nothing: no turn is
+  running to read the hooks. A confirmer that refuses without asking, such as a
+  one-shot run's for everything but a plan, fires it for nothing it refuses. A channel that
+  closed during the turn is found closed only when a question fails to send, so the question that
+  finds it closed fires it once.
 - **There is no moment for a session.** A session is many turns, and something that should happen
   once when the program opens fires per turn instead. The interactive interface is where a session
   begins and ends, and nothing there fires a hook yet.

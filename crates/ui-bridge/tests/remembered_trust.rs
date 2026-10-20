@@ -1,10 +1,12 @@
-//! A remembered answer to the trust question in the desktop front end, as TRUST-23 and TRUST-24 in
-//! docs/specs/trust-map.md have it: offered where the answer may be kept, written only where it was
-//! offered, honoured by the next session started in exactly that directory, and taken back from the
+//! A kept yes to the trust question in the desktop front end, as TRUST-23 and TRUST-24 in
+//! docs/specs/trust-map.md have it: written by a yes wherever the question offered to keep it, never
+//! by a no, honoured by the next session started in exactly that directory, and taken back from the
 //! permissions a session reports.
 //!
 //! Driven through the binary with a home of the test's own, since the record lives in the home and a
 //! test in-process would be reading and writing the developer's.
+
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use bravebot_agent::trusted::{Identity, Store};
 use serde_json::{Value, json};
@@ -266,18 +268,17 @@ fn handle(opened: &Value) -> String {
         .to_string()
 }
 
-/// Answer yes and say to remember it, in a session started in `directory`, and return the file the
-/// answer was kept in.
+/// Answer yes in a session started in `directory`, and return the file the answer was kept in.
 fn remember(front: &mut FrontEnd, directory: &Path) -> PathBuf {
     let (opened, _) = front.begin(directory);
     let keeping = PathBuf::from(
         opened["keeping"]
             .as_str()
-            .unwrap_or_else(|| panic!("remembering was not offered: {opened}")),
+            .unwrap_or_else(|| panic!("keeping was not offered: {opened}")),
     );
     let answered = front.call(
         "trust.reply",
-        json!({"session": handle(&opened), "trusted": true, "remember": true}),
+        json!({"session": handle(&opened), "trusted": true}),
     );
     assert_eq!(answered, json!({"trusted": true, "kept": true}));
     keeping
@@ -288,9 +289,9 @@ fn the_yes_rule() -> Value {
     json!([{"path": "", "integrity": "trusted"}])
 }
 
-/// The question offers to keep its answer and names the file it would write, and a yes kept there
-/// settles the next session started in that directory, in a later launch of the window: it is not
-/// asked, it says which kept answer settled it, it runs a turn, and it holds the rule a yes writes.
+/// The question names the file a yes would be kept in, a plain yes writes it, and it settles the next
+/// session started in that directory, in a later launch of the window: it is not asked, it says which
+/// kept answer settled it, it runs a turn, and it holds the rule a yes writes.
 #[test]
 fn a_remembered_yes_settles_the_next_session_started_there() {
     let scratch = Scratch::new("bridge-trust-remembered");
@@ -302,7 +303,7 @@ fn a_remembered_yes_settles_the_next_session_started_there() {
     let (opened, question) = front.begin(&scratch.project());
     let keeping = opened["keeping"]
         .as_str()
-        .unwrap_or_else(|| panic!("remembering was not offered: {opened}"))
+        .unwrap_or_else(|| panic!("keeping was not offered: {opened}"))
         .to_string();
     assert!(
         Path::new(&keeping).starts_with(scratch.records()),
@@ -317,7 +318,7 @@ fn a_remembered_yes_settles_the_next_session_started_there() {
 
     let answered = front.call(
         "trust.reply",
-        json!({"session": handle(&opened), "trusted": true, "remember": true}),
+        json!({"session": handle(&opened), "trusted": true}),
     );
     assert_eq!(answered, json!({"trusted": true, "kept": true}));
     assert!(Path::new(&keeping).is_file(), "nothing was written down");
@@ -447,12 +448,74 @@ fn a_remembered_worktree_root_answers_for_a_directory_below_it() {
     }
 }
 
-/// A kept answer is written only where the question offered it, and only for a yes: a no, a value
-/// that is not a boolean, a question already answered and a directory the answer may not be kept
-/// about all write nothing.
+/// A no is never kept, even where the question offered to keep a yes: it writes nothing, the session
+/// it answers trusts nothing, and the next session started there asks.
 #[test]
-fn an_answer_is_kept_only_where_the_question_offered_it() {
-    let scratch = Scratch::new("bridge-trust-remembered-offered");
+fn a_no_is_not_kept_and_the_next_session_asks() {
+    let scratch = Scratch::new("bridge-trust-declined");
+    if !scratch.tells_directories_apart() {
+        return;
+    }
+    let mut front = FrontEnd::start(&scratch.home());
+
+    let (opened, question) = front.begin(&scratch.project());
+    assert!(
+        opened["keeping"].is_string(),
+        "a yes would not have been kept here, so this tests nothing: {opened}"
+    );
+    assert!(question.is_some(), "a fresh session was not asked");
+    let session = handle(&opened);
+    assert_eq!(
+        front.call("trust.reply", json!({"session": session, "trusted": false})),
+        json!({"trusted": false, "kept": null})
+    );
+    assert!(!scratch.records().exists(), "a no was written down");
+    let listed = front.call("permissions.list", json!({"session": session}));
+    assert_eq!(listed["paths"], json!([]), "{listed}");
+    assert_eq!(listed["remembered"], Value::Null, "{listed}");
+
+    let (opened, question) = front.begin(&scratch.project());
+    assert!(question.is_some(), "a no settled a later session");
+    assert_eq!(opened["remembered"], Value::Null, "{opened}");
+}
+
+/// Where the question does not offer to keep a yes, the home and a directory holding it, since a tree
+/// rule there would trust every repository cloned under it later, a yes still trusts the session and
+/// writes nothing.
+#[test]
+fn a_yes_where_keeping_is_not_offered_trusts_this_session_and_writes_nothing() {
+    let scratch = Scratch::new("bridge-trust-not-offered");
+    let mut front = FrontEnd::start(&scratch.home());
+
+    for directory in [scratch.home(), scratch.path.clone()] {
+        let (opened, question) = front.begin(&directory);
+        assert_eq!(opened["keeping"], Value::Null, "{opened}");
+        let question = question.expect("the session was not asked");
+        assert_eq!(question["data"]["keeping"], Value::Null, "{question}");
+        let session = handle(&opened);
+        assert_eq!(
+            front.call("trust.reply", json!({"session": session, "trusted": true})),
+            json!({"trusted": true, "kept": null})
+        );
+        assert_eq!(front.turn(&session)["event"], "turn.done");
+        let listed = front.call("permissions.list", json!({"session": session}));
+        assert_eq!(listed["paths"], the_yes_rule(), "{listed}");
+
+        let (_, question) = front.begin(&directory);
+        assert!(
+            question.is_some(),
+            "{} was not asked after a yes that could not be kept",
+            directory.display()
+        );
+    }
+    assert!(!scratch.records().exists(), "an answer was written down");
+}
+
+/// The question is answered once, so a yes is written once: a repeat is refused, and so is a value
+/// that is not a boolean, which leaves the question waiting.
+#[test]
+fn a_yes_is_written_once_and_an_unreadable_answer_answers_nothing() {
+    let scratch = Scratch::new("bridge-trust-written-once");
     if !scratch.tells_directories_apart() {
         return;
     }
@@ -461,18 +524,8 @@ fn an_answer_is_kept_only_where_the_question_offered_it() {
     let (opened, _) = front.begin(&scratch.project());
     let session = handle(&opened);
     assert_eq!(
-        front.refused(
-            "trust.reply",
-            json!({"session": session, "trusted": false, "remember": true})
-        ),
-        "only a yes can be remembered"
-    );
-    assert_eq!(
-        front.refused(
-            "trust.reply",
-            json!({"session": session, "trusted": true, "remember": "yes"})
-        ),
-        "`remember` must be a boolean"
+        front.refused("trust.reply", json!({"session": session, "trusted": "yes"})),
+        "`trusted` must be a boolean"
     );
     assert!(
         front
@@ -483,35 +536,89 @@ fn an_answer_is_kept_only_where_the_question_offered_it() {
             .contains("send trust.reply first"),
         "a refused answer answered the question"
     );
+    assert!(!scratch.records().exists(), "a refused answer was kept");
+
     assert_eq!(
         front.call("trust.reply", json!({"session": session, "trusted": true})),
-        json!({"trusted": true, "kept": null})
+        json!({"trusted": true, "kept": true})
+    );
+    let record = Store::new(&scratch.home().join(".bravebot"), &scratch.project())
+        .path()
+        .to_path_buf();
+    let written = std::fs::read_to_string(&record).expect("the yes was written down");
+    assert_eq!(written.lines().count(), 1, "{written}");
+
+    assert_eq!(
+        front.refused("trust.reply", json!({"session": session, "trusted": true})),
+        "the trust question is not waiting for an answer",
     );
     assert_eq!(
-        front.refused(
-            "trust.reply",
-            json!({"session": session, "trusted": true, "remember": true})
-        ),
-        "the trust question is not waiting for an answer",
-        "a question already answered still offered to keep an answer"
+        std::fs::read_to_string(&record).expect("the record is still there"),
+        written,
+        "a repeated yes wrote the record again"
     );
+}
 
-    // The home, and a directory holding it, since a tree rule there would trust every repository
-    // cloned under it later.
-    for directory in [scratch.home(), scratch.path.clone()] {
-        let (opened, question) = front.begin(&directory);
-        assert_eq!(opened["keeping"], Value::Null, "{opened}");
-        let question = question.expect("the session was not asked");
-        assert_eq!(question["data"]["keeping"], Value::Null, "{question}");
-        assert_eq!(
-            front.refused(
-                "trust.reply",
-                json!({"session": handle(&opened), "trusted": true, "remember": true})
-            ),
-            "remembering this answer was not offered for this session",
-        );
+/// RUN-5: a client that did not show the sentence about confined lines is not taken to have, so its
+/// yes is kept without that field and a directory it answered about is read as not saying so.
+#[test]
+fn a_yes_from_a_client_that_did_not_show_the_sentence_is_kept_without_it() {
+    let scratch = Scratch::new("bridge-trust-confined-lines");
+    if !scratch.tells_directories_apart() {
+        return;
     }
-    assert!(!scratch.records().exists(), "an answer was written down");
+    let mut front = FrontEnd::start(&scratch.home());
+    let keeping = remember(&mut front, &scratch.project());
+    let written = std::fs::read_to_string(&keeping).expect("the yes was written down");
+    assert!(
+        !written.contains("confined_lines"),
+        "a yes to a question that did not say so was kept as saying so: {written}"
+    );
+    let store = Store::new(&scratch.home().join(".bravebot"), &scratch.project());
+    let identity = Identity::of(&scratch.project()).expect("an identity");
+    assert!(!store.kept(&identity).expect("kept").confined_lines);
+    drop(front);
+
+    // An entry the terminal kept for the same directory says so, and the window still settles on it
+    // as the rule a yes writes and nothing more.
+    assert!(store.keep(&identity, "terminal", 9, true));
+    let mut front = FrontEnd::start(&scratch.home());
+    let (opened, question) = front.begin(&scratch.project());
+    assert_eq!(question, None, "a kept answer was asked again");
+    let listed = front.call("permissions.list", json!({"session": handle(&opened)}));
+    assert_eq!(listed["paths"], the_yes_rule(), "{listed}");
+}
+
+/// RUN-5: the question carries the sentence, in the words the terminal draws, and a yes from the
+/// window that showed it is kept saying so. Both halves: the sentence is on the question, so a client
+/// has something to show, and the answer follows what the client said it showed, so one that said
+/// nothing is not turned into one that did.
+#[test]
+fn a_yes_from_a_window_that_showed_the_sentence_is_kept_saying_so() {
+    let scratch = Scratch::new("bridge-trust-confined-lines-shown");
+    if !scratch.tells_directories_apart() {
+        return;
+    }
+    let mut front = FrontEnd::start(&scratch.home());
+    let (opened, question) = front.begin(&scratch.project());
+    let question = question.expect("the question was put");
+    let sentence = bravebot_agent::trusted::confined_lines_notice();
+    assert_eq!(question["data"]["confinedLines"], sentence, "{question}");
+    assert_eq!(opened["confinedLines"], sentence, "{opened}");
+    assert!(sentence.contains("without asking"), "{sentence}");
+    assert_eq!(
+        front.call(
+            "trust.reply",
+            json!({"session": handle(&opened), "trusted": true, "confinedLines": true})
+        ),
+        json!({"trusted": true, "kept": true})
+    );
+    let store = Store::new(&scratch.home().join(".bravebot"), &scratch.project());
+    let identity = Identity::of(&scratch.project()).expect("an identity");
+    assert!(
+        store.kept(&identity).expect("kept").confined_lines,
+        "a yes to a question that showed the sentence was kept without it"
+    );
 }
 
 /// A line that cannot be written leaves the answer a yes for this session, and says so, and the next
@@ -528,10 +635,7 @@ fn an_answer_that_cannot_be_kept_is_still_a_yes_for_this_session() {
     let (opened, _) = front.begin(&scratch.project());
     let session = handle(&opened);
     assert_eq!(
-        front.call(
-            "trust.reply",
-            json!({"session": session, "trusted": true, "remember": true})
-        ),
+        front.call("trust.reply", json!({"session": session, "trusted": true})),
         json!({"trusted": true, "kept": false})
     );
     assert_eq!(front.turn(&session)["event"], "turn.done");

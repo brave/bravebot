@@ -3,6 +3,7 @@ import type { FileAttachment } from '../../shared/files'
 import { projectLabel } from '../../shared/recents'
 import { acceptMention, type MentionEntry, type MentionOffer } from '../../shared/mentions'
 import { useContextWindow } from '../context-window'
+import type { Staged } from '../staging'
 import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
@@ -16,8 +17,8 @@ import type { PermissionMode, SandboxMode } from '../../shared/protocol'
 async function askOffer(session: string, line: string, cursor: number): Promise<MentionOffer> {
   const { ok } = await window.bravebot.request<Partial<MentionOffer>>('mentions.offer', { session, line, cursor })
   return typeof ok?.typed === 'string' && Array.isArray(ok.entries)
-    ? { typed: ok.typed, entries: ok.entries, completes: ok.completes === true }
-    : { typed: null, entries: [], completes: false }
+    ? { typed: ok.typed, word: typeof ok.word === 'string' ? ok.word : null, entries: ok.entries, completes: ok.completes === true }
+    : { typed: null, word: null, entries: [], completes: false }
 }
 
 /** How many lines the field grows to before it starts to scroll. */
@@ -55,6 +56,10 @@ export interface ComposerProps {
   attachments: FileAttachment[]
   onAttach: () => void
   onRemoveAttachment: (id: string) => void
+  /** What a drop or a paste staged that the draft still names. */
+  staged: Staged[]
+  /** Take a staged file or picture off, by taking its marker out of the draft. */
+  onRemoveStaged: (marker: string) => void
   onPreview: (path: string) => void
   queued: string[]
   queuePaused: boolean
@@ -79,7 +84,7 @@ type Mode = 'agent' | 'plan'
 const PLAN_BLOCKED: Record<'unavailable' | 'bot' | 'attachments', string> = {
   unavailable: 'A plan run cannot start here.',
   bot: 'A bot answers in turns, so it has no plan mode.',
-  attachments: 'A plan is fixed before anything is read, so it cannot take attached files. Remove them, and name the file in the task.',
+  attachments: 'A plan is fixed before anything is read, so it cannot take attached files or pictures. Remove them, and name the file in the task.',
 }
 
 /**
@@ -155,7 +160,7 @@ export interface ComposerFooterProps {
 export const Composer = memo(function Composer(props: ComposerProps): React.JSX.Element {
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
-    draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, onPreview,
+    draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
     queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, starting = false,
   } = props
@@ -225,16 +230,21 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   /** The offer for exactly this line and row, waiting for it unless the last answer was for it. */
   const freshOffer = async (line: string, at: number): Promise<MentionOffer> =>
     at === 0 && offer?.session === session && offer.line === line ? offer.value : askOffer(session, line, at)
-  const choose = (entry: MentionEntry) => {
+  /** Writes the entry into the draft and says whether the draft changed. */
+  const choose = (entry: MentionEntry, word: string | null): boolean => {
     setCursor(0)
-    latest.current.onDraft(acceptMention(latest.current.draft, entry))
+    const draft = latest.current.draft
+    const completed = acceptMention(draft, entry, word)
+    if (completed === draft) return false
+    latest.current.onDraft(completed)
+    return true
   }
   /** Enter: complete a half-typed name, or send a line whose last name is finished (NAME-7). */
   const enter = async (line: string, at: number) => {
     if (session) {
       const value = await freshOffer(line, at)
       const entry = value.entries[Math.min(at, value.entries.length - 1)]
-      if (value.typed !== null && dismissed !== value.typed && value.completes && entry) return choose(entry)
+      if (value.typed !== null && dismissed !== value.typed && value.completes && entry && choose(entry, value.word)) return
     }
     const props = latest.current
     if (props.askingTrust || props.starting || props.backendReady === false || !props.draft.trim()) return
@@ -252,7 +262,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   // Agent or Plan, for the next message only. Plan starts one manifest run and the menu goes back
   // to Agent, because a session may not hold the mode (MANIFEST-9).
   const [mode, setMode] = useState<Mode>('agent')
-  const planBlocked = !onPlan ? 'unavailable' : scope === 'bot' ? 'bot' : attachments.length > 0 ? 'attachments' : null
+  const planBlocked = !onPlan ? 'unavailable' : scope === 'bot' ? 'bot' : attachments.length > 0 || staged.length > 0 ? 'attachments' : null
   useEffect(() => { setMode('agent') }, [session])
   useEffect(() => { if (planBlocked) setMode('agent') }, [planBlocked])
   const modeNow = useRef(mode)
@@ -266,7 +276,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   }
 
   return (
-    <footer className="composer">
+    <footer className="composer" data-paste-session={session}>
       <div className="composer-stack">
         {backendReady === false && <BackendTray onSetup={onSetup} onCheckBackend={onCheckBackend} onDiagnostics={onDiagnostics} />}
         {queued.length > 0 && (
@@ -297,7 +307,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
         )}
         <div className={`composer-shell${footer ? ' with-footer' : ''}`}>
         <div className="composer-box">
-          {attachments.length > 0 && (
+          {(attachments.length > 0 || staged.length > 0) && (
             <div className="attachment-chips">
               {attachments.map((file) => (
                 <span className="attachment-chip" key={file.id}>
@@ -308,8 +318,23 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                     onClick={() => onRemoveAttachment(file.id)} />
                 </span>
               ))}
+              {staged.map((item) => {
+                const name = item.via === 'drop' ? item.file.name : 'Pasted image'
+                const thumbnail = item.via === 'drop' ? item.file.thumbnail : item.picture.thumbnail
+                return (
+                  <span className="attachment-chip dropped" key={item.marker} data-test={item.via === 'drop' ? 'dropped-chip' : 'pasted-chip'}>
+                    {thumbnail
+                      ? <img className="attachment-thumb" src={thumbnail} alt="" />
+                      : <FileGlyph name={item.via === 'drop' ? item.file.name : 'image.png'} />}
+                    <span className={`attachment-label${item.via === 'paste' ? ' words' : ''}`} data-tooltip={name}>{name}</span>
+                    <span className="attachment-marker">{item.marker}</span>
+                    <IconButton icon="close" size="tiny" label={`Remove ${item.marker} ${name}`} tooltip="Remove"
+                      onClick={() => onRemoveStaged(item.marker)} />
+                  </span>
+                )
+              })}
               <span className="attachment-trust" tabIndex={0}
-                data-tooltip="Attached files are sent with your message as trusted context: the model reads them as you wrote them.">
+                data-tooltip="Attached files and pasted pictures are sent with your message as trusted context: the model reads them as you wrote them.">
                 <Icon name="warning-triangle-outline" />Sent as trusted context
               </span>
             </div>
@@ -341,7 +366,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 const at = list.active
                 void list.freshOffer(now.draft, at).then((value) => {
                   const entry = value.entries[Math.min(at, value.entries.length - 1)]
-                  if (value.typed !== null && entry) mention.current.choose(entry)
+                  if (value.typed !== null && entry) mention.current.choose(entry, value.word)
                 })
                 return
               }
@@ -376,7 +401,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
         </div>
         {footer && <ComposerFooter {...footer} disabled={running} />}
         </div>
-        {offered.length > 0 && <MentionList entries={offered} active={active} onActive={setCursor} onChoose={choose} />}
+        {offered.length > 0 && <MentionList entries={offered} active={active} onActive={setCursor} onChoose={(entry) => { choose(entry, offer?.value.word ?? null) }} />}
       </div>
     </footer>
   )

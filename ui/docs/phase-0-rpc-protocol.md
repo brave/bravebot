@@ -268,7 +268,7 @@ implementation should have one serialisation function per row and a round-trip t
 Two rules for the enums above:
 
 1. **Serialise the discriminant, not the prose.** `Landing::describe()` and
-   `Reach::describe()` return sentences meant for a screen; they are wording, they will
+   `Reach::note()` return sentences meant for a screen; they are wording, they will
    change, and a client that matches on them is matching on prose. Send the tag. The
    client may render its own words, or call the Rust wording a hint — but the tag is the
    contract.
@@ -645,7 +645,7 @@ Either list is checked in full before a turn starts. Each of these refuses the s
 
 - `attachments` that is not a list, or an entry that is not a string;
 - an entry that is relative, names nothing, names a directory, has an extension not in the list
-  above, or is larger than 8 MiB;
+  above, or is larger than 8 MiB, whose message is the note `drops.classify` gives for one;
 - `images` that is not a list, or an entry that is not an object with string `media` and `data`;
 - a `media` outside the four types, `data` that is not standard base64, an empty picture, or a
   picture larger than 10 MiB.
@@ -653,7 +653,11 @@ Either list is checked in full before a turn starts. Each of these refuses the s
 `null` for either list is the same as leaving it out.
 
 None of these lists may be named by a renderer in this app; see §9 and `src/main/sanitise.ts`. The
-app's main process composes `files` itself from native-picker grants.
+app's main process composes `files` itself from native-picker grants. The window names a file a
+person dropped by an opaque grant id in its own `drops` list, which the main process turns into
+`dropped` and `attachments` itself and never forwards (DROP-12). It names a picture a person pasted
+by an opaque grant id in its own `pastes` list, which the main process turns into `images` from the
+bytes it read off the clipboard, as `image/png`, and never forwards (PASTE-11).
 
 Unless `composed` is set, the bridge adds to `files` every name `prompt` gives with `@`, read with
 the terminal's rule (NAME-6): each word starting with `@`, without the `@`, except a bare `@` and a
@@ -733,6 +737,55 @@ The files a prompt names with `@`, surveyed as `turn.send` surveys them, or the 
 `bad_request` that `turn.send` would answer. For drawing the **Read** rows before a send and
 refusing it early; `turn.send` reads the prompt again, and that is the check that decides.
 
+#### `drops.classify`
+
+```json
+{ "id": 9, "method": "drops.classify", "params": { "files": [
+  { "path": "/Users/me/Desktop/shot.png", "bytes": 48213 },
+  { "path": "/Users/me/notes.md", "bytes": 912 },
+  { "path": "/Users/me/app.dmg", "bytes": 81920000 },
+  { "path": "/Users/me/Desktop/scan.pdf", "bytes": 9437184 }
+] } }
+→ { "files": [
+  { "kind": "image", "noun": "Image" },
+  { "kind": "text", "noun": "File" },
+  null,
+  { "note": "scan.pdf is 9.0 MB, and an attachment carries at most 8.0 MB" }
+] }
+```
+
+What each dropped file is (DROP-4, DROP-12), from the rules the terminal stages a drop by
+(`bravebot_filetype::by_name`) and the agent's attachment cap, one entry per file in the order
+given. `bytes` is the size the caller found on disk. `kind` is `image`, `pdf` or `text`; `noun` is
+the word the file's marker uses, sent to the model as it stands. `null` in place of an entry is a
+type nothing takes, whose path the window writes out as text. `{ "note" }` is a picture or PDF
+larger than the agent carries: the window leaves it out and shows the note as it stands. Text has
+no cap. At most 100 files; anything other than a list of objects with a string `path` and a whole
+`bytes` is `bad_request`. No file is opened. The app's main process calls it when it stages a
+drop, and the renderer cannot.
+
+A note is built from the terminal's catalogs (`bravebot_i18n::sizes`), in `en-US` whatever the
+machine's language, because the desktop window is in English only. `bravebot-rpc` chooses that
+locale when it starts (LOCALE-7); the terminal keeps choosing from the environment.
+
+#### `pastes.check`
+
+```json
+{ "id": 10, "method": "pastes.check", "params": { "bytes": 482113 } }
+→ { "ok": true, "media": "image/png", "noun": "Image" }
+
+{ "id": 11, "method": "pastes.check", "params": { "bytes": 20971520 } }
+→ { "ok": false, "note": "that picture is 20.0 MB, and a paste carries at most 10.0 MB" }
+```
+
+Whether a pasted picture of `bytes` may be staged (PASTE-11), held to the cap `turn.send` holds
+`images` to and the terminal's clipboard reader stages by. When it fits, `media` is the type a
+picture re-encoded as PNG is named by in `images` and `noun` is the word its marker uses. When it
+does not, `note` is the terminal's note for it, in `en-US` as `drops.classify`'s notes are, and the
+window shows it as it stands. `bytes` that is not a whole number is `bad_request`. The app's main
+process calls it when it stages a paste, once for the picture as it came off the clipboard and
+again once it is re-encoded, and the renderer cannot.
+
 #### `confirm.reply`
 
 ```json
@@ -799,22 +852,20 @@ except `connectors.preview` returns what `connectors.list` returns.
 
 ```json
 { "id": 8, "method": "trust.reply",
-  "params": { "session": "s1", "directory": "/Users/me/repos/thing", "trusted": true,
-              "remember": false } }
+  "params": { "session": "s1", "directory": "/Users/me/repos/thing", "trusted": true } }
 ```
 
 Records the user's answer to the startup question into that session's `TrustStore`,
-before the first `turn.send`. See §9. Returns `{ "trusted": true, "kept": null }`.
+before the first `turn.send`. See §9. Returns `{ "trusted": true, "kept": true }`.
 
 The question is answered once. A repeat, and a reply to a session that was never asked, is refused
 with `no_such_request`, and the trust already given stands.
 
-`remember` is optional, and `true` keeps the answer for later sessions in the directory. It is
-refused with `bad_request`, and nothing is recorded, with `trusted: false` or where the
-question offered no `keeping`; the offer is spent once the question is answered. `kept` is
-`true` when the answer was written down, `false` when writing it failed (the answer is then a
-yes for this session only, and the client says so, naming the file), and `null` when nothing
-was asked to be kept.
+A yes is kept for later sessions in the directory wherever the question carried `keeping`, and
+there is no separate field or call to ask for it. A no is never kept. `kept` is `true` when the
+yes was written down, `false` when writing it failed (the answer is then a yes for this session
+only, and the client says so, naming the file), and `null` when nothing was to be kept: a no, or
+a question that carried no `keeping`.
 
 #### `doctor`
 
@@ -1124,20 +1175,21 @@ The flow:
 `turn.send` before trust has been answered for that session errors `bad_request`. Not a
 default: defaulting either way is the mistake this design exists to avoid.
 
-**A remembered answer** is the one exception, and it is one the person made
-([trust-map.md](../../docs/specs/trust-map.md#TRUST-23)). Where a yes was kept about exactly
-this directory, a session the flow above would ask is not asked: it starts from the rule a yes
+**A kept yes** is the one exception, and it is one the person gave
+([trust-map.md](../../docs/specs/trust-map.md#TRUST-23)). Where a yes was kept about this
+directory, or about the root of the git worktree around it, a session the flow above would ask
+is not asked: it starts from the rule a yes
 writes, emits no `trust.request`, reports `trust.known: true` where its response has `trust`,
 and its response carries `remembered: { at, path }`, when
 the answer was given (seconds since the epoch) and the file it is kept in, for the client to
 say at the top of the conversation. Otherwise `remembered` is `null`. The record is the one
 the terminal keeps, so an answer kept in either front end settles the other.
 
-Where the question is put and its answer may be kept, the response and the `trust.request`
-carry `keeping`, the file a `trust.reply` with `remember: true` would write; the client names
-it on the question. `keeping` is `null` where the answer may not be kept: no state directory,
-a filesystem root, the home directory or one holding it, or a filesystem that cannot say when
-the directory was made.
+Where the question is put and a yes may be kept, the response and the `trust.request`
+carry `keeping`, the file a yes writes; the client names it on the question and says that a yes
+is kept. `keeping` is `null` where the answer may not be kept: no state directory,
+a filesystem root, the home directory or one holding it, a filesystem that cannot say when
+the directory was made, or an incognito session.
 
 ---
 
@@ -1166,7 +1218,8 @@ the directory was made.
 - MCP configuration (declaring, approving ahead of time, enabling and forgetting), subscription
   import and skills authoring have no dedicated UI. `bravebot mcp` in a terminal does the first.
 - File browsing, previews and attachments are Electron IPC features, not RPC methods. `@`
-  completion is `mentions.offer` and `mentions.named`.
+  completion is `mentions.offer` and `mentions.named`, what a dropped file is comes from
+  `drops.classify`, and whether a paste fits from `pastes.check`.
 - One `bravebot-rpc` process has one client. There is no multi-client transport.
 
 ---

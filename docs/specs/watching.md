@@ -4,6 +4,9 @@ title: Seeing what happened outside the transcript
 status: normative
 governs:
   - crates/tui/src/state.rs
+  - crates/tui/src/state/entry.rs
+  - crates/tui/src/state/standing.rs
+  - crates/tui/src/state/watching.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/watching.rs
   - crates/tui/src/render/transcript.rs
@@ -11,6 +14,7 @@ governs:
   - crates/tui/src/render/beneath.rs
   - crates/tui/src/render/hint.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
   - crates/tui/src/app/keys.rs
   - crates/agent/src/aside.rs
 documented-by: docs/website/docs/using/interactive-mode.md
@@ -440,6 +444,7 @@ worked out from the bytes.
 
 `verified-by: bravebot_tui::render::the_view_says_which_kind_of_thing_it_is_showing`
 `verified-by: bravebot_tui::render::the_view_says_whether_the_model_read_what_a_command_printed`
+`verified-by: bravebot_tui::render::stepping_from_one_kind_of_row_to_another_changes_the_header_and_the_footer`
 
 <a id="WATCH-17"></a>
 ### WATCH-17: a command's row and its view say how the run ended
@@ -572,7 +577,8 @@ delegate's `job:1` and the turn's `job:1` are two rows, and the delegate's says 
 delegate's.
 
 What a job printed is drawn in its row and nowhere else. No row, mark, count or name is made or
-changed from it.
+changed from it. Lines drawn before any look returned them are [WATCH-24](#WATCH-24)'s, and sit
+after the row's own lines without joining them.
 
 **Why.** Before this, a job had a row only once something looked at it, so a job nobody had looked
 at yet was missing from the list, and each look was a row of its own. A job that is running and has
@@ -596,7 +602,9 @@ earlier rows saying the job was running after it had ended.
 The row names the kind as `background` and leads its line with the job's name. The view's header
 names the job, and says whether it is running, and for how long by this end's clock, or how it
 ended. A job the turn stopped when it ended reads as that, not as running and not as a failure.
-Until a look has printed something, neither the row nor the view says whether the model read it.
+Until a look has printed something, and while the row holds no line a running job printed
+([WATCH-24](#WATCH-24)), neither the row nor the view says whether the model read it. A row that
+holds such lines says the model has not read them.
 
 **Why.** A job and a stopped foreground run carry the same mark ([WATCH-17](#WATCH-17)), since both
 are work that did not end on its own, so the mark alone cannot say whether the job is still going.
@@ -611,8 +619,41 @@ either word would be untrue.
 `verified-by: bravebot_tui::render::a_jobs_view_says_how_a_job_that_exited_ended`
 `verified-by: bravebot_tui::state::a_job_the_turn_stopped_reads_as_stopped_with_the_turn`
 `verified-by: bravebot_tui::state::a_turn_ending_ends_its_jobs_and_the_next_counts_only_its_own`
+`verified-by: bravebot_tui::render::a_jobs_live_lines_are_marked_as_unread_even_after_a_look_that_was_read`
+
+<a id="WATCH-24"></a>
+### WATCH-24: a running job's row gains the lines no look has returned
+
+At each step of a turn, the driver gives the screen what each running job has printed since the
+planner last looked: the newest of those lines, up to a bound, and how many there were. They are
+released through the gate that releases a look's lines, so output the planner may not read is drawn
+in the marked block, and they are drawn after the row's own lines, under the margin, saying the model
+has not read them. Each release is the newest of everything unread and replaces the one before it.
+The next look returns every line, adds them to the row's own lines and takes them off the live ones.
+
+These lines reach the screen only. They do not move the cursor `job_output` reports from, they are
+not written down ([WATCH-12](#WATCH-12)), and no row, mark, count or name is made or changed from
+them ([WATCH-22](#WATCH-22)).
+
+**Why.** A server or build moved to the background printed nothing a person could see until the
+model happened to look, which can be many minutes. Measured from the planner's last look, the live
+lines are exactly the ones it has not read, so the row never joins two runs of lines with a gap and
+never draws a line twice, and nothing has to be reconciled between a look and the screen.
+
+`verified-by: bravebot_agent::tools::unread_output_leaves_the_planners_cursor_where_it_was`
+`verified-by: bravebot_agent::turn::a_running_job_nobody_has_looked_at_gives_the_screen_its_lines_and_the_look_keeps_them`
+`verified-by: bravebot_agent::turn::an_unvouched_running_jobs_lines_are_drawn_and_never_reach_the_planner`
+`verified-by: bravebot_agent::turn::a_running_job_that_printed_past_the_bound_gives_the_screen_only_the_newest_lines`
+`verified-by: bravebot_tui::state::a_jobs_live_lines_replace_each_other_and_the_next_look_takes_them`
+`verified-by: bravebot_tui::state::a_job_printing_status_shaped_live_lines_changes_no_row_mark_or_count`
+`verified-by: bravebot_tui::state::a_delegates_live_lines_go_to_its_job_and_not_the_turns_of_the_same_name`
+`verified-by: bravebot_tui::render::a_jobs_live_lines_are_marked_as_unread_even_after_a_look_that_was_read`
 
 ## Known costs
+
+- **A running job's row gains lines only while a turn runs.** The release is at a turn's steps,
+  because the gate that decides what may be drawn belongs to the turn. A job nobody has looked at,
+  between turns, shows the lines it had at the turn's last step.
 
 - **A delegate that runs long enough loses its oldest work.** Several hundred calls in, the start
   of a run is gone from the screen, and a person arriving late reads from wherever the bound has

@@ -140,6 +140,10 @@ pub fn run(line: &str, directory: &std::path::Path, cancel: &Cancel) -> Result<R
     }
 
     let shell = shell();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the person's own `$SHELL`, running a line the person typed in shell mode"
+    )]
     let mut child = match bravebot_sandbox::process::starting_a_program(|| {
         Command::new(&shell)
             .arg("-c")
@@ -246,8 +250,9 @@ pub fn record<S: Sink>(
     } else {
         format!("I ran `{line}` in the shell myself{outcome}. It printed:\n\n{released}")
     };
-    conversation.push_from(
+    conversation.push_composed_from(
         Message::user(said),
+        crate::conversation::Composed::Written,
         crate::request_view::Provenance::Trusted("shell output"),
     );
 

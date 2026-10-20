@@ -16,8 +16,10 @@ bravebot
 
 ## Install
 
-The install downloads the release binary for your platform and verifies its checksum. macOS, Linux
-and Windows are supported, on both x86_64 and arm64. To build from source instead, see
+npm installs the binary for your platform from its own package, `@brave/bravebot-<platform>-<arch>`,
+and runs no install script, so `--ignore-scripts` does not affect it. `--omit=optional` leaves that
+package out, and then `bravebot` exits saying the binary is missing. macOS, Linux and Windows are
+supported, on both x86_64 and arm64. To build from source instead, see
 [Development](development.md).
 
 On macOS and Linux there is an install script, for a machine with no npm on it:
@@ -127,8 +129,11 @@ serve it. `doctor` says the same and fails. See
 A session that opens on a version something newer has replaced says so, once, under the trust
 question, and gives the line that updates the copy you are running. The notice names the version you
 are running rather than the newer one, which may have moved by the time you update: the npm command for an npm
-install, the script again for a script install. A build from source is told nothing, since neither
-line would update one.
+install, the script again for a script install, `brew upgrade --cask bravebot` for a copy a Homebrew
+cask installed and `winget upgrade Brave.Bravebot` for one WinGet installed. A package manager's
+copy is recognised by the directory the manager keeps it in. A build from source is told nothing,
+since none of those lines would update one. A package can arrive after the release it follows, and
+until it does the manager says there is nothing to upgrade.
 
 Nothing about it waits. The notice comes from an answer an earlier launch wrote down, and the
 request that refreshes it, at most one an hour whether or not it learned anything, runs behind the session
@@ -139,7 +144,9 @@ Every way this can fail is silence: no network, a registry that will not answer,
 unexpected shape. A registry that cannot be reached today does not withdraw a version it announced
 earlier, so the notice keeps showing until the registry answers with something else. A version that is not three numbers is never announced either, release candidates
 included. An [incognito session](using/sessions.md#a-session-that-leaves-nothing-behind) still
-reads an answer an ordinary session left, and neither records one nor asks.
+reads an answer an ordinary session left, and neither records one nor asks. A launch that cannot
+write the record of its last check, because there is no home directory or the state directory is not
+writable, does not ask the registry at all.
 
 ## Uninstall
 
@@ -187,10 +194,10 @@ Brave Bot asks whether you trust the working directory before anything else.
 - **Decline** and nothing is trusted. The session still works. Every write is shown to you
   first, and files are read into quarantine rather than into the model's context.
 
-The answer belongs to the session, not to the directory: every fresh session asks again, whatever
-you answered last time. `--resume` restores the answer that session's own user gave. Press `r`
-instead of `y` and later sessions started in exactly that directory trust it without asking, until
-you run `/forget-trust` ([Remembering the answer](security/trust.md#remembering-the-answer)).
+A yes is kept: later sessions started in that directory trust it without asking, until you run
+`/forget-trust` ([Remembering the answer](security/trust.md#remembering-the-answer)). A no is not
+kept, so the next session asks again, and you can work in the directory either way. `--resume`
+restores the answer that session's own user gave.
 
 What that answer means in detail, and every other way a path comes to be trusted, is
 [Trusted directories](security/trust.md).
@@ -239,8 +246,10 @@ A `run` prompt shows the compiled plan: every step, the binary each resolved to,
 every file the line would write. A step whose name reached its binary through a link, such as a
 virtualenv's `python`, shows the link and then the binary, as `link -> binary`. The prompt also says
 what the command is confined to, which is the directories the session was opened on and what each
-program in the line brings beyond them, such as the credentials a `git push` needs. On Windows,
-where nothing confines a program, it says the command is not sandboxed instead:
+program in the line brings beyond them, such as the credentials a `git push` needs. On Linux and
+Windows, when a program in the line other than git can write more than the temporary directory, the
+heading also warns that it can write a repository's hooks and configuration, which git runs later
+with no sandbox. Where the command runs with no sandbox, the prompt says it is not sandboxed instead:
 
 ```
   y run it    a always    n don't    ctrl-c stop the turn

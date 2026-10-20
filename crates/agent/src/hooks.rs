@@ -28,7 +28,7 @@
 //!
 //! The environment is inherited less the names [`crate::scrub`] takes off, so this agent's own
 //! credentials do not travel into a program the person attached to a moment any more than they
-//! travel into one the planner asked for.
+//! travel into one the planner asked for. Its `PATH` is reduced as the section below says.
 //!
 //! # Where a bare name is found
 //!
@@ -36,6 +36,11 @@
 //! [`bravebot_sandbox::programs::find`], which skips every `PATH` directory a confined stage may
 //! write (SANDBOX-30), so a stage cannot choose what runs with the person's access by writing a
 //! file under a hook's name.
+//!
+//! The same holds for the names the hook looks up itself: a script with an `env` shebang, or a
+//! launcher that starts another program by name. The hook is started with bravebot's `PATH` reduced
+//! by [`bravebot_sandbox::programs::restrict_path`] to the entries that lookup searches, so a stage
+//! cannot choose what runs by writing a file under its interpreter's name either.
 
 use bravebot_config::hooks::{Hook, Hooks, Moment};
 use std::ffi::OsStr;
@@ -197,6 +202,11 @@ fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<T
             std::io::Error::from(std::io::ErrorKind::NotFound).to_string(),
         ));
     };
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "a hook's own program: a path the person wrote, or a bare name found by \
+                      `bravebot_sandbox::programs::find` (SANDBOX-30)"
+    )]
     let mut command = Command::new(program);
     // The vector, never a string. There is no shell between the file and the process, so an
     // argument holding a space or a semicolon is one argument and arrives as one.
@@ -209,6 +219,9 @@ fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<T
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     crate::scrub::apply(&mut command);
+    // The names the hook starts itself (an `env` shebang, a launcher) search only the entries the
+    // lookup above searches, whether it was named bare or by a path (SANDBOX-30).
+    bravebot_sandbox::programs::restrict_path(&mut command);
 
     let mut child = match bravebot_sandbox::process::starting_a_program(|| command.spawn()) {
         Ok(child) => child,
@@ -340,6 +353,102 @@ mod tests {
         let report = String::from_utf8_lossy(&child.stderr).into_owned();
         let _ = std::fs::remove_dir_all(&session);
         let _ = std::fs::remove_dir_all(&system);
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(child.status.success(), "{report}");
+    }
+
+    /// SANDBOX-30: a hook that is a script with an `env` shebang, or a launcher that runs another
+    /// program by name, looks that program up on the `PATH` the hook was started with. An
+    /// interpreter a confined stage wrote into a directory the session keeps out, first on that
+    /// `PATH`, must not be the one that runs: the hook is started unconfined, with the person's
+    /// access to `~/.ssh` and `~/.aws`. The test binary runs again with `PATH` holding the
+    /// session's `.venv/bin`, an installed directory and the system directories, in that order.
+    /// `env-hook` is `#!/usr/bin/env interp` and sits in the installed directory, where each
+    /// `interp` records that it ran. It is named bare and then by its absolute path, since a hook
+    /// started either way looks its interpreter up through the same `PATH`. A hook started with
+    /// bravebot's whole `PATH` runs the planted `interp`.
+    #[cfg(unix)]
+    #[test]
+    fn a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written() {
+        use std::os::unix::fs::PermissionsExt;
+        const TEST: &str = "hooks::tests::a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written";
+        const SESSION: &str = "BRAVEBOT_TEST_HOOK_INTERPRETER_SESSION";
+        const INSTALLED: &str = "BRAVEBOT_TEST_HOOK_INTERPRETER_INSTALLED";
+
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            let installed = PathBuf::from(std::env::var_os(INSTALLED).unwrap());
+            bravebot_sandbox::programs::keep_out(&session);
+            std::fs::write(session.join("ran"), "").unwrap();
+
+            let absolute = installed.join("env-hook");
+            for name in ["env-hook", absolute.to_str().unwrap()] {
+                let hooks = Hooks::parse(&format!(
+                    r#"{{"hooks": [{{"on": "turn-finished", "run": [{name:?}]}}]}}"#
+                ));
+                let fired = fire(&hooks, Moment::TurnFinished, None, &session);
+
+                assert_eq!(
+                    fired[0].trouble, None,
+                    "the hook named {name} did not run to its end: {fired:?}"
+                );
+                assert!(
+                    !session.join("planted-ran").exists(),
+                    "the hook named {name} looked its interpreter up in a directory a stage may write"
+                );
+                assert!(
+                    session.join("installed-ran").exists(),
+                    "the hook named {name} did not run the installed interpreter"
+                );
+                std::fs::remove_file(session.join("installed-ran")).unwrap();
+            }
+            return;
+        }
+
+        let session = crate::testutil::scratch_dir("hooks-interpreter-session");
+        let installed = crate::testutil::scratch_dir("hooks-interpreter-installed");
+        for directory in [&session, &installed] {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        let planted = session.join(".venv/bin");
+        std::fs::create_dir_all(&planted).unwrap();
+        std::fs::create_dir_all(&installed).unwrap();
+        let write = |directory: &Path, name: &str, body: String| {
+            let file = directory.join(name);
+            std::fs::write(&file, body).unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let records =
+            |marker: &str| format!("#!/bin/sh\n: > '{}'\n", session.join(marker).display());
+        write(&planted, "interp", records("planted-ran"));
+        write(&installed, "interp", records("installed-ran"));
+        write(
+            &installed,
+            "env-hook",
+            "#!/usr/bin/env interp\n".to_string(),
+        );
+        let path = std::env::join_paths([
+            planted,
+            installed.clone(),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+            .env(SESSION, &session)
+            .env(INSTALLED, &installed)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+
+        let ran = session.join("ran").exists();
+        let report = String::from_utf8_lossy(&child.stderr).into_owned();
+        for directory in [&session, &installed] {
+            let _ = std::fs::remove_dir_all(directory);
+        }
         assert!(ran, "the child did not run the test: {report}");
         assert!(child.status.success(), "{report}");
     }

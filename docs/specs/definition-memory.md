@@ -7,11 +7,16 @@ governs:
   - crates/agent/src/preamble.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
+  - crates/agent/src/turn/setup.rs
+  - crates/agent/src/turn/round_steps.rs
   - crates/agent/src/turn/prompts.rs
   - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/agent/src/memory.rs
   - crates/agent/src/workspace.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/rewind.rs
   - crates/agent/src/manifest.rs
   - crates/core/src/delegate.rs
@@ -138,7 +143,10 @@ A definition with `memory: project` or `memory: local` keeps its memory in one f
 definition with no `memory:` key, or an empty one, keeps none. Any other value, `user` included, is
 a definition that loads and keeps no memory, and the turn says so, naming the definition's file and
 the value. Where that path falls inside the person's own directory, `~/.bravebot`, as it does for a
-session in the home directory, no memory is kept either, and the turn says so.
+session in the home directory, no memory is kept either, and the turn says so. A definition there
+loads only as the project's own, through the trust map ([DELEGATE-20](delegation.md#DELEGATE-20),
+[SKILL-3](skills.md#SKILL-3)), never from `~/.bravebot` itself, since its path goes through the
+working directory.
 
 `project` and `local` are one file. In Claude Code they differ over whether the file is meant to be
 committed, and whether a file is committed is decided by the person and their ignore rules rather
@@ -318,6 +326,7 @@ in that directory, which [INCOG-3](incognito.md#INCOG-3) otherwise refuses, so
 `verified-by: bravebot_agent::memory::a_directory_sharing_a_record_file_reads_none_of_the_other_s_lines`
 `verified-by: bravebot_agent::memory::an_untrusted_memory_write_with_nowhere_to_record_it_is_refused`
 `verified-by: bravebot_agent::memory::a_record_that_cannot_be_written_refuses_the_write`
+`verified-by: bravebot_agent::incognito::an_untrusted_write_to_a_memory_in_an_incognito_session_is_recorded`
 `verified-by: bravebot_agent::memory::a_path_trusted_again_leaves_the_record_and_the_rest_stays`
 `verified-by: bravebot_agent::memory::trusting_the_last_recorded_path_again_removes_the_record`
 `verified-by: bravebot_agent::memory::a_path_recorded_after_a_half_written_line_is_read_back`
