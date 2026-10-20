@@ -64456,3 +64456,82 @@ fn a_definition_lets_its_delegate_start_only_the_delegates_it_names() {
         "the coordinator and its reader should have started, and nothing else"
     );
 }
+
+/// DELEGATE-30. A definition a person addresses is offered `spawn_agent` with the kinds its
+/// `spawns:` line names and no others, and none at all where the line names no delegate that
+/// resolved, as a delegate in that state is. Through the whole turn, because the planner's list
+/// is rebuilt after the definition narrows the set, and an empty `kind` enumeration is one some
+/// providers reject.
+#[test]
+fn an_addressed_definition_is_offered_spawn_agent_only_with_delegates_it_may_start() {
+    let scratch = Scratch::new("address-spawns");
+    let home = Scratch::new("address-spawns-home");
+    define(
+        &home,
+        "lists-reader",
+        "kind: worker\nspawns: reader\n",
+        "LISTS-READER",
+    );
+    define(&home, "lists-none", "kind: worker\nspawns:\n", "LISTS-NONE");
+    define(
+        &home,
+        "lists-unknown",
+        "kind: worker\nspawns: nothing-goes-by-this\n",
+        "LISTS-UNKNOWN",
+    );
+    define(&home, "lists-nothing", "kind: worker\n", "LISTS-NOTHING");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        ("TASK-READER", vec![reply_with("done")]),
+        ("TASK-NONE", vec![reply_with("done")]),
+        ("TASK-UNKNOWN", vec![reply_with("done")]),
+        ("TASK-NOTHING", vec![reply_with("done")]),
+    ]);
+    let offered = |task: &str, name: &str| {
+        addressed_once(
+            &endpoint,
+            &received,
+            &workspace,
+            &addressed(task, &home, name),
+        )
+    };
+
+    let listed = offered("TASK-READER", "lists-reader");
+    assert!(
+        listed.contains(r#""name":"spawn_agent""#),
+        "a definition naming a delegate it may start was not offered spawn_agent"
+    );
+    assert!(
+        listed.contains(r#""enum":["reader"]"#),
+        "the kinds offered were not the ones the definition named: {listed}"
+    );
+    assert!(
+        !listed.contains(r#""enum":["reader","checker","worker","coordinator"]"#),
+        "the whole set was offered to a definition that named one kind"
+    );
+
+    for (task, name) in [
+        ("TASK-NONE", "lists-none"),
+        ("TASK-UNKNOWN", "lists-unknown"),
+    ] {
+        let request = offered(task, name);
+        assert!(
+            !request.contains(r#""name":"spawn_agent""#),
+            "{name}: spawn_agent was offered with no delegate it may start"
+        );
+        assert!(
+            !request.contains(r#""enum":[]"#),
+            "{name}: a tool was offered with an empty enumeration"
+        );
+        assert!(
+            request.contains(r#""name":"read_file""#),
+            "{name}: the rest of the turn's tools were not offered"
+        );
+    }
+
+    let whole = offered("TASK-NOTHING", "lists-nothing");
+    assert!(
+        whole.contains(r#""enum":["reader","checker","worker""#),
+        "a definition naming no spawns was not offered the whole set: {whole}"
+    );
+}

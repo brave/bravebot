@@ -4213,6 +4213,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
         self.capabilities = held;
 
+        // A turn with no delegate left to start is offered no way to start one, as a delegate in
+        // the same state is, so `spawn_agent` is not kept and its `kind` is never an empty
+        // enumeration (DELEGATE-30).
+        let may_delegate = !self.delegates.is_empty();
         let named = selected.tools();
         let kept: Vec<String> = offered
             .iter()
@@ -4220,6 +4224,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 crate::delegate::gating_capability(tool)
                     .is_none_or(|needs| self.capabilities.contains(&needs))
                     && named.is_none_or(|named| named.iter().any(|written| written == *tool))
+                    && (may_delegate || **tool != "spawn_agent")
             })
             .map(|tool| tool.to_string())
             .collect();
@@ -18504,6 +18509,50 @@ five
                     )
                     .is_ok()
             );
+        }
+
+        /// DELEGATE-30. An addressed definition whose list leaves no delegate to start is not
+        /// kept `spawn_agent`, as a delegate in that state is not offered it, and one naming no
+        /// list keeps it.
+        #[test]
+        fn an_addressed_definition_with_no_delegate_to_start_is_not_kept_spawn_agent() {
+            for (spawns, kept) in [
+                (Some(vec![]), false),
+                (Some(vec!["nothing-goes-by-this".to_string()]), false),
+                (Some(vec!["checker".to_string()]), true),
+                (None, true),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut routing = routing_with("task", "look into it");
+                routing.insert_trusted(ADDRESSED, "coordinator");
+                let mut policy =
+                    Policy::begin(routing, ReleasePlan::new(), all_capabilities(), &mut sink)
+                        .unwrap();
+                let mut definitions = Definitions::default();
+                let mut definition = Definition::from_file(
+                    "coordinator",
+                    "starts the others",
+                    Kind::Worker,
+                    None,
+                    "",
+                    ".bravebot/agents/coordinator.md",
+                );
+                if let Some(spawns) = spawns.clone() {
+                    definition = definition.with_spawns(spawns);
+                }
+                definitions.insert(definition);
+                policy.install_delegates(definitions);
+
+                let addressed = policy
+                    .address(&OFFERED)
+                    .expect("a resolved name is addressed")
+                    .expect("the line named a definition");
+                assert_eq!(
+                    addressed.tools().iter().any(|tool| tool == "spawn_agent"),
+                    kept,
+                    "spawns {spawns:?}"
+                );
+            }
         }
 
         /// ADDRESS-7. A definition is a person choosing which of their own capabilities to work

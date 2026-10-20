@@ -1155,7 +1155,9 @@ the list a person wrote and cannot lengthen it, and one writing no `spawns:` lin
 
 **Who it applies to.** A turn a person addresses to a definition
 ([ADDRESS-1](addressing-a-definition.md#ADDRESS-1)) is held to its list as a delegate is, since it
-runs the definition as a turn of the person's own and `spawn_agent` is among what it holds.
+runs the definition as a turn of the person's own and `spawn_agent` is among what it holds. Where
+the list leaves no delegate to start, the turn is offered no `spawn_agent`, as a delegate in that
+state is, so the tool is never offered with an empty set of kinds.
 
 **Why the comparison is sound.** The names are compared against a set the driver fixed before the
 turn, from files a person vouched for ([DELEGATE-20](#DELEGATE-20)), exactly as the planner's name
@@ -1171,6 +1173,8 @@ the set down and never add to it, so it grants nothing ([DELEGATE-19](#DELEGATE-
 `verified-by: bravebot_core::policy::an_empty_spawns_list_starts_nothing`
 `verified-by: bravebot_core::policy::a_definition_naming_no_spawns_starts_anything_the_run_may`
 `verified-by: bravebot_core::policy::an_addressed_definition_starts_only_the_delegates_it_lists`
+`verified-by: bravebot_core::policy::an_addressed_definition_with_no_delegate_to_start_is_not_kept_spawn_agent`
+`verified-by: bravebot_agent::turn::an_addressed_definition_is_offered_spawn_agent_only_with_delegates_it_may_start`
 `verified-by: bravebot_agent::turn::a_definition_lets_its_delegate_start_only_the_delegates_it_names`
 
 ## Known costs
