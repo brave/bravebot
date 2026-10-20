@@ -62,17 +62,24 @@ listed.
 <a id="EDIT-4"></a>
 ### EDIT-4: an edit comes back with the lines it produced
 
-The result carries the changed region of the file, with a few lines either side and their line
-numbers, in front of the count of replacements. The region is found by comparing the file before
+The result carries each changed region of the file, with a few lines either side and their line
+numbers, in front of the count of replacements. The regions are found by comparing the file before
 and after rather than by locating the new text, so a deletion, an insertion and a `replace_all`
-are all shown; a span longer than the excerpt allows is cut in the middle and says how much it
-dropped. An edit that changes only a line terminator, or adds or removes the final newline, is
-compared with the terminators included and shows the lines it touched.
+are all shown. Passages a long way apart are separate regions, with a note between them of how many
+unchanged lines it stands for, and regions that touch or lie a line apart are one. The regions
+together are held to a limit of lines: where they would pass it, the lines either side of each
+narrow, down to one, before any change is left out, and where they still pass it the middle is cut
+and a note says how many lines it dropped. Two versions too large and too different for the diff to
+line up are one region from the first difference to the last. An edit that changes only a line
+terminator, or adds or removes the final newline, is compared with the terminators included and
+shows the lines it touched.
 
 **Why.** A count of replacements is not a result anybody can check. A session edited eighteen
 files on nothing but those counts, never looked at one of them again, and compiled none of it. The
 lines around a change answer, in the result the planner already has, the question it would
-otherwise spend a round asking, or worse not ask at all.
+otherwise spend a round asking, or worse not ask at all. A call with several passages is the same
+case once for each, and one span from the first change to the last, cut in the middle, would leave
+a passage inside the cut known to have landed only from the count.
 
 **Nothing is declassified for it.** The excerpt is shaped inside the kernel and handed over
 labelled, exactly as a read is, so `Policy::present` decides whether the planner sees it. Where the
@@ -82,8 +89,9 @@ told only that. [EDIT-2](#EDIT-2) is what makes the file itself trusted by this 
 
 **The lines are a read of the file, and are scanned as one is.** The excerpt is text from the file
 handed to the planner, so before the result is returned the lines it shows are scanned for
-credentials under [CRED-15](../credential-protection.md#CRED-15), and only those lines: a credential
-in the part of a long span the excerpt cuts, or beyond its context, is not in the planner's context.
+credentials under [CRED-15](../credential-protection.md#CRED-15), and only those lines, those of every
+region shown: a credential in the unchanged lines between two regions, in the part the excerpt cuts,
+or beyond its context, is not in the planner's context.
 On a finding the person is asked, as for a read of that file, and one answer covers the file for
 this tool and for `read_file` alike. A value the edit's own words wrote is not asked about, since
 the planner wrote it and the write was put to the person with it. The edit has landed when the
@@ -105,6 +113,21 @@ nothing of the finding ([CRED-19](../credential-protection.md#CRED-19)).
 `verified-by: bravebot_agent::replace::a_change_of_line_terminator_still_shows_the_line`
 `verified-by: bravebot_agent::replace::removing_the_final_newline_still_shows_the_last_line`
 `verified-by: bravebot_agent::replace::adding_the_final_newline_still_shows_the_last_line`
+`verified-by: bravebot_agent::replace::passages_far_apart_are_each_shown_with_their_own_lines`
+`verified-by: bravebot_agent::replace::the_lines_between_two_regions_are_counted_as_unchanged`
+`verified-by: bravebot_agent::replace::regions_a_line_or_less_apart_are_one_and_a_wider_gap_is_counted`
+`verified-by: bravebot_agent::replace::many_regions_show_less_context_before_any_is_cut`
+`verified-by: bravebot_agent::replace::the_context_narrows_to_one_line_when_two_would_still_run_over`
+`verified-by: bravebot_agent::replace::a_region_of_exactly_the_limit_keeps_its_three_lines_of_context`
+`verified-by: bravebot_agent::replace::regions_that_cannot_all_fit_are_cut_in_the_middle_and_the_cut_is_named`
+`verified-by: bravebot_agent::replace::each_region_is_handed_back_with_its_own_first_line_and_the_gaps_are_not`
+`verified-by: bravebot_agent::replace::a_deletion_far_from_another_change_is_its_own_region`
+`verified-by: bravebot_agent::replace::a_deletion_at_either_end_shows_the_lines_beside_it_and_emptying_a_file_shows_none`
+`verified-by: bravebot_agent::replace::a_pair_too_different_to_line_up_still_shows_one_cut_span`
+`verified-by: bravebot_agent::turn::every_passage_of_a_several_passage_edit_is_in_the_result`
+`verified-by: bravebot_agent::turn::a_credential_beside_a_middle_passage_of_several_is_asked_about`
+`verified-by: bravebot_agent::turn::an_agreed_result_shows_every_passage_and_the_credential_beside_the_middle_one`
+`verified-by: bravebot_agent::turn::a_credential_between_two_passages_is_not_asked_about`
 
 <a id="EDIT-5"></a>
 ### EDIT-5: an edit takes the terminator the file already has

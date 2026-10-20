@@ -53646,6 +53646,147 @@ fn a_credential_outside_the_lines_an_edit_shows_is_not_asked_about() {
     );
 }
 
+/// `.env` lines `FILLER_nn=x` from `from` to `to`.
+fn env_filler(from: usize, to: usize) -> String {
+    (from..=to).map(|n| format!("FILLER_{n:02}=x\n")).collect()
+}
+
+/// One `edit_file` call with a pair for each of `FIRST`, `MIDDLE` and `LAST`, each changed from
+/// `=1` to `=2`.
+const EDITS_TO_THREE_KEYS: &str = concat!(
+    r#"{"path":".env","edits":["#,
+    r#"{"old_text":"FIRST=1","new_text":"FIRST=2"},"#,
+    r#"{"old_text":"MIDDLE=1","new_text":"MIDDLE=2"},"#,
+    r#"{"old_text":"LAST=1","new_text":"LAST=2"}]}"#
+);
+
+/// CRED-15 for several passages. The result shows the lines around every passage, so a credential
+/// beside one in the middle is shown, and it is put to the person like one beside the first. An
+/// excerpt that spanned the first change to the last and cut the middle never showed it, and the
+/// scan, which covers what is shown, never asked.
+#[test]
+fn a_credential_beside_a_middle_passage_of_several_is_asked_about() {
+    let scratch = Scratch::new("credential-edit-excerpt-middle-passage");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!(
+            "FIRST=1\n{}MIDDLE=1\nAWS_ACCESS_KEY_ID={DECLARED_KEY}\n{}LAST=1\n",
+            env_filler(1, 30),
+            env_filler(31, 60)
+        ),
+    )
+    .unwrap();
+
+    let mut confirmer = RemembersExposures::default();
+    let asked = confirmer.asked.clone();
+    let (answered, _told) = edits_to_env(
+        &scratch,
+        &[EDITS_TO_THREE_KEYS],
+        &mut confirmer,
+        Task::new("move all three to 2"),
+    );
+
+    let asked = asked.lock().unwrap();
+    let request = asked
+        .first()
+        .expect("the person was not asked about a credential the result would show");
+    assert_eq!(asked.len(), 1);
+    let said = request.credentials.join("; ");
+    assert!(
+        said.contains("an AWS access key id") && said.contains(".env:33"),
+        "the question did not say what was found or where: {said}"
+    );
+    assert!(
+        !answered.contains(DECLARED_KEY),
+        "a credential the person declined reached the planner: {answered}"
+    );
+    assert!(
+        answered.contains("edited .env: 3 replacement(s)"),
+        "the planner was not told its edit landed: {answered}"
+    );
+}
+
+/// The other direction, and the reason the scan has to follow the excerpt: once the person agrees,
+/// the planner is shown each passage with the line that was asked about, at its own number.
+#[test]
+fn an_agreed_result_shows_every_passage_and_the_credential_beside_the_middle_one() {
+    let scratch = Scratch::new("credential-edit-excerpt-middle-passage-agreed");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!(
+            "FIRST=1\n{}MIDDLE=1\nAWS_ACCESS_KEY_ID={DECLARED_KEY}\n{}LAST=1\n",
+            env_filler(1, 30),
+            env_filler(31, 60)
+        ),
+    )
+    .unwrap();
+
+    let mut confirmer = RemembersExposures {
+        allow: true,
+        ..Default::default()
+    };
+    let (answered, _told) = edits_to_env(
+        &scratch,
+        &[EDITS_TO_THREE_KEYS],
+        &mut confirmer,
+        Task::new("move all three to 2"),
+    );
+
+    for shown in ["FIRST=2", "MIDDLE=2", "LAST=2"] {
+        assert!(answered.contains(shown), "{shown} is missing: {answered}");
+    }
+    assert!(
+        answered.contains(&format!("    33  AWS_ACCESS_KEY_ID={DECLARED_KEY}")),
+        "the line beside the middle passage is missing or misnumbered: {answered}"
+    );
+}
+
+/// The lines between two passages are not in the result, so a credential among them is not a
+/// disclosure and holding the result back over it would put a question to the person about text
+/// nothing they were shown reaches. The two passages are thirty lines apart, which one span from
+/// the first to the last would show whole.
+#[test]
+fn a_credential_between_two_passages_is_not_asked_about() {
+    let scratch = Scratch::new("credential-edit-excerpt-between-passages");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!(
+            "FIRST=1\n{}AWS_ACCESS_KEY_ID={DECLARED_KEY}\n{}LAST=1\n",
+            env_filler(1, 14),
+            env_filler(15, 28)
+        ),
+    )
+    .unwrap();
+
+    let mut confirmer = RemembersExposures::default();
+    let asked = confirmer.asked.clone();
+    let (answered, _told) = edits_to_env(
+        &scratch,
+        &[
+            r#"{"path":".env","edits":[{"old_text":"FIRST=1","new_text":"FIRST=2"},{"old_text":"LAST=1","new_text":"LAST=2"}]}"#,
+        ],
+        &mut confirmer,
+        Task::new("move both to 2"),
+    );
+
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "an edit was held up over a credential its result does not show"
+    );
+    assert!(
+        answered.contains("FIRST=2") && answered.contains("LAST=2"),
+        "a passage was left out of the result: {answered}"
+    );
+    assert!(
+        answered.contains("23 unchanged lines"),
+        "the result does not say what lies between the passages: {answered}"
+    );
+    assert!(
+        !answered.contains(DECLARED_KEY),
+        "the lines between the passages reached the planner: {answered}"
+    );
+}
+
 /// A value the planner wrote itself is not a disclosure when the result repeats it, and the person
 /// was already shown it on the write they approved. Asking again about the same value, as though
 /// the planner were being handed something new, is a second prompt for one decision.
@@ -62331,6 +62472,43 @@ fn edits_far_apart_in_a_long_file_are_approved_as_two_changes() {
         .collect();
     assert_eq!(added, ["inserted early", "inserted late"]);
     assert_eq!(after.lines().count(), 5002);
+}
+
+/// EDIT-4 for several passages: the result shows each changed region, so a passage between the
+/// first and the last is not known to have landed only from the count of replacements. One span
+/// from the first change to the last, cut in the middle, shows the first and the last and leaves
+/// out the one between.
+#[test]
+fn every_passage_of_a_several_passage_edit_is_in_the_result() {
+    let before: String = (1..=120).map(|n| format!("line {n:03}\n")).collect();
+    let (after, _, second) = run_one_edit(
+        "edit-many-result",
+        &before,
+        r#"{"path":"a.txt","edits":[
+            {"old_text":"line 005\n","new_text":"LINE 005\n"},
+            {"old_text":"line 060\n","new_text":"LINE 060\n"},
+            {"old_text":"line 115\n","new_text":"LINE 115\n"}]}"#,
+    );
+    assert_eq!(after.matches("LINE ").count(), 3);
+
+    let result = second
+        .split_once("Result of edit_file:")
+        .expect("the second request carries the edit result")
+        .1;
+    for changed in ["LINE 005", "LINE 060", "LINE 115"] {
+        assert!(
+            result.contains(changed),
+            "{changed} is not in the result: {result}"
+        );
+    }
+    assert!(
+        result.contains("3 replacement(s)"),
+        "the count went missing: {result}"
+    );
+    assert!(
+        result.contains("48 unchanged lines"),
+        "the result does not say what lies between the passages: {result}"
+    );
 }
 
 /// A pair that does not match refuses the whole call: nobody is asked, the earlier pairs are not
