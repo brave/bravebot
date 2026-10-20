@@ -86,9 +86,9 @@ on the critical path and only the driver reads it.
 **Why each is gated separately.** A fan-out is several runs. A gate that saw one of them would be
 approving the rest on the strength of a sibling, and the entries are the part that differs.
 
-**Why a ceiling at all.** Not authority: the planner can already start as many one call at a time
+**Why a ceiling at all.** Not authority: the planner can already have as many running one call at a time
 as the turn's ceiling allows, and each passes the same gate either way. It is the cost of asking that changes, and a
-field turning one sentence into an unbounded number of runs is worth a bound.
+field turning one sentence into an unbounded number of runs at once is worth a bound.
 
 `verified-by: bravebot_agent::turn::one_call_can_fan_a_task_out_over_several_delegates`
 `verified-by: bravebot_agent::turn::a_fan_out_past_the_ceiling_is_refused_and_starts_nothing`

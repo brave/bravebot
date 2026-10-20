@@ -968,8 +968,9 @@ what it is doing.
 path per entry, say) is repeated. Every delegate it starts is one like any other: it is approved on
 its own, takes its own number, and holds its own copy of what you vouched for, so a fan-out is
 several runs rather than one run several times. A call naming more than eight, or naming none, is
-refused and starts nothing. A call that reaches the turn's ceiling of 32 delegates part-way starts
-the ones that fit and says how many did not start, and why.
+refused and starts nothing. A call that reaches the turn's ceiling on delegates running at once (64
+unless [`maxRunningDelegates`](../customize/configuration.md#maxrunningdelegates) says otherwise)
+part-way starts the ones that fit and says how many did not start, and why.
 
 **`mcp_servers` takes servers away from a worker.** Without it a worker holds every server its
 parent may call, less any its [definition](../customize/agents.md) leaves off. With it the worker

@@ -468,6 +468,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
 | `style` | the output style a session starts in: `concise`, `explanatory`, `proactive` or a file in `~/.bravebot/styles`. Read from your own file and the file `--settings` names only, and it cannot name a project's style from `.bravebot/styles` (pick that with `/style`) |
 | `limit` | the most tokens or Leo Premium credits a session may spend before it asks ([below](#limit)) |
+| `maxRunningDelegates` | the most delegates one turn may have running at once ([below](#maxrunningdelegates)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
 | `provider` | an OpenAI-compatible gateway ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
@@ -827,6 +828,22 @@ none of these, and zero, sets no limit. The nearest settings file that names it 
 [`/limit`](../reference/commands.md#limit-amount--off) changes it for one session. Tokens are
 the usage the model service reports, so a limit in tokens is a bound on tokens and not on money. The
 one-shot `-p` run and the desktop app do not apply it.
+
+### `maxRunningDelegates`
+
+```json
+{ "maxRunningDelegates": 32 }
+```
+
+The most delegates one turn may have running at once, counted across every level of nesting. Without
+this key it is 64. A delegate that has finished gives its place back, so a turn can start more than
+that number over its life and never has more going at once. A request made while every place is
+taken is refused and says how many the turn may have running, and a fan-out that meets the number
+part-way starts the ones that fit. A whole number above zero; zero, a negative or fractional number,
+or a number in quotes leaves it at 64. The nearest settings file that names it wins. Each delegate
+running holds a context of its own and may have a model request in flight, so a larger number raises
+the most a turn can spend at once, and a smaller one lowers how many requests reach your gateway at
+the same moment. The planner and the delegates cannot change it.
 
 ### `deferMcpToolsAbove`
 

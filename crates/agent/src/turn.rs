@@ -2492,6 +2492,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     if let Some(spec) = &task.delegate {
         policy = policy.within(spec);
     }
+    // After the place above, which a delegate's run keeps whatever the settings say: the bound is
+    // the turn's own and the kernel gives it to no run that is a delegate (DELEGATE-7).
+    policy = policy.with_delegate_bound(inputs.config.max_running_delegates);
 
     let started_in = task.permission_mode.get();
     policy.record_permission_mode(started_in.name());

@@ -1576,6 +1576,29 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self
     }
 
+    /// Hold the tree of delegates this turn starts to `bound` running at once, where the settings
+    /// named a figure, and to [`DEFAULT_MAX_RUNNING_DELEGATES`] where they named none
+    /// (DELEGATE-7).
+    ///
+    /// The caller reads the figure out of a person's settings, and nothing a delegate or the
+    /// planner reads or writes reaches it. A bound of zero is none, since a turn that may have no
+    /// delegate running is one that cannot delegate, which a run's tools say. It is the tree of a
+    /// turn's own run: a run that is a delegate ([`Policy::within`]) draws on the tree its spec
+    /// carries, so this changes nothing for it, whichever of the two is called first, and a
+    /// delegate cannot give itself a tree with a bound of its own choosing by calling it.
+    ///
+    /// [`DEFAULT_MAX_RUNNING_DELEGATES`]: crate::delegate::DEFAULT_MAX_RUNNING_DELEGATES
+    pub fn with_delegate_bound(mut self, bound: Option<u32>) -> Self {
+        if self.at.is_none() {
+            self.tree = crate::delegate::Tree::bounded(
+                bound
+                    .filter(|bound| *bound > 0)
+                    .unwrap_or(crate::delegate::DEFAULT_MAX_RUNNING_DELEGATES),
+            );
+        }
+        self
+    }
+
     /// Hold what a delegate's report held, once the planner has been given its words.
     ///
     /// The report is labelled in the delegate from that delegate's own context, so a delegate
@@ -3611,14 +3634,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The number is minted here, beneath this run's own, and spent only by a delegate that is
     /// approved. A refusal takes none, so the number says which of the run's delegates it was
     /// and not how many requests the run made. Two bounds are this call's to keep: a run at
-    /// [`MAX_DEPTH`] spawns nothing, and a tree holding [`MAX_DELEGATES`] takes no more,
-    /// whichever run in it asks. A run whose definition named its tools without `spawn_agent`
-    /// spawns nothing either, wherever it sits. Only a delegate that passed everything else
-    /// takes a place in the tree, and the trail records what it was delegated without only once
-    /// it has one.
+    /// [`MAX_DEPTH`] spawns nothing, and a tree already holding as many delegates as its bound
+    /// ([`Policy::with_delegate_bound`]) takes no more, whichever run in it asks. A run whose
+    /// definition named its tools without `spawn_agent` spawns nothing either, wherever it sits.
+    /// Only a delegate that passed everything else takes a place in the tree, and the trail
+    /// records what it was delegated without only once it has one.
+    ///
+    /// The place is held by the spec this returns and goes back when the spec does, once the
+    /// delegate's run has ended or where the caller drops the spec without starting one. A caller
+    /// that wants a delegate to count against the tree keeps the spec for as long as it runs.
     ///
     /// [`MAX_DEPTH`]: crate::delegate::MAX_DEPTH
-    /// [`MAX_DELEGATES`]: crate::delegate::MAX_DELEGATES
     pub fn before_delegate(
         &mut self,
         kind: &Labelled<String>,
@@ -3788,17 +3814,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             }
         };
 
-        if !self.tree.claim() {
+        let Some(place) = self.tree.claim() else {
             return Err(self.deny(
                 "delegate",
                 Principle::Capability,
                 format!(
-                    "this turn has already started {} delegates, which is as many as one \
-                     turn may; do the work yourself or say what is left",
-                    crate::delegate::MAX_DELEGATES
+                    "this turn already has {} delegates running, which is as many as one turn \
+                     may have at once; do the work yourself or say what is left",
+                    self.tree.bound()
                 ),
             ));
-        }
+        };
 
         // Spent only here, with the place in the tree, so a request refused above takes neither
         // and the next delegate this run starts is numbered as the one after the last that did.
@@ -3959,18 +3985,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             );
         }
 
-        let spec = crate::delegate::DelegateSpec::new(
-            id,
-            &selected,
-            task,
-            held,
-            rounds,
-            self.tree.clone(),
-        )
-        .holding(self.holds)
-        .limited_to(limits)
-        .budgeted_to(asked)
-        .spawning_within(self.spawns.as_deref());
+        let spec = crate::delegate::DelegateSpec::new(id, &selected, task, held, rounds, place)
+            .holding(self.holds)
+            .limited_to(limits)
+            .budgeted_to(asked)
+            .spawning_within(self.spawns.as_deref());
 
         let beneath = if spec.may_delegate() {
             "and a place in this turn's tree of delegates"
@@ -4008,10 +4027,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Take back a delegate [`Policy::before_delegate`] approved and the caller then did not
     /// start, because something it checks afterwards refused it.
     ///
-    /// The place under the ceiling and the number go back, so only a delegate that started is
-    /// counted ([DELEGATE-7](../../../docs/specs/delegation.md#DELEGATE-7)) and the next one is
-    /// numbered as the one after the last that did. Only the delegate this run approved last can
-    /// be taken back, which is the only one a caller holds: it asks for one at a time.
+    /// The place under the ceiling and the number go back, so only a delegate that started
+    /// holds a place ([DELEGATE-7](../../../docs/specs/delegation.md#DELEGATE-7)) and the next
+    /// one is numbered as the one after the last that did. The place goes back with the spec,
+    /// which this takes and drops. Only the delegate this run approved last can be taken back,
+    /// which is the only one a caller holds: it asks for one at a time.
     ///
     /// The refusal is recorded as one (TRACE-1), with its fixed `cause`, the directory a person
     /// opened where that was the cause, and how many of the call's `unstarted` delegates this
@@ -4024,7 +4044,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ) {
         debug_assert_eq!(self.spawned, spec.id().position());
         self.spawned = self.spawned.saturating_sub(1);
-        self.tree.release();
         let named = match cause.directory() {
             Some(dir) => format!(" ('{dir}')"),
             None => String::new(),
@@ -16579,12 +16598,22 @@ five
 
     mod delegates {
         use super::*;
-        use crate::delegate::{DelegateId, Kind, MAX_DELEGATES, MAX_DEPTH};
+        use crate::delegate::{DelegateId, DelegateSpec, Kind, MAX_DEPTH};
 
         /// What a planner's own words look like by the time a tool hands them over: the tool layer
         /// labels every argument pessimistically, because it cannot know where one came from.
         pub(super) fn argument(text: &str) -> Labelled<String> {
             Labelled::new(text.to_string(), Label::untrusted_public())
+        }
+
+        /// A turn whose settings named `bound` as the most delegates it may have running at once.
+        fn bounded_policy(sink: &mut RecordingSink, bound: u32) -> Policy<'_, RecordingSink> {
+            open_policy(sink).with_delegate_bound(Some(bound))
+        }
+
+        /// What a reader asks for, which a test that is about the count and nothing else sends.
+        fn ask_for_a_reader<S: Sink>(policy: &mut Policy<'_, S>) -> Gated<DelegateSpec> {
+            policy.before_delegate(&argument("reader"), &argument("look"), None)
         }
 
         /// A delegate is a planner, so its task must come from a context holding nothing an
@@ -17849,16 +17878,15 @@ five
         /// leaves the next one startable and numbered as the first.
         #[test]
         fn a_withdrawn_delegate_takes_neither_a_place_nor_a_number() {
+            const BOUND: u32 = 3;
             let mut sink = RecordingSink::new();
-            let mut turn = open_policy(&mut sink);
-            for _ in 0..=MAX_DELEGATES {
-                let spec = turn
-                    .before_delegate(&argument("reader"), &argument("look"), None)
-                    .expect("a withdrawn request filled the tree");
+            let mut turn = bounded_policy(&mut sink, BOUND);
+            for _ in 0..=BOUND {
+                let spec =
+                    ask_for_a_reader(&mut turn).expect("a withdrawn request filled the tree");
                 turn.withdraw_delegate(spec, &crate::delegate::CheckoutRefusal::Reader, 1);
             }
-            let spec = turn
-                .before_delegate(&argument("reader"), &argument("look"), None)
+            let spec = ask_for_a_reader(&mut turn)
                 .expect("the tree was full of delegates that never started");
             assert_eq!(spec.id(), DelegateId::nth(1));
             drop(turn);
@@ -18067,15 +18095,14 @@ five
 
         /// The ceiling is on the tree rather than on each run, so siblings running at once draw
         /// on one count and no arrangement of fan-outs gets past it. A second turn's tree is its
-        /// own.
+        /// own, and a delegate that has ended is a place the next one takes.
         #[test]
         fn a_turns_tree_holds_at_most_its_bound_however_it_is_arranged() {
+            const BOUND: u32 = 6;
             let mut sink = RecordingSink::new();
-            let mut turn = open_policy(&mut sink);
-            let siblings = [(); 2].map(|()| {
-                turn.before_delegate(&argument("reader"), &argument("look"), None)
-                    .expect("the turn may delegate")
-            });
+            let mut turn = bounded_policy(&mut sink, BOUND);
+            let siblings =
+                [(); 2].map(|()| ask_for_a_reader(&mut turn).expect("the turn may delegate"));
 
             let mut sinks = [RecordingSink::new(), RecordingSink::new()];
             let [left, right] = &mut sinks;
@@ -18083,62 +18110,182 @@ five
                 open_policy(left).within(&siblings[0]),
                 open_policy(right).within(&siblings[1]),
             ];
-            let mut started = siblings.len();
+            let mut running: Vec<DelegateSpec> = Vec::new();
             let mut refused = None;
-            for n in 0..MAX_DELEGATES {
+            for n in 0..BOUND {
                 match beneath[n as usize % 2].before_delegate(
                     &argument("reader"),
                     &argument("look closer"),
                     None,
                 ) {
-                    Ok(_) => started += 1,
+                    Ok(spec) => running.push(spec),
                     Err(denial) => {
                         refused = Some(denial);
                         break;
                     }
                 }
             }
-            assert_eq!(started, MAX_DELEGATES as usize);
+            assert_eq!(siblings.len() + running.len(), BOUND as usize);
             let refused = refused.expect("the tree took more than its bound");
             assert_eq!(refused.principle, Principle::Capability);
             assert!(
-                turn.before_delegate(&argument("reader"), &argument("look"), None)
-                    .is_err(),
+                refused.to_string().contains("6 delegates running"),
+                "the refusal did not say how many the turn may have running: {refused}"
+            );
+            assert!(
+                ask_for_a_reader(&mut turn).is_err(),
                 "the turn was not held to the places its delegates had taken"
             );
 
             let mut other_sink = RecordingSink::new();
+            let mut other_turn = bounded_policy(&mut other_sink, BOUND);
             assert!(
-                open_policy(&mut other_sink)
-                    .before_delegate(&argument("reader"), &argument("look"), None)
-                    .is_ok(),
+                ask_for_a_reader(&mut other_turn).is_ok(),
                 "another turn's tree shared this one's count"
             );
+
+            // One of the delegates ends, and one more may run, from any run in the tree.
+            drop(running.pop());
+            let next = ask_for_a_reader(&mut turn).expect("an ended delegate's place was not free");
+            assert!(
+                beneath[1]
+                    .before_delegate(&argument("reader"), &argument("look closer"), None)
+                    .is_err(),
+                "one ended delegate freed more than its own place"
+            );
+            drop(next);
         }
 
         /// A place in the tree and a number are taken by a delegate that exists. A planner that
-        /// asked badly several times has not used up what the turn may start, and the delegate it
-        /// then starts is `d1`, the first the turn started.
+        /// asked badly several times has not used up what the turn may have running, and the
+        /// delegate it then starts is `d1`, the first the turn started.
         #[test]
         fn a_refused_delegate_takes_no_place_in_the_tree() {
+            const BOUND: u32 = 4;
             let mut sink = RecordingSink::new();
-            let mut turn = open_policy(&mut sink);
-            for _ in 0..MAX_DELEGATES {
+            let mut turn = bounded_policy(&mut sink, BOUND);
+            for _ in 0..BOUND {
                 turn.before_delegate(&argument("auditor"), &argument("look"), None)
                     .expect_err("no kind is called that");
             }
-            let first = turn
-                .before_delegate(&argument("reader"), &argument("look"), None)
-                .expect("refusals took places in the tree");
+            let first = ask_for_a_reader(&mut turn).expect("refusals took places in the tree");
             assert_eq!(first.id(), DelegateId::nth(1));
-            let started = 1
-                + (1..MAX_DELEGATES)
-                    .filter(|_| {
-                        turn.before_delegate(&argument("reader"), &argument("look"), None)
-                            .is_ok()
-                    })
-                    .count();
-            assert_eq!(started, MAX_DELEGATES as usize);
+            let mut running = vec![first];
+            running.extend((1..BOUND).filter_map(|_| ask_for_a_reader(&mut turn).ok()));
+            assert_eq!(running.len(), BOUND as usize);
+            assert!(
+                ask_for_a_reader(&mut turn).is_err(),
+                "the tree took more than its bound"
+            );
+        }
+
+        /// A request refused because the tree is full takes no place either. Refused repeatedly
+        /// while the delegates run, it leaves the tree with exactly the places those delegates
+        /// give back, so one that ends frees one place and the next request is the third
+        /// delegate the turn started.
+        #[test]
+        fn a_refused_request_still_takes_no_place_once_places_return() {
+            const BOUND: u32 = 2;
+            let mut sink = RecordingSink::new();
+            let mut turn = bounded_policy(&mut sink, BOUND);
+            let mut running: Vec<DelegateSpec> = (0..BOUND)
+                .map(|_| ask_for_a_reader(&mut turn).expect("the tree has room"))
+                .collect();
+            for _ in 0..5 {
+                ask_for_a_reader(&mut turn).expect_err("the tree is full");
+            }
+
+            drop(running.remove(0));
+            let third = ask_for_a_reader(&mut turn).expect("the place that went back was not free");
+            assert_eq!(
+                third.id(),
+                DelegateId::nth(3),
+                "a number was reused or skipped"
+            );
+            assert!(
+                ask_for_a_reader(&mut turn).is_err(),
+                "the refused requests left the tree with more places than the delegates gave back"
+            );
+            drop(third);
+            drop(running);
+            let after: Vec<DelegateSpec> = (0..BOUND + 3)
+                .filter_map(|_| ask_for_a_reader(&mut turn).ok())
+                .collect();
+            assert_eq!(
+                after.len(),
+                BOUND as usize,
+                "the tree did not hold exactly its bound once every delegate had ended"
+            );
+        }
+
+        /// A place goes back when a delegate ends, so the delegates a turn starts one after
+        /// another are not counted against the ones running at once, and each is still numbered
+        /// as the next the turn started rather than as one that ended.
+        #[test]
+        fn a_place_a_finished_delegate_returned_is_taken_by_the_next_one() {
+            let mut sink = RecordingSink::new();
+            let mut turn = bounded_policy(&mut sink, 1);
+            for n in 1..=5 {
+                let spec = ask_for_a_reader(&mut turn)
+                    .expect("a delegate that ended was still holding the only place");
+                assert_eq!(spec.id(), DelegateId::nth(n));
+                assert!(
+                    ask_for_a_reader(&mut turn).is_err(),
+                    "a second delegate ran alongside the first under a bound of one"
+                );
+            }
+        }
+
+        /// A run that is a delegate draws on the tree its spec carries. A bound it names for itself
+        /// is ignored, so it cannot start a tree of its own to get past its turn's ceiling.
+        #[test]
+        fn a_delegate_cannot_give_itself_a_tree_with_a_bound_of_its_own() {
+            let mut turn_sink = RecordingSink::new();
+            let mut turn = bounded_policy(&mut turn_sink, 1);
+            let spec = ask_for_a_reader(&mut turn).expect("the turn may delegate");
+
+            let mut sink = RecordingSink::new();
+            let mut delegate = open_policy(&mut sink)
+                .within(&spec)
+                .with_delegate_bound(Some(100));
+            delegate
+                .before_delegate(&argument("reader"), &argument("look closer"), None)
+                .expect_err("a delegate started a tree of its own");
+        }
+
+        /// A turn whose settings name no figure, or a figure of zero, may have 64 delegates running
+        /// at once, and a figure that is named is the one it is held to instead.
+        #[test]
+        fn a_turn_whose_settings_name_no_bound_has_sixty_four_delegates_running() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink).with_delegate_bound(None);
+            let running: Vec<DelegateSpec> = (0..64)
+                .map(|_| ask_for_a_reader(&mut turn).expect("under the default"))
+                .collect();
+            let refused = ask_for_a_reader(&mut turn).expect_err("past the default");
+            assert!(
+                refused.to_string().contains("64 delegates running"),
+                "the refusal did not say what the default is: {refused}"
+            );
+            drop(running);
+
+            let mut zero_sink = RecordingSink::new();
+            let mut zero = bounded_policy(&mut zero_sink, 0);
+            assert!(
+                ask_for_a_reader(&mut zero).is_ok(),
+                "a bound of zero left a turn that could start no delegate"
+            );
+
+            let mut named_sink = RecordingSink::new();
+            let mut named = bounded_policy(&mut named_sink, 100);
+            let running: Vec<DelegateSpec> = (0..100)
+                .map(|_| ask_for_a_reader(&mut named).expect("under the named figure"))
+                .collect();
+            assert!(
+                ask_for_a_reader(&mut named).is_err(),
+                "a figure the settings named did not hold"
+            );
+            drop(running);
         }
 
         /// A refusal at the ceiling is all the trail says about that call. What a delegate is
@@ -18147,21 +18294,26 @@ five
         #[test]
         fn a_delegate_refused_at_the_ceiling_is_recorded_only_as_refused() {
             let mut sink = RecordingSink::new();
+            const BOUND: u32 = 3;
             let mut policy = Policy::begin(
                 routing_with("task", "look into it"),
                 ReleasePlan::new(),
                 CapabilitySet::from_iter([Capability::WebFetch, Capability::FileRead]),
                 &mut sink,
             )
-            .unwrap();
-            for _ in 0..MAX_DELEGATES {
-                policy
-                    .before_delegate(&argument("worker"), &argument("fix it"), None)
-                    .expect("the tree has room");
-            }
+            .unwrap()
+            .with_delegate_bound(Some(BOUND));
+            let running: Vec<DelegateSpec> = (0..BOUND)
+                .map(|_| {
+                    policy
+                        .before_delegate(&argument("worker"), &argument("fix it"), None)
+                        .expect("the tree has room")
+                })
+                .collect();
             policy
                 .before_delegate(&argument("worker"), &argument("fix it"), None)
                 .expect_err("the tree took more than its bound");
+            drop(running);
 
             let passed_for = |id: DelegateId| {
                 let about = format!("{id}:");
@@ -18174,7 +18326,7 @@ five
                 "a delegate that started did not say what it went without"
             );
             assert!(
-                !passed_for(DelegateId::nth(MAX_DELEGATES + 1)),
+                !passed_for(DelegateId::nth(BOUND + 1)),
                 "the trail allowed a delegate the ceiling then refused"
             );
         }

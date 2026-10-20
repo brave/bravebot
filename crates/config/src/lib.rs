@@ -1035,6 +1035,9 @@ pub struct Config {
     /// `deferMcpToolsAbove` setting. `None` offers every tool in full (`mcp-servers.md`
     /// SERVERS-16).
     pub defer_mcp_tools_above: Option<u64>,
+    /// The most delegates one turn may have running at once, from the `maxRunningDelegates`
+    /// setting. `None` leaves the kernel's own bound in force (`delegation.md` DELEGATE-7).
+    pub max_running_delegates: Option<u32>,
     /// The model the settings in force name for a turn to move to when its own keeps failing, as
     /// the file spelled it.
     ///
@@ -1292,6 +1295,7 @@ impl Config {
         config.models = managed.models().clone();
         config.advisor_model = settings.advisor_model().map(str::to_string);
         config.defer_mcp_tools_above = settings.defer_mcp_tools_above();
+        config.max_running_delegates = settings.max_running_delegates();
         config.fallback_model = settings.fallback_model().map(str::to_string);
         config.summary_model = settings.summary_model().map(str::to_string);
         config.processor_model = settings.processor_model().map(str::to_string);
@@ -1422,6 +1426,7 @@ impl Config {
             default_model,
             advisor_model: None,
             defer_mcp_tools_above: None,
+            max_running_delegates: None,
             fallback_model: None,
             summary_model: None,
             processor_model: None,
@@ -3017,6 +3022,19 @@ mod tests {
         ] {
             assert_eq!(bedrock.model_for(tier), Some(named));
         }
+    }
+
+    /// DELEGATE-7: the bound a settings file names on the delegates a turn may have running is what
+    /// the configuration carries to the turn, and a file that names none leaves the kernel's own.
+    #[test]
+    fn the_bound_on_running_delegates_reaches_the_configuration() {
+        let named = Settings::parse(r#"{"maxRunningDelegates": 12}"#);
+        let config = resolved(&named, |_| None, complete_env).expect("configured");
+        assert_eq!(config.max_running_delegates, Some(12));
+
+        let silent = Settings::parse("{}");
+        let config = resolved(&silent, |_| None, complete_env).expect("configured");
+        assert_eq!(config.max_running_delegates, None);
     }
 
     /// A tier has no block to state a ceiling in, so the variable is the only thing that can raise
