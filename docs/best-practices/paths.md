@@ -6,7 +6,9 @@ On Linux a path, a program name, an argument and an environment value are arbitr
 reviewer checks here, none of which a compiler or a lint can decide, is whether a conversion to
 text sits on a display or on a decision. Most of the `to_string_lossy` calls in the tree are
 display, which is correct, so a lint cannot tell the two apart. The same reviewer checks that a fix
-to a name that got past a rule accounts for the other names the file has.
+to a name that got past a rule accounts for the other names the file has. It also checks that a
+program bravebot starts itself is tested for the names it starts, and that a fix to one such program
+accounts for the others [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30) lists.
 
 ---
 
@@ -111,14 +113,46 @@ the rest.
 
 <a id="PATH-005"></a>
 
-## A program bravebot starts itself names the test that skips a file a stage could have written
+## A program bravebot starts itself names the tests that show it never runs a file a stage wrote
 
 **A change that starts a program bravebot runs for itself names, for that program, the test that
-shows a file in a writable `PATH` directory is skipped, and whether `own_credentials()` is removed
-from its environment ([CRED-14](../specs/credential-protection.md#CRED-14)).** `make check-security`
-fails on `Command::new("name")` in production code, so what a reviewer reads for is what it cannot
-see: a program named by a variable, and a started program that looks up a second one through the
-`PATH` it inherited ([SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)).
+shows a file in a directory [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30) leaves out is not found
+as the program, the test that shows the same for a name the program itself starts, the `PATH` the
+program is given, and whether `own_credentials()` is removed from its environment
+([CRED-14](../specs/credential-protection.md#CRED-14)).** `make check-security` fails on
+`Command::new("name")` in production code, so what a reviewer reads for is what it cannot see: a
+program named by a variable, and a started program that looks up a second one through the `PATH` it
+inherited (SANDBOX-30).
+
+The second test puts a directory SANDBOX-30 leaves out first on the `PATH` bravebot inherits and
+plants an executable file in it under a name the program itself starts, such as the interpreter an
+`env` shebang names. The planted file records that it ran and then runs the real one, which is
+installed later on that `PATH`. The test starts the program through the function production uses,
+and asserts both that the planted file did not run and that the program ran to its end. The first
+test passes for a program whose own file is found safely and whose interpreter is not, so it is no
+substitute for the second. The program is given a `PATH` reduced with
+`bravebot_sandbox::programs::restrict_path`, or the names it starts are passed as absolute paths,
+as the `/caffeinate` inhibitor's `cat` is. Where it is given neither, such as a language server that
+runs the project's own interpreter on purpose, the description cites the issue or Known costs entry
+that records it, as [GAP-001](gaps.md#GAP-001) says.
 
 **Why:** the check reads literals. A name held in a variable and a program started by another
-program each reach the same unconfined lookup, and each shipped before being asked about.
+program each reach the same unconfined lookup, and each shipped before being asked about. A program
+whose own file is found safely still runs a file a stage wrote when a name it looks up resolves in
+a directory SANDBOX-30 leaves out.
+
+---
+
+<a id="PATH-006"></a>
+
+## A fix to one program on the SANDBOX-30 list goes through the others on it
+
+**A change that fixes how one program in [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30) is found or
+started lists each entry in the clause and says for each whether the change handles it.**
+A reviewer looks for the description to cover every entry, with a test for each one the change
+handles. A diff that fixes only the reported program leaves the others unchecked. A case the change
+leaves is recorded as [GAP-001](gaps.md#GAP-001) says. [PATH-004](#PATH-004) states the same rule
+for the spellings of a path.
+
+**Why:** the programs on the list are started from different code, so a fix at one start does not
+reach the others unless it is made in code they share.
