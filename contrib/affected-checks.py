@@ -90,7 +90,7 @@ DESKTOP = ("ui-bridge", "ui-files")
 # gates cover what it checks short of linking every target.
 ALWAYS = (
     "check-scripts", "check-spec", "check-security", "check-locales", "check-versions",
-    "check-narration", "check-reviewdog",
+    "check-narration", "check-pr-body", "check-reviewdog",
 )
 HOST = {
     "rust": ("check",),

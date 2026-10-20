@@ -38,9 +38,9 @@ Choose how much to run:
 
 | Command | Coverage |
 |---|---|
-| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, narration, toolchain age, docs, pnpm lockfiles, dependency policy, desktop UI, the TypeScript session client, the mobile app's types and tests, and reviewdog. No Docker. |
+| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, narration, pull request body, toolchain age, docs, pnpm lockfiles, dependency policy, desktop UI, the TypeScript session client, the mobile app's types and tests, and reviewdog. No Docker. |
 | `make check-all` | Everything in `check-all-local`, plus Docker checks for minimum Rust, Windows Clippy and Linux. |
-| `make check-affected` | Script selftests, specs, security rules, locales, versions, narration and reviewdog, plus each host check this branch's changes need, chosen the way CI chooses its jobs. No Docker. |
+| `make check-affected` | Script selftests, specs, security rules, locales, versions, narration, pull request body and reviewdog, plus each host check this branch's changes need, chosen the way CI chooses its jobs. No Docker. |
 | `make check-affected-containers` | The Docker checks this branch's changes need: minimum Rust, Windows Clippy and Linux for a change to Rust, and none otherwise. |
 
 Before a PR, run the checks relevant to your change and state which command passed.
@@ -59,7 +59,7 @@ touches and says which of Rust, the desktop app, the cross-builds, the Windows i
 website, the pnpm lockfiles and the dependency policy they could affect. On a pull request the
 Windows installers are built and installed only for a change to the scripts that make them; main
 and every tag build and install them whatever changed. The specs, security, locales, versions and narration
-jobs take seconds and run on every change. A change to a crate needs the desktop jobs when the desktop app
+jobs take seconds and run on every change, and the narration job also reads the body's `Not covered:` line. A change to a crate needs the desktop jobs when the desktop app
 builds that crate, which is any crate the two bridge crates name, however far down. A job skipped
 by its condition reports success, and branch protection counts that as passing, so every doubt runs
 the job: a path no rule names runs everything, and so do a change to the workflows, the Makefile or
@@ -285,6 +285,18 @@ Locally it reads this branch's commits, uncommitted edits and untracked files ag
 base with `upstream/main`, or `origin/main` without one, or `BASE=<ref>`, and reads a title and body
 only where `PR_TITLE` and `PR_BODY` are set. It carries a `--selftest`, which `make check-narration`
 runs first.
+
+`make check-pr-body` fails a pull request whose body has no `Not covered:` line, or has a case under
+it that names no issue, which is the rule in [commits.md](commits.md) about cases a change leaves
+undone. The line is `none`, or a bullet per case each naming `#N` or `brave/bravebot#N`. CI runs it
+as the second step of the narration workflow, so it is read again when the body is edited, and it
+fails a body that is empty. The pull request's author arrives as `PR_AUTHOR`, and the dependency
+bot's, which has a body of its own, is not held to the line. Text inside a fenced code block or an
+HTML comment is not read, and a number is not looked up, so it does not show that the issue exists. Locally it reads a draft where `PR_BODY` is set, as in
+`PR_BODY="$(cat body.md)" make check-pr-body`, and otherwise runs its `--selftest` alone. The script
+is [../../contrib/check-pr-body.py](../../contrib/check-pr-body.py), which
+`agents/skills/pr-fix/pr-fix.py` loads as well, so the two readers of the body shape cannot disagree
+about the line.
 
 `make check-npm` lints the pnpm lockfiles, as CI does, and runs the tests under `npm/tests`. They
 hold the release origin the script that builds the platform packages downloads from to this

@@ -43,6 +43,28 @@ git remote get-url origin
 A worker that was handed a branch to push does not open the pull request unless its brief says to.
 It reports the branch, and whoever owns the pull request opens it with the command above.
 
+**Say which cases the pull request leaves undone, with an issue for each.** The body has a line
+`Not covered: none`, or `Not covered:` followed by one bullet per case, each naming the issue that
+tracks it as `#N` or `brave/bravebot#N`:
+
+```text
+Not covered:
+- `aws` keeps bravebot's own PATH (#NNNN)
+- hooks named by a relative path (#NNNN)
+```
+
+A case is another call site, platform or program with the same weakness as the one the change
+fixes, or another defect found while making it. File the issue first, with the
+[issue-poster](../../agents/agents/issue-poster.md) definition, so that its number exists when the
+body is written. A case that a spec records as accepted under Known costs is cited in the body where
+it is described, as [GAP-001](../best-practices/gaps.md#GAP-001) says, and is not a bullet, since an
+accepted case has no issue.
+
+`make check-pr-body` fails a pull request whose body has no such line, or has a bullet that names
+no issue. CI runs it when the body is edited as well as when the branch is pushed. It cannot read
+whether the list is complete, whether a number is an issue, or whether an issue is about its case, so
+the reviewer reads the diff for the cases it leaves. Pull requests opened by the dependency bot are not held to the line.
+
 **No co-attribution markers for Claude Code or other tools**, in a commit message or a pull request
 body.
 

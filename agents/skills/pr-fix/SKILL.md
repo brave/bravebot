@@ -221,10 +221,12 @@ are several.
    use `git stash`, never amend, never pass `--no-verify`.
 6. Write the pull request body to a file outside the worktree, in this shape: a first line
    `Closes brave/bravebot#<n>` (`Part of brave/bravebot#<n>` for a partial fix), a line
-   `User impact: <what a person using bravebot notices>`, then the headings `## The problem`,
-   `## Reproduce`, `## The fix` and `## Test plan`. The test plan lists the commands actually run as
-   checked boxes, says which plausible regression the tests reject, and ends with the line
-   `- [ ] CI passes cleanly`. Then
+   `User impact: <what a person using bravebot notices>`, a line `Not covered: none` or
+   `Not covered:` followed by one bullet per case the change leaves undone, each naming the issue
+   that tracks it (`#N` or `brave/bravebot#N`, filed first with the issue-poster definition), then
+   the headings `## The problem`, `## Reproduce`, `## The fix` and `## Test plan`. The test plan
+   lists the commands actually run as checked boxes, says which plausible regression the tests
+   reject, and ends with the line `- [ ] CI passes cleanly`. Then
    `... open <n> --title <title> --body-file <file>` checks that the
    worktree is clean and on `upstream/main` and that the title and body have that shape, pushes the
    branch in `.worktrees/issue-<n>` to `origin` and opens the pull request on brave/bravebot. Add

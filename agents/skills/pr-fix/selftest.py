@@ -875,6 +875,7 @@ ISSUE_REMOTES = lambda root: {
 
 GOOD_BODY = "\n".join([
     "Closes brave/bravebot#5", "", "User impact: a person can now see the thing.", "",
+    "Not covered: none", "",
     "## The problem", "It is broken.", "", "## Reproduce", "1. Do it.", "", "## The fix", "Fixed.", "",
     "## Test plan", "- [x] make check-affected: passed", "- [ ] CI passes cleanly",
 ])
@@ -1045,9 +1046,18 @@ def test_a_pull_request_body_needs_the_shape_the_repository_reviews():
         "last line": GOOD_BODY.replace("- [ ] CI passes cleanly", "- [x] CI passes cleanly"),
         "em-dash": GOOD_BODY.replace("It is broken.", "It is broken \u2014 badly."),
         "co-author": GOOD_BODY.replace("Fixed.", "Fixed.\nCo-Authored-By: a tool"),
+        "Not covered": GOOD_BODY.replace("Not covered: none\n\n", ""),
+        "a case with no issue": GOOD_BODY.replace("Not covered: none", "Not covered:\n- `aws` keeps the PATH"),
     }
     for name, body in cases.items():
         assert pr_fix.body_problem(body, 5), name
+
+
+def test_a_pull_request_body_may_list_the_cases_it_leaves_when_each_names_an_issue():
+    listed = GOOD_BODY.replace("Not covered: none", "Not covered:\n- `aws` keeps the PATH (#2756)\n- hooks (brave/bravebot#2753)")
+    assert pr_fix.body_problem(listed, 5) is None
+    assert "names no issue" in pr_fix.body_problem(listed.replace(" (#2756)", ""), 5)
+    assert "`Not covered:` line" in pr_fix.body_problem(GOOD_BODY.replace("Not covered: none\n\n", ""), 5)
 
 
 def test_a_branch_is_pushed_to_origin_and_the_pull_request_opened_on_brave_bravebot_for_the_assignee():
