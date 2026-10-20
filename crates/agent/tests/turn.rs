@@ -16291,6 +16291,630 @@ fn a_turn_that_has_written_is_not_told_to_write() {
     );
 }
 
+/// The sentence the driver puts to the planner when it answers with tasks still open, up to the
+/// count that follows it.
+const OPEN_TASKS_NOTICE: &str = "Your task list still has";
+
+/// A list written with `statuses`, one task each, as a `todo_write` call.
+fn writing_a_task_list(statuses: &[&str]) -> String {
+    let todos: Vec<_> = statuses
+        .iter()
+        .enumerate()
+        .map(|(n, status)| json!({"content": format!("step {}", n + 1), "status": status}))
+        .collect();
+    tool_request("todo_write", &json!({ "todos": todos }).to_string())
+}
+
+/// A list written by a call that carries no id, so the round's results go back as prose.
+fn writing_a_task_list_without_an_id(statuses: &[&str]) -> String {
+    writing_a_task_list(statuses).replace(r#""id":"c1","#, "")
+}
+
+/// TURN-12: the planner answers that the work is done while its list still has a task in progress
+/// and one pending, and the panel keeps the list beside the answer. The driver asks for the list
+/// to be brought up to date before the turn ends, and the turn ends on the answer that follows.
+#[test]
+fn a_turn_that_answers_with_tasks_still_open_is_asked_to_bring_the_list_up_to_date() {
+    let scratch = Scratch::new("open-tasks-at-the-answer");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "in_progress", "pending"]),
+        reply_with("all the work is done"),
+        writing_a_task_list(&["completed", "completed", "completed"]),
+        reply_with("done, and the list says so"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("build it, check the build, record the baseline"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        bodies.len(),
+        4,
+        "the answer with open tasks ended the turn, or the turn went on past the list: {bodies:#?}"
+    );
+    assert!(
+        !bodies[1].contains(OPEN_TASKS_NOTICE),
+        "the planner was told about open tasks before it had answered: {}",
+        bodies[1]
+    );
+    assert!(
+        bodies[2].contains(&format!("{OPEN_TASKS_NOTICE} 2 tasks")),
+        "the request after the answer did not say two tasks were open: {}",
+        bodies[2]
+    );
+    let answered = bodies[2]
+        .find("all the work is done")
+        .expect("the answer that was held back is not in the request that asks about the list");
+    let asked = bodies[2].find(OPEN_TASKS_NOTICE).expect("asked above");
+    assert!(
+        answered < asked,
+        "the question came before the answer it is about: {}",
+        bodies[2]
+    );
+    assert_eq!(outcome.reply_for_display(), "done, and the list says so");
+    let last = reporter.updates.last().expect("the list was reported");
+    assert!(
+        last.iter()
+            .all(|row| row.status == bravebot_core::todo::Status::Done),
+        "the list the panel keeps still has an open row: {last:?}"
+    );
+}
+
+/// TURN-12: asked once, so a planner that answers again with the same list open is not asked a
+/// second time. The list may be open for a reason the driver cannot read, and a line repeated
+/// until the planner gave in would spend a request each time to say what the conversation holds.
+#[test]
+fn a_turn_asks_about_open_tasks_once_however_the_planner_answers() {
+    let scratch = Scratch::new("open-tasks-asked-once");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        reply_with("the rest waits for your answer"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("do the first part, then ask me about the rest"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 3, "{bodies:#?}");
+    assert_eq!(
+        bodies[2].matches(OPEN_TASKS_NOTICE).count(),
+        1,
+        "the planner was asked about the list more than once: {}",
+        bodies[2]
+    );
+    assert_eq!(
+        outcome.reply_for_display(),
+        "the rest waits for your answer"
+    );
+}
+
+/// TURN-12: the question is put once a turn even where the planner answers it with a list of its
+/// own that still has tasks open. That list is a new one, so only the turn's own limit stops the
+/// question being put again, and a planner that rewrote its list at every answer would otherwise
+/// be asked for as long as it kept doing so.
+#[test]
+fn a_planner_that_answers_the_question_with_another_open_list_is_not_asked_again() {
+    let scratch = Scratch::new("open-tasks-asked-once-per-turn");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        writing_a_task_list(&["completed", "completed", "pending"]),
+        reply_with("the second part is done"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("do the first part, then the second"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 4, "{bodies:#?}");
+    assert_eq!(
+        bodies[3].matches(OPEN_TASKS_NOTICE).count(),
+        1,
+        "the planner was asked about its second list in the turn that asked about its first: {}",
+        bodies[3]
+    );
+    assert_eq!(outcome.reply_for_display(), "the second part is done");
+}
+
+/// TURN-12: the planner answers the question by sending its list again with the tasks still open.
+/// That list is its answer to the question and is not asked about, in that turn or in the next, so
+/// a planner that leaves a task open on purpose is asked about it once.
+#[test]
+fn a_list_the_planner_sends_again_when_asked_is_not_asked_about_by_the_next_turn() {
+    let scratch = Scratch::new("open-tasks-resent-when-asked");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the rest waits for your answer"),
+        reply_with("a question answered"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut ask = |prompt: &str| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            Task::new(prompt),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    ask("do the first part, then ask me about the rest");
+    let outcome = ask("what does the first step touch?");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 5, "{bodies:#?}");
+    assert_eq!(
+        bodies[4].matches(OPEN_TASKS_NOTICE).count(),
+        1,
+        "the later turn asked about the list the planner sent when it was asked: {}",
+        bodies[4]
+    );
+    assert_eq!(outcome.reply_for_display(), "a question answered");
+}
+
+/// TURN-12: a list the planner was not shown is still the one the panel keeps, so the count of the
+/// list before it is not what the turn asks about. Here the conversation meets something untrusted
+/// between two turns, and the second turn's list is written and held back from the planner.
+#[test]
+fn a_list_the_planner_was_not_shown_ends_the_question_about_the_list_before_it() {
+    let scratch = Scratch::new("open-tasks-newer-list-not-shown");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("the plan is written"),
+        writing_a_task_list(&["completed", "completed"]),
+        reply_with("the work is done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let take_a_turn = |task: Task, conversation: &mut bravebot_agent::Conversation| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            conversation,
+            task,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    take_a_turn(
+        Task::new("plan the work").with_rounds(Some(1)),
+        &mut conversation,
+    );
+    conversation.observed(bravebot_core::label::Label::untrusted_public());
+    let outcome = take_a_turn(Task::new("do the work"), &mut conversation);
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        bodies.len(),
+        4,
+        "the planner was asked about a list that is no longer the panel's: {bodies:#?}"
+    );
+    assert_eq!(outcome.reply_for_display(), "the work is done");
+}
+
+/// TURN-12: a round whose calls carry no id sends their results back as prose, and the list is
+/// counted all the same.
+#[test]
+fn a_list_written_in_a_round_with_no_call_ids_is_asked_about() {
+    let scratch = Scratch::new("open-tasks-without-call-ids");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list_without_an_id(&["completed", "in_progress"]),
+        reply_with("all the work is done"),
+        reply_with("the last step is still in progress"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("do the steps"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 3, "{bodies:#?}");
+    assert!(
+        bodies[2].contains(&format!("{OPEN_TASKS_NOTICE} 1 task ")),
+        "a list written without call ids was not asked about: {}",
+        bodies[2]
+    );
+    assert_eq!(
+        outcome.reply_for_display(),
+        "the last step is still in progress"
+    );
+}
+
+/// TURN-12: a line the person typed as the answer arrived is in front of the planner with the
+/// question, as it is in front of the round after a delegate's report. Left waiting, the planner
+/// would send its list and answer again without having seen it.
+#[test]
+fn a_line_typed_as_the_planner_answers_reaches_it_with_the_question_about_the_list() {
+    let scratch = Scratch::new("open-tasks-interjection");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        reply_with("stopping there, as you asked"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("do the first part, then the rest"),
+        &mut SaysOnce::said_after_one_asking("actually, stop after the first part"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 3, "{bodies:#?}");
+    assert!(
+        bodies[2].contains("actually, stop after the first part"),
+        "the line typed as the answer arrived did not reach the planner with the question: {}",
+        bodies[2]
+    );
+    assert_eq!(outcome.reply_for_display(), "stopping there, as you asked");
+}
+
+/// TURN-12: a finished task and a dropped one are not open. Only pending and in progress count, so
+/// a list the planner closed out, some of it by cancelling, is not asked about.
+#[test]
+fn a_list_with_every_task_completed_or_cancelled_is_not_asked_about() {
+    let scratch = Scratch::new("closed-tasks-at-the-answer");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "cancelled", "completed"]),
+        reply_with("done, and one step was dropped"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("do the steps"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+    assert!(
+        bodies.iter().all(|body| !body.contains(OPEN_TASKS_NOTICE)),
+        "a list with nothing open was asked about: {bodies:#?}"
+    );
+    assert_eq!(
+        outcome.reply_for_display(),
+        "done, and one step was dropped"
+    );
+}
+
+/// TURN-12: the list asked about is the one the panel keeps, so a turn that never wrote one is
+/// asked about the list an earlier turn left. The earlier turn here had no tools left to write it
+/// with, so the list reached the later turn unasked about.
+#[test]
+fn a_list_left_open_by_an_earlier_turn_is_asked_about_when_a_later_turn_answers() {
+    let scratch = Scratch::new("open-tasks-from-an-earlier-turn");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("the plan is written"),
+        reply_with("a question answered"),
+        reply_with("the list is left as it was"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut ask = |task: Task| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            task,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    ask(Task::new("plan the work").with_rounds(Some(1)));
+    ask(Task::new("what does the first step touch?"));
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 4, "{bodies:#?}");
+    assert!(
+        !bodies[1].contains(OPEN_TASKS_NOTICE),
+        "a turn with no tools left was asked to write a list: {}",
+        bodies[1]
+    );
+    assert!(
+        bodies[3].contains(&format!("{OPEN_TASKS_NOTICE} 2 tasks")),
+        "the later turn was not asked about the list the panel still shows: {}",
+        bodies[3]
+    );
+}
+
+/// TURN-12: a list the planner was asked about and answered with open is not asked about again by
+/// the turns after it. What the panel shows is the planner's decision by then, and a line in every
+/// later turn would spend a request each time on a list nothing in that turn touched.
+#[test]
+fn a_list_the_planner_was_asked_about_is_not_asked_about_by_the_next_turn() {
+    let scratch = Scratch::new("open-tasks-asked-in-an-earlier-turn");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        reply_with("the rest waits for your answer"),
+        reply_with("a question answered"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut ask = |prompt: &str| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            Task::new(prompt),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    ask("do the first part, then ask me about the rest");
+    let outcome = ask("what does the first step touch?");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 4, "{bodies:#?}");
+    assert_eq!(
+        bodies[3].matches(OPEN_TASKS_NOTICE).count(),
+        1,
+        "the later turn asked about the same list again: {}",
+        bodies[3]
+    );
+    assert_eq!(outcome.reply_for_display(), "a question answered");
+}
+
+/// TURN-12: a list the planner writes after it was asked about the one before is a new list, and
+/// the planner is asked about it by the turn it ends open in.
+#[test]
+fn a_list_written_after_the_planner_was_asked_is_asked_about_afresh() {
+    let scratch = Scratch::new("open-tasks-asked-afresh");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        reply_with("the rest waits for your answer"),
+        writing_a_task_list(&["completed", "completed", "in_progress", "pending"]),
+        reply_with("the second part is done"),
+        reply_with("the rest waits for your answer again"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut ask = |prompt: &str| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            Task::new(prompt),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    ask("do the first part, then ask me about the rest");
+    let outcome = ask("go on with the second part");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        bodies.len(),
+        6,
+        "the second list was not asked about: {bodies:#?}"
+    );
+    assert!(
+        bodies[5].contains(&format!("{OPEN_TASKS_NOTICE} 2 tasks")),
+        "the second list was not counted: {}",
+        bodies[5]
+    );
+    assert_eq!(
+        outcome.reply_for_display(),
+        "the rest waits for your answer again"
+    );
+}
+
+/// TURN-12: Escape pressed as the answer arrives ends the turn on that answer. Asking about the
+/// list would send one more request that the stop then ends, and the turn would come back stopped
+/// with the answer it had already been given left out of the result.
+#[test]
+fn a_turn_stopped_as_it_answers_is_not_asked_about_open_tasks() {
+    struct StopsAsTheAnswerArrives {
+        cancel: bravebot_core::cancel::Cancel,
+    }
+
+    impl bravebot_agent::report::Reporter for StopsAsTheAnswerArrives {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn streaming(&mut self, written: String) {
+            if written.contains("all the work is done") {
+                self.cancel.cancel();
+            }
+        }
+    }
+
+    let scratch = Scratch::new("open-tasks-stopped-at-the-answer");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("all the work is done"),
+    ]);
+    let config = config_for(&endpoint);
+    let cancel = bravebot_core::cancel::Cancel::new();
+
+    let outcome = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("do the steps"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut StopsAsTheAnswerArrives {
+            cancel: cancel.clone(),
+        },
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .expect("the turn ends on the answer it was given");
+
+    assert_eq!(outcome.reply_for_display(), "all the work is done");
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+}
+
+/// TURN-12: a turn that is not offered `todo_write` cannot send a list, so it is not asked to. A
+/// definition a person addresses a turn to can leave the tool out, and the list an earlier turn
+/// wrote is still the one the panel shows.
+#[test]
+fn a_turn_not_offered_the_task_list_tool_is_not_asked_about_the_list() {
+    let scratch = Scratch::new("open-tasks-not-offered");
+    let home = Scratch::new("open-tasks-not-offered-home");
+    define(
+        &home,
+        "reader-only",
+        "kind: reader\ntools: read_file\n",
+        "REVIEW",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("the plan is written"),
+        reply_with("reviewed"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut ask = |task: Task| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            task,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    ask(Task::new("plan the work").with_rounds(Some(1)));
+    let outcome = ask(addressed("review the plan", &home, "reader-only"));
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 3, "{bodies:#?}");
+    assert!(
+        !bodies[2].contains(OPEN_TASKS_NOTICE),
+        "a turn that cannot send a list was asked to bring it up to date: {}",
+        bodies[2]
+    );
+    assert_eq!(outcome.reply_for_display(), "reviewed");
+}
+
+/// TURN-12: a conversation that has met something untrusted writes every list at that label, so
+/// the planner is not shown the list it wrote and no count of its open tasks is kept. The turn ends
+/// on the answer exactly as it would without the question.
+#[test]
+fn a_session_that_has_met_something_untrusted_is_not_asked_about_the_list() {
+    let scratch = Scratch::new("open-tasks-untrusted");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("all the work is done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.observed(bravebot_core::label::Label::untrusted_public());
+
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("do the steps"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+    assert!(
+        bodies.iter().all(|body| !body.contains(OPEN_TASKS_NOTICE)),
+        "the driver asked about a list it was not shown: {bodies:#?}"
+    );
+}
+
 /// Moves the session to another mode when the planner's `at`th call finishes, standing in for the
 /// person pressing the mode key while that round runs.
 struct ChangesTheModeAfterACall {
@@ -31673,7 +32297,8 @@ fn a_conversation_past_the_budget_is_summarised_before_the_next_request() {
 
 /// COMPACT-16: the planner's list is written in one turn and the compaction that cuts it out of the
 /// request comes in a later one. The refused call between the two proves a list that was not
-/// accepted does not stand in for the one that was.
+/// accepted does not stand in for the one that was. The row left pending draws the planner's one
+/// question about it (TURN-12), which it answers with the list as it was.
 #[test]
 fn a_task_list_the_summary_replaced_is_sent_again_after_the_cut() {
     let scratch = Scratch::new("compact-keeps-the-task-list");
@@ -31686,6 +32311,7 @@ fn a_task_list_the_summary_replaced_is_sent_again_after_the_cut() {
         ),
         tool_request("todo_write", r#"{}"#),
         reply_with("planned"),
+        reply_with("the parser is next"),
         reply_with("they planned a lexer and a parser"),
         reply_with("done"),
     ]);
@@ -31721,8 +32347,8 @@ fn a_task_list_the_summary_replaced_is_sent_again_after_the_cut() {
     .expect("the compacting turn runs");
 
     let bodies: Vec<String> = received.try_iter().collect();
-    assert_eq!(bodies.len(), 5, "{bodies:#?}");
-    let planning = &bodies[4];
+    assert_eq!(bodies.len(), 6, "{bodies:#?}");
+    let planning = &bodies[5];
     assert!(
         planning.contains("they planned a lexer and a parser"),
         "the summary did not reach the next request: {planning}"

@@ -136,7 +136,7 @@ guards:
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 38
+      - crates/agent/src/tools.rs: 39
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
