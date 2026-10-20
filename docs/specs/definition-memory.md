@@ -143,7 +143,10 @@ A definition with `memory: project` or `memory: local` keeps its memory in one f
 definition with no `memory:` key, or an empty one, keeps none. Any other value, `user` included, is
 a definition that loads and keeps no memory, and the turn says so, naming the definition's file and
 the value. Where that path falls inside the person's own directory, `~/.bravebot`, as it does for a
-session in the home directory, no memory is kept either, and the turn says so.
+session in the home directory, no memory is kept either, and the turn says so. A definition there
+loads only as the project's own, through the trust map ([DELEGATE-20](delegation.md#DELEGATE-20),
+[SKILL-3](skills.md#SKILL-3)), never from `~/.bravebot` itself, since its path goes through the
+working directory.
 
 `project` and `local` are one file. In Claude Code they differ over whether the file is meant to be
 committed, and whether a file is committed is decided by the person and their ignore rules rather

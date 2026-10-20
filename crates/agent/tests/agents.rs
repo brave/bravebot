@@ -962,9 +962,11 @@ fn a_definition_a_deny_rule_covers_is_selectable_nowhere_through_a_link_to_it() 
 
 /// MEMORY-2, DELEGATE-20: a session whose working directory is the one holding the state directory,
 /// as a session opened in the home directory is, would keep a memory inside `~/.bravebot`, which
-/// the map does not govern. The definitions there are the checkout's own, which nobody vouched for
-/// here, so none loads and the directory is counted as it would be for any session there. The same
-/// file read from a state directory elsewhere is the control, keeping one and saying nothing.
+/// the map does not govern. The definitions there are the checkout's own, so none loads from
+/// provenance and, untrusted, the directory is counted as it would be for any session there. Once
+/// the map vouches for it the definition loads as the project's own, keeps no memory and says so.
+/// The same file read from a state directory elsewhere is the control, keeping one and saying
+/// nothing.
 #[test]
 fn a_memory_that_would_sit_inside_the_state_directory_is_not_kept_and_is_said() {
     let scratch = Scratch::new("memory-in-home");
@@ -985,8 +987,8 @@ fn a_memory_that_would_sit_inside_the_state_directory_is_not_kept_and_is_said() 
     let workspace = Workspace::new(&project).expect("workspace");
 
     let mut sink = RecordingSink::new();
-    let discovered = |home: &Path, sink: &mut RecordingSink| {
-        let mut policy = policy(sink, &[]);
+    let discovered = |home: &Path, trusted: &[&str], sink: &mut RecordingSink| {
+        let mut policy = policy(sink, trusted);
         let (definitions, notices) = agents::discover(&mut policy, &workspace, Some(home));
         let keeps = definitions
             .get("notes-keeper")
@@ -998,12 +1000,25 @@ fn a_memory_that_would_sit_inside_the_state_directory_is_not_kept_and_is_said() 
     let counted =
         "1 delegate definition in .bravebot/agents was not loaded: this directory is not trusted";
     assert_eq!(
-        discovered(&elsewhere, &mut sink),
+        discovered(&elsewhere, &[], &mut sink),
         (Some(true), vec![counted.to_string()])
     );
     assert_eq!(
-        discovered(&inside, &mut sink),
+        discovered(&inside, &[], &mut sink),
         (None, vec![counted.to_string()])
+    );
+    // Trusted through the map as the project's own definition, it loads, and the memory it would
+    // keep is inside `~/.bravebot`, so it is said and not kept.
+    assert_eq!(
+        discovered(&inside, &["."], &mut sink),
+        (
+            Some(false),
+            vec![
+                ".bravebot/agents/notes-keeper.md keeps no memory here: in this directory its \
+                 memory would be inside ~/.bravebot, which no write can leave untrusted"
+                    .to_string()
+            ]
+        )
     );
 }
 
