@@ -12,7 +12,7 @@
 
 use std::ffi::OsString;
 use std::io;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 
 /// The program that holds the machine awake, as a fixed path where the platform has one.
 #[cfg(target_os = "macos")]
@@ -122,17 +122,14 @@ impl Drop for Held {
 pub fn start_program(program: &str, arguments: &[OsString]) -> io::Result<Held> {
     let program = bravebot_sandbox::programs::find(std::ffi::OsStr::new(program))
         .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "the program `bravebot_sandbox::programs::find` returned, which leaves out \
-                      every directory a stage may write (SANDBOX-30)"
-    )]
-    let child = Command::new(program)
-        .args(arguments)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
+    let child = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+    )
+    .args(arguments)
+    .stdin(Stdio::piped())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()?;
     Ok(Held { child: Some(child) })
 }
 
@@ -267,6 +264,7 @@ impl KeepAwake {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     fn stand_in() -> io::Result<Held> {
         Ok(Held::stand_in())

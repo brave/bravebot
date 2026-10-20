@@ -21,7 +21,7 @@ use bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES;
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// Put `text` on the clipboard, reporting whether anything took it.
 pub fn copy(text: &str) -> bool {
@@ -65,18 +65,14 @@ fn pipe_into_found_by(
     let Some(program) = find(OsStr::new(program)) else {
         return false;
     };
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "the program `find` returned, and the caller passes \
-                      `bravebot_sandbox::programs::find` (SANDBOX-30)"
-    )]
-    let Ok(mut child) = Command::new(program)
-        .args(arguments)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
+    let Ok(mut child) = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+    )
+    .args(arguments)
+    .stdin(Stdio::piped())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn() else {
         return false;
     };
 
@@ -378,17 +374,14 @@ fn run_bytes_found_by(
     arguments: &[&str],
 ) -> Option<Vec<u8>> {
     let program = find(OsStr::new(program))?;
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "the program `find` returned, and the caller passes \
-                      `bravebot_sandbox::programs::find` (SANDBOX-30)"
-    )]
-    let output = Command::new(program)
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    let output = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+    )
+    .args(arguments)
+    .stdin(Stdio::null())
+    .stderr(Stdio::null())
+    .output()
+    .ok()?;
     output.status.success().then_some(output.stdout)
 }
 
@@ -399,6 +392,7 @@ fn run_text(program: &str, arguments: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     /// The sequence has to be exactly what a terminal recognises, and a test is the only place
     /// that can say so, since a terminal that does not recognise it says nothing at all.

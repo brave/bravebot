@@ -18,7 +18,6 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// What to open when nothing is configured, in the order they are tried.
@@ -347,12 +346,9 @@ fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failur
         .to_string_lossy()
         .into_owned();
 
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "the editor `lookup` found: a path the person wrote, or a name \
-                      `bravebot_sandbox::programs::find` returned (SANDBOX-30)"
-    )]
-    let mut command = Command::new(program);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::named_by_person(program),
+    );
     bravebot_sandbox::programs::restrict_path(&mut command);
     match command.args(arguments).arg(path).status() {
         Ok(status) if status.success() => Ok(()),
@@ -371,6 +367,7 @@ fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failur
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     /// A name already taken is refused rather than reused, so two names that are the same name
     /// cost whichever prompt asked second its editor.

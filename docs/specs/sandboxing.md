@@ -3161,8 +3161,13 @@ absolute entries of `PATH` that lie outside every directory a confined stage may
 
 `clippy.toml` refuses every call the tree starts a program with, `std::process::Command::new` and
 `CreateProcessW`, whatever names the program: a string literal, a variable, an alias, or a helper
-that passes it on. `make check` fails a start that has no
-`#[allow(clippy::disallowed_methods, reason = "...")]` beside it. `make check-security` fails a mark
+that passes it on. A program is started with `bravebot_sandbox::programs::start`, which takes a
+`Resolved` and not a path or a string. Only the lookup (`Resolved::find`, `Resolved::find_on`) and a
+named constructor build one, and each constructor says who chose the program:
+`own_executable`, `written_in_source`, `named_by_person`, `found_earlier` and `to_confine`. `start`
+holds the one `Command::new` the tree has outside a build script and a test, so a new spawn picks a
+constructor in the diff and does not compile until it has. `make check` fails any other start that
+has no `#[allow(clippy::disallowed_methods, reason = "...")]` beside it. `make check-security` fails a mark
 whose reason is empty, a mark that covers more than one start, and a second clippy configuration
 that hides the refusal from a crate. The reason says who chose the program, and a start outside the
 list above says why it needs no lookup of this kind: it is this program's own executable, a path

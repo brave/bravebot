@@ -82,13 +82,9 @@ fn absent(command: &Command) -> bool {
 }
 
 fn command_for(program: &Path) -> Command {
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "the `aws` that `installed` found with \
-                      `bravebot_sandbox::programs::find_on`, which leaves out every directory a \
-                      stage may write (SANDBOX-30)"
-    )]
-    let mut command = Command::new(program);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+    );
     for name in bravebot_config::scrub::own_credentials() {
         command.env_remove(name);
     }

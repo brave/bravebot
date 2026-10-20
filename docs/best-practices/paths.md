@@ -120,10 +120,10 @@ shows a file in a directory [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30) leav
 as the program, the test that shows the same for a name the program itself starts, the `PATH` the
 program is given, and whether `own_credentials()` is removed from its environment
 ([CRED-14](../specs/credential-protection.md#CRED-14)).** `clippy.toml` refuses every call the
-tree starts a program with, so each start has a mark beside it in the diff,
-`#[allow(clippy::disallowed_methods, reason = "...")]`. A reviewer reads what the lint cannot
-decide: that the reason names who chose the program and is true, and what the program itself starts
-by name (SANDBOX-30).
+tree starts a program with, and a start goes through `bravebot_sandbox::programs::start`, which takes
+a `Resolved`. A reviewer reads what neither can decide: that the constructor in the diff
+(`own_executable`, `written_in_source`, `named_by_person`, `found_earlier`, `to_confine`) names who
+chose the program truthfully, and what the program itself starts by name (SANDBOX-30).
 
 The second test puts a directory SANDBOX-30 leaves out first on the `PATH` bravebot inherits and
 plants an executable file in it under a name the program itself starts, such as the interpreter an

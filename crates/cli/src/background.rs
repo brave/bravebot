@@ -297,12 +297,9 @@ fn ensure_supervisor(roster: &Roster, program: &std::path::Path) {
 /// terminal holds open.
 #[cfg(unix)]
 fn supervisor_command(program: &std::path::Path) -> std::process::Command {
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "this program's own executable: every caller passes \
-                      `std::env::current_exe()`"
-    )]
-    let mut command = std::process::Command::new(program);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+    );
     command.arg("__bg-supervisor").current_dir("/");
     command
 }
@@ -315,12 +312,9 @@ pub(crate) fn host_command(
     directory: Option<&std::path::Path>,
     mode: Mode,
 ) -> std::process::Command {
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "this program's own executable: every caller passes \
-                      `std::env::current_exe()`"
-    )]
-    let mut command = std::process::Command::new(program);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+    );
     command.arg("__bg-host").arg(id).arg(mode.word());
     if let Some(directory) = directory {
         command.current_dir(directory);
