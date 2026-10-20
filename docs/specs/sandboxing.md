@@ -3196,14 +3196,16 @@ same change, or resolved first, and its mark is what a reviewer reads.
   activated virtualenv's `bin` among them, is told it is not installed
   (Known costs in [backends.md](backends.md#known-costs)); the clipboard tool reads as absent and the next tool is
   tried.
-- **The editor's and a hook's own lookups search only those entries.** A started program looks up the
-  names it starts itself through the `PATH` it inherits. The editor Ctrl-G opens and a hook's program
+- **The editor's, a hook's and `doctor --push-identity`'s own lookups search only those entries.** A
+  started program looks up the names it starts itself through the `PATH` it inherits. The editor
+  Ctrl-G opens, a hook's program, and the `ssh-keygen`, `ssh` and `git` of `doctor --push-identity`
   are started with bravebot's `PATH` reduced to the entries the lookup searches, in the order they
-  were written, so a `#!/usr/bin/env` shebang in the editor or the hook, a launcher script, or an
-  `$EDITOR` of `env vim` finds the program it starts only among them. A hook named by a path gets the
+  were written, so a `#!/usr/bin/env` shebang in the editor or the hook, a launcher script, an
+  `$EDITOR` of `env vim`, or a `ProxyCommand` in the person's ssh configuration that names a bare
+  program finds the program it starts only among them. A hook named by a path gets the
   same `PATH` as one named bare. Where no entry is searched the program is started with no `PATH`
-  variable. An empty `PATH` would be read as the current directory. A program the editor or a hook
-  starts by name that is found only in a directory left out is not found by it. A `PATH` names
+  variable. An empty `PATH` would be read as the current directory. A program the editor, a hook or
+  `ssh` starts by name that is found only in a directory left out is not found by it. A `PATH` names
   directories, so a file in a searched entry that links into a directory left out is still found by
   those lookups.
 - **The suite's programs started with no sandbox search only those entries as well.** The `gh` of
@@ -3213,9 +3215,10 @@ same change, or resolved first, and its mark is what a reviewer reads.
   A program found only in a directory left out is not installed: its workflow is skipped
   ([SANDBOX-21](#SANDBOX-21)), and a `gh` found only there gives no login row.
 - **A program named in another started program's arguments is resolved first.** A started program
-  other than the editor, a hook and the suite's programs started with no sandbox keeps bravebot's own
-  `PATH`, which can hold those directories, so an argument that names a program for it to start is
-  that program's absolute path, found the same way. The inhibitor `/caffeinate` starts on Linux is given `cat` that way
+  other than the editor, a hook, `doctor --push-identity`'s and the suite's programs started with no
+  sandbox keeps bravebot's own `PATH`, which can hold those directories, so an argument that names a
+  program for it to start is that program's absolute path, found the same way. The inhibitor
+  `/caffeinate` starts on Linux is given `cat` that way
   ([CMD-12](commands.md#CMD-12)). Where `cat` is found only in such a directory the inhibitor is not
   started, and `/caffeinate` reports it as it does an inhibitor that is not installed.
 - **Each start's `PATH` is stated here.** A program that starts others by name through the `PATH` it
@@ -3228,7 +3231,7 @@ same change, or resolved first, and its mark is what a reviewer reads.
   | A hook's program, named bare or by a path | reduced to the entries the lookup searches |
   | `gh`, `sh` and the programs of a workflow's setup stages, and a workflow run again without the sandbox, in `doctor --sandbox-check` | reduced to the entries the lookup searches |
   | The AWS CLI | bravebot's own, unreduced. A program `aws` starts by name can be one a stage wrote. Tracked in #2756. |
-  | `ssh-keygen`, `ssh` and `git` in `doctor --push-identity` | bravebot's own, unreduced. Tracked in #2754. |
+  | `ssh-keygen`, `ssh` and `git` in `doctor --push-identity` | reduced to the entries the lookup searches |
   | The connector authority | bravebot's own, unreduced. Tracked in #2755. |
   | A language server | bravebot's own, accepted: it runs code the project carries, and pyright is meant to use the virtualenv's `python3` ([LSP-5](tools/lsp.md#LSP-5), [Known costs](tools/lsp.md#known-costs)) |
   | The clipboard tools and `osascript` | bravebot's own. They are given fixed arguments that name no program, so there is no lookup to reduce `PATH` for. |
@@ -3247,7 +3250,8 @@ confinement ([CRED-14](credential-protection.md#CRED-14)): the stage has chosen 
 the person's access, which the confinement exists to deny it. A started program looks up a name in
 its own arguments through the `PATH` it inherited from bravebot, not through the lookup above.
 `systemd-inhibit` starts `cat` that way, so its argument is the resolved path and not the bare name.
-An editor or a hook that is a script starts its interpreter the same way, so each is given the `PATH`
+An editor or a hook that is a script starts its interpreter the same way, and `ssh` starts a
+`ProxyCommand`'s program so, so each is given the `PATH`
 the lookup would have searched.
 
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
@@ -3274,6 +3278,7 @@ the lookup would have searched.
 `verified-by: bravebot_agent::hooks::a_hook_named_bare_never_starts_a_file_found_only_where_a_stage_may_write`
 `verified-by: bravebot_agent::hooks::a_hook_named_by_a_path_is_not_looked_up`
 `verified-by: bravebot_agent::hooks::a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
+`verified-by: bravebot_cli::push_identity::a_program_ssh_starts_by_name_is_never_one_a_stage_may_have_written`
 `verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`
 `verified-by: bravebot_tui::caffeinate::an_inhibitor_with_no_cat_but_a_planted_one_is_not_started`
