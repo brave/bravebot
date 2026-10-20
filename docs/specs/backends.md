@@ -1132,7 +1132,10 @@ reaches nothing.
 **The region is required and the endpoint is not.** The host carries the region, so one value
 produces the other and there is nothing left to state. An entry naming no region configures no
 service, for the reason a Bedrock block without one does not: a guessed region is a request that
-fails somewhere far from the mistake.
+fails somewhere far from the mistake. An entry whose region is not lowercase letters, digits and `-`
+starting with a letter or a digit configures no service either, since the host is built from it and
+one holding `/`, `@`, `?`, `#`, `:` or `.` would send the signed request to another host or another
+route than the one the person named. [BACKEND-33](#BACKEND-33) gives the same rule for `AWS_REGION`.
 
 **What a row says.** A model named here has no tier, so a picker row carries what the block called
 it, and its id where the block called it nothing. An inference-profile ARN is not a name anybody
@@ -1141,6 +1144,8 @@ reads, which is why this is worth stating rather than left to fall out of the id
 `verified-by: bravebot_config::provider::an_aws_block_configures_bedrock_rather_than_a_gateway`
 `verified-by: bravebot_config::provider::an_aws_model_the_block_did_not_name_is_shown_by_its_id`
 `verified-by: bravebot_config::provider::an_aws_block_without_a_region_configures_nothing`
+`verified-by: bravebot_config::provider::an_aws_block_whose_region_would_move_the_request_configures_nothing`
+`verified-by: bravebot_config::bedrock::a_provider_account_whose_region_would_move_the_request_is_not_built`
 `verified-by: bravebot_config::lib::a_model_an_aws_block_named_reaches_bedrock_rather_than_a_gateway`
 `verified-by: bravebot_config::lib::a_name_qualified_by_the_aws_id_is_not_a_gateway_either`
 `verified-by: bravebot_agent::backend::a_model_an_aws_block_named_selects_the_bedrock_backend`
@@ -1403,6 +1408,13 @@ two answers comes whole from one place: [NET-7](network-egress.md#NET-7) and
 [NET-8](network-egress.md#NET-8) say how. The names are spelled as the environment spells them in
 upper case, and a lower-case spelling is not read from a file.
 
+`AWS_REGION` is written into the host a Bedrock request is signed for and sent to, so it names a
+region only as lowercase letters, digits and `-` starting with a letter or a digit, the characters
+a Google location is held to ([BACKEND-49](#BACKEND-49)). A value with any other character, `/`,
+`@`, `?`, `#`, `:` and `.` among them, configures no account, as an absent one does. That holds for
+every layer that may set the name, a checkout's included, and for an exported variable, and the
+`options.region` of a `provider` entry is held to it too ([BACKEND-29](#BACKEND-29)).
+
 A gateway is not configured from this block: it is a `provider` entry, whose shape BACKEND-13
 states and whose credential BACKEND-16 names. The three Google names are the one exception, and only
 together: BACKEND-50 says when they name a service. The top-level `model` key is not one of these either, being a
@@ -1421,6 +1433,10 @@ and the two budgets carry this program's own prefix, for the reason BACKEND-24 g
 copied from elsewhere should work unedited, while a name that decides what *this* program does
 belongs to this program and must not collide with whatever else a shared shell profile wanted.
 
+The region is checked because the host is built from it and a checkout's layer can write it. A
+file names only the region, and the rest of the host is compiled in, so a value that passes the
+check gives a host under `amazonaws.com`.
+
 `verified-by: bravebot_config::lib::every_name_a_settings_block_may_set_reaches_the_configuration`
 `verified-by: bravebot_config::settings::an_env_block_is_read`
 `verified-by: bravebot_config::settings::a_proxy_and_an_authority_in_the_persons_own_file_are_handed_over`
@@ -1430,6 +1446,9 @@ belongs to this program and must not collide with whatever else a shared shell p
 `verified-by: bravebot_config::settings::a_blank_or_non_string_network_value_states_nothing`
 `verified-by: bravebot_agent::transport::the_settings_and_the_transport_name_the_same_variables`
 `verified-by: bravebot_agent::transport::a_proxy_in_the_persons_file_is_the_one_a_client_carries_and_a_checkouts_is_not`
+`verified-by: bravebot_config::bedrock::a_region_that_would_move_the_request_configures_nothing`
+`verified-by: bravebot_config::bedrock::a_region_holding_only_the_characters_aws_uses_is_accepted`
+`verified-by: bravebot_config::settings::a_checkouts_region_that_would_move_the_request_configures_no_account`
 
 <a id="BACKEND-34"></a>
 ### BACKEND-34: a settings value is a string, and anything else is not a value
@@ -2562,6 +2581,14 @@ parsed number only how long.
   states to the planner. It is free text that reaches the planner's context on every round, so it is
   refused from the project layers outright, as `references` is, and reported by `doctor`. A checkout
   cannot say what its own history carries; the person says it once in their own file.
+
+- **A region refused for what it holds is not reported.** A Bedrock region outside the characters of
+  [BACKEND-33](#BACKEND-33), in an `env` block or in a `provider` entry, configures no account as an
+  absent one does, and nothing names the value that was refused: `doctor` lists the names a file set,
+  so an account missing from its output is the only sign, and a person who mistyped a region has the
+  other backends in force. Importing from Claude Code ([IMPORT-3](import.md#IMPORT-3)) writes the
+  region the file states, so one this refuses is imported and then not read, and an `amazon-bedrock`
+  entry from opencode with one is left with the reason that it has no region.
 
 - **The aichat endpoint Brave runs discards the effort level.** Measured against that endpoint: a
   nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits

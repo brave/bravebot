@@ -305,19 +305,18 @@ impl Provider {
         let profile = string(options.and_then(|options| options.get("profile")));
         let models = models(entry.get("models"));
         let entries = bedrock_entries(entry.get("models"));
+        let bedrock = crate::bedrock::Bedrock::from_provider(region, profile, entries)?;
 
         Some(Self {
             id: id.to_string(),
             name: string(entry.get("name")),
-            base_url: format!("https://bedrock-runtime.{region}.amazonaws.com"),
+            base_url: format!("https://{}", bedrock.host()),
             env: Vec::new(),
             api_key: None,
             stored_key: None,
             models,
             context_window: None,
-            bedrock: Some(crate::bedrock::Bedrock::from_provider(
-                region, profile, entries,
-            )),
+            bedrock: Some(bedrock),
         })
     }
 
@@ -954,6 +953,26 @@ mod tests {
         )
         .expect("parses");
         assert!(Provider::all(&root).is_empty());
+    }
+
+    /// The block's region is written into the host the entry is reached at, so one that would move
+    /// the request names no service, and the entry is dropped with it rather than reached
+    /// somewhere else.
+    #[test]
+    fn an_aws_block_whose_region_would_move_the_request_configures_nothing() {
+        for &region in crate::testutil::REGIONS_THAT_WOULD_MOVE_THE_REQUEST {
+            let root = serde_json::json!({"provider": {"amazon-bedrock": {
+                "options": {"region": region},
+                "models": {"openai.gpt-5.6-sol": {}}
+            }}});
+            let serde_json::Value::Object(root) = root else {
+                unreachable!("a json object literal")
+            };
+            assert!(
+                Provider::all(&root).is_empty(),
+                "region {region:?} was accepted"
+            );
+        }
     }
 
     /// opencode requires nothing of a model entry, so neither may this. An empty entry is a legal

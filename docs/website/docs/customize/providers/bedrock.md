@@ -21,6 +21,9 @@ Three services can answer a request: the aichat endpoint Brave runs, AWS Bedrock
 AWS account, and an [OpenAI-compatible gateway](openai-compatible.md) you
 configured. Every build can reach Brave; the other two are what you configure.
 
+`AWS_REGION` is spelled as AWS spells a region: lowercase letters, digits and `-`, such as
+`us-west-2`. A value with any other character is read as no region, and Bedrock is not configured.
+
 Each tier takes either a model id or an inference-profile ARN. With `AWS_PROFILE` unset the AWS CLI
 resolves credentials as it would for any other command, which is what a machine on instance
 credentials already relies on.
@@ -82,7 +85,8 @@ your file lists, each under the id a request sends:
 ```
 
 `options.region` is **required**, for the reason `AWS_REGION` is: a guessed region is a request that
-fails somewhere far from the mistake. An entry without one configures no service at all.
+fails somewhere far from the mistake. An entry without one, or with one spelled other than the way
+`AWS_REGION` is, configures no service at all.
 `options.profile` picks which credentials sign, exactly as `AWS_PROFILE` does, and is optional on the
 same terms.
 
