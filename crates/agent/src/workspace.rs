@@ -5183,8 +5183,9 @@ mod tests {
     use std::io;
 
     /// Whether a program planted in `directory` is one the lookup for programs bravebot starts on
-    /// its own account would find, with `directory` alone on `PATH`.
-    fn found_in(directory: &Path, program: &str) -> bool {
+    /// its own account would find, with `directory` alone on `PATH` and `writable` as the
+    /// directories left out of the search.
+    fn found_in(directory: &Path, program: &str, writable: &[PathBuf]) -> bool {
         let planted = directory.join(program);
         std::fs::write(&planted, "").expect("planted");
         #[cfg(unix)]
@@ -5194,12 +5195,8 @@ mod tests {
                 .expect("executable");
         }
         let path = std::env::join_paths([directory]).expect("path");
-        bravebot_sandbox::programs::find_in(
-            std::ffi::OsStr::new(program),
-            &path,
-            &bravebot_sandbox::programs::registered(),
-        )
-        .is_some()
+        bravebot_sandbox::programs::find_in(std::ffi::OsStr::new(program), &path, writable)
+            .is_some()
     }
 
     /// SANDBOX-30: a program planted where a confined stage may write is not the one started
@@ -5218,26 +5215,30 @@ mod tests {
         let moved = fresh("programs-moved");
         let session = fresh("programs-session");
 
+        // Against no recorded directory at all. The recorded ones are shared by every test in the
+        // process, and once any test has recorded `/` every directory is under one of them, so a
+        // search that read them could not find this program.
         assert!(
-            found_in(&control, "bravebot-probe-control"),
+            found_in(&control, "bravebot-probe-control", &[]),
             "the probe finds a program in a directory nothing has opened"
         );
 
+        let recorded = || bravebot_sandbox::programs::registered();
         let mut workspace = Workspace::new(&root).expect("workspace");
-        assert!(!found_in(&root, "bravebot-probe-root"));
+        assert!(!found_in(&root, "bravebot-probe-root", &recorded()));
 
         workspace
             .add_directory(&added.display().to_string())
             .expect("added");
-        assert!(!found_in(&added, "bravebot-probe-added"));
+        assert!(!found_in(&added, "bravebot-probe-added", &recorded()));
 
         workspace.open_scratch(Some(session.clone()));
-        assert!(!found_in(&session, "bravebot-probe-session"));
+        assert!(!found_in(&session, "bravebot-probe-session", &recorded()));
 
         workspace
             .change_root(&moved.display().to_string())
             .expect("moved");
-        assert!(!found_in(&moved, "bravebot-probe-moved"));
+        assert!(!found_in(&moved, "bravebot-probe-moved", &recorded()));
     }
 
     /// SANDBOX-28: reach is held by the workspace, in the order it was given and numbered from one,

@@ -19092,9 +19092,15 @@ mod tests {
 
         impl Scratch {
             pub(super) fn new(name: &str) -> Self {
+                // One directory per call. A name and the process id are the same for every test
+                // that calls `proposed`, and tests in one process run side by side, so each
+                // removing the directory at the start and again at the end took it from the others.
+                static NEXT: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
                 let path = crate::testutil::scratch_dir(&format!(
-                    "bravebot-arguments-{name}-{}",
-                    std::process::id()
+                    "bravebot-arguments-{name}-{}-{}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                 ));
                 let _ = std::fs::remove_dir_all(&path);
                 std::fs::create_dir_all(&path).expect("create scratch");
