@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -400,12 +400,9 @@ impl Authority {
     /// Start the authority, write `line` to it, and read its whole reply, stopping it if the run
     /// is cancelled or it outlasts the bound. The child is killed and reaped on either.
     fn exchange(&self, line: Vec<u8>) -> Result<Vec<u8>, ConnectorError> {
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "the credential authority, an absolute path the person configured \
-                          (`Authority::new` refuses a name)"
-        )]
-        let mut command = Command::new(&self.program);
+        let mut command = bravebot_sandbox::programs::start(
+            &bravebot_sandbox::programs::Resolved::named_by_person(&self.program),
+        );
         command
             .arg("connector")
             .stdin(Stdio::piped())
