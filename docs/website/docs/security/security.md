@@ -154,11 +154,11 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
 
-## Six deliberate exceptions
+## Seven deliberate exceptions
 
-Brave Bot looks at untrusted bytes to decide something in six places, three in the policy layer
-and three in the agent, the search, the diagnostics sentence and reading a repository's history, all
-written down rather than left to be found.
+Brave Bot looks at untrusted bytes to decide something in seven places, three in the policy layer
+and four in the agent, the search, the diagnostics sentence, reading a repository's history and
+telling a text file from a binary one, all written down rather than left to be found.
 
 **Splitting a processor's answer.** A processor returns one piece of text holding two things: a remark
 for the person watching, and the document to be written. It marks where the document begins, and the
@@ -212,6 +212,14 @@ count whether the pattern it chose matched. A page boundary that earlier files' 
 decided can stop the walk before later files, but every path is recorded before its file is read, so
 those bytes cannot steer the label. They cannot choose how the answer is labelled or any
 destination, and the model never sees a line of text from the file.
+
+**Telling a text file from a binary one.** When the model reads a file you did not vouch for, Brave
+Bot does not hand back text. It checks the start of the file for a NUL byte or a heap of control
+characters, and either refuses in its own words that the file is binary, or gives the model a
+reference with the file's size. An attacker who owns the file chooses which of those two results the
+model sees, and can put the file out of reach of the component that reads it later. That is one bit
+beside a size they already set. They cannot choose how the result is labelled, any destination, or
+put a word of their own in front of the model.
 
 ## What leaves the process
 

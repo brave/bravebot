@@ -3049,8 +3049,9 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     }
 
     // A file the planner may not see need not be opened yet. Whether it may see it is a question
-    // about the trust map, keyed by the path it named, so nothing about any file's contents
-    // reaches this branch.
+    // about the trust map, keyed by the path it named. Nothing about any file's contents decides
+    // it, but `survey` does sniff the file's first bytes for text or binary, which is the seventh
+    // of labels.md's Known costs.
     //
     // The offset and the limit do not enter it either. They describe a slice of what the planner
     // would have read, and a quarantined read hands back a reference rather than text, so there
