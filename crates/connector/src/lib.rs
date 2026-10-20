@@ -699,12 +699,8 @@ mod tests {
         ])
         .unwrap();
 
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "this test binary's own executable, run again with a chosen PATH"
-        )]
-        // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let own = bravebot_sandbox::programs::Resolved::own_executable().unwrap();
+        let child = bravebot_sandbox::programs::start(&own)
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env(INSTALLED, program.0.join("authority"))
