@@ -573,10 +573,10 @@ arrives at all.
 
 ## Known costs
 
-- **Five places do look at untrusted bytes in order to decide something.** Three are in the policy
-  layer, the fourth is the search, which is in `bravebot-agent`, and the fifth is the diagnostics
-  sentence, which is in `bravebot-agent` too. The clauses above say nothing
-  may, so these are exceptions, and they are written down rather than left to be found.
+- **Six places do look at untrusted bytes in order to decide something.** Three are in the policy
+  layer, the fourth is the search, which is in `bravebot-agent`, the fifth is the diagnostics
+  sentence and the sixth is `read_git`, which are in `bravebot-agent` too. The clauses above say
+  nothing may, so these are exceptions, and they are written down rather than left to be found.
 
   The first is splitting a processor's answer. A processor hands back a single piece of text that
   holds two things: a remark meant for the person watching, and the document to be written. It
@@ -771,3 +771,53 @@ arrives at all.
   errors. Gating the sentence on the queried file's trust-map entry, as the write-time sentence is
   gated, does not close it, since the counts depend on other files too and
   [LSP-3](tools/lsp.md#LSP-3) rules out borrowing the queried file's entry for what a server computed.
+
+- **The sixth is `read_git` comparing blobs committed from paths the map distrusts.** `read_git`
+  opens a repository whose whole `.git` the map vouches for ([GIT-2](tools/read-git.md#GIT-2)), and
+  a blob in it holds the bytes of the working-tree file it was committed from, which may be a path
+  the map distrusts. A `search` tests each line of such a blob against the pattern, a `diff`
+  compares both sides of it to decide the hunks and whether the two are too different to compare,
+  and `show` checks whether it is binary to choose between a description and its text. The
+  comparison is in `bravebot-agent`, which is the driver too ([LABEL-4](#LABEL-4)). Where every
+  path an answer shows is vouched for, the bytes are trusted and the comparison is the case
+  [LABEL-5](#LABEL-5) allows. The rest of this entry is about an answer that also shows a path
+  nobody vouched for.
+
+  Each path is recorded as shown before its blob is read, and the answer is labelled from those
+  paths once the walk has finished ([GIT-3](tools/read-git.md#GIT-3)), so one unvouched path makes
+  the whole answer untrusted. The lines the comparison keeps reach the planner only as a reference,
+  as the search's do. Suppose an attacker owns the committed bytes of such a path. Everything that
+  buys them is on this list:
+
+  - **Set the answer's line and byte counts.** Within the caps `read_git` keeps: 2,000 lines, 2,000
+    characters a line and 1 MiB a blob, and the count cap. The planner is shown both numbers for
+    any quarantined content ([LABEL-3](#LABEL-3)), and an attacker who owns a file already sets
+    them for a read of it.
+  - **Make the answer report itself incomplete.** By filling a cap, or by making the walk run to
+    its deadline, or a diff run to its bound of four million steps. The planner is told the answer
+    is incomplete and nothing else: the skip that lists the next page is printed inside the
+    quarantined body, so unlike the search's offset it does not reach the planner.
+  - **Tell the planner by a count whether the pattern it chose matched.** The line count of a
+    search over a single distrusted blob is one number the blob decided.
+  - **Choose which matches or hunks fall on which page, and make one of their own files print
+    nothing.** The first happens inside the body the planner cannot read. The second is a blob that
+    is binary or past the size cap, which a search names or describes and does not print.
+
+  What is **not** on the list: the label, which is fixed before the blob is read, any destination,
+  any argument of a later call, and a line of the blob. The pattern, the path and the skip are the
+  planner's own arguments and no byte of a blob reaches them. This entry cannot take the search's
+  wording that the result is labelled "before any file is opened" or that which files the walk
+  reaches is never decided by a byte of a file. `read_git` labels an answer after the walk has
+  finished, and a page boundary that earlier blobs' matching lines decided stops the walk, so those
+  bytes choose which later paths are reached. That is sound only because every path read is pushed
+  to the shown list before its blob is, which is what keeps the label from being steerable.
+
+  Two alternatives cost more than this does. Leaving unread every blob whose path the map distrusts
+  and reporting how many were left out would close the entry, and it changes what a history
+  question can find in a repository that holds vendored code, which is a product decision for the
+  maintainers and not made here. Moving the comparison into `bravebot-core` is not another, since
+  that crate is the driver as well.
+
+  The two claims the entry rests on, that only the counts and the incomplete notice follow what the
+  blob holds and that the skip stays in the body, are pinned under
+  [GIT-14](tools/read-git.md#GIT-14).
