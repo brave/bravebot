@@ -540,7 +540,10 @@ person with three answers: accept edits, ask before each edit, and keep planning
 answers end plan mode for the mode they name, and the planner is told the plan was approved. Any
 other answer, including a typed reply or a skip, leaves the session in plan mode and tells the
 planner it was not approved. A call outside plan mode, from a delegate, or where nobody can be
-asked, asks nobody and changes nothing. Bypassing is not offered (MODE-5).
+asked, asks nobody and changes nothing. Bypassing is not offered (MODE-5). The prompt is put every
+time: an answer to it is not remembered for the session as an answer to a planner's question is
+([ASK-8](tools/ask-user.md#ASK-8)), so the same plan proposed after the person has gone back to
+plan mode is asked again.
 
 The mode applies to the rest of the turn as any change of mode does (MODE-8), so the planner starts
 the work in the same turn and the person types nothing.
@@ -557,6 +560,7 @@ invented (MODE-7), so no mode answers it for the person.
 
 `verified-by: bravebot_agent::tools::approving_a_plan_leaves_plan_mode_for_the_mode_chosen`
 `verified-by: bravebot_agent::tools::a_plan_not_approved_leaves_plan_mode_in_force`
+`verified-by: bravebot_agent::tools::the_same_plan_proposed_again_is_put_under_a_new_key`
 `verified-by: bravebot_agent::tools::a_plan_proposed_outside_plan_mode_asks_nobody`
 `verified-by: bravebot_agent::tools::a_plan_from_an_untrusted_context_is_refused_and_changes_no_mode`
 `verified-by: bravebot_agent::tools::propose_plan_takes_a_plan_and_a_reason_and_is_not_in_the_table`
