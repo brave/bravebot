@@ -167,6 +167,7 @@ choose that program.
 `verified-by: bravebot_config::connectors::a_definition_that_is_a_dangling_link_is_refused`
 `verified-by: bravebot_config::connectors::a_file_or_owner_that_cannot_be_read_is_open_to_others`
 `verified-by: bravebot_config::connectors::an_authority_others_could_replace_is_refused`
+`verified-by: bravebot_config::connectors::an_authority_named_through_a_link_is_held_to_both_folders`
 `verified-by: bravebot_config::connectors::an_authority_the_system_owns_is_accepted`
 `verified-by: bravebot_config::connectors::a_definition_that_is_a_link_is_refused_though_it_points_at_one_that_reads`
 `verified-by: bravebot_config::connectors::only_the_persons_own_file_writable_by_them_alone_is_closed_to_others`

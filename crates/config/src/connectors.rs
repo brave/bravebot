@@ -523,26 +523,28 @@ mod tests {
     /// A state directory holding `files` under `connectors/`, each naming an authority program
     /// made beside it. Every mode is set rather than left to the umask, which may let the group
     /// write.
-    fn home(files: &[(&str, &str)]) -> scratch::Dir {
+    /// Set a file's mode outright.
+    fn set_mode(path: &Path, mode: u32) {
         use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    fn home(files: &[(&str, &str)]) -> scratch::Dir {
         let dir = scratch::Dir::new();
-        let mode = |path: &Path, mode: u32| {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-        };
         let authority = dir.path().join("authority");
         std::fs::create_dir_all(&authority).unwrap();
         std::fs::write(authority.join("agent"), "#!/bin/sh\n").unwrap();
-        mode(&authority.join("agent"), 0o755);
-        mode(&authority, 0o755);
+        set_mode(&authority.join("agent"), 0o755);
+        set_mode(&authority, 0o755);
         std::fs::create_dir_all(dir.path().join("connectors")).unwrap();
         for (name, text) in files {
             let named = authority.join("agent").display().to_string();
             let text = text.replace("/opt/authority/agent", &named);
             std::fs::write(dir.path().join("connectors").join(name), text).unwrap();
-            mode(&dir.path().join("connectors").join(name), 0o644);
+            set_mode(&dir.path().join("connectors").join(name), 0o644);
         }
-        mode(&dir.path().join("connectors"), 0o755);
-        mode(dir.path(), 0o755);
+        set_mode(&dir.path().join("connectors"), 0o755);
+        set_mode(dir.path(), 0o755);
         dir
     }
 
@@ -583,26 +585,55 @@ mod tests {
     /// the system could replace is refused, and so is one that is not there.
     #[test]
     fn an_authority_others_could_replace_is_refused() {
-        use std::os::unix::fs::PermissionsExt;
-        let set = |path: &Path, mode: u32| {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-        };
         let dir = home(&[("github.json", GITHUB)]);
         assert!(installed(dir.path())["github"].is_ok());
         let agent = dir.path().join("authority").join("agent");
-        set(&agent, 0o777);
+        set_mode(&agent, 0o777);
         let refused = installed(dir.path())["github"].clone().unwrap_err();
         assert!(refused.contains("can be written by others"), "{refused}");
-        set(&agent, 0o755);
-        set(&dir.path().join("authority"), 0o775);
+        set_mode(&agent, 0o755);
+        set_mode(&dir.path().join("authority"), 0o775);
         assert!(
             installed(dir.path())["github"].is_err(),
             "a folder the group can write"
         );
-        set(&dir.path().join("authority"), 0o755);
+        set_mode(&dir.path().join("authority"), 0o755);
         std::fs::remove_file(&agent).unwrap();
         let refused = installed(dir.path())["github"].clone().unwrap_err();
         assert!(refused.contains("cannot be read"), "{refused}");
+    }
+
+    /// An authority named through a link is held to the folder the link sits in and to the one
+    /// its program sits in, so a closed folder cannot vouch for a program in an open one, nor an
+    /// open folder hide behind a closed program.
+    #[test]
+    fn an_authority_named_through_a_link_is_held_to_both_folders() {
+        for (link_folder, program_folder) in [(0o755, 0o775), (0o775, 0o755)] {
+            let dir = home(&[("github.json", GITHUB)]);
+            let (named, real) = (dir.path().join("named"), dir.path().join("authority"));
+            std::fs::create_dir_all(&named).unwrap();
+            std::os::unix::fs::symlink(real.join("agent"), named.join("agent")).unwrap();
+            let file = dir.path().join("connectors").join("github.json");
+            let text = std::fs::read_to_string(&file).unwrap();
+            let linked = named.join("agent").display().to_string();
+            std::fs::write(
+                &file,
+                text.replace(&real.join("agent").display().to_string(), &linked),
+            )
+            .unwrap();
+            set_mode(&named, 0o755);
+            assert!(
+                installed(dir.path())["github"].is_ok(),
+                "both folders closed"
+            );
+            set_mode(&named, link_folder);
+            set_mode(&real, program_folder);
+            let refused = installed(dir.path())["github"].clone().unwrap_err();
+            assert!(
+                refused.contains("can be written by others"),
+                "link folder {link_folder:o}, program folder {program_folder:o}: {refused}"
+            );
+        }
     }
 
     /// A program the system owns, writable by nobody else, is one the person may name.
@@ -618,16 +649,15 @@ mod tests {
 
     #[test]
     fn a_definition_others_could_have_written_is_refused() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = home(&[("github.json", GITHUB)]);
         let file = dir.path().join("connectors").join("github.json");
         assert!(installed(dir.path())["github"].is_ok());
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o666)).unwrap();
+        set_mode(&file, 0o666);
         let refused = installed(dir.path())["github"].clone().unwrap_err();
         assert!(refused.contains("written by others"), "{refused}");
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        set_mode(&file, 0o644);
         let folder = dir.path().join("connectors");
-        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o777)).unwrap();
+        set_mode(&folder, 0o777);
         assert!(installed(dir.path())["github"].is_err());
     }
 
