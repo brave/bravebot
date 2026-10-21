@@ -7859,6 +7859,50 @@ mod tests {
         assert!(!back.contains("below") && !back.contains("held"), "{back}");
     }
 
+    /// The cue reminds a person that the view is held while the turn goes on, and it sits on the
+    /// line whose accent is kept for the parts that change what a key does. Drawn in the accent it
+    /// reads as one of them (VIEW-27). Read from the cells of the whole cue, from `held` to
+    /// `return`.
+    #[test]
+    fn the_held_cue_is_drawn_dim() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+        let mut session = Session::new("none");
+        for turn in 0..40 {
+            session.type_char('q');
+            session.submit();
+            session.complete(format!("reply number {turn}"), Vec::new(), 0);
+        }
+        rows_of_a_frame(&mut session);
+        session.scroll_up(60);
+        assert!(session.rows_below() > 0, "the view was not held");
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, &session);
+            })
+            .expect("draw succeeds");
+        let buffer = terminal.backend().buffer();
+        let hint_row = buffer.area().height - 1;
+        let symbols: Vec<&str> = (0..buffer.area().width)
+            .map(|column| buffer.cell((column, hint_row)).expect("cell").symbol())
+            .collect();
+        let from = (0..symbols.len())
+            .find(|at| symbols[*at..].concat().starts_with("held"))
+            .expect("the cue was not drawn");
+        let through = (from..symbols.len())
+            .find(|at| symbols[*at..].concat().starts_with("return"))
+            .expect("the cue did not name the key back")
+            + "return".len();
+
+        assert_ne!(theme::muted(), theme::accent());
+        for column in (from..through).filter(|column| symbols[*column] != " ") {
+            let ink = buffer.cell((column as u16, hint_row)).expect("cell").fg;
+            assert_eq!(ink, theme::muted(), "column {column} of the cue");
+        }
+    }
+
     /// The cue is the first of the things the hint line keeps for its own sake to go, so a terminal
     /// with no room for it loses the cue and keeps the mode, in the ordinary line and the shell
     /// line. Left out of either order, the line would be cleared whole and the mode with it.
@@ -8271,6 +8315,29 @@ mod tests {
     fn the_input_box_stops_growing_at_the_cap() {
         let huge = input_height(&typed(&"word ".repeat(500)), 50, 40);
         assert_eq!(huge as usize, wrap::MAX_ROWS + 2, "the cap was not applied");
+    }
+
+    /// The line being composed is the one thing a person must always be able to see, and the cap
+    /// is what leaves the transcript the majority of a standard terminal. A cap compared with the
+    /// constant that sets it passes at any value, so the ten rows are written as ten (INPUT-1).
+    #[test]
+    fn the_input_box_holds_ten_rows_of_text_and_no_more() {
+        let width = 50u16;
+        let row = "Ω".repeat(input_text_width(width));
+        for (written, shown) in [(9, 9), (10, 10), (11, 10), (40, 10)] {
+            let session = typed(&row.repeat(written));
+            assert_eq!(
+                input_height(&session, width, 60),
+                shown + 2,
+                "{written} rows of text"
+            );
+            let drawn = rendered_at(&session, width, 60);
+            assert_eq!(
+                drawn.matches('Ω').count(),
+                shown as usize * input_text_width(width),
+                "{written} rows of text: {drawn}"
+            );
+        }
     }
 
     /// Past the cap the view follows the cursor, so typing at the end stays visible.

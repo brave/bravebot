@@ -9226,6 +9226,7 @@ mod tests {
                 (key(KeyCode::Char('g')), key(KeyCode::Char('G'))),
                 (key(KeyCode::Char('<')), key(KeyCode::Char('>'))),
                 (ctrl_key(KeyCode::Home), ctrl_key(KeyCode::End)),
+                (key(KeyCode::Home), key(KeyCode::End)),
             ] {
                 let mut session = opened();
                 handle_key(&mut session, first);
@@ -21444,6 +21445,50 @@ mod tests {
             "the pick said more than one thing"
         );
         assert!(!cancel.is_cancelled());
+    }
+
+    /// The style changes what the next keystroke does and the box gives no other sign of it, so a
+    /// choice made without a sentence is found out by a letter going somewhere unexpected, and one
+    /// that names the other style is worse. Enter takes the row under the cursor and says which
+    /// style it took; Escape leaves the style alone and says nothing (INPUT-23). Read through the
+    /// picker a turn in progress opens, which carries a row out as the resting panel does.
+    #[test]
+    fn a_style_chosen_in_the_config_panel_is_kept_and_said_in_the_transcript() {
+        use crate::vim::Editing;
+        let said_of = |editing: Editing| match editing {
+            Editing::Vi => t!(session_editing_vi).to_string(),
+            Editing::Ordinary => t!(session_editing_ordinary).to_string(),
+        };
+        // The cursor starts on the style in force, which is the ordinary one, so a `j` moves it to
+        // vi and a lone Enter takes the style already chosen.
+        for (keys, chosen, said) in [
+            (vec![KeyCode::Char('j'), KeyCode::Enter], Editing::Vi, true),
+            (vec![KeyCode::Enter], Editing::Ordinary, true),
+            (
+                vec![KeyCode::Char('j'), KeyCode::Esc],
+                Editing::Ordinary,
+                false,
+            ),
+        ] {
+            let mut session = a_turn_running_on("first");
+            assert_eq!(session.editing(), Editing::Ordinary);
+            let cancel = Cancel::new();
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, CONFIG_COMMAND, key(KeyCode::Enter), beside);
+                for code in &keys {
+                    turn_key(&mut session, key(*code), &cancel, beside);
+                }
+            });
+
+            assert_eq!(session.editing(), chosen, "{keys:?}");
+            assert!(session.picking().is_none(), "{keys:?} left the panel open");
+            let expected = if said {
+                vec![said_of(chosen)]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(said_under_the_turn(&session), expected, "{keys:?}");
+        }
     }
 
     /// Escape and Ctrl-C are the picker's way out while it is open, and leave what was in force
