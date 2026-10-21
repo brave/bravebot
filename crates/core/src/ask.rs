@@ -1024,7 +1024,10 @@ mod tests {
         let given = read.finish(&mut memo, vec![Answer::Chosen(vec![0]), Answer::TimedOut]);
         assert_eq!(given, vec![Answer::Chosen(vec![0]), Answer::TimedOut]);
 
-        assert_eq!(memo.recall(&both.prompts[0].key), Some(Answer::Chosen(vec![0])));
+        assert_eq!(
+            memo.recall(&both.prompts[0].key),
+            Some(Answer::Chosen(vec![0]))
+        );
         assert_eq!(memo.recall(&both.prompts[1].key), None);
         let again = memo.read(&both);
         assert_eq!(again.outstanding().prompts, vec![both.prompts[1].clone()]);
