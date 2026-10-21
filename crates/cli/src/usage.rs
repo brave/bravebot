@@ -158,6 +158,7 @@ pub(crate) fn print_help() {
         ("--mode <mode>", t!(cli_option_mode)),
         ("--model <name>", t!(cli_option_model)),
         ("--advisor <name>", t!(cli_option_advisor)),
+        ("--processor-model <name>", t!(cli_option_processor_model)),
         ("--tools <a,b,c>", t!(cli_option_tools)),
         ("--no-shell", t!(cli_option_no_shell)),
         ("--effort <level>", t!(cli_option_effort)),

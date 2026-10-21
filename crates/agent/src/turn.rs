@@ -4471,7 +4471,7 @@ where
                 output.origin.clone()
             };
 
-            // A processor answered by a model other than the one `processorModel` named (PROC-13).
+            // A processor answered by a model other than the one named for processors (PROC-13).
             if let Some(written) = &output.substituted {
                 let said =
                     bravebot_i18n::t!(processor_model_substituted, model = written).to_string();

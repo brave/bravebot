@@ -133,7 +133,8 @@ asked", which is most of what anyone asks it.
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content
 
-Every field is a gate name, a capability, a label, a path, a destination host or a slot id.
+Every field is a gate name, a capability, a label, a path, a destination host, a slot id or a model
+name. A model name is one a setting, the command line or an agent definition chose.
 Network decisions omit URL userinfo, paths, queries and fragments. A host a confined program asked
 a proxy for is recorded only where it is a host name or an address ([SANDBOX-24](sandboxing.md#SANDBOX-24)),
 and so is a host the person answered a question about, under `host_grant`.
@@ -378,6 +379,26 @@ label is a claim about authority, so it comes from where the text was composed.
 `verified-by: bravebot_tui::state::the_request_view_opens_on_the_last_request_and_closing_restores_the_transcript`
 `verified-by: bravebot_tui::app::the_key_that_writes_the_transcript_out_does_nothing_in_the_request_view`
 
+<a id="TRACE-10"></a>
+### TRACE-10: the trail names the model each processor call asked for
+
+Each processor call, in a turn and in a manifest run, records the model its request names before the
+request is sent. The entry is under the gate `processor_model` and reads `<id>: the request names
+<model>`, with the id the call has in the trail ([PROC-1](processors.md#PROC-1)). The model is the
+one the driver resolved for the call: the model [PROC-13](processors.md#PROC-13) names, a tier word
+as the model it names and a gateway model with its provider's prefix, or the model of the turn or
+run where none is named. An entry can therefore differ from the name a gateway is sent. A call
+refused for a model that cannot be used sends no request and has no entry.
+
+**Why.** The model a processor runs on can differ from the planner's, and the screen shows only the
+model of the turn. A person accounting for what a run spent, or for where a file's contents were
+sent, reads the trail. A model name is chosen by configuration, so the entry holds no content
+([TRACE-2](#TRACE-2)).
+
+`verified-by: bravebot_agent::turn::the_audit_trail_names_the_model_a_turns_processor_call_asked_for`
+`verified-by: bravebot_agent::turn::a_processor_call_that_failed_in_transit_is_in_the_trail_with_its_model`
+`verified-by: bravebot_agent::manifest::the_audit_trail_names_the_model_each_manifest_processor_call_asked_for`
+
 ## Known costs
 
 - **A message restored from a saved session is `unrecorded`.** The origin is kept in memory beside
@@ -387,3 +408,7 @@ label is a claim about authority, so it comes from where the text was composed.
 - **A prompt sent with dropped pictures or PDFs is one `typed, with dropped files` span.** The
   line and the files go in one message, so the label says the bytes in it are not all typed.
 - **The view is of the planner's request, not of a delegate's, a summariser's or an advisor's.**
+- **A processor call refused for its model is not in the trail.** The refusal comes before the call
+  becomes a request ([PROC-13](processors.md#PROC-13)) and reaches the person as a refusal of the
+  call, not as a gate decision, so an account of where a file's contents were sent has to read the
+  sentence the person was shown for the calls that sent nothing.

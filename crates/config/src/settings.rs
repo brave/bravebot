@@ -1387,7 +1387,7 @@ impl Settings {
             // `inherit` is how other agents' definitions name no model, so it reads back as none,
             // as it does in a definition (DELEGATE-22).
             processor_model: word(root, "processorModel")
-                .filter(|name| !name.eq_ignore_ascii_case("inherit")),
+                .and_then(|name| processor_model_named(&name)),
             agent: word(root, "agent"),
             references_ignored: Vec::new(),
             attribution_ignored: Vec::new(),
@@ -2684,6 +2684,18 @@ impl Drop for Document {
         crate::scrub_document(&mut self.root);
         self.displaced.iter_mut().for_each(crate::scrub_value);
     }
+}
+
+/// The model `processorModel` or `--processor-model` names, as written but for its edges, or `None`
+/// where it names none.
+///
+/// `inherit` is how other agents' definitions name no model, so it reads back as none, as it does
+/// in a definition (DELEGATE-22). One place for the setting and the flag, so the two cannot differ
+/// on which words name nothing.
+pub fn processor_model_named(word: &str) -> Option<String> {
+    Some(word.trim())
+        .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case("inherit"))
+        .map(str::to_string)
 }
 
 /// A top-level key holding one word, or `None` where the file said nothing usable.

@@ -1810,3 +1810,39 @@ be removed stays listed. Like `sessions delete`, it is allowed under `--incognit
 `verified-by: bravebot_tui::resume::a_deleted_row_leaves_the_list_and_a_failed_one_stays`
 `verified-by: bravebot_session::sessions::purging_a_project_removes_its_sessions_and_not_another_directorys`
 `verified-by: bravebot_session::sessions::purging_leaves_a_session_something_is_running`
+
+<a id="CLI-34"></a>
+### CLI-34: `--processor-model <name>` names the model processors run on for one run
+
+`--processor-model <name>` names the model a processor runs on for one run, in the words `--model`
+takes, tier words included, and outranks the `processorModel` setting ([PROC-13](processors.md#PROC-13)).
+It reaches the processors of a turn and the processing steps of a manifest run
+([MANIFEST-12](manifest.md#MANIFEST-12)). `inherit` puts them on the model of the run whatever the
+setting names. Without the flag the setting answers, and with neither a processor runs on the model
+of the run.
+
+The flag is refused before the run starts when it has no name after it, when the name is blank,
+when the machine-level settings refuse the model, and when nothing is configured to serve it.
+Nothing is sent, and the refusal is the one `--model` and `--advisor` give for the same model. A
+model that needs a sign-in this machine has not made is met when a processor first starts, as it is
+for the setting ([PROC-13](processors.md#PROC-13)), because the sign-in the run's own model needs
+comes first and may cover it.
+
+**Why.** The flag is the person's own command line, so it chooses where a processor's input goes as
+their settings file does, and no project file or content can. A blank name is refused for the reason
+a blank `--model` is: a script that computed an empty variable asked for a cheaper model, and running
+processors on the dearer one would not say so. The model is checked before the run for the reason an
+advisor's is ([CLI-21](#CLI-21)): a manifest run would otherwise spend both planning calls before its
+first processing step met the refusal.
+
+**Known cost.** A processor answered by a model other than the one the flag named is reported as it
+is for the setting ([PROC-13](processors.md#PROC-13)), and the run does not end with a failure
+status as a substituted `--model` does.
+
+`verified-by: bravebot_cli::main::a_processor_model_flag_names_the_model_processors_run_on`
+`verified-by: bravebot_cli::main::a_blank_processor_model_is_refused_rather_than_read_as_no_choice`
+`verified-by: bravebot_cli::main::a_processor_model_the_managed_settings_refuse_is_refused_before_the_run`
+`verified-by: bravebot_cli::running::a_processor_model_nothing_serves_is_refused_before_the_run`
+`verified-by: bravebot_cli::running::a_processor_model_named_on_the_command_line_runs_a_turns_processor`
+`verified-by: bravebot_cli::running::a_processor_model_named_on_the_command_line_runs_a_manifest_step_and_outranks_the_setting`
+`verified-by: bravebot_cli::running::a_blank_processor_model_is_refused_before_the_run`

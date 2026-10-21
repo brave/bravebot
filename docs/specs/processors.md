@@ -6,6 +6,7 @@ governs:
   - crates/core/src/processor.rs
   - crates/core/src/policy.rs
   - crates/agent/src/commit_message.rs
+  - crates/agent/src/processor.rs
 guards:
   - symbol: ProcessorSpec::new
   - symbol: Policy::before_processor
@@ -257,7 +258,8 @@ The name is configuration, not content. It is read from the person's own setting
 file `--settings` names, and from no project or local layer ([BACKEND-24](backends.md#BACKEND-24)):
 a layer that names it is dropped and `doctor` names the file. No tool argument, planner word or
 file content chooses it, so the destination of a processor's input stays the one the person
-configured.
+configured. `--processor-model` ([CLI-34](cli.md#CLI-34)) names it for one run from the person's own
+command line and outranks the file.
 
 A model that needs a sign-in this machine has not made, that the managed layer refuses
 ([BACKEND-48](backends.md#BACKEND-48)), or that no configured service answers for is not swapped
@@ -268,6 +270,9 @@ A processor answered by a model other than the one the setting named says so, na
 the setting wrote it. It is compared as [DELEGATE-22](delegation.md#DELEGATE-22) compares a
 delegate's: against the name that was sent, and not where the name is a handle the reply resolves.
 The name that answered is left out of the sentence, which is the driver's own words.
+
+The trail records the model each processor call asked for ([TRACE-10](trace.md#TRACE-10)). A manifest
+run's processing steps use the same model ([MANIFEST-12](manifest.md#MANIFEST-12)).
 
 **Why refuse rather than fall back.** A person naming a cheaper model for bulk rewrites is drawing a
 cost boundary, and running the call on the turn's model would spend past it without anybody

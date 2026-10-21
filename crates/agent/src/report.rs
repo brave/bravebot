@@ -29,7 +29,8 @@ pub fn summary_model_refusal(refusal: &crate::compact::SideModelRefusal) -> Stri
     }
 }
 
-/// What a person is told when `processorModel` names a model a processor cannot run on.
+/// What a person is told when `processorModel` or `--processor-model` names a model a processor
+/// cannot run on.
 ///
 /// Beside [`summary_model_refusal`] for the same reason: it names the key to correct, and a person
 /// reads it.

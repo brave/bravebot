@@ -18611,6 +18611,69 @@ fn a_processor_with_no_configured_model_runs_on_the_turns_own() {
     assert_eq!(processor, ["the-planners-model"], "{requests:?}");
 }
 
+/// TRACE-10: the trail names the model a turn's processor call asked for, one entry for the call,
+/// whether `processorModel` named one, named a tier, or the turn's own was used. The three cases
+/// carry different names, and the tier is recorded as the model it names, so an entry that copied
+/// the setting's text, or the planner's model, into all of them fails one of them.
+#[test]
+fn the_audit_trail_names_the_model_a_turns_processor_call_asked_for() {
+    for configured in [Some("a-cheap-processor-model"), Some("haiku"), None] {
+        let scratch = Scratch::new("processor-model-trail");
+        std::fs::write(scratch.path.join("config.py"), "original\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request("read_file", r#"{"path":"config.py"}"#),
+            tool_request(
+                "spawn_processor",
+                r#"{"reads":["ref:1"],"instruction":"rewrite it"}"#,
+            ),
+            processor_reply("REWRITTEN"),
+            tool_request(
+                "write_file",
+                r#"{"path":"config.py","contents_ref":"ref:3"}"#,
+            ),
+            reply_with("done"),
+        ]);
+        let mut config = config_for(&endpoint);
+        config.processor_model = configured.map(str::to_string);
+        let expected = match configured {
+            Some(word) => config.model_named(word),
+            None => "the-planners-model".to_string(),
+        };
+        if configured == Some("haiku") {
+            assert_ne!(expected, "haiku", "the tier word did not resolve");
+        }
+        let mut sink = RecordingSink::new();
+
+        turns::run(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("rewrite the config").with_model(Some("the-planners-model".to_string())),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        let named: Vec<&str> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed { gate, detail } if *gate == "processor_model" => {
+                    Some(detail.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(named.len(), 1, "{configured:?}: {named:?}");
+        assert!(
+            named[0].ends_with(&format!(": the request names {expected}")),
+            "{configured:?}: {named:?}"
+        );
+    }
+}
+
 /// PROC-13: a `processorModel` that needs a sign-in this machine has not made refuses the call. No
 /// request goes to the model and none to the turn's model in its place, the file is left as it was,
 /// and the person is told which model and which setting.
@@ -18676,6 +18739,24 @@ fn a_processor_model_needing_a_sign_in_sends_nothing_and_says_so() {
     assert!(
         shown.contains("haiku-arn") && shown.contains("sign-in"),
         "the person was not told which model needed a sign-in: {shown}"
+    );
+    // The gate that let the call be asked for is the driver's own, made before a model is chosen. What
+    // a call that sent nothing must not leave is a line saying content went anywhere.
+    assert!(
+        !sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate, detail }
+                if gate.starts_with("processor")
+                    && (detail.contains("input assembled") || detail.contains("input carried"))
+        )),
+        "a call that sent nothing left a line saying its input was carried"
+    );
+    assert!(
+        !sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate, .. } if *gate == "processor_model"
+        )),
+        "a call that sent nothing was recorded as naming a model"
     );
 }
 
@@ -51766,6 +51847,62 @@ fn a_failed_processor_reports_a_category_and_nothing_the_service_or_the_setting_
         );
         assert!(!audit.contains(secret), "audit leaked {secret}");
     }
+}
+
+/// TRACE-10: the entry is made before the request goes, so a processor call that failed in transit,
+/// which has already sent the file's contents, is in the trail with the model it asked for. An entry
+/// made after the reply would be missing for exactly the calls an account of where contents went
+/// has to include.
+#[test]
+fn a_processor_call_that_failed_in_transit_is_in_the_trail_with_its_model() {
+    let scratch = Scratch::new("processor-model-trail-failed-call");
+    std::fs::write(scratch.path.join("input.txt"), "private input").unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (endpoint, _received) = serve_script(vec![
+        Served::Reply(tool_request("read_file", r#"{"path":"input.txt"}"#)),
+        Served::Reply(tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"summarise this"}"#,
+        )),
+        Served::DiagnosticStatus(418),
+        Served::Reply(reply_with("finished")),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.processor_model = Some("a-cheap-processor-model".to_string());
+    let mut audit = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("inspect input.txt"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut audit,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .unwrap();
+
+    let named: Vec<&str> = audit
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed { gate, detail } if *gate == "processor_model" => {
+                Some(detail.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(named.len(), 1, "{named:?}");
+    assert!(
+        named[0].ends_with(": the request names a-cheap-processor-model"),
+        "{named:?}"
+    );
 }
 
 /// What a stop cost is the requests that went, so a count taken from the retry ordinal reports one

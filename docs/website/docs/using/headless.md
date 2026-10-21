@@ -187,6 +187,11 @@ each thing it reads.
 The gates are the same ones in both modes. What changes is the scope of the precommitment, from one
 turn to a whole run.
 
+The two planning calls run on the run's model. Each processing step runs on the model
+[`--processor-model`](../reference/cli.md#--processor-model-name) or the
+[`processorModel`](../customize/configuration.md#processormodel) setting names, so a plan can be made
+on a stronger model and carried out on a cheaper one.
+
 A plan that fails validation **fails the run whole**: nothing is half adopted, no step is patched to
 make a plan usable, and nothing re-plans once a step has read something. Where every effect will land
 is fixed before the first byte is read, and the driver cannot insert, skip, reorder or invent a step.
@@ -315,6 +320,7 @@ the wrong thing to search for.
 | `--trace` | print the audit trail to stderr |
 | `--model <name>` | the model this run asks for |
 | `--advisor <name>` | a model the planner may put a question to |
+| `--processor-model <name>` | the model processors run on, in place of the `processorModel` setting |
 | `--json` | one result object on stdout, in the reply's place |
 | `--json-stream` | one event per line on stdout as the run goes, then the result object |
 | `--output-schema <path>` | hold the reply to a JSON Schema; a reply off it ends on status 6, one that conforms is also `structured` under `--json` |
