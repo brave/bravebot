@@ -1193,10 +1193,10 @@ mod tests {
         assert!(panel.contains("+1 -1"), "no net 0/0 row was drawn: {panel}");
     }
 
-    /// FILES-10: the state draws from the transcript and holds only indexes, so nothing it shows is
-    /// in a request or the record.
+    /// FILES-10: the state holds only indexes into the transcript and `/files` is a command of the
+    /// interface's own. This does not capture a request or the record; the clause is by construction.
     #[test]
-    fn nothing_the_state_holds_reaches_the_request_or_the_record() {
+    fn the_state_holds_only_indexes_and_files_is_an_interface_command() {
         let mut session = session_with(&["a.rs"]);
         opened(&mut session);
         let held = format!("{:?}", session.files_state());

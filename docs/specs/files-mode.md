@@ -230,7 +230,7 @@ later program change nothing in the state, since it draws what the session wrote
 
 Every word the state says is in the catalogue ([localization.md](localization.md)).
 
-`verified-by: bravebot_tui::files_mode::nothing_the_state_holds_reaches_the_request_or_the_record`
+`verified-by: by-construction (the state holds only indexes into the transcript's entries and draws from them, and nothing in it is passed to a request or the record; bravebot_tui::files_mode::the_state_holds_only_indexes_and_files_is_an_interface_command asserts that the held state names no file and that /files is in the interface's command table, and does not capture a request or the record)`
 `verified-by: bravebot_tui::files_mode::a_resumed_session_lists_only_the_edits_made_since`
 `verified-by: bravebot_tui::files_mode::clearing_ends_the_files_state_and_forgets_its_edits`
 `verified-by: bravebot_tui::app::undoing_a_turn_removes_its_edits_from_the_list`
