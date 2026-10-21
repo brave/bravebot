@@ -3141,7 +3141,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         earlier.as_deref(),
     ) {
         Ok(crate::workspace::Reading::Page { page, token }) => {
-            workspace.record_touch(&shown_path);
+            workspace.record_directories(&shown_path);
             shown_token = token;
             page
         }
@@ -3221,6 +3221,13 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             ));
         }
         policy.allow_exposing_read(&keyed);
+    }
+
+    // A read that was refused above is no touch of the file. Nor is one through a reference, where
+    // `shown_path` is the reference's name and the file's own was never the planner's to say
+    // (INSTR-16).
+    if destination == Destination::Named {
+        workspace.record_file(&shown_path);
     }
 
     // Reshaped inside the kernel, so the driver never holds the text. Only

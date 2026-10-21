@@ -311,7 +311,9 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
 /// specific thing: a rule about this turn rather than about how work is done here. On both
 /// prompts, since a delegate writing files in plan mode would be the mode failing exactly where
 /// nobody is watching the writes. Only plan mode says anything: see
-/// `PermissionMode::instruction`.
+/// `PermissionMode::instruction`. The rule files a touched path brings in come after it, so that one
+/// a round adds is appended to what was sent (INSTR-16), and their heading says the mode and the
+/// user's words from the command line stand over them.
 ///
 /// `delegates` is the set the turn resolved, as narrowed by its `spawns:` lines, which decides
 /// whether a delegate is told it may delegate. `started_in` is the mode the turn began in, read
@@ -393,5 +395,7 @@ pub(super) fn system_prompt(
         }
     }
     system.push(Provenance::Driver, mode);
+    // After everything else, so a rule a round adds later is appended to what was sent (INSTR-16).
+    system.extend(preamble.rules.clone());
     system
 }

@@ -591,10 +591,10 @@ pub struct Workspace {
     /// The hosts the person let programs reach for this session beyond `allowedHosts`, and the
     /// ones they declined (SANDBOX-24). Held here and nowhere else, for the reason `path_reach` is.
     host_grants: Arc<Mutex<HostGrants>>,
-    /// The directories below the root that a file tool has read from or written to, each by the
-    /// spelling the planner typed, with every directory above it down to the root's child
-    /// (INSTR-14). Shared for the reason `checkouts` is, so a delegate's reads count.
-    touched: Arc<Mutex<std::collections::BTreeSet<String>>>,
+    /// What a file tool has read or written, and what the person named with `@`, each by the
+    /// spelling it was typed in (INSTR-14, INSTR-16). Shared for the reason `checkouts` is, so a
+    /// delegate's reads count.
+    touched: Arc<Mutex<Touched>>,
     /// The directories the person's own settings named, in alias order (REFER-3).
     ///
     /// Each is also in `added`, which is what makes it reachable, so a reference is exactly as
@@ -608,6 +608,41 @@ pub struct Workspace {
 /// The most directories [`Workspace::record_touch`] keeps, so a planner reading through a large
 /// tree cannot make every turn look for instructions in thousands of directories.
 const TOUCHED_LIMIT: usize = 64;
+
+/// The most files [`Workspace::record_touch`] and [`Workspace::record_mention`] keep, so a planner
+/// reading through a large tree cannot make a turn compare every rule's paths with thousands of
+/// names (INSTR-16).
+const TOUCHED_FILES_LIMIT: usize = 1024;
+
+/// The names a session has reached, placed under the root by spelling alone and `/`-joined.
+#[derive(Debug, Default)]
+struct Touched {
+    /// The directories below the root a file tool read from or wrote to, and every directory
+    /// above each down to the root's child (INSTR-14).
+    directories: std::collections::BTreeSet<String>,
+    /// The files a file tool read or wrote, and the files the person named with `@`, in the order
+    /// they were first reached (INSTR-16).
+    files: Vec<String>,
+    /// The same names, for telling whether one is in `files` already.
+    file_names: std::collections::BTreeSet<String>,
+    /// The rule files the person has been told were added, so the session says it once and not
+    /// at the start of every turn that follows (INSTR-16).
+    told: std::collections::BTreeSet<String>,
+    /// The rule files added to a prompt so far, in the order they were, so a turn that starts later
+    /// puts them where the turn that added them did (INSTR-16).
+    loaded: Vec<String>,
+}
+
+impl Touched {
+    /// Keep `relative` as a file, unless the record is full or has it. A full record drops the new
+    /// name and keeps the old ones: a caller that has compared the first `n` files asks for those
+    /// from the `n`th on ([`Workspace::touched_files_from`]), and removing one would shift them.
+    fn insert_file(&mut self, relative: String) {
+        if self.files.len() < TOUCHED_FILES_LIMIT && self.file_names.insert(relative.clone()) {
+            self.files.push(relative);
+        }
+    }
+}
 
 /// `typed`, a name a planner gave a file, placed under `root` by its spelling alone, as the
 /// `/`-joined path relative to `root`. `None` where it lands outside `root` or names `root`.
@@ -647,6 +682,9 @@ pub struct KeptBetweenTurns {
     checkout_numbers: Arc<AtomicU64>,
     temporary_checkouts: Arc<Mutex<Option<TemporaryCheckouts>>>,
     working_writes: Arc<Mutex<WorkingWrites>>,
+    /// What the session has touched, which INSTR-14 and INSTR-16 read: a workspace built for each
+    /// turn would start every turn with none.
+    touched: Arc<Mutex<Touched>>,
 }
 
 impl KeptBetweenTurns {
@@ -4640,6 +4678,7 @@ impl Workspace {
             checkout_numbers: self.checkout_numbers.clone(),
             temporary_checkouts: self.temporary_checkouts.clone(),
             working_writes: self.working_writes.clone(),
+            touched: self.touched.clone(),
         }
     }
 
@@ -4651,6 +4690,7 @@ impl Workspace {
         self.checkout_numbers = kept.checkout_numbers.clone();
         self.temporary_checkouts = kept.temporary_checkouts.clone();
         self.working_writes = kept.working_writes.clone();
+        self.touched = kept.touched.clone();
         self
     }
 
@@ -4818,13 +4858,19 @@ impl Workspace {
         Ok(delegate)
     }
 
-    /// Record that a file tool read from or wrote to `typed`, a name the planner gave (INSTR-14).
-    ///
-    /// Only the directories are kept, placed by the spelling alone as a write is: no file is
-    /// opened and nothing a file holds is consulted, so what is recorded is the planner's own
-    /// choice of names. A name outside the root, or naming it, records nothing. The record stops
-    /// growing at [`TOUCHED_LIMIT`] directories.
+    /// Record that a file tool read from or wrote to `typed`, a name the planner gave (INSTR-14,
+    /// INSTR-16): [`Workspace::record_directories`] and [`Workspace::record_file`].
     pub fn record_touch(&self, typed: &str) {
+        self.record_directories(typed);
+        self.record_file(typed);
+    }
+
+    /// Record the directories above `typed`, a name the planner gave a file tool (INSTR-14).
+    ///
+    /// Placed by the spelling alone as a write is: no file is opened and nothing a file holds is
+    /// consulted, so what is recorded is the planner's own choice of names. A name outside the
+    /// root, or naming it, records nothing. The record stops growing at [`TOUCHED_LIMIT`].
+    pub(crate) fn record_directories(&self, typed: &str) {
         let Some(relative) = place_by_spelling(&self.root, typed) else {
             return;
         };
@@ -4832,19 +4878,81 @@ impl Workspace {
         parts.pop();
         let mut touched = locked(&self.touched);
         for end in 1..=parts.len() {
-            if touched.len() >= TOUCHED_LIMIT {
-                return;
+            if touched.directories.len() >= TOUCHED_LIMIT {
+                break;
             }
-            touched.insert(parts[..end].join("/"));
+            touched.directories.insert(parts[..end].join("/"));
         }
+    }
+
+    /// Record the file `typed`, a name the planner gave a file tool that read or wrote it
+    /// (INSTR-16), placed as [`Workspace::record_directories`] places it. The record stops growing
+    /// at [`TOUCHED_FILES_LIMIT`].
+    pub(crate) fn record_file(&self, typed: &str) {
+        if let Some(relative) = place_by_spelling(&self.root, typed) {
+            locked(&self.touched).insert_file(relative);
+        }
+    }
+
+    /// Record that the person named `typed` with `@` in a prompt (INSTR-16).
+    ///
+    /// The file only, and not its directory: naming a file for the planner to read is not working
+    /// in the directory it sits in, which INSTR-14 asks of a file tool. Placed by the spelling
+    /// alone, as [`Workspace::record_touch`] places a name, and only where a file is there, since a
+    /// name that is a directory or is nothing is not a file anyone read.
+    pub fn record_mention(&self, typed: &str) {
+        let Some(relative) = place_by_spelling(&self.root, typed) else {
+            return;
+        };
+        if self.root.join(&relative).is_file() {
+            locked(&self.touched).insert_file(relative);
+        }
+    }
+
+    /// Whether the person is still owed being told that `rule` was added, and from now on they are
+    /// not (INSTR-16). `rule` is its origin from INSTR-1's fixed set.
+    pub fn take_telling(&self, rule: &str) -> bool {
+        locked(&self.touched).told.insert(rule.to_string())
     }
 
     /// The directories below the root the session has read from or written to, `/`-joined and
     /// relative to it, shallowest first and in name order within a depth (INSTR-14).
     pub fn touched_directories(&self) -> Vec<String> {
-        let mut directories: Vec<String> = locked(&self.touched).iter().cloned().collect();
+        let mut directories: Vec<String> =
+            locked(&self.touched).directories.iter().cloned().collect();
         directories.sort_by_key(|directory| directory.matches('/').count());
         directories
+    }
+
+    /// The files the session has read, written or been told of by `@`, `/`-joined and relative to
+    /// the root, in the order each was first reached (INSTR-16).
+    pub fn touched_files(&self) -> Vec<String> {
+        locked(&self.touched).files.clone()
+    }
+
+    /// The files [`Workspace::touched_files`] lists from the `from`th on, which is what has been
+    /// reached since a caller that has compared the first `from` last looked.
+    pub(crate) fn touched_files_from(&self, from: usize) -> Vec<String> {
+        locked(&self.touched)
+            .files
+            .get(from..)
+            .unwrap_or_default()
+            .to_vec()
+    }
+
+    /// The rule files added to a prompt, in the order they were (INSTR-16).
+    pub(crate) fn rules_added(&self) -> Vec<String> {
+        locked(&self.touched).loaded.clone()
+    }
+
+    /// Record that the rule file at `origin` was added to a prompt. A turn that starts later adds
+    /// the rules already recorded again, and a repeat keeps its first place, so the order stays the
+    /// one the turn that first added them put them in (INSTR-16).
+    pub(crate) fn note_rule_added(&self, origin: &str) {
+        let mut touched = locked(&self.touched);
+        if !touched.loaded.iter().any(|added| added == origin) {
+            touched.loaded.push(origin.to_string());
+        }
     }
 
     /// Collect workspace-relative paths of regular files beneath `directory`.

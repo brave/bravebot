@@ -67012,3 +67012,481 @@ fn an_addressed_definition_is_offered_spawn_agent_only_with_delegates_it_may_sta
         "a definition naming no spawns was not offered the whole set: {whole}"
     );
 }
+
+/// What a request to the service put in front of the planner as the system prompt.
+fn system_prompt_of(body: &str) -> String {
+    let sent: serde_json::Value = serde_json::from_str(body).expect("a JSON request");
+    message_words(&sent["messages"][0])
+}
+
+/// A project whose `pkg/` holds a text file and `src/` a Rust file, with one rule for each kind.
+fn project_with_rules(name: &str) -> Scratch {
+    let scratch = Scratch::new(name);
+    for (path, contents) in [
+        (
+            ".bravebot/rules/text.md",
+            "---\npaths:\n  - \"pkg/*.txt\"\n---\nTEXT-RULE\n",
+        ),
+        (
+            ".bravebot/rules/rust.md",
+            "---\npaths: [\"**/*.rs\"]\n---\nRUST-RULE\n",
+        ),
+        ("pkg/a.txt", "the file body"),
+        ("src/lib.rs", "// nothing\n"),
+    ] {
+        let path = scratch.path.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    scratch
+}
+
+/// One turn of `task` over `conversation`, with the notices it said.
+fn run_turn_saying_notices(
+    config: &Config,
+    workspace: &Workspace,
+    conversation: &mut bravebot_agent::Conversation,
+    task: &Task,
+) -> Vec<String> {
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turn::resume(
+        config,
+        &egress,
+        workspace,
+        task,
+        conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+    reporter.notices
+}
+
+/// INSTR-16: a rule whose paths a file read in a turn matches is in the next round's request of that
+/// turn, appended to the system prompt the earlier round sent, so every byte in front of it is the
+/// same. The rule a file does not match stays out,
+/// the person is told once which file brought the one that loaded, and the turn after starts with
+/// the same system prompt the last round of this one ended with.
+#[test]
+fn a_rule_a_round_brings_in_is_appended_to_the_system_prompt_of_the_next_round() {
+    let scratch = project_with_rules("rule-mid-turn");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"pkg/a.txt"}"#),
+        tool_request("read_file", r#"{"path":"pkg/a.txt"}"#),
+        reply_with("done"),
+        reply_with("again"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    // In plan mode, whose words are the ones that end the prompt where there are none to add: a
+    // rule put before them could not be appended to what a round already sent.
+    let in_plan_mode =
+        |words| Task::new(words).with_permission_mode(bravebot_agent::PermissionMode::Plan);
+
+    let first = run_turn_saying_notices(
+        &config,
+        &workspace,
+        &mut conversation,
+        &in_plan_mode("read pkg/a.txt twice"),
+    );
+    let second = run_turn_saying_notices(
+        &config,
+        &workspace,
+        &mut conversation,
+        &in_plan_mode("carry on"),
+    );
+
+    let systems: Vec<String> = (0..4)
+        .map(|_| system_prompt_of(&received.recv().expect("a request")))
+        .collect();
+    assert!(!systems[0].contains("TEXT-RULE"), "{}", systems[0]);
+    assert!(
+        systems[1].starts_with(&systems[0]),
+        "the round's prompt is not the last one with the rule after it:\n{}\n---\n{}",
+        systems[0],
+        systems[1]
+    );
+    assert!(systems[1].ends_with("TEXT-RULE\n\n"), "{}", systems[1]);
+    assert_eq!(
+        systems[2], systems[1],
+        "a rule already added was added again, or moved"
+    );
+    assert_eq!(
+        systems[3], systems[2],
+        "the next turn does not start where the last round ended"
+    );
+    assert!(
+        systems.iter().all(|system| !system.contains("RUST-RULE")),
+        "a rule no touched file matches was loaded"
+    );
+    assert_eq!(
+        first,
+        [".bravebot/rules/text.md was added to the instructions: pkg/a.txt matches its paths"]
+    );
+    assert!(second.is_empty(), "{second:?}");
+}
+
+/// INSTR-16: a name a tool printed is not a touch. Only the paths the planner typed to a file tool
+/// and the person typed with `@` are compared with the rules' globs, so a listing or a search
+/// result naming a file, which a repository wrote, cannot load a rule.
+#[test]
+fn a_file_a_listing_or_a_search_names_does_not_load_a_rule() {
+    let scratch = project_with_rules("rule-listing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("list_files", r#"{"path":"src"}"#),
+        tool_request("search", r#"{"pattern":"nothing"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let said = run_turn_saying_notices(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        &Task::new("look around"),
+    );
+
+    let bodies: Vec<String> = (0..3)
+        .map(|_| received.recv().expect("a request"))
+        .collect();
+    assert!(
+        bodies[1].contains("src/lib.rs") && bodies[2].contains("src/lib.rs"),
+        "the tools did not name the Rust file, so this test cannot tell: {}",
+        bodies[2]
+    );
+    for body in &bodies {
+        assert!(
+            !system_prompt_of(body).contains("RUST-RULE"),
+            "{}",
+            system_prompt_of(body)
+        );
+    }
+    assert!(said.is_empty(), "{said:?}");
+}
+
+/// INSTR-16: a file the person names with `@` loads its rule before the first request of the turn
+/// that names it, which is the one case a file is touched before a round runs.
+#[test]
+fn a_file_the_person_names_with_at_loads_its_rule_for_the_first_request() {
+    let scratch = project_with_rules("rule-at");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+    let config = config_for(&endpoint);
+
+    let said = run_turn_saying_notices(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        &Task::new("explain this").with_file("src/lib.rs"),
+    );
+
+    let system = system_prompt_of(&received.recv().expect("a request"));
+    assert!(system.contains("RUST-RULE"), "{system}");
+    assert!(!system.contains("TEXT-RULE"), "{system}");
+    assert_eq!(
+        said,
+        [".bravebot/rules/rust.md was added to the instructions: src/lib.rs matches its paths"]
+    );
+}
+
+/// INSTR-16: a file a write or an edit changes is a touch, as a read is.
+#[test]
+fn a_file_written_or_edited_loads_its_rule_for_the_next_round() {
+    for (tool, arguments) in [
+        ("write_file", r#"{"path":"pkg/new.txt","contents":"x"}"#),
+        (
+            "edit_file",
+            r#"{"path":"pkg/a.txt","old_text":"the file","new_text":"a file"}"#,
+        ),
+    ] {
+        let scratch = project_with_rules(&format!("rule-after-{tool}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) =
+            serve_sequence(vec![tool_request(tool, arguments), reply_with("done")]);
+        let config = config_for(&endpoint);
+
+        run_turn_saying_notices(
+            &config,
+            &workspace,
+            &mut bravebot_agent::Conversation::new(),
+            &Task::new("change a file in pkg"),
+        );
+
+        let first = system_prompt_of(&received.recv().expect("a request"));
+        let second = system_prompt_of(&received.recv().expect("a second request"));
+        assert!(!first.contains("TEXT-RULE"), "{tool}: {first}");
+        assert!(second.contains("TEXT-RULE"), "{tool}: {second}");
+    }
+}
+
+/// INSTR-16: a turn that starts after rules were added by name order of arrival carries them in the
+/// order they arrived, which is where the last round of the turn that added them left them. A turn
+/// that put them in name order instead would change the prompt from its first request, and a
+/// service that kept the prefix would read none of it again.
+#[test]
+fn rules_added_in_one_order_are_carried_in_that_order_by_the_next_turn() {
+    let scratch = Scratch::new("rule-order");
+    for (path, contents) in [
+        (
+            ".bravebot/rules/a-rust.md",
+            "---\npaths: [\"**/*.rs\"]\n---\nRUST-RULE\n",
+        ),
+        (
+            ".bravebot/rules/b-text.md",
+            "---\npaths: [\"pkg/*.txt\"]\n---\nTEXT-RULE\n",
+        ),
+        ("pkg/a.txt", "the file body"),
+        ("src/lib.rs", "// nothing\n"),
+    ] {
+        let path = scratch.path.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"pkg/a.txt"}"#),
+        tool_request("read_file", r#"{"path":"src/lib.rs"}"#),
+        reply_with("done"),
+        reply_with("again"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    for task in ["read the text file, then the Rust one", "carry on"] {
+        run_turn_saying_notices(&config, &workspace, &mut conversation, &Task::new(task));
+    }
+
+    let systems: Vec<String> = (0..4)
+        .map(|_| system_prompt_of(&received.recv().expect("a request")))
+        .collect();
+    let at = |system: &str, needle: &str| system.find(needle).expect(needle);
+    assert!(
+        at(&systems[2], "TEXT-RULE") < at(&systems[2], "RUST-RULE"),
+        "the rules were not appended in the order their files were read: {}",
+        systems[2]
+    );
+    assert_eq!(
+        systems[3], systems[2],
+        "the next turn did not start where the last round ended"
+    );
+}
+
+/// INSTR-16: a file read through a reference is not a touch. The planner typed the reference's name
+/// and not the file's, which a listing it could not read gave to the driver, and the reference's
+/// name is not a path. A rule whose glob matches anything must stay out all the same.
+#[test]
+fn a_file_read_through_a_reference_does_not_load_a_rule() {
+    let scratch = Scratch::new("rule-through-reference");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join("rules")).unwrap();
+    std::fs::write(
+        home.join("rules/anything.md"),
+        "---\npaths: [\"*\"]\n---\nANYTHING-RULE\n",
+    )
+    .unwrap();
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("game.js"), "const SPEED = 100;\n").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("list_files", r#"{"directory":"."}"#),
+        tool_request("read_file", r#"{"path_ref":"ref:1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut confirmer = VouchesForFiles::new(true);
+    let offered = confirmer.offered.clone();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("look at what is here").with_home(Some(home)),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        offered.lock().unwrap().len(),
+        1,
+        "the person was not asked to vouch for the file, so the read did not reach it"
+    );
+    let bodies: Vec<String> = received
+        .try_iter()
+        .filter(|body| !body.contains("prompt-injection classifier"))
+        .collect();
+    assert_eq!(bodies.len(), 3, "the turn did not take the three rounds");
+    assert!(
+        bodies[2].contains("ref:1"),
+        "the read was not made through the reference: {}",
+        bodies[2]
+    );
+    for body in &bodies {
+        assert!(
+            !system_prompt_of(body).contains("ANYTHING-RULE"),
+            "a read through a reference loaded a rule"
+        );
+    }
+}
+
+/// INSTR-16: a read the person declined because the file holds a credential is no touch. The
+/// planner was not shown the file, and a rule that arrived for it would say a file was worked on
+/// that nobody worked on. The same read, agreed to, is one.
+#[test]
+fn a_read_the_person_declined_for_a_credential_does_not_load_a_rule() {
+    for (allow, loads) in [(false, false), (true, true)] {
+        let scratch = Scratch::new(&format!("rule-declined-read-{allow}"));
+        for (path, contents) in [
+            (
+                ".bravebot/rules/env.md",
+                "---\npaths: [\".env\"]\n---\nENV-RULE\n".to_string(),
+            ),
+            (".env", format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n")),
+        ] {
+            let path = scratch.path.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_file", r#"{"path":".env"}"#),
+            reply_with("understood"),
+        ]);
+        let mut confirmer = RemembersExposures {
+            allow,
+            ..RemembersExposures::default()
+        };
+        let mut sink = RecordingSink::new();
+
+        turns::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("what is in .env"),
+            &mut confirmer,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+
+        assert_eq!(confirmer.asked.lock().unwrap().len(), 1);
+        let _first = received.recv().expect("the first request");
+        let second = system_prompt_of(&received.recv().expect("the second request"));
+        assert_eq!(
+            second.contains("ENV-RULE"),
+            loads,
+            "allow {allow}: {second}"
+        );
+    }
+}
+
+/// INSTR-16 with PERM-7: a file the person names with `@` that a `deny` rule covers is left out of
+/// the turn, and it is no touch either, since nobody was shown it. The same name with no rule over
+/// it loads the rule.
+#[test]
+fn a_file_named_with_at_that_a_deny_rule_covers_loads_no_rule() {
+    for (named, loads) in [("secret.rs", false), ("open.rs", true)] {
+        let scratch = Scratch::new(&format!("rule-at-denied-{named}"));
+        for (path, contents) in [
+            (
+                ".bravebot/rules/rust.md",
+                "---\npaths: [\"**/*.rs\"]\n---\nRUST-RULE\n",
+            ),
+            ("secret.rs", "// secret\n"),
+            ("open.rs", "// open\n"),
+        ] {
+            let path = scratch.path.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+        let task = Task::new("explain this")
+            .with_file(named)
+            .with_permissions(rules(&["Read(./secret.rs)"], &[], &[]));
+
+        run_turn_saying_notices(
+            &config_for(&endpoint),
+            &workspace,
+            &mut bravebot_agent::Conversation::new(),
+            &task,
+        );
+
+        let system = system_prompt_of(&received.recv().expect("a request"));
+        assert_eq!(system.contains("RUST-RULE"), loads, "{named}: {system}");
+    }
+}
+
+/// INSTR-16: a delegate started after a read carries the rule that read brought in, and the person
+/// is told once, by the turn that started it. A delegate that took the telling for itself would use
+/// it up where nobody reads it, since a delegate's notices are not said, and the person would never
+/// learn which rule joined the session.
+#[test]
+fn a_delegate_started_after_a_read_carries_the_rule_and_leaves_the_telling_to_the_turn() {
+    let scratch = project_with_rules("rule-delegate");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "PARENT-START-MARK",
+            vec![
+                two_tool_requests(
+                    ("read_file", r#"{"path":"src/lib.rs"}"#),
+                    (
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"CHILD-REPORTS-NOW"}"#,
+                    ),
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("CHILD-REPORTS-NOW", vec![reply_with("reported")]),
+    ]);
+
+    let said = run_turn_saying_notices(
+        &config_for(&endpoint),
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        &Task::new("PARENT-START-MARK"),
+    );
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let (parent, delegate): (Vec<&String>, Vec<&String>) = requests
+        .iter()
+        .partition(|request| request.contains("PARENT-START-MARK"));
+    assert_eq!(delegate.len(), 1, "the delegate did not make its one round");
+    assert!(
+        system_prompt_of(delegate[0]).contains("RUST-RULE"),
+        "the delegate started without the rule the read had brought in"
+    );
+    assert!(
+        !system_prompt_of(parent[0]).contains("RUST-RULE"),
+        "the turn carried the rule before its read"
+    );
+    assert!(
+        parent
+            .iter()
+            .any(|request| system_prompt_of(request).contains("RUST-RULE")),
+        "the turn that started the delegate never carried the rule its own read brought in"
+    );
+    assert_eq!(
+        said,
+        [".bravebot/rules/rust.md was added to the instructions: src/lib.rs matches its paths"]
+    );
+}
