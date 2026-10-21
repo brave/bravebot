@@ -186,11 +186,15 @@ try {
 
   await scene('09-ask', async () => {
     await emit('ask.request', { request: 6, prompts: [
-      { header: 'Lock', question: 'Which lock should reads use?', rows: [{ index: 0, label: 'RwLock', detail: 'Many readers, one writer' }, { index: 1, label: 'Snapshot', detail: 'Copy on write' }], multiple: false, key: 'lock' },
-      { header: 'Tests', question: 'Which suites should run?', rows: [{ index: 0, label: 'Unit', detail: null }, { index: 1, label: 'Integration', detail: null }], multiple: true, key: 'tests' },
+      { header: 'Lock', question: 'Which lock should reads use?', rows: [{ index: 0, label: 'RwLock', detail: 'Many readers, one writer' }, { index: 1, label: 'Snapshot', detail: 'Copy on write' }], multiple: false, key: 'lock', place: 'the agent is asking (1 of 2)', last: false },
+      { header: 'Tests', question: 'Which suites should run?', rows: [{ index: 0, label: 'Unit', detail: null }, { index: 1, label: 'Integration', detail: null }], multiple: true, key: 'tests', place: 'the agent is asking (2 of 2)', last: true },
     ] })
     await page.locator('.confirm.ask').last().scrollIntoViewIfNeeded()
     await variants('09-ask')
+    // One question at a time: the second is drawn after the first is answered, and a skip on it ends the series.
+    await page.locator('.confirm.ask .choice').last().click()
+    await page.locator('.confirm.ask .approve').last().click()
+    await variants('09-ask-second')
     await page.locator('.confirm.ask .reject').last().click()
   })
 

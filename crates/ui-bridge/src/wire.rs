@@ -906,18 +906,27 @@ pub fn host_request(id: u64, request: &HostRequest) -> Value {
 /// `index` travels with every row so a selection can be reported back as data rather than
 /// by matching label text, and `key` travels with every prompt so a front-end can tell two
 /// questions apart without reimplementing the rule for what makes them different.
+///
+/// The same goes for where a question stands and whether settling it ends the series (ASK-6):
+/// `place` is the sentence the picker's title uses, null for a series of one, and `last` is the
+/// answer [`Asking::ends_at`] gives. The window puts the questions one at a time and keeps only
+/// which one it is on, so it says the position and ends the series from these and decides neither.
 pub fn ask_request(id: u64, asking: &Asking) -> Value {
+    let total = asking.prompts.len();
     json!({
         "request": id,
         "prompts": asking
             .prompts
             .iter()
-            .map(|prompt| {
+            .enumerate()
+            .map(|(at, prompt)| {
                 json!({
                     "header": prompt.header,
                     "question": prompt.question,
                     "multiple": prompt.multiple,
                     "key": prompt.key,
+                    "place": bravebot_i18n::ask::place(at, total),
+                    "last": asking.ends_at(at),
                     "rows": prompt
                         .rows
                         .iter()

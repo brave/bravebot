@@ -349,6 +349,10 @@ The driver asserts:
 7. Narrow settings/watch/approval layouts with reachable decision controls and cleanup.
    The Agent settings button stays within both sidebar tabs at the default, minimum
    and maximum panel widths (250, 200 and 400 pixels).
+8. A series of three questions from the planner: each put alone under its position, an answer
+   shut until something is picked or typed, a skip moving on, the card drawn again at the same
+   question and pick after another conversation was opened, and the planner reading one
+   paragraph per question with the skipped one as a decline.
 
 The native file-picker **result** is supplied by the test; the actual selection handler,
 JSON validation and configuration loading run normally. OS dialog appearance, real

@@ -77,6 +77,8 @@
     allow(clippy::disallowed_methods, reason = "the test names its program")
 )]
 
+/// Where a question stands in a series the planner is asking, which every interface says alike.
+pub mod ask;
 /// The catalog format and its parser, compiled only for tests.
 ///
 /// The build script does not reach it through here: it `include!`s `src/catalog.rs` into itself,

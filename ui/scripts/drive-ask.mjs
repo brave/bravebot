@@ -56,8 +56,10 @@ if (!asked) {
 check(true, 'the questions reach the window')
 const card = page.locator('.confirm.ask').first()
 
-const questions = await card.locator('.ask-question').count()
-check(questions >= 1, `one block per question (${questions})`)
+// The series is put one question at a time, and the card's head says where the person is in it.
+const position = card.locator('.confirm-head .path')
+const questions = Number((await position.textContent())?.trim().match(/^the agent is asking \(1 of (\d+)\)$/)?.[1] ?? 1)
+check((await card.locator('.ask-question').count()) === 1, `one question at a time (${questions} in the series)`)
 check(
   (await card.locator('.ask-question .question').first().textContent())?.trim().length > 0,
   'the question itself is drawn',
@@ -66,8 +68,8 @@ check(
 const choices = await card.locator('.choices .choice').count()
 check(choices >= 1, `the choices are drawn as the agent shaped them (${choices})`)
 check(
-  (await card.locator('.typed').count()) === questions,
-  'and every question keeps a way to answer in your own words',
+  (await card.locator('.typed').count()) === 1,
+  'and the question keeps a way to answer in your own words',
 )
 
 // The composer is closed to sending while the series stands.
@@ -89,25 +91,25 @@ check(questions >= 2, `several questions arrive in one series (${questions})`)
 const first = card.locator('.choices .choice').first()
 const label = (await first.locator('.label').textContent())?.trim() ?? ''
 for (let at = 0; at < questions; at++) {
-  const block = card.locator('.ask-question').nth(at)
+  check(
+    (await position.textContent())?.trim() === `the agent is asking (${at + 1} of ${questions})`,
+    `question ${at + 1} says where it sits in the series`,
+  )
+  const block = card.locator('.ask-question')
   if ((await block.locator('.choices .choice').count()) > 0) {
     await block.locator('.choices .choice').first().click()
+    check(
+      (await block.locator('.choice.picked').count()) === 1 &&
+        (await block.locator('.choices .choice').first().getAttribute('aria-pressed')) === 'true',
+      'a picked choice says so, to itself and to a screen reader',
+    )
   } else {
     await block.locator('.typed input').fill('whatever you think best')
   }
+  await card.locator('.confirm-actions .approve').click()
+  await page.waitForTimeout(300)
 }
-await page.waitForTimeout(200)
-check(
-  (await first.getAttribute('aria-pressed')) === 'true',
-  'a picked choice says so, to itself and to a screen reader',
-)
-check(
-  (await card.locator('.choice.picked').count()) >= 1,
-  'each question keeps its own selection, independently of the others',
-)
-
-await card.locator('.confirm-actions .approve').click()
-await page.waitForTimeout(1500)
+await page.waitForTimeout(1200)
 
 const records = await card.locator('.asked-answer').count()
 check(records === questions, `every question is recorded, not just the first (${records})`)

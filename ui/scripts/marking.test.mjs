@@ -263,7 +263,7 @@ const CARDS = {
   ask: {
     entry: () => t.askedQuestions({
       request: 1,
-      prompts: [{ header: FORGED_CHROME, question: FORGED_CHROME, rows: [{ index: 0, label: FORGED_CHROME, detail: null }], multiple: false, key: 'k' }],
+      prompts: [{ header: FORGED_CHROME, question: FORGED_CHROME, rows: [{ index: 0, label: FORGED_CHROME, detail: null }], multiple: false, key: 'k', place: null, last: true }],
     }),
     marks: null,
     // labels.md:355 gives a reply out of a transport the context's label, not the network's.

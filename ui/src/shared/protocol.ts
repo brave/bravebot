@@ -873,6 +873,13 @@ export interface AskPrompt {
   multiple: boolean
   /** A stable string standing for the whole question. */
   key: string
+  /**
+   * Where this question stands in the series, in the words the terminal picker uses, or `null`
+   * for a series of one. The bridge says it so the window words it as the terminal does.
+   */
+  place: string | null
+  /** Whether settling this question, answered or skipped, ends the series. The bridge decides. */
+  last: boolean
 }
 
 /** A series of questions the planner is putting to the person. */

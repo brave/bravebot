@@ -293,13 +293,14 @@ impl<'a> Picker<'a> {
 
     /// Take this question's answer and move on, finishing when there is nothing left to ask.
     ///
-    /// One place decides the series is over, and it decides on the number of questions, never on
+    /// [`Asking::ends_at`] decides the series is over, on the number of questions and never on
     /// what any of them was answered with. That is what makes skipping and finishing the same
     /// operation: an answer the person declined is still an answer to the question they were on.
     fn settle(&mut self, answer: Answer) -> Step {
+        let ends = self.asking.ends_at(self.at);
         self.answers.push(answer);
         self.at += 1;
-        if self.at == self.asking.prompts.len() {
+        if ends {
             return Step::Answered(std::mem::take(&mut self.answers));
         }
         self.here = State::starting(self.prompt());
@@ -612,17 +613,9 @@ impl<'a> Picker<'a> {
         if let Some(named) = &self.named {
             return format!(" {named} ");
         }
-        if self.asking.prompts.len() == 1 {
-            return format!(" {} ", t!(ask_title));
-        }
-        format!(
-            " {} ",
-            t!(
-                ask_title_numbered,
-                at = self.at + 1,
-                total = self.asking.prompts.len()
-            )
-        )
+        let said = bravebot_i18n::ask::place(self.at, self.asking.prompts.len())
+            .unwrap_or_else(|| t!(ask_title).to_string());
+        format!(" {said} ")
     }
 
     fn keys(&self) -> Vec<Span<'static>> {
