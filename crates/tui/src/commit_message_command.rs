@@ -122,7 +122,6 @@ mod tests {
             "--range -x..HEAD",
             "--range main..-x",
             "--range a..b..c",
-            &format!("--range {}..HEAD", "a".repeat(300)),
         ] {
             assert_eq!(parse(typed), None, "{typed:?}");
         }

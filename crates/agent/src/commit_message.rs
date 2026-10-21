@@ -39,9 +39,7 @@ impl Source {
     /// as `a..b` or `a...b`. What a revision may be written as is [`crate::git::is_range`]'s, the
     /// same reading `read_git` gives a diff's revision.
     pub fn range(text: &str) -> Option<Self> {
-        /// Longer than any real range.
-        const LONGEST: usize = 200;
-        (text.len() <= LONGEST && crate::git::is_range(text)).then(|| Self::Range(text.to_string()))
+        crate::git::is_range(text).then(|| Self::Range(text.to_string()))
     }
 }
 
