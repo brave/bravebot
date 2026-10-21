@@ -744,7 +744,7 @@ pub fn carry(
     static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let parts: Vec<&str> = relative.split('/').collect();
     let mut at = target.to_path_buf();
-    // The directories on the way that are not there yet, which are made below.
+    // Made only after every name on the way is checked, so a refused name leaves no directory.
     let mut missing = Vec::new();
     for (index, part) in parts.iter().enumerate() {
         check_name(part.as_bytes(), cfg!(windows)).map_err(Carry::Name)?;
