@@ -260,7 +260,7 @@ pub(crate) fn with_declined(
 /// outcome left to carry them (HOOK-7).
 ///
 /// `steps` is the rounds of tool calls the run made where it knows them, which is a run stopped at
-/// a limit (CLI-35), and zero for every other run with no outcome: a count the run has not got is
+/// a limit (CLI-36), and zero for every other run with no outcome: a count the run has not got is
 /// not invented.
 pub(crate) fn what_ran(
     ending: Ending,

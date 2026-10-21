@@ -40,7 +40,7 @@ pub struct SystemPrompts {
     pub appending: Option<String>,
 }
 
-/// What the person who started a run said it may spend before it stops (TURN-14, CLI-35).
+/// What the person who started a run said it may spend before it stops (TURN-14, CLI-36).
 ///
 /// Counts the driver keeps itself, rounds made and tokens the backends reported, so reaching one
 /// depends on no reply and no tool result. `None` is no limit of the person's, which leaves the run

@@ -16174,7 +16174,7 @@ fn limited_run(name: &str, gateway: &Gateway, limit_flags: &[&str]) -> (Output, 
     (output, result)
 }
 
-/// CLI-35, TURN-14: a run whose planner asks for a round past `--max-rounds` ends on status 7, with
+/// CLI-36, TURN-14: a run whose planner asks for a round past `--max-rounds` ends on status 8, with
 /// the rounds it made in the result object and no round run after the limit.
 ///
 /// The model asks for a listing for ever. Three rounds are allowed, so the gateway is sent four
@@ -16182,21 +16182,21 @@ fn limited_run(name: &str, gateway: &Gateway, limit_flags: &[&str]) -> (Output, 
 /// run stopped a round early shows two calls and three requests, and one that let the fourth round
 /// through shows four calls.
 #[test]
-fn a_run_asking_for_a_round_past_max_rounds_ends_on_status_seven() {
+fn a_run_asking_for_a_round_past_max_rounds_ends_on_status_eight() {
     let gateway = a_gateway_that_lists_until(10);
     let (output, result) = limited_run("cli-running-max-rounds", &gateway, &["--max-rounds", "3"]);
 
     let (stdout, stderr) = said(&output);
-    assert_eq!(output.status.code(), Some(7), "{stdout} {stderr}");
-    assert!(stderr.contains("BB1007: "), "{stderr}");
+    assert_eq!(output.status.code(), Some(8), "{stdout} {stderr}");
+    assert!(stderr.contains("BB1008: "), "{stderr}");
     assert!(
         stderr.contains("limit on rounds of tool calls (3)"),
         "{stderr}"
     );
     assert_eq!(result["ok"], false, "{stdout}");
-    assert_eq!(result["status"], 7);
+    assert_eq!(result["status"], 8);
     assert_eq!(result["reason"], "limit");
-    assert_eq!(result["identifier"], "BB1007");
+    assert_eq!(result["identifier"], "BB1008");
     assert_eq!(result["steps"], 3, "{stdout}");
     assert_eq!(result["reply"], "");
     assert_eq!(
@@ -16207,11 +16207,11 @@ fn a_run_asking_for_a_round_past_max_rounds_ends_on_status_seven() {
     assert_eq!(gateway.asked.try_iter().count(), 4);
 }
 
-/// CLI-35: the largest `--max-rounds` is the one just below the built-in bound, and a run holding to
-/// it is stopped by the limit, with the status 7. At the bound itself the built-in bound would take
+/// CLI-36: the largest `--max-rounds` is the one just below the built-in bound, and a run holding to
+/// it is stopped by the limit, with the status 8. At the bound itself the built-in bound would take
 /// the tools away first and the run would answer, which is why that value is refused.
 #[test]
-fn a_run_asking_for_a_round_past_the_largest_max_rounds_ends_on_status_seven() {
+fn a_run_asking_for_a_round_past_the_largest_max_rounds_ends_on_status_eight() {
     let most = bravebot_agent::turn::MAX_TOOL_ROUNDS - 1;
     let gateway = a_gateway_that_lists_until(PAST_THE_UNWATCHED_BOUND);
     let (output, result) = limited_run(
@@ -16221,12 +16221,12 @@ fn a_run_asking_for_a_round_past_the_largest_max_rounds_ends_on_status_seven() {
     );
 
     let (stdout, stderr) = said(&output);
-    assert_eq!(output.status.code(), Some(7), "{stdout} {stderr}");
+    assert_eq!(output.status.code(), Some(8), "{stdout} {stderr}");
     assert_eq!(result["steps"], most, "{stdout}");
     assert_eq!(gateway.asked.try_iter().count(), most + 1);
 }
 
-/// CLI-35, CLI-5: without `--json` a run stopped at its limit writes nothing to stdout and says the
+/// CLI-36, CLI-5: without `--json` a run stopped at its limit writes nothing to stdout and says the
 /// identifier and what was reached on stderr, as any other failure does.
 #[test]
 fn a_run_stopped_at_max_rounds_writes_nothing_to_stdout() {
@@ -16242,12 +16242,12 @@ fn a_run_stopped_at_max_rounds_writes_nothing_to_stdout() {
     );
 
     let (stdout, stderr) = said(&output);
-    assert_eq!(output.status.code(), Some(7), "{stderr}");
+    assert_eq!(output.status.code(), Some(8), "{stderr}");
     assert_eq!(stdout, "");
-    assert!(stderr.contains("BB1007: stopped at the limit"), "{stderr}");
+    assert!(stderr.contains("BB1008: stopped at the limit"), "{stderr}");
 }
 
-/// CLI-35: a run that finishes within `--max-rounds` is not touched by it. The planner answers
+/// CLI-36: a run that finishes within `--max-rounds` is not touched by it. The planner answers
 /// right after the last round it was allowed, which is the case a limit that stopped at the count
 /// would get wrong, and the status is the one a run with no limit has.
 #[test]
@@ -16268,7 +16268,7 @@ fn a_run_that_finishes_within_max_rounds_ends_as_it_would_without_it() {
     assert_eq!(gateway.asked.try_iter().count(), 4);
 }
 
-/// CLI-35, TURN-14: `--max-tokens` ends the run before the request that would follow the one that
+/// CLI-36, TURN-14: `--max-tokens` ends the run before the request that would follow the one that
 /// reached it, and the result object says what was spent.
 ///
 /// Each reply reports 60 tokens in and 40 out. A limit of 250 is reached by the third request,
@@ -16276,16 +16276,16 @@ fn a_run_that_finishes_within_max_rounds_ends_as_it_would_without_it() {
 /// the output alone is 120 and the prompt alone 180, and a run counting either would have sent
 /// two more.
 #[test]
-fn a_run_that_has_spent_max_tokens_sends_no_further_request_and_ends_on_status_seven() {
+fn a_run_that_has_spent_max_tokens_sends_no_further_request_and_ends_on_status_eight() {
     let gateway = a_gateway_that_lists_until_reporting(10, Some((60, 40)));
     let (output, result) =
         limited_run("cli-running-max-tokens", &gateway, &["--max-tokens", "250"]);
 
     let (stdout, stderr) = said(&output);
-    assert_eq!(output.status.code(), Some(7), "{stdout} {stderr}");
-    assert!(stderr.contains("BB1007: "), "{stderr}");
+    assert_eq!(output.status.code(), Some(8), "{stdout} {stderr}");
+    assert!(stderr.contains("BB1008: "), "{stderr}");
     assert!(stderr.contains("limit on tokens (250)"), "{stderr}");
-    assert_eq!(result["status"], 7, "{stdout}");
+    assert_eq!(result["status"], 8, "{stdout}");
     assert_eq!(result["reason"], "limit");
     assert_eq!(result["steps"], 3);
     assert_eq!(result["tokens"]["total"], 300);
@@ -16293,7 +16293,7 @@ fn a_run_that_has_spent_max_tokens_sends_no_further_request_and_ends_on_status_s
     assert_eq!(gateway.asked.try_iter().count(), 3);
 }
 
-/// CLI-35: an answer that carries the total past `--max-tokens` is the run's answer. The limit
+/// CLI-36: an answer that carries the total past `--max-tokens` is the run's answer. The limit
 /// stops a request being sent; with none left to send, the run ends as it would without it and the
 /// result object reports what it spent.
 #[test]
@@ -16311,7 +16311,7 @@ fn an_answer_that_passes_max_tokens_is_still_written() {
     assert_eq!(result["tokens"]["total"], 200);
 }
 
-/// CLI-35, CLI-30: `--trace` shows the line that says which limit ended the run, the round it was
+/// CLI-36, CLI-30: `--trace` shows the line that says which limit ended the run, the round it was
 /// reached on and what the run had spent against it, with no content in it.
 #[test]
 fn the_trail_of_a_run_stopped_at_its_limit_says_which_limit_it_was() {
@@ -16327,17 +16327,17 @@ fn the_trail_of_a_run_stopped_at_its_limit_says_which_limit_it_was() {
     );
 
     let (_, stderr) = said(&output);
-    assert_eq!(output.status.code(), Some(7), "{stderr}");
+    assert_eq!(output.status.code(), Some(8), "{stderr}");
     assert!(
         stderr.contains("run_limit: round 2: 2 rounds against a limit of 2; the run ended"),
         "{stderr}"
     );
 }
 
-/// CLI-35, CLI-6: a value that names no limit is refused with the argument status, and the
+/// CLI-36, CLI-6: a value that names no limit is refused with the argument status, and the
 /// refusal comes before anything is sent. Run as a limit of nothing, `0` would stop a run before its
 /// first request, and a bound at or above the built-in one would be reached by that bound first and
-/// answer with status 0 where the script expects 7.
+/// answer with status 0 where the script expects 8.
 #[test]
 fn a_limit_that_names_no_count_is_refused_before_anything_is_sent() {
     let at_the_bound = bravebot_agent::turn::MAX_TOOL_ROUNDS.to_string();
@@ -16370,7 +16370,7 @@ fn a_limit_that_names_no_count_is_refused_before_anything_is_sent() {
     assert_eq!(gateway.asked.try_iter().count(), 0, "a request went out");
 }
 
-/// CLI-35: a manifest run has no rounds of tool calls to count, so it refuses both flags by name
+/// CLI-36: a manifest run has no rounds of tool calls to count, so it refuses both flags by name
 /// with the argument status and sends nothing.
 #[test]
 fn a_manifest_run_refuses_a_limit_and_sends_nothing() {
