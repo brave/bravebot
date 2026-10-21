@@ -330,6 +330,141 @@ fn declined() -> String {
     "The user declined to answer. Proceed without it, or say what you need to continue.".to_string()
 }
 
+/// What a person has answered in one session, by the key of the question ([`Prompt::key`]).
+///
+/// A planner that loops back over a decision the person settled does not make them restate it
+/// (ASK-8). The terminal, the session in lines and the desktop application each keep one for the
+/// session and read a series through [`AnswerMemo::read`], so the rule for what makes two
+/// questions the same, what a skipped one counts as and which answers are remembered is written
+/// once.
+///
+/// Holds answers and compares keys, and nothing here reads what an answer says: a typed one is
+/// carried and handed back whole.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AnswerMemo {
+    answers: Vec<(String, Answer)>,
+}
+
+impl AnswerMemo {
+    /// What the person answered the last time this exact question was put to them, if it was.
+    pub fn recall(&self, key: &str) -> Option<Answer> {
+        self.answers
+            .iter()
+            .find(|(asked, _)| asked == key)
+            .map(|(_, answer)| answer.clone())
+    }
+
+    /// Remember an answer, replacing any earlier one for the same question.
+    pub fn remember(&mut self, key: String, answer: Answer) {
+        match self.answers.iter_mut().find(|(asked, _)| *asked == key) {
+            Some(slot) => slot.1 = answer,
+            None => self.answers.push((key, answer)),
+        }
+    }
+
+    /// Forget everything, as a conversation that begins another session does.
+    pub fn forget(&mut self) {
+        self.answers.clear();
+    }
+
+    /// Read a series against what was answered before: which of its questions are settled, and
+    /// which are left to put.
+    pub fn read<'a>(&self, asking: &'a Asking) -> Settled<'a> {
+        let known: Vec<Option<Answer>> = asking
+            .prompts
+            .iter()
+            .map(|prompt| self.recall(&prompt.key))
+            .collect();
+        let outstanding = Asking {
+            prompts: asking
+                .prompts
+                .iter()
+                .zip(&known)
+                .filter(|(_, earlier)| earlier.is_none())
+                .map(|(prompt, _)| prompt.clone())
+                .collect(),
+        };
+        Settled {
+            asking,
+            known,
+            outstanding,
+        }
+    }
+}
+
+/// A series read against the memo by [`AnswerMemo::read`].
+///
+/// What the person is shown is [`Settled::outstanding`], so the count they see is the number of
+/// questions they have to answer. [`Settled::finish`] puts what they answered back beside what was
+/// remembered, in the order the questions were asked, and remembers it.
+#[derive(Debug)]
+pub struct Settled<'a> {
+    asking: &'a Asking,
+    /// What each question of `asking` was answered earlier, by position.
+    known: Vec<Option<Answer>>,
+    outstanding: Asking,
+}
+
+impl<'a> Settled<'a> {
+    /// The questions nobody has settled, in the order they were asked.
+    pub fn outstanding(&self) -> &Asking {
+        &self.outstanding
+    }
+
+    /// The questions the person answered earlier, which a front end says it did not put again.
+    pub fn reused(&self) -> impl Iterator<Item = &'a Prompt> + '_ {
+        self.asking
+            .prompts
+            .iter()
+            .zip(&self.known)
+            .filter(|(_, earlier)| earlier.is_some())
+            .map(|(prompt, _)| prompt)
+    }
+
+    /// Whether the person's earlier answers decide any part of the series.
+    ///
+    /// When nobody could be asked the rest, a series that reuses an answer still reports what
+    /// the person said, and one that reuses none reports nothing. [`Settled::is_settled`] cannot
+    /// tell the two apart: it is false for a series that is only partly settled.
+    pub fn reuses_any(&self) -> bool {
+        self.known.iter().any(Option::is_some)
+    }
+
+    /// Whether every question was answered earlier, so there is nothing to put.
+    pub fn is_settled(&self) -> bool {
+        self.outstanding.prompts.is_empty()
+    }
+
+    /// The answer to each question of the series, in order, given `fresh`, what the person
+    /// answered to [`Settled::outstanding`].
+    ///
+    /// Only what `fresh` carries is remembered. A question the person was not asked, or that the
+    /// interface left unanswered, stays unsettled and is put again. In the series it is a decline,
+    /// since that is how the planner is told a question went unanswered.
+    pub fn finish(self, memo: &mut AnswerMemo, fresh: Vec<Answer>) -> Vec<Answer> {
+        for (prompt, answer) in self.outstanding.prompts.iter().zip(&fresh) {
+            memo.remember(prompt.key.clone(), answer.clone());
+        }
+        in_order(self.known, fresh)
+    }
+}
+
+/// Put remembered answers back beside the fresh ones, in the order the questions were asked.
+///
+/// The person is only shown the questions nobody has settled yet, so what they hand back is
+/// shorter than the series and lines up with nothing. This is where the two are woven together.
+///
+/// A fresh answer that never arrived leaves a decline rather than pulling the next one forward.
+/// Shifting answers up would report the person as having said, about one question, what they
+/// said about another.
+fn in_order(known: Vec<Option<Answer>>, fresh: Vec<Answer>) -> Vec<Answer> {
+    let mut fresh = fresh.into_iter();
+    known
+        .into_iter()
+        .map(|earlier| earlier.or_else(|| fresh.next()).unwrap_or(Answer::Declined))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,6 +585,16 @@ mod tests {
         let mut retagged = question();
         retagged.header = "Caching".into();
         assert_ne!(canonical(&one), canonical(&retagged));
+    }
+
+    /// A remembered `Chosen(1)` names the second option. The same options in another order are a
+    /// different question, or the memo would hand back an index that now names another option.
+    #[test]
+    fn a_question_with_its_choices_reordered_is_a_different_question() {
+        let one = question();
+        let mut reordered = question();
+        reordered.choices.reverse();
+        assert_ne!(canonical(&one), canonical(&reordered));
     }
 
     /// The bug the length prefixes exist for. Two questions that differ in their tag and their
@@ -686,6 +831,179 @@ mod tests {
                 &[Answer::Chosen(vec![0]), Answer::Typed("hello".into())]
             ),
             "The user chose: HTTP"
+        );
+    }
+
+    /// A question nobody has been asked has no answer to recall, which is what makes the memo
+    /// safe to consult for every question in a series.
+    #[test]
+    fn a_question_never_asked_has_no_remembered_answer() {
+        assert_eq!(
+            AnswerMemo::default().recall("pick one: Cache: Which?"),
+            None
+        );
+    }
+
+    /// The key is the whole question, so two that differ anywhere are two questions and the
+    /// second is put to the person rather than answered with the first one's reply.
+    #[test]
+    fn a_different_question_is_not_answered_from_an_earlier_one() {
+        let mut memo = AnswerMemo::default();
+        memo.remember("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
+        assert_eq!(memo.recall("pick one: Branch: Which?"), None);
+    }
+
+    /// Answering again replaces rather than accumulates, or the memo would grow a second entry
+    /// for the same question and recall would keep returning the stale one.
+    #[test]
+    fn answering_the_same_question_again_replaces_what_was_remembered() {
+        let mut twice = AnswerMemo::default();
+        twice.remember("q".into(), Answer::Chosen(vec![0]));
+        twice.remember("q".into(), Answer::Chosen(vec![1]));
+        let mut once = AnswerMemo::default();
+        once.remember("q".into(), Answer::Chosen(vec![1]));
+        assert_eq!(twice, once);
+        assert_eq!(twice.recall("q"), Some(Answer::Chosen(vec![1])));
+    }
+
+    /// A decline is an answer, so it is remembered as one. Treating it as absence would put a
+    /// question the person deliberately passed over back in front of them.
+    #[test]
+    fn a_skipped_question_is_remembered_as_skipped() {
+        let mut memo = AnswerMemo::default();
+        memo.remember("q".into(), Answer::Declined);
+        assert_eq!(memo.recall("q"), Some(Answer::Declined));
+    }
+
+    /// A session that begins another does not carry what was answered into it.
+    #[test]
+    fn a_forgotten_memo_answers_nothing() {
+        let mut memo = AnswerMemo::default();
+        memo.remember("q".into(), Answer::Typed("later".into()));
+        memo.forget();
+        assert_eq!(memo, AnswerMemo::default());
+        assert_eq!(memo.recall("q"), None);
+    }
+
+    /// A series is read against the memo by each question's own key, so settling one question
+    /// leaves its sibling to be asked, and a series put again finds the same question where it is.
+    #[test]
+    fn a_series_is_settled_question_by_question() {
+        let both = asking(&series());
+        let mut memo = AnswerMemo::default();
+        let first = memo.read(&both);
+        assert_eq!(first.outstanding(), &both, "nothing was settled yet");
+        let given = first.finish(&mut memo, vec![Answer::Chosen(vec![1]), Answer::Declined]);
+        assert_eq!(given, vec![Answer::Chosen(vec![1]), Answer::Declined]);
+
+        let swapped = asking(&Series::new(vec![platforms(), question()]));
+        let again = memo.read(&swapped);
+        assert!(again.is_settled());
+        assert_eq!(
+            again.finish(&mut memo, Vec::new()),
+            vec![Answer::Declined, Answer::Chosen(vec![1])],
+            "the answer followed its question to another position"
+        );
+    }
+
+    /// Only the questions nobody has settled are put, in their own order, so a person sees a
+    /// count of what they have to answer.
+    #[test]
+    fn a_series_with_some_questions_settled_puts_only_the_rest() {
+        let both = asking(&series());
+        let mut memo = AnswerMemo::default();
+        memo.remember(both.prompts[0].key.clone(), Answer::Declined);
+        let read = memo.read(&both);
+        assert_eq!(read.outstanding().prompts, vec![both.prompts[1].clone()]);
+        assert_eq!(read.reused().collect::<Vec<_>>(), vec![&both.prompts[0]]);
+        assert!(read.reuses_any() && !read.is_settled());
+
+        let mut memo = AnswerMemo::default();
+        memo.remember(both.prompts[1].key.clone(), Answer::Declined);
+        let read = memo.read(&both);
+        assert_eq!(read.outstanding().prompts, vec![both.prompts[0].clone()]);
+    }
+
+    /// A series every question of which is settled puts nothing.
+    #[test]
+    fn a_series_settled_throughout_has_nothing_outstanding() {
+        let both = asking(&series());
+        let mut memo = AnswerMemo::default();
+        memo.remember(both.prompts[0].key.clone(), Answer::Chosen(vec![0]));
+        memo.remember(both.prompts[1].key.clone(), Answer::Declined);
+        let read = memo.read(&both);
+        assert!(read.is_settled());
+        assert!(read.outstanding().prompts.is_empty());
+        assert_eq!(read.reused().count(), 2);
+    }
+
+    /// A series with nothing remembered reuses nothing, which is what tells a front end there is
+    /// nothing to say about it.
+    #[test]
+    fn a_series_nothing_was_answered_to_reuses_nothing() {
+        let both = asking(&series());
+        let read = AnswerMemo::default().read(&both);
+        assert!(!read.reuses_any());
+        assert_eq!(read.reused().count(), 0);
+    }
+
+    /// The person answered one question and the interface left the other alone. The one it left is
+    /// put again, where remembering a decline for it would claim the person chose to skip it.
+    #[test]
+    fn a_question_the_interface_left_unanswered_is_put_again() {
+        let both = asking(&series());
+        let mut memo = AnswerMemo::default();
+        let read = memo.read(&both);
+        let given = read.finish(&mut memo, vec![Answer::Chosen(vec![0])]);
+        assert_eq!(given, vec![Answer::Chosen(vec![0]), Answer::Declined]);
+
+        let again = memo.read(&both);
+        assert_eq!(again.outstanding().prompts, vec![both.prompts[1].clone()]);
+        assert_eq!(memo.recall(&both.prompts[1].key), None);
+    }
+
+    /// The weave the clients depend on. Fresh answers fill the gaps the remembered ones left,
+    /// and every question keeps its own place.
+    #[test]
+    fn remembered_answers_keep_their_places_beside_the_fresh_ones() {
+        let known = vec![
+            Some(Answer::Chosen(vec![1])),
+            None,
+            Some(Answer::Declined),
+            None,
+        ];
+        let fresh = vec![Answer::Typed("second".into()), Answer::Chosen(vec![0])];
+        assert_eq!(
+            in_order(known, fresh),
+            vec![
+                Answer::Chosen(vec![1]),
+                Answer::Typed("second".into()),
+                Answer::Declined,
+                Answer::Chosen(vec![0]),
+            ]
+        );
+    }
+
+    /// A series everyone has already answered asks nothing, and still reports every answer.
+    #[test]
+    fn a_series_answered_entirely_from_memory_asks_nothing() {
+        let known = vec![Some(Answer::Chosen(vec![0])), Some(Answer::Declined)];
+        assert_eq!(
+            in_order(known, Vec::new()),
+            vec![Answer::Chosen(vec![0]), Answer::Declined]
+        );
+    }
+
+    /// An interface that answered fewer than it was shown leaves the rest declined. Pulling the
+    /// next answer forward would report the person as having said, about one question, what they
+    /// said about another.
+    #[test]
+    fn an_interface_that_answered_fewer_leaves_the_rest_declined() {
+        let known = vec![None, None, None];
+        let fresh = vec![Answer::Chosen(vec![0])];
+        assert_eq!(
+            in_order(known, fresh),
+            vec![Answer::Chosen(vec![0]), Answer::Declined, Answer::Declined]
         );
     }
 }

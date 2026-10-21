@@ -5,6 +5,8 @@ status: normative
 governs:
   - crates/core/src/ask.rs
   - crates/tui/src/ask.rs
+  - crates/cli/src/plain.rs
+  - crates/ui-bridge/src/turn.rs
 guards:
   - symbol: Policy::record_answers
 documented-by: docs/website/docs/reference/tools.md
@@ -139,9 +141,14 @@ not asking.
 A planner that loops back over the same decision does not make the user restate it, and a set
 where some are already settled shows only the rest. Questions differing anywhere, including in
 their tag, are different questions. `/clear` and `/branch` begin another session, and the answers
-given before do not carry into it. The plan put by `propose_plan` is not one of these questions: it
-is a permission to change mode, and it is put under a key of its own every time, so a plan proposed
-again is asked again ([MODE-14](../permission-modes.md#MODE-14)).
+given before do not carry into it. The desktop application keeps them the same way: for the
+session, across its turns, and a session opened, resumed or forked there begins with none. The
+turn's notices name each question it did not put. The terminal and the desktop application
+remember only an answer the person gave, so a question that nobody could be asked, or that the
+interface returned no answer for, is put again. A session in lines reads the end of its input as a
+decline and remembers it, as it does a line left empty. The plan put by `propose_plan` is not one
+of these questions: it is a permission to change mode, and it is put under a key of its own every
+time, so a plan proposed again is asked again ([MODE-14](../permission-modes.md#MODE-14)).
 
 `verified-by: bravebot_core::ask::the_key_distinguishes_questions_that_differ_anywhere`
 `verified-by: bravebot_core::ask::the_key_distinguishes_questions_that_differ_in_their_tag`
@@ -150,8 +157,27 @@ again is asked again ([MODE-14](../permission-modes.md#MODE-14)).
 `verified-by: bravebot_core::ask::the_key_is_stable_for_the_same_question`
 `verified-by: bravebot_agent::tools::the_same_plan_proposed_again_is_put_under_a_new_key`
 `verified-by: bravebot_core::ask::two_series_holding_the_same_questions_in_a_different_order_have_different_keys`
-`verified-by: bravebot_tui::ask::a_series_answered_entirely_from_memory_asks_nothing`
+`verified-by: bravebot_core::ask::a_question_with_its_choices_reordered_is_a_different_question`
+`verified-by: bravebot_core::ask::a_series_answered_entirely_from_memory_asks_nothing`
+`verified-by: bravebot_core::ask::remembered_answers_keep_their_places_beside_the_fresh_ones`
+`verified-by: bravebot_core::ask::a_series_is_settled_question_by_question`
+`verified-by: bravebot_core::ask::a_series_with_some_questions_settled_puts_only_the_rest`
+`verified-by: bravebot_core::ask::a_skipped_question_is_remembered_as_skipped`
+`verified-by: bravebot_core::ask::a_question_the_interface_left_unanswered_is_put_again`
+`verified-by: bravebot_tui::ask::a_question_the_person_answered_is_not_drawn_again`
+`verified-by: bravebot_tui::ask::a_series_with_some_questions_settled_draws_only_the_rest`
+`verified-by: bravebot_tui::ask::a_question_the_picker_left_unanswered_is_drawn_again`
 `verified-by: bravebot_tui::state::clearing_the_conversation_forgets_the_answers_to_the_planners_questions`
-`verified-by: bravebot_tui::ask::remembered_answers_keep_their_places_beside_the_fresh_ones`
 `verified-by: bravebot_cli::plain::a_question_asked_again_in_a_session_in_lines_is_answered_from_memory`
 `verified-by: bravebot_cli::plain::a_series_with_some_questions_settled_puts_only_the_rest`
+`verified-by: bravebot_ui_bridge::answering_tests::a_question_the_person_answered_is_not_put_to_the_window_again`
+`verified-by: bravebot_ui_bridge::answering_tests::a_series_with_some_questions_settled_puts_only_the_rest_to_the_window`
+`verified-by: bravebot_ui_bridge::answering_tests::a_question_the_window_left_unanswered_is_put_again`
+`verified-by: bravebot_ui_bridge::answering_tests::a_question_reused_twice_in_a_turn_is_named_once`
+`verified-by: bravebot_ui_bridge::answering_tests::a_question_the_person_skipped_is_not_put_again`
+`verified-by: bravebot_ui_bridge::answering_tests::a_question_nobody_could_be_asked_is_not_remembered_as_declined`
+`verified-by: bravebot_ui_bridge::answering_tests::a_series_nobody_could_be_asked_keeps_the_answers_given_before`
+`verified-by: bravebot_ui_bridge::remembered_answers::a_question_answered_in_one_turn_is_not_put_again_in_the_next`
+`verified-by: bravebot_ui_bridge::remembered_answers::a_question_that_differs_only_in_its_tag_is_put_again`
+`verified-by: bravebot_ui_bridge::remembered_answers::another_session_is_not_answered_from_the_first_ones_memory`
+`verified-by: bravebot_ui_bridge::remembered_answers::a_turn_that_fails_after_a_remembered_answer_still_names_the_question_it_did_not_put`

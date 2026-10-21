@@ -117,6 +117,11 @@ pub struct State {
     /// it. A number is never reused, so an answer meant for one question cannot match a later one
     /// that happens to carry the same number (RPCVIEW-6).
     pub question_ids: Arc<AtomicU64>,
+    /// What the person answered to the planner's questions in this session, shared by every turn
+    /// in it so a question the planner puts again is not put to them again (ASK-8). Not saved: a
+    /// session opened from a record, and a fork, start with none, as `--resume` does in the
+    /// terminal.
+    pub question_answers: Arc<Mutex<bravebot_core::ask::AnswerMemo>>,
 }
 
 /// The session's own directory outside the project, or why it has none.
@@ -196,6 +201,7 @@ impl State {
             mcp: Mcp::Unstarted,
             scratch: Scratch::open(),
             question_ids: Arc::new(AtomicU64::new(0)),
+            question_answers: Arc::default(),
         }
     }
 
@@ -237,6 +243,7 @@ impl State {
             mcp: Mcp::Unstarted,
             scratch: Scratch::open(),
             question_ids: Arc::new(AtomicU64::new(0)),
+            question_answers: Arc::default(),
         }
     }
 
@@ -298,6 +305,7 @@ impl State {
             mcp: Mcp::Unstarted,
             scratch: Scratch::open(),
             question_ids: Arc::new(AtomicU64::new(0)),
+            question_answers: Arc::default(),
         }
     }
 }
