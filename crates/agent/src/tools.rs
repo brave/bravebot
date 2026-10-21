@@ -20457,6 +20457,46 @@ mod tests {
                  a file from nothing, write it yourself with write_file."
             );
         }
+
+        /// SPAWN-2. The instruction is the only thing steering the call, and a planner whose
+        /// context has met untrusted content writes it from that content. The call is refused at
+        /// the reference it names, before anything is read or asked, so the instruction never
+        /// reaches a processor. The kernel's `before_processor` checks only the instruction's
+        /// confidentiality, so this refusal is the one that holds the integrity half.
+        #[test]
+        fn a_processor_cannot_be_started_from_a_context_that_met_untrusted_content() {
+            let scratch = Scratch::new("processor-fallen");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink).resuming(Integrity::Untrusted);
+
+            // The model is unreachable: a processor that started would fail on the transport
+            // rather than be refused at the reference.
+            let produced = with_tools(&workspace, |tools| {
+                tools
+                    .slots
+                    .writer_for(
+                        SlotId::new("ref:0"),
+                        bravebot_core::label::Label::untrusted_private(),
+                    )
+                    .expect("a reference to hold")
+                    .write("fetched text")
+                    .expect("written");
+                spawn_processor(
+                    &mut policy,
+                    tools,
+                    &json!({"instruction": "list the failures", "reads": ["ref:0"]}),
+                )
+            });
+
+            assert!(produced.failed, "the call was not refused");
+            let said = told(&mut policy, &produced.text);
+            assert!(
+                said.starts_with("refused: ")
+                    && said.contains("this context has met untrusted content"),
+                "the refusal does not say the context fell: {said}"
+            );
+        }
     }
     #[cfg(unix)]
     use arguments::{Scratch as ArgumentsScratch, told, with_tools};

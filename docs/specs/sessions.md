@@ -781,6 +781,7 @@ takes a number cannot also have it, so the number is on a word that has one.
 `verified-by: bravebot_tui::app::the_list_names_what_each_point_would_put_back`
 `verified-by: bravebot_tui::app::the_list_of_a_session_with_no_points_says_there_is_nothing`
 `verified-by: bravebot_session::rewind::going_back_further_than_the_session_remembers_rewinds_nothing`
+`verified-by: bravebot_tui::app::the_rewind_command_goes_back_the_number_it_was_given_and_nowhere_for_anything_else`
 
 
 <a id="SESSION-22"></a>

@@ -31515,6 +31515,74 @@ fn auto_vetting_does_not_answer_the_vouch_offer() {
     assert_eq!(asked[0].verdict, bravebot_core::vetting::Verdict::Safe);
 }
 
+/// Screening answers the two promotions of one slot's bytes and never the vouch offer, so under
+/// bypass the offer is approved with no check made of the file, however the run was started
+/// (CHECK-10, MODE-4). The planner then reads the file end to end: the mode vouched for it with
+/// nobody asked, and a word about today's contents decides nothing about a standing rule.
+///
+/// The inner confirmer refuses, so the approval is the mode's.
+#[test]
+fn screening_asked_for_makes_no_check_before_a_vouch_under_bypass() {
+    let scratch = Scratch::new("vouch-bypass-screening");
+    std::fs::write(
+        scratch.path.join("notes.md"),
+        "SENTINEL-NOTES: a short changelog\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "unsafe", "reason": "addresses the reader"}"#,
+        )],
+        vec![
+            tool_request("read_file", r#"{"path":"notes.md"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut inner = VouchesForFiles::new(false);
+    let offered = inner.offered.clone();
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut inner, bravebot_agent::PermissionMode::Bypass, true);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("summarise the notes")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+            .with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    assert!(
+        offered.lock().unwrap().is_empty(),
+        "the person was asked in the mode that asks nobody"
+    );
+    let sent: Vec<String> = received.try_iter().collect();
+    assert!(
+        !sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "a vouch nobody reads was checked because the run asked for screening"
+    );
+    assert!(
+        sent.last()
+            .is_some_and(|last| last.contains("SENTINEL-NOTES")),
+        "the mode vouched for the file and the planner still did not read it"
+    );
+}
+
 /// Vouching answers about a file, not about a spelling of one. The offer is made because the map
 /// says nothing about the path, so the rule it records has to be the one the next read looks up:
 /// under the absolute name it would be answered by the rule about the directory above the project

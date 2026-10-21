@@ -978,6 +978,42 @@ mod tests {
             );
         }
 
+        /// WATCH-8. What the delegate was asked stands above its lines, on a row of its own, and
+        /// stays there while a person reads back through more calls than the screen holds. A task
+        /// drawn among the lines would scroll away with them and answer which run this is only at
+        /// the top.
+        #[test]
+        fn a_delegates_view_names_what_it_was_asked_above_its_lines_and_keeps_it_there() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "FIND-THE-PARSER-ENTRY");
+            for n in 0..60 {
+                let file = format!("CALLED-FILE-{n:02}");
+                session.finish_activity(Activity::running("Read", file).done("1 line"));
+            }
+            session.watch();
+
+            let row_of =
+                |rows: &[String], needle: &str| rows.iter().position(|row| row.contains(needle));
+
+            for (scroll, a_line) in [(0, "CALLED-FILE-59"), (1000, "CALLED-FILE-00")] {
+                session.scroll = scroll;
+                let rows = rows_at(&session, 90, 24);
+                let asked = row_of(&rows, "FIND-THE-PARSER-ENTRY")
+                    .unwrap_or_else(|| panic!("scroll {scroll}: the task was not drawn: {rows:?}"));
+                let line = row_of(&rows, a_line)
+                    .unwrap_or_else(|| panic!("scroll {scroll}: no line was drawn: {rows:?}"));
+                assert!(
+                    asked < line,
+                    "scroll {scroll}: the task was not above the delegate's lines: {rows:?}"
+                );
+                assert!(
+                    !rows[asked].contains("CALLED-FILE"),
+                    "scroll {scroll}: the task shares a row with a line: {}",
+                    rows[asked]
+                );
+            }
+        }
+
         /// Two questions a person watching has, and the last tool line answers neither: is this
         /// still going, and which of them am I looking at.
         #[test]
@@ -2088,6 +2124,34 @@ mod tests {
             assert!(
                 !screen.contains("PECULIAR-FILE-NAME"),
                 "a finished delegate is still drawing the work behind it: {screen}"
+            );
+        }
+
+        /// WATCH-5. The block in the transcript stops drawing the work behind a finished
+        /// delegate, and the work is still there to be opened in the delegate's own view. A
+        /// finish that cleared the lines would collapse the block and leave nothing behind it.
+        #[test]
+        fn a_finished_delegates_work_is_still_there_to_be_opened() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "reader", "find the parser");
+            session.start_activity(Activity::running("Read", "PECULIAR-FILE-NAME"));
+            session.delegate_finished(
+                id,
+                "a reader delegate answered after 2 rounds".to_string(),
+                false,
+                None,
+            );
+            assert!(
+                !rendered(&session).contains("PECULIAR-FILE-NAME"),
+                "the block did not collapse, so opening the delegate proves nothing"
+            );
+
+            session.watch();
+
+            let screen = rendered(&session);
+            assert!(
+                screen.contains("PECULIAR-FILE-NAME"),
+                "the work of a finished delegate was gone from its view: {screen}"
             );
         }
 

@@ -302,6 +302,8 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::turn::only_bypassing_answers_an_edit_that_leaves_a_file_holding_a_credential`
 `verified-by: bravebot_agent::manifest::bypassing_answers_a_credential_a_plan_writes`
 `verified-by: bravebot_tui::credential_mode_tests::bypassing_writes_a_credential_without_asking`
+`verified-by: bravebot_agent::mcp::screening_asked_for_makes_no_check_of_a_servers_list_under_bypass`
+`verified-by: bravebot_agent::turn::screening_asked_for_makes_no_check_before_a_vouch_under_bypass`
 
 ## Choosing one
 
