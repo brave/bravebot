@@ -176,6 +176,7 @@ cli-option-trace = Print the audit trail
 cli-option-json = Print one result object on stdout instead of the reply
 cli-option-json-stream = Print one event per line on stdout as the run goes, then the result object
 cli-option-output-schema = Require the reply to match the JSON Schema in this file; with --json the value is in "structured"
+cli-option-goal = Work towards this condition: after each turn a judge says whether it holds, and the work goes back until it does; exits with status 7 if it never does
 cli-option-incognito = Write nothing to ~/.bravebot: no history, no session record, no preference
 cli-option-safe =
     Load none of your own hooks, skills, definitions, MCP servers or AGENTS.md. Sign-in, model and permissions still apply
@@ -306,6 +307,16 @@ cli-advisor-needs-a-name = --advisor requires the name of a model
 cli-processor-model-needs-a-name = --processor-model requires the name of a model
 cli-advisor-not-with-a-manifest = --advisor cannot be used with --mode manifest, which runs its plan without a planner to ask
 cli-effort-needs-a-level = --effort requires one of { $levels }
+cli-goal-needs-a-condition = --goal requires the condition to work towards
+cli-goal-not-with-a-manifest = --goal cannot be used with --mode manifest, which runs its plan once and has no conversation to send the work back into
+cli-goal-impossible = the goal cannot be met: { $reason }
+cli-goal-unreadable = the check did not answer with a verdict, so there is nothing to act on and the run stops
+cli-goal-quarantined =
+    this conversation has met untrusted content, so a verdict about it is not something this
+    program may act on, and the run stops
+cli-goal-stalled =
+    the goal has sent the work back without a turn making a tool call, and has stopped sending it
+cli-goal-failed = the goal could not be checked: { $problem }
 cli-output-schema-needs-a-path = --output-schema requires the path of a JSON Schema file
 cli-output-schema-not-with-a-manifest = --output-schema cannot be used with --mode manifest, which has a reply for each step and none for the run
 cli-output-schema-not-served = --output-schema cannot be used with { $model }, which cannot be asked for a reply that matches a schema

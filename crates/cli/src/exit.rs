@@ -29,6 +29,8 @@ pub enum Ending {
     Unreachable,
     /// The run finished and its reply does not match the schema it was given.
     Schema,
+    /// The run worked towards the condition `--goal` gave and stopped without it being met.
+    Unmet,
 }
 
 impl Ending {
@@ -45,6 +47,7 @@ impl Ending {
             Self::Refused => 4,
             Self::Unreachable => 5,
             Self::Schema => 6,
+            Self::Unmet => 7,
         }
     }
 
@@ -61,6 +64,7 @@ impl Ending {
             Self::Refused => "refused",
             Self::Unreachable => "unreachable",
             Self::Schema => "schema",
+            Self::Unmet => "unmet",
         }
     }
 
@@ -128,9 +132,18 @@ pub fn fail(ending: Ending, message: impl Display) -> ExitCode {
 /// that lost the backend is classified here exactly as a turn's own round is.
 pub fn ending_of(error: &bravebot_agent::TurnError) -> Ending {
     match error {
-        bravebot_agent::TurnError::Chat(backend) if backend.is_unreachable() => Ending::Unreachable,
+        bravebot_agent::TurnError::Chat(backend) => ending_of_a_request(backend),
         bravebot_agent::TurnError::Manifest { cause, .. } => ending_of(cause),
         _ => Ending::Failed,
+    }
+}
+
+/// Which ending a request that failed has: the backend not being there is told apart, and every
+/// other failure of one is a failure.
+pub fn ending_of_a_request(failure: &bravebot_agent::backend::BackendError) -> Ending {
+    match failure.is_unreachable() {
+        true => Ending::Unreachable,
+        false => Ending::Failed,
     }
 }
 
@@ -151,6 +164,7 @@ mod tests {
             Ending::Refused,
             Ending::Unreachable,
             Ending::Schema,
+            Ending::Unmet,
         ];
 
         let mut seen: Vec<u8> = endings.iter().map(|e| e.status()).collect();
@@ -175,6 +189,7 @@ mod tests {
         );
         assert_eq!(Ending::Unreachable.identifier().as_deref(), Some("BB1005"));
         assert_eq!(Ending::Schema.identifier().as_deref(), Some("BB1006"));
+        assert_eq!(Ending::Unmet.identifier().as_deref(), Some("BB1007"));
     }
 
     /// Said in front of the message rather than instead of it: the sentence is what tells the

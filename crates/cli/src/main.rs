@@ -11,6 +11,7 @@ mod doctor;
 mod exit;
 mod finish;
 mod flags;
+mod goal_run;
 mod host;
 mod import;
 mod json;
@@ -38,9 +39,9 @@ use bravebot_agent::servers;
 
 use crate::exit::{Ending, fail};
 use crate::finish::{
-    Finished, ending_of_a_turn, failure_of_a_turn, refusals, refused_with_the_usage, report,
-    say_notices, say_the_result, say_what_a_stopped_manifest_produced, stopped_before_the_turn,
-    what_ran, with_declined,
+    Finished, ending_of_a_turn, ending_with_the_goal, failure_of_a_turn, failure_with_the_goal,
+    refusals, refused_with_the_usage, report, say_notices, say_the_goal_unmet, say_the_result,
+    say_what_a_stopped_manifest_produced, stopped_before_the_turn, what_ran, with_declined,
 };
 use crate::flags::{
     ACCEPT_EDITS, BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, SAFE, SKIP_PERMISSIONS, TASK_FLAGS, VET,
@@ -785,6 +786,11 @@ fn background_start(
     if let Some(flag) = flag_named(prompts) {
         return fail(Ending::Argument, t!(bg_takes_nothing_else, flag = flag));
     }
+    // A condition is judged by the run that took it (CLI-35), and the words after `--bg` are all one
+    // prompt, so the flag would be sent to the session as text and no goal would be in force.
+    if words.iter().any(|word| word == "--goal") {
+        return fail(Ending::Argument, t!(bg_takes_nothing_else, flag = "--goal"));
+    }
     background::start(words)
 }
 
@@ -1253,6 +1259,8 @@ struct Invocation {
     resume: Option<continued::Resume>,
     /// The file holding the JSON Schema the reply must match (CLI-28).
     output_schema: Option<String>,
+    /// The condition the run works towards until a judge says it holds (CLI-35).
+    goal: Option<String>,
 }
 
 /// The name after `--model`, for a one-shot run and for the session `-i` opens.
@@ -1305,6 +1313,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut stream = false;
     let mut resume = None;
     let mut output_schema = None;
+    let mut goal = None;
     let mut index = 0;
 
     while index < args.len() {
@@ -1404,6 +1413,16 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 }
                 _ => return Err(t!(cli_output_schema_needs_a_path).to_string()),
             },
+            // Refused when blank or when it is the next flag, as the words of `--system-prompt` are:
+            // a script that computed an empty variable asked for a condition and would otherwise
+            // run once untold, or take the flag after it for the condition and lose that flag.
+            "--goal" => match args.get(index + 1).filter(|text| is_a_value(text)) {
+                Some(condition) => {
+                    goal = Some(condition.trim().to_string());
+                    index += 2;
+                }
+                None => return Err(t!(cli_goal_needs_a_condition).to_string()),
+            },
             "--json" => {
                 json = true;
                 index += 1;
@@ -1446,17 +1465,19 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         stream,
         resume,
         output_schema,
+        goal,
     })
 }
 
 /// The first of the flags a manifest run cannot take that this invocation gave, as the sentence that
-/// refuses it, in the order the checks run: agent, advisor, output schema, tools, system prompts,
-/// resume. `None` for any other mode.
+/// refuses it, in the order the checks run: agent, advisor, output schema, goal, tools, system
+/// prompts, resume. `None` for any other mode.
 fn manifest_conflict(
     mode: Mode,
     has_agent: bool,
     has_advisor: bool,
     has_output_schema: bool,
+    has_goal: bool,
     prompts: &SystemPrompts,
     resume: Option<&continued::Resume>,
 ) -> Option<String> {
@@ -1478,6 +1499,11 @@ fn manifest_conflict(
     // a schema.
     if has_output_schema {
         return Some(t!(cli_output_schema_not_with_a_manifest).to_string());
+    }
+    // A manifest run is planned once and run from the plan, so there is no conversation to send
+    // the work back into when a judge says the condition is not met.
+    if has_goal {
+        return Some(t!(cli_goal_not_with_a_manifest).to_string());
     }
     // A manifest run's steps are planned and run from the plan, not chosen from a list of tools, so
     // the flags would be taken and limit nothing.
@@ -1542,6 +1568,7 @@ struct Prepared {
     trust_workspace: bool,
     named_on_the_command_line: bool,
     permission_mode: bravebot_agent::PermissionMode,
+    goal: Option<String>,
 }
 
 /// Everything a one-shot run settles before the turn: the arguments, the configuration, the
@@ -1584,6 +1611,7 @@ fn prepare_the_run(
         stream: as_stream,
         resume,
         output_schema,
+        goal,
     } = invocation;
 
     // Read before the emptiness check below, since `cat notes.md | bravebot -p` is a complete
@@ -1612,6 +1640,7 @@ fn prepare_the_run(
         agent.is_some(),
         advisor.is_some(),
         output_schema.is_some(),
+        goal.is_some(),
         &prompts,
         resume.as_ref(),
     ) {
@@ -1862,7 +1891,9 @@ fn prepare_the_run(
         // was refused above, so this task is a turn's.
         .with_system_prompts(prompts)
         .addressing(agent.clone())
-        .model_outranks_a_definition(named_on_the_command_line);
+        .model_outranks_a_definition(named_on_the_command_line)
+        // Every round is told the condition it is judged against, the first one included (GOAL-14).
+        .working_towards(goal.clone());
     task = task_from_the_settings(task, &settings, effort);
     for file in files {
         task = task.with_file(file);
@@ -1912,6 +1943,19 @@ fn prepare_the_run(
     let model =
         check_the_model_can_serve_the_run(&mut config, &mut task, under.as_deref(), as_json)?;
 
+    // The judge runs on the model `summaryModel` names (GOAL-19), so a name nothing can serve is
+    // found here, ahead of a round that would spend tokens before its first check could say so.
+    if goal.is_some()
+        && let Err(refusal) =
+            bravebot_agent::goal::judge_model(&config, &egress, Some(model.as_str()))
+    {
+        return Err(stopped_before_the_turn(
+            as_json,
+            Ending::Configuration,
+            bravebot_agent::report::summary_model_refusal(&refusal),
+        ));
+    }
+
     Ok(Prepared {
         workspace,
         continued,
@@ -1930,6 +1974,7 @@ fn prepare_the_run(
         trust_workspace,
         named_on_the_command_line,
         permission_mode,
+        goal,
     })
 }
 
@@ -2022,6 +2067,7 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
         trust_workspace,
         named_on_the_command_line,
         permission_mode,
+        goal,
     } = prepared;
     let mut sink = json::Streaming::new(as_stream.then(|| json::Stream::new(std::io::stdout())));
     // The trail goes to stderr as each gate decides, so a run that never finishes still shows
@@ -2060,9 +2106,10 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
     // Both modes take the same arguments and return the same outcome. The whole of the
     // difference is inside: one asks the model what to do next after every result, the other
     // asked once, before there were any.
+    let mut unmet: Option<goal_run::Unmet> = None;
     let outcome = match mode {
         Mode::Turn => {
-            let (outcome, kept) = run_turn(
+            let (outcome, kept, why) = run_turn(
                 TurnRun {
                     config: &config,
                     egress: &egress,
@@ -2070,6 +2117,8 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
                     task: &task,
                     trust_workspace,
                     agent: agent.as_deref(),
+                    goal: goal.as_deref(),
+                    model: &model,
                 },
                 continued,
                 &mut confirmer,
@@ -2077,6 +2126,8 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
                 &mut sink,
             );
             session = kept;
+            // Why the condition `--goal` gave went unmet, where it did (CLI-35).
+            unmet = why;
             outcome
         }
         Mode::Manifest => bravebot_agent::manifest::run(
@@ -2156,6 +2207,7 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
                 named_on_the_command_line,
                 not_served.is_some(),
             );
+            let ending = ending_with_the_goal(ending, unmet.as_ref());
 
             // Held to the schema only once the turn is otherwise a success: a run that failed for
             // another reason keeps that reason, and a reply that was not asked for in this shape
@@ -2173,9 +2225,13 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
             let rendered = as_json.then(|| {
                 json::render(&json::Report {
                     ending,
-                    message: off_schema
-                        .as_deref()
-                        .or_else(|| failure_of_a_turn(ending, not_served.as_deref())),
+                    message: failure_with_the_goal(
+                        off_schema
+                            .as_deref()
+                            .or_else(|| failure_of_a_turn(ending, not_served.as_deref())),
+                        unmet.as_ref(),
+                    )
+                    .as_deref(),
                     reply: outcome.reply_for_display(),
                     model: &outcome.model,
                     agent: outcome.addressed.as_ref().map(|addressed| addressed.name()),
@@ -2221,6 +2277,9 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
             if let Some(complaint) = &off_schema {
                 eprintln!("{}", ending.told(complaint));
             }
+            if let Some(why) = &unmet {
+                say_the_goal_unmet(&mut std::io::stderr().lock(), ending, why);
+            }
             ending.code()
         }
         // A run that stopped is the one worth looking at, so what it produced is printed
@@ -2241,6 +2300,10 @@ struct TurnRun<'a> {
     task: &'a Task,
     trust_workspace: bool,
     agent: Option<&'a str>,
+    /// The condition the run works towards (CLI-35), and the model its rounds are asked of, which
+    /// the judge is asked too unless `summaryModel` names another.
+    goal: Option<&'a str>,
+    model: &'a str,
 }
 
 /// The `Mode::Turn` arm of a one-shot run: the turn, continued from `continued` where there is one,
@@ -2255,6 +2318,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
 ) -> (
     Result<turn::Outcome, bravebot_agent::TurnError>,
     Option<String>,
+    Option<goal_run::Unmet>,
 ) {
     let TurnRun {
         config,
@@ -2263,6 +2327,8 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         task,
         trust_workspace,
         agent,
+        goal,
+        model,
     } = run;
     let mut session: Option<String> = None;
     // What a continued session vouched for comes back with it, as it does in a session
@@ -2303,6 +2369,33 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         None,
         &Cancel::new(),
     );
+    // Where the person's prompt entered the conversation, read before a later round moves it: a
+    // run that works towards a goal is one turn of the record, and the prompt is the first one.
+    let prompt_at = reporter.prompt_at();
+    let (mut completed, unmet, earlier) = match goal {
+        Some(condition) => {
+            let ended = goal_run::work_towards(
+                &goal_run::Towards {
+                    condition,
+                    config,
+                    egress,
+                    workspace,
+                    task,
+                    model,
+                },
+                completed,
+                &mut conversation,
+                confirmer,
+                reporter,
+                sink,
+            );
+            (ended.completed, ended.unmet, Some(ended.earlier))
+        }
+        None => (completed, None, None),
+    };
+    if let (Some(earlier), Ok(last)) = (earlier, &mut completed.outcome) {
+        earlier.fold_into(last, reporter.earlier());
+    }
     if let Some(points) = rewind.as_mut() {
         points.keep_backups(workspace.take_backups());
     }
@@ -2322,14 +2415,14 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
                 outcome: finished,
                 trust: &trust,
                 begins,
-                prompt_at: reporter.prompt_at(),
+                prompt_at,
                 agent,
                 started,
                 events: sink.stamped(),
             },
         );
     }
-    (completed.outcome, session)
+    (completed.outcome, session, unmet)
 }
 
 /// What a turn that stopped says: the notices, then what it produced and the trail, then the result
@@ -4457,6 +4550,52 @@ mod tests {
         }
     }
 
+    /// `--goal` takes the condition whole, wherever it stands among the other flags, and a run that
+    /// gave none has no goal.
+    #[test]
+    fn a_goal_flag_names_the_condition_the_run_works_towards() {
+        for typed in [
+            args(&["--goal", "cargo test exits 0", "do a thing"]),
+            args(&["do a thing", "--goal", "  cargo test exits 0  "]),
+        ] {
+            let parsed = parse_invocation(&typed).expect("parses");
+            assert_eq!(
+                parsed.goal.as_deref(),
+                Some("cargo test exits 0"),
+                "{typed:?}"
+            );
+            assert_eq!(
+                parsed.prompt, "do a thing",
+                "the condition became the prompt"
+            );
+        }
+        let none = parse_invocation(&args(&["do a thing"])).expect("parses");
+        assert_eq!(none.goal, None);
+    }
+
+    /// A blank condition and the next flag are no condition, and the flag is not lost to it.
+    #[test]
+    fn a_goal_flag_naming_no_condition_is_refused() {
+        for typed in [
+            args(&["--goal"]),
+            args(&["--goal", "", "do a thing"]),
+            args(&["--goal", "   ", "do a thing"]),
+            args(&["--goal", "--trace", "-p", "do a thing"]),
+            args(&["--goal", "-p", "do a thing"]),
+        ] {
+            let err = parse_invocation(&typed).expect_err("refused");
+            assert!(err.contains("--goal"), "{typed:?}: {err}");
+        }
+    }
+
+    /// A sentence opening with a dash holds a space, and is a condition.
+    #[test]
+    fn a_condition_opening_with_a_dash_is_still_a_condition() {
+        let typed = args(&["--goal", "-1 failing tests remain", "do a thing"]);
+        let parsed = parse_invocation(&typed).expect("parses");
+        assert_eq!(parsed.goal.as_deref(), Some("-1 failing tests remain"));
+    }
+
     /// The advisor is named on the command line, separately from the model, and a run that did not
     /// name one has none.
     #[test]
@@ -4827,6 +4966,67 @@ mod tests {
         assert_eq!(refused.status(), 4);
 
         assert!(ending_of_a_turn(true, false, false).ok());
+    }
+
+    /// An unmet condition is what a status of 0 cannot say, so it decides only where the turns would
+    /// have ended well. A refusal or a substituted model is what a person deals with first.
+    #[test]
+    fn an_unmet_goal_decides_the_ending_only_where_the_turns_ended_well() {
+        let spent = goal_run::Unmet::Spent {
+            rounds: 10,
+            last: "still red".to_string(),
+        };
+        assert_eq!(
+            ending_with_the_goal(Ending::Done, Some(&spent)),
+            Ending::Unmet
+        );
+        assert_eq!(ending_with_the_goal(Ending::Done, None), Ending::Done);
+        assert_eq!(
+            ending_with_the_goal(Ending::Refused, Some(&spent)),
+            Ending::Refused
+        );
+        assert_eq!(
+            ending_with_the_goal(Ending::Failed, Some(&spent)),
+            Ending::Failed
+        );
+        let unreachable = goal_run::Unmet::Unchecked {
+            ending: Ending::Unreachable,
+            problem: "no route".to_string(),
+        };
+        assert_eq!(
+            ending_with_the_goal(Ending::Done, Some(&unreachable)),
+            Ending::Unreachable
+        );
+    }
+
+    /// Where a refusal outranks an unmet condition both are said, in the result object's message and
+    /// beside the reply, and only a run that ended on the unmet status claims its identifier.
+    #[test]
+    fn a_goal_that_went_unmet_is_said_whether_or_not_it_decided_the_ending() {
+        let why = goal_run::Unmet::Stalled {
+            last: "still red".to_string(),
+        };
+
+        let message =
+            failure_with_the_goal(Some("a gate refused something"), Some(&why)).expect("a message");
+        assert!(
+            message.starts_with("a gate refused something\n") && message.contains("still red"),
+            "{message}"
+        );
+        assert_eq!(failure_with_the_goal(None, None), None);
+
+        let mut outranked = Vec::new();
+        say_the_goal_unmet(&mut outranked, Ending::Refused, &why);
+        let outranked = String::from_utf8(outranked).expect("utf-8");
+        assert!(
+            outranked.contains("still red") && !outranked.contains("BB1"),
+            "{outranked}"
+        );
+
+        let mut deciding = Vec::new();
+        say_the_goal_unmet(&mut deciding, Ending::Unmet, &why);
+        let deciding = String::from_utf8(deciding).expect("utf-8");
+        assert!(deciding.starts_with("BB1007: "), "{deciding}");
     }
 
     /// Below the flag the model is whatever was recorded or configured, so failing here would have
@@ -5493,24 +5693,66 @@ mod tests {
         let latest = continued::Resume::Latest;
 
         assert_eq!(
-            manifest_conflict(Mode::Turn, true, true, true, &words, Some(&latest)),
+            manifest_conflict(Mode::Turn, true, true, true, true, &words, Some(&latest)),
             None,
             "a turn is refused nothing here"
         );
         assert_eq!(
-            manifest_conflict(Mode::Manifest, false, false, false, &none, None),
+            manifest_conflict(Mode::Manifest, false, false, false, false, &none, None),
             None
         );
-        let first = manifest_conflict(Mode::Manifest, true, true, true, &words, Some(&latest));
+        let first = manifest_conflict(
+            Mode::Manifest,
+            true,
+            true,
+            true,
+            false,
+            &words,
+            Some(&latest),
+        );
         assert_eq!(first.as_deref(), Some(t!(cli_agent_not_with_a_manifest)));
-        let first = manifest_conflict(Mode::Manifest, false, true, true, &words, Some(&latest));
+        let first = manifest_conflict(
+            Mode::Manifest,
+            false,
+            true,
+            true,
+            false,
+            &words,
+            Some(&latest),
+        );
         assert_eq!(first.as_deref(), Some(t!(cli_advisor_not_with_a_manifest)));
-        let first = manifest_conflict(Mode::Manifest, false, false, true, &words, Some(&latest));
+        let first = manifest_conflict(
+            Mode::Manifest,
+            false,
+            false,
+            true,
+            false,
+            &words,
+            Some(&latest),
+        );
         assert_eq!(
             first.as_deref(),
             Some(t!(cli_output_schema_not_with_a_manifest))
         );
-        let first = manifest_conflict(Mode::Manifest, false, false, false, &words, Some(&latest));
+        let first = manifest_conflict(
+            Mode::Manifest,
+            false,
+            false,
+            false,
+            true,
+            &words,
+            Some(&latest),
+        );
+        assert_eq!(first.as_deref(), Some(t!(cli_goal_not_with_a_manifest)));
+        let first = manifest_conflict(
+            Mode::Manifest,
+            false,
+            false,
+            false,
+            false,
+            &words,
+            Some(&latest),
+        );
         assert_eq!(
             first,
             Some(t!(
@@ -5518,13 +5760,21 @@ mod tests {
                 flag = "--system-prompt"
             ))
         );
-        let first = manifest_conflict(Mode::Manifest, false, false, false, &none, Some(&latest));
+        let first = manifest_conflict(
+            Mode::Manifest,
+            false,
+            false,
+            false,
+            false,
+            &none,
+            Some(&latest),
+        );
         assert_eq!(
             first,
             Some(t!(cli_resume_not_with_a_manifest, flag = "--continue"))
         );
         let id = continued::Resume::Id("abc".to_string());
-        let named = manifest_conflict(Mode::Manifest, false, false, false, &none, Some(&id));
+        let named = manifest_conflict(Mode::Manifest, false, false, false, false, &none, Some(&id));
         assert_eq!(
             named,
             Some(t!(cli_resume_not_with_a_manifest, flag = "--resume"))

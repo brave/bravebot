@@ -15,6 +15,7 @@ governs:
   - crates/cli/src/completion.rs
   - crates/cli/src/continued.rs
   - crates/cli/src/exit.rs
+  - crates/cli/src/goal_run.rs
   - crates/cli/src/json.rs
   - crates/agent/src/output_schema.rs
   - crates/cli/src/permissions_check.rs
@@ -157,6 +158,7 @@ exiting successfully with an explanation on stdout, and each of them has a statu
 | 4 | `BB1004` | had an effect refused by a gate |
 | 5 | `BB1005` | never reached the backend |
 | 6 | `BB1006` | finished, and its reply is not what `--output-schema` (CLI-28) asked for |
+| 7 | `BB1007` | worked towards the condition `--goal` (CLI-35) gave, and it did not hold |
 
 A status is never renumbered and never given a second meaning. A failure kind nothing here names
 is 1, and one worth telling apart takes the next number.
@@ -193,6 +195,7 @@ over one set of failures is one of them going out of date.
 `verified-by: bravebot_cli::exit::a_failure_says_its_identifier_in_front_of_the_message`
 `verified-by: bravebot_cli::exit::a_manifest_run_is_classified_by_what_stopped_it`
 `verified-by: bravebot_cli::running::a_reply_off_the_output_schema_ends_on_its_own_status`
+`verified-by: bravebot_cli::running::a_goal_never_met_stops_after_ten_rounds_on_its_own_status`
 `verified-by: bravebot_agent::backend::a_request_that_never_left_is_told_apart_from_one_that_was_answered`
 `verified-by: bravebot_cli::main::a_turn_something_was_refused_in_does_not_succeed`
 `verified-by: bravebot_cli::main::what_nobody_could_be_asked_is_kept_and_what_was_answered_is_not`
@@ -566,7 +569,8 @@ policy recorded under `approval` ([TRACE-1](trace.md#TRACE-1)), and the confirme
 it is kept for the status of CLI-6 and is not listed again.
 
 A failed run retains measured cumulative token usage from completed work. The latest report
-replaces earlier reports; a successful outcome is charged once. Required numeric token fields
+replaces earlier reports; a successful outcome is charged once. A goal run (CLI-35) adds the rounds
+before the latest, and the judge's checks, to the latest round's figure. Required numeric token fields
 remain zero when no measurement exists. Failure reports do not invent a model, reply or round
 count.
 
@@ -1849,3 +1853,115 @@ status as a substituted `--model` does.
 `verified-by: bravebot_cli::running::a_processor_model_named_on_the_command_line_runs_a_turns_processor`
 `verified-by: bravebot_cli::running::a_processor_model_named_on_the_command_line_runs_a_manifest_step_and_outranks_the_setting`
 `verified-by: bravebot_cli::running::a_blank_processor_model_is_refused_before_the_run`
+
+<a id="CLI-35"></a>
+### CLI-35: `--goal` works towards a condition until a judge says it holds
+
+`--goal <condition>` makes a one-shot run the loop `/goal` is in the interface ([goal.md](goal.md)).
+The prompt that `-p` or the first argument carries is the first round, so setting the goal sends
+nothing of its own ([GOAL-2](goal.md#GOAL-2)). When a round ends, a judge that is offered no tools
+reads a copy of the exchange and answers `MET`, `NOT MET` or `IMPOSSIBLE` on its first line. On
+`NOT MET` the run sends the work back as another round, over the same conversation and with the
+trust the last round ended with. The prompt that carries it names the condition and quotes the
+judge's reason ([GOAL-7](goal.md#GOAL-7)).
+
+The condition is the argument typed on the command line. Nothing a round reads, writes or says
+changes it, and every round is told it, the first included ([GOAL-1](goal.md#GOAL-1),
+[GOAL-14](goal.md#GOAL-14)). The verdict is read as goal.md has it: the first line, compared whole
+with the three words, and only where the exchange has met nothing untrusted
+([GOAL-4](goal.md#GOAL-4), [GOAL-5](goal.md#GOAL-5)). The work goes back at most ten times, and
+stops sooner after three rounds in a row that made no tool call ([GOAL-9](goal.md#GOAL-9),
+[GOAL-20](goal.md#GOAL-20)). The judge runs on the model `summaryModel` names
+([GOAL-19](goal.md#GOAL-19)). What came with the prompt (`--file`, `--session-ref`, piped input)
+belongs to the first round and is not attached to a later one, so piped bytes stay a reference
+(CLI-3).
+
+| What ends the run | Status |
+|---|---|
+| the judge says `MET` | what the rounds alone would end on: 0, or 4 where a gate refused anything in any round, 5 or 6 |
+| `NOT MET` with the rounds spent or three rounds with no tool call, `IMPOSSIBLE`, a first line that is no verdict, an answer the driver may not read | 7, `BB1007`, where the rounds alone would end on 0 |
+| the judge's request fails | 1, or 5 where the backend was not there (CLI-6) |
+| a round fails | the status that failure has, and no check is made of it |
+
+An unmet condition takes status 7 only where the rounds alone would have ended on 0. A refusal in
+any round, or a model other than the one the command line named, outranks it, being what a person
+has to deal with first. The condition is still said to be unmet: the message on stderr, and in the
+result object beside the other failure's, says which of the endings above it was and, where the
+judge gave one, what the last check said, and carries the identifier of 7 only where the run ended
+on it. After each check that sends the work back, and after a `MET`,
+a line on stderr gives the verdict and its reason beside the progress lines (CLI-5). stdout is the
+last round's reply, or with `--json` the result object of CLI-12. Its `steps`, `tokens` and `notices`
+account for every round and every check, and the usage events of `--json-stream` are running totals
+over them, so a figure never falls when the work goes back.
+
+A goal run is one turn of one session record (CLI-25): every round is in the conversation it keeps.
+The condition is recorded nowhere else, so `--resume` carries that conversation and no goal
+([GOAL-12](goal.md#GOAL-12)).
+
+The flag is refused with the status for an argument (CLI-6) before anything is sent when no
+condition follows it, when the condition is blank or is the next flag, with `--mode manifest`, which
+is planned once and has no conversation to send the work back into, and where a background session
+is started, whose words after `--bg` are all its prompt. A model for the judge
+that cannot be used, because `summaryModel` names one that needs a sign-in this machine has not
+made or that the machine-level layer excludes ([COMPACT-15](compaction.md#COMPACT-15)), is refused
+with the status for a configuration before the first round is sent.
+
+**Why.** A goal can be set only from the interface, so a script or a CI job that wants work to
+continue until a condition holds has to drive a terminal by hand. The entry point is a flag because
+a line beginning with `/` is a command only from a key press ([CMD-1](commands.md#CMD-1)), which
+makes `-p "/goal ..."` a prompt. The condition is what the person typed on the command line, which
+settles it the way Enter settles it in the interface, and the verdict is read only after the gate,
+so nothing a model produces decides when the run stops.
+
+Nobody is there to stop a run that cannot succeed, so the ten rounds bound what it spends, and the
+status says whether the condition held, which is all a script reads. It is a status of its own
+because a run whose work was done and whose condition never held is acted on differently from one
+that broke, and from one that found nothing to connect to.
+
+**Known costs.**
+
+- The result object has no field for the verdict or the number of rounds. They are on stderr, and
+  the status and the message say how the run ended.
+- A run in which a gate refuses something nobody can approve is not stopped early. Each later
+  round meets the same refusal until the judge says `MET`, the rounds run out or three rounds make
+  no tool call, and the status is 4 whichever of those it is.
+- A check's time is not in the run's timing, as a check's time is not in a session's. Its tokens
+  are counted.
+- A run that fails in a later round writes no session record, as no run that fails does (CLI-25),
+  so the rounds before the failure cannot be resumed.
+- Language servers and background jobs a round started end with that round, as they end with the
+  turn of a run without the flag.
+
+`verified-by: bravebot_cli::running::a_goal_run_sends_the_work_back_until_the_judge_says_met`
+`verified-by: bravebot_cli::running::a_goal_met_the_first_time_sends_nothing_back`
+`verified-by: bravebot_cli::running::a_goal_never_met_stops_after_ten_rounds_on_its_own_status`
+`verified-by: bravebot_cli::running::a_goal_the_judge_cannot_settle_ends_the_run_without_sending_the_work_back`
+`verified-by: bravebot_cli::running::a_goal_check_that_fails_ends_the_run_on_a_failure_status`
+`verified-by: bravebot_cli::running::a_goal_check_that_fails_after_a_reply_still_charges_the_reply`
+`verified-by: bravebot_cli::running::a_goal_whose_rounds_make_no_tool_call_stops_after_the_third`
+`verified-by: bravebot_cli::running::a_goal_counts_the_calls_of_each_round_and_not_of_the_whole_run`
+`verified-by: bravebot_cli::running::a_goal_run_reports_everything_it_spent`
+`verified-by: bravebot_cli::running::a_goal_run_whose_stderr_was_closed_still_finishes`
+`verified-by: bravebot_cli::running::a_refusal_in_an_early_round_ends_a_goal_run_on_the_refused_status`
+`verified-by: bravebot_cli::running::a_refusal_that_outranks_an_unmet_goal_does_not_hide_it`
+`verified-by: bravebot_cli::running::a_goal_whose_judge_model_needs_a_sign_in_is_refused_before_anything_is_sent`
+`verified-by: bravebot_cli::running::a_goal_judge_that_cannot_be_reached_ends_the_run_on_the_unreachable_status`
+`verified-by: bravebot_cli::running::a_goal_run_whose_first_round_fails_makes_no_check`
+`verified-by: bravebot_cli::running::a_goal_run_whose_later_round_fails_reports_what_the_earlier_ones_cost`
+`verified-by: bravebot_cli::running::the_work_sent_back_carries_nothing_that_came_with_the_first_prompt`
+`verified-by: bravebot_cli::running::a_goal_run_is_one_record_that_a_later_run_carries_on_without_the_goal`
+`verified-by: bravebot_cli::running::a_goal_that_cannot_be_worked_towards_is_refused_before_anything_is_sent`
+`verified-by: bravebot_cli::running::a_goal_is_refused_where_a_background_session_starts`
+`verified-by: bravebot_cli::running::a_goal_is_refused_where_a_background_session_starts`
+`verified-by: bravebot_cli::main::a_goal_flag_names_the_condition_the_run_works_towards`
+`verified-by: bravebot_cli::main::a_goal_flag_naming_no_condition_is_refused`
+`verified-by: bravebot_cli::main::a_condition_opening_with_a_dash_is_still_a_condition`
+`verified-by: bravebot_cli::main::an_unmet_goal_decides_the_ending_only_where_the_turns_ended_well`
+`verified-by: bravebot_cli::main::a_goal_that_went_unmet_is_said_whether_or_not_it_decided_the_ending`
+`verified-by: bravebot_cli::main::a_manifest_run_is_refused_the_flags_it_cannot_take_in_order`
+`verified-by: bravebot_cli::goal_run::the_work_sent_back_keeps_the_run_and_drops_what_came_with_the_prompt`
+`verified-by: bravebot_cli::goal_run::an_unmet_condition_and_an_unmade_check_end_on_different_statuses`
+`verified-by: bravebot_cli::goal_run::what_the_judge_said_cannot_move_the_cursor`
+`verified-by: bravebot_cli::progress::what_a_run_has_cost_adds_up_across_its_rounds_and_its_checks`
+`verified-by: bravebot_cli::progress::a_streamed_total_never_falls_when_the_next_round_starts`
+`verified-by: bravebot_cli::progress::a_notice_a_later_round_says_again_is_kept_once`

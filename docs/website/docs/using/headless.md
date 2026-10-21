@@ -295,6 +295,7 @@ explanation on stdout.
 | 4 | `BB1004` | had an effect refused by a gate |
 | 5 | `BB1005` | never reached the backend |
 | 6 | `BB1006` | finished, and its reply is not what `--output-schema` asked for |
+| 7 | `BB1007` | worked towards the condition `--goal` gave, and it did not hold |
 
 A status is never renumbered and never given a second meaning, so a script can branch on one: "the
 endpoint was not there, try again", "the configuration is wrong, fail the build" and "a gate refused
@@ -324,6 +325,7 @@ the wrong thing to search for.
 | `--json` | one result object on stdout, in the reply's place |
 | `--json-stream` | one event per line on stdout as the run goes, then the result object |
 | `--output-schema <path>` | hold the reply to a JSON Schema; a reply off it ends on status 6, one that conforms is also `structured` under `--json` |
+| `--goal <condition>` | keep working until a judge says the condition holds; a condition that never does ends on status 7 |
 | `--settings <path>` | read a settings file above the ones found, for this run |
 | `--mode manifest` | plan the whole run first, then walk the plan |
 

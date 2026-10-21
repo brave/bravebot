@@ -257,6 +257,18 @@ impl From<ChatError> for GoalError {
     }
 }
 
+/// The model the judge runs on, or why it cannot be used (GOAL-19).
+///
+/// Asked by [`assess`] for every check, and by a caller that wants an unusable one refused before it
+/// sends the work the first check would judge.
+pub fn judge_model<'a>(
+    config: &'a bravebot_config::Config,
+    egress: &bravebot_net::Egress,
+    session_model: Option<&'a str>,
+) -> Result<std::borrow::Cow<'a, str>, crate::compact::SideModelRefusal> {
+    crate::compact::side_request_model(config, egress, session_model)
+}
+
 /// Judge one condition against the exchange, and hand back what came of it.
 pub fn assess<S: Sink>(
     policy: &mut Policy<'_, S>,
@@ -266,7 +278,7 @@ pub fn assess<S: Sink>(
     // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
     // below adds to it. A judge that could call a tool would be a turn, and it would be a turn
     // whose job is deciding whether turns stop.
-    let model = crate::compact::side_request_model(chat.config, chat.egress, chat.model)?;
+    let model = judge_model(chat.config, chat.egress, chat.model)?;
     let model = model.as_ref();
     // The exchange is given up once this answers, so nothing asks for a cache of it: the next
     // check carries a turn's work on the end of the same exchange, in front of the same condition,

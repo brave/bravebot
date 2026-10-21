@@ -100,6 +100,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--effort <level>` | how hard this run asks the model to think; outranks every other way one is named ([below](#--effort-level)) |
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--output-schema <path>` | hold the reply to the JSON Schema in this file, or end on status 6 ([below](#--output-schema-path)) |
+| `--goal <condition>` | keep working until a judge says the condition holds, or end on status 7 ([below](#--goal-condition)) |
 | `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../customize/configuration.md#runnetwork)) |
 | `--sandbox <mode>` | how far the programs the agent runs may reach: `strict`, `read-only` (which also stops the agent's file tools writing), `workspace-write` or `off`. Without it the mode is `workspace-write` ([`sandbox.mode`](../security/security.md)). Where a machine-level file pins `sandbox.mode`, a mode that reads more of the machine, writes more or both is refused, and the refusal says which and names the pinned mode to run with |
 | `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../customize/configuration.md#sandboxfilesystem)) |
@@ -493,6 +494,43 @@ cannot be read or is not a usable schema, with `--mode manifest`, and when the m
 schema: Bedrock, or a model whose listing states its supported parameters without `structured_outputs`
 or `response_format`. A model whose listing states none is asked, and the check after the turn is
 what holds the reply there.
+
+## `--goal <condition>`
+
+```sh
+bravebot --goal "docs/api.md documents every public function in src/lib.rs" \
+  -p "document the public API in docs/api.md" --accept-edits
+```
+
+Keeps a one-shot run working until a condition you wrote is judged met, as [`/goal`](commands.md#goal-condition)
+does in a session. The prompt is the first round. When a round ends, a judge with no tools reads
+a copy of the conversation and answers `MET`, `NOT MET` or `IMPOSSIBLE` on its first line. On `NOT MET`
+the work goes back for another round with the reason, and the run ends when the judge says `MET`.
+Every round is told the condition, and nothing a round reads or writes changes it. Files and
+piped input given with the prompt go to the first round only. The judge reads the conversation and
+runs nothing, so a condition is met only when a round observed it. With nobody to ask, a run is
+refused unless `--dangerously-skip-permissions` is given, so a condition about what a command prints
+needs that flag, and one about files can be observed without it.
+
+The status says how it ended. `MET` ends as the rounds alone would have, usually 0. Status 7
+(`BB1007`) is a run that did its work and did not meet the condition: the work was sent back ten
+times, three rounds in a row made no tool call, the judge said `IMPOSSIBLE`, or its answer began with
+no verdict or could not be read. A refusal in any round is status 4 and outranks it, and the message
+still says the condition was not met. A judge that cannot be reached ends the run on status 1 or 5
+as any failed request does. stdout is the last round's reply, or the result object under `--json`, whose
+`steps` and `tokens` cover every round and every check. After each check one line on stderr gives
+the verdict and its reason.
+
+The run is written down as one session, so `--resume` carries the whole conversation, and the
+condition is not carried with it. The flag is refused with status 2 before anything is sent when no
+condition follows it, when it is blank or is the next flag, and with `--mode manifest`. A
+[`summaryModel`](../customize/configuration.md#summarymodel) that cannot be used for the judge is
+refused with status 3 before the first round.
+
+:::caution
+**Every round re-sends the conversation.** Ten rounds of a long task cost more than ten ordinary
+turns, and a condition the conversation can never show to be met spends all ten.
+:::
 
 ## `--json-stream`
 
@@ -1076,6 +1114,7 @@ different things to do about a failed run.
 | 4 | `BB1004` | had an effect refused by a gate |
 | 5 | `BB1005` | never reached the backend |
 | 6 | `BB1006` | finished, and its reply is not what `--output-schema` asked for |
+| 7 | `BB1007` | worked towards the condition `--goal` gave, and it did not hold |
 
 Only the transport's own failures are status 5. A non-success answer from the service is the service
 answering, so a refused credential is a configuration problem rather than a connection to retry.

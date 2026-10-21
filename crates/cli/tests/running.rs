@@ -15580,3 +15580,758 @@ fn purge_with_yes_removes_this_directorys_sessions_and_leaves_a_running_one() {
         "another directory's record was purged"
     );
 }
+
+/// What the judge of a goal run is told it is, which no turn's request carries: the line that tells
+/// a gateway standing in for both ends which of the two is asking.
+const THE_JUDGES_WORDS: &str = "You are not the agent and you are not continuing its work";
+
+/// A planner that asks for a listing in every round.
+const ALWAYS: usize = usize::MAX;
+
+/// The condition the goal tests work towards.
+const A_CONDITION: &str = "the build is green";
+
+/// One streamed frame a gateway answers with, carrying `delta` and the usage the service reports.
+fn framed(delta: serde_json::Value, finish: &str, usage: (u64, u64)) -> String {
+    let frame = serde_json::json!({"model": "reasons-only", "choices": [{
+        "index": 0, "delta": delta, "finish_reason": finish}],
+        "usage": {"prompt_tokens": usage.0, "completion_tokens": usage.1}});
+    let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+    format!(
+        "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// A gateway standing in for the planner and for the judge of a goal run, told apart by the
+/// judge's own words (`THE_JUDGES_WORDS`).
+///
+/// The judge answers `verdicts` in order and repeats the last. The planner says `round N done`,
+/// numbering its answers, and asks for a listing first in each of the first `listing_rounds`
+/// rounds, so those rounds make a tool call and the rest do not (GOAL-20). Usage is fixed per kind of
+/// request so a total can be computed by hand: a listing costs 9, a planner's answer 12, a check 10.
+fn a_gateway_for_a_goal(verdicts: &[&str], listing_rounds: usize) -> Gateway {
+    let verdicts: Vec<String> = verdicts.iter().map(|verdict| verdict.to_string()).collect();
+    let checks = Arc::new(AtomicUsize::new(0));
+    let answers = Arc::new(AtomicUsize::new(0));
+    a_gateway(r#"["tools"]"#, move |body| {
+        if body.contains(THE_JUDGES_WORDS) {
+            let at = checks
+                .fetch_add(1, Ordering::SeqCst)
+                .min(verdicts.len() - 1);
+            return framed(
+                serde_json::json!({"role": "assistant", "content": &verdicts[at]}),
+                "stop",
+                (7, 3),
+            );
+        }
+        let asked: serde_json::Value = serde_json::from_str(body).expect("a JSON body");
+        let after_a_call = asked["messages"]
+            .as_array()
+            .and_then(|messages| messages.last())
+            .is_some_and(|message| message["role"] == "tool");
+        if answers.load(Ordering::SeqCst) < listing_rounds && !after_a_call {
+            // Two spellings of one directory, since the same call three times running is held.
+            let directory = if answers.load(Ordering::SeqCst).is_multiple_of(2) {
+                "."
+            } else {
+                "./"
+            };
+            return framed(
+                serde_json::json!({"role": "assistant", "tool_calls": [{
+                    "index": 0, "id": "call-1", "type": "function", "function": {
+                        "name": "list_files",
+                        "arguments": serde_json::json!({"directory": directory}).to_string()}}]}),
+                "tool_calls",
+                (8, 1),
+            );
+        }
+        let round = answers.fetch_add(1, Ordering::SeqCst) + 1;
+        framed(
+            serde_json::json!({"role": "assistant", "content": format!("round {round} done")}),
+            "stop",
+            (10, 2),
+        )
+    })
+}
+
+/// Run `-p` under `--goal` in `scratch`, with `more` flags ahead of it, and give back what the run
+/// said and every request it made.
+fn a_goal_run_in(scratch: &Scratch, gateway: &Gateway, more: &[&str]) -> (Output, Vec<String>) {
+    let mut arguments = vec!["--goal", A_CONDITION];
+    arguments.extend_from_slice(more);
+    arguments.extend(["-p", "get the build green"]);
+    let output = bravebot_started_in(&scratch.path, &scratch.path, AT_A_GATEWAY, &arguments);
+    (output, gateway.asked.try_iter().collect())
+}
+
+/// [`a_goal_run_in`] in a scratch of its own, named `name`.
+fn a_goal_run(name: &str, gateway: &Gateway, more: &[&str]) -> (Output, Vec<String>) {
+    let scratch = Scratch::new(name).with_settings(&settings_for(gateway));
+    a_goal_run_in(&scratch, gateway, more)
+}
+
+/// How many of `requests` were the judge's.
+fn checks_among(requests: &[String]) -> usize {
+    requests
+        .iter()
+        .filter(|body| body.contains(THE_JUDGES_WORDS))
+        .count()
+}
+
+/// CLI-35: the condition is put to the planner from the first round, the judge's `NOT MET` sends
+/// the work back with the reason, and the run ends when the judge says `MET`.
+///
+/// Rejects a loop that stops after one check, one that never sends the work back, and a first
+/// round that is not told what it is judged against.
+#[test]
+fn a_goal_run_sends_the_work_back_until_the_judge_says_met() {
+    let gateway = a_gateway_for_a_goal(
+        &["NOT MET\nthe tests have not run", "MET\nthe tests ran"],
+        0,
+    );
+
+    let (output, requests) = a_goal_run("cli-running-goal-met", &gateway, &[]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(checks_among(&requests), 2, "{stderr}");
+    let turns: Vec<&String> = requests
+        .iter()
+        .filter(|body| !body.contains(THE_JUDGES_WORDS))
+        .collect();
+    assert_eq!(
+        turns.len(),
+        2,
+        "one turn, then the work sent back: {stderr}"
+    );
+    assert!(
+        turns[0].contains(A_CONDITION) && turns[0].contains("is judged against it once it ends"),
+        "the first round was not told the condition: {}",
+        turns[0]
+    );
+    let last = turns[1];
+    assert!(
+        last.contains("The stopping condition for this session has not been met")
+            && last.contains("the tests have not run"),
+        "the work did not go back with the condition and the reason: {last}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "round 2 done",
+        "stdout is the last round's reply"
+    );
+    assert!(
+        stderr.contains("the goal is not met yet: the tests have not run"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("the goal is met: the tests ran"),
+        "{stderr}"
+    );
+}
+
+/// CLI-35: a condition judged met by the first check ends the run with no second turn.
+///
+/// Rejects a loop that sends the work back once whatever the verdict says.
+#[test]
+fn a_goal_met_the_first_time_sends_nothing_back() {
+    let gateway = a_gateway_for_a_goal(&["MET\nalready green"], 0);
+
+    let (output, requests) = a_goal_run("cli-running-goal-met-first", &gateway, &[]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(requests.len(), 2, "one turn and one check: {stderr}");
+    assert_eq!(stdout.trim(), "round 1 done");
+}
+
+/// CLI-35, GOAL-9: a condition the judge never finds met sends the work back ten times, ends on the
+/// status for an unmet goal, and says what the last check said.
+///
+/// Every round makes a call, so the three-idle-rounds stop of GOAL-20 is not what ends it. Rejects
+/// a loop with no bound, one with another bound, and an ending that is a success or the status for
+/// any other failure.
+#[test]
+fn a_goal_never_met_stops_after_ten_rounds_on_its_own_status() {
+    let gateway = a_gateway_for_a_goal(&["NOT MET\nstill red"], ALWAYS);
+
+    let (output, requests) = a_goal_run("cli-running-goal-spent", &gateway, &["--json"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(7), "{stderr}");
+    assert!(stderr.contains("BB1007"), "{stderr}");
+    assert_eq!(
+        checks_among(&requests),
+        11,
+        "the first turn and ten sent back"
+    );
+    let result: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["status"], 7);
+    assert_eq!(result["reason"], "unmet");
+    assert_eq!(result["identifier"], "BB1007");
+    assert_eq!(result["reply"], "round 11 done");
+    let message = result["message"].as_str().expect("a message");
+    assert!(
+        message.contains("10 times") && message.contains("the last check said: still red"),
+        "{message}"
+    );
+}
+
+/// CLI-35, GOAL-6: a verdict of `IMPOSSIBLE` and an answer that is no verdict each end the run after
+/// the first turn, with no work sent back.
+///
+/// Rejects reading either as `NOT MET`, which would send the work back, or as `MET`, which would
+/// exit successfully.
+#[test]
+fn a_goal_the_judge_cannot_settle_ends_the_run_without_sending_the_work_back() {
+    for (name, verdict, said_so) in [
+        (
+            "impossible",
+            "IMPOSSIBLE\nthere is no build",
+            "the goal cannot be met: there is no build",
+        ),
+        (
+            "unreadable",
+            "I think it is green.",
+            "did not answer with a verdict",
+        ),
+    ] {
+        let gateway = a_gateway_for_a_goal(&[verdict], 0);
+
+        let (output, requests) = a_goal_run(&format!("cli-running-goal-{name}"), &gateway, &[]);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(7), "{name}: {stderr}");
+        assert!(
+            stderr.contains("BB1007") && stderr.contains(said_so),
+            "{name}: {stderr}"
+        );
+        assert_eq!(
+            requests.len(),
+            2,
+            "{name}: one turn and one check: {stderr}"
+        );
+        assert_eq!(stdout.trim(), "round 1 done", "{name}");
+    }
+}
+
+/// CLI-35, CLI-6: a check that cannot be made ends the run on the status for a failure, and the
+/// turn's reply is still written.
+///
+/// Rejects treating a check that failed as a goal that was met.
+#[test]
+fn a_goal_check_that_fails_ends_the_run_on_a_failure_status() {
+    let checks = Arc::new(AtomicUsize::new(0));
+    let counted = checks.clone();
+    let gateway = a_gateway(r#"["tools"]"#, move |body| {
+        if body.contains(THE_JUDGES_WORDS) {
+            counted.fetch_add(1, Ordering::SeqCst);
+            return http(500, r#"{"error": {"message": "the judge is down"}}"#);
+        }
+        framed(
+            serde_json::json!({"role": "assistant", "content": "round 1 done"}),
+            "stop",
+            (10, 2),
+        )
+    });
+
+    let (output, _) = a_goal_run("cli-running-goal-check-fails", &gateway, &[]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("BB1001") && stderr.contains("the goal could not be checked"),
+        "{stderr}"
+    );
+    assert_eq!(stdout.trim(), "round 1 done");
+    assert!(checks.load(Ordering::SeqCst) >= 1);
+}
+
+/// CLI-35, GOAL-20: rounds that make no tool call stop the run after the third check, on the status
+/// for an unmet goal.
+///
+/// Rejects a loop that counts no calls and so spends all ten rounds on a planner that only talks.
+#[test]
+fn a_goal_whose_rounds_make_no_tool_call_stops_after_the_third() {
+    let gateway = a_gateway_for_a_goal(&["NOT MET\nstill red"], 0);
+
+    let (output, requests) = a_goal_run("cli-running-goal-stalled", &gateway, &[]);
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(7), "{stderr}");
+    assert_eq!(checks_among(&requests), 3, "{stderr}");
+    assert!(
+        stderr.contains("without a turn making a tool call"),
+        "{stderr}"
+    );
+}
+
+/// CLI-35, GOAL-20: a round counts the calls it made and not the calls the run has made, so rounds
+/// that go quiet after one that called a tool still stop the work going back.
+///
+/// The first round lists and every later one only talks, so the fourth check is the third quiet
+/// round. Rejects a count taken from the start of the run, which one early call keeps above zero.
+#[test]
+fn a_goal_counts_the_calls_of_each_round_and_not_of_the_whole_run() {
+    let gateway = a_gateway_for_a_goal(&["NOT MET\nstill red"], 1);
+
+    let (output, requests) = a_goal_run("cli-running-goal-calls-per-round", &gateway, &[]);
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(7), "{stderr}");
+    assert_eq!(checks_among(&requests), 4, "{stderr}");
+    assert!(
+        stderr.contains("without a turn making a tool call"),
+        "{stderr}"
+    );
+}
+
+/// CLI-35, CLI-12: the tokens and the rounds of tool calls a goal run reports are those of every
+/// round and every check, and a stream's usage never goes down.
+///
+/// Two rounds, each a listing (9) and an answer (12), and two checks (10 each): 62 in all, over 2
+/// rounds of calls. Rejects a total that is the last round's, one that leaves the checks out, and a
+/// stream that starts again from nothing when the work is sent back.
+#[test]
+fn a_goal_run_reports_everything_it_spent() {
+    let gateway = a_gateway_for_a_goal(&["NOT MET\nnot yet", "MET\nnow"], ALWAYS);
+
+    let (output, _) = a_goal_run("cli-running-goal-usage", &gateway, &["--json-stream"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let lines: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|_| panic!("{line}: {stderr}")))
+        .collect();
+    let result = lines.last().expect("the result object");
+    assert_eq!(result["tokens"]["total"], 62, "{stdout}");
+    assert_eq!(result["steps"], 2, "{stdout}");
+    let totals: Vec<u64> = lines
+        .iter()
+        .filter(|line| line["event"] == "usage")
+        .map(|line| line["tokens"]["total"].as_u64().expect("a total"))
+        .collect();
+    assert_eq!(totals.last(), Some(&62), "{stdout}");
+    assert!(
+        totals.windows(2).all(|pair| pair[0] <= pair[1]),
+        "usage went down between events: {totals:?}"
+    );
+}
+
+/// CLI-35, CLI-3: what came with the person's prompt is sent once. The file the run was given is in
+/// the conversation from the first round, and the rounds that send the work back add none.
+///
+/// Rejects building the next round from the first round's task unchanged, which names the file again
+/// every time.
+#[test]
+fn the_work_sent_back_carries_nothing_that_came_with_the_first_prompt() {
+    let gateway = a_gateway_for_a_goal(&["NOT MET\nnot yet", "MET\nnow"], 0);
+    let scratch = Scratch::new("cli-running-goal-files")
+        .with_settings(&settings_for(&gateway))
+        .with_file("notes.txt", "A-MARKER-ONLY-THE-FILE-HOLDS");
+
+    let (output, requests) = a_goal_run_in(&scratch, &gateway, &["--file", "notes.txt"]);
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let turns: Vec<&String> = requests
+        .iter()
+        .filter(|body| !body.contains(THE_JUDGES_WORDS))
+        .collect();
+    assert_eq!(turns.len(), 2, "{stderr}");
+    let held = |body: &String| body.matches("A-MARKER-ONLY-THE-FILE-HOLDS").count();
+    assert!(held(turns[0]) >= 1, "the file never reached the planner");
+    assert_eq!(
+        held(turns[1]),
+        held(turns[0]),
+        "the second round named the file again"
+    );
+}
+
+/// CLI-35, CLI-25, GOAL-12: a goal run is one record, holding every round, that a later run carries
+/// on, and the later run is not working towards the condition.
+///
+/// Rejects a record written per round or only for the first, and a condition that outlives the run.
+#[test]
+fn a_goal_run_is_one_record_that_a_later_run_carries_on_without_the_goal() {
+    let gateway = a_gateway_for_a_goal(&["NOT MET\nnot yet", "MET\nnow"], 0);
+    let scratch = Scratch::new("cli-running-goal-record").with_settings(&settings_for(&gateway));
+    let (output, _) = a_goal_run_in(&scratch, &gateway, &["--json"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let id = session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"));
+    let _ = requests(&gateway);
+
+    let follow_up = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--resume", &id, "-p", "and what changed?"],
+    );
+
+    let (_, stderr) = said(&follow_up);
+    assert_eq!(follow_up.status.code(), Some(0), "{stderr}");
+    let sent = requests(&gateway);
+    let sent = sent.last().expect("the follow-up reached the gateway");
+    assert!(
+        sent.contains("The stopping condition for this session has not been met"),
+        "the record kept no round that was sent back: {sent}"
+    );
+    assert!(
+        !sent.contains("is judged against it once it ends"),
+        "the condition was restored with the session: {sent}"
+    );
+}
+
+/// CLI-35, CLI-6: a blank condition and a manifest run are refused by the status for an argument
+/// before anything is sent.
+///
+/// Rejects running once with no condition when a script's variable was empty, and a manifest run
+/// that takes the flag and never judges anything.
+#[test]
+fn a_goal_that_cannot_be_worked_towards_is_refused_before_anything_is_sent() {
+    let gateway = a_gateway_for_a_goal(&["MET\nfine"], 0);
+    let scratch = Scratch::new("cli-running-goal-refused").with_settings(&settings_for(&gateway));
+
+    for (arguments, named) in [
+        (vec!["--goal", "  ", "-p", "go"], "--goal requires"),
+        (vec!["-p", "go", "--goal"], "--goal requires"),
+        (
+            vec!["--goal", A_CONDITION, "--mode", "manifest", "-p", "go"],
+            "--goal cannot be used with --mode manifest",
+        ),
+    ] {
+        let output = bravebot_started_in(&scratch.path, &scratch.path, AT_A_GATEWAY, &arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(stderr.contains(named), "{arguments:?}: {stderr}");
+        assert!(stdout.is_empty(), "{arguments:?}: {stdout}");
+    }
+    assert!(
+        requests(&gateway).is_empty(),
+        "a refused line reached the gateway"
+    );
+}
+
+/// A scratch whose settings deny `Read(./.env)`, and a gateway whose planner reads `.env` in its
+/// first round and only talks after that, with `verdicts` for the judge.
+fn a_goal_run_refused_in_its_first_round(
+    name: &str,
+    verdicts: &[&str],
+    more: &[&str],
+) -> (Output, Vec<String>) {
+    let verdicts: Vec<String> = verdicts.iter().map(|verdict| verdict.to_string()).collect();
+    let asked_to_read = Arc::new(AtomicUsize::new(0));
+    let checks = Arc::new(AtomicUsize::new(0));
+    let gateway = a_gateway(r#"["tools"]"#, move |body| {
+        if body.contains(THE_JUDGES_WORDS) {
+            let at = checks
+                .fetch_add(1, Ordering::SeqCst)
+                .min(verdicts.len() - 1);
+            return framed(
+                serde_json::json!({"role": "assistant", "content": &verdicts[at]}),
+                "stop",
+                (7, 3),
+            );
+        }
+        let asked: serde_json::Value = serde_json::from_str(body).expect("a JSON body");
+        let after_a_call = asked["messages"]
+            .as_array()
+            .and_then(|messages| messages.last())
+            .is_some_and(|message| message["role"] == "tool");
+        if !after_a_call && asked_to_read.fetch_add(1, Ordering::SeqCst) == 0 {
+            return framed(
+                serde_json::json!({"role": "assistant", "tool_calls": [{
+                    "index": 0, "id": "call-1", "type": "function", "function": {
+                        "name": "read_file",
+                        "arguments": serde_json::json!({"path": ".env"}).to_string()}}]}),
+                "tool_calls",
+                (8, 1),
+            );
+        }
+        framed(
+            serde_json::json!({"role": "assistant", "content": "done"}),
+            "stop",
+            (10, 2),
+        )
+    });
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(&gateway)).expect("settings are JSON");
+    settings["permissions"] = serde_json::json!({"deny": ["Read(./.env)"]});
+    let scratch = Scratch::new(name).with_settings(&settings.to_string());
+    std::fs::write(scratch.path.join(".env"), "A=1").expect("write the file");
+    a_goal_run_in(&scratch, &gateway, more)
+}
+
+/// CLI-35, CLI-6: a gate that refused something in an early round makes the run a refused one, even
+/// where the round that met the condition was clean.
+///
+/// The first round reads a file a rule denies and the second answers in words. Rejects reading only
+/// the last round's record of refusals, which ends this run on a success.
+#[test]
+fn a_refusal_in_an_early_round_ends_a_goal_run_on_the_refused_status() {
+    let (output, requests) = a_goal_run_refused_in_its_first_round(
+        "cli-running-goal-early-refusal",
+        &["NOT MET\nnot read yet", "MET\nread it"],
+        &["--json"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(checks_among(&requests), 2, "{stderr}");
+    assert_eq!(output.status.code(), Some(4), "{stderr}");
+    let result: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(result["reason"], "refused", "{stdout}");
+}
+
+/// CLI-35, CLI-6: where a refusal outranks an unmet condition, the run still says the condition was
+/// not met, on stderr and in the result object, without the identifier of a status it did not end
+/// on.
+///
+/// Rejects an unmet condition that goes unsaid whenever another failure decides the status, which
+/// leaves a script unable to tell a goal that held from one that did not.
+#[test]
+fn a_refusal_that_outranks_an_unmet_goal_does_not_hide_it() {
+    let (output, requests) = a_goal_run_refused_in_its_first_round(
+        "cli-running-goal-refused-and-unmet",
+        &["NOT MET\nstill red"],
+        &["--json"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        checks_among(&requests),
+        4,
+        "the first round called a tool and the next three did not: {stderr}"
+    );
+    assert_eq!(output.status.code(), Some(4), "{stderr}");
+    assert!(stderr.contains("BB1004"), "{stderr}");
+    assert!(
+        stderr.contains("without a turn making a tool call") && !stderr.contains("BB1007"),
+        "{stderr}"
+    );
+    let result: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    let message = result["message"].as_str().expect("a message");
+    assert!(
+        message.contains("a policy gate refused something")
+            && message.contains("without a turn making a tool call"),
+        "{message}"
+    );
+}
+
+/// CLI-35, GOAL-19: a judge model that needs a sign-in this machine has not made is refused with the
+/// status for a configuration before the first round is sent.
+///
+/// The rounds run on the gateway and the judge is Bedrock's, under a profile no machine has. Rejects
+/// finding out after a round that edited files and spent tokens, which is where the first check
+/// would have said so: that round would reach the gateway.
+#[test]
+fn a_goal_whose_judge_model_needs_a_sign_in_is_refused_before_anything_is_sent() {
+    let gateway = a_gateway_for_a_goal(&["MET\nfine"], 0);
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(&gateway)).expect("settings are JSON");
+    settings["summaryModel"] = serde_json::json!("haiku");
+    let scratch =
+        Scratch::new("cli-running-goal-judge-sign-in").with_settings(&settings.to_string());
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.extend([
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-west-2"),
+        ("ANTHROPIC_DEFAULT_SONNET_MODEL", "sonnet-arn"),
+        ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "haiku-arn"),
+        ("AWS_PROFILE", "a-profile-no-machine-has"),
+    ]);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        &environment,
+        &["--goal", A_CONDITION, "-p", "get the build green"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("BB1003") && stderr.contains("haiku-arn") && stderr.contains("sign-in"),
+        "{stderr}"
+    );
+    assert!(stdout.is_empty(), "{stdout}");
+    let requests: Vec<String> = gateway.asked.try_iter().collect();
+    assert!(requests.is_empty(), "a round was sent: {requests:?}");
+}
+
+/// CLI-35, CLI-6: a judge nobody can connect to ends the run on the status for a backend that was
+/// not there, and the last round's reply is still written. The judge is the `summaryModel`'s, so
+/// the service the rounds ran against is not the one that was asked.
+///
+/// Rejects the status for any other failure, which a script would not retry.
+#[test]
+fn a_goal_judge_that_cannot_be_reached_ends_the_run_on_the_unreachable_status() {
+    let gateway = a_gateway_for_a_goal(&["MET\nfine"], 0);
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings_for(&gateway)).expect("settings are JSON");
+    settings["provider"]["dead"] = serde_json::json!({
+        "env": ["OPENROUTER_API_KEY"],
+        "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+        "models": {"judge-model": {}}
+    });
+    settings["summaryModel"] = serde_json::json!("dead/judge-model");
+    let scratch = Scratch::new("cli-running-goal-judge-dead").with_settings(&settings.to_string());
+
+    let (output, requests) = a_goal_run_in(&scratch, &gateway, &[]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(5), "{stderr}");
+    assert!(stderr.contains("BB1005"), "{stderr}");
+    assert_eq!(stdout.trim(), "round 1 done");
+    assert_eq!(
+        requests.len(),
+        1,
+        "only the round reached the gateway: {stderr}"
+    );
+}
+
+/// CLI-35: a round that fails has nothing to judge, so the run ends as a turn that failed does and
+/// no check is made.
+///
+/// Rejects putting a check over the conversation of a round that never answered.
+#[test]
+fn a_goal_run_whose_first_round_fails_makes_no_check() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| {
+        http(500, r#"{"error": {"message": "the planner is down"}}"#)
+    });
+
+    let (output, requests) = a_goal_run("cli-running-goal-first-round-fails", &gateway, &[]);
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("BB1001"), "{stderr}");
+    assert_eq!(checks_among(&requests), 0, "{stderr}");
+}
+
+/// CLI-35, CLI-12: a run that fails in a later round still reports what the rounds before it and
+/// their checks cost.
+///
+/// The first round costs 12 and its check 10, and the second round fails. Rejects a failure report
+/// that starts again from the round that failed.
+#[test]
+fn a_goal_run_whose_later_round_fails_reports_what_the_earlier_ones_cost() {
+    let rounds = Arc::new(AtomicUsize::new(0));
+    let gateway = a_gateway(r#"["tools"]"#, move |body| {
+        if body.contains(THE_JUDGES_WORDS) {
+            return framed(
+                serde_json::json!({"role": "assistant", "content": "NOT MET\nnot yet"}),
+                "stop",
+                (7, 3),
+            );
+        }
+        if rounds.fetch_add(1, Ordering::SeqCst) > 0 {
+            return http(500, r#"{"error": {"message": "the planner is down"}}"#);
+        }
+        framed(
+            serde_json::json!({"role": "assistant", "content": "round 1 done"}),
+            "stop",
+            (10, 2),
+        )
+    });
+
+    let (output, _) = a_goal_run("cli-running-goal-later-round-fails", &gateway, &["--json"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    let result: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(result["tokens"]["total"], 22, "{stdout}");
+}
+
+/// CLI-35, CLI-12: a check whose reply completed and could not be used still costs what it cost, and
+/// the run's tokens say so.
+///
+/// The round costs 12 and the check 10, and the check answers with usage and no words. Rejects a
+/// failed check that leaves its completed request out of the total.
+#[test]
+fn a_goal_check_that_fails_after_a_reply_still_charges_the_reply() {
+    let gateway = a_gateway(r#"["tools"]"#, |body| {
+        let words = if body.contains(THE_JUDGES_WORDS) {
+            ""
+        } else {
+            "round 1 done"
+        };
+        let usage = if body.contains(THE_JUDGES_WORDS) {
+            (7, 3)
+        } else {
+            (10, 2)
+        };
+        framed(
+            serde_json::json!({"role": "assistant", "content": words}),
+            "stop",
+            usage,
+        )
+    });
+
+    let (output, _) = a_goal_run("cli-running-goal-check-charged", &gateway, &["--json"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("the goal could not be checked"), "{stderr}");
+    let result: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    assert_eq!(result["tokens"]["total"], 22, "{stdout}");
+}
+
+/// CLI-35: nobody reading stderr does not stop a goal run. A caller that closed the pipe after the
+/// first line has stopped listening, and the work it asked for is still on disk to finish.
+///
+/// Rejects a verdict line written with `eprintln!`, which panics on a closed stderr and ends the
+/// run between rounds with no reply and no record.
+#[test]
+fn a_goal_run_whose_stderr_was_closed_still_finishes() {
+    let gateway = a_gateway_for_a_goal(&["NOT MET\nnot yet", "MET\nnow"], 0);
+    let scratch =
+        Scratch::new("cli-running-goal-stderr-closed").with_settings(&settings_for(&gateway));
+    let mut command = prepared(
+        &scratch.path,
+        Some(&scratch.path),
+        AT_A_GATEWAY,
+        &["--goal", A_CONDITION, "-p", "get the build green"],
+    );
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = command.spawn().expect("the built binary starts");
+    drop(child.stderr.take());
+    let output = child.wait_with_output().expect("the run ends");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a closed stderr ended the run"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "round 2 done"
+    );
+}
+
+/// CLI-35: the words after `--bg` are one prompt, so a `--goal` among them is refused, by name,
+/// rather than sent to the session as text with no condition in force.
+///
+/// Rejects a background start that takes the flag, which would say it started and judge nothing.
+#[test]
+fn a_goal_is_refused_where_a_background_session_starts() {
+    let scratch = Scratch::new("cli-running-goal-background");
+
+    let output = bravebot(
+        &scratch.path,
+        &[],
+        &["--bg", "--goal", "the tests pass", "fix the build"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("--bg takes a prompt and no other option") && stderr.contains("--goal"),
+        "{stderr}"
+    );
+    assert!(stdout.is_empty(), "{stdout}");
+}
