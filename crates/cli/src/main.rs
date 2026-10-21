@@ -2126,7 +2126,8 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
                 &mut sink,
             );
             session = kept;
-            // Why the condition `--goal` gave went unmet, where it did (CLI-35).
+            // Kept out of `outcome`: it decides the ending only where the turns ended well, but is
+            // said wherever it is set, even under a refusal that outranks it (CLI-35).
             unmet = why;
             outcome
         }
