@@ -1239,7 +1239,6 @@ function Questions({
   const given = asking.answerOf(chosen, typed)
   // Nothing picked or typed is not an answer, and passing the question over is what Skip says.
   const blank = !given.typed && !given.chosen
-  const last = step.at === prompts.length - 1
 
   const choose = (index: number): void => {
     setChosen((old) => {
@@ -1249,7 +1248,7 @@ function Questions({
   }
 
   const settle = (answer: AskAnswer): void => {
-    const next = asking.settle(step, answer, prompts.length)
+    const next = asking.settle(step, answer, prompt.last)
     if ('answers' in next) {
       onAnswer(request.request.request, next.answers)
       return
@@ -1261,7 +1260,7 @@ function Questions({
 
   return (
     <div className="confirm ask" ref={card}>
-      <CardHead icon="message-bubble" intent="Asked" subject={<span className="path">{asking.position(step.at, prompts.length) ?? '1 question'}</span>} />
+      <CardHead icon="message-bubble" intent="Asked" subject={<span className="path">{prompt.place ?? '1 question'}</span>} />
 
       {/* Said again when the next question replaces this one, so a person using a screen reader
           learns that it did. */}
@@ -1313,7 +1312,7 @@ function Questions({
           Skip
         </Button>
         <Button kind="filled" size="small" className="approve" isDisabled={blank} onClick={() => settle(given)}>
-          {last ? 'Answer' : 'Next'}
+          {prompt.last ? 'Answer' : 'Next'}
         </Button>
       </div>
     </div>

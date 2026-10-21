@@ -191,7 +191,7 @@ export const CASES = {
     event: 'ask.request',
     request: {
       request: 115,
-      prompts: [{ header: 'Branch', question: 'Which branch should the notes go on?', rows: [{ index: 0, label: 'main', detail: null }, { index: 1, label: 'release', detail: null }], multiple: false, key: 'branch' }],
+      prompts: [{ header: 'Branch', question: 'Which branch should the notes go on?', rows: [{ index: 0, label: 'main', detail: null }, { index: 1, label: 'release', detail: null }], multiple: false, key: 'branch', place: null, last: true }],
     },
     tokens: [],
     standing: [],

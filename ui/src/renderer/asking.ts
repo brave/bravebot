@@ -47,14 +47,15 @@ export function release(id: string): void {
 export type Next = { step: Step } | { answers: AskAnswer[] }
 
 /**
- * Take the answer to the question being put and move on, finishing when there is none left.
+ * Take the answer to the question being put and move on, finishing when `last` says none is left.
  *
- * Whether the series is over depends on how many questions it holds and never on what any of them
- * was answered with, so skipping a question and answering it are the same operation.
+ * `last` is the bridge's, from the prompt: the rule for when a series is over is the agent's, so
+ * the window keeps which question it is on and does not count them. It never depends on what the
+ * question was answered with, so skipping a question and answering it are the same operation.
  */
-export function settle(step: Step, answer: AskAnswer, total: number): Next {
+export function settle(step: Step, answer: AskAnswer, last: boolean): Next {
   const settled = [...step.settled, answer]
-  return settled.length >= total ? { answers: settled } : { step: { at: step.at + 1, settled } }
+  return last ? { answers: settled } : { step: { at: step.at + 1, settled } }
 }
 
 /**
@@ -68,12 +69,4 @@ export function answerOf(chosen: readonly number[], typed: string): AskAnswer {
   const words = typed.trim()
   if (words) return { typed: words }
   return chosen.length > 0 ? { chosen: [...chosen] } : {}
-}
-
-/**
- * Where the question at `at` (counted from zero) stands in a series of `total`, or `null` for a
- * lone question, which has no position worth saying.
- */
-export function position(at: number, total: number): string | null {
-  return total > 1 ? `Question ${at + 1} of ${total}` : null
 }

@@ -156,7 +156,7 @@ try {
     { kind: 'kept', text: 'export class Store {' }, { kind: 'removed', text: '  private lock = new Mutex()' }, { kind: 'added', text: '  private readLock = new RwLock()' }, { kind: 'added', text: '  private writeLock = new Mutex()' }, { kind: 'kept', text: '}' },
   ] })
   await emit('run.request', { request: 2, line: 'npm test -- store', plan: 'npm test -- store', stages: [{ program: 'npm', resolved: '/usr/local/bin/npm', args: ['test', '--', 'store'], display: 'npm test -- store' }], directory, releasesPrivate: false, ambient: [], vouches: [], summary: 'Run the store tests' })
-  await emit('ask.request', { request: 3, prompts: [{ header: 'Lock', question: 'Which lock should reads use?', rows: [{ index: 0, label: 'RwLock', detail: 'Many readers' }, { index: 1, label: 'Snapshot', detail: 'Copy on write' }], multiple: false, key: 'lock' }] })
+  await emit('ask.request', { request: 3, prompts: [{ header: 'Lock', question: 'Which lock should reads use?', rows: [{ index: 0, label: 'RwLock', detail: 'Many readers' }, { index: 1, label: 'Snapshot', detail: 'Copy on write' }], multiple: false, key: 'lock', place: null, last: true }] })
   await page.locator('.confirm.ask').waitFor()
   const count = await page.evaluate(() => document.querySelectorAll('.entries [data-entry-id]').length)
   console.log(`fixture: ${ENTRIES} entries loaded, ${count} rows in the DOM`)

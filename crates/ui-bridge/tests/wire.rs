@@ -999,6 +999,34 @@ fn the_prompts_are_sent_as_the_kernel_shaped_them() {
     );
 }
 
+/// The window puts the questions one at a time and decides neither where a question stands nor
+/// whether settling it ends the series (ASK-6), so each prompt carries both, from the same code
+/// the picker uses. The fault this rejects is a series that ends on a count the window keeps.
+#[test]
+fn each_prompt_says_where_it_stands_and_whether_settling_it_ends_the_series() {
+    let sent = wire::ask_request(3, &a_series());
+    let prompts = sent["prompts"].as_array().expect("prompts");
+
+    assert_eq!(prompts[0]["place"], "the agent is asking (1 of 2)");
+    assert_eq!(prompts[1]["place"], "the agent is asking (2 of 2)");
+    assert_eq!(prompts[0]["last"], false);
+    assert_eq!(prompts[1]["last"], true);
+
+    let lone = ask::asking(&Series::new(vec![Question::new(
+        "Approach",
+        "Which way?",
+        vec![Choice::new("rebase", None)],
+        false,
+    )]));
+    let sent = wire::ask_request(4, &lone);
+    assert_eq!(
+        sent["prompts"][0]["place"],
+        Value::Null,
+        "a lone question counted itself"
+    );
+    assert_eq!(sent["prompts"][0]["last"], true);
+}
+
 /// The path a stage is started by goes to the desktop app beside the file, so its prompt can show
 /// the link a name reached the file through.
 #[test]

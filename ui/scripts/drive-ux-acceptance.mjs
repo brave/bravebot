@@ -43,7 +43,7 @@ try {
   await page.getByRole('button',{name:'Attach files'}).click();await page.locator('.attachment-chips').waitFor();await snap('10-attachment');await page.getByRole('button',{name:'Remove attachment src/nested/sample.txt'}).click()
   await page.locator('.model-trigger').click();await page.getByRole('option',{name:/Deep model/}).waitFor();await snap('11-models');await page.getByRole('option',{name:/Deep model/}).click();await page.locator('.model-trigger').click();await snap('12-recent-model');await page.keyboard.press('Escape')
   await composer.fill('Start review');await page.getByRole('button',{name:'Send',exact:true}).click()
-  await emit('ask.request',{request:1,prompts:[{header:'Color',question:'Which color should the sample use?',rows:[{index:0,label:'Blue',detail:'A cool accent'},{index:1,label:'Green',detail:'A natural accent'}],multiple:false,key:'color'}]})
+  await emit('ask.request',{request:1,prompts:[{header:'Color',question:'Which color should the sample use?',rows:[{index:0,label:'Blue',detail:'A cool accent'},{index:1,label:'Green',detail:'A natural accent'}],multiple:false,key:'color',place:null,last:true}]})
   await composer.fill('Follow up after this review');await composer.press('Enter');await snap('13-question-queue')
   await page.locator('.session').filter({hasText:'Plan the next iteration'}).click();await snap('14-background')
   await page.locator('.session').filter({hasText:'Review the sample project'}).click();await page.getByRole('button',{name:'Stop',exact:true}).click();await page.getByText('Task stopped',{exact:true}).waitFor();await snap('15-stopped-queue')

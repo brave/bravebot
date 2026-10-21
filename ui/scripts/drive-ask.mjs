@@ -58,7 +58,7 @@ const card = page.locator('.confirm.ask').first()
 
 // The series is put one question at a time, and the card's head says where the person is in it.
 const position = card.locator('.confirm-head .path')
-const questions = Number((await position.textContent())?.trim().match(/^Question 1 of (\d+)$/)?.[1] ?? 1)
+const questions = Number((await position.textContent())?.trim().match(/^the agent is asking \(1 of (\d+)\)$/)?.[1] ?? 1)
 check((await card.locator('.ask-question').count()) === 1, `one question at a time (${questions} in the series)`)
 check(
   (await card.locator('.ask-question .question').first().textContent())?.trim().length > 0,
@@ -92,7 +92,7 @@ const first = card.locator('.choices .choice').first()
 const label = (await first.locator('.label').textContent())?.trim() ?? ''
 for (let at = 0; at < questions; at++) {
   check(
-    (await position.textContent())?.trim() === `Question ${at + 1} of ${questions}`,
+    (await position.textContent())?.trim() === `the agent is asking (${at + 1} of ${questions})`,
     `question ${at + 1} says where it sits in the series`,
   )
   const block = card.locator('.ask-question')

@@ -1631,7 +1631,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         let mut fresh = Vec::new();
         for (at, prompt) in outstanding.iter().enumerate() {
             // The position among the questions put, as the picker's title says it (ASK-6).
-            let mut lines: Vec<String> = bravebot_tui::ask::place(at, outstanding.len())
+            let mut lines: Vec<String> = bravebot_i18n::ask::place(at, outstanding.len())
                 .into_iter()
                 .collect();
             lines.push(shown(&prompt.header));

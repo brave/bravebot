@@ -120,6 +120,18 @@ pub struct Asking {
     pub closes_when_idle: bool,
 }
 
+impl Asking {
+    /// Whether settling the question at `at` (counted from zero) ends the series.
+    ///
+    /// One place decides the series is over, and it decides on how many questions there are and
+    /// never on what any of them was answered with. That is what makes skipping and finishing the
+    /// same operation: an answer the person declined is still an answer to the question they were
+    /// on. The picker, and the window by way of the bridge, both ask this rather than count.
+    pub fn ends_at(&self, at: usize) -> bool {
+        at + 1 >= self.prompts.len()
+    }
+}
+
 /// What the person did.
 ///
 /// Not a label and not a gate, just the shape of a reply. Declining is a first-class answer
@@ -545,6 +557,20 @@ mod tests {
     #[test]
     fn a_shaped_question_carries_the_tag_it_is_shown_under() {
         assert_eq!(prompt(&question()).header, "Cache layer");
+    }
+
+    /// The series ends on the last question however it was settled, and not before it. An end
+    /// decided from the answer would let a skip, or a particular reply, close the series early.
+    #[test]
+    fn a_series_ends_at_its_last_question_and_not_before() {
+        let series = asking(&Series::new(vec![question(), question(), question()]));
+        assert!(!series.ends_at(0), "the first of three ended the series");
+        assert!(!series.ends_at(1), "the second of three ended the series");
+        assert!(
+            series.ends_at(2),
+            "the last of three did not end the series"
+        );
+        assert!(asking(&Series::new(vec![question()])).ends_at(0));
     }
 
     #[test]

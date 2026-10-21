@@ -412,7 +412,7 @@ try {
   const lastly = series.getByRole('button', { name: 'Answer', exact: true })
   // Only the question being put is on screen, and the others wait their turn.
   const onlyAsking = async (at, text) => {
-    await position.getByText(`Question ${at} of 3`, { exact: true }).waitFor()
+    await position.getByText(`the agent is asking (${at} of 3)`, { exact: true }).waitFor()
     assert.equal(await series.locator('.ask-question').count(), 1, 'one question at a time')
     assert.equal(await series.locator('.ask-question .question').innerText(), text)
     for (const other of questions.filter(one => one.question !== text)) assert.equal(await series.getByText(other.question, { exact: true }).count(), 0, `${other.question} is not drawn yet`)

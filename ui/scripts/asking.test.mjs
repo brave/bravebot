@@ -2,8 +2,10 @@
 // a skip that moves on, and every answer sent together once the last is settled.
 //
 // The walkthrough (`drive-manual-walkthrough.mjs`) drives the whole path through a real window and
-// bridge. These hold the two halves that need no window: what the stepping decides, and what the
-// card draws for the question it is on. The card is rendered through `react-dom/server` and the
+// bridge. These hold the two halves that need no window: how the stepping follows the bridge, and
+// what the card draws for the question it is on. Where a question stands and whether settling it
+// ends the series are the bridge's (`wire::ask_request`), so the fixtures carry them as the bridge
+// sends them, and nothing here counts the questions. The card is rendered through `react-dom/server` and the
 // markup is what is asserted on.
 
 import test from 'node:test'
@@ -34,18 +36,22 @@ const asking = load('src/renderer/asking.ts')
 const { Row } = load('src/renderer/components/Transcript.tsx')
 const t = load('src/renderer/transcript.ts')
 
-const prompt = (header, question, labels = [], multiple = false) => ({
+const prompt = (header, question, labels = [], multiple = false, place = null, last = true) => ({
   header,
   question,
   rows: labels.map((label, index) => ({ index, label, detail: null })),
   multiple,
   key: question,
+  place,
+  last,
 })
 
+// What the bridge sends for a series of three. The wording is the bridge's, so a window that
+// composed its own would not match it.
 const SERIES = [
-  prompt('Approach', 'Which approach should the flag take?', ['Global flag', 'Per command']),
-  prompt('Name', 'What should the flag be called?', ['--json', '--format json']),
-  prompt('Tests', 'Which suites should run?', ['Unit', 'Integration'], true),
+  prompt('Approach', 'Which approach should the flag take?', ['Global flag', 'Per command'], false, 'question 1 sur 3', false),
+  prompt('Name', 'What should the flag be called?', ['--json', '--format json'], false, 'question 2 sur 3', false),
+  prompt('Tests', 'Which suites should run?', ['Unit', 'Integration'], true, 'question 3 sur 3', true),
 ]
 
 const draw = (entry) =>
@@ -55,19 +61,19 @@ const draw = (entry) =>
 
 const text = (markup) => markup.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
 
-test('a series is over when the last question is settled, whatever that answer was', () => {
-  const total = SERIES.length
-  const first = asking.settle(asking.first, { chosen: [1] }, total)
+test('a series is over when the bridge says the question settled was the last, whatever the answer was', () => {
+  const [one, two, three] = SERIES
+  const first = asking.settle(asking.first, { chosen: [1] }, one.last)
   assert.ok('step' in first, 'the series ended on its first answer')
   assert.equal(first.step.at, 1)
 
-  const second = asking.settle(first.step, {}, total)
+  const second = asking.settle(first.step, {}, two.last)
   assert.ok('step' in second, 'a skipped question ended the series')
   assert.equal(second.step.at, 2)
 
   // A skip on the last question ends it exactly as an answer does.
-  const skipped = asking.settle(second.step, {}, total)
-  const answered = asking.settle(second.step, { chosen: [0] }, total)
+  const skipped = asking.settle(second.step, {}, three.last)
+  const answered = asking.settle(second.step, { chosen: [0] }, three.last)
   assert.ok('answers' in skipped && 'answers' in answered, 'the last question did not end the series')
 })
 
@@ -75,8 +81,8 @@ test('the answers go back in the order the questions were put, with a skip as an
   let step = asking.first
   const given = [{ typed: 'beta' }, {}, { chosen: [0, 1] }]
   let sent
-  for (const answer of given) {
-    const next = asking.settle(step, answer, given.length)
+  for (const [at, answer] of given.entries()) {
+    const next = asking.settle(step, answer, SERIES[at].last)
     if ('answers' in next) sent = next.answers
     else step = next.step
   }
@@ -85,7 +91,7 @@ test('the answers go back in the order the questions were put, with a skip as an
 
 test('settling does not change the step it was given', () => {
   const before = { at: 0, settled: [] }
-  asking.settle(before, { typed: 'a' }, 3)
+  asking.settle(before, { typed: 'a' }, false)
   assert.deepEqual(before, { at: 0, settled: [] })
   assert.deepEqual(asking.first, { at: 0, settled: [] })
 })
@@ -107,16 +113,11 @@ test('progress kept for a series comes back for that series and no other', () =>
   assert.deepEqual(asking.recall('series-a'), { step: asking.first, chosen: [], typed: '' }, 'an answered series kept its progress')
 })
 
-test('a question says where it stands in a series, and a lone question says nothing', () => {
-  assert.equal(asking.position(0, 3), 'Question 1 of 3')
-  assert.equal(asking.position(2, 3), 'Question 3 of 3')
-  assert.equal(asking.position(0, 1), null)
-})
-
 test('the card puts the first question of a series and none of the others', () => {
   const markup = draw(t.askedQuestions({ request: 7, prompts: SERIES }))
 
-  assert.ok(markup.includes('Question 1 of 3'), markup)
+  assert.ok(markup.includes('question 1 sur 3'), `the card did not say the position the bridge sent: ${markup}`)
+  assert.ok(!markup.includes('Question 1 of 3'), `the card worded a position of its own: ${markup}`)
   assert.ok(markup.includes(SERIES[0].question), markup)
   for (const later of SERIES.slice(1)) assert.ok(!markup.includes(later.question), `${later.question} is drawn before its turn`)
   assert.equal(markup.match(/<fieldset/g).length, 1, 'more than one question is on screen')
@@ -132,12 +133,21 @@ test('the card offers a skip beside the answer for the question it is on', () =>
 })
 
 test('a lone question is not counted and its button says it ends the series', () => {
-  const markup = draw(t.askedQuestions({ request: 8, prompts: [SERIES[0]] }))
+  const markup = draw(t.askedQuestions({ request: 8, prompts: [prompt('Approach', 'Which approach?', ['Global flag'])] }))
 
   assert.ok(markup.includes('1 question'), markup)
-  assert.ok(!markup.includes('Question 1 of 1'), markup)
+  assert.ok(!markup.includes(' of 1'), markup)
   const buttons = [...markup.matchAll(/<leo-button>(.*?)<\/leo-button>/g)].map((found) => found[1])
   assert.deepEqual(buttons, ['Skip', 'Answer'])
+})
+
+test('the card ends the series where the bridge says it ends, and not where its own count would', () => {
+  // The first of two, marked as the last. A card that counted its questions would offer Next.
+  const marked = [{ ...SERIES[0], last: true }, SERIES[1]]
+  const markup = draw(t.askedQuestions({ request: 10, prompts: marked }))
+
+  const buttons = [...markup.matchAll(/<leo-button>(.*?)<\/leo-button>/g)].map((found) => found[1])
+  assert.deepEqual(buttons, ['Skip', 'Answer'], 'the button followed a count the card kept')
 })
 
 test('an answered series is a record of every question, with what each was answered with', () => {

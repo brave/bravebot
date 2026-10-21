@@ -134,7 +134,7 @@ async function answerEverything(s, { shot }) {
       // One question is on screen at a time and Next puts the following one, so this runs once per
       // question: the card is still asking when the loop comes back to it.
       const position = ((await card.locator('.confirm-head .path').textContent()) ?? '').trim()
-      if (position.startsWith('Question')) await s.say('One at a time', position, 1.6)
+      if (position.startsWith('the agent is asking')) await s.say('One at a time', position, 1.6)
       const blocks = await card.locator('.ask-question').all()
       for (const block of blocks) {
         const choices = block.locator('.choices .choice')

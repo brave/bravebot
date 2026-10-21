@@ -35,7 +35,8 @@ Three columns, each side one resizable and foldable:
   (as the task and every step), whether the model may **read a file that holds a
   credential** (as the file and what the scan found, without the value), and a **series of
   questions** the planner wants to put to you: choices to pick from, or your own words. A series
-  is put one question at a time under its position ("Question 2 of 3"), each with a **Skip**
+  is put one question at a time under its position ("the agent is asking (2 of 3)", the terminal picker's
+  sentence, which the bridge sends with each question), each with a **Skip**
   that moves on to the next, and the answers are sent together once the last is settled. The
   turn blocks until one is answered. Window close and app shutdown refuse outstanding
   questions. For the last of the nine that means *no answers at all* rather than a decline per question: a decline
