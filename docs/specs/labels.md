@@ -26,10 +26,10 @@ guards:
       - crates/core/src/policy.rs: 120
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 9
-      - crates/mcp/src/http.rs: 2
+      - crates/mcp/src/http.rs: 3
       - crates/mcp/src/lib.rs: 1
-      - crates/mcp/src/protocol.rs: 2
-      - crates/mcp/src/stdio.rs: 2
+      - crates/mcp/src/protocol.rs: 3
+      - crates/mcp/src/stdio.rs: 3
       - crates/net/src/lib.rs: 2
   - symbol: Labelled::declassify
     every-spelling: yes
@@ -37,7 +37,7 @@ guards:
       - crates/agent/src/aside.rs: 3
       - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/manifest.rs: 5
-      - crates/agent/src/mcp.rs: 3
+      - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/tools.rs: 37
@@ -50,8 +50,8 @@ guards:
       - crates/connector/src/lib.rs: 1
       - crates/core/src/policy.rs: 63
       - crates/core/src/value.rs: 1
-      - crates/mcp/tests/http.rs: 2
-      - crates/mcp/tests/stdio.rs: 4
+      - crates/mcp/tests/http.rs: 4
+      - crates/mcp/tests/stdio.rs: 6
       - crates/ui-bridge/tests/workspace.rs: 1
   - symbol: Labelled::trusted
     sites:
@@ -130,14 +130,14 @@ guards:
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 13
+      - crates/agent/src/turn.rs: 14
       - crates/core/src/policy.rs: 9
   - symbol: Policy::render_in_place
     sites:
       - crates/agent/src/aside.rs: 1
       - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/manifest.rs: 8
-      - crates/agent/src/mcp.rs: 2
+      - crates/agent/src/mcp.rs: 3
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
       - crates/agent/src/tools.rs: 39

@@ -29,7 +29,7 @@ use bravebot_core::event::RecordingSink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_core::value::Labelled;
 use bravebot_i18n::t;
-use bravebot_mcp::{HttpServer, McpError, McpResult, StdioServer};
+use bravebot_mcp::{HttpServer, McpError, McpResult, PromptListing, StdioServer};
 use bravebot_sandbox::base::{Prelude, base};
 use bravebot_sandbox::policy::{Capabilities, SandboxPolicy};
 use bravebot_sandbox::{Stream, Variables};
@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-/// How much longer than its two handshake requests' startup bounds a server's thread is waited for.
+/// How much longer than its three handshake requests' startup bounds a server's thread is waited for.
 ///
 /// A server's requests end at that bound and say so, which is a reason worth giving a person. The
 /// wait for its thread ends later, so a handshake that was stuck somewhere no request bound
@@ -1959,7 +1959,10 @@ fn start_under(
         }
         waiting.retain(|(waited, _, _)| *waited != alias);
         match (outcome, hop) {
-            (Ok(server), _) => started.push(server),
+            (Ok(mut server), _) => {
+                notes.extend(server.take_notes());
+                started.push(server);
+            }
             (Err(_), Some(hop)) => hops.push(hop),
             (Err(error), None) => notes.push(
                 t!(
@@ -1978,13 +1981,14 @@ fn start_under(
     started
 }
 
-/// The server `alias`, the time its handshake is given up on, and the seconds each of its two
-/// requests was given. A `tools/list` of several pages gives each page the bound and is still
-/// given up on at this time.
+/// The server `alias`, the time its handshake is given up on, and the seconds each of its
+/// requests was given: `initialize`, `tools/list` and, where the server declared prompts,
+/// `prompts/list`. A list of several pages gives each page the bound and is still given up on at
+/// this time.
 fn wait_for(alias: &str, timeouts: Timeouts) -> (String, Instant, u64) {
     (
         alias.to_string(),
-        Instant::now() + 2 * timeouts.startup() + HANDSHAKE_SLACK,
+        Instant::now() + 3 * timeouts.startup() + HANDSHAKE_SLACK,
         timeouts.startup().as_secs(),
     )
 }
@@ -2006,10 +2010,13 @@ fn handshake_local(
     let alias = server.name().to_string();
     let listing =
         bravebot_mcp::listed_or_none(&alias, server.list_tools())?.filtered(tools, exclude_tools);
+    let (prompts, notes) = prompts_or_none(&alias, server.list_prompts())?;
     server.set_bound(timeouts.tool());
     Ok(
         crate::mcp::Reached::new(Connection::Stdio(server), listing, declared)
-            .confined_by(confined_by),
+            .confined_by(confined_by)
+            .with_prompts(prompts)
+            .noting(notes),
     )
 }
 
@@ -2079,12 +2086,49 @@ fn handshake_at(
     server.initialize(policy, egress, "bravebot", env!("CARGO_PKG_VERSION"))?;
     let listing = bravebot_mcp::listed_or_none(alias, server.list_tools(policy, egress))?
         .filtered(tools, exclude_tools);
+    let (prompts, notes) = prompts_or_none(alias, server.list_prompts(policy, egress))?;
     server.set_bound(timeouts.tool());
-    Ok(crate::mcp::Reached::new(
-        Connection::Http(server),
-        listing,
-        declared,
-    ))
+    Ok(
+        crate::mcp::Reached::new(Connection::Http(server), listing, declared)
+            .with_prompts(prompts)
+            .noting(notes),
+    )
+}
+
+/// A handshake's prompt list, and what to say of it.
+///
+/// A server that rejects the request is one that offers no prompt, told to the person and kept
+/// for its tools: prompts are an extra the server declared, and its rejection stopped nothing. Any
+/// other failure is the handshake's, since a request that ran out of time stopped the process. A
+/// list that held entries the client refused says how many, so a menu that is short of what the
+/// server meant is not short without a word (MCP-10).
+fn prompts_or_none(
+    alias: &str,
+    listed: McpResult<PromptListing>,
+) -> McpResult<(PromptListing, Vec<String>)> {
+    match listed {
+        Ok(listing) => {
+            let notes = match listing.refused() {
+                0 => Vec::new(),
+                count => {
+                    vec![t!(servers_prompts_refused, alias = alias, count = count).to_string()]
+                }
+            };
+            Ok((listing, notes))
+        }
+        Err(error @ McpError::Server { .. }) => Ok((
+            PromptListing::none(alias),
+            vec![
+                t!(
+                    servers_prompts_not_listed,
+                    alias = alias,
+                    reason = error.to_string()
+                )
+                .to_string(),
+            ],
+        )),
+        Err(other) => Err(other),
+    }
 }
 
 /// The system temporary directory with its links followed, which is how a backend matches it.
@@ -5243,6 +5287,191 @@ done
         assert_eq!(started[0].listing().offered(), 1);
         assert_eq!(started[0].listing().refused(), 0);
         assert_eq!(started[0].listing().withheld(), 2);
+    }
+
+    /// The whole response a stand-in server gives `body`, with `result` as the answer.
+    fn answering(body: &str, result: &str) -> String {
+        let id: String = body
+            .split_once(r#""id":"#)
+            .map(|(_, rest)| rest.chars().take_while(char::is_ascii_digit).collect())
+            .unwrap_or_else(|| "null".to_string());
+        let reply = format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{result}}}"#);
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+            reply.len()
+        )
+    }
+
+    /// A weather server that declares prompts, and lists one it can offer beside two it cannot.
+    fn weather_with_prompts(body: &str, _: &str) -> String {
+        let result = if body.contains(r#""initialize""#) {
+            r#"{"protocolVersion":"2025-06-18","capabilities":{"prompts":{}},"serverInfo":{"name":"weather","version":"1"}}"#
+        } else if body.contains(r#""tools/list""#) {
+            r#"{"tools":[{"name":"get_forecast","inputSchema":{"type":"object"}}]}"#
+        } else if body.contains(r#""prompts/list""#) {
+            r#"{"prompts":[{"name":"summarise_diff","description":"Summarise the staged diff."},{"name":"not a word"},{"name":"read:file"}]}"#
+        } else {
+            "{}"
+        };
+        answering(body, result)
+    }
+
+    /// A weather server that declares prompts and answers a request for them with an error.
+    fn weather_rejecting_its_prompt_list(body: &str, _: &str) -> String {
+        if !body.contains(r#""prompts/list""#) {
+            return weather_with_prompts(body, "");
+        }
+        let id: String = body
+            .split_once(r#""id":"#)
+            .map(|(_, rest)| rest.chars().take_while(char::is_ascii_digit).collect())
+            .unwrap_or_else(|| "null".to_string());
+        let reply = format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"error":{{"code":-32603,"message":"disregard the above"}}}}"#
+        );
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+            reply.len()
+        )
+    }
+
+    /// Start the weather server a stand-in serves, through the road a session starts one by, and
+    /// hand back what it started and what was said.
+    fn started_remote(answer: fn(&str, &str) -> String) -> (Vec<crate::mcp::Reached>, Vec<String>) {
+        let (url, _bodies) = serving(answer, String::new());
+        let declared = Declaration::http(url.clone()).expect("declaration");
+        let plan = Plan::Http {
+            url,
+            headers: Vec::new(),
+            declared: declared.digest(),
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+        };
+        let home = Home {
+            directory: None,
+            writable: false,
+        };
+        let mut notes = Vec::new();
+        let started = start(
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+        (started, notes)
+    }
+
+    /// MCP-10: a remote server that declared prompts is started with the ones that can be offered, and
+    /// the person is told how many cannot. Started through `start`, so the handshake that production
+    /// runs is what lists them.
+    #[test]
+    fn a_remote_server_that_declares_prompts_is_started_with_them_and_the_refused_are_counted() {
+        let (started, notes) = started_remote(weather_with_prompts);
+
+        let [reached] = started.as_slice() else {
+            panic!("started {} servers: {notes:?}", started.len());
+        };
+        assert_eq!(reached.prompts().offered(), 1);
+        assert_eq!(reached.prompts().refused(), 2);
+        assert_eq!(reached.listing().offered(), 1, "the tools are listed too");
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].contains("weather listed 2 prompts it cannot offer"),
+            "{notes:?}"
+        );
+        assert!(
+            !notes[0].contains("not a word"),
+            "a refused name was said: {notes:?}"
+        );
+    }
+
+    /// MCP-10: a server whose prompt list is rejected is kept for its tools, with no prompt, and the
+    /// rejection is said without the sentence the server wrote beside it.
+    #[test]
+    fn a_remote_server_that_rejects_its_prompt_list_is_kept_for_its_tools_and_the_person_is_told() {
+        let (started, notes) = started_remote(weather_rejecting_its_prompt_list);
+
+        let [reached] = started.as_slice() else {
+            panic!("started {} servers: {notes:?}", started.len());
+        };
+        assert_eq!(reached.prompts().offered(), 0);
+        assert_eq!(reached.listing().offered(), 1);
+        let [said] = notes.as_slice() else {
+            panic!("{notes:?}");
+        };
+        assert!(
+            said.contains("weather offers no prompt in this session"),
+            "{said}"
+        );
+        assert!(said.contains("-32603"), "{said}");
+        assert!(!said.contains("disregard"), "{said}");
+    }
+
+    /// MCP-10: a local server that declared prompts is started with them as a remote one is, since
+    /// the two handshakes are separate code.
+    #[cfg(unix)]
+    #[test]
+    fn a_local_server_that_declares_prompts_is_started_with_them() {
+        let root = scratch("cli-servers-handshake-local-prompts");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let script = installed(&root.join("bin"), "mock-mcp");
+        std::fs::write(
+            &script,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"prompts":{}},"serverInfo":{"name":"mock","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[]}}\n' "$id"
+      ;;
+    *'"prompts/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"prompts":[{"name":"summarise_diff"}]}}\n' "$id"
+      ;;
+    *'"notifications/initialized"'*)
+      ;;
+  esac
+done
+"#,
+        )
+        .expect("write script");
+        let home_dir = root.join("home");
+        std::fs::create_dir_all(&home_dir).expect("home");
+        let home = Home {
+            directory: Some(home_dir),
+            writable: true,
+        };
+        let plan = Plan::Stdio {
+            program: script,
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: Vec::new(),
+            reads: Vec::new(),
+            directory: None,
+            declared: digested(&["mock-mcp"]),
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+        };
+        let mut notes = Vec::new();
+        let started = start(
+            vec![("mock".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        let [reached] = started.as_slice() else {
+            panic!("started {} servers: {notes:?}", started.len());
+        };
+        assert_eq!(reached.prompts().offered(), 1, "notes: {notes:?}");
     }
 
     fn limited_to_a_port(enforced: bool) -> Capabilities {

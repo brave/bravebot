@@ -50,6 +50,11 @@ still a prompt like any other sentence, and the planner is what fetches the skil
 [tools/load-skill.md](tools/load-skill.md) owns the fetch. CMD-7 says why no skill becomes a
 command, and CMD-9 says what the box offers.
 
+**An MCP server's prompts are offered here, and are never commands.** A prompt of a server this
+session reached is a row of the list a slash opens, beside the skills. A line that starts with its
+word is sent as the prompt it is, and the turn it starts fetches the prompt. CMD-26 says what a
+line may hold and what the person is told, and [mcp.md](mcp.md) says what is labelled and why.
+
 **Prompt files are looked up, and are never commands.** A slash word that names a file in the
 person's own `~/.bravebot/prompts` is replaced in the box by the file's text, for the person to read
 and send. CMD-17 says what the lookup reads and what it never does.
@@ -309,6 +314,10 @@ touching this table. Neither is a skill row, since the command claims the name.
 this table, and the definition it runs is an argument on the line, compared against the set the
 session resolved and never added here, however many definitions a machine holds
 ([addressing-a-definition.md](addressing-a-definition.md)).
+
+A prompt of an MCP server (CMD-26) does not add to the set either. Its word is offered as a skill's
+is and written into the box as a prompt, and what runs it is the turn the sent line starts, so no
+dispatch in the box reads a word a server chose.
 
 A prompt file (CMD-17) does not add to the set either. A name is looked up in one directory when
 Enter is pressed on a line that starts with it, and is never listed, drawn as a row, or allowed to
@@ -1244,6 +1253,66 @@ the build with no network and no checkout, and a model is not needed to read out
 `verified-by: bravebot_tui::help_command::a_release_is_found_by_its_whole_version_and_else_the_newest_is_given`
 `verified-by: bravebot_tui::help_command::the_carried_changelog_lists_releases_newest_first_and_the_newest_has_notes`
 
+## Running a prompt of an MCP server
+
+<a id="CMD-26"></a>
+### CMD-26: a line that starts with the word of an MCP server's prompt runs it, and is sent as the line it is
+
+The prompts of the servers a session reached are rows of the list a slash opens, among the skills
+(CMD-9) and in name order with them. A row is `/mcp__<alias>__<word>`, says which server it came
+from and what the server said about the prompt, and once the word is typed in full the box draws
+what it takes after the caret, each required argument as `name=<value>` and each optional one in
+brackets. A row is offered, and the word drawn as recognised (CMD-10), only where it begins the
+line, since that is the one place a line runs it. Taking a row writes the word and each argument
+the prompt cannot run without as a space and `name=`, so the person gives values and retypes no
+name the row drew, and nothing else: an optional argument is left to be added, and a prompt that
+needs none gets the word and a space. No row is offered while work runs, in shell mode, or for a
+server turned off.
+
+A line whose first word is `/mcp__<alias>__<word>`, where the alias is one of a server this session
+reached and the word is one a tool may be named, runs that prompt. What follows the word is its
+arguments: `name=value` pairs separated by spaces, with a value that holds spaces in double
+quotes, where `\"` and `\\` stand for a quote and a backslash. A word that is not a pair, an
+argument given twice, a name an argument may not have and a quote that does not close are said, and
+the line stays in the box and is not sent, at rest and mid-turn alike. A word that two reached
+servers' aliases both begin names neither, since either could be the one meant and the arguments go
+to one of them: it is said and the line is not sent. A line that begins this way and names no
+server this session reached, or whose word is not one a tool may be named, is a prompt like any
+other sentence (CMD-2).
+
+The line is sent as the prompt it is, and the turn it starts fetches the prompt, which
+[mcp.md](mcp.md) says how to label. Nothing in the line is compared with what a server listed: the alias is
+compared with the servers the person declared, and the word and the arguments are the person's own
+and are the whole of the request. A name a taken row wrote is a word of the line like any other,
+so a line reads the same whether it was typed or taken. Only a line the person wrote runs a prompt. A line this program
+composed to carry a goal on does not, and a prompt file whose text would run a prompt of a server
+this session reached is refused as one opening with a command is (CMD-17). A line that reaches a
+turn without parsing, as a `/loop`'s prompt can, is sent as the sentence it is and the person is
+told the prompt was not fetched.
+
+**Why.** A server's words are its own, so the rows follow the rule skills do (CMD-7): the word is
+one a tool may be named, so it cannot read as a sentence, and the row says where it came from. The
+line is sent rather than dispatched because the keystroke is the person's endorsement of one fetch
+and nothing else. It does not vouch for what the server says, which reaches the planner as a
+reference and never as text. A prompt that was a command would have a path that carries a server's
+word into a dispatch that decides something.
+
+`verified-by: bravebot_tui::app::a_servers_prompt_is_offered_at_the_start_of_a_line`
+`verified-by: bravebot_tui::app::a_servers_prompt_is_not_offered_after_other_words`
+`verified-by: bravebot_tui::app::taking_a_prompt_row_writes_its_word_and_required_argument_names_and_sends_nothing`
+`verified-by: bravebot_tui::skills::taking_a_row_writes_the_names_of_the_arguments_a_prompt_cannot_run_without`
+`verified-by: bravebot_tui::app::a_line_running_a_prompt_with_words_that_are_not_arguments_is_said_and_not_sent`
+`verified-by: bravebot_tui::app::a_line_running_a_prompt_with_words_that_are_not_arguments_is_not_queued`
+`verified-by: bravebot_tui::app::a_line_the_person_wrote_carries_its_prompt_to_the_turn`
+`verified-by: bravebot_tui::render::a_servers_prompt_row_names_its_server_and_what_it_takes`
+`verified-by: bravebot_tui::render::a_servers_prompt_is_drawn_as_recognised_only_from_the_first_word`
+`verified-by: bravebot_tui::app::a_line_naming_two_servers_or_no_argument_name_is_said_and_not_sent`
+`verified-by: bravebot_tui::app::a_prompt_file_whose_text_would_run_a_servers_prompt_is_refused`
+`verified-by: bravebot_agent::mcp::a_typed_line_names_a_prompt_only_of_a_server_this_session_reached`
+`verified-by: bravebot_agent::mcp::arguments_are_pairs_and_a_quoted_value_may_hold_spaces`
+`verified-by: bravebot_agent::mcp::a_quoted_value_unescapes_a_quote_and_a_backslash_and_nothing_else`
+`verified-by: bravebot_agent::mcp::words_that_are_not_arguments_are_refused_naming_the_word`
+
 ## Known costs
 
 - **The list is one row per command and per skill, and a screen with no room for it loses the
@@ -1278,3 +1347,19 @@ the build with no network and no checkout, and a model is not needed to read out
   scrolls up to it. The program
   carries every earlier release's notes and no command shows one, so a person upgrading across several
   versions reads the earlier ones on the releases page.
+- **A server's prompts are the ones it offered when it started (CMD-26).** A prompt it adds later
+  is not a row until the server is started again, since the client does not read the server's
+  notice that its lists changed, which #1561 tracks. A server that moved after a redirect keeps the
+  list it started with, so a row can name a prompt the server at its new address does not have, and
+  running it reports that.
+- **Where two aliases both begin a prompt's word, no spelling names either server's (CMD-26).**
+  With `a` and `a__b` both reached, `/mcp__a__b__c` is the prompt `c` of `a__b` or the prompt
+  `b__c` of `a`, and the line is refused rather than sent to one of them. Aliases a person declares
+  are rarely nested this way.
+- **A prompt takes named arguments only (CMD-26).** `/mcp__weather__forecast Paris` is refused
+  rather than read as the first argument, because reading a value as an argument's means taking
+  that argument's name from the server's listing when the line is read, and nothing here decides
+  from what a server listed. Taking the row writes each required name as `name=`, so only values
+  are typed, and a line typed out by hand names its arguments. Once a name is written the line
+  holds more than the word, so the box draws no hint for the optional arguments; the row showed
+  them.

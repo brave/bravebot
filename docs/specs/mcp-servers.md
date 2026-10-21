@@ -71,6 +71,12 @@ tools and calls them, on `crates/mcp/`. The two questions put while servers star
 one and whether one moved, go to an asker the front end supplies; `bravebot-cli` supplies the
 terminal.
 
+A server that declared prompts in its handshake has them listed with its tools, and they are rows
+of the list a slash opens in the terminal client. A person runs one by typing its word at the start
+of a line, which is a prompt like any other and whose turn fetches the server's text
+([MCP-10](mcp.md#MCP-10), [MCP-11](mcp.md#MCP-11)). Nothing about them is in the list a person
+vouches for.
+
 At the first turn a person asks for, each started server's list of tools is put to them as the
 client drew it, every description whole and behind the margin, and nothing of the list reaches the
 planner until they say yes ([SERVERS-8](#SERVERS-8)). A yes offers each tool under the alias for the session
@@ -116,6 +122,7 @@ is not, and [the divergence](#the-one-place-this-diverges-from-claude-code) says
 | Unpinned command (`npx -y pkg@latest`) | run as written, silently | named at the prompt as code that differs per run |
 | Tool names | as the server reports them | namespaced by the local alias; a server's own words are never an identifier |
 | Tool descriptions | into the planner's context as trusted text | untrusted until a person vouches for the list they are on, and marked |
+| Prompts a server offers | `/mcp__<server>__<prompt>` commands, whose text enters the conversation as the person's message | rows after a slash, `/mcp__<alias>__<word> name=value`, sent as the line it is; the text is untrusted and private and the planner is given a reference to it ([MCP-10](mcp.md#MCP-10), [MCP-11](mcp.md#MCP-11)) |
 | Confinement of a stdio server | none | required already by [MCP-3](mcp.md#MCP-3) |
 | A remote server | fetched directly | an egress destination, and the host is approved |
 | A mode that skips the prompts | `--dangerously-skip-permissions` | [SERVERS-13](#SERVERS-13), and it skips prompts only |
@@ -1438,8 +1445,9 @@ takes them as `--startup-timeout <seconds>` and `--tool-timeout <seconds>`. A wo
 number in that range is refused naming the key, and an entry carrying a value outside it is listed
 with that problem. A bound left unsaid is 60 seconds for the handshake and 120 for a call.
 
-The startup bound is given to each request of the handshake, `initialize` and each page of
-`tools/list`, and a handshake is given up on after twice the bound and 5 seconds whatever it is doing. A request that is not answered within a bound is reported as a failure naming what was
+The startup bound is given to each request of the handshake, `initialize`, each page of
+`tools/list` and, where the server declared prompts ([MCP-10](mcp.md#MCP-10)), each page of
+`prompts/list`, and a handshake is given up on after three times the bound and 5 seconds whatever it is doing. A request that is not answered within a bound is reported as a failure naming what was
 asked, a tool by its name or the handshake's method, and the bound, and it is reported when the bound
 passes and not when the server next writes. The planner is told that the call timed out and nothing
 else: the sentence is this process's own words, and its content is a method or a tool name this
@@ -1804,9 +1812,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
   diagnostics drawn over it would be a server's bytes where the interface draws. A one-shot run and
   the plain interface pass it through to their own stderr.
 - **A server too slow for its handshake is left out.** A stdio server that has not answered
-  `initialize` or `tools/list` within its startup bound is stopped and left out of the session
-  ([SERVERS-15](#SERVERS-15)). A handshake stuck where no request bound reaches, a name that will not
-  resolve for one, is given up on after twice the bound and 5 seconds, and its thread holds the
+  `initialize`, `tools/list` or, where it declared prompts, `prompts/list` within its startup bound is
+  stopped and left out of the session ([SERVERS-15](#SERVERS-15)). A handshake stuck where no request
+  bound reaches, a name that will not resolve for one, is given up on after three times the bound and
+  5 seconds, whether or not the server declared prompts, and its thread holds the
   server until it answers or the process exits. The session opens after the last handshake or that
   time, and draws nothing while it waits.
 - **A call past its bound may have acted.** A server whose call timed out has been stopped or

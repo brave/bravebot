@@ -2244,6 +2244,28 @@ impl Session {
         match expand(&directory, &line) {
             Expansion::NotOne => false,
             Expansion::Expanded(text) => {
+                // A file's text that would run a prompt of a server once sent is refused as one
+                // that opens with a command is: nothing carries out a line from a file (CMD-26).
+                let runs_a_prompt = self
+                    .servers
+                    .session
+                    .as_ref()
+                    .is_some_and(|servers| servers.prompt_request(&text).is_some());
+                if runs_a_prompt {
+                    let name = line
+                        .trim_start_matches('/')
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or_default()
+                        .to_string();
+                    let path = directory.join(format!("{name}.md")).display().to_string();
+                    self.note(t!(
+                        prompt_file_begins_with_a_command,
+                        name = name,
+                        path = path
+                    ));
+                    return true;
+                }
                 self.put_in_the_box(text);
                 true
             }
@@ -2263,6 +2285,34 @@ impl Session {
                 true
             }
         }
+    }
+
+    /// Refuse a line that runs a prompt of an MCP server when the words after its name are not
+    /// `name=value` pairs, saying which word. The line stays as typed and nothing is sent (CMD-26).
+    ///
+    /// Returns whether the key was spent here. A line that names no server's prompt, one whose
+    /// arguments parse, and one with a row of the list highlighted are left for the arms that
+    /// follow.
+    pub fn refuse_unparsable_server_prompt(&mut self) -> bool {
+        use bravebot_agent::mcp::Unparsed;
+        if self.shell || self.completion != 0 {
+            return false;
+        }
+        let Some(servers) = self.servers.session.clone() else {
+            return false;
+        };
+        let line = self.unfolded(self.input.trim());
+        let Some(Err(why)) = servers.prompt_request(&line) else {
+            return false;
+        };
+        self.note(match why {
+            Unparsed::NotAPair(word) => t!(mcp_prompt_not_a_pair, word = word),
+            Unparsed::BadName(word) => t!(mcp_prompt_bad_name, word = word),
+            Unparsed::Twice(name) => t!(mcp_prompt_twice, name = name),
+            Unparsed::Quote(name) => t!(mcp_prompt_quote, name = name),
+            Unparsed::Ambiguous(word) => t!(mcp_prompt_ambiguous, word = word),
+        });
+        true
     }
 
     /// The worker appended the submitted prompt at this recounted position.

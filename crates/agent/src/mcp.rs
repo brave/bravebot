@@ -29,7 +29,10 @@ use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_core::vetting::{Endorsed, Verdict};
 use bravebot_i18n::t;
-use bravebot_mcp::{HttpServer, Listing, McpError, McpResult, StdioServer, wire_name};
+use bravebot_mcp::protocol::{WIRE_PREFIX, WIRE_SEPARATOR};
+use bravebot_mcp::{
+    HttpServer, Listing, McpError, McpResult, PromptListing, StdioServer, wire_name,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
@@ -48,6 +51,9 @@ pub enum Connection {
 pub struct Reached {
     connection: Connection,
     listing: Listing,
+    prompts: PromptListing,
+    /// What starting the server left to say to the person, which the session reports with the rest.
+    notes: Vec<String>,
     declaration: Digest,
     home: Option<SessionScratch>,
     policy: Option<EffectivePolicy>,
@@ -55,11 +61,14 @@ pub struct Reached {
 
 impl Reached {
     /// `declaration` is the digest of the declaration the server was started from, which a move
-    /// is recorded over.
+    /// is recorded over. The server offers no prompt until [`Reached::with_prompts`] says it does.
     pub fn new(connection: Connection, listing: Listing, declaration: Digest) -> Self {
+        let prompts = PromptListing::none(listing.alias());
         Self {
             connection,
             listing,
+            prompts,
+            notes: Vec::new(),
             declaration,
             home: None,
             policy: None,
@@ -71,6 +80,30 @@ impl Reached {
     pub fn confined_by(mut self, policy: EffectivePolicy) -> Self {
         self.policy = Some(policy);
         self
+    }
+
+    /// The same server, with the prompts it answered for (MCP-10).
+    pub fn with_prompts(mut self, prompts: PromptListing) -> Self {
+        self.prompts = prompts;
+        self
+    }
+
+    /// The same server, with sentences to say to the person once it has started. The sentences are
+    /// this process's own.
+    pub fn noting(mut self, notes: Vec<String>) -> Self {
+        self.notes.extend(notes);
+        self
+    }
+
+    /// What the server offered as prompts, which is for a person's screen and never the planner's
+    /// (MCP-10).
+    pub fn prompts(&self) -> &PromptListing {
+        &self.prompts
+    }
+
+    /// What starting the server left to say, taken so it is said once.
+    pub(crate) fn take_notes(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.notes)
     }
 
     /// The same server, holding the directory it was handed as its home in a session that keeps
@@ -183,6 +216,9 @@ struct Server {
     /// Locked for a question's length only, so a screen asking how things stand is never kept
     /// waiting on a call.
     state: Mutex<State>,
+    /// The prompts the server offered when it started, which are a person's to run and no
+    /// planner's to see (MCP-10).
+    prompts: PromptListing,
     /// Locked for one call at a time.
     connection: Mutex<Connection>,
     /// What the process was started under, where it is one this session confined, which a local
@@ -289,6 +325,7 @@ impl Session {
                     alias: reached.alias().to_string(),
                     declaration: Mutex::new(reached.declaration),
                     state: Mutex::new(State::Unasked(reached.listing)),
+                    prompts: reached.prompts,
                     connection: Mutex::new(reached.connection),
                     policy: reached.policy,
                     _home: reached.home,
@@ -398,6 +435,75 @@ impl Session {
                 (server.alias.clone(), offering)
             })
             .collect()
+    }
+
+    /// The prompts each server offers, drawn for a person's screen, in the order the servers are
+    /// held and by word within one (MCP-10).
+    ///
+    /// Reshaped without being read and then released to the screen, as a tool list is when it is
+    /// put to a person. What comes back is the server's own words, so it is for a menu a person
+    /// reads and nothing is decided from it here.
+    pub fn prompts<S: Sink>(&self, policy: &mut Policy<'_, S>) -> Vec<ListedPrompt> {
+        let mut listed = Vec::new();
+        for server in &self.0.servers {
+            if server.prompts.offered() == 0 {
+                continue;
+            }
+            let alias = server.alias.as_str();
+            let shaped = policy.render_in_place("mcp_prompts", server.prompts.list(), |text| {
+                bravebot_mcp::drawn_prompts(&text)
+            });
+            let drawn = {
+                let proof = policy.authorise_display_release("the prompts an MCP server offers");
+                shaped.declassify(&proof)
+            };
+            listed.extend(drawn.into_iter().map(|prompt| {
+                ListedPrompt {
+                    alias: alias.to_string(),
+                    word: wire_name(alias, &prompt.name),
+                    description: prompt.description,
+                    arguments: prompt
+                        .arguments
+                        .into_iter()
+                        .map(|argument| ListedArgument {
+                            name: argument.name,
+                            required: argument.required,
+                        })
+                        .collect(),
+                }
+            }));
+        }
+        listed
+    }
+
+    /// What a line a person typed asks of a server's prompts, or `None` where it asks nothing of
+    /// any server this session reached.
+    ///
+    /// `/mcp__<alias>__<word>` and then the arguments as `name=value` pairs (MCP-11). Only the
+    /// aliases a person declared are compared with what was typed, and the word is whatever the
+    /// person typed: the server's own listing is not consulted, so what it says decides nothing
+    /// here. A word is what [`records::is_tool_word`] accepts. Where two aliases both begin the
+    /// word the line names neither, since either could be the server the person meant and the
+    /// arguments go to one of them.
+    pub fn prompt_request(&self, line: &str) -> Option<Result<PromptRequest, Unparsed>> {
+        let rest = line.trim().strip_prefix('/')?.strip_prefix(WIRE_PREFIX)?;
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let (named, typed) = rest.split_at(end);
+        let mut matched = self.0.servers.iter().filter_map(|server| {
+            let word = named
+                .strip_prefix(server.alias.as_str())?
+                .strip_prefix(WIRE_SEPARATOR)?;
+            records::is_tool_word(word).then_some((server.alias.as_str(), word))
+        });
+        let (alias, word) = matched.next()?;
+        if matched.next().is_some() {
+            return Some(Err(Unparsed::Ambiguous(format!("/{WIRE_PREFIX}{named}"))));
+        }
+        Some(arguments_of(typed).map(|arguments| PromptRequest {
+            alias: alias.to_string(),
+            name: word.to_string(),
+            arguments,
+        }))
     }
 
     /// Settle every list nobody has been asked about yet of a server `holding` grants a call to
@@ -579,6 +685,15 @@ impl Session {
         replace(&records::tools_file(directory), standing.to_text())
     }
 
+    /// The server this session reached under `alias`.
+    fn reached(&self, alias: &str) -> McpResult<&Arc<Server>> {
+        self.0
+            .servers
+            .iter()
+            .find(|server| server.alias == alias)
+            .ok_or_else(|| McpError::Transport(format!("no server {alias} was reached")))
+    }
+
     pub(crate) fn call<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -587,14 +702,26 @@ impl Session {
         tool: &str,
         arguments: Value,
     ) -> McpResult<Labelled<String>> {
-        let Some(server) = self.0.servers.iter().find(|server| server.alias == alias) else {
-            return Err(bravebot_mcp::McpError::Transport(format!(
-                "no server {alias} was reached"
-            )));
-        };
+        let server = self.reached(alias)?;
         match &mut *held(&server.connection) {
             Connection::Stdio(server) => server.call_tool(policy, tool, arguments),
             Connection::Http(server) => server.call_tool(policy, egress, tool, arguments),
+        }
+    }
+
+    /// Get a prompt's text of the server `alias` (MCP-11).
+    pub(crate) fn prompt<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        egress: &bravebot_net::Egress,
+        alias: &str,
+        name: &str,
+        arguments: &[(String, String)],
+    ) -> McpResult<Labelled<String>> {
+        let server = self.reached(alias)?;
+        match &mut *held(&server.connection) {
+            Connection::Stdio(server) => server.get_prompt(policy, name, arguments),
+            Connection::Http(server) => server.get_prompt(policy, egress, name, arguments),
         }
     }
 
@@ -883,6 +1010,197 @@ pub fn unreadable_record(why: &records::Unreadable) -> String {
     }
 }
 
+/// One prompt of a server, as a person reads it in the menu a slash opens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedPrompt {
+    /// The server, by the alias a person gave it.
+    pub alias: String,
+    /// What a person types after the slash, `mcp__weather__forecast`.
+    pub word: String,
+    /// The server's sentence about the prompt, cleaned of what a terminal would act on.
+    pub description: Option<String>,
+    /// The arguments it takes, by name, in name order.
+    pub arguments: Vec<ListedArgument>,
+}
+
+/// One argument of a [`ListedPrompt`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedArgument {
+    pub name: String,
+    /// Whether the prompt cannot run without it.
+    pub required: bool,
+}
+
+/// A line a person typed that runs a prompt of a server this session reached.
+///
+/// Every word of it is the person's own: the alias is one they declared, and the name and the
+/// arguments are what they typed. A turn carries it as it is and has the server's text fetched
+/// from it (MCP-11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptRequest {
+    pub alias: String,
+    pub name: String,
+    /// `name=value` pairs, in the order they were typed.
+    pub arguments: Vec<(String, String)>,
+}
+
+/// Why the words typed after a prompt's name are not arguments. Each holds what the person typed,
+/// so a note can say which word it means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unparsed {
+    /// A word with no `=` in it, which could be an argument's value and could not say whose.
+    NotAPair(String),
+    /// A word that does not start with a name an argument may have.
+    BadName(String),
+    /// The same argument named twice.
+    Twice(String),
+    /// A quoted value that does not end, or goes on past its closing quote.
+    Quote(String),
+    /// The first word, which two of the servers this session reached both begin.
+    Ambiguous(String),
+}
+
+/// The `name=value` pairs of what followed a prompt's name.
+///
+/// A value is the characters up to the next space, or what is between double quotes, where `\"`
+/// and `\\` stand for a quote and a backslash. A value may be empty.
+fn arguments_of(typed: &str) -> Result<Vec<(String, String)>, Unparsed> {
+    let mut arguments: Vec<(String, String)> = Vec::new();
+    let mut rest = typed.trim_start();
+    while !rest.is_empty() {
+        let end = rest
+            .find(|c: char| c == '=' || c.is_whitespace())
+            .unwrap_or(rest.len());
+        let name = &rest[..end];
+        let Some(after) = rest[end..].strip_prefix('=') else {
+            let word = rest.split_whitespace().next().unwrap_or(rest);
+            return Err(Unparsed::NotAPair(word.to_string()));
+        };
+        if !bravebot_mcp::protocol::is_argument_name(name) {
+            let word = rest.split_whitespace().next().unwrap_or(rest);
+            return Err(Unparsed::BadName(word.to_string()));
+        }
+        if arguments.iter().any(|(seen, _)| seen == name) {
+            return Err(Unparsed::Twice(name.to_string()));
+        }
+        let (value, tail) = match after.strip_prefix('"') {
+            Some(quoted) => {
+                quoted_value(quoted).ok_or_else(|| Unparsed::Quote(name.to_string()))?
+            }
+            None => {
+                let end = after.find(char::is_whitespace).unwrap_or(after.len());
+                (after[..end].to_string(), &after[end..])
+            }
+        };
+        if !tail.is_empty() && !tail.starts_with(char::is_whitespace) {
+            return Err(Unparsed::Quote(name.to_string()));
+        }
+        arguments.push((name.to_string(), value));
+        rest = tail.trim_start();
+    }
+    Ok(arguments)
+}
+
+/// A value up to its closing quote, and what follows the quote. `None` where it never closes.
+fn quoted_value(text: &str) -> Option<(String, &str)> {
+    let mut value = String::new();
+    let mut characters = text.char_indices();
+    while let Some((at, character)) = characters.next() {
+        match character {
+            '"' => return Some((value, &text[at + 1..])),
+            '\\' => match characters.clone().next() {
+                Some((_, escaped @ ('"' | '\\'))) => {
+                    value.push(escaped);
+                    characters.next();
+                }
+                _ => value.push('\\'),
+            },
+            other => value.push(other),
+        }
+    }
+    None
+}
+
+/// What fetching a prompt came to.
+pub(crate) enum Fetched {
+    /// The server's text, held as untrusted and private (MCP-11).
+    Text(Labelled<String>),
+    /// Nothing reached the server or nothing usable came back. The sentence is this process's own.
+    Problem(String),
+}
+
+/// Fetch the prompt a person ran (MCP-11).
+///
+/// A `deny` rule refuses it before anything is sent, matched on the alias and the word as a tool
+/// call is. Nobody is asked: the line is the person's own and carries its arguments, which are
+/// what the server is sent. A reply that pointed off the declaration is put to the person as a
+/// tool call's is.
+pub(crate) fn fetch_prompt<S: Sink, C: Confirmer, R: Reporter>(
+    policy: &mut Policy<'_, S>,
+    session: &Session,
+    egress: &bravebot_net::Egress,
+    confirmer: &mut C,
+    reporter: &mut R,
+    request: &PromptRequest,
+) -> Fetched {
+    let PromptRequest {
+        alias,
+        name,
+        arguments,
+    } = request;
+    if let Err(denial) = policy.before_mcp_call_rules(alias, name) {
+        return Fetched::Problem(format!("refused: {denial}"));
+    }
+    let answered = following_a_move(
+        policy,
+        session,
+        egress,
+        confirmer,
+        reporter,
+        alias,
+        |policy| session.prompt(policy, egress, alias, name, arguments),
+    );
+    match answered {
+        Ok(text) => Fetched::Text(text),
+        Err(error) => Fetched::Problem(
+            t!(
+                mcp_prompt_failed,
+                alias = alias.as_str(),
+                name = name.as_str(),
+                reason = error.to_string()
+            )
+            .to_string(),
+        ),
+    }
+}
+
+/// Ask `ask`, and where a reply pointed off the server's declaration put that to the person and, on
+/// a yes, ask once more of where the server now is. A second hop is refused as the first was
+/// (SERVERS-11).
+fn following_a_move<S: Sink, C: Confirmer, R: Reporter, T>(
+    policy: &mut Policy<'_, S>,
+    session: &Session,
+    egress: &bravebot_net::Egress,
+    confirmer: &mut C,
+    reporter: &mut R,
+    alias: &str,
+    ask: impl Fn(&mut Policy<'_, S>) -> McpResult<T>,
+) -> McpResult<T> {
+    match ask(policy) {
+        Err(McpError::Denied(denial)) => match policy.take_server_hop() {
+            Some(hop) if session.moved(policy, egress, confirmer, reporter, alias, &hop) => {
+                let again = ask(policy);
+                if matches!(again, Err(McpError::Denied(_))) && policy.take_server_hop().is_some() {
+                    reporter.notice(t!(mcp_move_again, alias = alias));
+                }
+                again
+            }
+            _ => Err(McpError::Denied(denial)),
+        },
+        other => other,
+    }
+}
+
 /// One tool a turn offers.
 #[derive(Debug, Clone)]
 struct Offered {
@@ -1152,24 +1470,88 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
         Ok(arguments) => arguments,
         Err(denial) => return Called::Problem(format!("refused: {denial}")),
     };
-    let answered = match session.call(policy, egress, alias, tool, arguments.clone()) {
-        // A reply that pointed off the declaration is put to the person, and on a yes the call is
-        // made once more, to where the server now is. A second hop is refused as the first was.
-        Err(McpError::Denied(denial)) => match policy.take_server_hop() {
-            Some(hop) if session.moved(policy, egress, confirmer, reporter, alias, &hop) => {
-                let again = session.call(policy, egress, alias, tool, arguments);
-                if matches!(again, Err(McpError::Denied(_))) && policy.take_server_hop().is_some() {
-                    reporter.notice(t!(mcp_move_again, alias = alias));
-                }
-                again
-            }
-            _ => Err(McpError::Denied(denial)),
-        },
-        other => other,
-    };
+    // A reply that pointed off the declaration is put to the person, and on a yes the call is made
+    // once more, to where the server now is.
+    let answered = following_a_move(
+        policy,
+        session,
+        egress,
+        confirmer,
+        reporter,
+        alias,
+        |policy| session.call(policy, egress, alias, tool, arguments.clone()),
+    );
     match answered {
         Ok(result) => Called::Answered(result),
         Err(McpError::ToolFailed { detail, .. }) => Called::Failed(detail),
         Err(error) => Called::Problem(format!("error: calling {name} failed: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pairs(typed: &str) -> Vec<(String, String)> {
+        arguments_of(typed).unwrap_or_else(|why| panic!("{typed:?} did not parse: {why:?}"))
+    }
+
+    fn pair(name: &str, value: &str) -> (String, String) {
+        (name.to_string(), value.to_string())
+    }
+
+    /// An argument is a name, an equals sign and a value up to the next space, and a value with
+    /// spaces in it is between double quotes. Nothing is read out of a value: a quoted `=` is
+    /// text, and so is a word that looks like another argument.
+    #[test]
+    fn arguments_are_pairs_and_a_quoted_value_may_hold_spaces() {
+        assert_eq!(pairs(""), []);
+        assert_eq!(pairs("   "), []);
+        assert_eq!(pairs("city=Paris"), [pair("city", "Paris")]);
+        assert_eq!(
+            pairs("  city=Paris   units=metric "),
+            [pair("city", "Paris"), pair("units", "metric")]
+        );
+        assert_eq!(
+            pairs(r#"topic="two words" note="a=b c=d""#),
+            [pair("topic", "two words"), pair("note", "a=b c=d")]
+        );
+        assert_eq!(
+            pairs("empty= next=x"),
+            [pair("empty", ""), pair("next", "x")]
+        );
+        assert_eq!(pairs("path=a=b"), [pair("path", "a=b")]);
+    }
+
+    /// `\"` and `\\` stand for a quote and a backslash inside quotes, and any other backslash is
+    /// itself, so a Windows path in quotes arrives as typed.
+    #[test]
+    fn a_quoted_value_unescapes_a_quote_and_a_backslash_and_nothing_else() {
+        assert_eq!(
+            pairs(r#"text="say \"hi\" \\ done""#),
+            [pair("text", r#"say "hi" \ done"#)]
+        );
+        assert_eq!(
+            pairs(r#"path="C:\work\notes""#),
+            [pair("path", r"C:\work\notes")]
+        );
+    }
+
+    /// Words that are not pairs are refused with the word the person typed, since the box is the
+    /// only place they can be corrected, and a value is not guessed at the argument it might be for.
+    #[test]
+    fn words_that_are_not_arguments_are_refused_naming_the_word() {
+        for (typed, why) in [
+            ("Paris", Unparsed::NotAPair("Paris".to_string())),
+            ("city=Paris Paris", Unparsed::NotAPair("Paris".to_string())),
+            ("=Paris", Unparsed::BadName("=Paris".to_string())),
+            ("a b=c", Unparsed::NotAPair("a".to_string())),
+            ("ci/ty=Paris", Unparsed::BadName("ci/ty=Paris".to_string())),
+            ("city=Paris city=Rome", Unparsed::Twice("city".to_string())),
+            (r#"city="Paris"#, Unparsed::Quote("city".to_string())),
+            (r#"city="Paris"x"#, Unparsed::Quote("city".to_string())),
+        ] {
+            assert_eq!(arguments_of(typed), Err(why), "{typed:?}");
+        }
     }
 }

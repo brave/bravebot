@@ -6664,13 +6664,13 @@ mod tests {
                     name: "release-notes".to_string(),
                     description: "Draft the notes\nfrom the \u{1b}[31mchangelog, ".repeat(8),
                     argument_hint: None,
-                    source: Source::Workspace,
+                    source: Source::Workspace.into(),
                 },
                 crate::skills::Skill {
                     name: "release-check".to_string(),
                     description: "Check a tag".to_string(),
                     argument_hint: None,
-                    source: Source::Home,
+                    source: Source::Home.into(),
                 },
             ]
         });
@@ -6700,6 +6700,73 @@ mod tests {
             !rows[1].contains(['\u{1b}', '\n']),
             "an escape or a line break reached the row: {rows:?}"
         );
+    }
+
+    /// The rows the box offers when a session holds a server with a prompt, settled for `line`.
+    fn typed_with_prompts(line: &str) -> Session {
+        let held = crate::mcp_command::tests::holding_a_server_with_prompts();
+        let rows = crate::skills::from_servers(held.servers.session.as_ref());
+        let mut session = typed(line);
+        session.settle_skills(|| rows);
+        session
+    }
+
+    /// A prompt's row names the server it came from and what the server said about it, within the
+    /// width, and what it takes is drawn after the word once the word is typed in full (CMD-26).
+    #[test]
+    fn a_servers_prompt_row_names_its_server_and_what_it_takes() {
+        let session = typed_with_prompts("/mcp__w");
+        let rows: Vec<String> = lines_beneath_the_box(&session, 100, &session.offered())
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+        let [row] = rows.as_slice() else {
+            panic!("{rows:?}");
+        };
+        assert!(
+            row.starts_with("  ❯ /mcp__weather__summarise_diff"),
+            "{row}"
+        );
+        assert!(
+            row.ends_with("Summarise the staged diff. (MCP weather)"),
+            "{row}"
+        );
+
+        let finished = typed_with_prompts("/mcp__weather__summarise_diff ");
+        assert!(
+            input_row(&finished, 90).ends_with("file=<value> style=<value> [depth=<value>]"),
+            "{}",
+            input_row(&finished, 90)
+        );
+    }
+
+    /// A prompt's word is drawn as recognised where it begins the line and nowhere else, since that
+    /// is the one place a line runs it. A skill's name is recognised anywhere.
+    #[test]
+    fn a_servers_prompt_is_drawn_as_recognised_only_from_the_first_word() {
+        for (line, recognised) in [
+            (
+                "/mcp__weather__summarise_diff",
+                "/mcp__weather__summarise_diff",
+            ),
+            (
+                "/mcp__weather__summarise_diff file=a.rs",
+                "/mcp__weather__summarise_diff",
+            ),
+            ("see /mcp__weather__summarise_diff now", ""),
+            ("/mcp__weather__summarise", ""),
+        ] {
+            assert_eq!(
+                recognised_in_the_box(&typed_with_prompts(line)),
+                recognised,
+                "{line:?}"
+            );
+        }
     }
 
     /// The first row of the box after its border and prompt, one cell to an entry with the colour
@@ -6756,7 +6823,7 @@ mod tests {
             name: name.to_string(),
             description: format!("what {name} is for"),
             argument_hint: hint.map(str::to_string),
-            source: Source::Home,
+            source: Source::Home.into(),
         })
         .collect()
     }

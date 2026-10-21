@@ -1391,6 +1391,15 @@ word that is a command in full still lists the skills that extend it: `/pr` offe
 the `/pr` command. See
 [Skills](../customize/skills.md#naming-a-skill-after-a-slash).
 
+## Prompts of an MCP server
+
+A prompt a started [MCP server](../customize/mcp-servers.md#running-a-servers-prompts) offers is a
+row after a slash, `/mcp__<alias>__<name>`, beside the skills and only at the start of a line. Taking
+the row writes the names of the arguments that are not optional, as `name=`, and you type the values
+and any optional ones as `name=value` pairs. Enter sends the line as a prompt, which fetches the
+server's text. The text reaches the model as a reference and never as words, and a prompt is
+never a command.
+
 ## Prompt files
 
 A prompt you use often can be a file: `~/.bravebot/prompts/review.md` is run by typing `/review the
@@ -1410,7 +1419,8 @@ Review $1 for races, with attention to $ARGUMENTS.
 - `agent` makes the box `/agent reviewer <text>`, which runs when you press Enter on it. `description`
   is not used yet.
 - Only your own `~/.bravebot/prompts` is read, never a project's. A file cannot take a command's name,
-  and a file whose text begins with a command word is refused, so no file carries out a command.
+  and a file whose text begins with a command word or would run an MCP prompt is refused, so no file
+  carries out a command.
 - A file that is unreadable, over 64 KiB or empty is refused with a note, and the line stays as typed.
 - Names are not listed or completed.
 
