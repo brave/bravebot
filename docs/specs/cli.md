@@ -1823,10 +1823,13 @@ of the run.
 
 The flag is refused before the run starts when it has no name after it, when the name is blank,
 when the machine-level settings refuse the model, and when nothing is configured to serve it.
-Nothing is sent, and the refusal is the one `--model` and `--advisor` give for the same model. A
-model that needs a sign-in this machine has not made is met when a processor first starts, as it is
-for the setting ([PROC-13](processors.md#PROC-13)), because the sign-in the run's own model needs
-comes first and may cover it.
+Nothing is sent. A model the machine refuses is refused in the words `--model` and `--advisor` use
+for the same model. A model nothing serves is refused in the processor model's own words, the ones
+the setting gets ([PROC-13](processors.md#PROC-13)), which name the model and say it was set as the
+processor model. It does not get the sentence `--advisor` gives, because that sentence advises on
+the run's own model, and following it would not fix a processor model. A model that needs a sign-in
+this machine has not made is met when a processor first starts, as it is for the setting, because
+the sign-in the run's own model needs comes first and may cover it.
 
 **Why.** The flag is the person's own command line, so it chooses where a processor's input goes as
 their settings file does, and no project file or content can. A blank name is refused for the reason
