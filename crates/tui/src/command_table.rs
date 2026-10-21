@@ -227,6 +227,11 @@ pub(crate) const INIT_COMMAND: &str = "/init";
 /// [`crate::review_command`] and CMD-18.
 pub(crate) const REVIEW_COMMAND: &str = "/review";
 
+/// The line that has a commit message drafted from changes and put in the box.
+///
+/// Sends nothing to the planner. See [`crate::commit_message_command`] and CMD-23.
+pub(crate) const COMMIT_MESSAGE_COMMAND: &str = "/commit-message";
+
 /// The line that sets plan mode, and with a task starts a turn on it.
 ///
 /// The same endorsement as the key that cycles to plan mode (MODE-12): it only narrows what is
@@ -270,6 +275,10 @@ impl Command {
             REVIEW_COMMAND => {
                 use crate::review_command::{COMMIT, PULL_REQUEST, SINCE, STAGED};
                 format!("[{STAGED} | {SINCE} <ref> | {COMMIT} <ref> | {PULL_REQUEST} <n>] [focus]")
+            }
+            COMMIT_MESSAGE_COMMAND => {
+                use crate::commit_message_command::{RANGE, STAGED};
+                format!("[{STAGED} | {RANGE} <a>..<b>] [format]")
             }
             REACH_COMMAND => {
                 let scopes: Vec<&str> = bravebot_sandbox::scope::Scope::REACHABLE
@@ -327,7 +336,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 48] {
+pub fn commands() -> [Command; 49] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -567,6 +576,12 @@ pub fn commands() -> [Command; 48] {
             name: REVIEW_COMMAND,
             argument: "[target] [focus]",
             description: t!(command_review),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: COMMIT_MESSAGE_COMMAND,
+            argument: "[source] [format]",
+            description: t!(command_commit_message),
             mid_turn: MidTurn::Waits,
         },
         Command {

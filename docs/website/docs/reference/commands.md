@@ -53,6 +53,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/mcp` | `[list \| reconnect [alias] \| disable <alias>]` | List the MCP servers, start one that is not running, or turn one off for the session |
 | `/init` | | Have the planner draft an `AGENTS.md` for this project |
 | `/review` | `[target] [focus]` | Have the planner review local changes or a pull request |
+| `/commit-message` | `[source] [format]` | Draft a commit message from the staged changes into the box, for you to edit |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
 | `/copy` | `[n]` | Put the last reply on the clipboard, or the one that many replies back |
 | `/undo` | | Rewind one turn and put back the files it wrote |
@@ -847,6 +848,32 @@ should flag or leave alone. It sees the file only where you have vouched for it,
 without it otherwise. The command writes
 nothing and the prompt forbids changes, commits, pushes and comments. A prompt file or skill named
 `review` is shadowed by the command.
+
+## `/commit-message [source] [format]`
+
+Drafts a commit message from changes and puts it in the input box. The source is one of:
+
+| Source | Drafts from |
+|---|---|
+| none, or `--staged` | what is staged, the index against `HEAD` |
+| `--range <a>..<b>` | the changes between two commits, or `<a>...<b>` from their merge base |
+
+Words after the source are the format you want: `/commit-message --staged use Conventional
+Commits`. The two flags only count as the first word, so `/commit-message use Conventional Commits`
+drafts from the staged changes in that format. A range that is not two plain revisions is refused
+with a usage note.
+
+The planner does not see the diff. The program reads it without starting `git`, under the rules
+`read_git` is held to, and gives it to a processor that has no tools and no conversation. The
+draft comes back into the box after the line `Use this as the commit message:`, so the line you
+send always starts with those words, whatever the draft starts with. Edit it, then Enter sends it to
+the planner as your own prompt, for instance to ask for a commit with that message. Escape drops it.
+Nothing is committed by the command itself.
+
+Nothing is drafted for a repository you have not trusted, for changes that show no file, or for a diff
+that holds what looks like a credential, and the line says which. A diff longer than one read takes is
+drafted from the part that was read, and the line says so. The model is the one `processorModel` names,
+or the session's. Typed while a turn runs it waits for the turn to end.
 
 ## `/agent <name> <task>`
 

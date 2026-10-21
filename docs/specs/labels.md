@@ -10,6 +10,7 @@ governs:
 guards:
   - symbol: Labelled::new
     sites:
+      - crates/agent/src/commit_message.rs: 1
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
@@ -34,6 +35,7 @@ guards:
     every-spelling: yes
     sites:
       - crates/agent/src/aside.rs: 3
+      - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/manifest.rs: 5
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/processor.rs: 1
@@ -55,6 +57,7 @@ guards:
     sites:
       - crates/agent/src/agents.rs: 1
       - crates/agent/src/attached.rs: 1
+      - crates/agent/src/commit_message.rs: 3
       - crates/agent/src/tools/message.rs: 1
       - crates/agent/src/manifest.rs: 11
       - crates/agent/src/preamble.rs: 1
@@ -132,6 +135,7 @@ guards:
   - symbol: Policy::render_in_place
     sites:
       - crates/agent/src/aside.rs: 1
+      - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/manifest.rs: 8
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/servers.rs: 1

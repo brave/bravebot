@@ -2685,6 +2685,7 @@ command-rename = Call this conversation something else
 command-note = Note something on this session's record, without putting it in the conversation
 command-branch = Copy this session and carry on in the copy, keeping the original to return to
 command-handoff = Start a new session from a brief you can edit, written for the next goal
+command-commit-message = Draft a commit message from the staged changes into the box, for you to edit
 command-resume = Pick up another session of this directory, by id or from a list
 command-background = Hand this session to a background process and leave it running
 command-issue = Say which issue this session is for, show it, or clear it
@@ -3395,6 +3396,14 @@ handoff-ready = the brief is in the box. Edit it, then Enter starts a new sessio
 handoff-untrusted = the brief was not offered: this conversation has met something untrusted, so the new session would not be starting from what the planner could have held
 handoff-failed = the brief could not be written: { $problem }
 handoff-stopped = the brief was stopped
+commit-message-usage = /commit-message takes --staged or --range <a>..<b>, then any words about the format you want
+commit-message-nothing = there is nothing to draft a message for: the changes named show no file
+commit-message-credential = the changes hold what looks like a credential, so no part of them was sent to a model
+commit-message-none-written = the model did not mark where the message begins, so there is no draft
+commit-message-ready = the draft is in the box. Edit it, then Enter sends it to the planner as your prompt, or Esc drops it. The planner has not seen the diff
+commit-message-partial = the changes were longer than one read takes, so the draft describes the part that was read
+commit-message-failed = the commit message could not be drafted: { $problem }
+commit-message-stopped = the commit message was stopped
 handoff-started = handed off: this is a new session, and the earlier one is as it was. To return to it, run `bravebot --resume { $id }`
 
 # What the session says about a manifest run started from it. The plan, each step and the reply are

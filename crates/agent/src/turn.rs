@@ -1051,6 +1051,53 @@ pub fn goal<S: Sink, R: Reporter>(
     done
 }
 
+/// Draft a commit message from a diff, outside any turn.
+///
+/// What `/commit-message` runs. No conversation reaches here, so nothing the draft is made from or
+/// into can join one. The policy holds [`Capability::FileRead`], for the reader that produces the
+/// diff, and [`Capability::WebFetch`], because reaching the model is egress and the gate asks. The
+/// routing is the working directory and the range the person typed, both of which are theirs.
+///
+/// The diff goes to a processor and the draft comes back labelled by taint over the diff, so a draft
+/// of files nobody vouched for is untrusted. It is released to the person's input box and nowhere
+/// else (CMD-23).
+///
+/// `cancel` is the person's stop, and it reaches the request as it does a summary's.
+#[allow(clippy::too_many_arguments)]
+pub fn commit_message<S: Sink, R: Reporter>(
+    config: &Config,
+    egress: &Egress,
+    workspace: &Workspace,
+    source: &crate::commit_message::Source,
+    format: Option<&str>,
+    model: Option<&str>,
+    reporter: &mut R,
+    sink: &mut S,
+    trust: TrustStore,
+    cancel: &Cancel,
+) -> Result<crate::commit_message::Drafted, crate::commit_message::DraftError> {
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "draft a commit message from a diff");
+
+    let capabilities = CapabilitySet::from_iter([Capability::FileRead, Capability::WebFetch]);
+    let mut policy = Policy::begin(routing, ReleasePlan::new(), capabilities, sink)
+        .map_err(|d| crate::commit_message::DraftError::Read(d.to_string()))?
+        .with_trust(trust)
+        .with_root(workspace.root())
+        .with_scratch(workspace.scratch())
+        .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
+
+    let mut subscription = discover_subscription(config, egress, model, reporter);
+    let mut chat = crate::processor::Chat::new(config, egress)
+        .spending(subscription.as_mut())
+        .on(model)
+        .stoppable_by(cancel);
+
+    let done = crate::commit_message::draft(&mut policy, &mut chat, workspace, source, format);
+    policy.finish();
+    done
+}
+
 /// Find the subscription this turn will spend, and say so where one could not be read.
 ///
 /// Shared with [`crate::manifest`] rather than written twice, because the thing worth reporting is

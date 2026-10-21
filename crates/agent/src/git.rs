@@ -39,7 +39,7 @@ mod tags;
 pub use dates::parse_day;
 pub use declined::Declined;
 pub use out::Printed;
-pub use revision::{path_in, plausible_ref};
+pub use revision::{is_range, path_in, plausible_ref};
 pub use survey::{survey, survey_linked};
 
 use config::check_config;
@@ -102,6 +102,10 @@ pub enum Query {
     Status,
     Tags,
     Search,
+    /// HEAD's tree against the index, as `git diff --cached` prints it. Asked only by the driver,
+    /// for a commit message to be drafted from: [`Query::named`] never returns it, so no tool
+    /// argument can ask for it.
+    Staged,
 }
 
 impl Query {
@@ -125,6 +129,7 @@ impl Query {
             Query::Status => "status",
             Query::Tags => "tags",
             Query::Search => "search",
+            Query::Staged => "staged",
         }
     }
 }
@@ -326,6 +331,7 @@ impl Repository {
             Query::Show => self.show(&mut out, request, filter.as_deref())?,
             Query::Diff => self.diff(&mut out, request, filter.as_deref())?,
             Query::Status => status::answer(self, &mut out, filter.as_deref())?,
+            Query::Staged => status::staged(self, &mut out, filter.as_deref())?,
             Query::Tags => next = self.tags(&mut out, request)?,
             Query::Search => next = self.search(&mut out, request, filter.as_deref())?,
         }
@@ -2790,6 +2796,17 @@ mod tests {
         );
     }
 
+    /// GIT-15. The staged question has no name a tool argument can spell, so a planner cannot ask
+    /// for it, and every name that is spelled still names the question it always did.
+    #[test]
+    fn the_staged_question_is_not_one_a_tool_can_name() {
+        assert_eq!(Query::named("staged"), None);
+        assert_eq!(Query::named("cached"), None);
+        for name in ["log", "show", "diff", "status", "tags", "search"] {
+            assert_eq!(Query::named(name).map(Query::word), Some(name));
+        }
+    }
+
     #[cfg(unix)]
     mod status {
         use std::collections::BTreeMap;
@@ -2977,6 +2994,156 @@ mod tests {
 
             let under = status(&repo, Some("dir")).expect("answered");
             assert_eq!(under.text, " D dir/d.txt\n");
+        }
+
+        fn staged(repo: &Repo, path: Option<&str>, withheld: &dyn Fn(&str) -> bool) -> Answer {
+            repo.opened()
+                .expect("opened")
+                .answer(&request(Query::Staged, None, path), withheld)
+                .expect("answered")
+        }
+
+        /// GIT-15. The staged question prints the index against HEAD, and nothing a working-tree
+        /// edit changed.
+        #[test]
+        fn staged_prints_the_index_against_head_and_not_the_working_tree() {
+            let repo = Repo::new("staged-diff");
+            let old = repo.blob("one\ntwo\n");
+            let gone = repo.blob("gone\n");
+            let same = repo.blob("same\n");
+            commit(
+                &repo,
+                &[("a.txt", old), ("gone.txt", gone), ("same.txt", same)],
+            );
+            let edited = repo.blob("one\nTWO\n");
+            let added = repo.blob("new\n");
+            // The working tree holds a later edit than the one staged.
+            write(&repo, "a.txt", "one\nTWO\nand more\n");
+            write(&repo, "same.txt", "same, edited and not staged\n");
+            write(&repo, "new.txt", "new\n");
+            index(
+                &repo,
+                &[
+                    ("a.txt", FILE, edited, 0, false),
+                    ("new.txt", FILE, added, 0, false),
+                    ("same.txt", FILE, same, 0, false),
+                ],
+            );
+            let answer = staged(&repo, None, &|_| false);
+            let short = |id: ObjectId| id.to_hex_with_len(7).to_string();
+            assert_eq!(
+                answer.text,
+                format!(
+                    "diff --git a/a.txt b/a.txt\nindex {}..{} 100644\n--- a/a.txt\n+++ b/a.txt\n\
+                     @@ -1,2 +1,2 @@\n one\n-two\n+TWO\n\
+                     diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\nindex {}..0000000\n\
+                     --- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n\
+                     diff --git a/new.txt b/new.txt\nnew file mode 100644\nindex 0000000..{}\n\
+                     --- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n",
+                    short(old),
+                    short(edited),
+                    short(gone),
+                    short(added)
+                )
+            );
+            assert_eq!(answer.shown, ["a.txt", "gone.txt", "new.txt"]);
+
+            let one = staged(&repo, Some("new.txt"), &|_| false);
+            assert_eq!(one.shown, ["new.txt"]);
+        }
+
+        #[test]
+        fn staged_says_so_when_the_index_matches_head() {
+            let repo = Repo::new("staged-nothing");
+            let one = repo.blob("one\n");
+            commit(&repo, &[("a.txt", one)]);
+            index(&repo, &[("a.txt", FILE, one, 0, false)]);
+            write(&repo, "a.txt", "edited and not staged\n");
+            assert_eq!(
+                staged(&repo, None, &|_| false).text,
+                "(nothing is staged)\n"
+            );
+        }
+
+        #[test]
+        fn staged_leaves_out_a_withheld_path_and_says_so() {
+            let repo = Repo::new("staged-withheld");
+            let old = repo.blob("old\n");
+            let kept = repo.blob("kept\n");
+            commit(&repo, &[("secret.txt", old), ("open.txt", old)]);
+            let changed = repo.blob("changed\n");
+            index(
+                &repo,
+                &[
+                    ("open.txt", FILE, kept, 0, false),
+                    ("secret.txt", FILE, changed, 0, false),
+                ],
+            );
+            let answer = staged(&repo, None, &|path| path == "secret.txt");
+            assert!(answer.withheld);
+            assert_eq!(answer.shown, ["open.txt"]);
+            assert!(!answer.text.contains("changed"), "{}", answer.text);
+        }
+
+        /// PATH-003. A staged path that is not UTF-8 cannot be matched against a rule, so it is
+        /// withheld, and its lossy lookalike is an ordinary path that is shown.
+        #[test]
+        fn staged_withholds_a_path_that_is_not_utf8_and_shows_its_lookalike() {
+            let repo = Repo::new("staged-not-utf8");
+            let old = repo.blob("old\n");
+            commit(&repo, &[("keep.txt", old)]);
+            let bad = repo.blob("bad\n");
+            let lookalike = repo.blob("lookalike\n");
+            // The index writer takes &str, so the one byte that is not UTF-8 goes in afterwards,
+            // and the checksum over the entries is taken again.
+            let mut bytes = index_bytes(
+                &repo,
+                2,
+                &[
+                    ("keep.txt", FILE, old, 0, false),
+                    ("tool-\u{7f}", FILE, bad, 0, false),
+                    ("tool-\u{FFFD}", FILE, lookalike, 0, false),
+                ],
+                b"",
+            );
+            let at = bytes
+                .windows(6)
+                .position(|w| w == b"tool-\x7f")
+                .expect("placeholder");
+            bytes[at + 5] = 0xff;
+            let body = bytes.len() - 20;
+            let mut hasher = gix_hash::hasher(HashKind::Sha1);
+            hasher.update(&bytes[..body]);
+            let checksum = hasher.try_finalize().expect("hashed");
+            bytes.truncate(body);
+            bytes.extend_from_slice(checksum.as_bytes());
+            std::fs::write(repo.git.join("index"), bytes).expect("index");
+
+            let answer = staged(&repo, None, &|_| false);
+            assert!(answer.withheld);
+            assert_eq!(answer.shown, ["tool-\u{FFFD}"]);
+            assert!(answer.text.contains("lookalike"), "{}", answer.text);
+            assert!(!answer.text.contains("bad"), "{}", answer.text);
+        }
+
+        #[test]
+        fn staged_names_a_conflicted_path_and_prints_no_hunks_for_it() {
+            let repo = Repo::new("staged-conflict");
+            let base = repo.blob("base\n");
+            let ours = repo.blob("ours\n");
+            let theirs = repo.blob("theirs\n");
+            commit(&repo, &[("both.txt", base)]);
+            index(
+                &repo,
+                &[
+                    ("both.txt", FILE, base, 1, false),
+                    ("both.txt", FILE, ours, 2, false),
+                    ("both.txt", FILE, theirs, 3, false),
+                ],
+            );
+            let answer = staged(&repo, None, &|_| false);
+            assert_eq!(answer.text, "* Unmerged path both.txt\n");
+            assert!(answer.shown.is_empty());
         }
 
         #[test]

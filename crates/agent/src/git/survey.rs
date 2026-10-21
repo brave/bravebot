@@ -53,7 +53,7 @@ pub fn survey(git_dir: &Path, query: Query, deadline: Instant) -> Result<Vec<Pat
         let spelled = if matches!(
             lower.as_str(),
             "config" | "config.worktree" | "packed-refs" | "shallow"
-        ) || (query == Query::Status && lower == "index")
+        ) || (matches!(query, Query::Status | Query::Staged) && lower == "index")
         {
             lower
         } else if is_pseudo_ref(name) {
@@ -172,7 +172,7 @@ pub fn survey_linked(
         }
         Err(_) => return Err(Declined::Unreadable),
     }
-    let wanted: &[&str] = if query == Query::Status {
+    let wanted: &[&str] = if matches!(query, Query::Status | Query::Staged) {
         &["HEAD", "index"]
     } else {
         &["HEAD"]
