@@ -166,6 +166,7 @@ cli-option-append-system-prompt =
 cli-option-mode = turn (default) decides step by step; manifest plans the whole run first
 cli-option-model = The model this run asks for, in place of the remembered or configured one
 cli-option-advisor = A model the agent may put a question to, offered to it as the advisor tool
+cli-option-processor-model = The model processors run on, in place of the processorModel setting. inherit runs them on this run's model
 cli-option-tools = Offer the agent only these tools, comma separated. It cannot add one a setting removed
 cli-option-no-shell = Offer the agent no tool that runs a program or reads what one printed
 cli-option-effort = How hard this run asks the model to think, in place of the remembered or configured level
@@ -302,6 +303,7 @@ cli-sandbox-refused-network-file =
 cli-mode-needs-a-name = --mode requires one of { $names }
 cli-model-needs-a-name = --model requires the name of a model
 cli-advisor-needs-a-name = --advisor requires the name of a model
+cli-processor-model-needs-a-name = --processor-model requires the name of a model
 cli-advisor-not-with-a-manifest = --advisor cannot be used with --mode manifest, which runs its plan without a planner to ask
 cli-effort-needs-a-level = --effort requires one of { $levels }
 cli-output-schema-needs-a-path = --output-schema requires the path of a JSON Schema file
@@ -3618,18 +3620,18 @@ summary-model-refused =
 # a judge or a summariser answering without the exchange reads as a verdict rather than a failure.
 summary-model-not-served =
     { $model } is set as the summary model and no configured service answers for it, so nothing was sent
-# The model `processorModel` named, from the person's own settings file. A processor call is refused
-# rather than sent to the turn's model, since the setting is a cost boundary.
+# The model `processorModel` or `--processor-model` named, both the person's own. A processor call is
+# refused rather than sent to the turn's model, since the name is a cost boundary.
 processor-model-needs-sign-in =
     { $model } is set as the processor model and needs a sign-in first, so nothing was sent
-# The same setting naming a model this machine's managed layer excludes (BACKEND-48).
+# The same name for a model this machine's managed layer excludes (BACKEND-48).
 processor-model-refused =
     { $model } is set as the processor model and this machine's managed settings do not allow it, so nothing was sent
-# The same setting naming a model no configured service answers for.
+# The same name for a model no configured service answers for.
 processor-model-not-served =
     { $model } is set as the processor model and no configured service answers for it, so nothing was sent
 # The endpoint substitutes a model it will not serve rather than refusing. The name it answered
-# with is left out, because a notice is the driver's own words. The model is the setting's value.
+# with is left out, because a notice is the driver's own words. The model is the one the person named.
 processor-model-substituted = A processor asked for { $model } and was answered by a different model
 # A definition's skills line named skills this session did not find. The definition is its file's
 # path and the skills are that file's own words, joined with a comma, both from a vouched-for file.

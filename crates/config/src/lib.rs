@@ -50,7 +50,7 @@ pub use sandbox_filesystem::{
 pub use settings::{
     Attribution, Narrowing, NotADocument, PermissionLists, Reference, ReferenceFault, RunDeadlines,
     Settings, check_document, local_settings_file, lock, locked, name_a_settings_file,
-    named_settings_file, project_settings_file, user_settings_file,
+    named_settings_file, processor_model_named, project_settings_file, user_settings_file,
 };
 
 pub mod bedrock;
@@ -1056,7 +1056,8 @@ pub struct Config {
     /// `None` leaves such a turn on the session's own model. [`Config::plan`] resolves a tier word
     /// in it.
     pub plan_model: Option<String>,
-    /// The model the settings in force name for processors to run on, as the file spelled it.
+    /// The model the settings in force, or `--processor-model` over them, name for processors to run
+    /// on, as the file or the flag spelled it.
     ///
     /// `None`, and `inherit`, leave a processor on the turn's own model. [`Config::processor`]
     /// resolves a tier word in it.
@@ -1690,7 +1691,8 @@ impl Config {
 
     /// The model an isolated processor runs on, resolved like `--model`.
     ///
-    /// `None` where the settings name none, which leaves a processor on the turn's own model.
+    /// `None` where neither the settings nor `--processor-model` name one, which leaves a processor
+    /// on the turn's own model.
     ///
     /// A model the machine-level layer refuses is still returned, as it is by [`Config::summary`]
     /// and for the same reason: the setting is a cost boundary, so a name that cannot be used stops

@@ -96,6 +96,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--mode <turn\|manifest>` | how a one-shot is run; `turn` (the default) decides step by step, `manifest` plans the whole run first ([below](#--mode-turnmanifest)) |
 | `--model <name>` | the model this run asks for; outranks every other way one is named ([below](#--model-name)) |
 | `--advisor <name>` | a model the planner may put a question to, through the `advisor` tool ([below](#--advisor-name)) |
+| `--processor-model <name>` | the model processors run on for this run; outranks the `processorModel` setting ([below](#--processor-model-name)) |
 | `--effort <level>` | how hard this run asks the model to think; outranks every other way one is named ([below](#--effort-level)) |
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--output-schema <path>` | hold the reply to the JSON Schema in this file, or end on status 6 ([below](#--output-schema-path)) |
@@ -250,6 +251,28 @@ no such tool. The flag wins over the setting. The name is read as `--model` read
 `--advisor` with no name, a blank one, a model this machine's managed settings refuse, a model
 nothing is configured to serve, or `--mode manifest` is refused and the run stops before it starts.
 A turn may ask its advisor at most three times. The advisor's tokens are added to the run's total.
+
+## `--processor-model <name>`
+
+```sh
+bravebot --mode manifest --processor-model haiku "shorten every README under docs/"
+```
+
+Names the model processors run on for this run. A processor is the isolated call that reads and
+rewrites a file nobody vouched for, and in a [`--mode manifest`](#--mode-turnmanifest) run it is each
+processing step. The planner keeps the model the run was given, so a plan can be made on a stronger
+model and carried out on a cheaper one. Without the flag the model is the one the
+[`processorModel`](../customize/configuration.md#processormodel) setting names, and with neither a
+processor runs on the run's model. The flag wins over the setting, and `inherit` puts processors on
+the run's model whatever the setting names. The name is read as `--model` reads it, so `opus`,
+`sonnet` and `haiku` name a tier.
+
+`--processor-model` with no name or a blank one is refused and the run stops before it starts. So is a
+model that your administrator refuses or that no configured service answers for: nothing is sent, and
+the run is not started on the run's model in its place. A model that needs a sign-in this machine has
+not made, and the same models named in the `processorModel` setting, are met at the first processor
+instead, which in a manifest run is after the two planning calls. `--trace` prints the model each
+processor call asked for.
 
 ## `--effort <level>`
 

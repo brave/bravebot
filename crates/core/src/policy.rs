@@ -2829,6 +2829,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Put the model a processor's request names in the trail (TRACE-10).
+    ///
+    /// The name is the one the driver resolved from the person's configuration before sending, so
+    /// the line carries nothing the processor was given or answered, nor any name a service wrote.
+    pub fn record_processor_model(&mut self, id: &str, model: &str) {
+        self.allow(
+            "processor_model",
+            format!("{id}: the request names {model}"),
+        );
+    }
+
     /// The label a read of `path` would carry: what the trust map says about the path, and
     /// private as workspace content is.
     ///

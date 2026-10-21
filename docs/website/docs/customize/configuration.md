@@ -670,8 +670,11 @@ The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a
 
 The model an isolated processor runs on. A processor rewrites or reads a file nobody vouched for, so
 a large rewrite is billed for the whole file in and the whole file out. Naming a cheaper model here
-moves those calls onto it, while the planner keeps the model the session is using. Without the key,
-and with `"inherit"`, a processor runs on the session's model.
+moves those calls onto it, while the planner keeps the model the session is using. A
+[manifest run](../using/headless.md#planning-the-whole-run-first) plans on the run's model and carries
+out each processing step on this one. Without the key, and with `"inherit"`, a processor runs on the
+session's model. [`--processor-model`](../reference/cli.md#--processor-model-name) names the model for
+one run and wins over the key.
 
 A processor still has no tools and no memory, and a write of what it produced is approved from the
 diff of the real file, so a weaker model that rewrites a file worse shows up in that diff.

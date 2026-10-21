@@ -18,12 +18,13 @@ pub(crate) const ACCEPT_EDITS: &str = "--accept-edits";
 
 /// The flags that begin a one-shot run when one leads the line, so that `main` dispatches on this
 /// list and [`is_a_one_shot`] reads the same one.
-pub(crate) const TASK_FLAGS: [&str; 14] = [
+pub(crate) const TASK_FLAGS: [&str; 15] = [
     "-p",
     "--print",
     "--mode",
     "--model",
     "--advisor",
+    "--processor-model",
     "--effort",
     "--file",
     "--session-ref",

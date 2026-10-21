@@ -576,6 +576,268 @@ fn an_advisor_is_refused_with_a_manifest_run() {
     );
 }
 
+/// One streamed reply that names the model the request asked for, so nothing in a run reads as
+/// answered by another model than the one it was sent to.
+fn a_reply_from(model: &str, text: &str) -> String {
+    a_streamed_frame(&serde_json::json!({"model": model, "choices": [{
+        "index": 0, "delta": {"role": "assistant", "content": text}, "finish_reason": "stop"}]}))
+}
+
+/// One streamed response holding the one `frame`, framed.
+fn a_streamed_frame(frame: &serde_json::Value) -> String {
+    let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+    format!(
+        "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// CLI-34, MANIFEST-12. `--processor-model` moves the processing step of a manifest run onto the
+/// model it names while both planning calls keep the run's, outranks a `processorModel` setting for
+/// that run, and `inherit` puts the step back on the run's own model whatever the setting names.
+/// Each run is the binary against a gateway that answers as the model it was asked for, so the
+/// model of a request is what the run chose.
+#[test]
+fn a_processor_model_named_on_the_command_line_runs_a_manifest_step_and_outranks_the_setting() {
+    let plan = r#"{"steps":[
+        {"capability":"FILE_READ","args":{"path":"a.md","out_slot":"raw"}},
+        {"capability":"TRANSFORM","args":{"reads":["raw"],"instruction":"shout","out_slot":"loud"}},
+        {"capability":"FILE_WRITE","args":{"path":"a.md","from_slot":"loud"}}]}"#;
+    // The setting, the flag, and the model the processing step is sent to.
+    for (name, setting, flag, expected) in [
+        ("flag", None, "openrouter/cheap", "cheap"),
+        (
+            "flag-over-setting",
+            Some("openrouter/cheap"),
+            "openrouter/other",
+            "other",
+        ),
+        (
+            "inherit-over-setting",
+            Some("openrouter/cheap"),
+            "inherit",
+            "planner",
+        ),
+    ] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let gateway = a_gateway("[]", move |body| {
+            let asked: serde_json::Value = serde_json::from_str(body).expect("a JSON request");
+            let model = asked["model"].as_str().expect("a model");
+            match counted.fetch_add(1, Ordering::SeqCst) {
+                0 => a_reply_from(model, "Read a.md, shout it, write it back"),
+                1 => a_reply_from(model, plan),
+                _ => a_reply_from(model, "===== the document starts here =====\nHELLO"),
+            }
+        });
+        let mut settings = serde_json::json!({
+            "provider": {"openrouter": {
+                "env": ["OPENROUTER_API_KEY"],
+                "options": {"baseURL": format!("http://127.0.0.1:{}/api/v1", gateway.port)},
+                "models": {"planner": {}, "cheap": {}, "other": {}}
+            }},
+            "model": "openrouter/planner",
+        });
+        if let Some(setting) = setting {
+            settings["processorModel"] = setting.into();
+        }
+        let scratch = Scratch::new(&format!("cli-running-processor-model-{name}"))
+            .with_settings(&settings.to_string());
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("a project");
+        std::fs::write(project.join("a.md"), "hello").expect("a file to process");
+
+        let output = bravebot_started_in(
+            &scratch.path,
+            &project,
+            AT_A_GATEWAY,
+            &[
+                "--mode",
+                "manifest",
+                "--dangerously-skip-permissions",
+                "--processor-model",
+                flag,
+                "-p",
+                "shout a.md",
+            ],
+        );
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(0), "{name}: {stdout}{stderr}");
+        let requests: Vec<serde_json::Value> = gateway
+            .asked
+            .try_iter()
+            .map(|body| serde_json::from_str(&body).expect("a JSON request"))
+            .collect();
+        let models: Vec<&str> = requests
+            .iter()
+            .map(|request| request["model"].as_str().expect("a model"))
+            .collect();
+        assert_eq!(models, ["planner", "planner", expected], "{name}");
+        assert_eq!(
+            std::fs::read_to_string(project.join("a.md")).expect("the file"),
+            "HELLO",
+            "{name}"
+        );
+    }
+}
+
+/// CLI-34. A processor model nothing is configured to serve stops the run before the first round,
+/// as the same name given to `--advisor` does, rather than a manifest run spending its two planning
+/// calls to find out at the first processing step. The control is the run without the flag, which
+/// reaches the gateway, so the stop is known to be the flag's.
+#[test]
+fn a_processor_model_nothing_serves_is_refused_before_the_run() {
+    let scratch = Scratch::new("cli-running-processor-model-unserved").with_settings(
+        r#"{
+            "provider": {
+                "openrouter": {
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            }
+        }"#,
+    );
+    let environment = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+        (
+            "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+            "https://ai-chat-premium.bsg.brave.com",
+        ),
+        ("OPENROUTER_API_KEY", "a-token"),
+    ];
+    let run = ["-p", "say something", "--model", "openrouter/z-ai/glm-4.6"];
+
+    let control = bravebot(&scratch.path, &environment, &run);
+    let (_, stderr) = said(&control);
+    assert_eq!(
+        control.status.code(),
+        Some(5),
+        "the run without the flag did not reach the gateway: {stderr}"
+    );
+
+    let mut with_the_flag = run.to_vec();
+    with_the_flag.extend(["--processor-model", "opus"]);
+    let output = bravebot(&scratch.path, &environment, &with_the_flag);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stdout.is_empty(),
+        "the reply stream carried the explanation instead: {stdout}"
+    );
+    assert!(
+        stderr.contains("is set as the processor model and no configured service answers for it"),
+        "the refusal did not say what the model was named for: {stderr}"
+    );
+    assert!(
+        !stderr.contains("127.0.0.1:1"),
+        "the run went to the gateway with a processor model nothing serves: {stderr}"
+    );
+}
+
+/// One streamed reply that asks to call `tool`, from the model the request asked for.
+fn a_tool_call_from(model: &str, tool: &str, arguments: &str) -> String {
+    a_streamed_frame(&serde_json::json!({"model": model, "choices": [{
+        "index": 0,
+        "delta": {"role": "assistant", "tool_calls": [{
+            "index": 0, "id": "call-1", "type": "function",
+            "function": {"name": tool, "arguments": arguments}}]},
+        "finish_reason": "tool_calls"}]}))
+}
+
+/// CLI-34. The flag reaches the processors of a turn as it reaches a manifest run's: the planner
+/// reads the file, starts a processor over it, and the processor's request, the one with no tool
+/// list, names the model the flag did while the planner's three keep the run's.
+#[test]
+fn a_processor_model_named_on_the_command_line_runs_a_turns_processor() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let gateway = a_gateway("[]", move |body| {
+        let asked: serde_json::Value = serde_json::from_str(body).expect("a JSON request");
+        let model = asked["model"].as_str().expect("a model");
+        // The check made of an unvouched file before its reference is handed out, which is not a
+        // round of the script.
+        if body.contains("prompt-injection classifier") {
+            return a_reply_from(
+                model,
+                r#"{"verdict": "safe", "reason": "nothing addressed to a reader"}"#,
+            );
+        }
+        match counted.fetch_add(1, Ordering::SeqCst) {
+            0 => a_tool_call_from(model, "read_file", r#"{"path":"a.md"}"#),
+            1 => a_tool_call_from(
+                model,
+                "spawn_processor",
+                r#"{"reads":["ref:1"],"instruction":"shout"}"#,
+            ),
+            2 => a_reply_from(model, "===== the document starts here =====\nHELLO"),
+            _ => a_reply_from(model, "done"),
+        }
+    });
+    let settings = serde_json::json!({
+        "provider": {"openrouter": {
+            "env": ["OPENROUTER_API_KEY"],
+            "options": {"baseURL": format!("http://127.0.0.1:{}/api/v1", gateway.port)},
+            "models": {"planner": {}, "cheap": {}}
+        }},
+        "model": "openrouter/planner",
+    });
+    let scratch =
+        Scratch::new("cli-running-processor-model-turn").with_settings(&settings.to_string());
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    std::fs::write(project.join("a.md"), "hello").expect("a file to process");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &project,
+        AT_A_GATEWAY,
+        &["--processor-model", "openrouter/cheap", "-p", "shout a.md"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    let bodies: Vec<String> = gateway.asked.try_iter().collect();
+    let models: Vec<String> = bodies
+        .iter()
+        .filter(|body| !body.contains("prompt-injection classifier"))
+        .map(|body| {
+            let request: serde_json::Value = serde_json::from_str(body).expect("a JSON request");
+            request["model"].as_str().expect("a model").to_string()
+        })
+        .collect();
+    assert_eq!(
+        models,
+        ["planner", "planner", "cheap", "planner"],
+        "{stdout}{stderr}"
+    );
+}
+
+/// CLI-34. A `--processor-model` with no name, or a blank one, is refused as a bad argument before
+/// the run starts, so a script whose variable expanded to nothing does not run its processors on
+/// the run's dearer model without saying so.
+#[test]
+fn a_blank_processor_model_is_refused_before_the_run() {
+    let scratch = Scratch::new("cli-running-processor-model-blank");
+    for typed in [
+        vec!["-p", "say something", "--processor-model"],
+        vec!["-p", "say something", "--processor-model", "  "],
+    ] {
+        let output = bravebot(&scratch.path, &[], &typed);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{typed:?}: {stderr}");
+        assert!(stdout.is_empty(), "{typed:?}: {stdout}");
+        assert!(
+            stderr.contains("--processor-model"),
+            "{typed:?}: the refusal did not name the flag: {stderr}"
+        );
+    }
+}
+
 /// A service configured while the model in force is still Brave's own has no service for that
 /// model, and is the case a settings block copied out of another tool lands in: those blocks name
 /// their models and name no default, so the model stays the one this build baked in.
@@ -10586,6 +10848,10 @@ fn bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal() {
         ),
         (&["--bg", "--incognito", "fix it"][..], "--incognito"),
         (&["--bg", "fix it", "--vet"][..], "--vet"),
+        (
+            &["--bg", "--processor-model", "haiku", "fix it"][..],
+            "--processor-model",
+        ),
         (&["--vet", "--bg", "fix it"][..], "--vet"),
         (
             &["--settings", "s.json", "--bg", "fix it"][..],

@@ -157,7 +157,7 @@ pub struct Output {
     pub answers_for: Option<Option<SlotId>>,
     /// What an isolated processor said about what it did. For the person watching only.
     pub said: Option<Labelled<String>>,
-    /// The model a processor was answered by, where it is not the one `processorModel` named
+    /// The model a processor was answered by, where it is not the one the person named for processors
     /// (PROC-13). The turn words it for the person: this module is read by the planner.
     pub substituted: Option<String>,
     /// The content alone, where `text` has the driver's own notes after it, so that a glimpse of
@@ -1181,7 +1181,7 @@ struct Produced {
     /// Never part of `text`, which is what the planner is told about: this half of a processor's
     /// answer reaches a screen and stops there.
     said: Option<Labelled<String>>,
-    /// The sentence saying a processor was answered by a model other than `processorModel`'s.
+    /// The sentence saying a processor was answered by a model other than the one named for processors.
     substituted: Option<String>,
     /// The content alone, where `text` has the driver's own notes after it.
     glimpsed: Option<Labelled<String>>,

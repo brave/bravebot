@@ -47,7 +47,8 @@ use crate::flags::{
     is_a_one_shot, starts_neither_a_session_nor_a_task, take_flag, take_valued,
 };
 use crate::model::{
-    model_asked_for, model_for_this_run, model_not_served, nothing_serves, resolve_advisor,
+    model_asked_for, model_for_this_run, model_not_served, nothing_serves,
+    put_processor_model_in_force, resolve_advisor,
 };
 use crate::one_shot::OneShot;
 use crate::usage::print_help;
@@ -104,6 +105,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
                     | "--tools"
                     | "--no-shell"
                     | "--vet"
+                    | "--processor-model"
                     | "--settings"
                     | "--run-network"
                     | "--sandbox"
@@ -1229,6 +1231,9 @@ struct Invocation {
     /// The model the command line named as the planner's advisor. `None` leaves it to the
     /// `advisorModel` setting.
     advisor: Option<String>,
+    /// The model the command line named for processors to run on, as it was written. `None` leaves
+    /// it to the `processorModel` setting.
+    processor_model: Option<String>,
     /// The level the command line named, which outranks the saved pick and every settings file for
     /// this run alone. `None` leaves those to answer.
     effort: Option<bravebot_session::store::Effort>,
@@ -1282,7 +1287,7 @@ fn effort_level(next: Option<&String>) -> Result<bravebot_session::store::Effort
 }
 
 /// Parse `<prompt> [--file path]... [--add-dir path]... [--mode name] [--model name]
-/// [--effort level] [--trace] [--json] [-p]`.
+/// [--processor-model name] [--effort level] [--trace] [--json] [-p]`.
 fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut prompt = String::new();
     let mut files = Vec::new();
@@ -1290,6 +1295,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut mode = Mode::default();
     let mut model = None;
     let mut advisor = None;
+    let mut processor_model = None;
     let mut effort = None;
     let mut directories = Vec::new();
     let mut trust_workspace = false;
@@ -1325,6 +1331,15 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                     index += 2;
                 }
                 _ => return Err(t!(cli_advisor_needs_a_name).to_string()),
+            },
+            // Refused when blank for the reason `--advisor` is: a script whose variable expanded to
+            // nothing asked for a cheaper model and would otherwise run processors on the dear one.
+            "--processor-model" => match args.get(index + 1).map(|name| name.trim()) {
+                Some(name) if !name.is_empty() => {
+                    processor_model = Some(name.to_string());
+                    index += 2;
+                }
+                _ => return Err(t!(cli_processor_model_needs_a_name).to_string()),
             },
             "--effort" => {
                 effort = Some(effort_level(args.get(index + 1))?);
@@ -1421,6 +1436,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         mode,
         model,
         advisor,
+        processor_model,
         effort,
         directories,
         trust_workspace,
@@ -1558,6 +1574,7 @@ fn prepare_the_run(
         mode,
         model,
         advisor,
+        processor_model,
         effort,
         directories,
         trust_workspace,
@@ -1656,6 +1673,12 @@ fn prepare_the_run(
         Some(Err(how)) => return Err(stopped_before_the_turn(as_json, Ending::Configuration, how)),
         None => None,
     };
+
+    // The person's own command line, so it names the model as their settings file does and outranks
+    // the file for this run (PROC-13). Made where the advisor's check is, which it follows.
+    if let Err(how) = put_processor_model_in_force(&mut config, processor_model.as_deref()) {
+        return Err(stopped_before_the_turn(as_json, Ending::Configuration, how));
+    }
 
     let mut workspace = match current_workspace(&settings, &Managed::load()) {
         Ok(w) => w,
@@ -4538,6 +4561,91 @@ mod tests {
             let err = parse_invocation(&typed).expect_err("must refuse");
             assert!(err.contains("--advisor"), "{typed:?}: {err}");
         }
+    }
+
+    /// CLI-34. The model processors run on is named on the command line, separately from the run's
+    /// model and from the advisor, and a run that did not name one leaves the setting to answer.
+    #[test]
+    fn a_processor_model_flag_names_the_model_processors_run_on() {
+        let invocation = parse_invocation(&args(&[
+            "--processor-model",
+            "  cheap-model ",
+            "do a thing",
+        ]))
+        .expect("parses");
+        assert_eq!(invocation.processor_model.as_deref(), Some("cheap-model"));
+        assert_eq!(
+            invocation.model, None,
+            "the processor model replaced the run's model"
+        );
+        assert_eq!(
+            invocation.advisor, None,
+            "the processor model was read as the advisor"
+        );
+        assert_eq!(invocation.prompt, "do a thing");
+
+        let invocation = parse_invocation(&args(&["do a thing"])).expect("parses");
+        assert_eq!(invocation.processor_model, None);
+    }
+
+    /// CLI-34. A script that computed an empty variable asked for a cheaper model, and running the
+    /// processors on the dear one would not say so.
+    #[test]
+    fn a_blank_processor_model_is_refused_rather_than_read_as_no_choice() {
+        for typed in [
+            args(&["--processor-model"]),
+            args(&["--processor-model", "", "do a thing"]),
+            args(&["--processor-model", "   ", "do a thing"]),
+        ] {
+            let err = parse_invocation(&typed).expect_err("must refuse");
+            assert!(err.contains("--processor-model"), "{typed:?}: {err}");
+        }
+    }
+
+    /// CLI-34. A machine whose managed settings refuse a model does not run processors on it either,
+    /// and the run stops before it starts, naming the model, rather than at the first processor. A
+    /// model the file does not name is put in force over the setting, and `inherit` and no flag
+    /// leave the run's own model to answer.
+    ///
+    /// Not a binary run, for the reason the advisor's is not: the managed file is read from a fixed
+    /// system path.
+    #[test]
+    fn a_processor_model_the_managed_settings_refuse_is_refused_before_the_run() {
+        let scratch = Scratch::new("cli-processor-model-managed");
+        let (managed, file) = pinned(&scratch, r#"{"models": {"deny": ["stub/cheap"]}}"#);
+        let settings = layers(
+            &scratch,
+            Some(
+                r#"{"provider": {"stub": {"options": {"baseURL": "http://127.0.0.1:1/v1"},
+                    "models": {"planner": {}, "cheap": {}, "dear": {}}}}}"#,
+            ),
+            None,
+        );
+        let mut config =
+            Config::from_env_and_settings(&settings, &managed).expect("a configuration");
+
+        let how = put_processor_model_in_force(&mut config, Some("stub/cheap"))
+            .expect_err("must be refused");
+        assert!(
+            how.contains("stub/cheap") && how.contains(&file.display().to_string()),
+            "the refusal named neither the model nor the file that refused it: {how}"
+        );
+        assert_eq!(
+            config.processor_model, None,
+            "a refused model was put in force"
+        );
+
+        assert_eq!(
+            put_processor_model_in_force(&mut config, Some("stub/dear")),
+            Ok(())
+        );
+        assert_eq!(config.processor_model.as_deref(), Some("stub/dear"));
+        assert_eq!(
+            put_processor_model_in_force(&mut config, Some("Inherit")),
+            Ok(())
+        );
+        assert_eq!(config.processor_model, None);
+        assert_eq!(put_processor_model_in_force(&mut config, None), Ok(()));
     }
 
     /// CLI-21. A machine whose managed settings refuse a model does not request it for an advisor

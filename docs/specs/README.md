@@ -35,8 +35,8 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [shell-integration.md](shell-integration.md) | `SHELLINT` | 5 | `bravebot shell-init`: a hook that gives `@bravebot` the commands run in a terminal, as quarantined input |
 | [skills.md](skills.md) | `SKILL` | 17 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
 | [instructions.md](instructions.md) | `INSTR` | 16 | which instruction files are looked for, where, in what order, and where what they say ends up |
-| [cli.md](cli.md) | `CLI` | 33 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
-| [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
+| [cli.md](cli.md) | `CLI` | 34 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
+| [manifest.md](manifest.md) | `MANIFEST` | 12 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 46 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 25 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, what `/help` asks the planner to answer from the documentation, what `/changelog` shows, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, what `/sandbox`, `/limit`, `/review` and `/reach` show after the word, and how a prompt file is expanded |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 32 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
@@ -69,7 +69,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [state-directory.md](state-directory.md) | `STATE` | 3 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
 | [diagnostic-log.md](diagnostic-log.md) | `DIAG` | 8 | a file of hosts, statuses and counts, never content, for a person to attach to a bug report, and `bug-report`, which names it |
-| [trace.md](trace.md) | `TRACE` | 9 | what is recorded about every decision the system makes, what that record may contain, and the view of the request a turn built |
+| [trace.md](trace.md) | `TRACE` | 10 | what is recorded about every decision the system makes, what that record may contain, and the view of the request a turn built |
 | [localization.md](localization.md) | `LOCALE` | 8 | every word said to a person, and which of them change with the reader's language |
 | [acp.md](acp.md) | `ACP` | 7 | an editor hosting a session over the Agent Client Protocol: what a prompt, an attachment and an answer may carry |
 | [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |
