@@ -1443,10 +1443,13 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 index += 1;
             }
             // `lines` is the one format, and the word is checked rather than assumed so a second
-            // format can be added without changing what a script that names this one does.
+            // format can be added without changing what a script that names this one does. The
+            // lines are answered on the stream, so a run that reads them is a `--json-stream` run.
             "--input-format" => match args.get(index + 1).map(String::as_str) {
                 Some("lines") => {
                     input_lines = true;
+                    json = true;
+                    stream = true;
                     index += 2;
                 }
                 _ => return Err(t!(cli_input_format_unknown).to_string()),
@@ -1552,21 +1555,16 @@ fn manifest_conflict(
 /// Why `--input-format lines` or `--trust-input-lines` cannot go with the rest of the command line,
 /// as the sentence that refuses it, or `None` where nothing is wrong (CLI-35).
 ///
-/// The stream flag comes first because the lines are answered on it: a run with nowhere to write a
-/// question or a result would take lines it could not reply to. `--incognito` is refused because
-/// each turn is carried on from the record the one before wrote, and an incognito run writes none.
+/// `--incognito` is refused because each turn is carried on from the record the one before wrote,
+/// and an incognito run writes none.
 fn input_lines_conflict(
     input_lines: bool,
     trust_input_lines: bool,
-    streams: bool,
     mode: Mode,
     incognito: bool,
 ) -> Option<String> {
     if !input_lines {
         return trust_input_lines.then(|| t!(cli_trust_input_lines_needs_lines).to_string());
-    }
-    if !streams {
-        return Some(t!(cli_input_lines_needs_a_stream).to_string());
     }
     if mode == Mode::Manifest {
         return Some(t!(cli_input_lines_not_with_a_manifest).to_string());
@@ -1708,7 +1706,6 @@ fn prepare_the_run(
     if let Some(conflict) = input_lines_conflict(
         input_lines,
         trust_input_lines,
-        as_stream,
         mode,
         bravebot_core::incognito::engaged(),
     ) {
@@ -2806,10 +2803,13 @@ fn off_schema_message(broke: &bravebot_agent::output_schema::Mismatch) -> String
 /// Whether a result object was asked for, read straight off the command line.
 ///
 /// Only for the case where the parse failed, which is the one moment the parsed invocation cannot
-/// answer.
+/// answer. `--input-format lines` is a `--json-stream` run (CLI-34), so it asks for one too.
 fn wants_json(args: &[String]) -> bool {
     args.iter()
         .any(|arg| arg == "--json" || arg == "--json-stream")
+        || args
+            .windows(2)
+            .any(|pair| pair[0] == "--input-format" && pair[1] == "lines")
 }
 
 /// What a pipe may carry before it is refused.

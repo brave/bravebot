@@ -111,7 +111,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--append-system-prompt <prompt>` | add your own words to the system prompt for this run, after the project's `AGENTS.md` ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
 | `--json-stream` | write one event per line as the run goes, then the result object ([below](#--json-stream)) |
-| `--input-format lines` | read turns, steers, answers and stops from stdin, a JSON object to a line, for as many turns as it is sent; needs `--json-stream` ([below](#--input-format-lines)) |
+| `--input-format lines` | read turns, steers, answers and stops from stdin, a JSON object to a line, for as many turns as it is sent; implies `--json-stream` ([below](#--input-format-lines)) |
 | `--trust-input-lines` | with `--input-format lines`, treat the lines as your own words and not a program's ([below](#--input-format-lines)) |
 | `--trace` | print the audit trail to stderr |
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
@@ -558,11 +558,12 @@ and none is removed or renamed.
 ## `--input-format lines`
 
 ```sh
-bravebot --json-stream --input-format lines --trust-input-lines -p "review the diff" < turns.jsonl
+bravebot --input-format lines --trust-input-lines -p "review the diff" < turns.jsonl
 ```
 
-One process that **reads JSON lines on stdin for as many turns as it is sent**, with `--json-stream`
-writing the events and each turn's result object. Each line is one JSON object with a `type`:
+One process that **reads JSON lines on stdin for as many turns as it is sent**. It is a
+[`--json-stream`](#--json-stream) run, writing the events and each turn's result object. Each line
+is one JSON object with a `type`:
 
 | `type` | other fields | what it does |
 |---|---|---|
@@ -609,8 +610,8 @@ already hold as many bytes as that cap). The event holds nothing the line said. 
 line is ignored, and a field a line's type does not use is skipped.
 
 The flags are refused with status 2 before stdin is read when `--input-format` names anything but
-`lines`, without `--json-stream`, with `--mode manifest` and with `--incognito`, and when
-`--trust-input-lines` comes without `--input-format lines`.
+`lines`, with `--mode manifest` and with `--incognito`, and when `--trust-input-lines` comes without
+`--input-format lines`.
 
 ## Continuing a session from a one-shot run
 

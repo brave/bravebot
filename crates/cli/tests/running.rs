@@ -16606,7 +16606,12 @@ impl LinesRun {
     fn start_in(scratch: &Scratch, cwd: &Path, flags: &[&str]) -> Self {
         let mut arguments = vec!["--json-stream", "--input-format", "lines"];
         arguments.extend_from_slice(flags);
-        let mut child = prepared(&scratch.path, Some(cwd), AT_A_GATEWAY, &arguments)
+        Self::spawn(scratch, cwd, &arguments)
+    }
+
+    /// Started with exactly `arguments`, so a test can leave `--json-stream` off.
+    fn spawn(scratch: &Scratch, cwd: &Path, arguments: &[&str]) -> Self {
+        let mut child = prepared(&scratch.path, Some(cwd), AT_A_GATEWAY, arguments)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -17105,8 +17110,7 @@ fn a_line_does_not_approve_a_write() {
 #[test]
 fn input_lines_is_refused_beside_what_it_cannot_go_with() {
     let scratch = Scratch::new("cli-lines-refused");
-    let cases: [(&[&str], &str); 7] = [
-        (&["-p", "--input-format", "lines"], "requires --json-stream"),
+    let cases: [(&[&str], &str); 6] = [
         (
             &["--json-stream", "--input-format", "csv"],
             "--input-format takes lines",
@@ -17150,6 +17154,55 @@ fn input_lines_is_refused_beside_what_it_cannot_go_with() {
         assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
         assert!(stderr.contains(problem), "{arguments:?}: {stderr}");
     }
+}
+
+/// CLI-35: a run that reads lines is a `--json-stream` run without being told so, since its
+/// questions are put and its results written on the stream. A run that required the flag would be
+/// refused, one that took the result object alone would write no `usage` event ahead of it, and one
+/// that took the events alone would write no result object at all.
+#[test]
+fn a_run_reading_lines_streams_without_being_given_the_stream_flag() {
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-lines-implied-stream").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::spawn(
+        &scratch,
+        &scratch.path,
+        &["--input-format", "lines", "--trust-input-lines"],
+    );
+    run.send(&prompt_line("WORDS"));
+    let (lines, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(0), "{stderr}");
+    let last = lines.last().expect("the run wrote its result");
+    assert!(last.get("event").is_none(), "no result object: {lines:?}");
+    assert_eq!(last["reply"], "reply 1", "{lines:?}");
+    assert!(
+        lines[..lines.len() - 1]
+            .iter()
+            .any(|line| line["event"] == "usage"),
+        "no event ahead of the result: {lines:?}"
+    );
+}
+
+/// CLI-35: a command line that fails to parse is answered with a result object when the run is
+/// one that reads lines, as it is for `--json-stream`, since a program that reads the run's stdout
+/// for objects has no other way to hear of it.
+#[test]
+fn a_failed_command_line_for_a_lines_run_is_a_result_object() {
+    let scratch = Scratch::new("cli-lines-implied-json");
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--input-format", "lines", "--output-schema"],
+    );
+    let (stdout, stderr) = said(&output);
+
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    let result: serde_json::Value =
+        serde_json::from_str(stdout.trim()).unwrap_or_else(|_| panic!("not an object: {stdout}"));
+    assert_eq!(result["status"], 2, "{stdout}");
 }
 
 /// CLI-35: a run that was sent no prompt before its input ended has no task, and says so with the

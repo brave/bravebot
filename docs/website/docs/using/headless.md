@@ -146,7 +146,7 @@ lists the events.
 ## Sending several turns to one process
 
 ```sh
-bravebot --json-stream --input-format lines --trust-input-lines <<'EOF'
+bravebot --input-format lines --trust-input-lines <<'EOF'
 {"type":"prompt","text":"review the diff"}
 {"type":"prompt","text":"now fix what you found"}
 EOF
@@ -340,7 +340,7 @@ the wrong thing to search for.
 | `--processor-model <name>` | the model processors run on, in place of the `processorModel` setting |
 | `--json` | one result object on stdout, in the reply's place |
 | `--json-stream` | one event per line on stdout as the run goes, then the result object |
-| `--input-format lines` | read turns, steers, answers and stops from stdin, a JSON object to a line; needs `--json-stream` |
+| `--input-format lines` | read turns, steers, answers and stops from stdin, a JSON object to a line; implies `--json-stream` |
 | `--trust-input-lines` | treat those lines as your own words and not a program's |
 | `--output-schema <path>` | hold the reply to a JSON Schema; a reply off it ends on status 6, one that conforms is also `structured` under `--json` |
 | `--goal <condition>` | keep working until a judge says the condition holds; a condition that never does ends on status 7 |

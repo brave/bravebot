@@ -1979,8 +1979,9 @@ that broke, and from one that found nothing to connect to.
 <a id="CLI-35"></a>
 ### CLI-35: `--input-format lines` reads turns, steers, answers and stops from stdin, a JSON object to a line
 
-A one-shot run given `--input-format lines` and `--json-stream` reads stdin a line at a time until it
-closes, where CLI-2 reads it once. Each line is one JSON object with a `type`:
+A one-shot run given `--input-format lines` is a `--json-stream` run (CLI-24), since its questions are
+put and its results written there, and reads stdin a line at a time until it closes, where CLI-2
+reads it once. Each line is one JSON object with a `type`:
 
 - `prompt`, with `text`, starts a turn with those words. A prompt that arrives while a turn runs
   waits, and starts a turn of its own when the turns before it have ended.
@@ -2050,16 +2051,14 @@ file piped in whole fills no more memory than one piped to `-p` does. A read of 
 ends the input as the end of it does.
 
 Refused with the status for an argument (CLI-6), before stdin is read: `--input-format` with a word
-other than `lines`; `--input-format lines` without `--json-stream`, which is where its questions are
-put and its results written; `--trust-input-lines` without `--input-format lines`;
+other than `lines`; `--trust-input-lines` without `--input-format lines`;
 `--input-format lines` with `--mode manifest`, which has one task and no turns to add; and
 `--input-format lines` with `--incognito`, since each turn is carried on from the record the one
 before wrote and an incognito run writes none.
 
-**Why.** A script or an editor that drives bravebot can send a second turn today only as a second
-process (CLI-25), cannot say anything to a turn that is running, and cannot answer a question.
-Following the run is the half CLI-24 did. This is the other half: one process the program talks to
-for as long as it has something to say.
+**Why.** Without this, a program driving bravebot needs one process for each turn (CLI-25) and
+cannot steer, answer or stop a turn that is running. One process that it talks to for as long as it
+has something to say takes all of them, and the events of CLI-24 follow each turn.
 
 The launching program is not necessarily the person. A line on a pipe has no author the trust map
 could ask about, so its words take the pessimistic label CLI-3 gives a pipe, and the one thing that
@@ -2144,6 +2143,8 @@ one the person chose to run with the flag.
 `verified-by: bravebot_cli::running::a_question_is_declined_when_the_input_ends_without_an_answer`
 `verified-by: bravebot_cli::running::a_line_does_not_approve_a_write`
 `verified-by: bravebot_cli::running::input_lines_is_refused_beside_what_it_cannot_go_with`
+`verified-by: bravebot_cli::running::a_run_reading_lines_streams_without_being_given_the_stream_flag`
+`verified-by: bravebot_cli::running::a_failed_command_line_for_a_lines_run_is_a_result_object`
 `verified-by: bravebot_cli::running::a_run_that_reads_lines_and_is_sent_no_prompt_has_no_task`
 `verified-by: bravebot_core::policy::a_vouched_line_is_recorded_as_that_and_does_not_lower_the_context`
 `verified-by: bravebot_agent::turn::a_line_from_a_vouched_channel_is_recorded_as_vouched_for_and_not_as_typed`
