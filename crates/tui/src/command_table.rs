@@ -773,7 +773,9 @@ enum Acts {
     Other,
 }
 
-/// What the command acts on.
+/// A command not named here falls to [`Acts::Other`], which every waiting line but a `/sandbox`
+/// holds it behind, so one added to the table waits when nobody has said what it acts on instead of
+/// landing ahead of a line that could change it.
 fn acts_on(command: &str) -> Acts {
     match command {
         ISSUE_COMMAND | PR_COMMAND => Acts::Link,
