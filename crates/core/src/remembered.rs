@@ -371,12 +371,10 @@ pub struct Entry {
 /// [RUN-20]: ../../../docs/specs/tools/run.md
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scope {
-    /// Which group of the table this is.
     pub kind: scopes::Kind,
     /// The repository every line names, as the prompt wrote it. Said where the scope is read back
     /// and decides nothing: what covers a line is the lines.
     pub repository: String,
-    /// The lines the scope covers.
     pub lines: Vec<RememberedLine>,
 }
 
