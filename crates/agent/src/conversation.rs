@@ -760,12 +760,12 @@ impl Conversation {
         self.skills_overview_said = true;
     }
 
-    /// Whether `long_descriptions_said` is set.
+    /// See `long_descriptions_said`.
     pub fn long_descriptions_said(&self) -> bool {
         self.long_descriptions_said
     }
 
-    /// Record that it has, so a later turn of the same session does not say it again.
+    /// See `long_descriptions_said`.
     pub fn long_descriptions_were_said(&mut self) {
         self.long_descriptions_said = true;
     }
