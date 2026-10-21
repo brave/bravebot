@@ -3085,6 +3085,47 @@ mod tests {
             assert!(!answer.text.contains("changed"), "{}", answer.text);
         }
 
+        /// PATH-003. A staged path that is not UTF-8 cannot be matched against a rule, so it is
+        /// withheld, and its lossy lookalike is an ordinary path that is shown.
+        #[test]
+        fn staged_withholds_a_path_that_is_not_utf8_and_shows_its_lookalike() {
+            let repo = Repo::new("staged-not-utf8");
+            let old = repo.blob("old\n");
+            commit(&repo, &[("keep.txt", old)]);
+            let bad = repo.blob("bad\n");
+            let lookalike = repo.blob("lookalike\n");
+            // The index writer takes &str, so the one byte that is not UTF-8 goes in afterwards,
+            // and the checksum over the entries is taken again.
+            let mut bytes = index_bytes(
+                &repo,
+                2,
+                &[
+                    ("keep.txt", FILE, old, 0, false),
+                    ("tool-\u{7f}", FILE, bad, 0, false),
+                    ("tool-\u{FFFD}", FILE, lookalike, 0, false),
+                ],
+                b"",
+            );
+            let at = bytes
+                .windows(6)
+                .position(|w| w == b"tool-\x7f")
+                .expect("placeholder");
+            bytes[at + 5] = 0xff;
+            let body = bytes.len() - 20;
+            let mut hasher = gix_hash::hasher(HashKind::Sha1);
+            hasher.update(&bytes[..body]);
+            let checksum = hasher.try_finalize().expect("hashed");
+            bytes.truncate(body);
+            bytes.extend_from_slice(checksum.as_bytes());
+            std::fs::write(repo.git.join("index"), bytes).expect("index");
+
+            let answer = staged(&repo, None, &|_| false);
+            assert!(answer.withheld);
+            assert_eq!(answer.shown, ["tool-\u{FFFD}"]);
+            assert!(answer.text.contains("lookalike"), "{}", answer.text);
+            assert!(!answer.text.contains("bad"), "{}", answer.text);
+        }
+
         #[test]
         fn staged_names_a_conflicted_path_and_prints_no_hunks_for_it() {
             let repo = Repo::new("staged-conflict");
