@@ -26,6 +26,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
 | `/limit` | `[<amount> \| off]` | Show the session's spend limit, set it in tokens or credits, or remove it |
 | `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
+| `/help` | `<question>` | Ask a question about bravebot, answered from its own documentation |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/recap` | | Recap where this session stands, without putting it in the conversation |
@@ -890,6 +891,28 @@ Nothing is drafted for a repository you have not trusted, for changes that show 
 that holds what looks like a credential, and the line says which. A diff longer than one read takes is
 drafted from the part that was read, and the line says so. The model is the one `processorModel` names,
 or the session's. Typed while a turn runs it waits for the turn to end.
+
+## `/help <question>`
+
+Asks the planner to answer a question about using bravebot from the documentation carried inside
+the program, so the answer comes from the version you are running and not from a checkout or the
+website: `/help how do I stop a background job`. The request names the built-in `bravebot-help`
+skill, whose pages the planner loads one at a time, only the ones the question needs. If the pages it
+loaded do not answer the question, it says so. Without the command, the planner loads the same skill
+on its own when a question is about using bravebot.
+
+The question is sent as you typed it, inside a sentence the program wrote, and the line you typed is
+not sent. It is a line you typed, so a file you name in it with `@` is read as it is in any prompt.
+A picture pasted or a file dropped into it is written as words, as for every command that does not
+send them on.
+
+With no question, `/help` says what it takes and nothing starts. A longer word such as `/helpful`,
+and a sentence that mentions the word, is a prompt. Typed while a turn runs, the line waits for the
+turn to end.
+
+A skill named `bravebot-help` of your own, or one in a project you trusted, replaces the built-in and
+its pages, and `/help` then loads that one. A prompt file or skill named `help` is shadowed by the
+command.
 
 ## `/agent <name> <task>`
 

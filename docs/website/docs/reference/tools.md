@@ -1173,8 +1173,8 @@ Says when this turn should be asked again: the pace of the next tick of a self-p
 [`/loop`](commands.md#loop-interval-prompt), or, outside a loop, the first later look at something,
 which starts a loop over the line you typed. It is offered only where that later look can actually
 happen; a call from any other turn is answered the way any unoffered name is. A turn that runs a prompt
-bravebot wrote for a command, as [`/init`](commands.md#init) and [`/review`](commands.md#review-target-focus)
-do, is not offered it, so those cannot start a loop that repeats the fixed prompt.
+bravebot wrote for a command, as [`/init`](commands.md#init), [`/review`](commands.md#review-target-focus)
+and [`/help`](commands.md#help-question) do, is not offered it, so those cannot start a loop that repeats the fixed prompt.
 
 | Parameter | |
 |---|---|

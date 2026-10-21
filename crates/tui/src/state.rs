@@ -1135,7 +1135,8 @@ pub struct Session {
     /// that outlived its session would start sending prompts at somebody who opened a
     /// conversation to read it, about a file that moved while nobody was here.
     watches: watch::Watches,
-    /// Set when `/init` hands back its prompt, so the turn that sends it says the driver wrote it.
+    /// Set when `/init`, `/review` or `/help` hands back its prompt, so the turn that sends it says
+    /// the driver wrote it.
     driver_prompt_pending: bool,
     /// The same prompts, resolved, for the turn in flight to take between rounds.
     ///
@@ -3865,12 +3866,23 @@ impl Session {
         )
     }
 
+    /// Begin the turn `/help` is (CMD-24).
+    pub fn start_help(&mut self, question: &str) -> String {
+        self.driver_prompt_pending = true;
+        self.begin_turn(
+            crate::help_command::prompt(question),
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+        )
+    }
+
     /// Whether the turn starting now sends a prompt the driver wrote, without taking the answer.
     pub fn driver_prompt_is_pending(&self) -> bool {
         self.driver_prompt_pending
     }
 
-    /// Whether the turn starting now sends a prompt the driver wrote, as `/init` and `/review` do.
+    /// Whether the turn starting now sends a prompt the driver wrote, as `/init`, `/review` and
+    /// `/help` do.
     /// Taken once.
     pub fn take_driver_prompt(&mut self) -> bool {
         std::mem::take(&mut self.driver_prompt_pending)

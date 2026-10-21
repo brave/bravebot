@@ -608,6 +608,15 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
             }
         };
     }
+    // The question is the person's and goes into a sentence the driver wrote, so the turn is the
+    // driver's prompt like `/init`'s. Asked nothing, the word says what it takes and no turn starts.
+    if let Some(question) = argument_to(line, HELP_COMMAND) {
+        if question.is_empty() {
+            session.note(t!(help_usage));
+            return Action::Redraw;
+        }
+        return Action::Submit(session.start_help(question));
+    }
     // Carried unparsed, because which names exist is read from the workspace and the trust map,
     // both of which the loop owns.
     if let Some(argument) = argument_to(line, AGENT_COMMAND) {
@@ -6322,7 +6331,7 @@ fn watch_to_start(wakeup: Option<turn::Wakeup>, offered: bool) -> Option<turn::W
 ///
 /// The same refusals [`crate::state::Session::watch_again`] makes once the turn has ended, in one
 /// place ahead of it, and the answer [`watch_to_start`] reads then: the line has to be the
-/// person's, which `/init` and `/review` are not, since the person's keystroke sends a prompt this
+/// person's, which `/init`, `/review` and `/help` are not, since the person's keystroke sends a prompt this
 /// program wrote; and the session has to have nothing else of its own already running, since it
 /// does one of a watch, a loop and a goal at a time. A turn that is a tick of a loop is not this
 /// question at all, the loop being already the thing that asks again, and the agent reads this
@@ -14715,6 +14724,91 @@ mod tests {
             commit_message_answered(&mut session, Err(why));
             assert_eq!(session.input(), "typing");
             assert_eq!(session.transcript.last().expect("a note").text, said);
+        }
+    }
+
+    /// CMD-24: `/help` starts a turn whose prompt is the driver's words around the question, and
+    /// that prompt is what the transcript shows as sent. The line typed is not what goes out.
+    #[test]
+    fn the_help_command_starts_a_turn_with_the_drivers_own_prompt_around_the_question() {
+        let mut session = Session::new("none");
+        let prompt = crate::help_command::prompt("how do I stop a background job?");
+        assert_eq!(
+            enter_line(&mut session, "/help how do I stop a background job?"),
+            Action::Submit(prompt.clone())
+        );
+        assert_eq!(session.turns, 1);
+        assert_eq!(session.transcript.last().expect("the prompt").text, prompt);
+        assert!(session.take_driver_prompt());
+    }
+
+    /// CMD-24, CMD-8: typed while a turn runs, `/help <question>` waits for it and then starts its
+    /// own turn on the driver's prompt. Handed to the running turn it would be the person's
+    /// interjection, and the sentence naming the skill would never be sent.
+    #[test]
+    fn a_help_question_typed_while_a_turn_runs_waits_and_then_starts_its_own_turn() {
+        let mut session = a_turn_running_on("first");
+        type_while_working(&mut session, "/help how do I stop a background job?");
+        assert_eq!(
+            session.interjections().take(),
+            None,
+            "the running turn was handed the question"
+        );
+        assert_eq!(session.turns, 1, "a second turn began beside the first");
+        session.complete("answered", Vec::new(), 0);
+
+        let queued = session
+            .take_queued_command()
+            .expect("the command was not waiting to be carried out");
+        let prompt = crate::help_command::prompt("how do I stop a background job?");
+        assert_eq!(
+            dispatch_command(&mut session, queued),
+            Action::Submit(prompt)
+        );
+        assert!(session.take_driver_prompt());
+    }
+
+    /// CMD-24: the prompt `/help` sends is one this program wrote, so the turn is not offered a
+    /// later look at its own line. A watch or loop armed from it would repeat the driver's sentence
+    /// where the person typed a question, which an ordinary prompt's line is not.
+    #[test]
+    fn a_help_turn_is_the_drivers_prompt_and_is_offered_no_later_look() {
+        let mut ordinary = Session::new("none");
+        enter_line(&mut ordinary, "how do I stop a background job?");
+        assert!(will_look_again(&ordinary, Wrote::ThePerson));
+
+        let mut helped = Session::new("none");
+        enter_line(&mut helped, "/help how do I stop a background job?");
+        assert!(!will_look_again(&helped, Wrote::ThePerson));
+    }
+
+    /// CMD-24: asked nothing, `/help` says what it takes and starts no turn, so no request is made
+    /// about no question.
+    #[test]
+    fn the_help_command_with_no_question_says_what_it_takes_and_starts_no_turn() {
+        for line in ["/help", "/help   "] {
+            let mut session = Session::new("none");
+            assert_eq!(enter_line(&mut session, line), Action::Redraw, "{line:?}");
+            assert_eq!(session.turns, 0, "{line:?}");
+            assert_eq!(
+                session.transcript.last().expect("a note").text,
+                t!(help_usage)
+            );
+            assert!(!session.take_driver_prompt(), "{line:?}");
+        }
+    }
+
+    /// CMD-24, CMD-2: a longer word starting with the command's name is a prompt, not a question
+    /// for the documentation.
+    #[test]
+    fn a_prompt_containing_the_help_command_or_a_longer_word_is_still_a_prompt() {
+        for line in ["/helpful hints please", "/helps", "what does /help do"] {
+            let mut session = Session::new("none");
+            assert_eq!(
+                enter_line(&mut session, line),
+                Action::Submit(line.to_string())
+            );
+            assert!(!session.take_driver_prompt(), "{line:?}");
         }
     }
 

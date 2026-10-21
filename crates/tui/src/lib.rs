@@ -34,6 +34,7 @@ pub mod dropped;
 pub mod editor;
 pub mod effort_prompt;
 pub mod goals;
+pub mod help_command;
 pub mod hidden;
 pub mod history;
 pub mod history_search;

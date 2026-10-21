@@ -236,6 +236,13 @@ pub(crate) const REVIEW_COMMAND: &str = "/review";
 /// Sends nothing to the planner. See [`crate::commit_message_command`] and CMD-23.
 pub(crate) const COMMIT_MESSAGE_COMMAND: &str = "/commit-message";
 
+/// The line that has the planner answer a question about bravebot from the documentation this
+/// program carries.
+///
+/// Starts an ordinary turn with words the driver wrote around the person's question. See
+/// [`crate::help_command`] and CMD-24.
+pub(crate) const HELP_COMMAND: &str = "/help";
+
 /// The line that sets plan mode, and with a task starts a turn on it.
 ///
 /// The same endorsement as the key that cycles to plan mode (MODE-12): it only narrows what is
@@ -433,6 +440,12 @@ pub fn commands() -> [Command; 50] {
             argument: "[tag | auto]",
             description: t!(command_language),
             mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: HELP_COMMAND,
+            argument: "<question>",
+            description: t!(command_help),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: COMPACT_COMMAND,

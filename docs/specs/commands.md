@@ -16,6 +16,7 @@ governs:
   - crates/tui/src/init_command.rs
   - crates/tui/src/review_command.rs
   - crates/tui/src/commit_message_command.rs
+  - crates/tui/src/help_command.rs
   - crates/tui/src/prompt_files.rs
 guards:
   - symbol: commands
@@ -36,7 +37,8 @@ conversation never sees, and where its answer is drawn is [watching.md](watching
 a different surface entirely and is [shell-mode.md](shell-mode.md). `/copy` has no other spec to
 belong to, so what it copies is CMD-11, and neither has `/caffeinate`, so what it holds is CMD-12. `/init` starts an ordinary turn, but the words that turn is given and
 when it is refused are CMD-13. `/review` is the same kind of turn, and what it is given and what
-it may not do are CMD-18. `/request` shows the request a turn built, which is
+it may not do are CMD-18. `/help` is the same kind of turn, given a question and
+the name of the skill that carries the documentation, which is CMD-24. `/request` shows the request a turn built, which is
 [TRACE-9](trace.md#TRACE-9)'s, and `/context` divides what it measured, which is CMD-19.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
@@ -1159,6 +1161,48 @@ prompt to agree.
 `verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
 `verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
 `verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
+
+## Answering from what this program carries
+
+<a id="CMD-24"></a>
+### CMD-24: `/help` asks the planner to answer a question from the documentation this program carries
+
+`/help <question>` starts an ordinary turn whose prompt is a fixed text written in this program
+around the question: load the built-in skill `bravebot-help` with `load_skill` and answer from the
+pages it lists, not from memory ([SKILL-17](skills.md#SKILL-17)). The question is the argument as
+CMD-5 takes it and is carried into the prompt as typed. The prompt is what the transcript shows as
+sent, and typed during a turn the line waits (CMD-8).
+
+With no question the command says what it takes and no turn starts. `/help` followed by words is
+the command, a longer word that starts with it is a prompt, and so is a sentence that mentions it
+(CMD-2).
+
+The fixed words of the prompt name no path with `@`, so sending them vouches for nothing. The
+question is the person's own line, so an `@` in it is read as it is in any line they type
+([NAME-1](naming-files.md#NAME-1)). The turn is marked as one the driver wrote the prompt of, so it is
+not offered a later look at its own line ([SCHED-6](tools/schedule-next.md#SCHED-6)). The pages are
+this program's own text and are trusted for that reason ([SKILL-12](skills.md#SKILL-12)). The turn
+reads what any turn may read and the prompt adds no reach. Nothing the driver does branches on the
+question or on the answer. A skill named `bravebot-help` that a turn would offer from another source
+shadows the built-in ([SKILL-12](skills.md#SKILL-12)), and the turn then loads that one. A prompt file
+or skill named `help` is shadowed by the command (CMD-17).
+
+**Why.** The planner loads the skill on its own when the description fits the question
+([SKILL-13](skills.md#SKILL-13)), and a person's wording may not fit it. The command names the
+skill in the prompt, so the question is answered from the documentation of the running version
+whatever the wording. The question goes into the driver's sentence and not the other way round, so
+the typed line itself is never sent (CMD-4).
+
+`verified-by: bravebot_tui::app::the_help_command_starts_a_turn_with_the_drivers_own_prompt_around_the_question`
+`verified-by: bravebot_tui::app::the_help_command_with_no_question_says_what_it_takes_and_starts_no_turn`
+`verified-by: bravebot_tui::app::a_help_question_typed_while_a_turn_runs_waits_and_then_starts_its_own_turn`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_help_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::a_help_turn_is_the_drivers_prompt_and_is_offered_no_later_look`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::help_command::the_prompt_names_the_help_skill_and_carries_the_question_as_typed`
+`verified-by: bravebot_tui::help_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
+`verified-by: by-construction (the command returns Action::Submit like any typed line, and the one place a submitted line is run reads it as the person's; nothing in the command marks the question as anything else)`
 
 ## Known costs
 

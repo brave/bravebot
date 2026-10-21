@@ -2326,6 +2326,7 @@ command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
 command-memory = Lister la mémoire de chaque définition, où elle est gardée et si elle est retenue
 command-init = Faire rédiger par le planificateur un AGENTS.md pour ce projet
 command-review = Faire examiner par le planificateur des modifications locales ou une pull request
+command-help = Poser une question sur bravebot, avec une réponse tirée de sa documentation
 command-export = Exporter la transcription de la session vers un fichier markdown
 command-copy = Copier la dernière réponse dans le presse-papiers, ou une plus ancienne en reculant d'autant de réponses
 command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
@@ -2907,6 +2908,9 @@ init-already-there = { $file } existe déjà ici, donc /init n'y touche pas
 
 # Ce que /review dit quand la cible donnée ne désigne rien d'utilisable.
 review-usage = Usage : /review [staged | since <réf> | commit <réf> | pr <numéro ou URL>] [ce qu'il faut examiner]
+
+# Ce que /help répond quand il est tapé sans question.
+help-usage = Usage : /help <question>, par exemple /help comment arrêter une tâche. Tapez / pour les commandes
 
 # Ce que la session dit d'une définition qu'une personne a désignée avec /agent. Chaque nom ici a
 # été résolu par la session depuis une source que quelqu'un a approuvée ; il peut donc être affiché,
