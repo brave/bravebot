@@ -4,9 +4,23 @@ title: read_git
 status: normative
 governs:
   - crates/agent/src/git.rs
+  - crates/agent/src/git/config.rs
+  - crates/agent/src/git/dates.rs
+  - crates/agent/src/git/declined.rs
+  - crates/agent/src/git/diff.rs
+  - crates/agent/src/git/log.rs
+  - crates/agent/src/git/objects.rs
+  - crates/agent/src/git/out.rs
+  - crates/agent/src/git/resolve.rs
+  - crates/agent/src/git/revision.rs
+  - crates/agent/src/git/search.rs
+  - crates/agent/src/git/show.rs
   - crates/agent/src/git/status.rs
+  - crates/agent/src/git/survey.rs
+  - crates/agent/src/git/tags.rs
   - crates/agent/src/workspace.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/core/src/policy.rs
 documented-by: docs/website/docs/reference/tools.md
 ---
@@ -39,9 +53,19 @@ authored, its author and its subject, as `git log --format='%h %ad %an %s' --dat
 ([GIT-12](#GIT-12)).
 `show` prints a commit with its message and its diff as `git show` does, a tag with its message and
 then its commit, and `<revision>:<path>` as the file or directory stood at that revision. `diff`
-compares two commits' trees as `git diff` prints them. Revisions are read in git's syntax, as git
-resolves them: names, ids and their prefixes, `~N`, `^N`, `^{commit}` and ranges. Loose and packed
-objects, deltas included, read the same.
+compares two commits' trees as `git diff` prints them. How far apart a file's changes lie does not
+count against matching its two sides line by line. That takes at most four million steps, a step
+being one comparison of two lines or one line read, and a search for a shortest edit is given up
+past a thousand edits. A file that exceeds the bound is described by a notice in place of hunks. The
+notice names the lines the sides differ between, the lines within those that could not be matched,
+and the most lines they could have removed and added. Revisions are read in git's syntax, as git
+resolves them: names, ids and their prefixes, `~N`, `^N`, `^{commit}` and ranges. `A...B` is what
+each side has that the other lacks: a diff compares the merge base of the two with B, as `git diff
+A...B` does, and a log lists the commits reachable from either and not from both, as `git log
+A...B` does. Where the two have several merge bases, a diff measures from the most recent one,
+and a log leaves out what every one of them reaches. Two
+histories with no commit in common are refused by name. Loose and packed objects, deltas included,
+read the same.
 
 What each question means is fixed by this reader. No key in the repository's configuration names a
 program it runs, a driver it applies or a filter it passes bytes through, and no remote URL is ever
@@ -66,10 +90,15 @@ the gix crates that start one.
 `verified-by: bravebot_agent::git::show_prints_a_commit_its_message_and_its_diff_as_git_does`
 `verified-by: bravebot_agent::git::show_lists_a_directory_and_prints_a_file_at_a_revision`
 `verified-by: bravebot_agent::git::diff_compares_two_commits_as_git_diff_prints_them`
+`verified-by: bravebot_agent::git::edits_far_apart_in_a_long_file_are_two_hunks`
+`verified-by: bravebot_agent::git::a_stretch_that_cannot_be_lined_up_is_named_by_its_lines`
 `verified-by: bravebot_agent::git::revisions_resolve_through_names_ancestry_and_peels_as_git_does`
 `verified-by: bravebot_agent::git::ranges_and_pairs_are_read_as_git_reads_them`
 `verified-by: bravebot_agent::git::a_range_leaves_out_what_its_start_already_reaches`
 `verified-by: bravebot_agent::git::a_range_leaves_out_its_start_whatever_the_commit_times`
+`verified-by: bravebot_agent::git::a_symmetric_range_measures_from_the_merge_base`
+`verified-by: bravebot_agent::git::a_symmetric_range_over_a_criss_cross_history_is_read_as_git_reads_it`
+`verified-by: bravebot_agent::git::a_symmetric_range_with_no_common_ancestor_is_refused_by_name`
 `verified-by: bravebot_agent::git::a_path_after_a_revision_is_read_as_a_name_whatever_it_holds`
 `verified-by: bravebot_agent::git::a_path_keeps_only_the_commits_that_changed_it`
 `verified-by: bravebot_agent::git::a_log_narrowed_to_a_path_follows_the_side_a_merge_kept_it_from`
@@ -169,16 +198,15 @@ which object a file holds is not known until it is read.
 <a id="GIT-5"></a>
 ### GIT-5: the question is log, show, diff, status, tags or search, and anything else is refused by name
 
-A word off the list is refused and the planner is told to use `run`, where the turn is offered one. A revision form this reader does not implement, `A...B` or `HEAD^@`
-among them, is refused by name, and a query given the other shape of revision, one where it takes
+A word off the list is refused and the planner is told to use `run`, where the turn is offered one. A revision form this reader does not implement,
+`HEAD^@` or `@{upstream}` among them, is refused by name, and a query given the other shape of revision, one where it takes
 two or two where it takes one, is told which query takes it. A status given a revision is told to
 use diff. A pattern given to anything but search, a search given none, an empty one or one that is
 not a regular expression, and a list of tags given a path are each refused by name.
 
-**Why.** A guess answers a question the planner did not ask as though it had. `A...B` read as the
-forms this reader knows is the range from `A.` to `.B`, and `HEAD^@` is `HEAD^`, so each would
-come back as a confident answer to something else. A pattern or a path dropped without a word is
-the same guess: a log with its pattern dropped is every commit, read as the ones that matched.
+**Why.** A guess answers a question the planner did not ask as though it had. `HEAD^@` read as the
+forms this reader knows is `HEAD^`, so it would come back as a confident answer to something else.
+A pattern or a path dropped without a word is the same guess: a log with its pattern dropped is every commit, read as the ones that matched.
 
 `verified-by: bravebot_agent::tools::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`
@@ -200,19 +228,44 @@ the calendar, written `YYYY-MM-DD`, is refused with the form it takes.
 `verified-by: bravebot_agent::turn::since_and_until_are_whole_days_and_anything_else_is_refused`
 `verified-by: bravebot_agent::git::since_and_until_bound_the_log_by_whole_days`
 `verified-by: bravebot_agent::git::only_a_real_calendar_day_is_read_as_one`
+`verified-by: bravebot_agent::turn::since_and_until_include_the_first_and_last_second_of_their_day`
 
 <a id="GIT-7"></a>
 ### GIT-7: a git run whose output is sealed names read_git
 
-Where a stage of a `run` was git and its output could not be shown to the planner, the result says
-once that read_git reads history with nobody asked in a trusted repository. A run of any other
-program says nothing about it.
+Where a stage of a `run` was git, its output could not be shown to the planner, and read_git
+opens the repository git finds from the directory that stage worked in, for a question about
+history, the result says once that read_git reads history with nobody asked in a trusted
+repository. A stage works in the directory the line ran in, moved by each `-C` that leads its
+arguments. The repository git finds is in the nearest directory at or above that one, inside the
+session's directory or one the person added, that holds a `.git`. A stage that names its
+repository by `--git-dir`, `--work-tree` or `GIT_DIR` is judged by the directory it worked in.
+
+A run of any other program says nothing about it, and neither does a git run whose repository
+read_git declines: a `.git` that is a file ([GIT-8](#GIT-8)), which includes a directory below a
+linked worktree, a repository the map does not trust or a rule covers ([GIT-2](#GIT-2),
+[GIT-4](#GIT-4)), or a repository read_git cannot be asked for by name, because the name is not
+text or lies under a directory named `~`. A delegate's checkout, whose `.git` is also a file, is a
+repository read_git opens ([CHECKOUT-12](../checkouts.md#CHECKOUT-12)).
+
+Whether read_git opens the repository is decided by the opener a read_git call goes through. The
+checks a call makes on the name it was given before it reaches the opener are not made. Nothing
+under `.git` is read until the map has vouched for all of it ([GIT-2](#GIT-2)).
 
 **Why.** A planner that ran git and got a sealed result does not otherwise learn that the question
 has an answer it can read. Said after every run, the sentence would be noise the planner learns to
-skip.
+skip. Said after a run in a repository read_git declines, it names a call that is refused, and the
+planner then spends a round on that call before it asks `run` again.
 
 `verified-by: bravebot_agent::turn::a_sealed_git_run_names_read_git_and_another_programs_does_not`
+`verified-by: bravebot_agent::turn::a_sealed_git_run_in_a_subdirectory_of_a_repository_names_read_git`
+`verified-by: bravebot_agent::turn::a_sealed_git_run_in_a_linked_worktree_does_not_name_read_git`
+`verified-by: bravebot_agent::turn::a_sealed_git_run_in_a_repository_nobody_vouched_for_does_not_name_read_git`
+`verified-by: bravebot_agent::turn::a_sealed_git_run_is_judged_by_the_directory_dash_c_names`
+`verified-by: bravebot_agent::workspace::read_git_opens_the_directories_a_question_would_open`
+`verified-by: bravebot_agent::workspace::read_git_opens_a_repository_in_a_directory_that_was_added`
+`verified-by: bravebot_agent::workspace::read_git_opens_no_repository_whose_name_is_not_text`
+`verified-by: bravebot_agent::workspace::read_git_opens_no_repository_under_a_directory_named_tilde`
 
 <a id="GIT-8"></a>
 ### GIT-8: a repository whose files change what a read means is declined, not followed
@@ -233,6 +286,11 @@ quoting, line endings and continued lines.
 [CHECKOUT-12](../checkouts.md#CHECKOUT-12) opens one kind of linked worktree: a delegate's
 checkout, found from the driver's own record of it and never from its `.git` file.
 
+The description of read_git says that it declines the `.git` file a linked worktree or a submodule
+has, except at the root of a checkout the delegate was started in. A planner working in a linked
+worktree then goes to `run` first, or learns that no tool on its list reads that history where it
+holds none.
+
 **Why.** Each of these sends a read to files the list in [GIT-2](#GIT-2) does not hold, or answers
 with objects other than the ones stored. Past any of them this reader answers a different question
 from the one git would, and the rules were held against files it did not read.
@@ -244,6 +302,7 @@ from the one git would, and the rules were held against files it did not read.
 `verified-by: bravebot_agent::git::the_per_worktree_configuration_is_held_to_the_same_rules`
 `verified-by: bravebot_agent::git::a_ref_in_another_worktrees_directory_is_never_read`
 `verified-by: bravebot_agent::git::a_loop_of_symbolic_refs_is_declined`
+`verified-by: bravebot_agent::tools::read_git_says_a_dot_git_that_is_a_file_is_declined`
 
 <a id="GIT-9"></a>
 ### GIT-9: an answer is bounded, and one that stopped short says so
@@ -413,6 +472,8 @@ in anything other than the lines it printed would repeat or skip one on the next
 
 `verified-by: bravebot_agent::turn::read_git_searches_the_files_at_a_revision_and_pages_the_lines`
 `verified-by: bravebot_agent::turn::a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not`
+`verified-by: bravebot_agent::turn::what_a_distrusted_blob_holds_changes_a_searchs_counts_and_nothing_else`
+`verified-by: bravebot_agent::turn::the_skip_a_cut_read_git_search_offers_stays_inside_a_distrusted_blobs_body`
 `verified-by: bravebot_agent::workspace::a_search_pattern_is_held_to_trusted_public_before_anything_is_read`
 `verified-by: bravebot_agent::git::search_lists_the_lines_a_pattern_matches_at_a_revision_as_git_grep_does`
 `verified-by: bravebot_agent::git::a_search_shows_every_file_it_read_whether_or_not_it_matched`

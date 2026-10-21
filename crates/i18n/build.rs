@@ -145,16 +145,14 @@ fn check(locales: &[Catalog], reference: &Catalog) {
                     message.line
                 );
             }
+        }
 
-            let has_select = matches!(message.value, Value::Select { .. });
-            assert!(
-                !has_select || is_known(&locale.language),
-                "locales/{}.ftl line {}: `{id}` selects on a plural, and no plural rule for `{}` \
+        if let Some(message) = locale.select_without_a_plural_rule(is_known) {
+            panic!(
+                "locales/{}.ftl line {}: `{}` selects on a plural, and no plural rule for `{}` \
                  is written in crates/i18n/src/plural.rs. Add its rule there rather than letting \
                  it take English's",
-                locale.tag,
-                message.line,
-                locale.language
+                locale.tag, message.line, message.id, locale.language
             );
         }
 

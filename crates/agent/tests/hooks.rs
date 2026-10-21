@@ -119,8 +119,8 @@ fn a_hook_is_told_the_moment_and_nothing_else() {
 }
 
 /// HOOK-5: the moment and the tool an entry names reach the hook on its standard input only. Its
-/// environment is this process's own, less what is scrubbed, with no name added and no value
-/// carrying the tool or the moment.
+/// environment is this process's own, less what is scrubbed and with `PATH` reduced, with no name
+/// added and no value carrying the tool or the moment.
 #[test]
 fn a_hook_is_given_no_environment_of_its_own() {
     let scratch = Scratch::new("environment");
@@ -268,6 +268,13 @@ fn a_hook_that_outstays_the_bound_is_stopped() {
         began.elapsed() < Duration::from_secs(20),
         "the bound was not applied"
     );
+}
+
+/// HOOK-7: the bound a hook that states no `timeout` is held to is the thirty seconds the clause
+/// gives, a number the other tests do not state because they pass a short one in its place.
+#[test]
+fn the_default_bound_is_thirty_seconds() {
+    assert_eq!(hooks::LIMIT, Duration::from_secs(30));
 }
 
 /// A hooks file declaring one entry that runs `run` with a `timeout`.

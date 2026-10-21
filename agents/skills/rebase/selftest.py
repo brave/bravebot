@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("rebase", HERE / "rebase.py")
@@ -71,7 +72,7 @@ def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own()
         assert code == 1, out
         assert "  a.txt:1-5" in out and "main moves" in out, out
         tree = pr().tree
-        assert tree.name == "bravebot-9", tree
+        assert tree == Path(tmp).resolve() / "bravebot" / ".worktrees" / "pr-9", tree
 
         code, out = quietly(rebase.resume, pr())
         assert code == 1 and "markers remain" in out, "a marker left in place is not staged"
@@ -197,6 +198,139 @@ def test_a_worktree_deleted_by_hand_after_the_rebase_finished_is_checked_out_aga
         code, out = quietly(rebase.start, pr())
         assert code == 0 and "push 9" in out, out
         assert tree.is_dir()
+
+
+def test_a_branch_already_checked_out_elsewhere_is_rebased_there_and_every_report_says_so():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        elsewhere = root / "elsewhere"
+        helpers.the_forks_feature_in(root / "bravebot", elsewhere)
+        code, out = quietly(rebase.start, pr())
+        assert code == 1 and "  a.txt:1-5" in out, out
+        assert f"worktree {elsewhere}" in out, out
+        assert f"reused: feature is already checked out in {elsewhere} (outside the main clone" in out, out
+        assert not (root / "bravebot" / ".worktrees").exists(), "the standard place is not made as well"
+
+        (elsewhere / "a.txt").write_text("from main and the pull request\n")
+        code, out = quietly(rebase.resume, pr())
+        assert code == 0 and "push 9" in out and "reused: feature" in out, out
+
+
+def test_a_reused_worktree_with_uncommitted_changes_says_it_was_reused_when_start_refuses_it():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        elsewhere = root / "elsewhere"
+        helpers.the_forks_feature_in(root / "bravebot", elsewhere)
+        (elsewhere / "a.txt").write_text("the person's own edit\n")
+        code, out = quietly(rebase.start, pr())
+        assert code == 1 and f"{elsewhere} has uncommitted changes" in out, out
+        assert "reused: feature is already checked out in" in out, out
+
+
+def run_main(pr, *argv):
+    with mock.patch.object(rebase, "lookup", lambda number, create: pr):
+        with mock.patch.object(sys, "argv", ["rebase.py", *argv]):
+            return quietly(rebase.main)
+
+
+def test_no_step_works_in_a_locked_worktree_until_the_person_agrees():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        clone, elsewhere = root / "bravebot", root / "elsewhere"
+        helpers.the_forks_feature_in(clone, elsewhere, lock="build running")
+        head, base = git("rev-parse", "HEAD", cwd=elsewhere), git("rev-parse", "upstream/main", cwd=clone)
+
+        for step in ("start", "continue", "check", "push"):
+            code, out = run_main(pr(), step, "9")
+            assert code == 1 and "build running" in out, (step, out)
+            assert f"{rebase.SCRIPT} {step} 9 --use-locked" in out, (step, out)
+            assert "a.txt" not in out, "no conflict was reached"
+        assert git("rev-parse", "HEAD", cwd=elsewhere) == head and rebase.rebase_dir(elsewhere) is None
+        assert git("rev-parse", "upstream/main", cwd=clone) == base, "not even a fetch happened"
+
+        code, out = run_main(pr(), "check", "9", "check-spec")
+        assert code == 1 and f"{rebase.SCRIPT} check 9 check-spec --use-locked" in out, "the targets asked for are kept"
+
+        code, out = run_main(pr(), "start", "9", "--use-locked")
+        assert code == 1 and "  a.txt:1-5" in out and "locked: build running" in out, out
+        (elsewhere / "a.txt").write_text("from main and the pull request\n")
+        code, out = run_main(pr(), "continue", "9")
+        assert code == 1 and "--use-locked" in out, "a yes given to one step is not given to the next"
+        code, out = run_main(pr(), "continue", "9", "--use-locked")
+        assert code == 0 and "push 9" in out, out
+
+
+def unsignable(clone):
+    """Every commit is to be signed and the signing program fails, as when the signing key is missing."""
+    git("config", "commit.gpgsign", "true", cwd=clone)
+    git("config", "gpg.program", "false", cwd=clone)
+
+
+def test_a_rebase_stopped_by_a_signing_failure_says_so_when_it_starts():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, seed, fork = world(Path(tmp).resolve())
+        git("checkout", "-q", "-b", "clean", "main~1", cwd=seed)
+        (seed / "b.txt").write_text("no conflict\n")
+        git("add", "b.txt", cwd=seed)
+        git("commit", "-q", "-m", "clean change", cwd=seed)
+        git("push", "-q", "-f", str(fork), "clean:feature", cwd=seed)
+        unsignable(pr().here)
+
+        code, out = quietly(rebase.start, pr())
+        assert code == 1, out
+        assert "stopped at 1/1: " in out and "clean change" in out, out
+        assert "stopped without a conflict; git said:" in out, out
+        assert "  error: gpg failed to sign the data:" in out, "git's own error is the reason it stopped"
+        assert "hint:" not in out and "edit-todo" not in out, "the hints are not the reason"
+
+
+def test_a_rebase_stopped_by_a_signing_failure_says_so_when_it_continues():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, seed, fork = world(Path(tmp).resolve())
+        git("checkout", "-q", "feature", cwd=seed)
+        (seed / "b.txt").write_text("second\n")
+        git("add", "b.txt", cwd=seed)
+        git("commit", "-q", "-m", "second", cwd=seed)
+        git("push", "-q", str(fork), "feature", cwd=seed)
+        unsignable(pr().here)
+        quietly(rebase.start, pr())
+        (pr().tree / "a.txt").write_text("resolved\n")
+
+        code, out = quietly(rebase.resume, pr())
+        assert code == 1, out
+        assert "stopped without a conflict; git said:" in out, out
+        assert "  error: gpg failed to sign the data:" in out, "git's own error is the reason it stopped"
+
+
+def test_a_step_counter_git_did_not_state_is_left_out_rather_than_printed_as_a_question_mark():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, _, _ = world(Path(tmp).resolve())
+        quietly(rebase.start, pr())
+        state = rebase.rebase_dir(pr().tree)
+        assert (state / "msgnum").is_file() and (state / "end").is_file()
+        _, out = quietly(rebase.report, pr())
+        assert "stopped at 1/1: " in out, out
+
+        (state / "end").unlink()
+        _, out = quietly(rebase.report, pr())
+        assert "stopped: " in out and "?" not in out, out
+
+
+def test_a_push_from_a_worktree_with_uncommitted_changes_is_refused():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, _, fork = world(Path(tmp).resolve())
+        quietly(rebase.start, pr())
+        (pr().tree / "a.txt").write_text("resolved\n")
+        quietly(rebase.resume, pr())
+        before = git("rev-parse", "feature", cwd=fork)
+        (pr().tree / "a.txt").write_text("edited after the rebase\n")
+
+        code, out = quietly(rebase.push, pr())
+        assert code == 1 and "has uncommitted changes; commit them first" in out, out
+        assert git("rev-parse", "feature", cwd=fork) == before
 
 
 def main():

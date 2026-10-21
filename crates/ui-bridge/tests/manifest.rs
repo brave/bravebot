@@ -6,6 +6,8 @@
 //! Driven through the binary against a model service of the test's own. The plan writes one file
 //! with a body the plan fixed, so whether the plan ran is read off the disk.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -249,10 +251,19 @@ impl FrontEnd {
             json!({"directory": scratch.project().display().to_string()}),
         );
         let session = opened["session"].as_str().expect("a handle").to_string();
-        self.call(
-            "trust.reply",
-            json!({"session": session, "trusted": trusted}),
-        );
+        // A yes an earlier session here gave is kept, and settles the next one without asking.
+        // A test that wants a session with nothing trusted opens it before any yes is given.
+        if opened["remembered"].is_null() {
+            self.call(
+                "trust.reply",
+                json!({"session": session, "trusted": trusted}),
+            );
+        } else {
+            assert!(
+                trusted,
+                "a kept yes settled a session the test wanted untrusted"
+            );
+        }
         session
     }
 
@@ -685,6 +696,10 @@ fn a_session_is_busy_until_its_run_ends() {
             refused["error"]["code"], "turn_in_flight",
             "{method} was taken while a run was waiting: {refused}"
         );
+        assert_eq!(
+            refused["error"]["message"], "a turn is already running in this session",
+            "{method} was refused for another reason: {refused}"
+        );
     }
 
     front.reply("manifest.reply", &session, &question, "reject");
@@ -722,13 +737,23 @@ fn a_run_that_cannot_be_what_was_asked_for_is_refused() {
         );
     }
 
+    // In a directory nothing has been kept about: the yes above settles a session in the project.
+    let elsewhere = scratch.path.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("a second directory");
     let opened = front.call(
         "session.new",
-        json!({"directory": scratch.project().display().to_string()}),
+        json!({"directory": elsewhere.display().to_string()}),
     );
+    assert!(opened["remembered"].is_null(), "{opened}");
     let unanswered = opened["session"].as_str().expect("a handle");
     let refused = front.answered("manifest.run", json!({"session": unanswered, "task": TASK}));
     assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("send trust.reply first")),
+        "a run in an unasked session was refused for another reason: {refused}"
+    );
 
     assert_eq!(rounds.try_iter().count(), 0, "a refused run asked a model");
 }

@@ -170,11 +170,15 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
       onDraft={setDraft}
       onSend={start}
       onQueue={start}
+      onInterject={start}
+      interjected={[]}
       onCancel={noop}
       onModel={onModel}
       attachments={[]}
       onAttach={noop}
       onRemoveAttachment={noop}
+      staged={[]}
+      onRemoveStaged={noop}
       onPreview={noop}
       queued={[]}
       queuePaused={false}

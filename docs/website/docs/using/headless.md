@@ -28,7 +28,14 @@ it interactively, or say so on the command line:
 bravebot --dangerously-skip-permissions -p "fix the failing test"
 ```
 
-That flag lifts the refusal of effects, because a flag you typed is an instruction rather than a guess
+If the run only needs to edit files, `--accept-edits` is the narrower grant: writes go through, and
+commands, fetches and a write that would create a credential are still refused.
+
+```sh
+bravebot --accept-edits -p "apply the lint fixes"
+```
+
+`--dangerously-skip-permissions` lifts the refusal of every effect, because a flag you typed is an instruction rather than a guess
 made in your name. It does not lift the second half: the planner's questions are declined in that mode
 too, since they are not permissions. It is a mode for a container with no network and nothing in it
 worth losing. See [modes](../security/permissions.md#answering-in-advance-modes).
@@ -57,15 +64,17 @@ nobody is watching cannot be asked to trust a tree. See
 A run starts with nothing trusted, so the planner reads project files only through a processor or a
 file named with `--file`. `--trust-workspace` trusts the working directory and everything under it
 for this run, as answering yes to the startup question does, and nothing else: directories from
-`--add-dir` stay untrusted and no record is written.
+`--add-dir` stay untrusted and no record is written. Trusting the directory opens reads only: a
+write is still refused unless the run was given `--accept-edits` or `--dangerously-skip-permissions`.
 
 ```sh
 bravebot --trust-workspace -p "summarise what src/ does"
 ```
 
-A run in a directory where a session once kept the answer (`r` at the startup question), or inside
-the git worktree whose root it was kept about, opens trusting the directory without the flag, and says so on stderr with how to take it back. The flag is read from
-the command line only, so a settings file or a checkout cannot turn it on.
+A run in a directory where a session once kept a yes (`y` at the startup question), or inside the
+git worktree whose root it was kept about, opens trusting the directory without the flag, and says so
+on stderr with how to take it back. The flag is read from the command line only, so a settings file
+or a checkout cannot turn it on.
 
 ## Piped input is untrusted and private, always
 
@@ -141,7 +150,9 @@ id=$(bravebot --json -p "review the diff" | jq -r '.session')
 bravebot -p "now fix what you found" --resume "$id"
 ```
 
-A one-shot run is written down as a session, and `--json` names it under `session`. `--resume <id>`
+A one-shot run is written down as a session, and `--json` names it under `session`. The record carries
+the turn's timing and the time the run began, and the run's audit trail is kept beside it, so a resumed
+session shows both without `--trace`. `--resume <id>`
 or `--continue` with a task runs that task as one more turn of it, so a script can chain a review, a
 fix and a summary over one conversation instead of restating it each time. Piped input stays a
 reference, and `--incognito` writes nothing, so there is no id to pass on.
@@ -180,7 +191,10 @@ A plan that fails validation **fails the run whole**: nothing is half adopted, n
 make a plan usable, and nothing re-plans once a step has read something. Where every effect will land
 is fixed before the first byte is read, and the driver cannot insert, skip, reorder or invent a step.
 A destination has to be text, so a plan that filled one with a number or a list is refused whole
-rather than reaching the step that would have used it. An unknown mode name is refused rather than
+rather than reaching the step that would have used it. The same holds for the `contents` of a
+`write_file` step and the `instruction` of a processor step: a number or a list there is refused with
+"'contents' must be text" or "'instruction' must be text", where it used to be written as an empty
+file. An unknown mode name is refused rather than
 guessed, since guessing would run the mode you did not ask for.
 
 A session can start one of these runs too, with `/manifest`. See

@@ -4,6 +4,8 @@
 //! only a process started without a profile variable has no store, and a test that removed one
 //! from its own environment would race every other test in the binary that reads it.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;

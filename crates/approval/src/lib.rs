@@ -212,7 +212,7 @@ pub struct RunStep {
 pub struct Confinement {
     /// The sentence that introduces the directories.
     pub heading: String,
-    /// The directories every stage reads and writes.
+    /// The directories every stage reads and writes. Drawn through `shown_name`, as the writes are.
     pub directories: Vec<String>,
     /// What else the turn confines, in the order the agent gave it.
     pub sentences: Vec<String>,
@@ -224,7 +224,8 @@ pub struct Run<'a> {
     pub summary: &'a str,
     /// Every step, in order.
     pub steps: &'a [RunStep],
-    /// The paths the plan says it writes.
+    /// The paths the plan says it writes. Each is drawn through `shown_name`, so a path that would
+    /// draw as nothing or as another is spelled.
     pub writes: &'a [String],
     /// What the stages are confined to, or `None` where the turn does not confine them.
     pub confinement: Option<&'a Confinement>,
@@ -232,6 +233,12 @@ pub struct Run<'a> {
     pub ambient: &'a [String],
     /// Bytes going into a program are released somewhere this policy stops governing.
     pub releases_private: bool,
+}
+
+/// The sentence for a run the turn does not confine, in the catalog's words, so a front end that
+/// draws it carries no copy of its own (SHARE-001).
+pub fn not_sandboxed() -> String {
+    t!(run_not_sandboxed).to_string()
 }
 
 /// The lines a run is read before approving: every step as the line wrote it, the binary each name
@@ -247,7 +254,7 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
     if !run.writes.is_empty() {
         lines.push(t!(run_writes).to_string());
         for path in run.writes {
-            lines.push(format!("  {}", printable(path)));
+            lines.push(format!("  {}", bravebot_agent::confirm::shown_name(path)));
         }
     }
     // Said every time, because it is the thing a person is likeliest to assume otherwise: what the
@@ -256,11 +263,14 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
         Some(confined) => {
             lines.push(confined.heading.clone());
             for directory in &confined.directories {
-                lines.push(format!("  {}", printable(directory)));
+                lines.push(format!(
+                    "  {}",
+                    bravebot_agent::confirm::shown_name(directory)
+                ));
             }
             lines.extend(confined.sentences.iter().cloned());
         }
-        None => lines.push(t!(run_not_sandboxed).to_string()),
+        None => lines.push(not_sandboxed()),
     }
     // Which access in particular a yes hands over, where the line reaches one nothing here holds.
     // The line above says what confinement there is and is said every time; this says what is
@@ -298,14 +308,24 @@ pub fn fetch_lines(host: &str, url: &str, metadata_service: bool) -> Vec<String>
 ///
 /// None of the output is left out, because a yes releases all of it to the planner (OUTPUT-1).
 /// The terminal's panel and the desktop card show all of it too.
-pub fn output_lines(summary: &str, check: Check, output: &str) -> Vec<String> {
+///
+/// `hidden` is how many characters of `output` drew as nothing before the agent wrote them out, so
+/// the sentence saying what the tokens in it are goes above it.
+pub fn output_lines(summary: &str, check: Check, output: &str, hidden: usize) -> Vec<String> {
     let mut lines = vec![
         printable(summary),
         t!(output_unseen).to_string(),
         checked(check),
     ];
+    lines.extend(hidden_note(hidden));
     lines.extend(quarantined_in_full(output));
     lines
+}
+
+/// The sentence over text in which `hidden` characters draw as nothing, or none where none do, in
+/// the catalog's words so a front end that draws it carries no copy of its own (SHARE-001).
+pub fn hidden_note(hidden: usize) -> Option<String> {
+    (hidden > 0).then(|| t!(hidden_characters, count = hidden).to_string())
 }
 
 /// A picture or a PDF in place of the text of a vetted read.
@@ -326,6 +346,9 @@ pub struct Vet<'a> {
     pub check: Check,
     /// The text, shown where there is no picture.
     pub content: &'a str,
+    /// How many characters of `content` drew as nothing before the agent wrote them out. A picture
+    /// has no text, so it is not read there.
+    pub hidden: usize,
     /// The picture to open in place of the text.
     pub picture: Option<Picture<'a>>,
 }
@@ -356,15 +379,23 @@ pub fn vet_lines(vet: &Vet<'_>) -> Vec<String> {
                 lines.push(t!(vet_pdf_hidden_text).to_string());
             }
         }
-        None => lines.extend(quarantined_in_full(vet.content)),
+        None => {
+            lines.extend(hidden_note(vet.hidden));
+            lines.extend(quarantined_in_full(vet.content));
+        }
     }
     lines
 }
 
 /// The lines a quarantined file is read before it is vouched for.
-pub fn vouch_lines(path: &str, check: Check, preview: &str) -> Vec<String> {
+pub fn vouch_lines(path: &str, rule: &str, check: Check, preview: &str) -> Vec<String> {
     let mut lines = vec![
-        printable(path),
+        bravebot_agent::confirm::shown_name(path),
+        t!(
+            vouch_rule,
+            rule = bravebot_agent::confirm::shown_name(rule).as_str()
+        )
+        .to_string(),
         t!(vouch_explained).to_string(),
         checked(check),
     ];
@@ -378,12 +409,12 @@ pub fn vouch_lines(path: &str, check: Check, preview: &str) -> Vec<String> {
 /// The findings in a file the planner asked to read, and nothing of the file.
 ///
 /// Each line is already a kind, a place and a mask, so there is no content here to picture or to
-/// put behind a margin. `printable` is still applied, since a control character reaching a terminal
-/// from any direction is a cursor somewhere else, and the path in a finding is a path the planner
-/// may have spelled.
+/// put behind a margin. `printable` is still applied to a finding, since a control character
+/// reaching a terminal from any direction is a cursor somewhere else, and the path is drawn through
+/// `shown_name`, which spells a name that would draw as nothing or as another name.
 pub fn exposure_lines(path: &str, findings: &[String]) -> Vec<String> {
     let mut lines = vec![
-        printable(path),
+        bravebot_agent::confirm::shown_name(path),
         t!(expose_explained).to_string(),
         t!(expose_found).to_string(),
     ];
@@ -407,6 +438,41 @@ pub fn host_lines(hosts: &[String]) -> Vec<String> {
             .map(|host| t!(host_row, host = printable(host).as_str()).to_string()),
     );
     lines.push(t!(host_explained).to_string());
+    lines
+}
+
+/// A message the planner wants to send to another background session (MSG-3).
+pub struct Message<'a> {
+    /// The target's name, as the roster holds it.
+    pub name: &'a str,
+    /// The roster's word for what the target is doing.
+    pub state: &'a str,
+    /// Where the target works.
+    pub directory: &'a str,
+    /// The whole text, which is what the receiving planner will be told.
+    pub text: &'a str,
+    /// The label the text is sent under, in its own form.
+    pub label: &'a str,
+}
+
+/// The lines a message is read before it is sent: who it goes to, the whole text behind the margin,
+/// the label, and what a yes does and does not do.
+///
+/// Nothing of the text is left out. A yes sends every byte of it into another planner's context, so
+/// a line counted instead of shown would be approved unread.
+pub fn message_lines(message: &Message<'_>) -> Vec<String> {
+    let mut lines = vec![
+        t!(
+            message_to,
+            name = printable(message.name),
+            state = printable(message.state),
+            directory = printable(message.directory)
+        )
+        .to_string(),
+    ];
+    lines.extend(quarantined_in_full(message.text));
+    lines.push(t!(message_label, label = printable(message.label)).to_string());
+    lines.push(t!(message_explained).to_string());
     lines
 }
 
@@ -472,16 +538,13 @@ pub struct Tools<'a> {
     pub refused: usize,
     /// How many tools were withheld by the server's allow or deny list.
     pub withheld: usize,
-    /// A list was vouched for under this declaration before and this is not it.
-    pub changed: bool,
     /// What the check made of the list.
     pub check: Check,
 }
 
 /// The whole list, each description behind the margin and none of it cut.
 ///
-/// A yes puts exactly this text in front of the planner for every session the list stays the
-/// same, so what is read here has to be all of it. The description is behind the margin because it
+/// A yes puts exactly this text in front of the planner, so what is read here has to be all of it. The description is behind the margin because it
 /// is the server's words, and the names and arguments are not because the client drew them from a
 /// fixed alphabet.
 pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
@@ -493,9 +556,6 @@ pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
             count = list.tools.len()
         ),
     }];
-    if list.changed {
-        lines.push(t!(mcp_tools_changed).to_string());
-    }
     lines.push(checked(list.check));
     for tool in list.tools {
         lines.push(format!("  {}", printable(tool.name)));
@@ -604,6 +664,122 @@ pub fn manifest_lines(task: &str, steps: &[String]) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// PROMPT-1, PROMPT-2: the plain prompt names the file so a blank name is visible, and says
+    /// the rule a yes writes, which the file's own name does not.
+    #[test]
+    fn the_vouch_lines_mark_a_blank_name_and_say_the_rule() {
+        let blank = vouch_lines(" ", "/work/ ", Check::from_word("safe"), "text");
+        let plain = vouch_lines("note.md", "/work/note.md", Check::from_word("safe"), "text");
+        assert_ne!(blank[0], " ");
+        assert!(blank[0].contains('\u{2423}'), "{:?}", blank[0]);
+        assert_eq!(plain[0], "note.md");
+        assert!(blank[1].contains("/work/\u{2423}"), "{:?}", blank[1]);
+        assert!(plain[1].contains("/work/note.md"), "{:?}", plain[1]);
+    }
+
+    /// PROMPT-1: where some of the text drew as nothing, the plain prompts say how many characters
+    /// that was above the text, outside the margin, since the tokens below it are what the sentence
+    /// explains. A text with none gets no such sentence.
+    #[test]
+    fn the_plain_prompts_say_how_many_characters_draw_as_nothing_above_the_text() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A}";
+        let said = t!(hidden_characters, count = 2usize).to_string();
+        let vet = |hidden| Vet {
+            summary: "read it",
+            expects: "notes",
+            check: Check::Safe,
+            content: text,
+            hidden,
+            picture: None,
+        };
+        for (what, lines) in [
+            ("output", output_lines("read it", Check::Safe, text, 2)),
+            ("vet", vet_lines(&vet(2))),
+        ] {
+            let saying = lines.iter().position(|line| *line == said);
+            let shown = lines
+                .iter()
+                .position(|line| *line == format!("{QUARANTINE_BAR} {text}"));
+            assert!(
+                saying.is_some() && saying < shown,
+                "{what}: the sentence is not above the text: {lines:?}"
+            );
+        }
+        for (what, lines) in [
+            ("output", output_lines("read it", Check::Safe, "plain", 0)),
+            (
+                "vet",
+                vet_lines(&Vet {
+                    content: "plain",
+                    ..vet(0)
+                }),
+            ),
+        ] {
+            assert!(
+                lines.iter().all(|line| !line.contains("U+XXXX")),
+                "{what}: a text with nothing hidden in it said something was: {lines:?}"
+            );
+        }
+    }
+
+    /// PROMPT-1: the credential-read lines name the file so a name that would draw as nothing, or as
+    /// another name, is spelled, and a plain name reads as it did.
+    #[test]
+    fn the_exposure_lines_spell_a_name_that_would_draw_as_another() {
+        let findings = ["an API key at line 1".to_string()];
+        assert_eq!(exposure_lines("note.md", &findings)[0], "note.md");
+        for (name, spelled) in [
+            (" ", "\"\u{2423}\""),
+            ("note.md ", "\"note.md\u{2423}\""),
+            ("a\u{202e}b", "\"a\\u{202e}b\""),
+        ] {
+            assert_eq!(exposure_lines(name, &findings)[0], spelled, "{name:?}");
+        }
+    }
+
+    /// A yes releases every byte of a command's output to the model, so a colour code in it is
+    /// written in full and not counted: where nobody is deciding about the bytes colour codes are
+    /// left out of the drawing (VIEW-30), and here somebody is.
+    #[test]
+    fn a_colour_code_in_output_awaiting_a_yes_is_written_in_full() {
+        let lines = output_lines("read it", Check::Safe, "\u{1b}[31mred\u{1b}[0m", 0);
+
+        assert!(
+            lines.contains(&format!("{QUARANTINE_BAR} \u{241b}[31mred\u{241b}[0m")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().all(|line| !line.contains("colour code")),
+            "{lines:?}"
+        );
+    }
+
+    /// MSG-3: a message is shown whole behind the margin, however long, with its control characters
+    /// pictured. A yes sends every byte of it into another planner's context, so a row counted and
+    /// left out would be approved unread.
+    #[test]
+    fn a_message_is_shown_in_full_behind_the_margin() {
+        let text: String = (0..MOST_CONTENT_LINES * 3)
+            .map(|n| format!("row {n}\u{1b}[31m\n"))
+            .collect();
+        let lines = message_lines(&Message {
+            name: "build",
+            state: "idle",
+            directory: "/work",
+            text: &text,
+            label: "(T,pub)",
+        });
+        let rows: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.starts_with(QUARANTINE_BAR))
+            .collect();
+        assert_eq!(rows.len(), MOST_CONTENT_LINES * 3);
+        assert_eq!(rows[0], "\u{2503} row 0\u{241b}[31m");
+        assert!(lines.iter().all(|line| !line.contains('\u{1b}')));
+        assert!(lines.first().is_some_and(|line| line.contains("build")));
+        assert!(lines.iter().any(|line| line.contains("(T,pub)")));
+    }
+
     #[test]
     fn a_word_that_names_no_check_reassures_least() {
         assert_eq!(Check::from_word("safe"), Check::Safe);
@@ -644,6 +820,60 @@ mod tests {
             "it reaches the container daemon",
         ] {
             assert!(text.contains(part), "`{part}` missing from {text}");
+        }
+    }
+
+    /// PROMPT-1: the files a line writes and the directories it is confined to are drawn with a
+    /// name that would draw as nothing, or as another name, quoted and spelled, so a yes to
+    /// `note.md ` cannot be read as one to `note.md`. A plain name reads as it did.
+    #[test]
+    fn a_run_spells_a_written_file_and_a_directory_that_would_draw_as_another() {
+        let steps = [RunStep {
+            written: "tee".to_string(),
+            binary: "/usr/bin/tee".to_string(),
+        }];
+        let drawn = |write: &str, directory: &str| {
+            let confinement = Confinement {
+                heading: "confined to".to_string(),
+                directories: vec![directory.to_string()],
+                sentences: Vec::new(),
+            };
+            run_lines(&Run {
+                summary: "write it",
+                steps: &steps,
+                writes: &[write.to_string()],
+                confinement: Some(&confinement),
+                ambient: &[],
+                releases_private: false,
+            })
+        };
+        let plain = drawn("note.md", "/work");
+        assert!(plain.contains(&"  note.md".to_string()), "{plain:?}");
+        assert!(plain.contains(&"  /work".to_string()), "{plain:?}");
+        for (name, spelled) in [
+            (" ", "\"\u{2423}\""),
+            ("note.md ", "\"note.md\u{2423}\""),
+            ("a\u{202e}b", "\"a\\u{202e}b\""),
+            ("a\u{200b}b", "\"a\\u{200b}b\""),
+        ] {
+            let written = drawn(name, "/work");
+            assert!(
+                written.contains(&format!("  {spelled}")),
+                "{name:?}: {written:?}"
+            );
+            assert!(
+                !written.contains(&format!("  {name}")),
+                "{name:?}: {written:?}"
+            );
+            let confined = drawn("note.md", name);
+            assert!(
+                confined.contains(&format!("  {spelled}")),
+                "{name:?}: {confined:?}"
+            );
+            assert!(
+                !confined.contains(&format!("  {name}")),
+                "{name:?}: {confined:?}"
+            );
         }
     }
 
@@ -760,7 +990,6 @@ mod tests {
             tools: &[tool],
             refused: 1,
             withheld: 2,
-            changed: false,
             check: Check::Safe,
         });
         assert!(lines.contains(&t!(mcp_tools_not_listed, count = 1).to_string()));

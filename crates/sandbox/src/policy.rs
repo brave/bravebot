@@ -46,7 +46,9 @@ pub struct SandboxPolicy {
     pub egress_only_to: Option<u16>,
     /// The unix socket the proxy behind `egress_only_to` also listens on, for a backend that
     /// holds the process in a network of its own and so cannot reach the proxy's port. Linux
-    /// relays the port to this socket from inside that network; the other backends ignore it.
+    /// relays the port to this socket from inside that network, and only to a listener that the
+    /// process building the command made: the proxy is one this process runs, and the relay ends
+    /// a connection to any other socket. The other backends ignore it.
     pub egress_through: Option<PathBuf>,
     /// Whether the process may spawn children. False stops a confined process from
     /// launching an unconfined helper.
@@ -187,7 +189,8 @@ impl SandboxPolicy {
 
     /// Name the unix socket the proxy named by [`SandboxPolicy::allow_network_egress_only_to`]
     /// listens on as well, which a backend that runs the process in an empty network uses to
-    /// bring the proxy's port into it.
+    /// bring the proxy's port into it. The socket is one the calling process listens on, and the
+    /// bound name of its listener is this path.
     pub fn with_egress_through(mut self, socket: impl Into<PathBuf>) -> Self {
         self.egress_through = Some(socket.into());
         self

@@ -80,14 +80,14 @@ impl Registry for Install {
     fn url(self) -> &'static str {
         match self {
             Self::Npm => NPM_URL,
-            Self::Script => RELEASES_URL,
+            Self::Script | Self::Homebrew | Self::Winget => RELEASES_URL,
         }
     }
 
     fn field(self) -> &'static str {
         match self {
             Self::Npm => "version",
-            Self::Script => "tag_name",
+            Self::Script | Self::Homebrew | Self::Winget => "tag_name",
         }
     }
 
@@ -96,14 +96,14 @@ impl Registry for Install {
     fn source(self) -> &'static str {
         match self {
             Self::Npm => "npm",
-            Self::Script => "releases",
+            Self::Script | Self::Homebrew | Self::Winget => "releases",
         }
     }
 
     fn other(self) -> Self {
         match self {
             Self::Npm => Self::Script,
-            Self::Script => Self::Npm,
+            Self::Script | Self::Homebrew | Self::Winget => Self::Npm,
         }
     }
 }
@@ -457,6 +457,31 @@ mod tests {
             "the install script is missing: {said}"
         );
         assert!(!said.contains("npm install"), "the wrong command: {said}");
+    }
+
+    /// A package manager's copy is told its manager's own upgrade command, read from the release
+    /// listing like the script's, and never the npm or script line, which would put a second copy
+    /// beside the one the manager owns.
+    #[test]
+    fn a_package_manager_install_is_given_its_managers_upgrade_command() {
+        let brew = line(Install::Homebrew, version(0, 5, 0), version(1, 0, 0)).expect("newer");
+        assert!(brew.contains("brew upgrade --cask bravebot"), "{brew}");
+        let winget = line(Install::Winget, version(0, 5, 0), version(1, 0, 0)).expect("newer");
+        assert!(winget.contains("winget upgrade Brave.Bravebot"), "{winget}");
+        for said in [&brew, &winget] {
+            assert!(!said.contains("npm install"), "the wrong command: {said}");
+            assert!(!said.contains("install.sh"), "the wrong command: {said}");
+        }
+        let listing = br#"{"tag_name":"v0.7.2"}"#;
+        for install in [Install::Homebrew, Install::Winget] {
+            assert_eq!(
+                version_in(install, listing),
+                Some(version(0, 7, 2)),
+                "{install:?} did not read the release listing"
+            );
+            assert_eq!(install.source(), Install::Script.source());
+            assert_eq!(install.other(), Install::Npm);
+        }
     }
 
     /// Saying nothing is the ordinary case: most launches are of the newest version, and a line

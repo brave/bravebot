@@ -13,6 +13,23 @@
 use crate::Secret;
 use std::fmt;
 
+/// `url` as a report may print it: the userinfo of its authority dropped.
+///
+/// A `baseURL`, or an endpoint a variable or a settings `env` block names, may state credentials
+/// (`https://user:token@host/v1`), and a report is pasted into issues. Only the authority is read
+/// for an `@`, so one in a path or a query is kept.
+pub fn without_userinfo(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    format!("{scheme}://{host}{tail}")
+}
+
 /// The endpoints known by the name a provider block gives them.
 ///
 /// Here because the other tool resolves this from a registry it fetches, and a block copied out of it
@@ -29,11 +46,20 @@ use std::fmt;
 ///
 /// The third column is the variable the other tool reads that id's token from. A block copied out of
 /// it relies on that variable without naming it, so an import names it for the block.
-const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[(
-    "openrouter",
-    "https://openrouter.ai/api/v1",
-    "OPENROUTER_API_KEY",
-)];
+const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[
+    (
+        "openrouter",
+        "https://openrouter.ai/api/v1",
+        "OPENROUTER_API_KEY",
+    ),
+    (OPENAI_ID, "https://api.openai.com/v1", "OPENAI_API_KEY"),
+];
+
+/// The id naming OpenAI, which is reached at the endpoint compiled in for it.
+///
+/// Named apart from the table because a reply from it is read differently: see
+/// [`Provider::answers_under_the_model_behind_an_alias`].
+const OPENAI_ID: &str = "openai";
 
 /// The id naming AWS Bedrock, which is reached by signing rather than by a bearer token.
 ///
@@ -118,13 +144,6 @@ pub struct Model {
     pub options: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-impl Model {
-    /// The window to budget against, stated or assumed.
-    pub fn window(&self) -> u64 {
-        self.context_window.unwrap_or(CONTEXT_WINDOW)
-    }
-}
-
 /// One gateway, and the models it was configured to offer.
 ///
 /// Not comparable, because one field is a credential and `Secret` refuses equality: an operator
@@ -164,6 +183,13 @@ pub struct Provider {
     /// enumerate, so the gateway is asked. A service with no listing to ask is offered
     /// [`Self::compiled_roster`] instead, which is never copied in here.
     pub models: Vec<Model>,
+    /// The window every model of this provider is assumed to have, where `options.contextWindow`
+    /// states one.
+    ///
+    /// For a server whose window is one setting for all its models, such as a local Ollama, and the
+    /// only place to keep a figure where the block lists no models, since a block that lists models
+    /// turns off the roster. A model's own `limit.context` outranks it.
+    pub context_window: Option<u64>,
     /// The AWS account this entry reaches, where it names Bedrock rather than a gateway.
     ///
     /// Resolved here rather than by the caller because a request to Bedrock needs a region to sign
@@ -230,6 +256,7 @@ impl Provider {
                 .map(Secret::new),
             stored_key: None,
             models: models(entry.get("models")),
+            context_window: options.and_then(|options| positive(options.get("contextWindow"))),
             bedrock: None,
         })
     }
@@ -258,6 +285,7 @@ impl Provider {
             api_key: Some(token),
             stored_key: None,
             models: Vec::new(),
+            context_window: None,
             bedrock: None,
         })
     }
@@ -277,18 +305,18 @@ impl Provider {
         let profile = string(options.and_then(|options| options.get("profile")));
         let models = models(entry.get("models"));
         let entries = bedrock_entries(entry.get("models"));
+        let bedrock = crate::bedrock::Bedrock::from_provider(region, profile, entries)?;
 
         Some(Self {
             id: id.to_string(),
             name: string(entry.get("name")),
-            base_url: format!("https://bedrock-runtime.{region}.amazonaws.com"),
+            base_url: format!("https://{}", bedrock.host()),
             env: Vec::new(),
             api_key: None,
             stored_key: None,
             models,
-            bedrock: Some(crate::bedrock::Bedrock::from_provider(
-                region, profile, entries,
-            )),
+            context_window: None,
+            bedrock: Some(bedrock),
         })
     }
 
@@ -342,6 +370,16 @@ impl Provider {
         self.id == GOOGLE_VERTEX_ID
     }
 
+    /// Whether a reply names the model behind the name the request carried, not that name.
+    ///
+    /// OpenAI only: a name such as `gpt-4o` is an alias, and the reply names the dated model it
+    /// resolved to. Every other gateway answers under the slug it was asked for, so a name that
+    /// comes back changed is a substitution there and the alias working here. OpenAI refuses a
+    /// name it does not serve, so there is no substitution for the comparison to find.
+    pub fn answers_under_the_model_behind_an_alias(&self) -> bool {
+        self.id == OPENAI_ID
+    }
+
     /// What to show a person choosing this provider.
     pub fn display_name(&self) -> &str {
         self.name.as_deref().unwrap_or(&self.id)
@@ -376,6 +414,14 @@ impl Provider {
     /// budget is taken from.
     pub fn model(&self, id: &str) -> Option<&Model> {
         self.models.iter().find(|model| model.id == id)
+    }
+
+    /// The window to budget `model` against: its own, else this provider's, else the assumed one.
+    pub fn window_of(&self, model: &Model) -> u64 {
+        model
+            .context_window
+            .or(self.context_window)
+            .unwrap_or(CONTEXT_WINDOW)
     }
 
     /// Whether a name is one of this provider's models.
@@ -512,6 +558,13 @@ fn string(value: Option<&serde_json::Value>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// A whole number above zero, where the value is one.
+fn positive(value: Option<&serde_json::Value>) -> Option<u64> {
+    value
+        .and_then(serde_json::Value::as_u64)
+        .filter(|figure| *figure > 0)
+}
+
 /// The `env` array: variable names that may hold the token.
 fn names(value: Option<&serde_json::Value>) -> Vec<String> {
     let Some(serde_json::Value::Array(names)) = value else {
@@ -598,6 +651,23 @@ fn ceiling(limit: Option<&serde_json::Value>) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CLI-7: only the authority's userinfo goes. The regression it rejects is cutting at the last
+    /// `@` of the whole string, which would eat a path or query that holds one.
+    #[test]
+    fn userinfo_is_dropped_from_the_authority_alone() {
+        for (stated, shown) in [
+            ("https://u:p@host.invalid/v1", "https://host.invalid/v1"),
+            ("https://u:p@host.invalid:8443", "https://host.invalid:8443"),
+            ("https://u:p@w@host.invalid/v1", "https://host.invalid/v1"),
+            ("https://host.invalid/v1/@x", "https://host.invalid/v1/@x"),
+            ("https://host.invalid?a=b@c", "https://host.invalid?a=b@c"),
+            ("https://u@host.invalid#f", "https://host.invalid#f"),
+            ("host.invalid/v1", "host.invalid/v1"),
+        ] {
+            assert_eq!(without_userinfo(stated), shown, "{stated}");
+        }
+    }
 
     fn parsed(text: &str) -> Vec<Provider> {
         let serde_json::Value::Object(root) = serde_json::from_str(text).expect("json") else {
@@ -885,6 +955,26 @@ mod tests {
         assert!(Provider::all(&root).is_empty());
     }
 
+    /// The block's region is written into the host the entry is reached at, so one that would move
+    /// the request names no service, and the entry is dropped with it rather than reached
+    /// somewhere else.
+    #[test]
+    fn an_aws_block_whose_region_would_move_the_request_configures_nothing() {
+        for &region in crate::testutil::REGIONS_THAT_WOULD_MOVE_THE_REQUEST {
+            let root = serde_json::json!({"provider": {"amazon-bedrock": {
+                "options": {"region": region},
+                "models": {"openai.gpt-5.6-sol": {}}
+            }}});
+            let serde_json::Value::Object(root) = root else {
+                unreachable!("a json object literal")
+            };
+            assert!(
+                Provider::all(&root).is_empty(),
+                "region {region:?} was accepted"
+            );
+        }
+    }
+
     /// opencode requires nothing of a model entry, so neither may this. An empty entry is a legal
     /// opencode model and has to stay a legal one here, or a copied block stops working.
     #[test]
@@ -908,9 +998,41 @@ mod tests {
                 "models": {"some/model": {}}
             }}}"#);
         assert_eq!(
-            provider.model("some/model").expect("offered").window(),
+            provider.window_of(provider.model("some/model").expect("offered")),
             CONTEXT_WINDOW
         );
+    }
+
+    /// IMPORT-5: a window the block states for the provider is every model's, where the model
+    /// states none, and a model's own `limit` outranks it. The regressions rejected are ignoring
+    /// the provider figure, and letting it override a model that pinned its own.
+    #[test]
+    fn a_provider_window_is_the_default_for_models_that_state_none() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://example.invalid/v1", "contextWindow": 4096},
+                "models": {"plain": {}, "pinned": {"limit": {"context": 8192, "output": 1024}}}
+            }}}"#);
+        assert_eq!(provider.context_window, Some(4096));
+        assert_eq!(
+            provider.window_of(provider.model("plain").expect("offered")),
+            4096
+        );
+        assert_eq!(
+            provider.window_of(provider.model("pinned").expect("offered")),
+            8192
+        );
+    }
+
+    /// A provider window that is not a whole number above zero says nothing, as an unusable model
+    /// `limit` does.
+    #[test]
+    fn an_unusable_provider_window_is_not_read() {
+        for stated in ["0", "-5", "\"4096\"", "40.5", "null"] {
+            let provider = one(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://e.invalid/v1", "contextWindow": {stated}}}}}}}}}"#
+            ));
+            assert_eq!(provider.context_window, None, "{stated}");
+        }
     }
 
     /// The case `limit` exists for: an upstream pinned to a smaller window than the model's own.
@@ -925,7 +1047,7 @@ mod tests {
             .model("anthropic/claude-sonnet-4.5")
             .expect("offered");
         assert_eq!(model.context_window, Some(200_000));
-        assert_eq!(model.window(), 200_000);
+        assert_eq!(provider.window_of(model), 200_000);
     }
 
     /// opencode requires `context` and `output` together once `limit` is present. A block naming
@@ -1048,6 +1170,43 @@ mod tests {
                 "options": {"baseURL": "https://proxy.example.invalid/v1"}
             }}}"#);
         assert_eq!(provider.base_url, "https://proxy.example.invalid/v1");
+    }
+
+    /// OpenAI is a gateway like any other once its host is known: the key goes in `authorization`,
+    /// nothing is compiled in to offer, and no tool call carries anything back that this program
+    /// keeps. A name that changed any of that would be a second code path for a service that
+    /// speaks the protocol everything else here speaks.
+    #[test]
+    fn an_openai_entry_is_reached_at_openais_host_like_any_other_gateway() {
+        let provider = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        assert_eq!(provider.base_url, "https://api.openai.com/v1");
+        assert_eq!(
+            provider.chat_completions_url(),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(provider.models_url(), "https://api.openai.com/v1/models");
+        assert_eq!(provider.host(), "api.openai.com");
+        assert_eq!(
+            provider.credential_header("a-key"),
+            ("authorization", "Bearer a-key".to_string())
+        );
+        assert_eq!(provider.compiled_roster(), None);
+        assert!(!provider.takes_extra_content());
+
+        let exported = |name: &str| (name == "OPENAI_API_KEY").then(|| "a-key".to_string());
+        assert_eq!(token(&provider.credential(exported)), Some("a-key"));
+    }
+
+    /// A proxy, or an Azure-style deployment of the same protocol, is reached by stating where it
+    /// is; the host compiled in for the name is only what an absent `baseURL` falls back to.
+    #[test]
+    fn a_stated_endpoint_beats_the_one_compiled_in_for_openai() {
+        let provider = one(r#"{"provider": {"openai": {
+                "env": ["OPENAI_API_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/openai/v1"}
+            }}}"#);
+        assert_eq!(provider.base_url, "https://proxy.example.invalid/openai/v1");
+        assert_eq!(provider.host(), "proxy.example.invalid");
     }
 
     /// A trailing slash on the endpoint would otherwise produce a double slash in the path, which

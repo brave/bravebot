@@ -10,7 +10,6 @@ import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRu
 import * as t from '../transcript'
 import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
-import type { Asked } from '../App'
 import type { ExportFormat } from '../../shared/export'
 import { Diff } from './Diff'
 import { BackendTray, Composer, ProjectMenu, type ComposerFooterProps } from './Composer'
@@ -35,6 +34,10 @@ import { Alert, Button, Collapse, Icon, Input, Label, ProgressRing, type IconNam
 import { middleTruncate } from '../truncate'
 import { pointForPrompt, undoRow } from '../rewind'
 import { ShownContext, leftWords, mayAnswer, useShown, type OnScreen } from '../shown'
+import { showToast } from '../toasts'
+import { EMPTY_STAGING, named, stageDrop, stagePaste, withoutMarker, type Staging } from '../staging'
+import type { Drop } from '../../shared/drops'
+import type { Paste } from '../../shared/pastes'
 
 interface Live {
   model: string | null
@@ -63,6 +66,7 @@ interface Live {
   /** The points this session can be put back to, newest first. */
   rewind?: RewindPoint[]
   sendRefused?: string | null
+  staging?: Staging
 }
 
 /**
@@ -72,7 +76,7 @@ interface Live {
  * the card that drew the question is the only thing that knows which one it was.
  */
 export type Answer = (
-  kind: Asked,
+  kind: t.Asked,
   request: number,
   approve: boolean,
   remember?: boolean,
@@ -87,6 +91,8 @@ interface Props {
   attachments: FileAttachment[]
   onAttach: () => void
   onRemoveAttachment: (id: string) => void
+  /** Record what a drop or a paste staged in a session's composer. */
+  onStaging: (session: string, staging: Staging) => void
   backendReady: boolean | null
   onCheckBackend: () => void
   onDiagnostics: () => void
@@ -94,6 +100,8 @@ interface Props {
   storageKey: string
   onNew: (directory?: string) => void
   onQueue: () => void
+  onInterject: () => void
+  interjected: string[]
   queued: string[]
   queuePaused: boolean
   onResumeQueued: () => void
@@ -267,6 +275,7 @@ export function Transcript({
   attachments,
   onAttach,
   onRemoveAttachment,
+  onStaging,
   backendReady,
   onCheckBackend,
   onDiagnostics,
@@ -274,6 +283,8 @@ export function Transcript({
   storageKey,
   onNew,
   onQueue,
+  onInterject,
+  interjected,
   queued, queuePaused, onResumeQueued, onDismissRefusal,
   onRemoveQueued,
   live,
@@ -432,6 +443,7 @@ export function Transcript({
   const stableAnswer = useEvent((...args: Parameters<AnswerQuestions>) => { onAnswer(...args); toComposer() })
   const send = useEvent(() => { latest(); onSubmit(); toComposer() })
   const queue = useEvent(onQueue)
+  const interject = useEvent(onInterject)
   const cancel = useEvent(onCancel)
   const plan = useEvent(() => { latest(); onPlan?.() })
   const draftChanged = useEvent(onDraft)
@@ -440,6 +452,40 @@ export function Transcript({
   const chooseSandbox = useEvent(onSandbox)
   const attach = useEvent(onAttach)
   const removeAttachment = useEvent(onRemoveAttachment)
+  const removeStaged = useEvent((marker: string) => onDraft(withoutMarker(draft, marker)))
+  const caret = (): number => input.current?.shadowRoot?.querySelector('textarea')?.selectionEnd ?? draft.length
+  /** Put what a drop or a paste wrote into the draft, and the caret after it. */
+  const restage = (handle: string, next: { staging: Staging; draft: string; caret: number }) => {
+    onStaging(handle, next.staging)
+    onDraft(next.draft)
+    requestAnimationFrame(() => {
+      input.current?.focus()
+      input.current?.shadowRoot?.querySelector('textarea')?.setSelectionRange(next.caret, next.caret)
+    })
+  }
+  const dropped = useEvent((drop: Drop) => {
+    if (!live || drop.session !== live.handle) return
+    const next = stageDrop(live.staging ?? EMPTY_STAGING, drop.outcomes, draft, caret())
+    for (const left of next.skipped) {
+      if (left.why === 'too-large') showToast('Too large to attach', left.note, 'note')
+      else showToast(SKIPPED[left.why], left.name, 'note')
+    }
+    if (next.draft !== draft) restage(live.handle, next)
+  })
+  useEffect(() => window.bravebot.onDrop(dropped), [dropped])
+  const pasted = useEvent((paste: Paste) => {
+    if (!live || paste.session !== live.handle) return
+    if (paste.outcome.kind === 'too-large') {
+      showToast('Too large to paste', paste.outcome.note, 'note')
+      return
+    }
+    restage(live.handle, stagePaste(live.staging ?? EMPTY_STAGING, paste.outcome.picture, draft, caret()))
+  })
+  useEffect(() => window.bravebot.onPaste(pasted), [pasted])
+  // Entered and left once per element crossed, so counted rather than toggled.
+  const dragDepth = useRef(0)
+  const [dragging, setDragging] = useState(false)
+  const carriesFiles = (event: React.DragEvent): boolean => event.dataTransfer.types.includes('Files')
   const preview = useEvent((path: string) => setPreviewPath(path))
   const resumeQueued = useEvent(onResumeQueued)
   const removeQueued = useEvent(onRemoveQueued)
@@ -657,7 +703,17 @@ export function Transcript({
   // Nothing said yet and nothing running: the composer is the whole of the page.
   const fresh = live.entries.length === 0 && !live.running
   return (
-    <main className={`transcript${fresh ? ' fresh' : ''}`}>
+    <main className={`transcript${fresh ? ' fresh' : ''}`} data-drop-session={live.handle}
+      onDragEnter={(event) => { if (carriesFiles(event) && ++dragDepth.current === 1) setDragging(true) }}
+      onDragLeave={(event) => { if (carriesFiles(event) && --dragDepth.current === 0) setDragging(false) }}
+      onDrop={() => { dragDepth.current = 0; setDragging(false) }}>
+      {dragging && (
+        <div className="drop-target" data-test="drop-target" aria-hidden="true">
+          <Icon name="attachment" />
+          <span className="drop-target-title">Drop files to attach</span>
+          <span className="drop-target-note"><Icon name="warning-triangle-outline" />Sent with your message as trusted context</span>
+        </div>
+      )}
       {head}
       {findBar}
 
@@ -757,6 +813,8 @@ export function Transcript({
           onDraft={draftChanged}
           onSend={send}
           onQueue={queue}
+          onInterject={interject}
+          interjected={interjected}
           onCancel={cancel}
           onPlan={onPlan ? plan : undefined}
           onModel={chooseModelFor}
@@ -767,6 +825,8 @@ export function Transcript({
           attachments={attachments}
           onAttach={attach}
           onRemoveAttachment={removeAttachment}
+          staged={named(live.staging, draft)}
+          onRemoveStaged={removeStaged}
           onPreview={preview}
           queued={queued}
           queuePaused={queuePaused}
@@ -790,6 +850,16 @@ export function Transcript({
     </main>
   )
 }
+
+/**
+ * What the window says about a dropped file it left out, above the file's name. One too large to
+ * carry is told in the bridge's note instead, which names the file and says its size and the cap.
+ */
+const SKIPPED: Record<'folder' | 'unreadable', string> = {
+  folder: 'Folders are not attached',
+  unreadable: 'Could not attach a dropped file',
+}
+
 
 /** The three files a conversation can become. Ordered plainest first. */
 const FORMATS: readonly { id: ExportFormat; label: string; detail: string; icon: IconName }[] = [
@@ -1275,9 +1345,9 @@ function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onMana
         </p>
       )}
       {kept && (
-        <p className="session-banner session-notice" role="note" data-tooltip={`Remembered ${ago(kept.at)} · kept in ${kept.path}`}>
+        <p className="session-banner session-notice" role="note" data-tooltip={`Trusted ${ago(kept.at)} · kept in ${kept.path}`}>
           <Icon name="shield-done" />
-          <span className="notice-text">Trust is remembered for this directory, so chats started here are not asked.</span>
+          <span className="notice-text">You trusted this directory, so chats started here are not asked.</span>
           <Button kind="plain" size="tiny" className="link" onClick={onManage}>Manage</Button>
         </p>
       )}
@@ -1492,7 +1562,7 @@ function YesOrNo({
   approved,
   rejected,
 }: {
-  kind: Asked
+  kind: t.Asked
   request: number
   answerable: boolean
   decision: 'approve' | 'reject' | null
@@ -1540,7 +1610,7 @@ function ThreeAnswers({
   approvedAlways,
   rejected,
 }: {
-  kind: Asked
+  kind: t.Asked
   request: number
   answerable: boolean
   decision: 'approve' | 'reject' | null
@@ -1797,6 +1867,18 @@ function Card({
       // nothing anybody types earns this row.
       return <div className="attached consolidation"><Icon name="refresh" />Asked to bring its memory up to date</div>
 
+    case 'session-message':
+      // Drawn from the record's fields and never from a prompt's wording, so nothing anybody types
+      // earns this row. The words are quoted, and are the sender's where the message came in.
+      return (
+        <div className="session-message">
+          <strong>{entry.heading}</strong>
+          {entry.text === null
+            ? <span>{entry.kept}</span>
+            : <blockquote>{entry.text}</blockquote>}
+        </div>
+      )
+
     case 'watch':
       return <div className="watch-turn"><Icon name="eye-on" /><strong>{entry.text}</strong><span>Automatic turn · file contents still follow normal read permissions</span></div>
     case 'error':
@@ -1857,19 +1939,17 @@ function Card({
             <span className="origin" data-tooltip={shown.origin}>
               {shown.origin}
             </span>
+            {shown.reach === 'no_model' && <span className="reach">in no model’s context</span>}
             <span className="label">{shown.label}</span>
           </div>
           <pre className="preview">{shown.preview.join('\n')}</pre>
           <div className="quarantine-foot">
-            {shown.lines} line{shown.lines === 1 ? '' : 's'} total ·{' '}
-            {shown.reach === 'no_model'
-              ? 'in no model’s context'
-              : 'not in the planner’s context'}
-            <Collapse className="card-details" title="Details" isOpen={undefined}>
-              {shown.reach === 'no_model'
-                ? 'Nothing can be sent to read this. Only its line count and origin are known to the conversation.'
-                : 'A processor can be sent to read it in isolation. What it writes back is marked untrusted in turn.'}
-            </Collapse>
+            {shown.lines} line{shown.lines === 1 ? '' : 's'} total
+            {shown.reach === 'no_model' && (
+              <Collapse className="card-details" title="Details" isOpen={undefined}>
+                Nothing can be sent to read this. Only its line count and origin are known to the conversation.
+              </Collapse>
+            )}
           </div>
         </div>
       )
@@ -1882,10 +1962,10 @@ function Card({
         <DecisionCard
           className={`confirm ${request.untrusted ? 'untrusted' : ''}`}
           answerable={answerable}
-          subject={request.path}
+          subject={request.shownPath}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You approved this write' : 'You refused this write' }}
           head={<CardHead icon="edit-box" intent={INTENT_WORD[request.intent]} deciding
-            subject={<code className="path" data-tooltip={request.path}>{request.path}</code>}
+            subject={<code className="path" data-tooltip={request.shownPath}>{request.shownPath}</code>}
             counts={<span className="counts" aria-label={`${stats.added} added, ${stats.removed} removed`}><span className="stat added">+{stats.added}</span><span className="stat removed">−{stats.removed}</span></span>}
             trust={request.untrusted && <Label mode="loud" color="yellow" className="trust-label"><Icon name="warning-triangle-filled" slot="icon-before" />Untrusted source</Label>} />}
           actions={<>
@@ -1931,7 +2011,7 @@ function Card({
             <pre>{request.remark.preview.join('\n')}</pre>
             <small>{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
           </div>}
-          <Diff changes={request.changes} path={request.path} untrusted={request.untrusted} deciding />
+          <Diff changes={request.changes} path={request.path} shownPath={request.shownPath} untrusted={request.untrusted} deciding />
           <Collapse className="card-details" title="Details" isOpen={undefined}>
             <p className="permission-scope">{request.existing ? 'Update an existing project file.' : 'Create a new project file.'} This decision applies to the change shown above.</p>
           </Collapse>
@@ -1987,7 +2067,7 @@ function Card({
               binary rather than the word. */}
           {request.plan && <p className="permission-scope" data-deciding="all"><strong>Execution plan:</strong> <code>{request.plan}</code></p>}
           {request.stdin && <p className="permission-scope" data-deciding="all"><strong>Standard input:</strong> <code>{request.stdin}</code></p>}
-          {!!request.writes?.length && <div className="permission-scope" data-deciding="all"><strong>Files created or modified:</strong><ul>{request.writes.map(path => <li key={path}><code>{path}</code></li>)}</ul></div>}
+          {!!request.shownWrites?.length && <div className="permission-scope" data-deciding="all"><strong>Files created or modified:</strong><ul>{request.shownWrites.map((path, index) => <li key={index}><code>{path}</code></li>)}</ul></div>}
           <ol className="stages" data-deciding="all">
             {request.stages.map((stage, index) => (
               <li key={index}>
@@ -2000,6 +2080,19 @@ function Card({
             ))}
           </ol>
 
+          {/* Said every time, as the terminal says it: what the programs are held to, or that they
+              are held to nothing. Only `null` is "not sandboxed"; a bridge that sent no field says
+              nothing rather than claim it. */}
+          {request.confinement && (
+            <div className="permission-scope" data-test="confinement" data-deciding="all">
+              <p>{request.confinement.heading}</p>
+              {!!request.confinement.shownDirectories.length && <ul>{request.confinement.shownDirectories.map((directory, index) => <li key={index}><code>{directory}</code></li>)}</ul>}
+              {request.confinement.sentences.map((sentence, index) => <p key={index}>{sentence}</p>)}
+            </div>
+          )}
+          {request.confinement === null && !!request.notSandboxed && (
+            <p className="permission-scope" data-test="not-sandboxed" data-deciding="all">{request.notSandboxed}</p>
+          )}
           <AmbientNotice ambient={request.ambient} deciding />
           {!!lent.length && (
             <div data-deciding="all">
@@ -2062,6 +2155,8 @@ function Card({
             instruction will be read there as one.</span>
           </p>
 
+          <HiddenCharacters note={request.hiddenNote} />
+
           {/* In full, never truncated. The answer to this question rests on the bytes, so
               a preview would be asking for an approval of what nobody saw. */}
           <pre className="preview" data-deciding="first">{request.output}</pre>
@@ -2106,6 +2201,7 @@ function Card({
         </>}>
         <VettingReason vetting={request.vetting} />
         <p className="permission-scope" data-deciding="all">Expected contents: {request.expects}</p>
+        <HiddenCharacters note={request.hiddenNote} />
         <pre className="preview" data-deciding="first">{request.content}</pre>
         <Collapse className="card-details" title="Details" isOpen={undefined}>
           <p className="permission-scope">Approval lets the planner read only this content. It does not trust this file for future reads.</p>
@@ -2246,9 +2342,11 @@ function Card({
           </ol>
 
           <p className="permission-scope" data-deciding="all">
-            These steps run in this order, and nothing re-plans once the run starts. Approving
-            the plan does not approve its writes: each write is still put to you when its step
-            is reached. This answer covers this plan only.
+            These steps run in this order, decided before anything was read. Nothing the run reads
+            can add a step, drop one, or send anything anywhere this plan does not already name.
+            Approving the plan does not approve its writes: each write is still put to you when its
+            step is reached. Nothing has been read or written yet, so declining leaves everything
+            as it is. This answer covers this plan only.
           </p>
 
           {!!entry.unheld?.length && (
@@ -2287,7 +2385,7 @@ function Card({
         <div className="confirm exposure">
           <div className="confirm-head" data-deciding="all">
             <span className="intent">send file</span>
-            <code className="path">{request.path}</code>
+            <code className="path">{request.shownPath}</code>
             <span className="counts">
               {found} finding{found === 1 ? '' : 's'}
             </span>
@@ -2457,9 +2555,7 @@ function Card({
             <VettingVerdict vetting={request.vetting} />
           </div>
 
-          {request.changed && (
-            <p className="warn" data-deciding="all">This is not the list you approved before: the tools it offers have changed.</p>
-          )}
+          <VettingReason vetting={request.vetting} />
 
           <p className="permission-scope" data-deciding="all">
             The model will read each tool’s name, its arguments and what the server says about
@@ -2731,10 +2827,10 @@ function Card({
         <DecisionCard
           className="confirm vouch"
           answerable={answerable}
-          subject={request.path}
+          subject={request.shownPath}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You vouched for this path' : 'You left it confined' }}
           head={<CardHead icon="shield-done" intent="Vouch for" deciding
-            subject={<code className="path">{request.path}</code>}
+            subject={<code className="path">{request.shownPath}</code>}
             trust={<VettingVerdict vetting={request.vetting} />} />}
           actions={<>
             <Button
@@ -2749,6 +2845,9 @@ function Card({
           </>}
         >
           <VettingReason vetting={request.vetting} />
+          <p className="vouch-rule" data-deciding="all">
+            A yes trusts <code className="path">{request.shownRule}</code> and everything beneath it.
+          </p>
           <p className="warn" data-deciding="all">
             <Icon name="warning-triangle-filled" />
             <span>Vouching records a standing rule for this path, so it applies to later reads as
@@ -2890,6 +2989,21 @@ function VettingVerdict({ vetting }: { vetting?: import('../../shared/protocol')
     : verdict === 'unsafe'
       ? <Label mode="loud" color="red" className="vetting-verdict unsafe"><Icon name="warning-triangle-filled" slot="icon-before" />Possible instructions detected</Label>
       : <Label mode="outline" color="yellow" className="vetting-verdict">Check inconclusive</Label>
+}
+
+/**
+ * What the tokens in the text below are, where some of it draws as nothing. The agent wrote each
+ * such character out as `‹U+XXXX›` and worded this sentence, so this draws it and reads none of the
+ * text. A row the answer waits on: the planner is given the characters themselves.
+ */
+function HiddenCharacters({ note }: { note?: string | null }): React.JSX.Element | null {
+  if (!note) return null
+  return (
+    <p className="warn" data-deciding="all" data-test="hidden-characters">
+      <Icon name="warning-triangle-filled" />
+      <span>{note}</span>
+    </p>
+  )
 }
 
 /** The checker's one-sentence reason, beside the content it is about: it is the evidence for the verdict. */

@@ -73,6 +73,9 @@ fn values_that_are_not_lists(settings: &Settings) -> impl Iterator<Item = Reject
 ///
 /// The entry is quoted in the spelling the file used: a line of three spaces and a line of none
 /// are two entries somebody has to find, and a report that trimmed both names neither.
+///
+/// The entry and the file are put in as they are. A caller that writes the result straight to a
+/// terminal hands it a `Rejected` whose text has had its control characters replaced (LAYER-3).
 pub fn describe(rejected: &Rejected) -> String {
     let problem = problem(rejected.reason);
     match &rejected.file {
@@ -182,6 +185,7 @@ pub fn for_an_unattended_run(
     let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
     let (mut permissions, mut rejected) =
         Permissions::parse(&lists.deny, &lists.ask, &[], &anchors);
+    explain(&mut permissions, settings);
     follow_links(&mut permissions, workspace);
     // Read for its rejects and then dropped, rather than not read at all. A line the person
     // believes is in force and that nothing can act on is worth saying out loud wherever it was
@@ -196,6 +200,20 @@ pub fn for_an_unattended_run(
     let (_, unreadable) = dropped_allow_entries(settings, &anchors);
     rejected.extend(unreadable);
     (permissions, rejected)
+}
+
+/// Put the reason the person wrote beside each rule onto the rule (PERM-1).
+///
+/// The settings crate answers, and it answers only for the person's own file: a `reason` written in
+/// a project, local or `--settings` layer is not read at all, because the sentence would be text a
+/// checkout wrote and the places a reason is shown present it as the person's own words. That is
+/// the same layering `summaryModel` and the `provider` block have, and it is what keeps a
+/// checkout's sentence out of the refusal the planner is given.
+///
+/// The reason reaches nothing that decides. It is carried on the rule and handed to a report, and
+/// [`Permissions::explain`] states the half of that the kernel is responsible for.
+fn explain(permissions: &mut Permissions, settings: &Settings) {
+    permissions.explain(|list, written| settings.rule_reason(list, written).map(str::to_string));
 }
 
 /// What a leading `~` and a leading `/` in a rule are resolved against.
@@ -222,10 +240,12 @@ fn anchors(profile: Option<&std::path::Path>, folds_case: bool) -> Anchors {
 ///
 /// The links are followed as the rules are read, so a link made or repointed later in the session
 /// is not followed until they are read again (PERM-12). Where `workspace` cannot be resolved, a
-/// rule about the workspace is left as written. So is a rule whose spelling passes through no link:
-/// a full path to a project file names it in the other namespace, which PERM-3 keeps apart.
+/// rule about the workspace is left as written. A rule about a full path that passes through no
+/// link is also given the workspace-relative spelling where the path is inside the workspace, since
+/// the file tools ask about a project file by that name.
 fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
     let root = workspace.canonicalize().ok();
+    let folds_case = crate::workspace::volume_folds_case(workspace);
     permissions.follow_links(|prefix| {
         let named = match bravebot_core::trust::is_absolute_key(prefix) {
             true => std::path::PathBuf::from(
@@ -239,7 +259,13 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
                 .is_ok_and(|entry| entry.is_symlink())
         });
         if !through_a_link {
-            return None;
+            // A full path to a place inside the project is also that place under the name the
+            // file tools ask by, so a rule about `~/.ssh` covers `.ssh` in a session opened in
+            // the home directory.
+            return match (&root, bravebot_core::trust::is_absolute_key(prefix)) {
+                (Some(root), true) => beneath(&named, root, folds_case),
+                _ => None,
+            };
         }
         let reached = crate::workspace::destination(&named)?;
         // Named as a gate holds it: relative to the root for a file in the project, in full for one
@@ -250,6 +276,32 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
         };
         Some(held.to_string_lossy().into_owned())
     });
+}
+
+/// `path` relative to `root` where it lies at or under it. Names are compared as the OS holds them,
+/// except where the volume folds case: the key a rule's prefix arrives in was folded there, and
+/// folding takes text.
+fn beneath(path: &std::path::Path, root: &std::path::Path, folds_case: bool) -> Option<String> {
+    if !folds_case {
+        let relative = path.strip_prefix(root).ok()?;
+        return Some(tail(relative.components()));
+    }
+    let fold = |name: &std::ffi::OsStr| bravebot_core::trust::fold_case(&name.to_string_lossy());
+    let mut names = path.components();
+    for held in root.components() {
+        if fold(names.next()?.as_os_str()) != fold(held.as_os_str()) {
+            return None;
+        }
+    }
+    Some(tail(names))
+}
+
+/// The names left after the root, joined with `/` as a rule's own string spells them.
+fn tail<'a>(names: impl Iterator<Item = std::path::Component<'a>>) -> String {
+    let names: Vec<_> = names
+        .map(|name| name.as_os_str().to_string_lossy())
+        .collect();
+    names.join("/")
 }
 
 /// A full path keyed from `/` spelled as the host opens it: `/C:/x` is `C:/x` where a backslash
@@ -302,6 +354,7 @@ pub fn with_granted(
     let anchors = anchors(profile, crate::workspace::volume_folds_case(workspace));
     let (mut permissions, mut rejected) =
         Permissions::parse(&lists.deny, &lists.ask, &allow, &anchors);
+    explain(&mut permissions, settings);
     follow_links(&mut permissions, workspace);
     rejected.extend(entries_that_are_not_lines(lists));
     rejected.extend(values_that_are_not_lists(settings));
@@ -963,6 +1016,88 @@ mod tests {
         );
     }
 
+    /// PERM-1, PERM-14: a `reason` is read from the person's own file and from no other layer, and
+    /// the rule decides the same either way. A reason is shown to the person as their own words, so
+    /// a sentence a checkout wrote is not read at all, which is the layering `summaryModel` has.
+    ///
+    /// Both layers in one test, because an implementation that read every layer's reason passes an
+    /// assertion about the home layer alone, and that is the case the scope of this field exists to
+    /// close.
+    #[test]
+    fn a_reason_the_person_wrote_reaches_the_rule_and_a_checkouts_does_not() {
+        let own = r#"{"permissions": {"deny": [{"rule": "Read(own.env)", "reason": "my keys"}]}}"#;
+        let checkout = r#"{"permissions": {"deny": [{"rule": "Read(theirs.env)", "reason": "their sentence"}]}}"#;
+        let settings = layered_settings("reason-layers", Some(checkout), Some(own));
+        let (permissions, rejected) = from_settings(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        let (ruling, rule) = permissions
+            .rule_for_path(Subject::Read, "own.env")
+            .expect("the person's own deny rule");
+        assert_eq!(ruling, Ruling::Deny);
+        assert_eq!(
+            rule.reason(),
+            Some("my keys"),
+            "the reason the person wrote did not reach the rule"
+        );
+
+        let (ruling, rule) = permissions
+            .rule_for_path(Subject::Read, "theirs.env")
+            .expect("the checkout's deny rule");
+        assert_eq!(
+            ruling,
+            Ruling::Deny,
+            "a checkout's deny rule stopped deciding"
+        );
+        assert_eq!(
+            rule.reason(),
+            None,
+            "a sentence a checkout wrote was carried on the rule"
+        );
+    }
+
+    /// PERM-1, PERM-15: granting a checkout's `allow` entry puts the rule in force and carries no
+    /// sentence with it. What the person accepted was the rule text the question showed, which is
+    /// not agreement with a sentence the same file wrote, and a dropped checkout entry records no
+    /// source for a reason to be read back from.
+    #[test]
+    fn a_reason_a_checkout_wrote_does_not_reach_a_rule_the_person_granted() {
+        let block = r#"{"permissions": {"allow": [{"rule": "Bash(bash scripts/check.sh)", "reason": "their sentence"}]}}"#;
+        let checkout = layered_settings("granted-reason", Some(block), None);
+        let profile = PathBuf::from("/home/x");
+
+        let offered: Vec<String> = proposed(&checkout, Some(&profile))
+            .into_iter()
+            .map(|rule| rule.rule)
+            .collect();
+        assert_eq!(
+            offered,
+            ["Bash(bash scripts/check.sh)"],
+            "an object entry was not offered as the rule it holds"
+        );
+
+        let (permissions, rejected) = with_granted(
+            &checkout,
+            &["Bash(bash scripts/check.sh)".to_string()],
+            Some(&profile),
+            Path::new("/nonexistent"),
+        );
+        assert!(rejected.is_empty(), "{rejected:?}");
+        let (ruling, rule) = permissions
+            .rule_for_command(&["bash", "scripts/check.sh"])
+            .expect("the granted rule");
+        assert_eq!(ruling, Ruling::Allow);
+        assert_eq!(
+            rule.reason(),
+            None,
+            "a sentence a checkout wrote was carried on the rule the person granted"
+        );
+    }
+
     /// A scratch home and working directory with the layers the arguments name, read the way a
     /// session reads them.
     ///
@@ -986,6 +1121,43 @@ mod tests {
             std::fs::write(home_dir.join("settings.json"), text).expect("home");
         }
         bravebot_config::Settings::layered(Some(home_dir), Some(&cwd), None)
+    }
+
+    /// PERM-19 end to end: an administrator's deny rule refuses what the person's own `allow` rule
+    /// permits and what a checkout's layer says nothing against, and its ask rule is a question.
+    /// The failure this rejects is a managed rule that a lower layer's entry outranks.
+    #[test]
+    fn a_managed_deny_holds_against_the_persons_allow_and_a_checkouts_layer() {
+        let dir = crate::testutil::scratch_dir("bravebot-managed-deny");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let file = dir.join("managed.json");
+        std::fs::write(
+            &file,
+            r#"{"permissions": {"deny": ["Bash(git push *)"], "ask": ["Bash(make *)"]}}"#,
+        )
+        .expect("managed file");
+        let settings = layered_settings(
+            "managed-deny",
+            Some(r#"{"permissions": {"deny": ["Bash(ls)"]}}"#),
+            Some(r#"{"permissions": {"allow": ["Bash(git push *)", "Bash(make *)"]}}"#),
+        )
+        .under(&bravebot_config::Managed::at(&file));
+        let (permissions, rejected) = from_settings(&settings, None, Path::new("/nonexistent"));
+        assert!(rejected.is_empty(), "{rejected:?}");
+        assert_eq!(
+            permissions.for_command(&["git", "push", "origin"]),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_command(&["make", "all"]),
+            Decision::Ruled(Ruling::Ask)
+        );
+        assert_eq!(
+            permissions.for_command(&["ls"]),
+            Decision::Ruled(Ruling::Deny),
+            "the checkout's own rule stopped holding"
+        );
     }
 
     /// A single leading slash is anchored at the settings file's own directory, which is the
@@ -1167,23 +1339,25 @@ mod tests {
         );
     }
 
-    /// PERM-3: a full path with no link in it names a project file in the other namespace, so it is
-    /// not added under the name the project holds the file by.
+    /// PERM-7: a full path with no link in it covers a project file under the name the file tools
+    /// ask by as well, and a place outside the project only by its full path.
     #[cfg(unix)]
     #[test]
-    fn a_full_path_rule_with_no_link_in_it_says_nothing_about_a_project_file() {
+    fn a_full_path_rule_with_no_link_in_it_covers_a_project_file_by_its_relative_name() {
         let root = project_with_a_linked_directory("permissions-full-path-without-a-link");
+        let outside = root.parent().unwrap().join("outside");
         let settings = Settings::parse(&format!(
-            r#"{{"permissions": {{"deny": ["Read(/{}/real/**)"]}}}}"#,
-            root.display()
+            r#"{{"permissions": {{"deny": ["Read(/{}/real/**)"], "ask": ["Edit(/{}/**)"]}}}}"#,
+            root.display(),
+            outside.display()
         ));
         let (permissions, rejected) = from_settings(&settings, None, &root);
         assert!(rejected.is_empty(), "{rejected:?}");
 
         assert_eq!(
             permissions.for_path(Subject::Read, "real/secret.txt"),
-            Decision::Unmatched,
-            "a full path with no link in it reached into the project's namespace"
+            Decision::Ruled(Ruling::Deny),
+            "a full path to a project file did not cover the name the file tools ask by"
         );
         assert_eq!(
             permissions.for_path(
@@ -1191,6 +1365,56 @@ mod tests {
                 &root.join("real").join("secret.txt").display().to_string()
             ),
             Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "vendor/real/secret.txt"),
+            Decision::Unmatched,
+            "the relative spelling floated to every directory of that name"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "outside/notes.md"),
+            Decision::Unmatched,
+            "a rule about a place outside the project covered a project name"
+        );
+        assert_eq!(permissions.len(), 2);
+    }
+
+    /// PERM-7: in a session opened in the home directory, a `~/` rule covers the file as `.ssh/key`.
+    #[cfg(unix)]
+    #[test]
+    fn a_home_rule_covers_the_relative_name_in_a_session_opened_in_the_home_directory() {
+        let root = project_with_a_linked_directory("permissions-home-is-the-workspace");
+        let settings = Settings::parse(r#"{"permissions": {"deny": ["Read(~/real/**)"]}}"#);
+        let (permissions, rejected) = from_settings(&settings, Some(&root), &root);
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        assert_eq!(
+            permissions.for_path(Subject::Read, "real/secret.txt"),
+            Decision::Ruled(Ruling::Deny),
+            "a home rule missed the file when the session was opened in the home directory"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "notes.md"),
+            Decision::Unmatched
+        );
+    }
+
+    /// PERM-7: a root that is not UTF-8 is not the directory whose name is its lossy lookalike
+    /// (PATH-003).
+    #[cfg(unix)]
+    #[test]
+    fn a_root_that_is_not_utf8_is_not_its_lossy_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::Path;
+        let root = Path::new(std::ffi::OsStr::from_bytes(b"/p/dir-\xff"));
+        assert_eq!(beneath(Path::new("/p/dir-\u{FFFD}/a/b"), root, false), None);
+        assert_eq!(
+            beneath(
+                Path::new(std::ffi::OsStr::from_bytes(b"/p/dir-\xff/a/b")),
+                root,
+                false
+            ),
+            Some("a/b".to_string())
         );
     }
 

@@ -79,6 +79,8 @@ enum Read {
     /// Apart from [`Read::Skipped`] because it is said as a message of the catalogue's, whole,
     /// rather than as an English reason placed into one.
     NotACount,
+    /// A definition whose `budget:` is not a count of tokens above zero, which is also not loaded.
+    NotABudget,
 }
 
 /// Why a definition that asked to keep a memory keeps none, which its author is told.
@@ -184,6 +186,12 @@ fn read_definition(text: &str, origin: &str) -> Read {
         definition = definition.with_servers(if declares_servers { Vec::new() } else { names });
     }
 
+    // The delegates it may start, read as `tools:` is (DELEGATE-30). An empty line names none, and
+    // its delegate starts none, for the reason an empty `tools:` line leaves one no tool.
+    if let Some(spawns) = declared.get("spawns") {
+        definition = definition.with_spawns(names_in(spawns));
+    }
+
     // Refused rather than left at the kind's own, because its author believes the number is in
     // force. Zero goes with the rest: the bound is checked after a round, so it would be one.
     if let Some(written) = declared
@@ -195,6 +203,20 @@ fn read_definition(text: &str, origin: &str) -> Read {
             return Read::NotACount;
         };
         definition = definition.with_rounds(rounds);
+    }
+
+    // Refused for the reason `rounds:` is: its author believes the figure is in force. A count
+    // of credits is refused with the rest, since a session-wide counter cannot be attributed to
+    // one delegate while its siblings run.
+    if let Some(written) = declared
+        .get("budget")
+        .map(|b| b.trim())
+        .filter(|b| !b.is_empty())
+    {
+        let Some(tokens) = budget_in(written) else {
+            return Read::NotABudget;
+        };
+        definition = definition.with_budget(tokens);
     }
 
     // `project` and `local` are one file here, since whether it is committed is the person's to
@@ -387,6 +409,13 @@ fn rounds_in(written: &str) -> Option<usize> {
     }
 }
 
+/// The tokens a `budget:` value names, in the words `/limit` accepts, or nothing where it names no
+/// count of tokens above zero.
+fn budget_in(written: &str) -> Option<u64> {
+    let limit = bravebot_config::limit::parse(written, bravebot_config::limit::Unit::Tokens)?;
+    (limit.unit == bravebot_config::limit::Unit::Tokens).then_some(limit.figure)
+}
+
 /// Whether this is a name a definition may go by.
 ///
 /// Two rules, both borrowed from the agent definitions people already write for other tools, so
@@ -415,7 +444,7 @@ const FOLDS_TO_A_COLON: [char; 5] = [
     '\u{ff1a}', // FULLWIDTH COLON
 ];
 
-/// The names a `tools:`, a `skills:` or an `mcpServers:` value lists.
+/// The names a `tools:`, a `skills:`, a `spawns:` or an `mcpServers:` value lists.
 ///
 /// A comma and a space both separate, so a YAML scalar (`read_file, list_files`) and a YAML
 /// sequence (`- read_file` on its own line) both arrive here as something this splits the same
@@ -482,7 +511,13 @@ pub fn discover<S: Sink>(
     }
 
     if let Some(home) = home {
-        discover_home(policy, &home.join(AGENTS), &mut definitions, &mut notices);
+        discover_home(
+            policy,
+            workspace,
+            &home.join(AGENTS),
+            &mut definitions,
+            &mut notices,
+        );
     }
     discover_workspace(policy, workspace, &mut definitions, &mut notices);
     notices.extend(rounds_held_to_their_kind(&definitions));
@@ -589,8 +624,14 @@ pub fn not_vouched_for(workspace: &Workspace, trust: &bravebot_core::trust::Trus
 }
 
 /// Definitions from `~/.bravebot/agents`, labelled from where they sit.
+///
+/// A file whose path goes through the workspace is not read from here, because a turn can write
+/// it (DELEGATE-20, SKILL-3). It is the project's, and `discover_workspace` reads it through the
+/// trust map where `~/.bravebot/agents` is the project's definition directory. Those passed over
+/// are counted, except in that case, where `discover_workspace` has said what it did with each.
 fn discover_home<S: Sink>(
     policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
     root: &Path,
     definitions: &mut Definitions,
     notices: &mut Vec<Notice>,
@@ -599,7 +640,12 @@ fn discover_home<S: Sink>(
         return;
     }
 
+    let mut passed_over = 0;
     for file in definition_files(root) {
+        if crate::skills::goes_through_the_workspace(workspace, &root.join(&file)) {
+            passed_over += 1;
+            continue;
+        }
         let origin = format!("~/.bravebot/{AGENTS}/{file}");
 
         let Ok(text) = std::fs::read_to_string(root.join(&file)) else {
@@ -619,6 +665,17 @@ fn discover_home<S: Sink>(
             definitions,
             notices,
         );
+    }
+    // The project's own pass has said what it did with each file where it reads this directory.
+    let read_as_the_projects = std::fs::canonicalize(root)
+        .ok()
+        .zip(std::fs::canonicalize(workspace.root().join(WORKSPACE_AGENTS)).ok())
+        .is_some_and(|(home, project)| home == project);
+    if passed_over > 0 && !read_as_the_projects {
+        notices.push(Notice::from_message(t!(
+            home_definitions_reached_through_the_workspace,
+            count = passed_over
+        )));
     }
 }
 
@@ -753,6 +810,13 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
         Read::NotACount => {
             notices.push(Notice::from_message(t!(
                 delegate_rounds_not_a_count,
+                definition = origin
+            )));
+            return;
+        }
+        Read::NotABudget => {
+            notices.push(Notice::from_message(t!(
+                delegate_budget_not_a_count,
                 definition = origin
             )));
             return;
@@ -917,6 +981,34 @@ pub fn servers_not_found(definitions: &Definitions, reached: &[String]) -> Vec<N
                 definition = definition.origin(),
                 count = missing.len(),
                 servers = missing.join(", ")
+            )))
+        })
+        .collect()
+}
+
+/// What to tell whoever wrote a definition whose `spawns:` line names a delegate this session did
+/// not resolve (DELEGATE-30).
+///
+/// Such a name selects nothing, as a `skills:` name nothing found does, and silence would leave a
+/// misspelt name reading as a delegate the definition may start.
+pub fn spawns_not_found(definitions: &Definitions) -> Vec<Notice> {
+    definitions
+        .iter()
+        .filter_map(|definition| {
+            let mut missing: Vec<&str> = Vec::new();
+            for name in definition.spawns()? {
+                if definitions.get(name).is_none() && !missing.contains(&name.as_str()) {
+                    missing.push(name);
+                }
+            }
+            if missing.is_empty() {
+                return None;
+            }
+            Some(Notice::from_message(t!(
+                delegate_spawns_not_found,
+                definition = definition.origin(),
+                count = missing.len(),
+                names = missing.join(", ")
             )))
         })
         .collect()
@@ -1169,6 +1261,7 @@ mod tests {
             Read::Definition { definition, .. } => *definition,
             Read::NotOne => panic!("not read as a definition at all"),
             Read::NotACount => panic!("skipped: its rounds are not a count"),
+            Read::NotABudget => panic!("skipped: its budget is not a count of tokens"),
             Read::Skipped(why) => panic!("skipped: {why}"),
         }
     }
@@ -1566,6 +1659,45 @@ mod tests {
         assert_eq!(skills_of(""), None);
     }
 
+    /// DELEGATE-30. `spawns:` is read as `tools:` is, and an empty line is a list of none, which
+    /// is not the same as no line.
+    #[test]
+    fn a_definition_reads_the_delegates_it_may_start() {
+        let spawns_of = |line: &str| {
+            definition_of(&format!(
+                "---\nname: coordinator\ndescription: coordinates\nkind: worker\n{line}---\n\nbody\n"
+            ))
+            .spawns()
+            .map(<[String]>::to_vec)
+        };
+        let both = Some(vec!["reader".to_string(), "checker".to_string()]);
+
+        assert_eq!(spawns_of("spawns: reader, checker\n"), both);
+        assert_eq!(spawns_of("spawns:\n  - reader\n  - checker\n"), both);
+        assert_eq!(spawns_of("spawns:\n"), Some(Vec::new()));
+        assert_eq!(spawns_of(""), None);
+    }
+
+    /// DELEGATE-30. A name no definition resolved is said, naming the file, once.
+    #[test]
+    fn a_spawns_name_nothing_resolved_is_said_once() {
+        let mut definitions = Definitions::default();
+        definitions.insert(definition_of(
+            "---\nname: coordinator\ndescription: coordinates\nkind: worker\nspawns: reader, \
+             reviwer, reviwer\n---\n\nbody\n",
+        ));
+        let said: Vec<String> = spawns_not_found(&definitions)
+            .into_iter()
+            .map(|notice| notice.message)
+            .collect();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].contains("reviwer") && !said[0].contains("reviwer,"),
+            "{said:?}"
+        );
+        assert!(!said[0].contains("reader"), "{said:?}");
+    }
+
     /// One misspelt name written twice is one name nothing found, so it is said once and in the
     /// singular rather than as two skills.
     #[test]
@@ -1766,6 +1898,62 @@ mod tests {
             [
                 ".bravebot/agents/migrator.md was skipped: its rounds must be a whole number above \
               zero"
+            ]
+        );
+    }
+
+    /// `budget:` takes the words `/limit` does. An absent or empty line names no budget, as an
+    /// empty `rounds:` line names no number.
+    #[test]
+    fn a_definition_reads_the_token_budget_it_names() {
+        let read = |line: &str| {
+            definition_of(&format!(
+                "---\nname: migrator\ndescription: a staged refactor\nkind: worker\n{line}---\n\n\
+                 body\n"
+            ))
+        };
+
+        assert_eq!(read("budget: 2m\n").budget(), Some(2_000_000));
+        assert_eq!(read("budget: 500k tokens\n").budget(), Some(500_000));
+        assert_eq!(read("budget: \"750000\"\n").budget(), Some(750_000));
+        assert_eq!(read("budget:\n").budget(), None);
+        assert_eq!(read("").budget(), None);
+    }
+
+    /// A value that is no count of tokens above zero, credits included, is refused rather than
+    /// left unbounded, since whoever wrote it believes it is in force, and the notice names the
+    /// file.
+    #[test]
+    fn a_budget_line_that_is_not_a_count_of_tokens_is_not_a_definition() {
+        for written in ["0", "-5", "lots", "1.5m", "12 rounds", "3 credits", "off"] {
+            let text = format!(
+                "---\nname: migrator\ndescription: a staged refactor\nkind: worker\nbudget: \
+                 {written}\n---\n"
+            );
+            assert!(
+                matches!(read_definition(&text, "test"), Read::NotABudget),
+                "'{written}' was read as a budget"
+            );
+        }
+
+        let mut definitions = Definitions::default();
+        let mut notices = Vec::new();
+        admit(
+            read_definition(
+                "---\nname: migrator\ndescription: d\nkind: worker\nbudget: lots\n---\n",
+                ".bravebot/agents/migrator.md",
+            ),
+            ".bravebot/agents/migrator.md",
+            &mut definitions,
+            &mut notices,
+        );
+        assert!(definitions.get("migrator").is_none());
+        let said: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+        assert_eq!(
+            said,
+            [
+                ".bravebot/agents/migrator.md was skipped: its budget must be a count of tokens \
+                 above zero, such as 500k or 2m"
             ]
         );
     }

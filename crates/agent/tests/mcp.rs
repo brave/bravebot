@@ -440,7 +440,7 @@ impl Confirmer for Answering {
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
         self.calls.push(request.clone());
-        self.call
+        self.call.clone()
     }
 
     /// Refuses. This double answers no question about reach.
@@ -450,6 +450,13 @@ impl Confirmer for Answering {
 
     fn confirm_host(&mut self, _request: &bravebot_agent::confirm::HostRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
     }
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
@@ -575,10 +582,6 @@ fn a_vouched_list_offers_its_tool_and_a_call_answers_quarantined() {
         );
     };
     assert_eq!(list.alias, "weather");
-    assert!(
-        !list.changed,
-        "a list nobody vouched for before was drawn as changed"
-    );
     let [tool] = list.tools.as_slice() else {
         panic!("the list was drawn as {:?}", list.tools);
     };
@@ -629,10 +632,11 @@ fn a_vouched_list_offers_its_tool_and_a_call_answers_quarantined() {
     assert!(call.contains(r#""name":"get_forecast""#), "{call}");
     assert!(call.contains(r#""city":"Paris""#), "{call}");
 
-    let vouched = Approvals::read(&scratch.state()).vouched_list(&declaration());
     assert!(
-        vouched.is_some(),
-        "a person's yes to the list was not recorded"
+        !std::fs::read_to_string(approvals_file(&scratch.state()))
+            .unwrap_or_default()
+            .contains("tools"),
+        "a person's yes to the list was recorded"
     );
     assert!(
         !tools_file(&scratch.state()).exists(),
@@ -1049,6 +1053,60 @@ fn a_refused_call_reaches_no_server() {
     );
 }
 
+/// What the planner is told in the round after one call, with the person answering `answer`.
+fn told_after_a_call(name: &str, answer: CallDecision) -> (String, usize) {
+    let scratch = Scratch::new(name);
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("fine"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, answer);
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    let sent = rounds(&chat);
+    (sent[1].clone(), methods(&server).len())
+}
+
+/// PROMPT-12: words a person typed beside the answer to a call reach the planner with the result,
+/// a refusal ends on them rather than on the question, and an answer that stands for the tool
+/// carries none.
+#[test]
+fn a_note_beside_a_call_answer_is_told_to_the_planner() {
+    let (refused, calls) = told_after_a_call(
+        "call-refused-with-a-note",
+        CallDecision::reject().with_note("ask for Paris, France"),
+    );
+    assert_eq!(calls, 0, "a refused call reached the server");
+    assert!(
+        refused.contains("The user declined this and wrote: ask for Paris, France"),
+        "{refused}"
+    );
+    assert!(!refused.contains("ask what they would prefer"), "{refused}");
+
+    let (approved, calls) = told_after_a_call(
+        "call-approved-with-a-note",
+        CallDecision::approve().with_note("that was the right tool"),
+    );
+    assert!(calls > 0, "an approved call did not reach the server");
+    assert!(
+        approved.contains("The user approved this and wrote: that was the right tool"),
+        "{approved}"
+    );
+
+    let (standing, _) = told_after_a_call(
+        "call-standing-with-a-note",
+        CallDecision::approve_and_stand().with_note("standing words"),
+    );
+    assert!(!standing.contains("standing words"), "{standing}");
+}
+
 /// Answer 2 stands for that one tool in that one project: the next call to it asks nothing and
 /// still reaches the server, and the record names the tool and the project and nothing more. The
 /// next turn's confirmer refuses everything, as a one-shot run's does, so the answer holds there.
@@ -1345,10 +1403,11 @@ fn a_record_that_cannot_be_read_is_not_written_over() {
     }
 }
 
-/// A list vouched for under this declaration before is offered with nobody asked, and one that
-/// changed since is asked about again and drawn as changed.
+/// A list is put to the person every session: a yes records nothing, and a `tools` line that
+/// matches the list does not stand in for the answer, since deciding from a server's bytes
+/// whether it was seen before is the driver's decision taken from untrusted content.
 #[test]
-fn a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again() {
+fn a_list_is_asked_about_every_session_and_a_yes_records_nothing() {
     let scratch = Scratch::new("recorded");
     let (url, _server) = serve_weather();
 
@@ -1361,6 +1420,12 @@ fn a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again() {
         &mut vouching,
     );
     assert_eq!(vouching.lists.len(), 1);
+    assert!(
+        !std::fs::read_to_string(approvals_file(&scratch.state()))
+            .unwrap_or_default()
+            .contains("tools"),
+        "a yes was recorded"
+    );
 
     let next = session(&url, &scratch, true);
     let mut refusing = Answering::new(Decision::Reject, CallDecision::reject());
@@ -1370,21 +1435,25 @@ fn a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again() {
         Task::new("second session").with_mcp(Some(next.clone())),
         &mut refusing,
     );
-    assert!(
-        refusing.lists.is_empty(),
-        "the list vouched for before was asked about again"
+    assert_eq!(
+        refusing.lists.len(),
+        1,
+        "the list said yes to before was not asked about again"
     );
     assert_eq!(
         next.offering(),
-        [("weather".to_string(), Offering::Tools(1))]
+        [("weather".to_string(), Offering::Declined)]
     );
 
-    let mut approvals = Approvals::read(&scratch.state());
-    approvals.vouch_list(
-        declaration(),
-        Digest::of_list("the list as it was last week"),
-    );
-    std::fs::write(approvals_file(&scratch.state()), approvals.to_text()).expect("rewrite");
+    // The digest an earlier version recorded for the list this server sends, so that the line is
+    // one that would have answered for it and the only thing that can fail this is that answer.
+    let digest = declaration();
+    let list = "8f7dc1133696e730f427675b9f2f6d1ebdf97a7ecc29ef909393c7167fb33f7e";
+    std::fs::write(
+        approvals_file(&scratch.state()),
+        format!("tools {digest} {list}\n"),
+    )
+    .expect("write a line an earlier version wrote");
     let (endpoint, _chat) = serve_chat(vec![reply_with("three")]);
     let mut asked = Answering::new(Decision::Reject, CallDecision::reject());
     run_turn(
@@ -1393,10 +1462,11 @@ fn a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again() {
         Task::new("third session").with_mcp(Some(session(&url, &scratch, true))),
         &mut asked,
     );
-    let [list] = asked.lists.as_slice() else {
-        panic!("a changed list was not asked about: {:?}", asked.lists);
-    };
-    assert!(list.changed, "a changed list was drawn as new");
+    assert_eq!(
+        asked.lists.len(),
+        1,
+        "a recorded line answered for the list"
+    );
 }
 
 /// Bypassing answers the list and the call and records neither, so the next session that asks
@@ -1441,9 +1511,9 @@ fn bypassing_answers_both_prompts_and_records_nothing() {
         "a list nobody reads was checked"
     );
     assert!(
-        Approvals::read(&scratch.state())
-            .vouched_list(&declaration())
-            .is_none(),
+        !std::fs::read_to_string(approvals_file(&scratch.state()))
+            .unwrap_or_default()
+            .contains("tools"),
         "bypassing recorded a vouch for the list"
     );
     assert!(
@@ -2187,6 +2257,102 @@ fn two_servers(scratch: &Scratch) -> (Session, [mpsc::Receiver<String>; 2]) {
 
 /// The one tool of the second server [`two_servers`] reaches.
 const DOCS_TOOL: &str = "mcp__docs__lookup";
+
+/// The aliases a session holds a grant for, in order.
+fn granted(session: &Session) -> Vec<String> {
+    session
+        .grants()
+        .iter()
+        .map(|grant| grant.as_str().to_string())
+        .collect()
+}
+
+/// A session joined by one a reconnect started holds the servers of both and a grant for each, and
+/// what the first was told stays told: its list was vouched for, and a start that reached it again
+/// would put the list to the person once more. A server the other holds under an alias the first
+/// holds is left out, so one alias is one server and one grant (SERVERS-19).
+#[test]
+fn a_session_joined_by_a_reconnect_keeps_the_first_servers_and_what_they_were_told() {
+    let scratch = Scratch::new("joined");
+    let (weather, _weather) = serve_weather();
+    let (docs, _docs) = serve_tool("lookup");
+    let new = |servers: Vec<Reached>| {
+        Session::new(
+            servers,
+            scratch.project(),
+            Some(scratch.state()),
+            true,
+            Managed::default(),
+        )
+    };
+    let first = new(vec![reach_as("weather", &weather)]);
+    let (endpoint, _chat) = serve_chat(vec![reply_with("done")]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(first.clone())),
+        &mut confirmer,
+    );
+    assert_eq!(
+        first.offering(),
+        vec![("weather".to_string(), Offering::Tools(1))],
+        "the first list was not vouched for, so this says nothing"
+    );
+
+    let second = new(vec![reach_as("docs", &docs), reach_as("weather", &weather)]);
+    let joined = first.joined_by(&second);
+
+    assert_eq!(joined.aliases(), vec!["weather", "docs"]);
+    assert_eq!(granted(&joined), vec!["weather", "docs"]);
+    assert_eq!(
+        joined.offering(),
+        vec![
+            ("weather".to_string(), Offering::Tools(1)),
+            ("docs".to_string(), Offering::Unasked)
+        ]
+    );
+}
+
+/// A session without a server holds no grant naming it and offers none of its tools, though its
+/// list was vouched for, and a turn does not put it to the person again. The server it keeps is
+/// untouched, and a session left with none is no session (SERVERS-19).
+#[test]
+fn a_session_without_a_server_holds_no_grant_for_it_and_offers_none_of_its_tools() {
+    let scratch = Scratch::new("without");
+    let (session, _bodies) = two_servers(&scratch);
+
+    let kept = session.without("docs").expect("weather is left");
+
+    assert_eq!(kept.aliases(), vec!["weather"]);
+    assert_eq!(granted(&kept), vec!["weather"]);
+    assert_eq!(
+        granted(&session),
+        vec!["weather", "docs"],
+        "the original changed"
+    );
+    let (endpoint, chat) = serve_chat(vec![reply_with("done")]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what can you call").with_mcp(Some(kept.clone())),
+        &mut confirmer,
+    );
+    assert_eq!(
+        confirmer.lists.len(),
+        1,
+        "the list of the server turned off was put to the person"
+    );
+    let sent = rounds(&chat);
+    let first = sent.first().expect("a round");
+    assert!(first.contains(FORECAST), "the server kept was not offered");
+    assert!(
+        !first.contains(DOCS_TOOL),
+        "a tool of the server turned off was offered: {first}"
+    );
+    assert!(kept.without("weather").is_none());
+}
 
 /// A worker holds the servers its parent holds and no other the session reached. A first turn
 /// holding both settles both lists, and the next is handed a grant for one, so neither it nor the

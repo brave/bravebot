@@ -82,7 +82,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace ([`lsp`](../reference/tools.md#the-index-is-cached-and-it-is-not-small)) |
 | `~/.bravebot/findings/<workspace>.jsonl` | the credentials a turn's own writes were found to hold, one per workspace |
 | `~/.bravebot/granted/<directory>.jsonl` | the permission rules a checkout proposed that you granted, one file per directory ([`permissions`](#permissions)) |
-| `~/.bravebot/trusted/<directory>.jsonl` | the answer to the startup question you pressed `r` for, one per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
+| `~/.bravebot/trusted/<directory>.jsonl` | the yes to the startup question, one file per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
 | `~/.bravebot/untrusted/<directory>.jsonl` | the [delegate definitions' memories](agents.md#memory) a write left untrusted, one per directory |
 | `~/.bravebot/history` | prompts you have sent |
 | `~/.bravebot/model` | the model chosen with `/model` |
@@ -104,7 +104,10 @@ pasted into one. A directory or file an older version left open to the machine i
 time something writes to it, so an upgrade is enough.
 
 Narrowing stops at `~/.bravebot`, and a symbolic link out of it is stepped over rather than
-followed. What else is in your home directory is not this program's business, and somebody keeping
+followed. That holds for `~/.bravebot` itself, for `logs` and for the `shell` directory the
+[shell hook](../reference/cli.md#shell-init) uses: if you link any of them to another volume, the
+directory it leads to keeps the mode you gave it. What else is in your home directory is not this
+program's business, and somebody keeping
 their sessions on another volume has put the target outside what bravebot was given.
 
 A file **you** put there keeps the mode you gave it. `settings.json`, your standing instructions and
@@ -365,11 +368,16 @@ one.
 `BRAVEBOT_CONTEXT_BUDGET` is never baked into a binary. It is a knob one person turns while working,
 so it has to be set in the environment.
 
-**Thirteen names can also go in a settings file's [`env`](#settingsjson) block**, under the same
+**Thirteen of these names can go in a settings file's [`env`](#settingsjson) block**, under the same
 spelling: seven of the nine above, plus the six AWS ones. The two exceptions are `BRAVEBOT_LOCALE` and
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB`, which are read from the environment alone. Exporting a name wins over
 the file, except where an [administrator pinned it](#pinned-by-an-administrator), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
+
+Six network names can go there as well: `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`, `HTTPS_PROXY`,
+`HTTP_PROXY` and `NO_PROXY`. They are read from your own file and a `--settings` file outside the
+project, and from no project or local file; see
+[certificates and proxies](../security/security.md#certificates-and-proxies).
 
 ## `settings.json`
 
@@ -404,11 +412,14 @@ one thing leaves everything else in force:
 
 | What | How the files combine |
 |---|---|
-| `env`, `attribution`, `keybindings` | per name one level down; the value under a name is replaced whole |
+| `env`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `agent`, `style` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `processorModel`, `agent`, `style`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
+| `references` | your own file and a `--settings` file outside the project; a project or local file's block, and a `--settings` file that resolves inside the project, is ignored and reported, and a later file's block replaces an earlier one's |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
+| `sandbox.network.deniedHosts`, `sandbox.network.onUnlisted: refuse` | every file's entries are kept |
+| `sandbox.network.allowedHosts`, `sandbox.network.onUnlisted: ask` | your own file and a `--settings` file outside the project; a project or local file's are ignored and reported |
 | `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
 | `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and a `--settings` file outside the project; a project or local file's are ignored and reported |
 | `git.identities` | your own file and a `--settings` file outside the project, the later one's entry for an owner replacing the earlier one's; a project or local file's are ignored and reported |
@@ -449,17 +460,21 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `advisorModel` | the model the planner may consult through the `advisor` tool ([below](#advisormodel)) |
 | `fallbackModel` | the model a turn moves to when its own keeps failing ([below](#fallbackmodel)) |
 | `summaryModel` | the model compaction summaries and `/goal` checks run on ([below](#summarymodel)) |
+| `processorModel` | the model an isolated processor runs on ([below](#processormodel)) |
+| `references` | directories outside the project that the planner may consult, each with a name and a description ([below](#references)) |
 | `agent` | the definition every turn of a session is addressed to when `--agent` names none ([below](#agent)) |
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `promptCacheTtl` | how long a gateway or an AWS account keeps a cached prompt, `5m` or `1h` ([below](#promptcachettl)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
-| `style` | the output style a session starts in: `concise`, `explanatory`, `proactive` or a file in `~/.bravebot/styles`. Read from your own file and the file `--settings` names only |
+| `style` | the output style a session starts in: `concise`, `explanatory`, `proactive` or a file in `~/.bravebot/styles`. Read from your own file and the file `--settings` names only, and it cannot name a project's style from `.bravebot/styles` (pick that with `/style`) |
 | `limit` | the most tokens or Leo Premium credits a session may spend before it asks ([below](#limit)) |
+| `maxRunningDelegates` | the most delegates one turn may have running at once ([below](#maxrunningdelegates)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
 | `provider` | an OpenAI-compatible gateway ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([below](#runscrubenv)) |
 | `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([below](#runnetwork)) |
+| `sandbox.network.allowedHosts`, `deniedHosts`, `onUnlisted` | the hosts a program the agent runs may reach ([below](#sandboxnetwork)) |
 | `sandbox.filesystem.allowRead`, `denyRead`, `allowWrite`, `denyWrite` | lists of paths that move what a program the agent runs reads and writes ([below](#sandboxfilesystem)) |
 | `git.identities` | the ssh key a `git` command offers first for one owner's repositories ([below](#gitidentities)) |
 | `run.maxOutput` | how much of what a command printed the agent reads ([below](#runmaxoutput)) |
@@ -470,8 +485,10 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `search` | how large a tree a search may walk ([below](#search)) |
 | `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
 | `awaySummaryEnabled` | whether a session is recapped by itself after you have been away ([below](#awaysummaryenabled)) |
+| `awaySummaryIdleSeconds` | how long after a turn finishes the automatic recap waits ([below](#awaysummaryidleseconds)) |
 | `suggestions` | whether the empty box offers a suggested next prompt ([below](#suggestions)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
+| `tui.mouse` | `false` stops the interface capturing the mouse, so the terminal's own selection works ([below](#tuimouse)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
 | `vetting` | whether quarantined content is checked without asking you ([below](#vetting)) |
@@ -512,7 +529,7 @@ others in force, so a mistake in a checkout cannot decide that your own file no 
 :::caution
 **A `.bravebot/settings.json` arrives with a checkout.** A repository you have just cloned cannot name
 the host every request goes to, the model, the advisor model, the fallback model, or the environment variables read as a
-gateway's credential: a `provider` block, or a `model`, `advisorModel`, `fallbackModel` or `summaryModel` key, in a project or local file is ignored, and `bravebot
+gateway's credential: a `provider` block, or a `model`, `advisorModel`, `fallbackModel`, `summaryModel` or `processorModel` key, in a project or local file is ignored, and `bravebot
 doctor` names each file whose block or key was dropped. It can still set the other keys here, so read
 a project's settings file before working in it; `doctor` names the files in force. It cannot grant a
 capability either. The names that would (`permissions.allow`, and `permissions.additionalDirectories`)
@@ -617,6 +634,31 @@ reported by `bravebot doctor`. A model your administrator refuses is not used as
 
 The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
 
+### `processorModel`
+
+```json
+{ "processorModel": "haiku" }
+```
+
+The model an isolated processor runs on. A processor rewrites or reads a file nobody vouched for, so
+a large rewrite is billed for the whole file in and the whole file out. Naming a cheaper model here
+moves those calls onto it, while the planner keeps the model the session is using. Without the key,
+and with `"inherit"`, a processor runs on the session's model.
+
+A processor still has no tools and no memory, and a write of what it produced is approved from the
+diff of the real file, so a weaker model that rewrites a file worse shows up in that diff.
+
+A model that needs a sign-in this machine has not made, that your administrator refuses, or that no
+configured service answers for is reported and the call is not sent to the session's model instead,
+since naming a cheaper model is a limit on what bulk work costs. A processor answered by a model
+other than the one named says so.
+
+**The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
+other.** The model is sent the files a processor reads, so a `.bravebot/settings.json` or
+`.bravebot/settings.local.json` that names one is ignored and reported by `bravebot doctor`.
+
+The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
+
 ### `summaryModel`
 
 ```json
@@ -647,6 +689,45 @@ other.** The model is sent the conversation, so a `.bravebot/settings.json` or
 The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier. The context
 budget that decides when to compact is still measured against the window of the model the session is
 using, not this one.
+
+### `references`
+
+```json
+{
+  "references": {
+    "libfoo": "~/src/libfoo",
+    "notes": { "path": "/Users/me/notes", "description": "my design notes" }
+  }
+}
+```
+
+Directories outside the project that you keep for the planner to consult: a library's source, a
+sibling repository, a folder of notes. An entry is a path (absolute, or starting with `~`) or an
+object with a `path` and an optional `description`. A name holds no `/`, whitespace, backtick or
+comma.
+
+Each usable entry is opened the way [`--add-dir`](../reference/cli.md#--add-dir-path) opens a
+directory: its files can be read by absolute path, and nothing is vouched for, so a file there is
+read on the footing of any file you did not vouch for. The system prompt lists each open one with
+its directory and your description. Nothing inside a reference, an `AGENTS.md` included, is read
+into the prompt.
+
+Typing `@` offers each open reference's name beside the files of the project, and a `/` after one
+lists that directory, so `@libfoo/src/parser.rs` names a file in `~/src/libfoo`. Sending the line
+reads it as any file named with `@` is read, and your typing it is what vouches for it. A file or
+directory of the project with the same name as a reference is offered instead of the reference. Only
+references that are open are offered, so one closed with `/add-dir close` drops out of the list, and
+`/add-dir` and `/cd` update it when they change what is open. A reference directory whose path is not
+valid text cannot be named this way: the name is refused rather than read from another directory.
+
+An entry with a bad name or no path, or one whose directory is missing, is not a directory, lies
+inside the working directory or is refused by `permissions.readsStayInWorkspace`, is reported by
+name and skipped, and the other entries still apply. A later file's block replaces an earlier one's.
+
+**The key is read from `~/.bravebot/settings.json` and from a file `--settings` names that sits
+outside the project.** A project or local settings file that names it is ignored and reported by
+`bravebot doctor`, since it would make a directory reachable and put its description in front of the
+planner without your having written either.
 
 ### `agent`
 
@@ -744,9 +825,25 @@ stop, to go on without a limit or to go on under a new one. A whole number of to
 `k` or `m` after it for thousands or millions. Put `credits` after the figure, as in `"200 credits"`,
 to count the credentials a Leo Premium subscription spends, one per request, instead. A value that is
 none of these, and zero, sets no limit. The nearest settings file that names it wins, and
-[`/limit`](../reference/commands.md#limit-tokens--credits--off) changes it for one session. Tokens are
+[`/limit`](../reference/commands.md#limit-amount--off) changes it for one session. Tokens are
 the usage the model service reports, so a limit in tokens is a bound on tokens and not on money. The
 one-shot `-p` run and the desktop app do not apply it.
+
+### `maxRunningDelegates`
+
+```json
+{ "maxRunningDelegates": 32 }
+```
+
+The most delegates one turn may have running at once, counted across every level of nesting. Without
+this key it is 64. A delegate that has finished gives its place back, so a turn can start more than
+that number over its life and never has more going at once. A request made while every place is
+taken is refused and says how many the turn may have running, and a fan-out that meets the number
+part-way starts the ones that fit. A whole number above zero; zero, a negative or fractional number,
+or a number in quotes leaves it at 64. The nearest settings file that names it wins. Each delegate
+running holds a context of its own and may have a model request in flight, so a larger number raises
+the most a turn can spend at once, and a smaller one lowers how many requests reach your gateway at
+the same moment. The planner and the delegates cannot change it.
 
 ### `deferMcpToolsAbove`
 
@@ -758,7 +855,11 @@ Every tool of a server you approved is otherwise sent to the model in full on ev
 set, a turn whose server tools would weigh more than that many tokens, estimated from their length,
 sends only their names, `alias:tool`, and a `load_tool` the model calls with one name to have that
 tool's definition sent from its next request on. The name has to match one on the list exactly.
+A call to a listed tool that has not been loaded is refused with the instruction to load it first, and is
+neither put to you nor sent to the server.
 Loading changes what is sent and not who is asked: a loaded tool still asks you before each call.
+A `reader` or `checker` delegate, a delegate left with no server, and a run limited with `--tools` are
+offered no `load_tool`.
 A number or a size like `"20k"`; anything else, and zero, leaves every tool in full, which is the
 default. It lasts a turn, so a later turn loads again.
 
@@ -768,11 +869,23 @@ default. It lasts a turn, so a later turn loads again.
 { "awaySummaryEnabled": false }
 ```
 
-After the terminal has been unfocused for five minutes since the last turn finished, a session of at
-least three turns recaps itself once, as `/recap` does, and not again until another turn finishes.
+After the terminal has been unfocused for five minutes (or the
+[`awaySummaryIdleSeconds`](#awaysummaryidleseconds) you set) since the last turn finished, a session
+of at least three turns recaps itself once, as `/recap` does, and not again until another turn finishes.
 It needs a terminal that reports when it is left. `false` turns the automatic recap off, and `/recap`
 still works. Only the boolean `false` turns it off: `"false"` in quotes, or any other value, leaves it
 on.
+
+### `awaySummaryIdleSeconds`
+
+```json
+{ "awaySummaryIdleSeconds": 120 }
+```
+
+How many seconds the terminal has to have been unfocused since the last turn finished before
+[`awaySummaryEnabled`](#awaysummaryenabled)'s automatic recap is made. Without this key it is 300.
+A whole number above zero; zero, a negative or fractional number, or a number in quotes leaves it at
+300. It changes nothing else about the recap, and `/recap` is not delayed by it.
 
 ### `suggestions`
 
@@ -799,6 +912,20 @@ The terminal's title names the session, as `bravebot · dependency audit`
 terminal or multiplexer that manages titles itself. Only the boolean `false` turns it off: `"false"`
 in quotes, or any other value, leaves it on. An incognito session leaves the title alone whatever this
 says.
+
+### `tui.mouse`
+
+```json
+{ "tui": { "mouse": false } }
+```
+
+`false` stops the session asking the terminal to report the mouse. The terminal's own text selection
+and scrollback wheel then work as they do outside a session, and the session's own drag selection
+and wheel scrolling do not (use the keys and the scroller instead). Only the boolean `false` does
+this: `"false"` in quotes or any other value leaves capture on. Read when the session opens.
+
+While capture is on, most terminals still select natively if you hold a modifier while dragging:
+Shift on most, Option on macOS iTerm2 and Terminal.app.
 
 ### `tui.wheelRows`
 
@@ -843,7 +970,11 @@ checks.
 ```
 
 Variables to withhold from a program the agent runs, on top of bravebot's own credentials, which are
-withheld with no configuration at all. See [`run`](../reference/run-tool.md#what-a-program-is-handed).
+withheld with no configuration at all. Those credentials are the signing key and its key id, and every
+variable a [provider block](providers/openai-compatible.md) names in its `env` as the place a gateway's token is read from,
+so a gateway token held in `OPENROUTER_API_KEY` or in a name of your own is withheld without being
+listed here. A variable no provider block names is yours and stays. A block you add mid-session
+withholds its variable from the next program started. See [`run`](../reference/run-tool.md#what-a-program-is-handed).
 
 A hook and a language server are withheld these names too. A line you typed yourself at the `!`
 prompt is not: it keeps your whole environment, because it is meant to behave as your own terminal
@@ -862,7 +993,8 @@ editing it describes your next session.
 against the whole of a variable name and ignoring case, so `AWS_*` withholds `AWS_PROFILE` and
 `aws_region` and leaves `PATH` and `MY_AWS_KEY`. `*` and `?` are the whole of the syntax. A pattern
 matching nothing withholds nothing; an exact name is withheld whether you have that variable set or
-not.
+not. `bravebot doctor` lists each pattern with one variable it matched on this machine, names only,
+so you can see whether it caught what you meant. An exact name is not listed.
 
 ```json
 { "run": { "scrubEnv": ["AWS_*", "*_TOKEN", "MY_SECRET"] } }
@@ -888,14 +1020,61 @@ a command that was lent a credential (remote, cloud, cluster or container). A pr
 run get none, so what they read cannot be sent anywhere.
 
 `--run-network closed` sets it for one run, and a machine-level file can pin it, which no other
-layer overrides. A project's own settings can close the network and cannot open it. On Linux the
-operating system cannot take the network from one program and leave it to another, so under
-`closed` a program that does not need it is not started, and the result says so. The opening screen,
+layer overrides. A project's own settings can close the network and cannot open it. On Linux a
+program with no network runs in a network namespace of its own, which needs a kernel that lets an
+unprivileged user make one. Ubuntu 24.04 restricts that by default and many containers block it.
+Where it is unavailable, a program that would lose the network is not started and the result says
+so, and `bravebot doctor` says why. The opening screen,
 `/status` and `bravebot doctor` say when it is closed and which layer closed it.
 
 The desktop app reads the setting once, when it starts, from your own file, the file `--settings` names
 when it exists, the settings file of the directory it was started in and the machine-level pin. A project opened in a window afterwards, or a
 settings file chosen there, does not change it.
+
+### `sandbox.network`
+
+```json
+{
+  "sandbox": {
+    "network": {
+      "allowedHosts": ["registry.npmjs.org", "*.github.io"],
+      "deniedHosts": ["evil.example"],
+      "onUnlisted": "refuse"
+    }
+  }
+}
+```
+
+Holds the programs the agent runs to a list of hosts while the network stays open for everything
+else. `allowedHosts` names the hosts a program may reach, with GitHub added for a `git` or `gh`
+command that talks to a remote and a toolchain's own registry added for `cargo`, `npm`, `pip` and
+`go`. `deniedHosts` refuses hosts whatever else allows them. `onUnlisted` is `refuse` or `ask`: a host
+no list names is refused, or put to you. With `ask`, the program is refused at once and the hosts it
+was refused are put to you after that run has stopped, up to eight at a time, one per row. A yes adds
+them to the allowed set until the session ends and writes nothing to disk, so you run the line again;
+a no is kept for the session and the host is not asked about again. The terminal, the plain CLI, the
+desktop app and an [editor](../using/editors.md) all ask, and an editor's approval is labelled as
+lasting the session. A host on `deniedHosts`, one
+refused for its port or as not public, and anything a delegate's line asked for are never put to you,
+and bypass mode and a session nobody is at refuse as `refuse` does. `/clear`, `/branch` and `/resume`
+begin a session that asks about those hosts again. A stage with the network points its proxy settings at a local proxy that applies the list, and
+on macOS and Linux it may connect only to that proxy, so a program that ignores the proxy settings
+is still held to the list. On Linux that needs the same kernel support as `run.network`, and a stage
+is refused, naming this setting, where the kernel lacks it. On Windows a stage is refused while a list
+is set, naming this setting. A `run` that asks for `loopback` is then given the right to listen only. A list that is set,
+even an empty one, is a list, and an
+empty `allowedHosts` refuses every host. See [the sandbox](../security/security.md) for what the list
+can and cannot hold back.
+
+`deniedHosts` and `onUnlisted: refuse` only take reach away, so any file may write them. `allowedHosts`
+and `onUnlisted: ask` give it back, so they are read from your own file and a `--settings` file
+outside the project; a project or local file's are ignored and named by `bravebot doctor`. A value
+that is not a list of strings, or an `onUnlisted` that is neither word, is reported and read as absent.
+
+A machine-level file pins what it writes. Its `allowedHosts` is the whole allowed set and nothing you
+wrote is added to it, its `deniedHosts` is added to yours, and its `onUnlisted` is the answer whatever
+you said. A pinned `allowedHosts` also drops your `onUnlisted: ask` unless the file sets `onUnlisted`
+itself. A pinned value that cannot be read pins nothing, and `bravebot doctor` names it.
 
 ### `sandbox.filesystem`
 
@@ -924,8 +1103,13 @@ command starts, so a file made afterwards is not in it. A link is judged by wher
 
 The narrower path wins: `allowWrite` on `~/a` and `denyWrite` on `~/a/b` writes `~/a/c` and not
 `~/a/b/x`. Where both name the same path the refusal wins, and it wins over what a command is given
-for itself, so a refusal of `~/.config/gh` stands against `gh`. Nothing adds reach to `~/.ssh`, and
-the home directory, `/` and a directory above the home are refused as write paths.
+for itself, so a refusal of `~/.config/gh` stands against `gh`. Nothing adds reach to `~/.ssh` or
+`~/.bravebot` or to anything inside either, except that an `allowRead` entry may name
+`~/.bravebot/sessions` or a path inside it, which programs already read and never write. The home directory, `/` and a directory above the
+home are refused as write paths. On Windows an `allowRead` or `allowWrite` entry that is a directory
+holding a credential location beneath it, such as the home directory, a directory above it or
+`~/.config`, is refused; a wildcard entry drops those matches and keeps the rest. Linux and macOS
+are unchanged.
 
 Your own file and a `--settings` file outside the project may write all four. A project or local file
 may write `denyRead` and `denyWrite` and not the other two, so a repository you clone cannot widen
@@ -943,6 +1127,26 @@ grant.
 The desktop app shows the lists in the conversation's permissions view, each entry with the file
 that wrote it, and says in the notice above the conversation when an entry is not in force. It does
 not edit them: change the settings file, and the next conversation reads it.
+
+### `sandbox.holdBackTemporaryDirectory`
+
+```json
+{ "sandbox": { "holdBackTemporaryDirectory": true } }
+```
+
+Programs the agent runs can write the system temporary directory in every mode that confines. With
+this set to `true` no stage writes it, so nothing a stage leaves there can be read or run by a later
+program. The directory can still be read. The scratch directory and your own `allowWrite` entries are
+separate and stay writable. Under `--sandbox off` the directory is refused too, although those
+stages otherwise write anything your account can.
+
+A program that makes a scratch file there is refused, such as a shell heredoc, `mktemp` or a
+compiler's intermediate files, and the planner is told so in the `run` description. A `denyWrite`
+entry naming the directory refuses it as well, and is the way to hold back one path inside it.
+
+The key is read from your own file and a `--settings` file outside the project, as `sandbox.mode`
+is. A project or local file that sets it is not obeyed and `bravebot doctor` reports the key as
+unread. Any value but `true` asks for nothing.
 
 ### `git.identities`
 
@@ -965,6 +1169,12 @@ the key. A remote given by name, such as `origin`, is not matched, because its a
 repository's own configuration; nor is an https address. Your ssh agent still signs, so no private key
 is read.
 
+When a `git` command that carries the remote scope fails, the agent is told which key that command
+offered (the one your entry names, or whichever key ssh tried first because no entry applied, or
+because the command named its remote by name). It is also told that a permission rejection usually
+means the key belongs to another account, and that only you choose the key. It then asks you to add
+an entry and does not retry the same push.
+
 On the commands it applies to it replaces a `GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand` of
 yours. Your own file and a `--settings` file outside the project may write it; a project or local
 file's is ignored, and `bravebot doctor` names it, an entry it cannot read, and a key it would not
@@ -981,6 +1191,17 @@ that key offered first, or `0` to leave the key to ssh. Either answer is kept in
 every session, as an entry would; `y` runs the command without choosing, and the next prompt asks
 again. An entry in your settings decides over a kept answer. `/reach keys` lists the answers kept,
 and `/reach keys remove <number>` forgets one. The plain interface and the desktop app do not ask.
+
+When a push over ssh fails, the failure text says whether the session's ssh agent was lent to the
+command, how many public key files the command could read, and how many an `IdentityFile` line named
+that it could not read. It promises a numbered key prompt only where one will be shown. Where the
+session accepts the request, it also says the push can be run with `'unconfined': true`, which you
+approve, and which runs it with no sandbox.
+
+After a push is refused for permission, the agent may retry with `ssh-key` in the `scopes` of its `run`
+call. The run prompt then numbers the keys again for an owner you already chose for, and your new
+answer replaces the earlier one. The request lends nothing, does not change an entry in your
+settings, and is asked about every time and never remembered.
 
 ### `download.maxBytes`
 
@@ -1080,6 +1301,20 @@ The same three lists Claude Code keeps, with the same spellings, so a block copi
 `~/.claude/settings.json` works unedited. What a rule is allowed to decide, and the reason it may
 never trust a command's output, is on
 [Approvals and permissions](../security/permissions.md#rules-you-write-down-in-advance).
+
+An entry in `deny`, `ask` or `allow` can also be an object, which is the same rule with a note on
+why it exists:
+
+```json
+{ "permissions": { "deny": [{ "rule": "Bash(git push *)", "reason": "pushes go through review" }] } }
+```
+
+The `reason` is read only from `~/.bravebot/settings.json`. In a project file, a local file or a
+`--settings` file the rule still applies and the reason is ignored. A blank reason, or one that is not
+text, counts as none. An object with no `rule` text is reported as an entry that could not be read.
+When a `deny` rule with a reason refuses a read or a write, the refusal the planner gets quotes it
+("The user's rule gives a reason: ..."), so it can pick another way instead of retrying.
+[`bravebot permissions check`](../reference/cli.md#permissions-check) prints it too.
 
 The last two keys are not rules. Every rule names the thing it refuses, so a path nobody wrote down is
 a path no rule covers; these two state a standing refusal instead, and are described under
@@ -1240,8 +1475,8 @@ whoever writes the commit. Anything that is not a string reads as absence.
 
 What you set here is stated to the model in front of every round of every turn, and a destination you
 did not name is not mentioned to it at all. A value is quoted as text to copy rather than written in
-as a sentence addressed to it, since the block resolves through a file in the checkout as well as your
-own.
+as a sentence addressed to it. The block is read from your own file and the file `--settings` names
+only; a project or local file that sets it is ignored and reported by `bravebot doctor`.
 
 ### `keybindings`
 
@@ -1249,7 +1484,7 @@ own.
 { "keybindings": { "stash": "alt-s", "scroller": "alt-o" } }
 ```
 
-Ten actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
+Eleven actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
 
 | Action | Default | What it does |
 |---|---|---|
@@ -1263,6 +1498,7 @@ Ten actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](../using/sessions.md#telling-sessions-apart) |
 | `scope` | `ctrl-n` | switch Up between every stored prompt and this session's |
+| `undo` | `ctrl-_` | put back the last edit to the line ([Interactive mode](../using/interactive-mode.md#undoing-an-edit)) |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is already answered (a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, the arrows move), so handing one to an action
@@ -1273,12 +1509,13 @@ are not rebindable.
 **Every action keeps a key of its own.** A chord that cannot be read, or that the input box already
 answers, leaves that action on its default. So does one two actions both asked for: both fall back
 rather than one winning, since which won would come down to the order the file was read in. Two
-actions *trading* chords is not a conflict and both get what they asked for. `scope` is the newest
-of the ten, so a file that already gave `ctrl-n` to another action now asks for the chord the switch
-stands on, and that action is back on its default until the file moves `scope` as well.
+actions *trading* chords is not a conflict and both get what they asked for. `scope` and `undo` are
+the newest of the eleven, so a file that already gave `ctrl-n` or `ctrl-_` to another action now asks
+for a chord the new action stands on, and that action is back on its default until the file moves
+`scope` or `undo` as well.
 
 The block layers per action the way `env` does, so a project file moving one action says nothing about
-the other nine. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
+the other ten. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
 
 ### `search`
 
@@ -1365,7 +1602,9 @@ on the same footing:
 Pinning the account without this says where the traffic goes and not what it spends: every other model
 name still reaches the pinned account and is billed to it. A name here is the model as a request
 carries it, an inference-profile ARN or a gateway slug such as `z-ai/glm-4.6`, compared exactly, and a
-tier word is checked as the model that tier names. Without an `allow` list every model not denied is
+tier word is checked as the model that tier names. A gateway model has two spellings, such as
+`openrouter/z-ai/glm-4.6` and the `z-ai/glm-4.6` the gateway is sent, and an entry naming either one
+answers for the model however it was asked for. Without an `allow` list every model not denied is
 requested as before; with one, a model no entry names is refused, and `"allow": []` refuses every
 model. A deny entry wins over an allow entry naming the same model.
 
@@ -1384,8 +1623,23 @@ working directory or putting the mode that asks about nothing out of reach is so
 have a legitimate say in. Neither is pinned in the sense the variables are. A name in the list above is
 answered by this file and nothing else is consulted for it; these two take the strictest answer any
 file gave, so somebody may ask for either where this file did not, and no file of theirs can lift it
-where it did. The rules themselves are not read here: a rule names a path, a program or a host, which
-is deciding what a session may work on rather than whether it may leave the tree at all.
+where it did.
+
+`"permissions": { "deny": [...], "ask": [...] }` are rules, written as they are in any settings file, and
+they are added to the rules every other file wrote. A deny rule here refuses on every session on the
+machine in every mode, and nothing in a checkout or in a person's own file removes it:
+
+```json
+{
+  "permissions": {
+    "deny": ["Read(.env)", "Bash(git push *)"],
+    "ask": ["WebFetch"]
+  }
+}
+```
+
+A refusal names this file. A line that is not a rule is reported by `doctor` and in the session, and the
+rest of the list still applies. `allow` is never read from here, because a grant is the person's own.
 
 A layer that can pin a preference is a layer somebody uses to pin one. What two parties have a
 legitimate say in is where a request goes, whose account pays for it, and what a session on the machine
@@ -1460,9 +1714,17 @@ Ollama with none that can is named as left. Nothing answering, or an answer that
 listing, says nothing. The request waits a few seconds at most. Where your settings file already has
 an entry for a server on the same port, under any name, Ollama is not offered again.
 
+A second request asks which models are loaded. For the model shown, the question gives the context
+window the server loaded it with. Where that is below the 131,072 tokens bravebot otherwise budgets
+against, the question says the server drops the earliest turns beyond it and names
+`OLLAMA_CONTEXT_LENGTH`. A model that is not loaded has no line. The figure is shown and never
+written to your settings.
+
 **What can be imported.** A Claude Code Bedrock setup, under bravebot's own names, when a region is
 named. An opencode `provider` entry reached through an OpenAI-compatible SDK, with only the fields
-bravebot reads, and an `auth.json` API key for a gateway whose endpoint bravebot knows. opencode's
+bravebot reads, and an `auth.json` API key for a gateway whose endpoint bravebot knows. An `openai` entry that names
+no SDK, or an `auth.json` key for `openai`, imports; one naming `@ai-sdk/openai` is left as another
+SDK's. opencode's
 `disabled_providers` and `enabled_providers` are honoured, and a name already set in your settings file,
 or pinned by an administrator, is left as it is. A model opencode's `amazon-bedrock` entry lists that
 one of your Bedrock tiers already names, such as the Claude Code import's
@@ -1504,6 +1766,10 @@ A `provider` block in a settings file names a gateway, the models it offers and 
 holds its credential. It is opencode's block, so one copied from `opencode.json` works unedited, and
 a local Ollama needs no key. [Reaching an OpenAI-compatible gateway](providers/openai-compatible.md)
 has the fields, the credential, which models are offered, and how to name one.
+
+OpenAI is reached with an API key by a block keyed `openai` naming `OPENAI_API_KEY` in `env`, and
+needs no `baseURL`. [OpenAI](providers/openai-compatible.md#openai) has the details, including which
+models `/model` offers.
 
 Google Vertex AI is reached by a block keyed `google-vertex`, or with no block by exporting
 `GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT`. It has no model listing a key can call, so `/model`

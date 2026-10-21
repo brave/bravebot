@@ -30,12 +30,30 @@ promotion is recorded as one, and the fields fixed before a turn observed anythi
 first. A promotion records the label it decided and nothing about where the path lands. Where a
 tool tells the planner that a path resolves outside the workspace, the trail records that refusal
 as well, with the remedy offered and the path named as the planner was told it: `ref:N` for a
-reference, the path otherwise. A write call the permission mode refuses before the tool runs
+reference, the path otherwise. A path inside the workspace that is refused for not being named
+relative to its root is recorded with the remedy of naming it relative to the workspace root
+([TRUST-10](trust-map.md#TRUST-10)). A write call the permission mode refuses before the tool runs
 ([MODE-3](permission-modes.md#MODE-3)), and a planned run it refuses from its plan, are recorded as
 refusals under `permission_mode`, naming the tool, or the step and its tool, and the mode. The
 sandbox mode `read-only` ([SANDBOX-22](sandboxing.md#SANDBOX-22)) is recorded the same way, under
 `sandbox`, for a write call it refuses before the tool runs, a planned run it refuses for a step
 that writes, and a `run` line it refuses for redirecting output into a file.
+
+A `run` call that asks for no sandbox (`unconfined`, [SANDBOX-29](sandboxing.md#SANDBOX-29)) or for
+credential scopes (`scopes`, [SANDBOX-26](sandboxing.md#SANDBOX-26)) and is refused is recorded as a
+refusal under `sandbox`. The entry names the argument and each cause that held: the sandbox mode by
+its name, a turn that confines none of its runs, a workspace not trusted, a managed closed network,
+a delegate, and for `scopes` a platform with no sandbox or a session with no profile directory. The
+sentence the planner reads names none of them.
+
+A `run` line put to the person and not approved, by an answer of no, Ctrl-C or nobody being there
+to ask, is recorded as a refusal under `approval` saying the line was not approved and did not run.
+Its `sandbox` entry, which names the mode the programs ran in, is written only once the line is
+approved, so a line that did not start is not recorded as having run.
+
+A `run` line that asked for `unconfined` or `scopes` and was accepted is given `(U,priv)` for its
+output whatever vouched for the same line without the request, and its `provenance` entry states
+`(U,priv)`.
 
 A delegate the gate approved and its checkout then refused is recorded as a refusal under
 `delegate`, not as a permission. The entry gives the delegate's number, one fixed cause (the
@@ -45,6 +63,16 @@ directory, an opened directory holds the working directory, an opened directory 
 unusable, or the repository was refused), the directory a person opened where that was the cause,
 and how many of the call's delegates were not started, the withdrawn one included. The delegate
 still takes no number and no place under the ceiling ([DELEGATE-7](delegation.md#DELEGATE-7)).
+
+A write, an edit, a fetch or a save (`write_file`, `edit_file`, `fetch_url` and `download_url`)
+that is put to a person who does not approve it is recorded as a refusal under `approval`, and so is
+each file `apply_checkout` brings back and a write a manifest run plans. The entry names the tool, or
+the step and its tool, and says the write or the fetch was not approved and nothing was written or
+fetched. A no, a Ctrl-C and a question nobody could be asked are one answer to the policy, so the
+entry does not tell them apart. A write the credential scan raised doubts about is recorded the same
+way when it is not approved. A `download_url` asks about its host and then about its file, and
+records the question that was answered no: a host that is refused as a fetch, and a file that is
+refused as a write, with the second question not put once the first is refused.
 
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
@@ -64,6 +92,8 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::an_edit_whose_file_leaves_the_workspace_while_asked_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::tools::a_deferred_read_refused_for_leaving_the_workspace_is_recorded_as_the_reference`
 `verified-by: bravebot_agent::tools::a_directory_outside_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::tools::a_directory_inside_the_workspace_is_refused_as_inside_it`
+`verified-by: bravebot_agent::turn::a_read_naming_the_working_directory_in_full_is_told_to_name_it_relative`
 `verified-by: bravebot_agent::tools::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::tools::a_watch_refused_for_leaving_the_workspace_is_recorded_as_the_path_typed`
 `verified-by: bravebot_agent::turn::a_write_refused_by_plan_mode_is_recorded_as_a_refusal`
@@ -71,6 +101,25 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
 `verified-by: bravebot_agent::manifest::under_read_only_a_plan_that_writes_is_refused_and_one_that_writes_nothing_runs`
 `verified-by: bravebot_agent::turn::under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_null_runs`
+`verified-by: bravebot_core::policy::a_refused_run_request_names_its_argument_and_every_cause_that_held`
+`verified-by: bravebot_agent::tools::a_refused_unconfined_request_is_recorded_with_each_cause_that_held`
+`verified-by: bravebot_agent::tools::a_refused_scope_request_is_recorded_with_each_cause_that_held`
+`verified-by: bravebot_agent::tools::an_accepted_request_for_reach_leaves_no_sandbox_refusal`
+`verified-by: bravebot_agent::tools::pointing_a_refused_write_at_the_unconfined_line_records_no_refusal_of_it`
+`verified-by: bravebot_agent::tools::an_unconfined_request_is_accepted_only_where_every_condition_holds`
+`verified-by: bravebot_agent::tools::a_scope_request_is_accepted_only_where_the_session_confines_and_trusts`
+`verified-by: bravebot_agent::turn::a_refused_request_for_no_sandbox_or_for_scopes_is_recorded_with_its_cause`
+`verified-by: bravebot_core::policy::a_line_that_asked_for_a_request_is_untrusted_by_every_road_and_the_trail_says_so`
+`verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`
+`verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`
+`verified-by: bravebot_agent::turn::a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so`
+`verified-by: bravebot_agent::turn::a_run_line_the_person_does_not_approve_is_recorded_as_not_run`
+`verified-by: bravebot_agent::turn::an_unconfined_line_the_person_does_not_approve_is_not_recorded_as_unconfined`
+`verified-by: bravebot_core::policy::a_write_or_a_fetch_the_person_did_not_approve_is_a_refusal_under_approval`
+`verified-by: bravebot_agent::turn::a_write_or_an_edit_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::a_fetch_or_a_save_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::a_file_of_an_apply_the_person_does_not_approve_is_recorded_under_the_apply`
+`verified-by: bravebot_agent::manifest::a_planned_write_the_person_does_not_approve_is_recorded_as_a_refusal`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content
@@ -205,7 +254,8 @@ with ([permission-modes.md](permission-modes.md)) by its name, before any tool i
 policy decides a command or a write is to be put to the person, a second entry under `approval`
 says what answered: the mode that answered in their place and so drew nothing, or no mode, which
 leaves it to whatever confirms (a person, or nothing that can ask). The entries before it that end
-in "asking" say what the policy decided, and they read as a person having been asked.
+in "asking" say what the policy decided, and they read as a person having been asked. A write that
+is then not approved is recorded as a refusal ([TRACE-1](#TRACE-1)).
 
 Other prompts a mode answers, such as a fetch or a server start, are not named here.
 
@@ -250,6 +300,7 @@ for a different response: raise the bound, retry, or nothing.
 `verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_reply`
 `verified-by: bravebot_agent::turn::a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note`
 `verified-by: bravebot_agent::turn::a_stopped_delegate_and_a_lost_one_are_each_recorded_as_what_they_were`
+`verified-by: bravebot_agent::turn::delegate_end::the_note_for_a_delegate_that_did_not_answer_names_why_it_ended`
 
 <a id="TRACE-9"></a>
 ### TRACE-9: `/request` shows the request already built, each span with where its words came from

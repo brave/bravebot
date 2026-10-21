@@ -37,7 +37,7 @@ use bravebot_core::event::Sink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use std::fmt;
 use std::io::Read;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -139,9 +139,11 @@ pub fn run(line: &str, directory: &std::path::Path, cancel: &Cancel) -> Result<R
         return Err(ShellError::Io("there was no command to run".to_string()));
     }
 
+    use bravebot_sandbox::programs::{Inherits, Resolved, SearchPath};
     let shell = shell();
+    let program = Resolved::named_by_person(&shell);
     let mut child = match bravebot_sandbox::process::starting_a_program(|| {
-        Command::new(&shell)
+        bravebot_sandbox::programs::start(&program, Inherits::All, SearchPath::Inherited)
             .arg("-c")
             .arg(line)
             .current_dir(directory)
@@ -246,8 +248,9 @@ pub fn record<S: Sink>(
     } else {
         format!("I ran `{line}` in the shell myself{outcome}. It printed:\n\n{released}")
     };
-    conversation.push_from(
+    conversation.push_composed_from(
         Message::user(said),
+        crate::conversation::Composed::Written,
         crate::request_view::Provenance::Trusted("shell output"),
     );
 

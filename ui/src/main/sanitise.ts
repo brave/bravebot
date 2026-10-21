@@ -1,4 +1,6 @@
+import { withDrops } from './drops'
 import { attachmentPaths } from './files'
+import { withPastes } from './pastes'
 
 /**
  * The params a method is allowed to have arrived with.
@@ -26,6 +28,15 @@ import { attachmentPaths } from './files'
  * person chose in a native picker, which this process resolves to `files`. It is never forwarded
  * under its own name, so an id list cannot become a list of paths the agent reads as bytes.
  *
+ * `drops` is the window's list of files a person dropped, again as ids: grants `drops.ts` minted
+ * from paths the preload took off a trusted drop event, which the page never saw. This process
+ * turns them into the agent's `dropped` and `attachments` after everything the window said under
+ * those names is gone, so the only paths in either are ones a drop put there.
+ *
+ * `pastes` is the window's list of pictures a person pasted, as ids `pastes.ts` minted for bytes
+ * this process read off the clipboard itself. They become the agent's `images` the same way, after
+ * whatever the window sent as `images` is gone, so the only bytes there are ones a paste put there.
+ *
  * Stripped silently. There is no legitimate caller to warn, and a message saying which key was
  * removed would be a message telling a compromised renderer what to try next.
  */
@@ -45,6 +56,15 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
     const { directory: _directory, ...rest } = held
     return rest
   }
+  // Words typed into a turn that is running. The turn is already running with the reach it began
+  // with, so a line carries no file under any key. What is forwarded is the line and the names
+  // and markers the bridge puts into words (DROP-8): a name is only text, never a path it opens.
+  if (method === 'turn.interject') {
+    const files = Array.isArray(held.files)
+      ? held.files.map((file: { marker?: unknown; name?: unknown }) => ({ marker: file?.marker, name: file?.name }))
+      : undefined
+    return { session: held.session, target: held.target, prompt: held.prompt, files, pictures: held.pictures }
+  }
   if (method !== 'turn.send') return held
   // `recall` and `definition` join the lists for a smaller reason than theirs. `recall` decides
   // whether a prompt is one a person can find again, and `definition` decides which definition a
@@ -58,7 +78,10 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
     recall: _recall,
     definition: _definition,
     attachments,
+    drops,
+    pastes,
     ...rest
   } = held
-  return { ...rest, files: attachmentPaths(typeof rest.session === 'string' ? rest.session : '', attachments) }
+  const session = typeof rest.session === 'string' ? rest.session : ''
+  return withPastes(session, pastes, withDrops(session, drops, { ...rest, files: attachmentPaths(session, attachments) }))
 }

@@ -5,18 +5,22 @@
         [--workspace DIR] [SESSION-ID ...]
     python3 agents/skills/session-review/session-review.py verify --work-dir DIR
     python3 agents/skills/session-review/session-review.py draft --work-dir DIR
-    python3 agents/skills/session-review/session-review.py post --work-dir DIR [--dry-run]
-        [--assignee LOGIN] [--max N]
+    python3 agents/skills/session-review/session-review.py filed --work-dir DIR --id ID --issue N [--existing]
     python3 agents/skills/session-review/session-review.py record --work-dir DIR [--dry-run]
 
 Sessions are the records under ~/.bravebot/sessions, one directory per working directory. A session
 is reviewed once: `record` appends a line to `<id>.analysis.jsonl` beside the session, and `pending`
-offers a session again only when it has had more turns since. The marker is a local file because
+offers a session again only when it has had more turns or more notes since. A note is a line the
+person typed with `/note` (docs/specs/sessions.md SESSION-36). It is written to a file beside the
+record copy and named to the analyzer and verifier as data from the person, never put in a prompt.
+The marker is a local file because
 sessions are per machine. Its name does not end in `.json`, because the session store reads every
 `.json` file in a directory as a session record.
 
-No model takes part in anything this script does. The issue drafting, the duplicate search and the
-posting are shared with the peer-advisories skill.
+No model takes part in anything this script does. The issue drafting and the `filed` command are
+shared with the peer-advisories skill. This script files nothing: each draft in DIR/drafts.json is
+handed to the `issue-poster` definition (agents/agents/issue-poster.md), and `filed` records the
+issue number it was given in DIR/filed.json, which `record` reads.
 """
 
 import argparse
@@ -42,21 +46,25 @@ def _load_peer():
     return module
 
 
-# Prompt rendering, the tracker listing, label and title helpers, the draft cleaning and the post
-# loop are peer-advisories.py, which this reuses rather than restating.
+# Prompt rendering, the tracker listing, label and title helpers, the draft cleaning and the `filed`
+# command are peer-advisories.py, which this reuses rather than restating.
 pa = _load_peer()
+workdir = pa.workdir
 Problem = pa.Problem
 one_line = pa.one_line
 
 MAX = 8
 IDLE_MINUTES = 30
 MAX_PROBLEMS = 5
+# A summary of a session with notes says what was decided about each, so it runs longer than a title.
+SUMMARY_LIMIT = 1200
 MARKER_SUFFIX = ".analysis.jsonl"
 # Sessions imported from another tool say nothing about bravebot.
 IMPORTED = "claude-code-"
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 KINDS = ("bug", "enhancement")
+SESSION_ANALYSIS = "session-analysis"
 PROBLEM_TEXT = ("title", "what_happens", "code_path", "reproduce", "fix", "evidence")
 VERIFY_VERDICTS = ("confirmed", "fixed", "known", "not-a-defect")
 
@@ -97,6 +105,28 @@ def write_marker(directory, session, entry):
         out.write(json.dumps(entry, sort_keys=True) + "\n")
 
 
+def notes_of(record):
+    """The notes a person typed on a session, numbered from 1 in the order they were added.
+
+    Only the shape is checked: an entry without text is not a note. What a note says is never read
+    by this script beyond that, and reaches no prompt except through the file it is written to.
+    """
+    found = []
+    for entry in (record or {}).get("notes") or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("text"), str) or not entry["text"].strip():
+            continue
+        turn = entry.get("turn")
+        found.append(
+            {
+                "number": len(found) + 1,
+                "turn": turn if isinstance(turn, int) and not isinstance(turn, bool) else 0,
+                "by": entry.get("by") if isinstance(entry.get("by"), str) else "person",
+                "text": entry["text"],
+            }
+        )
+    return found
+
+
 def safe_build(value):
     text = str(value or "")
     return text if re.fullmatch(r"[\w.+ ()/,-]{1,80}", text) else "unknown"
@@ -126,6 +156,7 @@ def candidates(store, workspace=None):
                     "record": str(path),
                     "audit": str(directory / f"{path.stem}.audit.jsonl"),
                     "turns": record["turns"] if isinstance(record.get("turns"), int) else 0,
+                    "notes": len(notes_of(record)),
                     "updated": record["updated"],
                     "build": safe_build(record.get("build")),
                     "workspace": str(record.get("directory") or ""),
@@ -138,10 +169,11 @@ def candidates(store, workspace=None):
 def select(found, named, limit, now, idle):
     """The sessions to review: the ones named, else the unreviewed or grown, newest first.
 
-    A named session is reviewed whatever its marker says and from its first turn, since naming one
-    is how a session is reviewed again. Otherwise a session that is imported, has no turns, or was
-    written within `idle` seconds (so may still be running) is passed over, and one reviewed before
-    is offered only for the turns after the ones that were reviewed.
+    A named session is reviewed whatever its marker says and from its first turn and first note,
+    since naming one is how a session is reviewed again. Otherwise a session that is imported, has
+    no turns, or was written within `idle` seconds (so may still be running) is passed over, and
+    one reviewed before is offered only when it has more turns or more notes than the review
+    considered, for the turns and notes after those.
     """
     if named:
         chosen = []
@@ -154,7 +186,7 @@ def select(found, named, limit, now, idle):
                 raise Problem(f"{name} matches {len(matches)} sessions; give more of the id")
             if matches[0]["turns"] < 1:
                 raise Problem(f"session {matches[0]['id']} has had no turns")
-            chosen.append(dict(matches[0], from_turn=0))
+            chosen.append(dict(matches[0], from_turn=0, from_note=0))
         return chosen
 
     left = []
@@ -162,16 +194,22 @@ def select(found, named, limit, now, idle):
         marker = session["marker"]
         if session["id"].startswith(IMPORTED) or session["turns"] < 1 or now - session["updated"] < idle:
             continue
-        if marker is not None and session["turns"] <= marker["turns"]:
+        if marker is not None and session["turns"] <= marker["turns"] and session.get("notes", 0) <= marker.get("notes", 0):
             continue
-        left.append(dict(session, from_turn=marker["turns"] if marker else 0))
+        left.append(
+            dict(
+                session,
+                from_turn=marker["turns"] if marker else 0,
+                from_note=marker.get("notes", 0) if marker else 0,
+            )
+        )
     left.sort(key=lambda s: s["updated"], reverse=True)
     return left[:limit]
 
 
 def pending(args, now=None):
     root = Path(args.root)
-    ref, tip = pa.checked_commit(root, ledger="", verb="review", worktree="bravebot-session-review")
+    ref, tip = pa.checked_commit(root, ledger="", verb="review", worktree="session-review")
     store = Path(args.sessions_root) if args.sessions_root else sessions_root()
     if not store.is_dir():
         raise Problem(f"no sessions under {store}")
@@ -200,6 +238,11 @@ def pending(args, now=None):
         if have_audit:
             shutil.copyfile(session["audit"], audit_copy)
         prompt, result = work / "analyze" / f"{sid}.md", work / "analyze" / f"{sid}.json"
+        notes = notes_of(pa.read_json(record_copy))
+        notes_copy = work / "sessions" / f"{sid}.notes.json"
+        if notes:
+            notes_copy.write_text(json.dumps(notes, indent=2), encoding="utf-8")
+        session = dict(session, notes=len(notes))
         prompt.write_text(
             pa.render(
                 template,
@@ -208,6 +251,9 @@ def pending(args, now=None):
                     "build": session["build"],
                     "turns": str(session["turns"]),
                     "from_turn": str(session["from_turn"]),
+                    "notes": str(len(notes)),
+                    "from_note": str(min(session["from_note"], len(notes))),
+                    "notes_file": str(notes_copy) if notes else "(this session has no notes)",
                     "record_file": str(record_copy),
                     "audit_file": str(audit_copy) if have_audit else "(this session has no audit trail)",
                     "tracker": str(tracker_file),
@@ -222,7 +268,7 @@ def pending(args, now=None):
         entries.append(dict(session, prompt_file=str(prompt), results_file=str(result)))
 
     manifest = {"root": str(root), "ref": ref, "commit": tip, "sessions": entries}
-    (work / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    workdir.write_manifest(work, manifest)
     reviewed = sum(1 for s in found if s["marker"] is not None)
     print(
         f"{len(found)} sessions found, {reviewed} reviewed before, {len(chosen)} to review against {ref} {tip[:12]};"
@@ -306,6 +352,9 @@ def outcomes(work):
         if analysis is None:
             decided[sid] = {"state": "pending", "reason": why, "problems": []}
             continue
+        if has_new_notes(entry) and not one_line(analysis.get("summary")):
+            decided[sid] = {"state": "pending", "reason": "the summary says nothing about the new notes", "problems": []}
+            continue
         problems = []
         for number, problem in enumerate(analysis["problems"], 1):
             pid = problem_id(sid, number)
@@ -324,8 +373,13 @@ def outcomes(work):
                     )
                 else:
                     problems.append({"id": pid, "state": "file", "fields": problem, "reason": check["reason"]})
-        decided[sid] = {"state": "read", "reason": one_line(analysis.get("summary")), "problems": problems}
+        decided[sid] = {"state": "read", "reason": one_line(analysis.get("summary"), SUMMARY_LIMIT), "problems": problems}
     return manifest, decided
+
+
+def has_new_notes(entry):
+    """Whether the review of this session considers a note no earlier review considered."""
+    return entry.get("notes", 0) > entry.get("from_note", 0)
 
 
 def verify(args):
@@ -341,6 +395,7 @@ def verify(args):
         entry = entries[sid]
         record_copy = Path(work) / "sessions" / f"{sid}.json"
         audit_copy = Path(work) / "sessions" / f"{sid}.audit.jsonl"
+        notes_copy = Path(work) / "sessions" / f"{sid}.notes.json"
         for problem in session["problems"]:
             if problem["state"] != "verify":
                 print(f"  {problem['id']}  {problem.get('verdict') or problem['state']}", file=sys.stderr)
@@ -357,6 +412,7 @@ def verify(args):
                         "claim": pa.fenced(json.dumps(claim, indent=2)),
                         "record_file": str(record_copy),
                         "audit_file": str(audit_copy) if audit_copy.is_file() else "(this session has no audit trail)",
+                        "notes_file": str(notes_copy) if notes_copy.is_file() else "(this session has no notes)",
                         "root": manifest["root"],
                         "commit": manifest["commit"],
                         "results_file": str(result),
@@ -383,7 +439,7 @@ def scrub(text, manifest, session):
 
 
 def labels_for(fields):
-    labels = [fields["kind"]]
+    labels = [fields["kind"], SESSION_ANALYSIS]
     area = str(fields.get("area") or "").strip().removeprefix("area/")
     if area in pa.AREAS:
         labels.append(f"area/{area}")
@@ -414,11 +470,13 @@ def draft(args):
     entries = {e["id"]: e for e in manifest["sessions"]}
     out = work / "issues"
     out.mkdir(exist_ok=True)
-    drafts, held, waiting = [], [], []
+    drafts, held, waiting, noted = [], [], [], []
     for sid, session in decided.items():
         if session["state"] == "pending":
             waiting.append(sid)
             continue
+        if has_new_notes(entries[sid]):
+            noted.append((sid, session["reason"]))
         for problem in session["problems"]:
             if problem["state"] == "held":
                 held.append(problem)
@@ -442,12 +500,10 @@ def draft(args):
     (work / "drafts.json").write_text(json.dumps(drafts, indent=2), encoding="utf-8")
     for problem in held:
         print(f"  held   {problem['id']}  turn {problem['turn']}: {problem['title']}")
+    for sid, summary in noted:
+        print(f"  notes  {sid}  {summary}")
     print(f"{len(drafts)} drafted, {len(held)} held back as security concerns" + (f", {len(waiting)} undecided: {', '.join(waiting)}" if waiting else ""))
     return 0
-
-
-def post(args, poster=None):
-    return pa.post(args, poster)
 
 
 # Recording.
@@ -484,6 +540,8 @@ def record(args, today=None):
             "commit": manifest["commit"][:12],
             "turns": entry["turns"],
             "from_turn": entry["from_turn"],
+            "notes": entry.get("notes", 0),
+            "from_note": entry.get("from_note", 0),
             "problems": len(session["problems"]),
             "issues": sorted(set(issues)),
             "dropped": dropped,
@@ -512,13 +570,7 @@ def main(argv=None):
     for name, text in (("verify", "write a verifier prompt per problem"), ("draft", "write an issue body per confirmed problem")):
         commands.add_parser(name, help=text).add_argument("--work-dir", required=True)
 
-    one = commands.add_parser("post", help="file the drafts the tracker does not hold")
-    one.add_argument("--work-dir", required=True)
-    one.add_argument("--repo", default=pa.REPO)
-    one.add_argument("--dry-run", action="store_true")
-    one.add_argument("--assignee")
-    one.add_argument("--max", type=int, default=pa.MAX_POSTS)
-    one.add_argument("--pace", type=float, default=10.0)
+    pa.add_filed_command(commands)
 
     one = commands.add_parser("record", help="mark the settled sessions as reviewed")
     one.add_argument("--work-dir", required=True)
@@ -529,7 +581,7 @@ def main(argv=None):
         if not SESSION_ID.fullmatch(name):
             parser.error(f"{name!r} is not a session id")
     try:
-        return {"pending": pending, "verify": verify, "draft": draft, "post": post, "record": record}[args.command](args)
+        return {"pending": pending, "verify": verify, "draft": draft, "filed": pa.filed, "record": record}[args.command](args)
     except Problem as problem:
         print(f"session-review: {problem}", file=sys.stderr)
         return 2

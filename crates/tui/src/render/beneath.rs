@@ -5,6 +5,7 @@ use bravebot_i18n::t;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::command_table::{held_back_by, named, runs_while_working};
 use crate::keybindings::Keybindings;
 use crate::state::{Bound, Session, Status};
 use crate::theme;
@@ -162,7 +163,15 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
             0
         };
         let left = (width as usize).saturating_sub(used + offered);
-        let bound = format!(
+        // A command that would have been carried out as it was typed, but for a line waiting ahead
+        // of it, names that line (CMD-8). One that waits for the turn on its own account does not,
+        // since the lines ahead of it are not why.
+        let after = (goes == Bound::CarriedOut && runs_while_working(&waiting.prompt))
+            .then(|| held_back_by(session, at, &waiting.prompt))
+            .flatten();
+        // Where the line goes, in the words that name what it waits behind where there are any and
+        // room for them, and in the plain words where there is not.
+        let plain = format!(
             "  {}",
             match goes {
                 Bound::IntoThisTurn => t!(queued_into_this_turn),
@@ -172,7 +181,17 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
                 Bound::Run => t!(queued_run),
             }
         );
-        if wrap::display_width(&bound) <= left {
+        let with_name = after.map(|(ahead, line)| {
+            format!(
+                "  {}",
+                t!(queued_carried_out_after, line = named(ahead, line))
+            )
+        });
+        if let Some(bound) = with_name
+            .into_iter()
+            .chain([plain])
+            .find(|bound| wrap::display_width(bound) <= left)
+        {
             mark.push(Span::styled(bound, dim()));
         }
         if offer {
@@ -325,7 +344,7 @@ fn command_when(session: &Session, command: &crate::command_table::Command) -> &
         }
         MidTurn::Runs => t!(command_when_now),
         MidTurn::Waits => t!(command_when_queued),
-        MidTurn::Changes | MidTurn::RunsWhenNamed | MidTurn::RunsUnlessItStarts => {
+        MidTurn::Changes | MidTurn::RunsUnlessItStarts | MidTurn::ChangesUnlessItAsks => {
             t!(command_when_either)
         }
     }
@@ -370,12 +389,12 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The ten the file can move are
-/// the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
+/// list names the key that answers rather than the key that used to. The eleven the file can move
+/// are the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
     bindings: &Keybindings,
-) -> [(String, &'static str); 25] {
+) -> [(String, &'static str); 27] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "letters as commands, then stop",
@@ -408,7 +427,9 @@ pub(super) fn shortcuts(
             bindings.scope_name(),
             "earlier prompts: this session or all",
         ),
+        (bindings.undo_name(), "undo the last edit"),
         ("drag".to_string(), "select, copy on release"),
+        ("shift-drag".to_string(), "the terminal's own selection"),
     ]
 }
 

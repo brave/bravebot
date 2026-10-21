@@ -74,4 +74,25 @@ mod tests {
     fn the_prompt_names_no_path_for_the_person_to_vouch_for() {
         assert!(!PROMPT.contains('@'));
     }
+
+    /// The turn is only as good as the words it is given: each part of what the clause says the
+    /// prompt asks for has to be in it, or the planner drafts something else.
+    #[test]
+    fn the_prompt_asks_for_the_title_the_length_the_five_areas_and_the_tools() {
+        for part in [
+            "write_file",
+            "AGENTS.md in the working directory",
+            "\"Repository Guidelines\"",
+            "between 200 and 400 words",
+            "project structure",
+            "build, test and development commands",
+            "coding style",
+            "testing guidelines",
+            "commit and pull request conventions",
+            "ask_user",
+            "a reference instead of the lines",
+        ] {
+            assert!(PROMPT.contains(part), "the prompt lost {part:?}");
+        }
+    }
 }

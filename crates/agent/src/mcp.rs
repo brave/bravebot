@@ -1,10 +1,10 @@
 //! The MCP servers a session reached, as a turn meets them (SERVERS-7, SERVERS-8, SERVERS-13).
 //!
 //! A server's list of tools is the server's own words, so nothing of it reaches the planner until
-//! a person has read it as it is drawn and said yes, which is road 1 of issue #83. A yes records a
-//! digest of the list beside the server's approval, so the same list asks nothing the next session
-//! and a list that changed asks again. Every call to a tool on a list somebody vouched for is then
-//! put to the person with three answers, the second of which stops asking for that one tool in that
+//! a person has read it as it is drawn and said yes, which is road 1 of issue #83. The question is
+//! asked every session and nothing is recorded, since a comparison with an earlier list would be a
+//! decision taken from the server's bytes. Every call to a tool on a list somebody vouched for is
+//! then put to the person with three answers, the second of which stops asking for that one tool in that
 //! one project.
 //!
 //! The servers themselves were started before the session opened, by whoever assembled it. What
@@ -52,8 +52,8 @@ pub struct Reached {
 }
 
 impl Reached {
-    /// `declaration` is the digest of the declaration the server was started from, which a vouch
-    /// for its list is recorded beside.
+    /// `declaration` is the digest of the declaration the server was started from, which a move
+    /// is recorded over.
     pub fn new(connection: Connection, listing: Listing, declaration: Digest) -> Self {
         Self {
             connection,
@@ -182,7 +182,9 @@ struct Server {
 }
 
 struct Shared {
-    servers: Vec<Server>,
+    /// Shared with the sessions [`Session::joined_by`] and [`Session::without`] make, so a server
+    /// one of them keeps is the process the other holds and is stopped when the last lets go.
+    servers: Vec<Arc<Server>>,
     /// The workspace root, which answer 2 of a call records and is read against. It moves with the
     /// session, since a standing answer is about the project a person is in.
     project: Mutex<PathBuf>,
@@ -271,13 +273,15 @@ impl Session {
     ) -> Self {
         let servers = reached
             .into_iter()
-            .map(|reached| Server {
-                alias: reached.alias().to_string(),
-                declaration: Mutex::new(reached.declaration),
-                local: matches!(reached.connection, Connection::Stdio(_)),
-                state: Mutex::new(State::Unasked(reached.listing)),
-                connection: Mutex::new(reached.connection),
-                _home: reached.home,
+            .map(|reached| {
+                Arc::new(Server {
+                    alias: reached.alias().to_string(),
+                    declaration: Mutex::new(reached.declaration),
+                    local: matches!(reached.connection, Connection::Stdio(_)),
+                    state: Mutex::new(State::Unasked(reached.listing)),
+                    connection: Mutex::new(reached.connection),
+                    _home: reached.home,
+                })
             })
             .collect();
         Self(Arc::new(Shared {
@@ -286,6 +290,48 @@ impl Session {
             directory,
             writable,
             managed,
+        }))
+    }
+
+    /// This session's servers and those of `other`, in that order, as a session of their own.
+    ///
+    /// The servers are the ones both hold, not copies: a list's answer already given stays given,
+    /// and nothing is started again. `other` supplies no server whose alias this session holds.
+    pub fn joined_by(&self, other: &Session) -> Session {
+        let mut servers = self.0.servers.clone();
+        servers.extend(
+            other
+                .0
+                .servers
+                .iter()
+                .filter(|added| servers.iter().all(|kept| kept.alias != added.alias))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        self.with_servers(servers)
+    }
+
+    /// This session without the server called `alias`, as a session of its own, or `None` where
+    /// that leaves no server. The grant naming it goes with it (SERVERS-9), and its process stops
+    /// once no turn still holds the session this was made from.
+    pub fn without(&self, alias: &str) -> Option<Session> {
+        let servers: Vec<Arc<Server>> = self
+            .0
+            .servers
+            .iter()
+            .filter(|server| server.alias != alias)
+            .cloned()
+            .collect();
+        (!servers.is_empty()).then(|| self.with_servers(servers))
+    }
+
+    fn with_servers(&self, servers: Vec<Arc<Server>>) -> Session {
+        Self(Arc::new(Shared {
+            servers,
+            project: Mutex::new(held(&self.0.project).clone()),
+            directory: self.0.directory.clone(),
+            writable: self.0.writable,
+            managed: self.0.managed.clone(),
         }))
     }
 
@@ -339,12 +385,11 @@ impl Session {
     /// A server the turn holds no grant for is one it is offered nothing of, so its list waits
     /// for a turn that does rather than being put to a person who could not use the answer here.
     ///
-    /// A list that is the one somebody vouched for under this declaration before is offered with
-    /// nobody asked. Every other list is checked, unless every check is being bypassed, and put to
-    /// the person as it is drawn. A yes promotes it, and records its digest where the session may
-    /// write and a person gave the answer; a no offers none of its tools for the rest of the
-    /// session, and a turn stopped at the question leaves it unasked. Settled at the start of a turn a person asked for, since that is where there is
-    /// somebody to put the question to.
+    /// Every list is checked, unless every check is being bypassed, and put to the person as it is
+    /// drawn, every session: the list is a server's bytes, and nothing here decides from them
+    /// whether it was seen before. A yes promotes it; a no offers none of its tools for the rest
+    /// of the session, and a turn stopped at the question leaves it unasked. Settled at the start
+    /// of a turn a person asked for, since that is where there is somebody to put the question to.
     pub fn settle<S: Sink, C: Confirmer, R: Reporter>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -401,22 +446,7 @@ impl Session {
         let alias = server.alias.as_str();
         let refused = listing.refused();
         let withheld = listing.withheld();
-        let recorded = self.0.directory.as_deref().and_then(|directory| {
-            Approvals::read(directory).vouched_list(&held(&server.declaration))
-        });
-
-        let (list, changed) = match recorded {
-            Some(recorded) => match policy.promote_a_recorded_tool_list(
-                alias,
-                listing.list().clone(),
-                &recorded.to_string(),
-                |text| Digest::of_list(text).to_string(),
-            ) {
-                Ok(promoted) => return (offered(promoted), Usage::default()),
-                Err(list) => (list, true),
-            },
-            None => (listing.list().clone(), false),
-        };
+        let list = listing.list().clone();
 
         // Not made where every check is being bypassed, for the reason a vouch makes none there:
         // the mode answers this question yes, so nobody would read the word.
@@ -447,7 +477,6 @@ impl Session {
             tools,
             refused,
             withheld,
-            changed,
             verdict,
             reason,
         };
@@ -473,40 +502,7 @@ impl Session {
                 return (State::Declined, usage);
             }
         };
-        // What bypassing answered records nothing, so the next session that asks anybody asks.
-        if by == Endorsed::ByAPerson {
-            self.record_list(said, server, &promoted);
-        }
         (offered(promoted), usage)
-    }
-
-    /// Record a vouch for this list beside the declaration it was listed by, where the session may.
-    fn record_list<R: Reporter>(
-        &self,
-        said: &mut Said<'_, R>,
-        server: &Server,
-        list: &Labelled<String>,
-    ) {
-        let (Some(directory), true) = (&self.0.directory, self.0.writable) else {
-            return;
-        };
-        let Ok(text) = list.clone().into_trusted() else {
-            return;
-        };
-        let written = Approvals::to_change(directory)
-            .map_err(|why| unreadable_record(&why))
-            .and_then(|mut approvals| {
-                approvals.vouch_list(*held(&server.declaration), Digest::of_list(&text));
-                replace(&records::approvals_file(directory), approvals.to_text())
-                    .map_err(|error| error.to_string())
-            });
-        if let Err(error) = written {
-            said.notice(t!(
-                mcp_tools_not_recorded,
-                alias = server.alias.as_str(),
-                error = error
-            ));
-        }
     }
 
     /// The tools this turn may offer: every tool on every list somebody vouched for.
@@ -1095,11 +1091,26 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
             description: offer.description(alias, tool),
             may_stand: session.may_stand(),
         };
-        let CallDecision { decision, stand } = confirmer.confirm_mcp_call(&request);
+        let answer = confirmer.confirm_mcp_call(&request);
+        crate::tools::keep_the_note(
+            policy,
+            "call_server_tool",
+            answer.decision == Decision::Approve,
+            answer.note(),
+        );
+        let told = answer.note().is_some();
+        let CallDecision {
+            decision, stand, ..
+        } = answer;
         if decision == Decision::Reject {
             return Called::Problem(format!(
-                "refused: the user did not approve calling {name}. Do not retry the same call; ask \
-                 what they would prefer."
+                "refused: the user did not approve calling {name}. Do not retry the same \
+                 call{}",
+                if told {
+                    "."
+                } else {
+                    "; ask what they would prefer."
+                }
             ));
         }
         if stand && request.may_stand {

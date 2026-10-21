@@ -558,6 +558,135 @@ fn a_crate_that_draws_nothing_reaches_no_terminal_library() {
     }
 }
 
+/// The standard-library modules that reach outside the process, and the macros that write to it.
+const REACHES_OUT: [&str; 4] = ["fs", "io", "process", "env"];
+const PRINTS: [&str; 5] = ["println!", "print!", "eprintln!", "eprint!", "dbg!"];
+
+/// The `std::` paths and print macros a source file's non-test code uses that a crate promising
+/// "no I/O" and "nothing prints" may not, one description per use.
+///
+/// Test modules are skipped, since a test reads fixtures. `use std::{fs, io}` and
+/// `use std::{\n    fs,\n}` are read as the paths they are, so grouping the import is not a way past
+/// it. Comments are skipped, because the crates say in prose what they do not do.
+fn reaching_out(source: &str) -> Vec<String> {
+    let mut code = String::new();
+    let mut lines = source.lines().peekable();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if trimmed == "#[cfg(test)]"
+            && lines
+                .peek()
+                .is_some_and(|next| next.starts_with("mod ") || next.starts_with("pub mod "))
+        {
+            // rustfmt closes a module at column 0, so the first bare brace ends it.
+            for inner in lines.by_ref() {
+                if inner == "}" {
+                    break;
+                }
+            }
+            continue;
+        }
+        if !trimmed.starts_with("//") {
+            code.push_str(line);
+            code.push('\n');
+        }
+    }
+
+    let mut found = Vec::new();
+    for print in PRINTS {
+        if code.contains(print) {
+            found.push(print.to_string());
+        }
+    }
+    for (at, _) in code.match_indices("std::") {
+        let path = &code[at + "std::".len()..];
+        let segments = match path.strip_prefix('{') {
+            Some(group) => group.split('}').next().unwrap_or_default().to_string(),
+            None => path
+                .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':'))
+                .next()
+                .unwrap_or_default()
+                .to_string(),
+        };
+        for word in segments.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+            if REACHES_OUT.contains(&word) || word == "TcpStream" || word == "UdpSocket" {
+                found.push(format!("std::{segments}"));
+                break;
+            }
+        }
+    }
+    found
+}
+
+/// The files under `directory`, depth first, in no particular order.
+fn rust_files(directory: &std::path::Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(directory).expect("a source directory") {
+        let path = entry.expect("a directory entry").path();
+        if path.is_dir() {
+            files.extend(rust_files(&path));
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// LAYER-1 says the kernel does no I/O and prints nothing, and the file-type crate does no I/O. A
+/// manifest cannot say it: both depend on nothing outside the standard library, which is where
+/// the file system, the environment, child processes and the terminal live. So what holds the
+/// promise is the code never naming them, read off the source with the tests left out.
+#[test]
+fn the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing() {
+    for krate in ["core", "filetype"] {
+        let files = rust_files(&workspace().join("crates").join(krate).join("src"));
+        assert!(
+            files.len() > 1,
+            "{krate} has {} source files, so this test would pass by scanning almost nothing",
+            files.len()
+        );
+        for file in files {
+            let source = std::fs::read_to_string(&file).expect("a source file");
+            let found = reaching_out(&source);
+            assert!(
+                found.is_empty(),
+                "LAYER-1 says {krate} does no I/O and prints nothing, and {} uses {found:?}",
+                file.display()
+            );
+        }
+    }
+}
+
+/// The scan that holds the kernel to no I/O has to see each way of reaching out, or the test
+/// above passes on a crate that has found one it does not look for.
+#[test]
+fn the_io_scan_sees_a_grouped_import_a_macro_and_skips_tests_and_comments() {
+    for reaching in [
+        "use std::fs;",
+        "let _ = std::env::var(\"HOME\");",
+        "use std::{\n    collections::BTreeMap,\n    io,\n};",
+        "use std::process::Command;",
+        "println!(\"{x}\");",
+        "eprintln!(\"{x}\");",
+        "let _ = std::net::TcpStream::connect(a);",
+    ] {
+        assert!(
+            !reaching_out(reaching).is_empty(),
+            "a use that reaches out was not seen: {reaching}"
+        );
+    }
+    for quiet in [
+        "use std::collections::BTreeMap;\nuse std::net::IpAddr;\nuse std::path::Path;",
+        "// reads nothing: no std::fs here, and no println! either\nfn f() {}",
+        "fn f() {}\n#[cfg(test)]\nmod tests {\n    use std::fs;\n    fn g() { println!(\"x\"); }\n}\nfn h() {}",
+    ] {
+        assert!(
+            reaching_out(quiet).is_empty(),
+            "a use that reaches nowhere was reported: {quiet}"
+        );
+    }
+}
+
 /// A reader that accepts the wrong shapes enforces nothing, and the wrong shapes here are the ones
 /// a table drifting out of the spec's own format would have: a separator taken for data, a column
 /// added or removed, and a line that is no table row at all.

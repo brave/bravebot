@@ -102,6 +102,14 @@ export type Said =
    * agent's own: a reference name and a media type from its table of extensions.
    */
   | { kind: 'vetted'; reference: string; media: string }
+  /**
+   * A message between two background sessions, from this one's record (MSG-11). `direction` is
+   * `from` for one that reached this session's planner and `to` for one its planner sent. `text` is
+   * null where the planner was given a reference and not the words. `heading` and `kept` are the
+   * sentences the terminal draws for the same record, worded once in Rust; `kept` is null where
+   * `text` is not.
+   */
+  | { kind: 'session_message'; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
 
 export interface TodoRow {
   content: string
@@ -206,10 +214,12 @@ export interface OpenedSession {
   context: string
   todos: Record<string, TodoRow[]>
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
-  /** The yes an earlier session here was told to remember, where it and not `trust` settled the question (TRUST-23). */
+  /** The yes that was kept about this directory, where it and not `trust` settled the question (TRUST-23). */
   remembered?: KeptTrust | null
-  /** Where a remembered yes would be written, where the question is asked and remembering is offered. */
+  /** Where a yes would be kept, where the question is asked and the answer may be kept. */
   keeping?: string | null
+  /** What a yes also grants beyond the files, to show on the question (RUN-5); null where the question is not asked. */
+  confinedLines?: string | null
   branchNote: string | null
   buildNote: string | null
   /** Said when the other front end wrote the transcript above: it drew it, and this one will not draw it the same way. */
@@ -325,6 +335,7 @@ export interface ForkedSession {
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
   remembered?: KeptTrust | null
   keeping?: string | null
+  confinedLines?: string | null
   /** The parent's, as it opened: the child carries on its conversation. */
   autoVetting: boolean
   /** Always `ask`, whatever the parent was in: a fork opens as any session does (MODE-11). */
@@ -343,14 +354,29 @@ export interface ForkedSession {
   }
 }
 
-export interface Vetting { verdict: string; reason?: string | null; detail?: string | null }
+export interface Vetting { verdict: string; reason?: string | null; label?: string | null; detail?: string | null }
 /**
  * A picture or a PDF put to the person as a copy to open, since a transcript row cannot show what
  * the model would be shown. The copy is deleted once the question is answered.
  */
 export interface VetPicture { path: string; media: string; bytes: number }
 
-export interface VetRequest { request: number; origin: string; summary?: string; expects: string; content: string; lines: number; picture?: VetPicture | null; vetting: Vetting }
+export interface VetRequest {
+  request: number
+  origin: string
+  summary?: string
+  expects: string
+  /** The content with each character that draws as nothing written out as `‹U+XXXX›`, as the agent spelled it. */
+  content: string
+  label?: string | null
+  lines: number
+  /** How many characters of `content` drew as nothing before the agent wrote them out. Counted by the agent. */
+  hidden?: number
+  /** The sentence saying so, in the agent's words, or null where none did. Draw this and not a copy. */
+  hiddenNote?: string | null
+  picture?: VetPicture | null
+  vetting: Vetting
+}
 
 export interface ConfirmRequest {
   remark?: { preview: string[]; lines: number; label: string } | null
@@ -373,6 +399,9 @@ export interface ConfirmRequest {
   lineEndings?: string | null
   request: number
   path: string
+  /** The path with whitespace at either end, zero-width and bidi characters made visible and
+   *  the name quoted, as the agent spelled it. Draw this and not `path`. */
+  shownPath: string
   intent: Intent
   untrusted: boolean
   existing: boolean
@@ -609,6 +638,8 @@ export interface ManifestError {
 export interface ExposureRequest {
   request: number
   path: string
+  /** `path` spelled as `ConfirmRequest.shownPath` is. Draw this and not `path`. */
+  shownPath: string
   credentials: string[]
   summary: string
 }
@@ -651,15 +682,14 @@ export interface McpTool { name: string; arguments: string[]; description: strin
 
 /**
  * The tools an MCP server lists, put to the person before any is offered to the model
- * (SERVERS-8). `refused` counts tools the client would not draw, and `changed` says a different
- * list was approved under this declaration before. A yes is remembered for this exact list.
+ * (SERVERS-8). `refused` counts tools the client would not draw. A yes holds for the session
+ * and is not remembered.
  */
 export interface McpToolsRequest {
   request: number
   alias: string
   tools: McpTool[]
   refused: number
-  changed: boolean
   vetting: Vetting
 }
 
@@ -719,6 +749,8 @@ export interface RunRequest {
   /** Resolved execution plan, including conditional joins and redirections. */
   plan?: string
   writes?: string[]
+  /** `writes` with each path spelled as `ConfirmRequest.shownPath` is. Draw this and not `writes`. */
+  shownWrites: string[]
   stdin?: string | null
   stages: Stage[]
   directory: string
@@ -730,8 +762,13 @@ export interface RunRequest {
    * governing.
    */
   releasesPrivate: boolean
-  /** What the stages are confined to, or `null` where the turn does not confine them. */
-  confinement?: { heading: string; directories: string[]; sentences: string[] } | null
+  /**
+   * What the stages are confined to, or `null` where the turn does not confine them.
+   * `shownDirectories` is `directories` spelled as `shownWrites` is. Draw it and not `directories`.
+   */
+  confinement?: { heading: string; directories: string[]; shownDirectories: string[]; sentences: string[] } | null
+  /** The sentence for `confinement: null`, worded by the bridge in the person's language. */
+  notSandboxed?: string | null
   /**
    * Credential scopes and toolchain lists the planner asked this line to be lent, by name.
    *
@@ -779,7 +816,14 @@ export interface OutputRequest {
   command: string
   reference: string
   lines: number
+  /** How many characters of `output` drew as nothing before the agent wrote them out. Counted by the agent. */
+  hidden?: number
+  /** The sentence saying so, in the agent's words, or null where none did. Draw this and not a copy. */
+  hiddenNote?: string | null
+  /** The output with each character that draws as nothing written out as `‹U+XXXX›`, as the agent spelled it. */
   output: string
+  /** The label the output was released under, as the trail writes it. */
+  label: string
   summary: string
 }
 
@@ -788,7 +832,16 @@ export interface VouchRequest {
   vetting?: Vetting
   request: number
   path: string
+  /** The path with whitespace at either end, zero-width and bidi characters made visible and
+   *  the name quoted, as the agent spelled it. Draw this and not `path`. */
+  shownPath: string
+  /** The rule a yes writes, as the map holds it. */
+  rule: string
+  /** The rule spelled the way `shownPath` is. Draw this and not `rule`. */
+  shownRule: string
   preview: string
+  /** The label the preview was released under, as the trail writes it. */
+  label: string
   /** Whether the preview is only part of the file. Load-bearing: a preview that stops
    *  without saying so reads as the whole thing. */
   truncated: boolean
@@ -840,8 +893,10 @@ export type AskAnswer = { chosen?: number[]; typed?: string }
 /** Every event the bridge emits, keyed by name. */
 export interface EventMap {
   'agent.ready': { build: string; version: string; home: string | null }
-  'trust.request': { directory: string; keeping?: string | null }
+  'trust.request': { directory: string; keeping?: string | null; confinedLines?: string | null }
   'turn.started': { turn: number; sandbox?: SandboxMode }
+  /** The planner has read the oldest line sent with `turn.interject`. `prompt` is the words it was given. */
+  'turn.interjected': { prompt: string }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
   phase: { phase: Phase }

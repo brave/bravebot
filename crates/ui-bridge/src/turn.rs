@@ -200,6 +200,8 @@ pub struct BridgeReporter {
     reporting_for: Option<DelegateId>,
     /// Where the submitted prompt entered the recounted conversation (SESSION-23).
     prompt_at: Option<usize>,
+    /// The task list as the turn last wrote it, kept for the record (SESSION-23).
+    task_list: Vec<Row>,
 }
 
 impl BridgeReporter {
@@ -212,12 +214,18 @@ impl BridgeReporter {
             notices: Vec::new(),
             reporting_for: None,
             prompt_at: None,
+            task_list: Vec::new(),
         }
     }
 
     /// The latest cumulative measurements, retained for manifest storage on failure.
     pub fn spent(&self) -> Option<bravebot_agent::Spent> {
         self.spent
+    }
+
+    /// The task list the turn last wrote, whichever way it ended. Empty where it wrote none.
+    pub fn task_list(&self) -> &[Row] {
+        &self.task_list
     }
 
     /// Where the turn's prompt landed in the recounted conversation, if it got that far.
@@ -248,9 +256,17 @@ impl Reporter for BridgeReporter {
         self.prompt_at = Some(at);
     }
 
+    /// The planner has read a line the person typed while the turn ran, so a front end moves it
+    /// from waiting to said. Emitted at the moment it is taken, and always before the turn's end,
+    /// so a line still waiting when the turn ends was not read.
+    fn interjected(&mut self, said: String) {
+        self.say("turn.interjected", json!({ "prompt": said }));
+    }
+
     fn todos(&mut self, rows: Vec<Row>) {
-        let rows: Vec<_> = rows.iter().map(wire::row).collect();
-        self.say("todos", json!({ "rows": rows }));
+        let wired: Vec<_> = rows.iter().map(wire::row).collect();
+        self.task_list = rows;
+        self.say("todos", json!({ "rows": wired }));
     }
 
     /// How much the model has written, when it changes and not before.
@@ -461,6 +477,8 @@ pub struct BridgeConfirmer {
     declined_a_plan: bool,
     /// Which kinds somebody can answer now. Every kind, until a host says otherwise.
     answerers: crate::answerers::Answerers,
+    /// What the person typed while this turn ran. Empty for a confirmer nobody can type into.
+    interjections: crate::running::Interjections,
 }
 
 impl BridgeConfirmer {
@@ -481,7 +499,17 @@ impl BridgeConfirmer {
             cancel,
             declined_a_plan: false,
             answerers: crate::answerers::Answerers::default(),
+            interjections: crate::running::Interjections::default(),
         }
+    }
+
+    /// Read what the person types into this turn from `interjections` at each round boundary.
+    pub(crate) fn taking_interjections(
+        mut self,
+        interjections: crate::running::Interjections,
+    ) -> Self {
+        self.interjections = interjections;
+        self
     }
 
     /// Ask only what `answerers` says somebody can answer, and refuse the rest without showing it.
@@ -623,8 +651,7 @@ impl Confirmer for BridgeConfirmer {
     /// Ask whether to offer an MCP server's tools to the model (SERVERS-8).
     ///
     /// The request carries each tool as the client drew it, the server's descriptions among them.
-    /// A yes offers the list and is recorded beside the server's approval, so the same list is
-    /// offered unasked in a later session. A no offers none of its tools for the rest of this one.
+    /// A yes offers the list for this session and records nothing. A no offers none of its tools for the rest of this one.
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         self.yes_or_no(Kind::McpTools, "mcp-tools.request", |id| {
             wire::mcp_tools_request(id, request)
@@ -662,6 +689,15 @@ impl Confirmer for BridgeConfirmer {
         self.yes_or_no(Kind::Host, "host.request", |id| {
             wire::host_request(id, request)
         })
+    }
+
+    /// Declined without asking: the desktop hosts no background session, and a session offered no
+    /// way to send is never asked (MSG-3).
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
     }
 
     /// Ask whether a remote MCP server moved where its reply pointed (SERVERS-11).
@@ -710,10 +746,10 @@ impl Confirmer for BridgeConfirmer {
         }
     }
 
-    // The UI queues messages for the next turn; the protocol has no mid-turn input.
-    // In particular, polling must neither block nor consume an approval reply.
+    // Whatever `turn.interject` left since the last boundary. Polling must neither block nor
+    // consume an approval reply, and this reads a queue of its own, never the answers.
     fn interjection(&mut self) -> Option<String> {
-        None
+        self.interjections.take()
     }
 
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {

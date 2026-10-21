@@ -60,10 +60,10 @@ const draw = (entry) =>
     }),
   )
 
-const confined = (preview) =>
+const confined = (preview, reach = 'not_the_planner') =>
   t.quarantined({
     origin: 'notes.md',
-    reach: 'not_the_planner',
+    reach,
     label: '(U,priv)',
     preview,
     lines: preview.length,
@@ -112,7 +112,22 @@ test('quarantined content cannot paint its own container', () => {
   // The head and the foot are what the reader is meant to trust, and they name the origin and
   // the reach rather than repeating a word the content could have written.
   assert.match(drawn, /class="origin"[^>]*>notes\.md</)
-  assert.ok(drawn.includes('not in the planner'), drawn)
+})
+
+test('a block says where its content went only where that is not the ordinary answer', () => {
+  // Kept from the planner is what every block is, and the mark in its head says so.
+  const ordinary = draw(confined(['first line']))
+  assert.match(ordinary, /<span class="mark">confined<\/span>/)
+  assert.ok(!ordinary.includes('planner'), ordinary)
+  assert.ok(!ordinary.includes('no model'), ordinary)
+
+  // Content in no model's context is the exception and says so in the heading (VIEW-7), where
+  // the other words about the block are, and not in the foot under the content.
+  const unread = draw(confined(['first line'], 'no_model'))
+  const [head, rest] = unread.split('<pre class="preview">')
+  assert.ok(head.includes('class="quarantine-head"'), unread)
+  assert.ok(head.includes('in no model’s context'), unread)
+  assert.ok(!rest.includes('no model’s context'), unread)
 })
 
 /** A write of bytes a processor produced, which is the card the clause marks explicitly. */
@@ -153,6 +168,7 @@ const CARDS = {
   attached: { entry: () => ({ kind: 'attached', id: 'a1', path: FORGED_CHROME }), marks: null, why: 'the path somebody named, never the file’s bytes' },
   watch: { entry: () => t.watchFired(1, FORGED_CHROME), marks: null, why: 'the watch’s own line: a number and a path' },
   error: { entry: () => t.errored(FORGED_CHROME), marks: null, why: 'a diagnostic from the service the agent spoke to' },
+  'session-message': { entry: () => ({ kind: 'session-message', id: 'm1', direction: 'from', heading: 'message from session 11111111 (planner)', kept: null, session: '11111111-aaaa', name: 'planner', label: '(T,pub)', text: FORGED_CHROME }), marks: '<blockquote>' },
   'replayed-tool': { entry: () => ({ kind: 'replayed-tool', id: 'r1', text: FORGED_CHROME, why: FORGED_CHROME }), marks: null, why: 'the line a record kept of a call and the planner’s reason for it, with no result in it' },
   tool: {
     // `Activity.changes` and `Activity.untrusted` are on the wire already and this card draws
@@ -197,7 +213,7 @@ const CARDS = {
     why: 'the task the person typed, and the agent’s rendering of a plan made from that task alone before anything was read',
   },
   exposure: {
-    entry: () => t.askedExposure({ request: 1, path: FORGED_CHROME, credentials: [FORGED_CHROME], summary: 'let the model read a file' }),
+    entry: () => t.askedExposure({ request: 1, path: FORGED_CHROME, shownPath: FORGED_CHROME, credentials: [FORGED_CHROME], summary: 'let the model read a file' }),
     marks: null,
     // docs/specs/credential-protection.md CRED-19: a finding is a kind, a location and a mask.
     why: 'the path the planner named, and the agent’s own line about each finding, which holds no text of the file',
@@ -211,7 +227,7 @@ const CARDS = {
   },
   // SERVERS-8: a tool's description is the server's own text, released for a person to read.
   'mcp-tools': {
-    entry: () => t.askedMcpTools({ request: 1, alias: 'weather', tools: [{ name: 'weather:get_forecast', arguments: [FORGED_CHROME], description: FORGED_CHROME }], refused: 0, changed: false, vetting: { verdict: 'safe' } }),
+    entry: () => t.askedMcpTools({ request: 1, alias: 'weather', tools: [{ name: 'weather:get_forecast', arguments: [FORGED_CHROME], description: FORGED_CHROME }], refused: 0, changed: false, vetting: { verdict: 'safe', reason: 'the descriptions are plain' } }),
     marks: 'class="mcp-tool-description"',
   },
   'mcp-call': {
@@ -264,7 +280,7 @@ const CARDS = {
     marks: '<pre class="preview" data-deciding="first">',
   },
   vouch: {
-    entry: () => t.askedVouch({ request: 1, path: 'notes.md', preview: FORGED_CHROME, truncated: false }),
+    entry: () => t.askedVouch({ request: 1, path: 'notes.md', shownPath: 'notes.md', rule: '/work/notes.md', shownRule: '/work/notes.md', preview: FORGED_CHROME, truncated: false }),
     marks: '<pre class="preview" data-deciding="first">',
   },
 }
@@ -516,7 +532,7 @@ test('a failure card reads the category and never the wording of the detail', ()
 test('undecided path exceptions are not shown as refusals or grants', () => {
   const { PathPermissions } = load('src/renderer/components/Permissions.tsx')
   const markup = renderToStaticMarkup(React.createElement(PathPermissions, {
-    paths: [{ path: 'vendor', integrity: 'untrusted' }, { path: 'vendor/ours', integrity: 'undecided' }],
+    paths: [{ path: 'vendor', shownPath: 'vendor', integrity: 'untrusted' }, { path: 'vendor/ours', shownPath: 'vendor/ours', integrity: 'undecided' }],
     busy: false,
     onRevoke() {},
   }))

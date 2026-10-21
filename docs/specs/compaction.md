@@ -49,6 +49,7 @@ what catches it.
 `verified-by: bravebot_core::policy::a_summary_of_a_trusted_conversation_is_adopted`
 `verified-by: bravebot_core::policy::a_summary_of_an_untrusted_conversation_is_refused_rather_than_adopted`
 `verified-by: bravebot_agent::turn::a_summary_of_an_untrusted_conversation_leaves_the_conversation_whole`
+`verified-by: bravebot_agent::turn::compacting_on_request_an_untrusted_conversation_is_refused_and_leaves_no_line`
 
 <a id="COMPACT-2"></a>
 ### COMPACT-2: the summariser is offered no tools
@@ -99,11 +100,18 @@ cut that would not free more than it retains is not made at all.
 life and shortens nothing. Measured at 35 summaries in a turn that should have made none. Never
 relax this to compact sooner.
 
+"At least as much" is measured twice: in exchanges (or rounds), and in bytes of what each side
+holds. A count alone cannot tell a few repeated one-line prompts from eighty thousand tokens of file
+reads, so a cut that gives up two short prompts and keeps the reads is not made, and the round cut
+is tried instead.
+
 A skill the cut would send again ([COMPACT-17](#COMPACT-17)) counts as kept, since it takes the
 place of what was given up.
 
 `verified-by: bravebot_agent::conversation::a_cut_that_would_give_up_less_than_it_keeps_is_not_worth_a_request`
 `verified-by: bravebot_agent::conversation::a_long_turn_does_not_summarise_itself_once_per_round`
+`verified-by: bravebot_agent::conversation::a_cut_that_frees_a_few_bytes_and_keeps_huge_reads_is_not_made`
+`verified-by: bravebot_agent::conversation::a_cut_that_frees_more_than_it_keeps_is_still_made_after_a_large_exchange_is_given_up`
 `verified-by: bravebot_agent::conversation::a_head_that_is_only_an_earlier_summary_is_not_compacted_again`
 `verified-by: bravebot_agent::conversation::compacting_forgets_a_measurement_of_the_conversation_it_replaced`
 `verified-by: bravebot_agent::conversation::a_conversation_with_nothing_but_recent_exchanges_is_not_compacted`
@@ -157,6 +165,9 @@ a fallback rather than the usual case: see COMPACT-9.
 `verified-by: bravebot_agent::turn::a_conversation_past_the_budget_is_summarised_before_the_next_request`
 `verified-by: bravebot_agent::turn::a_conversation_nobody_has_measured_is_not_compacted`
 `verified-by: bravebot_agent::conversation::a_long_turn_does_not_summarise_itself_once_per_round`
+`verified-by: bravebot_agent::turn::a_conversation_with_older_exchanges_and_no_measurement_is_not_compacted`
+`verified-by: bravebot_agent::turn::a_summariser_that_failed_is_not_asked_again_for_the_rest_of_the_turn`
+`verified-by: bravebot_agent::turn::a_turn_is_summarised_more_than_once_as_the_rounds_build_up`
 `verified-by: by-construction (the default budget is asserted below the smallest useful window at compile time)`
 
 <a id="COMPACT-9"></a>
@@ -226,6 +237,7 @@ only the round says how far into the work.
 
 `verified-by: bravebot_agent::turn::the_trail_says_what_a_compaction_gave_up_and_what_it_cost`
 `verified-by: bravebot_agent::turn::the_trail_says_which_round_a_compaction_landed_on`
+`verified-by: bravebot_agent::turn::compacting_on_request_an_untrusted_conversation_is_refused_and_leaves_no_line`
 
 <a id="COMPACT-11"></a>
 ### COMPACT-11: the summariser asks for no cache of the exchange it gives up
@@ -333,6 +345,8 @@ again, as in COMPACT-8.
 `verified-by: bravebot_agent::turn::a_request_refused_as_too_large_is_sent_again_after_one_compaction`
 `verified-by: bravebot_agent::turn::a_second_refusal_is_reported_and_compacts_nothing_more`
 `verified-by: bravebot_agent::turn::a_refusal_with_nothing_to_cut_is_reported_without_a_summary`
+`verified-by: bravebot_agent::turn::a_refusal_after_a_failed_summary_is_reported_without_asking_for_another`
+`verified-by: bravebot_agent::backend::only_a_400_or_a_422_is_a_refusal_of_the_body`
 
 <a id="COMPACT-15"></a>
 ### COMPACT-15: the `summaryModel` setting names the model a summary runs on
@@ -369,6 +383,9 @@ against the window of the planner's model rather than this one
 `verified-by: bravebot_agent::turn::a_summary_model_needing_a_sign_in_refuses_the_compaction_and_leaves_the_conversation_whole`
 `verified-by: bravebot_agent::compact::a_summary_model_the_machine_refuses_is_not_the_one_a_side_request_runs_on`
 `verified-by: bravebot_agent::compact::a_summary_model_nothing_serves_is_named_in_the_refusal_it_causes`
+`verified-by: bravebot_agent::compact::a_summary_model_no_configured_service_answers_for_is_refused_rather_than_sent`
+`verified-by: bravebot_agent::turn::a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_conversation_whole`
+`verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_summary_model_that_is_not_obeyed`
 
 <a id="COMPACT-16"></a>
 ### COMPACT-16: the planner's latest task list is sent again after the summary
@@ -452,3 +469,50 @@ following them once the result is replaced, and nothing tells it or the user.
 `verified-by: bravebot_ui_bridge::fork::a_fork_inside_the_archive_leaves_out_the_skills_a_compaction_sent_again`
 `verified-by: bravebot_agent::turn::a_skill_the_planner_was_shown_is_tagged_and_a_refused_load_is_not`
 `verified-by: bravebot_agent::turn::a_skill_loaded_in_a_turn_is_sent_again_when_that_conversation_is_compacted`
+
+<a id="COMPACT-18"></a>
+### COMPACT-18: old tool results are dropped from the request before a summary is asked for
+
+When the budget says to compact ([COMPACT-8](#COMPACT-8)), the results of tool calls older than the
+recent part of the conversation are first sent as a stub, and a summary is asked for only if the
+conversation is still over the budget. "Older" is before the start of the last two exchanges or of
+the last six rounds, whichever is later, which are the points [COMPACT-4](#COMPACT-4) cuts at. The
+step is made only when it frees at least a fixed floor, about 4,000 tokens, so a rewrite of the
+request that gains little is not made ([COMPACT-5](#COMPACT-5)). Nothing has measured the shortened
+request, so the figure compared is lowered by the bytes dropped at four to a token, which is the
+estimate used elsewhere in this file and errs towards summarising.
+
+The stub is a fixed sentence with the tool's name and the size dropped, and nothing of the result:
+no prefix, no excerpt. The decision uses the role, the tag, the position and the length of the
+message, so the driver branches on nothing a result says. The name is the planner's own call or the
+driver's own prefix, and is repeated only if it is made of the characters a tool name is made of. A
+result shorter than about 500 tokens stays, which keeps every reference to quarantined content
+([COMPACT-3](#COMPACT-3)), and so does the planner's latest task list ([COMPACT-16](#COMPACT-16)).
+A skill, a message to another session and a vetted answer are not plain results and are not
+touched.
+
+The message stays, with the stub as its body, so a call is never separated from its result
+([COMPACT-4](#COMPACT-4)). The request is shortened and the record is not ([COMPACT-6](#COMPACT-6)):
+the stored messages, the transcript and the session file hold the whole result. A window of a file
+whose result was dropped is no longer recorded as shown, so reading it again sends its lines. A
+summary asked for afterwards is written from the request as sent.
+
+**Why.** A result the planner has already acted on is the bulk of a long session, and a summary
+that gives it up also gives up what the person said and decided. Dropping it first needs no model
+call.
+
+**Not recorded.** The step writes no line to the trail and no narration. The request view shows the
+stubs.
+
+`verified-by: bravebot_agent::conversation::an_old_tool_result_is_a_stub_in_the_request_and_whole_in_the_record`
+`verified-by: bravebot_agent::conversation::a_tool_result_in_the_recent_exchanges_is_left_alone`
+`verified-by: bravebot_agent::conversation::dropping_results_that_free_too_little_is_not_done`
+`verified-by: bravebot_agent::conversation::a_short_result_is_kept_however_old`
+`verified-by: bravebot_agent::conversation::the_planners_latest_task_list_is_not_dropped`
+`verified-by: bravebot_agent::conversation::a_read_whose_result_was_dropped_is_forgotten`
+`verified-by: bravebot_agent::conversation::a_prose_shaped_result_is_dropped_the_same_way`
+`verified-by: bravebot_agent::conversation::the_stub_repeats_nothing_but_a_well_formed_tool_name`
+`verified-by: bravebot_agent::conversation::results_already_dropped_are_not_dropped_again`
+`verified-by: bravebot_agent::conversation::a_compaction_moves_the_line_with_the_messages`
+`verified-by: bravebot_agent::conversation::a_cut_is_judged_on_what_the_request_holds`
+`verified-by: bravebot_agent::turn::old_tool_results_are_dropped_before_a_summary_is_asked_for`

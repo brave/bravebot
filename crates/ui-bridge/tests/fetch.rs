@@ -5,6 +5,8 @@
 //! property is about a request leaving the machine or not leaving it, and the only honest witness
 //! to that is the server it would have reached.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -528,6 +530,33 @@ fn a_session_view_cannot_start_after_completion_resume_or_fork() {
         json!({"session": resumed["session"], "version": 1}),
     );
     assert_eq!(refused["error"]["code"], "bad_request", "resume: {refused}");
+}
+
+/// A client that starts the view after the startup trust question was answered is told the session
+/// is idle. A view that opens as awaiting trust for every session leaves the client showing a
+/// question that cannot be answered a second time, and one that opens as idle for every session
+/// hides the question from a client that starts before it is answered (RPCVIEW-1).
+#[test]
+fn a_view_started_after_trust_was_answered_opens_idle() {
+    let scratch = Scratch::new("bridge-view-trusted");
+    let (endpoint, _rounds) = a_planner_fetching("http://docs.example/");
+    let mut front = FrontEnd::serving(&scratch.home(), &endpoint);
+    front.until(|m| m["event"] == "agent.ready");
+    let opened = front.call("session.new", json!({"directory": scratch.project()}));
+    let session = opened["session"].clone();
+    front.call("trust.reply", json!({"session": session, "trusted": true}));
+
+    front.call(
+        "session.view.start",
+        json!({"session": session, "version": 1}),
+    );
+
+    let initial = front.until(|m| m["event"] == "session.view.initial");
+    assert_eq!(initial["data"]["status"], "idle", "{initial}");
+    assert_eq!(initial["data"]["sequence"], 0);
+    assert_eq!(initial["data"]["turn"], 0);
+    assert_eq!(initial["data"]["rows"], json!([]));
+    assert!(initial["data"]["pending"].is_null());
 }
 
 /// A negotiated view carries authoritative state through the same process as legacy events.

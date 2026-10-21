@@ -27,9 +27,15 @@ after(async () => {
   for (const made of rigs) await made.stop()
 })
 
-/** Open a session and answer the startup trust question as the caller says a person did. */
-async function trusted(made: Rig, answer = true): Promise<AgentSession> {
-  const session = await made.rpc.client.createSession({ workspace: 'project' })
+/**
+ * Open a session and answer the startup trust question as the caller says a person did.
+ *
+ * A yes is kept in the rig's home, so a later session in the same workspace opens already settled
+ * and is not asked. A caller that needs the question put again, to answer no, opens `elsewhere`.
+ */
+async function trusted(made: Rig, answer = true, workspace = 'project'): Promise<AgentSession> {
+  const session = await made.rpc.client.createSession({ workspace })
+  if (answer && session.view.status === 'idle') return session
   assert.equal(session.view.status, 'awaiting_trust')
   await session.answerTrust(answer)
   await until(session, 'trust to be recorded', (view) => view.status === 'idle')
@@ -103,11 +109,11 @@ describe('a real bravebot-rpc process through the typed client', () => {
     assert.equal(finished.rows.some((row) => row.kind === 'approval'), false, 'a trusted workspace was not asked')
     assert.equal(readFileSync(join(made.project, 'trusted.txt'), 'utf8'), 'trusted bytes')
 
-    const no = await trusted(made, false)
+    const no = await trusted(made, false, 'elsewhere')
     await no.send('plan:declined')
     const asked = await until(no, 'the declined session to ask', (view) => view.status === 'waiting')
     assert.equal(pendingOf(asked).kind, 'confirm')
-    assert.equal(existsSync(join(made.project, 'declined.txt')), false)
+    assert.equal(existsSync(join(made.elsewhere, 'declined.txt')), false)
   })
 
   test('two sessions with turns running at once keep their own rows and finish in the order the model releases them', async () => {

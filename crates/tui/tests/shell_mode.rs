@@ -151,6 +151,53 @@ fn output_cannot_draw_its_own_escapes() {
     );
 }
 
+/// A program that colours its output writes a code around each coloured word, and drawn as
+/// pictures they bury the words. The output shows the words and says how many codes it left out
+/// (VIEW-30).
+#[test]
+fn coloured_output_is_drawn_without_its_codes_and_they_are_counted() {
+    let mut session = Session::new("kernel-enforced");
+    session.transcript.push(Entry::shell("gh run view"));
+    session.transcript.push(Entry::output(
+        "\u{1b}[0m\u{1b}[36m\u{251c}\u{1b}[0m Announcement: a link\nplain line",
+    ));
+
+    let drawn = screen(&session);
+    assert!(drawn.contains("\u{251c} Announcement: a link"), "{drawn}");
+    assert!(drawn.contains("plain line"), "{drawn}");
+    assert!(
+        !drawn.contains("[36m") && !drawn.contains("[0m") && !drawn.contains('\u{241b}'),
+        "a colour code was drawn as text:\n{drawn}"
+    );
+    assert!(drawn.contains("3 colour codes not drawn"), "{drawn}");
+}
+
+/// Only a colour code is left out. An erase beside one is still shown as what it is, and still
+/// cannot reach the terminal.
+#[test]
+fn output_keeps_every_other_escape_beside_the_codes_it_leaves_out() {
+    let mut session = Session::new("kernel-enforced");
+    session.transcript.push(Entry::shell("cat hostile"));
+    session
+        .transcript
+        .push(Entry::output("\u{1b}[31mred\u{1b}[0m and \u{1b}[2Jcleared"));
+
+    let drawn = screen(&session);
+    assert!(drawn.contains("red and \u{241b}[2Jcleared"), "{drawn}");
+    assert!(drawn.contains("2 colour codes not drawn"), "{drawn}");
+    assert!(!drawn.contains('\u{1b}'), "{drawn}");
+}
+
+/// Output with no colour codes says nothing about them.
+#[test]
+fn output_without_colour_codes_says_nothing_about_them() {
+    let mut session = Session::new("kernel-enforced");
+    session.transcript.push(Entry::shell("echo hello"));
+    session.transcript.push(Entry::output("hello"));
+
+    assert!(!screen(&session).contains("colour code"));
+}
+
 /// A command that printed nothing has to say so. A blank gap would look like a command that never
 /// ran, which is the one thing the user cannot tell by looking.
 #[test]

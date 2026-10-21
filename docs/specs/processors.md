@@ -48,6 +48,7 @@ which is the thing this design refuses. A loop would give a reply something to s
 
 `verified-by: bravebot_core::policy::only_the_slots_it_was_given_reach_a_processor`
 `verified-by: bravebot_agent::turn::a_tool_call_from_a_processor_does_nothing`
+`verified-by: bravebot_agent::turn::a_processors_request_has_no_tool_list_no_history_and_no_second_round`
 `verified-by: bravebot_core::policy::a_reference_to_nothing_is_refused`
 `verified-by: bravebot_core::policy::a_processor_with_nothing_to_read_is_refused`
 `verified-by: bravebot_core::policy::naming_the_same_reference_twice_is_refused`
@@ -74,8 +75,28 @@ The policy layer, the part of `bravebot-core` that owns the gates, concatenates 
 without seeing it. The `instruction` comes from the planner and must not
 be private.
 
+What the planner writes is private once its context holds private content, which
+[LABEL-8](labels.md#LABEL-8) lists the ways of reaching: a slot `vet_content` let through, output
+`read_output` read to it, a delegate's report, or a resumed conversation that already held some.
+From then on every call is refused. The refusal does not ask for a rewording, since none helps, and
+names what still reaches a quarantined reference: a filter such as `grep` or `tail` run with
+`stdin_ref` set to it, whose printed result `read_output` shows, and `vet_content` for a reference
+that holds no text. A reference made in such a context is described without the move that names a
+processor, and the tool's description says the call is refused once the context holds private
+content.
+
+**Why.** A planner told to give a reference to a processor, and refused for the rest of the
+conversation when it does, reads the whole of a long output with `read_output` instead, which is
+the content the processor was the way to avoid reading.
+
 `verified-by: bravebot_core::policy::a_private_instruction_cannot_direct_a_processor`
 `verified-by: bravebot_agent::turn::a_planner_shown_private_content_cannot_instruct_a_processor`
+`verified-by: bravebot_core::policy::the_refusal_of_a_processor_in_a_private_context_names_what_still_works`
+`verified-by: bravebot_core::policy::a_reference_names_no_processor_exactly_when_the_context_holds_private_content`
+`verified-by: bravebot_core::reference::a_reference_closed_to_processors_names_none_and_keeps_the_other_moves`
+`verified-by: bravebot_agent::tools::the_processor_is_described_as_refused_once_private_content_has_been_shown`
+`verified-by: bravebot_agent::turn::a_planner_that_cannot_start_a_processor_is_not_pointed_at_one`
+`verified-by: bravebot_agent::turn::reading_a_quarantined_file_by_reference_names_no_processor_in_a_private_context`
 
 <a id="PROC-5"></a>
 ### PROC-5: the output is never shown to the planner
@@ -107,6 +128,8 @@ approved it.
 `verified-by: bravebot_agent::manifest::a_planned_answer_cannot_be_written_to_a_file_it_is_not_about`
 `verified-by: bravebot_agent::manifest::a_second_transform_does_not_find_a_document_for_an_answer`
 `verified-by: bravebot_agent::manifest::two_spellings_of_one_path_are_one_document`
+`verified-by: bravebot_agent::manifest::a_planned_answer_cannot_be_written_to_a_name_that_differs_by_trailing_whitespace`
+`verified-by: bravebot_agent::turn::an_answer_cannot_be_written_to_a_file_named_like_its_own_with_trailing_whitespace`
 `verified-by: bravebot_core::policy::a_file_beside_another_input_is_not_taken_for_the_document`
 
 <a id="PROC-7"></a>
@@ -220,11 +243,54 @@ holds the fuller preview.
 `verified-by: bravebot_core::policy::a_document_nobody_said_anything_about_has_nothing_to_show`
 `verified-by: bravebot_tui::confirm::what_a_processor_said_is_drawn_beside_the_diff_it_describes`
 
+<a id="PROC-13"></a>
+### PROC-13: the `processorModel` setting names the model a processor runs on
+
+`processorModel` holds one model name. A processor runs on it, resolved the way `--model` is, so a
+tier word means that tier's configured model and anything else is sent as written. Absent, empty or
+`inherit`, a processor runs on the model of the turn that started it. The planner's own rounds, and
+vetting and compaction, are not affected: compaction and goal checks have `summaryModel`
+([COMPACT-15](compaction.md#COMPACT-15)).
+
+The name is configuration, not content. It is read from the person's own settings file and from the
+file `--settings` names, and from no project or local layer ([BACKEND-24](backends.md#BACKEND-24)):
+a layer that names it is dropped and `doctor` names the file. No tool argument, planner word or
+file content chooses it, so the destination of a processor's input stays the one the person
+configured.
+
+A model that needs a sign-in this machine has not made, that the managed layer refuses
+([BACKEND-48](backends.md#BACKEND-48)), or that no configured service answers for is not swapped
+for the turn's model. The call does not run, nothing is sent, and the person is told which model
+the setting named. The planner is told only that the call did not run.
+
+A processor answered by a model other than the one the setting named says so, naming the model as
+the setting wrote it. It is compared as [DELEGATE-22](delegation.md#DELEGATE-22) compares a
+delegate's: against the name that was sent, and not where the name is a handle the reply resolves.
+The name that answered is left out of the sentence, which is the driver's own words.
+
+**Why refuse rather than fall back.** A person naming a cheaper model for bulk rewrites is drawing a
+cost boundary, and running the call on the turn's model would spend past it without anybody
+choosing to.
+
+**Why this does not change PROC-1 to PROC-3.** The model name is a request field. The processor
+still holds no tools and no memory, makes one request, and has its output label fixed before the
+call. A weaker model may rewrite a file worse, and a write is approved from the diff of the real
+bytes ([PROC-12](#PROC-12)).
+
+`verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_processor_model`
+`verified-by: bravebot_config::lib::the_processor_model_is_resolved_like_a_model_name`
+`verified-by: bravebot_agent::turn::a_processor_request_carries_the_configured_model_while_the_planner_keeps_the_turns`
+`verified-by: bravebot_agent::turn::a_processor_with_no_configured_model_runs_on_the_turns_own`
+`verified-by: bravebot_agent::turn::a_processor_model_needing_a_sign_in_sends_nothing_and_says_so`
+`verified-by: bravebot_agent::turn::a_processor_answered_by_another_model_than_the_configured_one_says_so`
+`verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_processor_model_that_is_not_obeyed`
+
 ## Known costs
 
 - **An untrusted file's contents reach the backend.** A processor is a model call, so working on
   a file nobody vouched for sends it where before it would have stayed on the machine. The
-  destination is the one a trusted directory has always sent its files to. What is new is only
+  destination is the one a trusted directory has always sent its files to, or the one
+  [PROC-13](#PROC-13) names where the person configured a model for processors. What is new is only
   that the reader holds nothing.
 - **One approval per candidate, not per change.** Where several files could be the one, each is
   read into its own slot, transformed with the same instruction, and written back to the path it

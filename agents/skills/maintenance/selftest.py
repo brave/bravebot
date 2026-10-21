@@ -146,6 +146,69 @@ class References(unittest.TestCase):
         )
         self.assertEqual(symbols(files, "unreferenced"), [])
 
+    def test_a_cfg_test_field_does_not_cover_the_impl_after_it(self):
+        files = {
+            "crates/a/src/lib.rs": textwrap.dedent(
+                """\
+                pub struct Client<T> {
+                    attempts: u32,
+                    #[cfg(test)]
+                    test_request: Option<std::collections::HashMap<String, T>>,
+                    config: u32,
+                }
+
+                impl Client<u8> {
+                    pub fn shipped() { after_the_field(); }
+                }
+
+                pub fn make() -> Client<u8> {
+                    Client {
+                        attempts: 0,
+                        #[cfg(test)]
+                        test_request: None,
+                        config: 0,
+                    }
+                }
+
+                fn more() {
+                    after_the_literal();
+                    let c = Client { attempts: 0, #[cfg(test)] test_request: None, config: 0 };
+                }
+
+                impl Client<u16> {
+                    pub fn also_shipped() { after_the_inline_literal(); }
+                }
+
+                #[cfg(test)]
+                mod tests {
+                    fn t() { used_only_in_tests(); }
+                }
+                """
+            ),
+            "crates/a/src/other.rs": (
+                "pub fn after_the_field() {}\npub fn after_the_literal() {}\n"
+                "pub fn after_the_inline_literal() {}\npub fn used_only_in_tests() {}\n"
+            ),
+        }
+        self.assertEqual(symbols(files, "test-only"), ["used_only_in_tests"])
+
+    def test_a_cfg_test_statement_block_still_covers_its_block(self):
+        files = {
+            "crates/a/src/lib.rs": textwrap.dedent(
+                """\
+                pub fn f() {
+                    #[cfg(test)]
+                    if let Some(x) = hook() {
+                        used_only_under_the_statement();
+                    }
+                    used_after_the_statement();
+                }
+                """
+            ),
+            "crates/a/src/other.rs": "pub fn used_only_under_the_statement() {}\npub fn used_after_the_statement() {}\n",
+        }
+        self.assertEqual(symbols(files, "test-only"), ["used_only_under_the_statement"])
+
     def test_code_after_a_test_module_and_under_not_test_is_not_test_code(self):
         files = {
             "crates/a/src/lib.rs": textwrap.dedent(

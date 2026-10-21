@@ -11,6 +11,7 @@
 //! socket belongs to the test and the host never sees it; the host's own channel has no name.
 
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -380,7 +381,10 @@ impl Client {
     fn session_in(&mut self, project: &Path) -> String {
         let opened = self.call("session.new", json!({"directory": project}));
         let session = opened["session"].as_str().expect("a handle").to_string();
-        self.call("trust.reply", json!({"session": session, "trusted": true}));
+        // A yes an earlier session here gave is kept, and settles the next one without asking.
+        if opened["remembered"].is_null() {
+            self.call("trust.reply", json!({"session": session, "trusted": true}));
+        }
         session
     }
 

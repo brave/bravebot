@@ -9,8 +9,8 @@ make all-platforms
 
 ## Publishing a version
 
-Two steps to name the version, then two manual publishes: Jenkins for signed binaries, then
-GitHub Actions for the npm package. Either can wait days after the tag.
+Two steps to name the version, then manual publishes: Jenkins for signed binaries, then
+GitHub Actions for the npm package, then the package manifests. Each can wait days after the tag.
 
 ```sh
 make bump-version BUMP=bugfix   # or minor, major
@@ -18,6 +18,7 @@ make bump-version BUMP=bugfix   # or minor, major
 make github-release
 # later: Jenkins job bravebot-build with UPLOAD and RELEASE
 # later: make publish-npm TAG=v<version>
+# later: make package-manifests TAG=v<version>
 ```
 
 Before it changes anything, `bump-version` warns and asks whether to go on when any of these hold:
@@ -70,23 +71,42 @@ binaries plus the `.sha256` files written after signing. `gh release create` fai
 release already exists.
 
 After Jenkins has created that GitHub release, `make publish-npm TAG=v<version>` dispatches
-`publish-npm.yml` from that tag to publish `@brave/bravebot`. Without `TAG` it takes the latest
-GitHub release rather than the version in the tree, which may already be bumped past it. The
-workflow, not the target, refuses a tag that does not match its tree or a release missing an
-asset. OIDC trusted publishing; there is no `NPM_TOKEN`. The trusted publisher on npmjs.com must
-name that workflow file. The npm `postinstall` verifies the binary against its published
-`.sha256` before writing it, and then its signature: the `.sha256` on Linux, the code signature
-on macOS and Windows. `install.sh` does the same except on Windows, which it does not install.
+`publish-npm.yml` from that tag. It publishes seven packages: `@brave/bravebot-<platform>-<arch>`
+for each of the six platforms, each holding that platform's binary, and then `@brave/bravebot`,
+which lists the six as `optionalDependencies` at its own version and holds no binary. Without
+`TAG` the target takes the latest GitHub release rather than the version in the tree, which may
+already be bumped past it. The workflow, not the target, refuses a tag that does not match its
+tree or a release missing an asset. OIDC trusted publishing; there is no `NPM_TOKEN`, and the
+trusted publisher on npmjs.com must name that workflow file, and the `npm-publish` environment, for
+each of the seven packages. The publishing jobs wait on that environment's required reviewer, so
+the dispatch is followed by an approval from a second maintainer
+([branch-protection.md](branch-protection.md#the-npm-publish-environment)).
+
+Each platform package is built by `npm/scripts/stage-platform-package.js` on a runner of that
+platform's own kind. It verifies the binary against its published `.sha256` before writing it, and
+then its signature: the `.sha256` on Linux, the code signature on macOS and Windows. `install.sh`
+does the same when it runs, except on Windows, which it does not install. Installing the npm
+package runs no script and checks nothing itself. A dispatch after a partial failure publishes
+the packages that are missing and skips the ones the registry already has.
+
+After Jenkins has created that GitHub release, `make package-manifests TAG=v<version>` downloads
+the macOS and Windows `.sha256` files from it and runs `contrib/package-manifests.py`, which writes
+`dist/packages/Casks/bravebot.rb` and the three WinGet manifests under
+`dist/packages/manifests/b/Brave/Bravebot/<version>/`. It refuses a tag that is not `v` plus the
+tree's version and any missing or malformed digest, and writes nothing then. Opening the change
+against the Homebrew tap and `microsoft/winget-pkgs` is done by hand with those files; nothing here
+holds a credential for either, and neither package verifies a signature when it installs
+([RELEASE-18](../specs/releases.md#RELEASE-18)).
 
 `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD` is set in GitHub Actions so forks and PRs compile without
 secrets. Jenkins does not set it on an upload, so a missing credential fails the release
 instead of shipping a binary that cannot reach the backend.
 
-Darwin binaries are codesigned and notarised, Windows binaries are Authenticode-signed, and the
-installers hold each to that: the Developer ID team `KL8N8XSYF4` on macOS, the signer
-`Brave Software, Inc.` on Windows. A change of certificate or team has to be made in `install.sh`
-and `npm/scripts/postinstall.js` before the first release signed by the new one is published, or
-installs of it are refused. The commands for checking a download by hand are in the quickstart.
+Darwin binaries are codesigned and notarised, Windows binaries are Authenticode-signed, and
+`install.sh` and the platform package script hold each to that: the Developer ID team `KL8N8XSYF4`
+on macOS, the signer `Brave Software, Inc.` on Windows. A change of certificate or team has to be
+made in `install.sh` and `npm/scripts/stage-platform-package.js` before the first release signed
+by the new one is published, or installs and publishes of it are refused. The commands for checking a download by hand are in the quickstart.
 
 ## The desktop application
 
@@ -189,8 +209,8 @@ transition renamed several of them, so those are named as alternatives and a pac
 release still installs on the other.
 
 `brave-bot` is the package name in both formats. Upgrades and conflicts key on it, so like the
-macOS bundle id it is fixed by the first release. It is not the CLI's `bravebot`, which an apt or
-dnf repository would want as a package of its own.
+macOS bundle id it is fixed by the first release. It is not the CLI's `bravebot`, which
+[the CLI packages](#the-cli-packages) below ship as a package of its own.
 
 The packages are fused and unsigned, as the Mac bundles are. Signing them, and an apt or dnf
 repository to serve updates from, are issue #770; the app has no updater on any platform.
@@ -200,6 +220,31 @@ release, because a container shares the host's kernel and AppArmor policy and so
 the sandbox the packages exist for. On a machine of each, the package has to install, start from
 its launcher with the sandbox on, start its agent, ignore `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`
 and `--inspect`, and uninstall cleanly.
+
+### The CLI packages
+
+```sh
+make linux-amd64 linux-arm64 strip
+make cli-packages-linux
+```
+
+Packages for the CLI, one per architecture under the name `bravebot`, from the same binaries the
+releases page publishes; the apt and dnf repositories that will serve them are
+[#1048](https://github.com/brave/bravebot/issues/1048). It reads `dist/bravebot-linux-<arch>` and
+writes `dist/bravebot-linux-<arch>.deb` and `dist/bravebot-linux-<arch>.rpm` for amd64 and arm64,
+on a Linux host and needing no Rust toolchain. The payload is the one binary at
+`/usr/bin/bravebot`; both formats are packed by the same two digest-pinned containers the app's
+packages use, described under [the Linux packages](#the-linux-packages) above; and those four
+names are the ones the publish job uploads.
+
+The dependencies declared are the binary's own, from its dynamic section: `libm`, `libc`,
+`libpthread` and `libdl`, all of them `libc6` on Debian and `glibc` on Fedora, required at version
+2.30 or newer in both formats, the newest symbol version either architecture asks for. Nothing
+from the Electron dependency list the app declares is copied, since none of it is needed. The
+package files carry no signature of their own. Each is published with its `.sha256` and the
+signature on that checksum, as the Linux binaries are, so a download can be verified before it
+is installed. Serving them from the apt and dnf repositories, whose metadata is signed, is
+[#1048](https://github.com/brave/bravebot/issues/1048).
 
 ### The Windows installers
 

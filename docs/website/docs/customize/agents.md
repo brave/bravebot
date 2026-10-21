@@ -71,8 +71,10 @@ does not ask whether to trust the checkout, so it reads only the definitions in
 | `tools` | no | fewer tools than the kind's; absent means the kind's own |
 | `writes` | no | the files a `worker` may write, as the patterns an `Edit(...)` rule takes (`docs/**, README.md`); anything else is refused, and a deny rule still applies inside them. Absent means any file, and an empty line none. It holds a redirection but not a program the delegate runs, so leave `run` out of `tools` to keep source out of reach, and a turn started with `/agent` is your own and is not held to it. Name `.bravebot/memory/**` if it keeps a memory |
 | `skills` | no | the [skills](skills.md) this delegate is offered, out of the ones the turn found; absent means all of them, and an empty line none |
+| `spawns` | no | the delegates this one may start with `spawn_agent`, by name, out of the three kinds and your definitions; absent means all of them, and an empty line none |
 | `mcpServers` | no | the [MCP servers](mcp-servers.md) a `worker` calls, by alias, out of the ones the turn may; absent means all of them unless `tools` is written, and an empty line none |
 | `rounds` | no | how many rounds of tools this delegate may take before it has to answer, up to its kind's ceiling; absent or empty means the kind's own |
+| `budget` | no | the most tokens this delegate may spend before it has to answer, as `500000`, `500k` or `2m`; absent or empty means none, and only its rounds bound it |
 | `memory` | no | `project` or `local` keeps [a memory](#memory), a file its runs read and write themselves; absent or empty means none |
 | `isolation` | no | `checkout` or `worktree` gives each of its delegates [a checkout of its own](#a-checkout-of-its-own) to work in; absent or empty means none |
 | body | no | the standing instruction |
@@ -117,6 +119,17 @@ that adds a capability, including `*`, which is read as a tool name matching not
 "all of them". That is the deliberate difference from tools where the same key *is* the permission
 list: a file in a repository you cloned cannot hand an agent a shell it was never granted.
 
+**`spawns` chooses which delegates this one may start.** Name definitions or kinds on one line or
+as a list: a coordinator written `spawns: reader, checker` is offered those two by `spawn_agent`, is
+refused a `worker`, and the delegates it starts are held to the same list. Absent, it may start any
+the turn resolved; an empty line, none. The list only takes names away, so a later file of the same
+name can shorten it and cannot lengthen it. A turn you start with `/agent` is held to it too. A name
+no definition goes by picks nothing, and the turn says so:
+
+```
+~/.bravebot/agents/coordinator.md names a delegate this session did not resolve, so its delegate may not start it: reviwer
+```
+
 **`mcpServers` chooses which servers a `worker` calls.** Name them by the alias you gave each in
 `~/.bravebot/mcp.json`, on one line or as a list. The delegate calls those, where the turn that
 spawned it may, and no others. A server's tools are not bravebot's, so no `tools` line names one:
@@ -152,7 +165,9 @@ for. A name no skill goes by picks nothing, and the turn says so:
 
 **`rounds` sets how long the delegate may work.** Nobody is watching a delegate, so each kind stops
 one after a set number of rounds and makes it answer with what it has: 60 for a `reader`, 80 for a
-`checker` and 120 for a `worker`. A definition written for a long job, a staged refactor say, can
+`checker` and 120 for a `worker`. When a delegate reaches its bound, the planner and you are told in
+the delegate's report how many rounds it spent and that it may not be finished. The same is said when
+it spent the bound and then failed to answer, so the planner does not start the identical task again. A definition written for a long job, a staged refactor say, can
 ask for more, up to its kind's ceiling: 120 for a `reader`, 160 for a `checker` and 200 for a
 `worker`, which is the bound on a one-shot run nobody is watching. Asking for more than that gives
 the delegate the ceiling, and the turn says so:
@@ -163,7 +178,15 @@ the delegate the ceiling, and the turn says so:
 
 The value is a whole number above zero. An empty line is the same as none. Anything else, `0` or
 `lots` or `1.5`, means the file does not load, and the turn names it. The planner cannot set a
-bound when it starts a delegate: only the definition can.
+number of rounds when it starts a delegate: only the definition can.
+
+**`budget` stops a delegate at a spend.** Rounds are a poor measure of cost, since one round can
+send a large context. `budget` is a number of tokens, and a delegate that has spent it loses its
+tools and answers with what it has. The planner and you are told the budget was spent and the work
+may not be finished. The planner can lower a definition's budget for one call with the `budget`
+field of [`spawn_agent`](../reference/tools.md#spawn_agent) and cannot raise it. The value is a count
+of tokens above zero, so `0`, `lots` or `3 credits` means the file does not load and the turn names
+it. A project definition of a name you defined keeps the lower of the two budgets.
 
 `rounds` bounds the definition only when the planner starts it as a delegate. A turn you run
 yourself with `/agent` is yours, and carries no bound, as any turn you are watching does.
@@ -279,7 +302,7 @@ directory resolve by file name, so which is live is the same on every machine.
 
 **It wins about what the definition is for, and never about what it may do.** The project's file
 takes over the description, the body, the model, the effort, the skills, the rounds and the memory, the rounds
-held to the ceiling of the kind it is loaded as. The kind is the narrower of the two, and the `tools` and `mcpServers`
+held to the ceiling of the kind it is loaded as. The kind is the narrower of the two, and the `tools`, `spawns` and `mcpServers`
 lists are met name by name, so a checkout you vouched for cannot turn a `reader` you wrote into a
 `worker`, and cannot hand back a tool or a server your own lines took away. A checkout is met the
 same way: either file asking gives one, so the project's can add one and cannot take yours away.

@@ -415,6 +415,23 @@ fn without_leading_reasoning(text: &str) -> &str {
     text
 }
 
+/// Whether the slot the step at `index` fills is only ever shown to the person: read by at least
+/// one later step, and by nothing but the plan's answers.
+fn shown_only(plan: &Manifest, index: usize) -> bool {
+    let Some(slot) = plan.steps()[index].out_slot() else {
+        return false;
+    };
+    let mut readers = plan.steps()[index + 1..]
+        .iter()
+        .filter(|later| later.reads().contains(slot))
+        .peekable();
+    readers.peek().is_some() && readers.all(|later| later.tool() == manifest::ANSWER)
+}
+
+/// What a process step's instruction gains when its first answer marked no document.
+const MARK_AGAIN: &str = "Your last answer marked no document. Give the whole result after the \
+line that marks where the document begins.";
+
 /// The tags a reply may open with. Written out rather than built from names so the set a reader
 /// has to trust is visible, and so nothing is allocated to look for one that is not there.
 const REASONING_TAGS: [(&str, &str); 3] = [
@@ -1142,13 +1159,10 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     let mut filled = false;
     let mut answer: Option<Labelled<String>> = None;
     let mut shown = String::new();
-    let mut chat = Chat {
-        config,
-        egress,
-        subscription: subscription.map(|s| s as &mut dyn bravebot_aichat::Subscription),
-        model: chosen_model,
-        cancel: Some(cancel),
-    };
+    let mut chat = Chat::new(config, egress)
+        .spending(subscription)
+        .on(chosen_model)
+        .stoppable_by(cancel);
 
     for (index, step) in plan.steps().iter().enumerate() {
         if cancel.is_cancelled() {
@@ -1190,6 +1204,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 &mut asking,
                 permission_mode,
                 index,
+                shown_only(&plan, index),
                 step,
                 entry,
                 accounting,
@@ -1258,6 +1273,8 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         compared_the_model_itself: false,
         model,
         steps: plan.len(),
+        standing_refusals: policy.refusals().to_vec(),
+        worked_around: 0,
         clean: planning_was_clean && policy.finish(),
         trust,
         programs,
@@ -1352,6 +1369,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     confirmer: &mut C,
     permission_mode: &crate::LiveMode,
     index: usize,
+    shown_only: bool,
     step: &Step,
     entry: &'static Advertised,
     accounting: &mut Accounting,
@@ -1471,42 +1489,72 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             // slot that reads its file here may come back worse than it was reserved at.
             crate::tools::materialise(policy, workspace, slots, "process", step.reads())?;
 
-            // `about` is a turn-loop field the schema does not name. Passing nothing is the
-            // driver not inventing a slot the plan did not: what comes back names the one
-            // document the call was given, where the whole of what it was given is one document,
-            // and no document otherwise.
-            let spec = policy
-                .before_processor(
-                    &format!("step_{index}"),
-                    step.reads(),
-                    &instruction,
-                    None,
-                    slots,
-                )
-                .map_err(|d| d.to_string())?;
-            let asked_at = std::time::Instant::now();
-            let processed = crate::processor::run(policy, chat, slots, &spec);
-            let waited = asked_at.elapsed();
-            accounting.elapsed.inference += waited;
-            let usage = match &processed {
-                Ok(done) => Some(done.usage),
-                Err(crate::processor::ProcessorError::Chat(error)) => error.completed_usage(),
-                Err(_) => None,
-            };
-            if let Some(usage) = usage {
-                accounting.spent.add_usage(usage);
-            }
-            accounting.publish(reporter);
-            let processed = processed.map_err(|e| e.to_string())?;
-
             // An answer that marked no document has nothing for the slot the plan named, and the
             // input is not a substitute for it: a plan reads that slot to write somewhere else,
-            // so standing the input in would copy one file over whatever comes next. The step
-            // fails instead, which is the direction an unmarked answer fails in everywhere.
-            let Some(document) = processed.document else {
-                return Err(
-                    "the processor produced no document, so there is nothing to store".to_string(),
-                );
+            // so standing the input in would copy one file over whatever comes next. In a turn
+            // the planner asks again for the line; a plan has no planner left, so the driver asks
+            // once more itself, with the plan's instruction and one fixed sentence, both trusted.
+            // An empty reply shares that one further try. Whichever went wrong, a second failure
+            // fails the step, which is the direction an unmarked answer fails in everywhere.
+            let mut asked = instruction;
+            let mut retried = false;
+            let (spec, processed, document) = loop {
+                // `about` is a turn-loop field the schema does not name. Passing nothing is the
+                // driver not inventing a slot the plan did not: what comes back names the one
+                // document the call was given, where the whole of what it was given is one
+                // document, and no document otherwise.
+                let spec = policy
+                    .before_processor(&format!("step_{index}"), step.reads(), &asked, None, slots)
+                    .map_err(|d| d.to_string())?;
+                let asked_at = std::time::Instant::now();
+                let processed = crate::processor::run(policy, chat, slots, &spec);
+                let waited = asked_at.elapsed();
+                accounting.elapsed.inference += waited;
+                let usage = match &processed {
+                    Ok(done) => Some(done.usage),
+                    Err(crate::processor::ProcessorError::Chat(error)) => error.completed_usage(),
+                    Err(_) => None,
+                };
+                if let Some(usage) = usage {
+                    accounting.spent.add_usage(usage);
+                }
+                accounting.publish(reporter);
+                let mut processed = match processed {
+                    Ok(done) => {
+                        if let Some(written) = &done.substituted {
+                            reporter.notice(
+                                bravebot_i18n::t!(processor_model_substituted, model = written)
+                                    .to_string(),
+                            );
+                        }
+                        done
+                    }
+                    Err(crate::processor::ProcessorError::Chat(error))
+                        if error.is_empty_reply() && !retried =>
+                    {
+                        retried = true;
+                        continue;
+                    }
+                    Err(error) => return Err(error.to_string()),
+                };
+
+                if let Some(document) = processed.document.take() {
+                    break (spec, processed, document);
+                }
+                // A slot the plan only shows the person has no file for an unmarked answer to
+                // land in: what the processor said goes to the person either way, so it stands as
+                // the answer, at its own label, rather than failing the step.
+                if shown_only && let Some(said) = processed.note.take() {
+                    break (spec, processed, said);
+                }
+                if retried {
+                    return Err(
+                        "the processor produced no document, so there is nothing to store"
+                            .to_string(),
+                    );
+                }
+                retried = true;
+                asked = Labelled::trusted(format!("{}\n\n{MARK_AGAIN}", step.text("instruction")));
             };
             let note = policy.render_in_place("process", &document, |text| {
                 crate::tools::tally(text.lines().count(), "line", "lines")
@@ -1554,12 +1602,18 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             let proof = policy
                 .declassify(&slot, content.label())
                 .map_err(|d| d.to_string())?;
-            let text = content.clone().declassify(&proof);
-            Ok(Done {
-                note: format!(
+            // Counted inside the kernel on the still-labelled answer, as the process step does,
+            // so the text released below is carried to the screen and not read on the way.
+            let note = policy.render_in_place("answer", &content, |text| {
+                format!(
                     "{} shown",
                     crate::tools::tally(text.lines().count(), "line", "lines")
-                ),
+                )
+            });
+            let note = release_note(policy, note);
+            let text = content.clone().declassify(&proof);
+            Ok(Done {
+                note,
                 answer: Some(Answered {
                     shown: text,
                     value: content,
@@ -1644,6 +1698,19 @@ fn write<S: Sink, C: Confirmer>(
     index: usize,
     step: &Step,
 ) -> Result<Done, String> {
+    // The mode is read again here, because the person can choose plan mode while the run walks and
+    // the plan was checked once, before it was put to them (MODE-3, MODE-8). Before the scan and
+    // before any prompt: a body the plan carried into a vouched path raises no prompt for a mode
+    // to refuse, so this is the only place the refusal can be made.
+    let mode = permission_mode.get();
+    if mode.refuses_writes() {
+        policy.refuse_write_in_mode(&format!("step {}: write_file", index + 1), mode.name());
+        return Err(
+            "plan mode refuses a write, so nothing was written. Leave plan mode and ask again."
+                .to_string(),
+        );
+    }
+
     let path = locked(policy, index, "path")?;
 
     // What a processor said about the body, where a processor produced it. Filled below, from the
@@ -1772,6 +1839,7 @@ fn write<S: Sink, C: Confirmer>(
             untrusted: !body_label.is_trusted(),
             remark,
             credentials: to_approve,
+            protected: crate::tools::write_is_protected(workspace, &path),
             may_always: standing.may_always,
             record: standing.record.clone(),
         };
@@ -1779,10 +1847,11 @@ fn write<S: Sink, C: Confirmer>(
         let mode = permission_mode.get();
         let answer = confirmer.confirm_write(&request);
         policy.record_answer(
-            mode.answers_a_write_unasked(!request.credentials.is_empty())
+            mode.answers_a_write_unasked(!request.credentials.is_empty(), request.protected)
                 .then(|| mode.name()),
         );
         if !answer.approved() {
+            policy.refuse_unapproved_write(&format!("step {}: write_file", index + 1));
             return Err(format!("the user did not approve writing {path}"));
         }
         standing.keep(policy, answer);

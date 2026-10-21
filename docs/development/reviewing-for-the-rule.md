@@ -55,8 +55,11 @@ data, so it is used everywhere legitimately, and only a reader can say which is 
 that count and `make check-spec` fails until somebody records it, which puts the question in front
 of a reviewer without answering it.
 
-Four places do branch on untrusted bytes, deliberately. Three are in the kernel and the fourth is
-the search in `bravebot-agent`. All four are named under Known costs in
+Seven places do branch on untrusted bytes, deliberately. Three are in the kernel, the fourth is
+the search in `bravebot-agent`, the fifth is the wording of the `lsp` diagnostics sentence from
+the counts a server computed, in `crates/agent/src/lsp.rs`, the sixth is `read_git`, also in
+`bravebot-agent`, and the seventh is the text-or-binary sniff of a read of an unvouched file, in
+`Workspace::survey` and `Workspace::read`. All seven are named under Known costs in
 [specs/labels.md](../specs/labels.md), because an unlisted exception is indistinguishable from a
 violation. A further one that mints a witness of its own moves a pinned count and so cannot arrive
 quietly. One added inside a function that already holds a counted `declassify` moves nothing: the
@@ -67,7 +70,12 @@ bytes `policy.rs` released. The fourth holds none either: `Workspace::grep_shape
 `crates/agent/src/workspace.rs` opens files with `std::fs::read_to_string` and compares each line
 with `Regex::matches`, and no pinned symbol counts that, so a second comparison of the same kind
 elsewhere is found by reading the diff. What the comparison decides reaches the planner through
-the `search` function in `crates/agent/src/tools.rs`, whose releases are counted gates.
+the `search` function in `crates/agent/src/tools.rs`, whose releases are counted gates. The sixth
+is the same shape in `crates/agent/src/git/`: `Repository::search_blob` and `Repository::patch`
+compare a blob's bytes, and `Workspace::read_git` labels the answer from the paths shown, so a
+comparison added to a third file there is found by reading the diff as well.
+The seventh is the same shape: `bravebot_filetype::looks_binary` holds no `declassify`, so a second
+sniff of untrusted bytes elsewhere is found by reading the diff.
 
 ## The inverse mistake: inventing a violation
 

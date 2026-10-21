@@ -138,15 +138,20 @@ not asking.
 
 A planner that loops back over the same decision does not make the user restate it, and a set
 where some are already settled shows only the rest. Questions differing anywhere, including in
-their tag, are different questions.
+their tag, are different questions. `/clear` and `/branch` begin another session, and the answers
+given before do not carry into it. The plan put by `propose_plan` is not one of these questions: it
+is a permission to change mode, and it is put under a key of its own every time, so a plan proposed
+again is asked again ([MODE-14](../permission-modes.md#MODE-14)).
 
 `verified-by: bravebot_core::ask::the_key_distinguishes_questions_that_differ_anywhere`
 `verified-by: bravebot_core::ask::the_key_distinguishes_questions_that_differ_in_their_tag`
 `verified-by: bravebot_core::ask::no_question_can_spell_the_key_of_another`
 `verified-by: bravebot_core::ask::a_choice_with_no_detail_differs_from_one_with_an_empty_detail`
 `verified-by: bravebot_core::ask::the_key_is_stable_for_the_same_question`
+`verified-by: bravebot_agent::tools::the_same_plan_proposed_again_is_put_under_a_new_key`
 `verified-by: bravebot_core::ask::two_series_holding_the_same_questions_in_a_different_order_have_different_keys`
 `verified-by: bravebot_tui::ask::a_series_answered_entirely_from_memory_asks_nothing`
+`verified-by: bravebot_tui::state::clearing_the_conversation_forgets_the_answers_to_the_planners_questions`
 `verified-by: bravebot_tui::ask::remembered_answers_keep_their_places_beside_the_fresh_ones`
 `verified-by: bravebot_cli::plain::a_question_asked_again_in_a_session_in_lines_is_answered_from_memory`
 `verified-by: bravebot_cli::plain::a_series_with_some_questions_settled_puts_only_the_rest`

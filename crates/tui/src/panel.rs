@@ -7,6 +7,7 @@
 
 use crate::state::Session;
 use crate::theme;
+use bravebot_aichat::protocol::Cached;
 use bravebot_i18n::t;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -16,6 +17,24 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 
 /// Columns the panel takes, its border included.
 pub const WIDTH: u16 = 36;
+
+/// The fewest columns the panel can be dragged down to, border included.
+pub const NARROWEST_PANEL: u16 = 24;
+
+/// Columns the transcript keeps whatever the panel is dragged to.
+const TRANSCRIPT_MINIMUM: u16 = 64;
+
+/// A requested width held between the panel's minimum and what leaves the transcript its own on a
+/// terminal `columns` wide.
+pub fn clamped(width: u16, columns: u16) -> u16 {
+    let most = columns
+        .saturating_sub(TRANSCRIPT_MINIMUM)
+        .max(NARROWEST_PANEL);
+    width.clamp(NARROWEST_PANEL, most)
+}
+
+/// Columns at the left of each panel row that hold no text: the border and the space after it.
+pub const INSET: u16 = 2;
 
 /// The narrowest terminal the panel is drawn on, which leaves the transcript 64 columns.
 pub const NARROWEST: u16 = 100;
@@ -185,10 +204,20 @@ pub fn lines(session: &Session, width: u16, height: u16) -> Vec<Line<'static>> {
     laid_out(session, width, height).0
 }
 
+/// The screen rows of a panel drawn over `area` that continue on the row below, as the two halves
+/// of the session id do. A copy joins them without a line break.
+pub fn continued_rows(session: &Session, area: Rect) -> Vec<u16> {
+    laid_out(session, area.width, area.height)
+        .2
+        .into_iter()
+        .map(|row| area.y + row as u16)
+        .collect()
+}
+
 /// Draw the panel over `area`, its border on the left, each shortened address a link to the
 /// address it stands for.
 pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) {
-    let (rows, links) = laid_out(session, area.width, area.height);
+    let (rows, links, _) = laid_out(session, area.width, area.height);
     Clear.render(area, buffer);
     Paragraph::new(rows)
         .block(Block::default().borders(Borders::LEFT).border_style(dim()))
@@ -205,14 +234,19 @@ pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) {
     }
 }
 
-/// The rows [`lines`] gives, and where among them the links are.
-fn laid_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, Vec<Link>) {
+/// The rows [`lines`] gives, where among them the links are, and which of them continue on the
+/// row below.
+fn laid_out(
+    session: &Session,
+    width: u16,
+    height: u16,
+) -> (Vec<Line<'static>>, Vec<Link>, Vec<usize>) {
     let height = usize::from(height);
     if height == 0 {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new());
     }
     let text = text_width(width);
-    let (mut body, mut links) = head(session, text);
+    let (mut body, mut links, mut continued) = head(session, text);
 
     let languages = session.language_servers().programs();
     if !languages.is_empty() {
@@ -255,7 +289,8 @@ fn laid_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, 
         dim(),
     ));
     links.retain(|link| link.row < height - 1);
-    (body, links)
+    continued.retain(|row| *row < height - 1);
+    (body, links, continued)
 }
 
 /// Whether a frame `columns` by `rows` draws the panel with its Context section whole.
@@ -265,19 +300,27 @@ fn laid_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, 
 /// both rather than leave the reading on neither.
 pub fn shows_context(session: &Session, columns: u16, rows: u16) -> bool {
     // The hint line takes one row and the key that hides the panel another.
-    drawn(session, columns) && head(session, text_width(WIDTH)).0.len() + 2 <= usize::from(rows)
+    drawn(session, columns)
+        && head(session, text_width(session.panel_columns(columns)))
+            .0
+            .len()
+            + 2
+            <= usize::from(rows)
 }
 
 /// One column for the border and one for the space after it.
 fn text_width(width: u16) -> usize {
-    usize::from(width).saturating_sub(2).max(1)
+    usize::from(width).saturating_sub(usize::from(INSET)).max(1)
 }
 
 /// The Session, Goal, Links and Context sections, each left out where it has nothing to say but for
-/// the context, which always has a reading, and where in them the links are.
-fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>) {
+/// the context, which always has a reading, where in them the links are, and which rows continue on
+/// the row below.
+fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<usize>) {
     let mut body: Vec<Line<'static>> = Vec::new();
     let mut links = Vec::new();
+    let mut continued = Vec::new();
+    let mut id_row = None;
 
     let identity = session.identity();
     let (name, addresses) = shortened(&crate::render::printable(&crate::status::cut(
@@ -314,6 +357,9 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>) {
         // last hyphen over two rows rather than cut.
         let id = crate::render::printable(id);
         let (first, second) = id.split_at(id.rfind('-').map_or(0, |at| at + 1));
+        if !first.is_empty() && !second.is_empty() {
+            id_row = Some(about.len());
+        }
         for half in [first, second] {
             if !half.is_empty() {
                 about.push(row(half.to_string(), dim()));
@@ -324,6 +370,7 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>) {
         let count = about.len();
         section(&mut body, t!(panel_session).to_string(), about);
         let first = body.len() - count;
+        continued.extend(id_row.map(|row| first + row));
         links.extend(name_links.into_iter().map(|link| Link {
             row: first + link.row,
             ..link
@@ -399,26 +446,31 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>) {
     if let Some(rate) = crate::render::cache_hit_rate(session) {
         context.push(row(rate, dim()));
     }
-    if let Some(cached) = session.cached() {
-        context.push(row(
-            t!(
-                panel_cache_read,
-                tokens = crate::status::tokens(cached.read_tokens)
-            )
-            .to_string(),
-            dim(),
-        ));
-        context.push(row(
-            t!(
-                panel_cache_written,
-                tokens = crate::status::tokens(cached.written_tokens)
-            )
-            .to_string(),
-            dim(),
-        ));
+    // A zero is a service that reported nothing as much as a cache that missed, so it draws nothing.
+    if let Some(cached) = session.cached().filter(Cached::any) {
+        if cached.read_tokens > 0 {
+            context.push(row(
+                t!(
+                    panel_cache_read,
+                    tokens = crate::status::tokens(cached.read_tokens)
+                )
+                .to_string(),
+                dim(),
+            ));
+        }
+        if cached.written_tokens > 0 {
+            context.push(row(
+                t!(
+                    panel_cache_written,
+                    tokens = crate::status::tokens(cached.written_tokens)
+                )
+                .to_string(),
+                dim(),
+            ));
+        }
     }
     section(&mut body, t!(panel_context).to_string(), context);
-    (body, links)
+    (body, links, continued)
 }
 
 /// The plan in at most `room` rows, the task being worked on among them.
@@ -903,6 +955,68 @@ mod tests {
                 .any(|row| row.contains(&t!(panel_cache_read, tokens = "").to_string())),
             "a cache figure was drawn before any turn reported one: {none:#?}"
         );
+    }
+
+    fn cache_row_count(session: &Session) -> usize {
+        texts(&lines(session, WIDTH, 30))
+            .iter()
+            .filter(|row| {
+                row.contains(&t!(panel_cache_read, tokens = "").to_string())
+                    || row.contains(&t!(panel_cache_written, tokens = "").to_string())
+            })
+            .count()
+    }
+
+    /// A zero says a service that reported nothing exactly as much as it says a missed cache, so
+    /// it draws nothing, and a write-only turn draws the write alone.
+    #[test]
+    fn a_zero_cache_figure_is_not_drawn() {
+        let mut session = Session::new("none");
+        session.served_from_cache(Cached::default(), 20_000);
+        assert_eq!(cache_row_count(&session), 0);
+
+        session.served_from_cache(
+            Cached {
+                read_tokens: 0,
+                written_tokens: 3_000,
+            },
+            20_000,
+        );
+        let rows = texts(&lines(&session, WIDTH, 30));
+        let written = t!(panel_cache_written, tokens = crate::status::tokens(3_000)).to_string();
+        assert!(rows.iter().any(|row| row.contains(&written)), "{rows:#?}");
+        assert_eq!(cache_row_count(&session), 1, "{rows:#?}");
+    }
+
+    /// A turn stopped or failed before any request completed has reported nothing, so it neither
+    /// draws figures in a session that has none nor leaves the ones an earlier turn had (BACKEND-31).
+    #[test]
+    fn a_turn_ended_before_any_request_reports_no_cache_figures() {
+        let figures = Cached {
+            read_tokens: 12_000,
+            written_tokens: 3_000,
+        };
+        let ending = || bravebot_agent::Ending::Stopped { attempts: None };
+        for fail in [false, true] {
+            let end = |session: &mut Session| {
+                if fail {
+                    session.fail("boom", ending());
+                } else {
+                    session.stopped(None);
+                }
+            };
+            let mut fresh = Session::new("none");
+            end(&mut fresh);
+            assert_eq!(fresh.cached(), None, "fail: {fail}");
+            assert_eq!(fresh.cached_prompt_tokens(), None, "fail: {fail}");
+
+            let mut earlier = Session::new("none");
+            earlier.served_from_cache(figures, 20_000);
+            end(&mut earlier);
+            assert_eq!(earlier.cached(), None, "fail: {fail}");
+            assert_eq!(earlier.cached_prompt_tokens(), None, "fail: {fail}");
+            assert_eq!(cache_row_count(&earlier), 0, "fail: {fail}");
+        }
     }
 
     /// A loop spends while nobody is watching, and the panel can be closed or the terminal too
@@ -1729,6 +1843,43 @@ mod tests {
         );
     }
 
+    /// The session record cannot tell a turn that emptied its list from one that kept none, so a
+    /// report with no rows must leave the plan as the report before it in the turn set it, not
+    /// fall back to an earlier turn's plan or to nothing.
+    #[test]
+    fn an_empty_report_after_one_with_rows_keeps_that_plan() {
+        let shown = |session: &Session| texts(&lines(session, WIDTH, 30));
+        let mut session = working_on(plan(&[("Earlier turn", Status::Done)]));
+        session.complete("done", Vec::new(), 0);
+
+        session.type_char('b');
+        session.submit();
+        session.set_todos(plan(&[("Later turn", Status::Active)]));
+        session.set_todos(Vec::new());
+        let during = shown(&session);
+        assert!(
+            during.iter().any(|row| row.ends_with("Later turn"))
+                && !during.iter().any(|row| row.ends_with("Earlier turn")),
+            "the empty report changed the plan mid-turn: {during:#?}"
+        );
+
+        session.complete("done", Vec::new(), 0);
+        let after = shown(&session);
+        assert!(
+            after.iter().any(|row| row.ends_with("Later turn"))
+                && !after.iter().any(|row| row.ends_with("Earlier turn")),
+            "the plan fell back once the turn ended: {after:#?}"
+        );
+
+        let mut first = working_on(plan(&[("Only plan", Status::Active)]));
+        first.set_todos(Vec::new());
+        first.complete("done", Vec::new(), 0);
+        assert!(
+            shown(&first).iter().any(|row| row.ends_with("Only plan")),
+            "the plan went when its turn was the first"
+        );
+    }
+
     /// TODO-3 in the panel, which draws the plan a second time and from its own branch. The
     /// transcript test beside this one draws neither, so without this the panel could show a
     /// cancelled task with the finished tick and nothing would fail.
@@ -1844,5 +1995,178 @@ mod tests {
             above.contains(&t!(panel_earlier, count = 12).to_string()),
             "rows left out above are counted as more to come: {above:#?}"
         );
+    }
+
+    fn mouse(
+        kind: ratatui::crossterm::event::MouseEventKind,
+        row: u16,
+        column: u16,
+    ) -> ratatui::crossterm::event::MouseEvent {
+        ratatui::crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+        }
+    }
+
+    /// Hold the left button down on `from`, move to `to` and let go, as the event loop would.
+    fn dragged(session: &mut Session, from: (u16, u16), to: (u16, u16)) -> Vec<crate::app::Action> {
+        use ratatui::crossterm::event::{MouseButton::Left, MouseEventKind::*};
+        [Down(Left), Drag(Left), Up(Left)]
+            .into_iter()
+            .zip([from, to, to])
+            .map(|(kind, (row, column))| {
+                crate::app::handle_mouse(session, mouse(kind, row, column))
+            })
+            .collect()
+    }
+
+    /// Dragging the border moves it, the panel takes what is to its right, and the transcript and
+    /// the input wrap to the columns left of it. A panel that kept 36 columns, or a transcript laid
+    /// out at the old width, fails here.
+    #[test]
+    fn a_drag_on_the_border_moves_it_and_the_transcript_rewraps() {
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        assert_eq!(session.laid.width, 84, "the default is 36 columns");
+        dragged(&mut session, (5, 84), (5, 70));
+        let rows = screen(&mut session, 120, 30);
+        assert_eq!(session.laid.width, 70, "the transcript kept its old width");
+        assert_eq!(session.panel_columns(120), 50);
+        let cell = |x: usize| rows[5].chars().nth(x).unwrap_or(' ');
+        assert_eq!(cell(70), '│', "the border is not where it was dragged to");
+        assert_ne!(cell(84), '│', "the border is also where it was");
+    }
+
+    /// A drag past either end stops at the minimum panel and at the transcript's 64 columns, so
+    /// neither pane can be dragged out of existence.
+    #[test]
+    fn the_width_is_clamped_at_both_ends() {
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        dragged(&mut session, (5, 84), (5, 0));
+        assert_eq!(
+            session.panel_columns(120),
+            56,
+            "the transcript lost columns"
+        );
+        screen(&mut session, 120, 30);
+        assert_eq!(session.laid.width, 64);
+        let border = session.laid.width;
+        dragged(&mut session, (5, border), (5, 119));
+        assert_eq!(session.panel_columns(120), NARROWEST_PANEL);
+    }
+
+    /// A terminal narrowed while the panel is open draws it at what fits, and widened again it is
+    /// back at the width that was dragged to: the choice is the person's, the clamp is the screen's.
+    #[test]
+    fn a_narrowed_terminal_reclamps_without_forgetting_the_choice() {
+        let mut session = opened_at(160);
+        screen(&mut session, 160, 30);
+        dragged(&mut session, (5, 124), (5, 90));
+        assert_eq!(session.panel_columns(160), 70);
+        assert_eq!(session.panel_columns(120), 56);
+        assert_eq!(session.panel_columns(100), 36);
+        assert_eq!(session.panel_columns(160), 70, "the choice was overwritten");
+    }
+
+    /// A press on the border is the handle and never the start of a selection, and the release of
+    /// that drag copies nothing. A press one column to the right is the panel's text and still
+    /// selects, so the border is exactly one column wide.
+    #[test]
+    fn a_drag_from_the_border_never_selects_or_copies() {
+        use crate::app::Action;
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        let actions = dragged(&mut session, (5, 84), (8, 100));
+        assert!(session.selection.is_none(), "the drag selected text");
+        assert!(!actions.contains(&Action::Copy), "the release copied");
+        assert!(!session.dragging_panel(), "the drag was never let go");
+
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        let actions = dragged(&mut session, (5, 90), (6, 95));
+        assert!(
+            session.selection.is_some(),
+            "text in the panel did not select"
+        );
+        assert_eq!(actions.last(), Some(&Action::Copy));
+    }
+
+    /// Move the pointer to `row` and `column` with no button held, as a terminal reports it, and
+    /// say what shape the session then asks for.
+    fn shape_at(session: &mut Session, row: u16, column: u16) -> crate::pointer::Shape {
+        let moved = mouse(
+            ratatui::crossterm::event::MouseEventKind::Moved,
+            row,
+            column,
+        );
+        crate::app::handle_mouse(session, moved);
+        session.pointer_shape()
+    }
+
+    /// The border is the panel's left column from its first row to its last, so a pointer one
+    /// column to either side, or on the hint line under it, is not told it can drag.
+    #[test]
+    fn the_resize_pointer_is_over_the_border_column_and_nowhere_else() {
+        use crate::pointer::Shape::{Default, ResizeColumns};
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        let panel = session.laid.panes.last().expect("panel").1;
+        let (first, last, below) = (panel.top(), panel.bottom() - 1, panel.bottom());
+        let border = panel.left();
+        assert_eq!(shape_at(&mut session, first, border), ResizeColumns);
+        assert_eq!(shape_at(&mut session, last, border), ResizeColumns);
+        assert_eq!(shape_at(&mut session, below, border), Default, "below it");
+        assert_eq!(shape_at(&mut session, 5, border - 1), Default, "left of it");
+        assert_eq!(
+            shape_at(&mut session, 5, border + 1),
+            Default,
+            "right of it"
+        );
+    }
+
+    /// A drag keeps the resize pointer while the pointer is nowhere near where the border was when
+    /// the frame was drawn, and when it ends the pointer is the resize one only if it rests on the
+    /// border where the next frame put it. A shape taken from hovering alone drops in the first, and
+    /// one taken from the drag alone is wrong in the second.
+    #[test]
+    fn a_drag_holds_the_resize_pointer_and_its_end_follows_the_border() {
+        use crate::pointer::Shape::{Default, ResizeColumns};
+        use ratatui::crossterm::event::{MouseButton::Left, MouseEventKind::*};
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        let step = |session: &mut Session, kind, column| {
+            crate::app::handle_mouse(session, mouse(kind, 5, column));
+            session.pointer_shape()
+        };
+        assert_eq!(step(&mut session, Down(Left), 84), ResizeColumns);
+        assert_eq!(
+            step(&mut session, Drag(Left), 70),
+            ResizeColumns,
+            "the drag ended the shape before the border had been drawn where the pointer is"
+        );
+        screen(&mut session, 120, 30);
+        assert_eq!(
+            step(&mut session, Up(Left), 70),
+            ResizeColumns,
+            "at rest on the border"
+        );
+        assert_eq!(step(&mut session, Moved, 40), Default, "moved off it");
+    }
+
+    /// A panel closed while the pointer rests on its border leaves the pointer over nothing, with
+    /// no report of the pointer to say so.
+    #[test]
+    fn a_panel_closed_under_the_pointer_gives_the_resize_pointer_back() {
+        use crate::pointer::Shape::{Default, ResizeColumns};
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        let border = session.laid.panes.last().expect("panel").1.left();
+        assert_eq!(shape_at(&mut session, 5, border), ResizeColumns);
+        session.toggle_panel();
+        screen(&mut session, 120, 30);
+        assert_eq!(session.pointer_shape(), Default);
     }
 }

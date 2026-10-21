@@ -20,9 +20,10 @@ For each site, read the function it is in, from the release to the end, and deci
 
 Two things that look like decisions and are not, so do not report them without more:
 
-- The four exceptions recorded under `## Known costs` in `{labels_spec}`. Splitting a processor's
-  answer at the mark, the trailing-newline check, reading a one-word verdict out of a check, and the
-  search comparing its pattern against files nobody vouched for are admitted, with the attacker's
+- The five exceptions recorded under `## Known costs` in `{labels_spec}`. Splitting a processor's
+  answer at the mark, the trailing-newline check, reading a one-word verdict out of a check, the
+  search comparing its pattern against files nobody vouched for, and `read_git` comparing blobs
+  committed from paths the map distrusts are admitted, with the attacker's
   whole gain enumerated beside each. If a site is one of those, it belongs to the `known-costs`
   lane, not this one.
 - Measuring without reading. `Labelled::shape` returns lines and bytes and is documented as not a

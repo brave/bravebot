@@ -4,10 +4,15 @@ title: The input box
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/app/terminal.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/input.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/vi.rs
+  - crates/tui/src/state/completion.rs
+  - crates/tui/src/state/editing.rs
+  - crates/tui/src/state/scroller.rs
+  - crates/tui/src/state/settings.rs
   - crates/tui/src/wrap.rs
   - crates/tui/src/editor.rs
   - crates/tui/src/history_search.rs
@@ -17,6 +22,8 @@ governs:
   - crates/tui/src/keybindings.rs
   - crates/config/src/settings.rs
   - crates/tui/src/command_table.rs
+  - crates/ui-bridge/src/running.rs
+  - ui/src/renderer/interjecting.ts
 documented-by:
   - docs/website/docs/using/interactive-mode.md
   - docs/website/docs/using/vi-mode.md
@@ -42,6 +49,7 @@ transcript, and the box stays beneath the list.
 
 `verified-by: bravebot_tui::render::the_input_box_grows_with_the_text`
 `verified-by: bravebot_tui::render::the_input_box_stops_growing_at_the_cap`
+`verified-by: bravebot_tui::render::the_input_box_holds_ten_rows_of_text_and_no_more`
 `verified-by: bravebot_tui::render::a_very_long_input_scrolls_to_the_cursor`
 `verified-by: bravebot_tui::render::the_box_grows_mid_turn_too`
 `verified-by: bravebot_tui::render::a_long_list_leaves_room_for_the_box_and_the_transcript`
@@ -78,6 +86,10 @@ The row beneath the box goes with the marker. What is drawn there is what the li
 carries, so a file whose marker has been rubbed out is drawn nowhere, and one whose marker is still
 there is drawn whether or not a turn is running.
 
+What a marker named is not itself taken off: the attachment stores keep it until the line is sent or
+cleared, and the row and the turn both read the line for which markers still name one. Undoing the
+edit that deleted a marker is enough to have the attachment back with it (INPUT-44).
+
 **Why.** The turn was always built from the markers the line still held, so a deleted one already
 sent nothing. What lingered was the row, which is the only place a person can see whether rubbing
 the marker out worked: left drawn, it says a file is going that is not.
@@ -89,6 +101,7 @@ the marker out worked: left drawn, it says a file is going that is not.
 `verified-by: bravebot_tui::drop::sending_a_line_clears_what_was_attached_to_it`
 `verified-by: bravebot_tui::render::an_attached_file_is_named_under_the_box`
 `verified-by: bravebot_tui::render::deleting_the_marker_takes_the_row_out_from_under_the_box`
+`verified-by: bravebot_tui::state::undo_brings_back_a_deleted_marker_with_its_attachment`
 
 
 <a id="INPUT-4"></a>
@@ -103,7 +116,7 @@ read against what is happening, in this order:
 
 | What is happening | What Ctrl-C does |
 |---|---|
-| a turn in flight, or a command running | stops it, and the session stays where it was |
+| a turn in flight, a summary, an aside or a goal check, or a command running | stops it, and the session stays where it was |
 | nothing running, a line in the box | takes the line, and offers the way out |
 | nothing running, an empty box | offers the way out |
 | nothing running, an empty box, the way out already offered | ends the session |
@@ -151,12 +164,15 @@ damage is that a stopped turn puts its prompt back where the box can take it, so
 and the time rather than the work. That is a bound and not a defence, and it is written here so nobody
 reads the rung that leaves as protecting the rest of the ladder.
 
-Escape only ever stops, and never leaves. A summary is the one exception to the table: it is a
-single request with no round for a stop to land between, so nothing there can stop it and Ctrl-C
-leaves once it comes back. An aside is such a request too, and so is the check a goal is judged by,
-which [goal.md](goal.md) governs. What the table leaves out of all three is a mode: a scroller, a
-delegate's view or a prompt search open over the request answers both keys itself, exactly as it
-does over a turn, and the press that reaches the request is the one after the mode has closed.
+Escape only ever stops, and never leaves. A summary, an aside and the check a goal is judged by are
+each one request. Both keys stop one the way they stop a turn: the request is walked away from, the
+conversation is as it was, and the person is told. A summary that has already come back is kept, the
+stop having landed too late to be one. Stopping a goal check also takes the goal off
+([GOAL-10](goal.md#GOAL-10)). No press made while one of these is out leaves.
+
+What the table leaves out of all of them is a mode: a picker, a scroller, a delegate's view or a
+prompt search open over the request answers both keys itself, exactly as it does over a turn, and
+the press that reaches the request is the one after the mode has closed.
 
 Taking the line says so, on the line beneath the box, and says which key ends the session. The
 offer lives for exactly one press, since it answers the press just made and the next press is the
@@ -179,6 +195,15 @@ the person presses again, toward the presses at an empty box that end the sessio
 The reply stops arriving. When no work followed the prompt, no prompts are queued, and the box is
 empty, the prompt returns for editing. The status identifies a deliberate cancellation rather than
 a failure or a completed answer.
+A prompt that returns leaves the conversation the planner reads as well as the transcript, together
+with whatever the turn read for it, so the request that follows a resend holds the prompt once
+rather than once for every send. That holds while the planner has done nothing. A turn it had
+answered or in which it had called a tool keeps its messages, because what it did is not undone by
+taking the prompt back, and so does a turn in which compaction ran. A message that reached the turn
+after its prompt, such as one from another session, stays. A prompt that stays sent stays in the
+conversation. What the planner was shown is not taken back: the conversation keeps the integrity
+and confidentiality it had reached and the references it had handed out. The turn is recorded with
+no prompt and no position for one in the conversation.
 Dropped files and pasted pictures return with their markers, keeping their identities and order
 within each attachment store. Resubmitting includes each once in the new submission, in the
 request order described by [dropping.md](dropping.md). Editor attachment stores remain in memory
@@ -247,7 +272,15 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::app::the_way_out_stops_being_offered_at_the_next_press`
 `verified-by: bravebot_tui::render::the_way_out_is_offered_where_the_line_went`
 `verified-by: bravebot_tui::app::escape_only_stops_and_ctrl_c_is_read_against_what_is_happening`
-`verified-by: bravebot_tui::app::a_single_request_says_it_cannot_be_stopped_and_leaves_on_ctrl_c`
+`verified-by: bravebot_tui::app::a_stop_key_stops_a_summary_or_an_aside_and_never_leaves`
+`verified-by: bravebot_tui::app::a_stopped_summary_question_or_brief_says_so_and_is_not_reported_as_a_failure`
+`verified-by: bravebot_tui::app::a_summary_that_came_back_is_kept_though_a_stop_landed_with_it`
+`verified-by: bravebot_agent::turn::a_stop_pressed_during_a_summary_reaches_the_request_and_leaves_the_conversation_whole`
+`verified-by: bravebot_agent::turn::a_stop_pressed_during_a_question_reaches_the_request_and_nothing_is_answered`
+`verified-by: bravebot_tui::app::a_stop_key_takes_the_goal_off_and_stops_the_check`
+`verified-by: bravebot_tui::app::a_stopped_goal_check_is_not_reported_as_a_failure`
+`verified-by: bravebot_agent::turn::a_stop_pressed_while_a_summary_is_out_walks_away_from_the_request`
+`verified-by: bravebot_agent::turn::a_stop_pressed_during_a_goal_check_reaches_the_request_and_no_verdict_comes_back`
 `verified-by: bravebot_tui::app::stopping_the_work_takes_the_offer_to_leave_down_with_it`
 `verified-by: bravebot_tui::app::stopping_a_single_request_takes_the_offer_to_leave_down`
 `verified-by: bravebot_tui::app::stopping_a_goal_check_takes_the_offer_to_leave_down`
@@ -257,6 +290,17 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_the_model_to_start_writing`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_an_endpoint_that_has_not_answered`
 `verified-by: bravebot_tui::state::cancelling_before_anything_happens_still_un_sends_the_prompt`
+`verified-by: bravebot_tui::undo_tests::a_prompt_stopped_before_any_reply_is_sent_once_when_it_is_sent_again`
+`verified-by: bravebot_tui::undo_tests::a_stopped_prompt_that_stays_sent_stays_in_the_conversation`
+`verified-by: bravebot_tui::undo_tests::a_prompt_stopped_after_a_round_of_tool_calls_keeps_the_round_in_the_conversation`
+`verified-by: bravebot_agent::conversation::a_turn_taken_back_leaves_the_messages_a_turn_that_never_ran_would_have`
+`verified-by: bravebot_agent::conversation::a_turn_taken_back_keeps_a_message_that_reached_it_after_its_opening`
+`verified-by: bravebot_agent::conversation::a_turn_the_planner_has_answered_is_not_taken_back`
+`verified-by: bravebot_agent::conversation::a_turn_taken_back_does_not_forget_what_the_planner_was_shown`
+`verified-by: bravebot_agent::conversation::a_turn_taken_back_keeps_the_note_a_resume_added`
+`verified-by: bravebot_agent::conversation::a_turn_that_put_in_no_opening_takes_back_nothing`
+`verified-by: bravebot_agent::conversation::a_turn_that_compacted_is_not_taken_back`
+`verified-by: bravebot_tui::app::a_prompt_taken_out_of_the_conversation_is_recorded_without_an_offset`
 `verified-by: bravebot_tui::sessions::cancelled_attachments_return_to_the_editor_and_the_next_request`
 `verified-by: bravebot_tui::sessions::cancelled_attachments_preserve_a_stashed_draft`
 `verified-by: bravebot_tui::sessions::cancellation_keeps_attachment_ownership_when_the_prompt_stays_sent`
@@ -790,7 +834,8 @@ cannot write ([SANDBOX-30](sandboxing.md#SANDBOX-30)), and what runs is that nam
 symlink behind it points at. The name is only kept while it still reaches the same program: a link
 that now points elsewhere, or one that no longer resolves, is started by resolved path instead. This
 is the editor alone. Everywhere a program is approved before it runs, the approval names the file
-that ran, because a name can be repointed afterwards.
+that ran, because a name can be repointed afterwards. The editor's own lookups of other programs
+search the same directories alone ([SANDBOX-30](sandboxing.md#SANDBOX-30)).
 
 **Why.** MacVim installs `vim`, `vi` and `gvim` as links to a single shim that reads its own
 `argv[0]`, stays in the terminal for the `vi*` spellings and forks a detached GUI window for the
@@ -893,6 +938,7 @@ flight, which is aimed at something else entirely and costs the answer being wri
 
 `verified-by: bravebot_tui::app::up_takes_back_everything_waiting_rather_than_a_copy_of_it`
 `verified-by: bravebot_tui::app::up_walks_the_history_again_once_nothing_is_waiting`
+`verified-by: bravebot_tui::app::up_reaches_the_queue_only_from_the_top_row_of_a_paragraph`
 `verified-by: bravebot_tui::app::taking_the_queue_back_takes_it_out_of_the_turns_reach`
 `verified-by: bravebot_tui::app::a_prompt_the_turn_has_taken_cannot_be_taken_back`
 `verified-by: bravebot_tui::state::taking_the_queue_back_puts_every_waiting_prompt_in_the_box`
@@ -993,6 +1039,12 @@ and readline from disagreeing about what was last taken.
   modifier the chord arrives as Enter and only queues the line (INPUT-5). The offer beside the queue,
   which is where somebody reaches for it, is left off there; the list is drawn from one table for
   every terminal, as it is for Shift-Enter.
+- **Where the pointer's movement is reported, moving it between the two presses of Ctrl-C withdraws
+  the offer to leave.** A movement is a mouse report, and a mouse report withdraws the offer
+  ([INPUT-4](#INPUT-4)), so the second press offers again and a third leaves. That is the terminals
+  asked for a pointer shape ([PANEL-6](info-panel.md#PANEL-6)); elsewhere only the wheel and a click
+  withdraw it. A movement is not exempted, because the offer would then stand through input another
+  program can write, which is what withdrawing it is for.
 
 <a id="INPUT-19"></a>
 ### INPUT-19: Ctrl-R searches every prompt sent, and what is chosen goes into the box
@@ -1002,9 +1054,11 @@ again along with Escape and Ctrl-C. It opens on the newest prompt, seeded with w
 the person typed into the box, and with nothing where that line is a prompt walked back to: the
 history put that one there whole, and a search looking for it answers with it alone. While it is open
 every letter narrows the list rather than reaching the box, and each word typed has to appear
-somewhere in a prompt for it to be offered; the arrows walk the matches, Ctrl-S swaps between every
-prompt and the ones sent from this workspace, and backspacing past the start closes the search as the
-scroller's does. The chord is on the key list (INPUT-13), and in the border of the box while an older
+somewhere in a prompt for it to be offered; the arrows walk the matches, Ctrl-S cycles the scope through
+everywhere, this project and this session and back to everywhere, and backspacing past the start closes the search as the
+scroller's does. A paste, a dropped file and the empty paste that stands for a picture on the clipboard do
+nothing while it is open: they reach neither the box nor the search, no clipboard is read, and
+closing it with Escape leaves the box as it was. The chord is on the key list (INPUT-13), and in the border of the box while an older
 prompt is being walked back to, which is the moment somebody has shown they want one, except where
 that border is too narrow to hold it beside which prompt is being shown (INPUT-31).
 
@@ -1015,6 +1069,10 @@ in the box, that line being what the search was seeded with or the prompt the wa
 one and no way in at all when it is the hundredth: what a person remembers of an old prompt is a
 word out of the middle of it rather than how far back it was. Ctrl-R because every shell answers
 that chord with this question.
+
+A paste reaches the session by another route than a letter does, so keeping letters out of the box
+does not keep it out. The panel is drawn in place of the box, so a paste that reached the box would
+be found only when the search closed, as a prompt that is not the one the person left.
 
 A stored prompt is content, not an instruction: the file can be edited, on a shared machine by
 somebody else. Landing it in the box rather than in a request means the keystroke that sends it is
@@ -1041,6 +1099,7 @@ those the same way.
 `verified-by: bravebot_tui::app::a_letter_narrows_the_search_rather_than_reaching_the_box`
 `verified-by: bravebot_tui::app::enter_puts_the_chosen_prompt_in_the_box_without_sending_it`
 `verified-by: bravebot_tui::app::escape_closes_the_search_and_leaves_the_box_as_it_was`
+`verified-by: bravebot_tui::app::a_paste_and_a_drop_do_not_reach_the_line_while_the_search_is_open`
 `verified-by: bravebot_tui::app::backspacing_past_the_start_of_the_search_closes_it`
 `verified-by: bravebot_tui::app::the_arrows_walk_the_matches_while_the_search_is_open`
 `verified-by: bravebot_tui::history_search::typing_narrows_the_list_to_the_prompts_that_match`
@@ -1051,6 +1110,11 @@ those the same way.
 `verified-by: bravebot_tui::history_search::backspacing_widens_the_list`
 `verified-by: bravebot_tui::history_search::the_scope_narrows_to_the_prompts_sent_from_this_workspace`
 `verified-by: bravebot_tui::history_search::a_prompt_from_before_workspaces_were_kept_is_in_the_wide_list_only`
+`verified-by: bravebot_tui::history_search::the_scope_cycles_everywhere_project_session_and_back`
+`verified-by: bravebot_tui::history_search::the_session_scope_holds_this_sessions_prompts_and_nothing_else`
+`verified-by: bravebot_tui::history_search::an_empty_scope_is_skipped_and_one_scope_left_does_nothing`
+`verified-by: bravebot_tui::history_search::changing_the_scope_puts_the_cursor_on_the_newest_match`
+`verified-by: bravebot_tui::app::a_moved_chord_is_read_inside_the_search_it_opened`
 
 <a id="INPUT-20"></a>
 ### INPUT-20: the list says which prompt each row is
@@ -1060,7 +1124,12 @@ how long ago that prompt was sent, and nothing where the entry predates times be
 prompt under the cursor is drawn in full beside the list, with a word for how many lines did not
 fit; where the terminal is too narrow for two columns the list is what is kept. A window over more
 matches than fit says so, the scope in force is named, and a search matching nothing says that
-rather than showing an empty panel.
+rather than showing an empty panel. The scope is one of everywhere, this project and this session:
+this project holds the prompts sent from the workspace the session runs in, an entry recorded with
+no workspace is in everywhere only, and this session holds the prompts this process sent and the
+ones a resumed record holds. Up walks the same three scopes (INPUT-40), and the two share one
+definition of which entries each holds. A scope holding nothing is skipped by the cycle, and with
+one scope left Ctrl-S does nothing. The key line under the search says the chord cycles the scope.
 
 **Why.** A row is one line of what may be a paragraph, and two prompts about the same thing begin
 alike: what tells them apart is the rest of the text and when each was sent. An age is the one thing
@@ -1274,6 +1343,7 @@ vi gives `m` no key, and a box that waited for one would swallow the instruction
 `verified-by: bravebot_tui::list_picker::escape_and_ctrl_c_cancel`
 `verified-by: bravebot_tui::list_picker::the_arrows_and_vis_own_keys_walk_the_list`
 `verified-by: bravebot_tui::list_picker::enter_takes_the_row_under_the_cursor`
+`verified-by: bravebot_tui::app::a_style_chosen_in_the_config_panel_is_kept_and_said_in_the_transcript`
 `verified-by: bravebot_tui::config_prompt::every_row_says_what_it_means`
 
 <a id="INPUT-24"></a>
@@ -1478,6 +1548,10 @@ names a character a marker is spelled with, and it did exactly that before it wa
 `verified-by: bravebot_tui::state::the_underscore_key_is_the_first_word_of_the_row_its_count_names`
 `verified-by: bravebot_tui::state::the_bar_key_is_the_column_its_count_names`
 `verified-by: bravebot_tui::state::the_jumps_to_a_character_land_on_it_or_just_short_of_it`
+`verified-by: bravebot_tui::state::a_backward_jump_reaches_a_target_that_begins_the_line`
+`verified-by: bravebot_tui::state::a_backward_jump_only_looks_behind_the_caret_and_along_its_own_line`
+`verified-by: bravebot_tui::state::an_operator_takes_the_stretch_back_to_a_target_that_begins_the_line`
+`verified-by: bravebot_tui::state::a_backward_jump_can_land_on_a_marker_that_begins_the_line`
 `verified-by: bravebot_tui::state::a_jump_to_a_character_stays_on_its_own_line`
 `verified-by: bravebot_tui::state::the_repeat_keys_do_the_last_jump_again_and_then_the_other_way`
 `verified-by: bravebot_tui::state::a_repeat_with_nothing_to_repeat_does_nothing`
@@ -1921,9 +1995,9 @@ Block-wise selection is a known cost rather than a clause.
 ### INPUT-31: Ctrl-S on a prompt walked back to searches this workspace instead
 
 While the box holds a prompt reached by walking back through the history, Ctrl-S opens the search over
-the prompts sent, with the scope already narrowed to this workspace: the scope the search's own Ctrl-S
-selects (INPUT-19). It is that search in every other respect, opened on the newest match with nothing
-typed into it, closed the same way, and the wide list is one more press of the same key from inside it.
+the prompts sent, with the scope already on this project: the scope the search's own Ctrl-S
+cycles to after everywhere (INPUT-19). It is that search in every other respect, opened on the newest match with nothing
+typed into it, closed the same way, and the other scopes are further presses of the same key from inside it.
 On any other line the key still puts the line away or brings one back (INPUT-17), and a line put away
 earlier is still there afterwards. The border of the box names this chord beside Ctrl-R while an older
 prompt is being walked back to, and gives the two up one at a time where the row will not hold them
@@ -1949,23 +2023,31 @@ rendering fault rather than as a border with no room for all of it.
 `verified-by: bravebot_tui::render::a_border_gives_up_the_ways_in_one_at_a_time`
 
 <a id="INPUT-40"></a>
-### INPUT-40: Up walks every stored prompt, and the scope chord narrows it to this session's
+### INPUT-40: Up walks every stored prompt, and the scope chord cycles it through this project and this session
 
 Up and Down walk every stored prompt, from every session and workspace, and Up stops at the oldest
-of them (INPUT-18). While a sent prompt is on screen and this session has sent one, the scope
-chord, Ctrl-N by default, walks only the prompts this session sent, and the ones its record holds
-when it was resumed, staying on the prompt on screen, and pressed again goes back to every stored
-prompt. Where the prompt on screen is not this session's, the narrow scope lands on the newest of
-this session's before it, and failing that the oldest of them. The border of the box names the
-scope with the position, `All 78/83` or `This session 2/3`, and the chord that changes it. The
-scope stays where the person put it: ending the walk, editing the line and sending do not change
+of them (INPUT-18). While a sent prompt is on screen, the scope
+chord, Ctrl-N by default, cycles the walk through every stored prompt, the prompts sent from this
+workspace, and the prompts this session sent and the ones its record holds when it was resumed,
+and back to every stored prompt, staying on the prompt on screen where it is in the new scope.
+Where the prompt on screen is not in the new scope, the walk lands on the newest prompt of the
+new scope before it, and failing that the oldest of it. An entry stored with no workspace is in
+every stored prompt only. The search shares the three scopes and the definition of what each
+holds (INPUT-19). The border of the box names the scope with the position, `All 78/83`,
+`This project 12/20` or `This session 2/3`, and the chord that changes it. The scope
+stays where the person put it: ending the walk, editing the line and sending do not change
 it. `/clear` starts a new session's own prompts and puts the scope back on every stored prompt,
 and a prompt queued during a turn counts as sent from the moment it is queued (INPUT-10). The
 stored file is unchanged: which prompts are this session's is known from what this process sent
-and from the turns of a resumed record.
+and from the turns of a resumed record. A turn of a resumed record is matched to a stored prompt
+with the same words that was sent since the session began, since a prompt such as `continue` is
+stored by many sessions, and a cancelled turn is matched to none, since its prompt left the
+history when it was cancelled ([sessions.md](sessions.md#SESSION-6)).
 
-Where this session has sent nothing, the walk is over every stored prompt, the chord is not
-offered on the border, and pressing it does nothing. Where the history has nothing to switch, in a
+A scope that holds nothing is skipped by the cycle: where this session has sent nothing the
+session scope is skipped, and where no stored prompt belongs to this workspace the project scope
+is. Where one scope is left, the chord is not offered on the border and pressing it does nothing.
+Withdrawing the last prompt of the scope in force puts the walk back on every stored prompt. Where the history has nothing to switch, in a
 line being typed or with nothing recalled, the chord is not typed and does nothing, except that a
 chord moved onto a line-editing key still edits there. Ctrl-Left, Ctrl-Right, Alt-Left and
 Alt-Right are the caret's word motion everywhere, a recalled prompt included, since a prompt is
@@ -1981,13 +2063,22 @@ prompts through the search (INPUT-19).
 is not what they know. The walk reaches all of it by default, and the narrow scope is one chord
 away for a person who wants only this conversation's last prompts. The scope holds once chosen,
 because a person who narrowed it to this conversation would otherwise be put back on last week's
-prompts by the next send. It is not offered before this session has sent a prompt, since the chord
-would have nothing to narrow to. The switch is a letter chord because a letter chord reaches the
+prompts by the next send. A scope with nothing in it is not offered, since the chord would
+have nothing to move to. The switch is a letter chord because a letter chord reaches the
 app in every terminal, while a Ctrl arrow chord may be taken by the system (Mission Control on
-macOS) and never arrive. It is one chord that toggles because a pair of directions is two things
-to remember.
+macOS) and never arrive. It is one chord that cycles because a pair of directions is two things
+to remember, and the search answers to the same three scopes so that what a person learns in
+one carries to the other.
 
 `verified-by: bravebot_tui::app::the_scope_chord_narrows_the_walk_to_this_sessions_prompts_and_widens_it_again`
+`verified-by: bravebot_tui::history::the_scope_cycles_everywhere_project_session_and_back`
+`verified-by: bravebot_tui::history::a_scope_switch_before_every_prompt_of_the_scope_lands_on_the_oldest`
+`verified-by: bravebot_tui::history::a_prompt_with_no_recorded_project_is_in_the_everywhere_scope_only`
+`verified-by: bravebot_tui::history::a_scope_with_nothing_in_it_is_skipped`
+`verified-by: bravebot_tui::history::with_one_scope_left_the_chord_is_not_offered_and_does_nothing`
+`verified-by: bravebot_tui::history::the_project_scope_holds_across_the_walk_and_clearing_puts_it_back`
+`verified-by: bravebot_tui::history::withdrawing_the_last_prompt_of_this_project_puts_the_scope_back_on_everywhere`
+`verified-by: bravebot_tui::render::the_border_names_all_three_scopes_and_the_one_the_chord_moves_to`
 `verified-by: bravebot_tui::app::the_scope_chosen_holds_after_the_walk_ends_and_after_sending`
 `verified-by: bravebot_tui::app::switching_scope_keeps_a_prompt_that_is_in_both`
 `verified-by: bravebot_tui::app::ctrl_and_alt_arrows_on_a_recalled_prompt_move_the_caret_and_leave_the_scope`
@@ -2002,6 +2093,9 @@ to remember.
 `verified-by: bravebot_tui::render::the_border_names_the_scope_and_offers_the_switch_only_where_it_works`
 `verified-by: bravebot_tui::render::the_border_names_the_scope_chord_a_settings_file_moved`
 `verified-by: bravebot_tui::state::a_resumed_sessions_own_prompts_are_in_its_session_scope`
+`verified-by: bravebot_tui::state::a_cancelled_turn_of_a_resumed_record_is_given_no_entry`
+`verified-by: bravebot_tui::history::a_resumed_prompt_is_not_matched_to_an_entry_sent_before_the_session_began`
+`verified-by: bravebot_tui::history::an_entry_with_no_stamp_is_still_matched_to_a_resumed_prompt`
 `verified-by: bravebot_tui::history::up_walks_every_stored_prompt_by_default`
 `verified-by: bravebot_tui::history::this_sessions_scope_is_offered_only_from_a_prompt_when_the_session_has_sent_one`
 `verified-by: bravebot_tui::history::the_scope_stays_where_it_was_put_when_the_walk_ends`
@@ -2009,12 +2103,12 @@ to remember.
 `verified-by: bravebot_tui::history::narrowing_picks_the_nearest_earlier_prompt_not_the_oldest`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move ten chords, and nothing else
+### INPUT-32: a settings file can move eleven chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
-action's key says nothing about the other nine. There is no second file and no other spelling of the
-block, so one place answers what a key does. Ten actions can be moved, and nothing else can:
+action's key says nothing about the other ten. There is no second file and no other spelling of the
+block, so one place answers what a key does. Eleven actions can be moved, and nothing else can:
 
 - `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
   ([RUN-25](tools/run.md#RUN-25)).
@@ -2028,6 +2122,7 @@ block, so one place answers what a key does. Ten actions can be moved, and nothi
 - `panel` (default: `ctrl-x`): show or hide the info panel ([PANEL-5](info-panel.md#PANEL-5)).
 - `scope` (default: `ctrl-n`): switch the prompt history Up walks between every stored prompt and
   this session's prompts (INPUT-40).
+- `undo` (default: `ctrl-_`): put back the last edit to the line (INPUT-44).
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is
 typed into the line, Enter sends, Escape clears it, Tab takes what is offered, and the arrows walk
@@ -2072,14 +2167,14 @@ readline editing keys (such as `ctrl-u` or `alt-b`), the action answers rather t
 editing arm. In vi's normal mode, `/` translates to the chord configured for history search.
 
 **The screen names the chord that answers.** `?` lists the keys from the one place they are written
-down (INPUT-13), and the ten rows above are asked of the chord in force rather than spelled out
+down (INPUT-13), and the eleven rows above are asked of the chord in force rather than spelled out
 there. So is every other line that names one: the row saying what brings a stashed line back
 (INPUT-17), the border while an older prompt is being walked back to (INPUT-31), the keys under the
 search (INPUT-19), the hint saying there is something to watch, the note left where a picture on the
 clipboard needs a key of its own, and the scroller's way out
 ([SCROLL-7](scroller.md#SCROLL-7)). A translated line names the chord by taking it as an argument, so
 no catalog has to be revisited when a default moves. Where a clause of this spec or another names one
-of the ten, it names the default.
+of the eleven, it names the default.
 
 **Why.** A list is worth having only where it is right, and a person reads it at the moment a key
 they pressed did nothing. Keeping a second copy for the defaults is the same list twice: the copy
@@ -2134,8 +2229,10 @@ screen of its own, so what was in the terminal beforehand is untouched and is ba
 afterwards. A session in lines ([cli.md](cli.md)) takes none of what follows, and this
 clause is about the one that draws. With that screen the
 session asks for mouse reporting, narrowed to the buttons, the wheel and motion while a button is
-held; bracketed paste; focus reporting; and, only where the terminal says it understands the
-request, disambiguated keys.
+held, except in a terminal that draws the pointer shape it is asked for
+([PANEL-6](info-panel.md#PANEL-6)), which is told of motion with no button held as well; bracketed
+paste; focus reporting; and, only where the terminal says it understands the request,
+disambiguated keys.
 
 Every one of those is given back when the session ends, including when it ends by failing rather
 than by being left, and again around each handover of the terminal to another program: the editor
@@ -2145,7 +2242,9 @@ found, and the same set is taken again on the way back.
 **Why.** Each mode is asked for because something here cannot work without it. The wheel scrolls
 the transcript only while the mouse is reported, and all-motion reporting is narrowed away because
 a pointer merely crossing the window is an event and a redraw per pixel of travel, for a gesture
-nothing here reads. Bracketed paste is what stops a pasted prompt sending itself, since without it
+nothing here reads. The exception is a terminal that draws the pointer shape on request: where the
+pointer is over the info panel's border is what the shape follows, so that terminal is not narrowed
+and no other is. Bracketed paste is what stops a pasted prompt sending itself, since without it
 the newline most clipboards carry arrives as Enter; it is also the only thing that says a paste came
 off a clipboard at all, so where a terminal does not send those markers a paste arrives as bare keys
 and nothing downstream can tell it from what a program wrote. Focus reporting is what makes the
@@ -2165,6 +2264,7 @@ person than whatever error put it there.
 `verified-by: bravebot_tui::app::every_mode_a_session_asks_for_is_given_back`
 `verified-by: bravebot_tui::app::a_pushed_keyboard_mode_is_popped_and_an_unpushed_one_is_not`
 `verified-by: bravebot_tui::app::the_session_reads_a_drag_and_not_every_pointer_movement`
+`verified-by: bravebot_tui::app::a_terminal_that_draws_the_pointer_shape_reports_every_movement`
 
 <a id="INPUT-34"></a>
 ### INPUT-34: what arrived together is not two presses
@@ -2504,7 +2604,9 @@ It is made once per turn, without the box waiting for it.
 
 What comes back is offered only if it holds 2 to 12 words, fewer than 100 characters and one line.
 The driver counts and nothing else: it does not read what the words say, and an answer outside the
-counts is not offered, rather than being cut to something the model did not write. An offer is
+counts is not offered, rather than being cut to something the model did not write. Nothing is
+offered where the answer is one the planner could not have held, which is an exchange that has met
+something untrusted, as a handoff brief is not (see [sessions.md](sessions.md)). An offer is
 drawn dimmed in the box where the invitation is, and only while the box is empty and the session
 idle.
 
@@ -2534,6 +2636,7 @@ nobody asked for on each turn is the cost this setting exists to let a person ch
 `verified-by: bravebot_tui::app::a_suggestion_is_offered_only_to_an_idle_empty_box_with_the_setting_on`
 `verified-by: bravebot_tui::app::a_suggestion_is_asked_for_only_after_a_turn_that_answered`
 `verified-by: bravebot_tui::app::a_suggestions_cost_is_charged_to_the_session`
+`verified-by: bravebot_tui::app::a_suggestion_from_an_exchange_that_met_something_untrusted_is_not_offered`
 `verified-by: bravebot_tui::app::an_answered_request_is_charged_recorded_and_offered`
 `verified-by: bravebot_tui::app::an_answer_that_is_not_usable_is_still_charged_and_recorded`
 `verified-by: bravebot_tui::app::a_request_not_yet_answered_is_waited_on`
@@ -2542,3 +2645,145 @@ nobody asked for on each turn is the cost this setting exists to let a person ch
 `verified-by: bravebot_tui::app::no_request_is_made_where_the_setting_is_off_or_no_turn_answered`
 `verified-by: bravebot_tui::render::a_suggestion_is_drawn_in_the_empty_box_in_place_of_the_invitation`
 `verified-by: bravebot_tui::render::a_suggestion_is_dimmed_as_the_invitation_is`
+
+<a id="INPUT-44"></a>
+### INPUT-44: the ordinary box has an undo step too, one per edit and one for a run of typing
+
+Ctrl-_ puts the line and the caret back as they stood before the last edit, as far back as a
+thousand edits, the depth vi's own `u` keeps (INPUT-28). Backspace, Delete, Ctrl-W, Alt-D, Ctrl-U
+and Ctrl-K each open a step before taking what they take, and a paste, a dropped file or a pasted
+picture opens one before writing the marker or the stretch of text it writes, so one press of the
+chord puts back the whole of what any of them took or wrote. Ctrl-Y opens a step before putting
+text back, as do the presses above. A run of characters typed one after another is one step
+rather than one per character, the first key of the run opening it and the rest sharing it, the
+way everything typed in one vi INSERT session shares the step that session opened.
+
+Sending the line, clearing it, putting it away, bringing it back, choosing the other style or
+recalling an earlier prompt leaves nothing to undo, the way each already does for vi (INPUT-28): the
+line in the box did not stand under any step still on the stack once one of these has run.
+
+A marker a step puts back names its attachment again while that attachment is still staged, for the
+reason INPUT-3 keeps a deleted marker's attachment staged at all: nothing takes it off until the line
+is sent or cleared, so a step that puts the marker's text back is the whole of what has to happen.
+
+Ctrl-_ reaches both styles rather than only the ordinary box's, since the stack it puts back a step
+from is the one `u` already does. Pressed in vi's INSERT mode it reaches back past the session open
+there to the last change already on the stack, without first pressing Escape to reach `u`, and the
+session stays open in INSERT mode. What the session has typed since it opened is not itself on the
+stack until Escape closes it (INPUT-28), so Ctrl-_ there does not reach it either, the same as `u`
+could not reach it if INSERT read letters as anything but themselves. It carries no count, so one
+press is one step back in either style, where a count in front of `u` asks vi for several. Ctrl-Z is
+not used for it: that chord suspends the process on a terminal that has not had job control turned
+off, which this program does not take.
+
+`undo` is one of the eleven chords a settings file can move (INPUT-32), defaulting to `ctrl-_`, and
+the `?` list shows it (INPUT-13). While it stands on that default, the chord also answers to Ctrl-7,
+Ctrl-Shift-_, Ctrl-/ and Ctrl-Shift-/, the spellings a terminal reports for the same byte or the same
+key by another name, so the key that undoes on a terminal reporting one answers on a terminal
+reporting another. An alternate is read only where a settings file has not moved another action onto
+that exact chord: moving `trail` onto `ctrl-/` takes the chord from undo, which goes on answering to
+its remaining alternates and to its default.
+
+A settings file that moves another action onto `ctrl-_` contests undo's default, so that request
+gives way as every contested request does (INPUT-32), and the action keeps its own default instead.
+Undo keeps `ctrl-_`, since nothing was asked of it to give up.
+
+**Why.** With no step kept, one wrong key loses a paragraph for good, which Claude Code, Gemini CLI
+and OpenCode each document a key against. Folding a run of typing into one step is what makes the
+key worth having rather than one that only ever takes back the last character of a sentence somebody
+has otherwise finished typing.
+
+`verified-by: bravebot_tui::keybindings::the_undo_chord_is_ctrl_underscore_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::every_spelling_a_terminal_sends_for_ctrl_underscore_answers_the_default`
+`verified-by: bravebot_tui::state::a_typing_run_in_the_ordinary_box_is_one_change_to_undo`
+`verified-by: bravebot_tui::state::ctrl_u_then_undo_restores_the_line_and_caret_in_the_ordinary_box`
+`verified-by: bravebot_tui::state::undo_after_a_send_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::state::undo_brings_back_a_deleted_marker_with_its_attachment`
+`verified-by: bravebot_tui::app::the_undo_chord_puts_back_what_a_delete_took`
+`verified-by: bravebot_tui::app::the_undo_chord_takes_back_a_whole_typing_run`
+`verified-by: bravebot_tui::app::the_undo_chord_leaves_the_next_run_able_to_open_its_own_step`
+`verified-by: bravebot_tui::app::the_undo_chord_works_in_vi_insert_mode_without_leaving_it`
+`verified-by: bravebot_tui::app::the_undo_chord_works_while_a_turn_is_running`
+`verified-by: bravebot_tui::state::a_second_typing_run_after_undo_opens_its_own_step`
+`verified-by: bravebot_tui::state::typing_after_a_yank_opens_its_own_run`
+`verified-by: bravebot_tui::state::undo_after_clearing_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::state::undo_after_stashing_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::state::undo_after_a_style_switch_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::state::undo_after_recalling_history_has_nothing_to_restore_in_the_ordinary_box`
+`verified-by: bravebot_tui::keybindings::an_alternate_spelling_given_to_another_action_no_longer_answers_undo`
+`verified-by: bravebot_tui::keybindings::a_block_written_before_undo_existed_that_named_ctrl_underscore_gives_it_up`
+
+<a id="INPUT-45"></a>
+### INPUT-45: a typed character is drawn as soon as it is handled, at a cost that does not grow with the conversation or the directory
+
+A key, a paste or a focus change is drawn as soon as it has been handled, with no deferral behind
+other queued events. Only a stream of pointer events or of size changes is coalesced, so a burst of
+them is drawn once (INPUT-41).
+
+Drawing a frame after a keystroke does no work in proportion to the length of the transcript. The
+lines the entries are drawn as are kept until an entry, the width, the theme or the trail's
+visibility changes, and only the rows on the screen are handed to the terminal. The reply still
+arriving is drawn again only when its words change. What `@` and `/` offer is worked out once for
+the line a key press leaves, however many callers ask, and a directory that has gone unchanged for
+two seconds is listed once, not on every key.
+
+**Why.** A frame that lays the whole conversation out again makes typing lag in proportion to the
+length of the session, and listing a directory of many files on every key makes each key after an `@`
+slow. A typed character is the one thing a person watches the screen for, so nothing that scales
+with something else may stand between it and the screen.
+
+`verified-by: bravebot_tui::input::only_a_stream_of_positions_or_sizes_is_an_event_a_frame_waits_out`
+`verified-by: bravebot_tui::render::a_keystroke_is_drawn_without_measuring_the_transcript_again`
+`verified-by: bravebot_tui::render::an_entry_edited_after_a_frame_is_drawn_as_edited`
+`verified-by: bravebot_tui::render::a_change_of_width_or_trail_is_not_answered_from_the_lines_kept_before_it`
+`verified-by: bravebot_tui::render::drawing_the_visible_slice_matches_wrapping_the_whole_transcript`
+`verified-by: bravebot_mentions::lib::a_settled_directory_is_not_read_again_while_it_is_unchanged`
+`verified-by: bravebot_mentions::lib::a_changed_or_recently_touched_directory_is_read_afresh`
+`verified-by: bravebot_tui::references::the_callers_of_one_key_press_share_one_reading_of_the_directory`
+
+<a id="INPUT-46"></a>
+### INPUT-46: the desktop window sends Enter into the turn that is running, and queues only when asked
+
+Enter in the message box while a turn runs sends the line into that turn, as [INPUT-10](#INPUT-10)
+says for the terminal: the planner reads it at the turn's next round boundary, after the round's
+calls have run, as the person's own words and under the routing the turn began with. The window
+sends it with `turn.interject`, which takes the session, the words and optionally the target of the
+turn it is for. The bridge answers `{ "accepted": true }` when the turn is running, is not being
+stopped and asks between rounds, and `false` otherwise. A plan run asks nothing between rounds, so
+it never accepts one.
+
+The window draws the line under the box as sent to this turn. It is in the transcript only once the
+bridge sends `turn.interjected`, at the moment the planner is given it, and lines are read in the
+order they were sent. A line the bridge does not accept, and a line still unread when the turn
+ends, becomes a turn of its own and goes at once, ahead of anything queued, even when a Stop has
+paused the queue. A turn that failed for any other reason leaves the line in the queue it paused.
+
+Alt+Enter, or **Queue for after**, holds the line for after the turn instead. That queue is the one
+Stop pauses and **Resume** releases, and each message in it starts a turn of its own with the files
+it names.
+
+**What it carries is words.** A dropped file resolves to its name and a pasted picture to a
+sentence saying it cannot be shown, as in [DROP-8](dropping.md#DROP-8). The window sends the line as
+written with `files`, each a marker and a name, and `pictures`, each a marker, and the bridge puts
+them into words with the same Rust functions the terminal does (`bravebot_filetype::markers`), so
+the two front ends give the planner the same line. The main process forwards the session, the
+target, the line and those names and markers of a `turn.interject` and nothing else, so no path,
+file or picture reaches the running turn through it. A message with a file chosen by the attach button, and any
+message sent while the bot's memory update runs, is queued instead.
+
+**Why.** A correction such as "no, the other one" that is held until the turn ends arrives after
+the work it was meant to prevent, and stopping the turn to deliver it sooner also pauses the queue.
+Enter is the key a person presses to say something to the agent, and the terminal already gives it
+this meaning.
+
+`verified-by: bravebot_ui_bridge::interjecting::a_line_typed_while_a_round_runs_is_in_the_next_request`
+`verified-by: bravebot_ui_bridge::interjecting::a_turn_that_is_stopping_or_over_does_not_take_a_line`
+`verified-by: bravebot_ui_bridge::interjecting::a_blank_line_and_an_unknown_session_are_refused`
+`verified-by: bravebot_ui_bridge::interjecting::markers_in_a_line_become_a_name_and_a_sentence_in_the_bridge`
+`verified-by: bravebot_ui_bridge::interjecting::a_malformed_marker_list_is_refused`
+`verified-by: bravebot_ui_bridge::interjecting::a_plan_run_does_not_take_a_line`
+`verified-by: bravebot_filetype::markers::a_picture_becomes_a_sentence_naming_its_marker_and_the_reason`
+`verified-by: bravebot_filetype::markers::a_dropped_file_becomes_its_name_and_text_around_it_is_kept`
+`verified-by: bravebot_ui_bridge::interjection_tests::work_that_asks_nothing_between_rounds_takes_no_line`
+`verified-by: bravebot_ui_bridge::interjection_tests::lines_are_read_in_the_order_they_were_typed`
+`verified-by: by-construction (the renderer and the main process are not crates this workspace compiles, so ui/scripts/interjecting.test.mjs drives the window's own event reducer with the bridge's events: a line is in the transcript only after turn.interjected and in the order it was sent, a line unread when the turn is done or stopped goes on past a paused queue, one left by a failed turn waits, a refused line returns to the head of the queue, the window names its markers and writes no words, a paperclip file or the memory update queues the line, and turn.interject forwards only its line and the names of its markers; make check-ui runs the test)`

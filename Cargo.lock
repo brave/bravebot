@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-agent"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
  "bravebot-aichat",
@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-aichat"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "bravebot-config",
  "bravebot-core",
@@ -175,7 +175,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-approval"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "bravebot-agent",
  "bravebot-i18n",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-bedrock"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "bravebot-aichat",
  "bravebot-config",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-browser"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
  "rand 0.8.7",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-cli"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "bravebot-agent",
  "bravebot-approval",
@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-config"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "bravebot-sandbox",
  "serde",
@@ -241,7 +241,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-connector"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "bravebot-core",
  "bravebot-sandbox",
@@ -252,26 +252,29 @@ dependencies = [
 
 [[package]]
 name = "bravebot-core"
-version = "0.15.0"
+version = "0.17.0"
+dependencies = [
+ "unicode-normalization",
+]
 
 [[package]]
 name = "bravebot-diag"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "bravebot-filetype"
-version = "0.15.0"
+version = "0.17.0"
 
 [[package]]
 name = "bravebot-i18n"
-version = "0.15.0"
+version = "0.17.0"
 
 [[package]]
 name = "bravebot-lsp"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "bravebot-core",
  "bravebot-diag",
@@ -283,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-mcp"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "bravebot-config",
  "bravebot-core",
@@ -297,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-mentions"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "bravebot-filetype",
  "tempfile",
@@ -305,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-net"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "bravebot-core",
  "bravebot-diag",
@@ -316,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-sandbox"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "landlock",
  "libc",
@@ -325,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-session"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
  "bravebot-agent",
@@ -342,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-signing"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
  "hmac",
@@ -351,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-skus"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "challenge-bypass-ristretto",
  "hmac",
@@ -364,18 +367,20 @@ dependencies = [
 
 [[package]]
 name = "bravebot-stamp"
-version = "0.15.0"
+version = "0.17.0"
 
 [[package]]
 name = "bravebot-tui"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
  "bravebot-agent",
  "bravebot-aichat",
  "bravebot-config",
  "bravebot-core",
+ "bravebot-filetype",
  "bravebot-i18n",
+ "bravebot-mcp",
  "bravebot-mentions",
  "bravebot-net",
  "bravebot-sandbox",
@@ -394,7 +399,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-ui-bridge"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
  "bravebot-agent",
@@ -402,6 +407,8 @@ dependencies = [
  "bravebot-approval",
  "bravebot-config",
  "bravebot-core",
+ "bravebot-filetype",
+ "bravebot-i18n",
  "bravebot-mentions",
  "bravebot-net",
  "bravebot-sandbox",
@@ -416,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-ui-files"
-version = "0.15.0"
+version = "0.17.0"
 dependencies = [
  "bravebot-filetype",
  "rustix 1.1.4",
@@ -2328,9 +2335,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "log",
  "once_cell",
@@ -2352,9 +2359,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.14"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0527518605e68109d875e248ea259b6758801cf165e4b2c2733ae3b51f12535a"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -2977,9 +2984,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]

@@ -4,6 +4,7 @@
 //! requests are not handled: a server that asks the client to do something is not
 //! supported, which keeps the trust direction one-way.
 
+use bravebot_core::invisible::draws_as_nothing;
 use bravebot_core::value::Labelled;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -267,7 +268,7 @@ fn described(text: &str) -> String {
         .chars()
         .map(|c| match c {
             '\n' => '\n',
-            c if c.is_control() || hides(c) => ' ',
+            c if c.is_control() || draws_as_nothing(c) => ' ',
             c => c,
         })
         .collect();
@@ -276,33 +277,6 @@ fn described(text: &str) -> String {
         Some((cut, _)) => format!("{} ...", trimmed[..cut].trim_end()),
         None => trimmed.to_string(),
     }
-}
-
-/// Whether a character changes how the text around it reads without being seen: Unicode's default
-/// ignorable characters, which hold the bidirectional controls, the zero-width characters, the
-/// variation selectors and the tags a model reads as letters, and the separators and annotation
-/// marks that break or cover a line without a newline.
-fn hides(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00AD}'
-            | '\u{034F}'
-            | '\u{061C}'
-            | '\u{115F}'..='\u{1160}'
-            | '\u{17B4}'..='\u{17B5}'
-            | '\u{180B}'..='\u{180F}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{2028}'..='\u{202E}'
-            | '\u{2060}'..='\u{206F}'
-            | '\u{3164}'
-            | '\u{FE00}'..='\u{FE0F}'
-            | '\u{FEFF}'
-            | '\u{FFA0}'
-            | '\u{FFF0}'..='\u{FFFB}'
-            | '\u{1BCA0}'..='\u{1BCA3}'
-            | '\u{1D173}'..='\u{1D17A}'
-            | '\u{E0000}'..='\u{E0FFF}'
-    )
 }
 
 /// Whether `name` may name an argument: letters, digits, `_`, `-` and `.`.
@@ -380,7 +354,7 @@ fn choices(property: &Value) -> Option<Vec<String>> {
                 .filter(|text| {
                     !text.is_empty()
                         && text.chars().count() <= MAX_CHOICE
-                        && !text.chars().any(|c| c.is_control() || hides(c))
+                        && !text.chars().any(|c| c.is_control() || draws_as_nothing(c))
                 })
                 .map(str::to_string)
         })
@@ -868,8 +842,8 @@ mod tests {
         assert_eq!((offered, refused), (1, 2));
     }
 
-    /// The list is what a digest is taken of, so the same tools in another order are the same list
-    /// and ask nothing again.
+    /// The same tools in another order are the same list, so the order a server sends them in
+    /// changes nothing a person is shown.
     #[test]
     fn the_list_is_the_same_whatever_order_the_server_sent() {
         let one = r#"{"tools":[
@@ -921,6 +895,19 @@ mod tests {
     fn non_text_content_is_ignored() {
         let raw = r#"{"content":[
             {"type":"image","data":"base64..."},
+            {"type":"text","text":"caption"}
+        ]}"#;
+        let result: ToolResult = serde_json::from_str(raw).unwrap();
+        assert_eq!(result.text(), "caption");
+    }
+
+    /// A block of another type may still carry a `text` field, as an embedded resource does. Only
+    /// the type decides, so what it holds is not taken.
+    #[test]
+    fn a_block_of_another_type_is_ignored_even_when_it_carries_text() {
+        let raw = r#"{"content":[
+            {"type":"resource","text":"embedded"},
+            {"type":"image","text":"alt text"},
             {"type":"text","text":"caption"}
         ]}"#;
         let result: ToolResult = serde_json::from_str(raw).unwrap();

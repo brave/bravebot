@@ -165,7 +165,7 @@ test('every question answered with a yes or a no has a method, an event and a wa
   // an answer to arrive: the union that declares the entry, the reducer that draws the question
   // when the agent asks it, and the main process, which forwards no method it was not told of.
   const transcript = readFileSync('src/renderer/transcript.ts', 'utf8')
-  const app = readFileSync('src/renderer/App.tsx', 'utf8')
+  const apply = readFileSync('src/renderer/apply.ts', 'utf8')
   const main = readFileSync('src/main/index.ts', 'utf8')
   const allowed = main.slice(main.indexOf('const ALLOWED = new Set(['), main.indexOf('])', main.indexOf('const ALLOWED = new Set([')))
 
@@ -173,7 +173,7 @@ test('every question answered with a yes or a no has a method, an event and a wa
   for (const [kind, method] of Object.entries(t.REPLY)) {
     assert.equal(method, `${kind}.reply`)
     assert.ok(transcript.includes(`kind: '${kind}'`), `${kind} is not an entry`)
-    assert.ok(app.includes(`case '${kind}.request':`), `${kind}.request is not drawn`)
+    assert.ok(apply.includes(`case '${kind}.request':`), `${kind}.request is not drawn`)
     assert.ok(allowed.includes(`'${method}'`), `${method} is not forwarded to the agent`)
   }
 })

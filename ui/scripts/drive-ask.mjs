@@ -7,43 +7,14 @@
 //
 // Note that a planner shown untrusted content may not ask at all — that gate is upstream
 // and deliberate — so this drives a session with nothing quarantined in it.
-import { _electron as electron } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
+const { check, problems } = checker()
 
-// The left column has two tabs and remembers which was last open, so a run after somebody left it
-// on the bots — or after a run of `drive-bots.mjs` that was interrupted before its teardown — would
-// find the session list present in the DOM and invisible, and every click below would time out
-// against an element that is right there. Everything here is about that list, so it is put back on
-// screen first: a driver leaves the window as the next one expects to find it, and does not assume
-// it was left that way.
-async function showSessions(page) {
-  await page
-    .locator('.sidebar-tabs [role="option"]')
-    .first()
-    .waitFor({ state: 'visible', timeout: 15000 })
-    .catch(() => undefined)
-  await page
-    .locator('.sidebar-tabs [role="option"]')
-    .first()
-    .click({ timeout: 3000 })
-    .catch(() => undefined)
-  await page.waitForTimeout(250)
-}
-
-const app = await electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
-const page = await app.firstWindow()
-await page.waitForLoadState('domcontentloaded')
-await showSessions(page)
-page.on('pageerror', (e) => console.log('PAGE ERROR:', e.message))
-page.on('console', (m) => m.type() === 'error' && console.log('CONSOLE ERROR:', m.text()))
+const { app, page } = await launchLive()
 await page.waitForTimeout(2500)
 
 if ((await page.locator('.session').count()) === 0) {
@@ -59,7 +30,7 @@ if (await page.locator('.trust').isVisible().catch(() => false)) {
   await page.waitForTimeout(600)
 }
 
-await page.locator('.composer textarea').fill(
+await page.locator(COMPOSER_INPUT).fill(
   'I want to add a --json flag to this project. Do not write anything. First, in ONE ask_user ' +
     'call, ask me two questions together: which approach, and what to name the flag. After I ' +
     'answer, make a SECOND ask_user call with one further question. Then just summarise my ' +
@@ -104,7 +75,7 @@ check(
   await page.getByRole('button', { name: 'Stop', exact: true }).isEnabled(),
   'the send control is Stop while the questions stand',
 )
-const placeholder = await page.locator('.composer textarea').getAttribute('placeholder')
+const placeholder = await page.locator(COMPOSER_INPUT).getAttribute('placeholder')
 check(
   (placeholder ?? '').includes('questions'),
   `and the composer says what is waiting (${placeholder})`,
@@ -188,7 +159,7 @@ if (again) {
 }
 
 const done = await page
-  .locator('.composer textarea:not([disabled])')
+  .locator(COMPOSER_IDLE)
   .waitFor({ state: 'visible', timeout: 150000 })
   .then(() => true)
   .catch(() => false)

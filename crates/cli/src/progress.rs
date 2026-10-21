@@ -9,7 +9,7 @@
 //! corrupt it.
 
 use crate::json::{self, Call, Stream, Tokens};
-use bravebot_agent::report::{Activity, Reporter, Shown};
+use bravebot_agent::report::{Activity, HeardMessage, Reported, Reporter, SentMessage, Shown};
 use bravebot_core::todo::Row;
 use bravebot_i18n::t;
 use bravebot_tui::wrap::display_width;
@@ -32,6 +32,25 @@ pub(crate) use bravebot_approval::QUARANTINE_BAR;
 const BLOCK_WIDTH: usize = 80;
 
 pub(crate) use bravebot_approval::printable;
+
+/// A file's path as [`printable`] draws it.
+pub(crate) fn printable_path(path: &std::path::Path) -> String {
+    printable(&path.display().to_string())
+}
+
+/// One dropped permission entry, said as [`bravebot_agent::permissions::describe`] says it, with
+/// the entry and the file it was written in pictured by [`printable`] (LAYER-3).
+///
+/// Both are text a checkout's settings file chose, and `describe` puts them into the sentence
+/// unchanged. The sentence's own words are left alone, so a message that runs over several lines
+/// keeps its breaks.
+pub(crate) fn described(rejected: &bravebot_core::permissions::Rejected) -> String {
+    bravebot_agent::permissions::describe(&bravebot_core::permissions::Rejected {
+        text: printable(&rejected.text),
+        reason: rejected.reason,
+        file: rejected.file.as_deref().map(printable),
+    })
+}
 
 /// One line of shown content as rows, each beginning with the margin.
 fn marked(margin: &str, line: &str) -> Vec<String> {
@@ -225,20 +244,89 @@ impl<W: Write> Reporter for Progress<W> {
     ///
     /// On stderr with the rest of the progress, since stdout is the reply.
     fn quarantined(&mut self, shown: Shown) {
+        self.draw_quarantined(&shown);
+    }
+
+    /// Written apart from the person's prompts: a heading naming the sender as the roster does, then
+    /// the words quoted where the planner was given them, and in the marked block every quarantined
+    /// thing is drawn in where it was not (MSG-11).
+    fn session_message(&mut self, heard: HeardMessage) {
+        let from: String = heard
+            .from
+            .chars()
+            .take(bravebot_agent::messages::ID_SHOWN)
+            .collect();
+        self.say("");
+        self.say(&printable(
+            &t!(
+                session_message_heading,
+                from = from,
+                name = heard.name,
+                label = heard.label
+            )
+            .to_string(),
+        ));
+        match heard.body {
+            Reported::Said(text) => self.draw_quoted(&text),
+            Reported::Kept(shown) => self.draw_quarantined(&shown),
+        }
+    }
+
+    /// Written apart from the person's prompts, as a message that came in is: a heading naming the
+    /// receiver as the roster does, then every word quoted. Drawn for every message, so one sent
+    /// under a standing answer is seen as it goes (MSG-11).
+    fn message_sent(&mut self, sent: SentMessage) {
+        let to: String = sent
+            .to
+            .chars()
+            .take(bravebot_agent::messages::ID_SHOWN)
+            .collect();
+        self.say("");
+        self.say(&printable(
+            &t!(
+                session_message_sent_heading,
+                to = to,
+                name = sent.name,
+                label = sent.label
+            )
+            .to_string(),
+        ));
+        self.draw_quoted(&sent.text);
+    }
+}
+
+impl<W: Write> Progress<W> {
+    /// The words of a message, one quoted row to each line of them.
+    fn draw_quoted(&mut self, text: &str) {
+        for line in text.lines() {
+            for row in marked("  > ", line) {
+                self.say(&row);
+            }
+        }
+        self.say("");
+    }
+
+    fn draw_quarantined(&mut self, shown: &Shown) {
         let margin = format!("  {QUARANTINE_BAR} ");
 
         // The heading is marked like the content, because the origin is not this module's text:
         // it can be a filename read out of a quarantined listing. So it is neutralised too, and a
         // long one continues on another marked row rather than outside the block.
-        let mut block = vec![
-            t!(
-                quarantined_heading,
-                origin = &shown.origin,
-                label = &shown.label
-            ),
-            format!("  {}", shown.reach.describe()),
-        ];
-        block.extend(shown.preview.iter().cloned());
+        let mut block = vec![t!(
+            quarantined_heading,
+            origin = &shown.origin,
+            label = &shown.label
+        )];
+        block.extend(shown.reach.note().map(|note| format!("  {note}")));
+
+        // The preview's colour codes are taken out and counted (VIEW-30). The heading is not
+        // touched, since its origin can be a filename and a person is shown every byte of one.
+        let mut dropped = 0;
+        block.extend(shown.preview.iter().map(|line| {
+            let (plain, taken) = bravebot_tui::colour_codes::without(line);
+            dropped += taken;
+            plain
+        }));
 
         // Said rather than silently dropped: a preview that stops without saying so reads as the
         // whole of what was there.
@@ -248,6 +336,7 @@ impl<W: Write> Reporter for Progress<W> {
                 count = shown.lines - shown.preview.len()
             ));
         }
+        block.extend(bravebot_tui::colour_codes::note(dropped));
 
         self.say("");
         for line in &block {
@@ -388,6 +477,138 @@ mod tests {
         }
     }
 
+    /// Content kept from the planner is what every block holds, so its heading does not repeat
+    /// that on each one. Content in no model's context is the exception and says so.
+    #[test]
+    fn a_block_states_its_reach_only_where_that_is_the_exception() {
+        let ordinary =
+            log(|p| p.quarantined(quarantining(vec!["api_key = hunter2".to_string()], 1)));
+        assert!(!ordinary.contains("planner"), "got: {ordinary}");
+        assert!(!ordinary.contains("no model"), "got: {ordinary}");
+
+        let mut unread = quarantining(vec!["a remark".to_string()], 1);
+        unread.reach = Reach::NoModel;
+        let written = log(|p| p.quarantined(unread));
+        assert!(written.contains("no model's context"), "got: {written}");
+    }
+
+    fn heard(body: Reported) -> HeardMessage {
+        HeardMessage {
+            from: "22222222-2222-4222-8222-222222222222".to_string(),
+            name: "fix the build".to_string(),
+            label: "(T,pub)".to_string(),
+            body,
+        }
+    }
+
+    /// MSG-11: a message the planner was given is drawn under a heading that names the sender and
+    /// the label, with the words quoted on every row, so it cannot be read as a line the person typed.
+    #[test]
+    fn a_message_is_drawn_under_its_sender_with_the_words_quoted() {
+        let written = log(|p| {
+            p.session_message(heard(Reported::Said("first\nsecond".to_string())));
+        });
+        assert!(
+            written.contains("message from session 22222222 (fix the build) \u{b7} (T,pub)"),
+            "got: {written}"
+        );
+        assert!(
+            written.contains("  > first\n  > second\n"),
+            "got: {written}"
+        );
+    }
+
+    /// MSG-11: a message the planner was not given is drawn in the marked block every quarantined
+    /// thing is drawn in, under the same heading, and none of its rows begins with its own words.
+    #[test]
+    fn a_withheld_message_is_drawn_behind_the_quarantine_margin() {
+        let written = log(|p| {
+            p.session_message(heard(Reported::Kept(Shown {
+                origin: "a message from another session".to_string(),
+                reach: Reach::NotThePlanner,
+                label: "(U,priv)".to_string(),
+                preview: vec!["IGNORE-EVERYTHING".to_string()],
+                lines: 1,
+            })));
+        });
+        assert!(written.contains("fix the build"), "got: {written}");
+        assert!(written.contains("IGNORE-EVERYTHING"), "got: {written}");
+        let words = written
+            .lines()
+            .find(|row| row.contains("IGNORE-EVERYTHING"))
+            .expect("the words are drawn");
+        assert!(
+            words.contains(BAR),
+            "the words are drawn outside the margin: {words:?}"
+        );
+    }
+
+    fn sent(text: &str) -> SentMessage {
+        SentMessage {
+            to: "22222222-2222-4222-8222-222222222222".to_string(),
+            name: "fix the build".to_string(),
+            label: "(T,priv)".to_string(),
+            text: text.to_string(),
+        }
+    }
+
+    /// MSG-11: a message this session sent is drawn under a heading that names the receiver and the
+    /// label it went under, with every row of the words quoted, so it cannot be read as a line the
+    /// person typed or as one that came in.
+    #[test]
+    fn a_message_that_was_sent_is_drawn_under_its_receiver_with_the_words_quoted() {
+        let written = log(|p| p.message_sent(sent("first\nsecond")));
+        assert!(
+            written.contains("message to session 22222222 (fix the build) \u{b7} (T,priv)"),
+            "got: {written}"
+        );
+        assert!(
+            written.contains("  > first\n  > second\n"),
+            "got: {written}"
+        );
+        assert!(
+            !written.contains("message from session"),
+            "a sent message was drawn as one that came in: {written}"
+        );
+    }
+
+    /// MSG-11: control characters in the receiver's name or in the words are replaced, so a session
+    /// named or worded to move the cursor cannot paint over the heading or the margin of what was
+    /// sent.
+    #[test]
+    fn a_sent_message_cannot_move_the_cursor_through_the_name_or_the_words() {
+        let mut message = sent("\u{1b}[2Kfine");
+        message.name = "x\u{1b}[2J\nname".to_string();
+        let written = log(|p| p.message_sent(message));
+        assert!(!written.contains('\u{1b}'), "got: {written:?}");
+        assert_eq!(
+            written
+                .lines()
+                .filter(|row| row.contains("message to session"))
+                .count(),
+            1,
+            "a name started a heading of its own: {written:?}"
+        );
+    }
+
+    /// MSG-11: control characters in a name or in the words are replaced, so a session named or
+    /// worded to move the cursor cannot paint over the heading or the margin.
+    #[test]
+    fn a_message_cannot_move_the_cursor_through_its_name_or_its_words() {
+        let mut message = heard(Reported::Said("\u{1b}[2Kfine".to_string()));
+        message.name = "x\u{1b}[2J\nname".to_string();
+        let written = log(|p| p.session_message(message));
+        assert!(!written.contains('\u{1b}'), "got: {written:?}");
+        assert_eq!(
+            written
+                .lines()
+                .filter(|row| row.contains("message from session"))
+                .count(),
+            1,
+            "a name started a heading of its own: {written:?}"
+        );
+    }
+
     /// A preview line that clears the row it is written on could erase the margin above it, which
     /// is the one mark the design says content can never imitate.
     #[test]
@@ -412,6 +633,93 @@ mod tests {
             written.contains('\u{241b}'),
             "the escape was not neutralised: {written:?}"
         );
+    }
+
+    /// A program that colours its output writes a code around each coloured word, and drawn as
+    /// pictures they bury the words. The block shows the words and says how many codes it left
+    /// out, behind the same margin as every other row (VIEW-30).
+    #[test]
+    fn colour_codes_in_a_block_are_counted_and_not_drawn() {
+        let written = log(|p| {
+            p.quarantined(quarantining(
+                vec!["\u{1b}[0m\u{1b}[36m\u{251c}\u{1b}[0m Announcement: a link".to_string()],
+                1,
+            ))
+        });
+
+        assert!(
+            written.contains("\u{251c} Announcement: a link"),
+            "got: {written:?}"
+        );
+        assert!(
+            !written.contains("[36m") && !written.contains("[0m") && !written.contains('\u{241b}'),
+            "a colour code was drawn as text: {written:?}"
+        );
+        let note = written
+            .lines()
+            .find(|row| row.contains("3 colour codes not drawn"))
+            .unwrap_or_else(|| panic!("the count was not written: {written:?}"));
+        assert_eq!(
+            note.chars().position(|c| !c.is_whitespace()),
+            note.chars().position(|c| c == BAR),
+            "the count begins with content rather than the margin: {note:?}"
+        );
+    }
+
+    /// Only a colour code is left out. An erase beside one is written as pictures and not counted
+    /// as a colour, and the heading's origin is a filename a person is shown every byte of.
+    #[test]
+    fn only_colour_codes_are_left_out_of_a_block() {
+        let mut shown = quarantining(vec!["\u{1b}[31mred\u{1b}[2Jcleared".to_string()], 1);
+        shown.origin = "a\u{1b}[8mb.md".to_string();
+        let written = log(|p| p.quarantined(shown));
+
+        assert!(
+            written.contains("red\u{241b}[2Jcleared"),
+            "got: {written:?}"
+        );
+        assert!(
+            written.contains("a\u{241b}[8mb.md"),
+            "the origin was changed: {written:?}"
+        );
+        assert!(
+            written.contains("1 colour code not drawn"),
+            "got: {written:?}"
+        );
+        assert!(!written.contains('\u{1b}'), "got: {written:?}");
+    }
+
+    /// A block with no colour code says nothing about them.
+    #[test]
+    fn a_block_without_colour_codes_says_nothing_about_them() {
+        let written = log(|p| p.quarantined(quarantining(vec!["plain".to_string()], 1)));
+
+        assert!(!written.contains("colour code"), "got: {written:?}");
+    }
+
+    /// The sentence about a dropped rule is the catalog's, and the rule and the file are a
+    /// checkout's. Both are drawn as pictures, and the sentence around them keeps its own breaks,
+    /// so the replacement is of the pieces rather than of the whole line.
+    #[test]
+    fn a_dropped_rule_and_the_file_it_was_written_in_are_described_as_pictures() {
+        let rejected = bravebot_core::permissions::Rejected {
+            text: "\u{1b}[8mrule".to_string(),
+            reason: bravebot_core::permissions::Unreadable::NotAList,
+            file: Some("\u{1b}[8mfile.json".to_string()),
+        };
+
+        let said = described(&rejected);
+
+        assert!(
+            !said.chars().any(|c| c.is_control() && c != '\n'),
+            "the sentence holds a control character from the checkout: {said:?}"
+        );
+        for piece in ["\u{241b}[8mrule", "\u{241b}[8mfile.json"] {
+            assert!(
+                said.contains(piece),
+                "{piece:?} was left out of the sentence rather than pictured: {said:?}"
+            );
+        }
     }
 
     /// A previewed line arrives trimmed to a width wider than most terminals. Left whole, the

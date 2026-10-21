@@ -11,6 +11,10 @@
 //! [LABEL-6](../../../docs/specs/labels.md#LABEL-6) refuses. `Policy::render_pair_in_place` is
 //! what hands the two sides over, and what comes back out is labelled by the taint of both.
 
+use bravebot_i18n::t;
+use std::collections::HashMap;
+use std::ops::Range;
+
 /// One line of a rendered diff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
@@ -57,96 +61,212 @@ pub struct Diff {
     changes: Vec<Change>,
     added: usize,
     removed: usize,
-    exact: bool,
+    differing: (Range<usize>, Range<usize>),
+    unaligned: Option<(Range<usize>, Range<usize>)>,
     before_ending: Option<LineEnding>,
     after_ending: Option<LineEnding>,
 }
 
 /// Cells the longest-common-subsequence table may occupy.
 ///
-/// The table is quadratic in the differing region, so a bound is needed: two large and
-/// wholly dissimilar files would otherwise allocate without limit. Past this the diff
-/// reports itself inexact and the caller falls back to describing the change in the
-/// aggregate, which is honest about what it does not know.
+/// The table is quadratic in the stretch it covers, so a bound is needed: two large and
+/// wholly dissimilar stretches would otherwise allocate without limit. A stretch past it is
+/// searched for a shortest edit or split instead, so the bound covers one table and the span
+/// between the first change and the last does not count against it.
 const MAX_CELLS: usize = 1_000_000;
+
+/// A table this small is built whatever is left of the steps, so a stretch of a few lines is never
+/// left unlined because larger stretches used the budget. All such tables together cost at most a
+/// hundred steps for each line of the texts.
+const MAX_SMALL_CELLS: usize = 10_000;
+
+/// Steps one diff may spend in all: table cells, lines read to split a stretch, and the work of
+/// the search for a shortest edit. A step is one comparison or one line read, whatever the line.
+///
+/// Each of those is bounded for the stretch it serves, and a text made of many stretches would
+/// still add them up without limit. A table is built while it takes at most a quarter of the steps
+/// left, so tables for stretches that a search lines up more cheaply cannot use the whole budget.
+/// A stretch that would take more than is left is not lined up, and the diff reports itself
+/// inexact.
+const MAX_STEPS: usize = 4 * MAX_CELLS;
+
+/// Steps for each line of a stretch that the search for a shortest edit may take where the stretch
+/// can be split instead.
+///
+/// The search costs by the number of edits, so a stretch that differs in few places is lined up
+/// at a cost in proportion to its size, and one that does not is split on its lines held once,
+/// which costs less but can pair lines that moved across a stretch of repeated ones.
+const SEARCH_STEPS_PER_LINE: usize = 16;
+
+/// Edits the search for a shortest edit looks for before it gives up on a stretch. What it keeps
+/// grows with the square of this.
+const MAX_EDITS: usize = 1000;
+
+/// One run of changed lines, and the lines either side that put it in place.
+///
+/// Counted in lines of the two texts, so a hunk can be taken out of the text after and the lines it
+/// replaced in the text before put in their place ([`put_back`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hunk {
+    /// The lines of the text before the run replaces, as a zero-based half-open range.
+    pub before: Range<usize>,
+    /// The lines of the text after the run is, in the same terms.
+    pub after: Range<usize>,
+    /// The run with up to the requested number of unchanged lines either side, each line whole with
+    /// the terminator it ends in. Two hunks are the same hunk when their ranges and these lines
+    /// are, which is why they are not the lines as drawn ([`Hunk::drawn`]).
+    pub changes: Vec<Change>,
+}
+
+impl Hunk {
+    /// The run as it is drawn, line by line, without the terminators.
+    ///
+    /// A line removed that reads the same as a line added keeps the carriage return it ends in, and
+    /// says so when it has no terminator, since the way it ends is all that differs between them.
+    /// Every other line is drawn bare, so a CRLF file is not marked on every row.
+    pub fn drawn(&self) -> Vec<Change> {
+        let bare = |line: &str| {
+            line.strip_suffix("\r\n")
+                .or_else(|| line.strip_suffix('\n'))
+                .unwrap_or(line)
+                .to_string()
+        };
+        let texts_of = |added: bool| -> std::collections::HashSet<String> {
+            self.changes
+                .iter()
+                .filter_map(|change| match change {
+                    Change::Removed(line) if !added => Some(bare(line)),
+                    Change::Added(line) if added => Some(bare(line)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (removed, added) = (texts_of(false), texts_of(true));
+        let shown = |line: &str, other_side: &std::collections::HashSet<String>| {
+            if !other_side.contains(&bare(line)) {
+                return bare(line);
+            }
+            match line.strip_suffix('\n') {
+                Some(text) => text.to_string(),
+                None => format!("{line} {}", t!(diff_no_final_newline)),
+            }
+        };
+        self.changes
+            .iter()
+            .map(|change| match change {
+                Change::Kept(line) => Change::Kept(bare(line)),
+                Change::Added(line) => Change::Added(shown(line, &removed)),
+                Change::Removed(line) => Change::Removed(shown(line, &added)),
+                Change::Elided(count) => Change::Elided(*count),
+            })
+            .collect()
+    }
+}
 
 impl Diff {
     /// Diff `before` against `after`, by line.
     pub fn compute(before: &str, after: &str) -> Self {
-        let old: Vec<&str> = before.lines().collect();
-        let new: Vec<&str> = after.lines().collect();
+        Self::of_lines(
+            before,
+            after,
+            before.lines().collect(),
+            after.lines().collect(),
+        )
+    }
+
+    /// Diff `before` against `after`, by line with its terminator.
+    ///
+    /// Two lines that differ only in their terminator are different lines here, which
+    /// [`Diff::compute`] counts as the same: a hunk that is put back has to bring back the bytes it
+    /// replaced, a final line that had no terminator included. The lines of the changes carry
+    /// their terminators.
+    pub fn compute_terminated(before: &str, after: &str) -> Self {
+        Self::of_lines(
+            before,
+            after,
+            before.split_inclusive('\n').collect(),
+            after.split_inclusive('\n').collect(),
+        )
+    }
+
+    fn of_lines(before: &str, after: &str, old: Vec<&str>, new: Vec<&str>) -> Self {
         let before_ending = LineEnding::of(before);
         let after_ending = LineEnding::of(after);
 
-        // Matching head and tail are trimmed first. Most edits touch a small region, and
-        // this is what keeps the quadratic step small enough to run at all.
-        let mut start = 0;
-        while start < old.len() && start < new.len() && old[start] == new[start] {
-            start += 1;
-        }
-        let mut old_end = old.len();
-        let mut new_end = new.len();
-        while old_end > start && new_end > start && old[old_end - 1] == new[new_end - 1] {
-            old_end -= 1;
-            new_end -= 1;
-        }
+        let head = common_head(&old, &new);
+        let tail = common_tail(&old[head..], &new[head..]);
+        let differing = (head..old.len() - tail, head..new.len() - tail);
 
-        let old_middle = &old[start..old_end];
-        let new_middle = &new[start..new_end];
+        let mut aligned = Aligned {
+            changes: Vec::new(),
+            added: 0,
+            removed: 0,
+            unaligned: None,
+            steps_left: MAX_STEPS,
+        };
+        align(
+            &mut aligned,
+            &old,
+            &new,
+            differing.0.clone(),
+            differing.1.clone(),
+        );
 
-        if old_middle.len().saturating_mul(new_middle.len()) > MAX_CELLS {
-            return Self {
-                changes: Vec::new(),
-                added: new_middle.len(),
-                removed: old_middle.len(),
-                exact: false,
-                before_ending,
-                after_ending,
-            };
-        }
-
-        let mut changes: Vec<Change> = old[..start]
-            .iter()
-            .map(|l| Change::Kept(l.to_string()))
-            .collect();
-        changes.extend(subsequence_changes(old_middle, new_middle));
-        changes.extend(old[old_end..].iter().map(|l| Change::Kept(l.to_string())));
-
-        let added = changes
-            .iter()
-            .filter(|c| matches!(c, Change::Added(_)))
-            .count();
-        let removed = changes
-            .iter()
-            .filter(|c| matches!(c, Change::Removed(_)))
-            .count();
+        let exact = aligned.unaligned.is_none();
+        let changes = if exact {
+            let mut changes: Vec<Change> = kept_lines(&old[..head]).collect();
+            changes.extend(aligned.changes);
+            changes.extend(kept_lines(&old[old.len() - tail..]));
+            changes
+        } else {
+            Vec::new()
+        };
 
         Self {
             changes,
-            added,
-            removed,
-            exact: true,
+            added: aligned.added,
+            removed: aligned.removed,
+            differing,
+            unaligned: aligned.unaligned,
             before_ending,
             after_ending,
         }
     }
 
-    /// Lines added.
+    /// Lines added. Where the diff is inexact, a stretch that could not be lined up counts as
+    /// all added, so the lines the change adds are at most this.
     pub fn added(&self) -> usize {
         self.added
     }
 
-    /// Lines removed.
+    /// Lines removed. Where the diff is inexact, a stretch that could not be lined up counts as
+    /// all removed, so the lines the change removes are at most this.
     pub fn removed(&self) -> usize {
         self.removed
     }
 
     /// Whether the line-by-line changes were computed, or only counted.
     ///
-    /// False for a difference too large to diff, where [`Diff::condensed`] is empty and
-    /// only the counts are meaningful.
+    /// False where a stretch could not be lined up, and then [`Diff::condensed`] is empty and the
+    /// counts, [`Diff::differing_lines`] and [`Diff::unaligned_lines`] are all there is.
     pub fn is_exact(&self) -> bool {
-        self.exact
+        self.unaligned.is_none()
+    }
+
+    /// The lines of the text before and of the text after that lie between the first difference
+    /// and the last, as zero-based half-open ranges. Everything outside them is the same on both
+    /// sides, and where the two texts are the same the ranges are empty.
+    pub fn differing_lines(&self) -> (Range<usize>, Range<usize>) {
+        self.differing.clone()
+    }
+
+    /// Where an inexact diff gave up, as the lines of the text before and of the text after from
+    /// the start of the first stretch it could not line up to the end of the last, in the same
+    /// ranges as [`Diff::differing_lines`]. Every line it could not line up is inside them, and
+    /// lines between two such stretches may be inside them and lined up. `None` where the diff is
+    /// exact.
+    pub fn unaligned_lines(&self) -> Option<(Range<usize>, Range<usize>)> {
+        self.unaligned.clone()
     }
 
     /// The terminators the text before and the text after use.
@@ -198,21 +318,379 @@ impl Diff {
             .min(self.changes.len().saturating_sub(1));
         (low..=high).any(|i| !matches!(self.changes[i], Change::Kept(_)))
     }
+
+    /// Each run of changed lines, with up to `context` unchanged lines either side, in the order
+    /// the text has them.
+    ///
+    /// `None` where the diff is not exact, since the stretch it could not line up has no hunks to
+    /// name. The lines of each hunk's changes are whole, terminators included, and its ranges count
+    /// the lines the diff was made over, so only a diff made by [`Diff::compute_terminated`] has
+    /// ranges [`put_back`] can use. [`Hunk::drawn`] is how they are drawn.
+    pub fn hunks(&self, context: usize) -> Option<Vec<Hunk>> {
+        if !self.is_exact() {
+            return None;
+        }
+        let kept = |at: usize| matches!(self.changes[at], Change::Kept(_));
+        let mut hunks = Vec::new();
+        let (mut before, mut after) = (0usize, 0usize);
+        let mut at = 0;
+        while at < self.changes.len() {
+            if kept(at) {
+                before += 1;
+                after += 1;
+                at += 1;
+                continue;
+            }
+            let (first, first_before, first_after) = (at, before, after);
+            while at < self.changes.len() && !kept(at) {
+                match self.changes[at] {
+                    Change::Removed(_) => before += 1,
+                    Change::Added(_) => after += 1,
+                    Change::Kept(_) | Change::Elided(_) => {}
+                }
+                at += 1;
+            }
+            let leading = (1..=context.min(first))
+                .take_while(|back| kept(first - back))
+                .count();
+            let trailing = (0..context)
+                .take_while(|ahead| at + ahead < self.changes.len() && kept(at + ahead))
+                .count();
+            hunks.push(Hunk {
+                before: first_before..before,
+                after: first_after..after,
+                changes: self.changes[first - leading..at + trailing].to_vec(),
+            });
+        }
+        Some(hunks)
+    }
+}
+
+/// `after` with the lines `hunk` replaced in `before` put where the hunk is.
+///
+/// Every line is taken whole, terminator included, from the text it belongs to, so the result is
+/// `after` outside the hunk and `before` inside it, byte for byte. `None` where the hunk's ranges
+/// lie outside either text, which is a hunk made over other texts.
+pub fn put_back(before: &str, after: &str, hunk: &Hunk) -> Option<String> {
+    let old: Vec<&str> = before.split_inclusive('\n').collect();
+    let new: Vec<&str> = after.split_inclusive('\n').collect();
+    let replaced = old.get(hunk.before.clone())?;
+    let (ahead, behind) = (new.get(..hunk.after.start)?, new.get(hunk.after.end..)?);
+    Some([ahead, replaced, behind].concat().concat())
+}
+
+/// What [`align`] has made of the runs it was given.
+struct Aligned {
+    /// The changes in order, kept only while every stretch so far was lined up.
+    changes: Vec<Change>,
+    added: usize,
+    removed: usize,
+    /// From the start of the first stretch that could not be lined up to the end of the last. Those
+    /// stretches are counted as all replaced, and no changes are kept once there is one.
+    unaligned: Option<(Range<usize>, Range<usize>)>,
+    steps_left: usize,
+}
+
+impl Aligned {
+    fn kept(&mut self, lines: &[&str]) {
+        if self.unaligned.is_none() {
+            self.changes.extend(kept_lines(lines));
+        }
+    }
+
+    fn added(&mut self, lines: &[&str]) {
+        self.added += lines.len();
+        if self.unaligned.is_none() {
+            self.changes
+                .extend(lines.iter().map(|l| Change::Added(l.to_string())));
+        }
+    }
+
+    fn removed(&mut self, lines: &[&str]) {
+        self.removed += lines.len();
+        if self.unaligned.is_none() {
+            self.changes
+                .extend(lines.iter().map(|l| Change::Removed(l.to_string())));
+        }
+    }
+
+    fn changed(&mut self, changes: Vec<Change>) {
+        for change in changes {
+            match change {
+                Change::Added(_) => self.added += 1,
+                Change::Removed(_) => self.removed += 1,
+                _ => {}
+            }
+            if self.unaligned.is_none() {
+                self.changes.push(change);
+            }
+        }
+    }
+
+    fn unaligned(&mut self, o: Range<usize>, n: Range<usize>) {
+        self.changes = Vec::new();
+        self.added += n.len();
+        self.removed += o.len();
+        self.unaligned = Some(match self.unaligned.take() {
+            Some((first_o, first_n)) => (first_o.start..o.end, first_n.start..n.end),
+            None => (o, n),
+        });
+    }
+}
+
+/// `lines` as changes that keep them.
+fn kept_lines<'a>(lines: &'a [&str]) -> impl Iterator<Item = Change> + 'a {
+    lines.iter().map(|l| Change::Kept(l.to_string()))
+}
+
+/// A piece of the runs still to be turned into changes, taken in the order the changes come.
+enum Piece {
+    /// Lines of `old` that `new` has in the same place.
+    Kept(Range<usize>),
+    /// Lines of `old` and of `new` between two lines already lined up.
+    Stretch(Range<usize>, Range<usize>),
+}
+
+/// Turn the lines of `old` in `o` and of `new` in `n` into changes.
+///
+/// A stretch that fits the table is diffed by [`subsequence_changes`]. One that does not is
+/// searched for a shortest edit, which takes steps in proportion to the number of edits. Where
+/// that takes too long and the stretch holds lines that occur once on each side, it is split at
+/// them and the table is used between them, so the table covers the lines between two shared lines
+/// whatever the distance from the first change to the last. A split lines the stretches up on the
+/// lines it chose, which gives a correct account of both texts that need not be the shortest. A
+/// stretch with no such line is searched with every step that is left, and one that still cannot
+/// be lined up is counted as replaced.
+fn align(aligned: &mut Aligned, old: &[&str], new: &[&str], o: Range<usize>, n: Range<usize>) {
+    let mut pieces = vec![Piece::Stretch(o, n)];
+    while let Some(piece) = pieces.pop() {
+        let (mut o, mut n) = match piece {
+            Piece::Kept(run) => {
+                aligned.kept(&old[run]);
+                continue;
+            }
+            Piece::Stretch(o, n) => (o, n),
+        };
+
+        // Matching head and tail are trimmed first. Most edits touch a small region, and
+        // this is what keeps the quadratic step small enough to run at all.
+        let head = common_head(&old[o.clone()], &new[n.clone()]);
+        aligned.kept(&old[o.start..o.start + head]);
+        o.start += head;
+        n.start += head;
+        let tail = common_tail(&old[o.clone()], &new[n.clone()]);
+        if tail > 0 {
+            pieces.push(Piece::Kept(o.end - tail..o.end));
+            o.end -= tail;
+            n.end -= tail;
+        }
+
+        if o.is_empty() {
+            aligned.added(&new[n]);
+            continue;
+        }
+        if n.is_empty() {
+            aligned.removed(&old[o]);
+            continue;
+        }
+        let cells = o.len().saturating_mul(n.len());
+        if cells <= MAX_SMALL_CELLS || (cells <= MAX_CELLS && cells <= aligned.steps_left / 4) {
+            aligned.steps_left = aligned.steps_left.saturating_sub(cells);
+            aligned.changed(subsequence_changes(&old[o], &new[n]));
+            continue;
+        }
+
+        // Where there is a line to split on, the search for a shortest edit is tried first with
+        // an allowance in proportion to the stretch. Where there is none, it has every step left.
+        let reading = o.len() + n.len();
+        let shared = if reading <= aligned.steps_left {
+            aligned.steps_left -= reading;
+            single_lines(&old[o.clone()], &new[n.clone()])
+        } else {
+            Vec::new()
+        };
+        let offered = if shared.is_empty() {
+            aligned.steps_left
+        } else {
+            (SEARCH_STEPS_PER_LINE * reading).min(aligned.steps_left)
+        };
+        let mut allowance = offered;
+        let found = shortest_edit(&old[o.clone()], &new[n.clone()], &mut allowance);
+        aligned.steps_left -= offered - allowance;
+        if let Some(changes) = found {
+            aligned.changed(changes);
+            continue;
+        }
+        if shared.is_empty() {
+            aligned.unaligned(o, n);
+            continue;
+        }
+        // Pushed last stretch first, so they come off in order.
+        let (mut o_end, mut n_end) = (o.end, n.end);
+        for &(i, j) in shared.iter().rev() {
+            let (i, j) = (o.start + i, n.start + j);
+            pieces.push(Piece::Stretch(i + 1..o_end, j + 1..n_end));
+            pieces.push(Piece::Kept(i..i + 1));
+            (o_end, n_end) = (i, j);
+        }
+        pieces.push(Piece::Stretch(o.start..o_end, n.start..n_end));
+    }
+}
+
+/// How many lines at the start of both runs are the same.
+fn common_head(old: &[&str], new: &[&str]) -> usize {
+    old.iter().zip(new).take_while(|(a, b)| a == b).count()
+}
+
+/// How many lines at the end of both runs are the same.
+fn common_tail(old: &[&str], new: &[&str]) -> usize {
+    old.iter()
+        .rev()
+        .zip(new.iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count()
+}
+
+/// Positions, in `old` and in `new`, of lines that each run holds exactly once, taken as the
+/// longest chain that is in the same order in both. A line that moved is left out of the chain, so
+/// what is returned can be split at without crossing itself.
+fn single_lines(old: &[&str], new: &[&str]) -> Vec<(usize, usize)> {
+    #[derive(Default)]
+    struct Sightings {
+        old_count: usize,
+        old_at: usize,
+        new_count: usize,
+        new_at: usize,
+    }
+    let mut seen: HashMap<&str, Sightings> = HashMap::new();
+    for (i, line) in old.iter().enumerate() {
+        let held = seen.entry(line).or_default();
+        held.old_count += 1;
+        held.old_at = i;
+    }
+    for (j, line) in new.iter().enumerate() {
+        if let Some(held) = seen.get_mut(line) {
+            held.new_count += 1;
+            held.new_at = j;
+        }
+    }
+    let mut pairs: Vec<(usize, usize)> = seen
+        .values()
+        .filter(|held| held.old_count == 1 && held.new_count == 1)
+        .map(|held| (held.old_at, held.new_at))
+        .collect();
+    // The map hands them back in no order, and the chain below is read in the order of `old`.
+    pairs.sort_unstable();
+
+    // The usual patience sort: `ends[k]` is the pair ending the best chain of length `k + 1`, and
+    // `before[p]` the pair ahead of `p` in the best chain that ends at it.
+    let mut ends: Vec<usize> = Vec::new();
+    let mut before: Vec<Option<usize>> = vec![None; pairs.len()];
+    for (p, &(_, j)) in pairs.iter().enumerate() {
+        let at = ends.partition_point(|&e| pairs[e].1 < j);
+        before[p] = at.checked_sub(1).map(|k| ends[k]);
+        if at == ends.len() {
+            ends.push(p);
+        } else {
+            ends[at] = p;
+        }
+    }
+    let mut chain = Vec::with_capacity(ends.len());
+    let mut link = ends.last().copied();
+    while let Some(p) = link {
+        chain.push(pairs[p]);
+        link = before[p];
+    }
+    chain.reverse();
+    chain
+}
+
+/// A shortest list of changes from `old` to `new`, by Myers' search along the diagonals of the
+/// edit graph, or `None` where it needs more than [`MAX_EDITS`] edits or more of `steps` than are
+/// left. What it spends comes off `steps` either way.
+///
+/// The cost follows the number of edits, so two long runs that differ
+/// in a few lines are lined up however alike their lines are to each other.
+fn shortest_edit(old: &[&str], new: &[&str], steps: &mut usize) -> Option<Vec<Change>> {
+    let (n, m) = (old.len(), new.len());
+    let limit = MAX_EDITS.min(n + m);
+    let offset = limit + 1;
+    // The furthest `x` reached on each diagonal `x - y = k`, held at `k + offset`.
+    let mut furthest = vec![0usize; 2 * limit + 3];
+    // What `furthest` held before each round of `d` edits, for the diagonals the round reads.
+    let mut rounds: Vec<Vec<usize>> = Vec::new();
+    let mut spent = 0usize;
+    let mut done = false;
+    'search: for d in 0..=limit {
+        rounds.push(furthest[offset - d - 1..=offset + d + 1].to_vec());
+        let reach = d as isize;
+        for k in (-reach..=reach).step_by(2) {
+            let at = (k + offset as isize) as usize;
+            let mut x = if k == -reach || (k != reach && furthest[at - 1] < furthest[at + 1]) {
+                furthest[at + 1]
+            } else {
+                furthest[at - 1] + 1
+            };
+            let mut y = (x as isize - k) as usize;
+            spent += 1;
+            while x < n && y < m && old[x] == new[y] {
+                x += 1;
+                y += 1;
+                spent += 1;
+            }
+            furthest[at] = x;
+            if x >= n && y >= m {
+                done = true;
+                break 'search;
+            }
+            if spent > *steps {
+                break 'search;
+            }
+        }
+    }
+    *steps = steps.saturating_sub(spent);
+    if !done {
+        return None;
+    }
+
+    // Back from the end, round by round, to the edit that began each.
+    let mut changes = Vec::new();
+    let (mut x, mut y) = (n as isize, m as isize);
+    for (d, round) in rounds.iter().enumerate().rev() {
+        let d = d as isize;
+        let at = |k: isize| round[(k + d + 1) as usize] as isize;
+        let k = x - y;
+        let from = if k == -d || (k != d && at(k - 1) < at(k + 1)) {
+            k + 1
+        } else {
+            k - 1
+        };
+        let (from_x, from_y) = (at(from), at(from) - from);
+        while x > from_x && y > from_y {
+            x -= 1;
+            y -= 1;
+            changes.push(Change::Kept(old[x as usize].to_string()));
+        }
+        if d > 0 {
+            if from == k + 1 {
+                y -= 1;
+                changes.push(Change::Added(new[y as usize].to_string()));
+            } else {
+                x -= 1;
+                changes.push(Change::Removed(old[x as usize].to_string()));
+            }
+        }
+    }
+    changes.reverse();
+    Some(changes)
 }
 
 /// Walk a longest-common-subsequence table to turn two line runs into changes.
 ///
 /// Removals are emitted before additions where the table is indifferent, so a replaced
-/// line reads as the old text followed by the new.
+/// line reads as the old text followed by the new. Both runs have lines.
 fn subsequence_changes(old: &[&str], new: &[&str]) -> Vec<Change> {
     let (n, m) = (old.len(), new.len());
-    if n == 0 {
-        return new.iter().map(|l| Change::Added(l.to_string())).collect();
-    }
-    if m == 0 {
-        return old.iter().map(|l| Change::Removed(l.to_string())).collect();
-    }
-
     let width = m + 1;
     let mut table = vec![0u32; (n + 1) * width];
     for i in (0..n).rev() {
@@ -269,6 +747,67 @@ mod tests {
             .collect()
     }
 
+    fn numbered(count: usize) -> Vec<String> {
+        (0..count).map(|n| format!("line {n}")).collect()
+    }
+
+    fn joined(lines: &[String]) -> String {
+        lines.iter().map(|l| format!("{l}\n")).collect()
+    }
+
+    /// The lines of `changes` that are not dropped, in order.
+    fn replayed(changes: &[Change], dropped: fn(&Change) -> bool) -> Vec<String> {
+        changes
+            .iter()
+            .filter(|c| !dropped(c))
+            .map(|c| match c {
+                Change::Kept(l) | Change::Added(l) | Change::Removed(l) => l.clone(),
+                Change::Elided(_) => panic!("a full view elided something"),
+            })
+            .collect()
+    }
+
+    /// The changes account for both texts: the lines not added read as the text before, in order,
+    /// and the lines not removed read as the text after.
+    fn assert_replays(diff: &Diff, before: &str, after: &str) {
+        let all = diff.condensed(usize::MAX);
+        let before: Vec<&str> = before.lines().collect();
+        let after: Vec<&str> = after.lines().collect();
+        assert_eq!(replayed(&all, |c| matches!(c, Change::Added(_))), before);
+        assert_eq!(replayed(&all, |c| matches!(c, Change::Removed(_))), after);
+    }
+
+    /// A fixed sequence of numbers, so a test that draws lines at random draws the same ones.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self, bound: usize) -> usize {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (self.0 >> 33) as usize % bound
+        }
+    }
+
+    /// Twelve stretches of 999 lines that have nothing in common, between lines that are the same.
+    /// Each is within the table, and together they take more steps than one diff may.
+    fn dissimilar_stretches() -> (Vec<String>, Vec<String>) {
+        let stretch = |first: &str, second: &str| -> Vec<String> {
+            (0..999)
+                .map(|n| [first, second][n % 2].to_string())
+                .collect()
+        };
+        let (mut before, mut after) = (Vec::new(), Vec::new());
+        for k in 0..12 {
+            before.push(format!("anchor {k}"));
+            after.push(format!("anchor {k}"));
+            before.extend(stretch("p", "q"));
+            after.extend(stretch("r", "s"));
+        }
+        (before, after)
+    }
+
     #[test]
     fn a_text_is_classed_by_its_terminators() {
         assert_eq!(LineEnding::of(""), None);
@@ -310,6 +849,7 @@ mod tests {
         assert!(diff.is_empty());
         assert_eq!(diff.added(), 0);
         assert_eq!(diff.removed(), 0);
+        assert_eq!(diff.differing_lines(), (2..2, 2..2));
     }
 
     #[test]
@@ -407,7 +947,429 @@ mod tests {
         assert!(!diff.is_exact());
         assert!(diff.condensed(3).is_empty());
         assert_eq!((diff.added(), diff.removed()), (2000, 2000));
+        assert_eq!(diff.differing_lines(), (0..2000, 0..2000));
         assert!(!diff.is_empty(), "an inexact diff still changed something");
+    }
+
+    /// A long file with a line inserted near each end. The span between the two edits is far past
+    /// what the table holds, and nothing in it changed.
+    #[test]
+    fn two_edits_a_thousand_lines_apart_are_two_small_changes() {
+        let before = numbered(1200);
+        let mut after = before.clone();
+        after.insert(1195, "inserted late".into());
+        after.insert(5, "inserted early".into());
+        let (before, after) = (joined(&before), joined(&after));
+
+        let diff = Diff::compute(&before, &after);
+
+        assert!(diff.is_exact(), "the span between the edits was counted");
+        assert_eq!((diff.added(), diff.removed()), (2, 0));
+        assert_eq!(added(&diff), ["inserted early", "inserted late"]);
+        assert!(removed(&diff).is_empty());
+        assert_replays(&diff, &before, &after);
+        assert_eq!(diff.differing_lines(), (5..1195, 5..1197));
+        assert_eq!(diff.unaligned_lines(), None);
+    }
+
+    /// Far past any table a larger bound could allow, so raising the bound does not pass this.
+    #[test]
+    fn replaced_lines_at_both_ends_of_a_very_long_file_are_two_small_changes() {
+        let before = numbered(30_000);
+        let mut after = before.clone();
+        after[10] = "changed near the start".into();
+        after[29_990] = "changed near the end".into();
+        let (before, after) = (joined(&before), joined(&after));
+
+        let diff = Diff::compute(&before, &after);
+
+        assert!(diff.is_exact());
+        assert_eq!((diff.added(), diff.removed()), (2, 2));
+        assert_eq!(removed(&diff), ["line 10", "line 29990"]);
+        assert_eq!(
+            added(&diff),
+            ["changed near the start", "changed near the end"]
+        );
+        assert_replays(&diff, &before, &after);
+    }
+
+    /// Source-shaped text, in which `}` and blank lines repeat all through, diffs exactly when its
+    /// edits are far apart.
+    #[test]
+    fn repeated_lines_do_not_misplace_changes_far_apart() {
+        let block = |n: usize| {
+            vec![
+                format!("fn f{n}() {{"),
+                format!("    body {n}"),
+                "}".to_string(),
+                String::new(),
+            ]
+        };
+        let before: Vec<String> = (0..750).flat_map(block).collect();
+        let mut after = before.clone();
+        after[2 * 4 + 1] = "    body two, changed".into();
+        after[748 * 4 + 1] = "    body 748, changed".into();
+        let (before, after) = (joined(&before), joined(&after));
+
+        let diff = Diff::compute(&before, &after);
+
+        assert!(diff.is_exact());
+        assert_eq!((diff.added(), diff.removed()), (2, 2));
+        assert_eq!(removed(&diff), ["    body 2", "    body 748"]);
+        assert_replays(&diff, &before, &after);
+    }
+
+    /// A line that moved cannot be lined up beside its neighbours, so it shows as removed in one
+    /// place and added in the other rather than crossing the lines between.
+    #[test]
+    fn a_line_moved_a_long_way_is_a_removal_and_an_addition() {
+        let before = numbered(3000);
+        let mut after = before.clone();
+        let moved = after.remove(10);
+        after.push(moved);
+        let (before, after) = (joined(&before), joined(&after));
+
+        let diff = Diff::compute(&before, &after);
+
+        assert!(diff.is_exact());
+        assert_eq!((diff.added(), diff.removed()), (1, 1));
+        assert_eq!(removed(&diff), ["line 10"]);
+        assert_eq!(added(&diff), ["line 10"]);
+        assert_replays(&diff, &before, &after);
+    }
+
+    /// Once larger stretches have used the budget, a stretch of a few lines is still lined up, so
+    /// the lines that could not be matched are not taken to reach the end of the text.
+    #[test]
+    fn a_small_stretch_after_the_budget_is_spent_is_still_lined_up() {
+        let (mut before, mut after) = dissimilar_stretches();
+        for k in 0..2000 {
+            before.push(format!("tail {k}"));
+            after.push(format!("tail {k}"));
+        }
+        before.push("old end".into());
+        after.push("new end".into());
+        for k in 0..10 {
+            before.push(format!("end {k}"));
+            after.push(format!("end {k}"));
+        }
+        let (before, after) = (joined(&before), joined(&after));
+
+        let diff = Diff::compute(&before, &after);
+
+        assert!(!diff.is_exact());
+        assert_eq!((diff.added(), diff.removed()), (12 * 999 + 1, 12 * 999 + 1));
+        let (stuck, _) = diff.unaligned_lines().expect("an inexact diff names where");
+        assert_eq!(stuck.end, 12_000, "{stuck:?}");
+    }
+
+    /// Many changes scattered through a long file differ by more lines than a search for a
+    /// shortest edit takes, and each is small once the lines between them are set aside. The
+    /// closing line after each is no anchor, and it ends each stretch between two that are. A line
+    /// that moved across the file is a removal and an addition, and is not made an anchor that the
+    /// lines between would have to cross.
+    #[test]
+    fn many_scattered_changes_in_a_long_file_are_each_small() {
+        let before: Vec<String> = (0..10_000)
+            .flat_map(|n| [format!("line {n}"), "}".to_string()])
+            .collect();
+        let mut after = before.clone();
+        let places = (50..9_950).step_by(16);
+        let changed = places.clone().count();
+        for n in places {
+            after[2 * n] = format!("changed line {n}");
+        }
+        let moved = after.remove(2 * 501);
+        after.insert(19_000, moved);
+        let (before, after) = (joined(&before), joined(&after));
+
+        let diff = Diff::compute(&before, &after);
+
+        assert!(
+            2 * changed > MAX_EDITS,
+            "the changes are within a search for a shortest edit"
+        );
+        assert!(diff.is_exact());
+        assert_eq!((diff.added(), diff.removed()), (changed + 1, changed + 1));
+        assert_replays(&diff, &before, &after);
+    }
+
+    /// One unique line moved from one end to the other, and between the two nothing is held once
+    /// by each side. Anchoring on that line would pair it across the whole text, and the answer
+    /// would replace every row for a change of one line.
+    #[test]
+    fn a_unique_line_moved_across_repetitive_text_is_one_removal_and_one_addition() {
+        let rows: Vec<String> = (0..3000).map(|n| format!("row {}", n % 5)).collect();
+        let mut before = vec!["header".to_string()];
+        before.extend(rows.iter().cloned());
+        let mut after = rows;
+        after.push("header".to_string());
+        let (before, after) = (joined(&before), joined(&after));
+
+        let diff = Diff::compute(&before, &after);
+
+        assert!(diff.is_exact());
+        assert_eq!((diff.added(), diff.removed()), (1, 1));
+        assert_replays(&diff, &before, &after);
+    }
+
+    /// Every line of the first stretch occurs again in the second, so none is an anchor across
+    /// the whole texts. Each is once in the stretch, and the stretch is split again on them. The
+    /// lines either side of them differ by more edits than a search for a shortest edit takes.
+    #[test]
+    fn a_stretch_with_no_anchor_in_the_whole_text_is_split_on_its_own() {
+        let copy: Vec<String> = (0..1500).map(|n| format!("copy {n}")).collect();
+        let block = |tag: &str, count: usize| {
+            (0..count)
+                .map(move |k| format!("{tag} {k}"))
+                .collect::<Vec<_>>()
+        };
+        let build = |side: char| {
+            let mut lines = vec!["start".to_string()];
+            lines.extend(block(&format!("x{side}"), 600));
+            lines.extend(copy.iter().cloned());
+            lines.extend(block(&format!("y{side}"), 600));
+            lines.push("separator".to_string());
+            lines.extend(copy.iter().cloned());
+            lines.extend(block(&format!("z{side}"), 1));
+            lines.push("end".to_string());
+            joined(&lines)
+        };
+        let (before, after) = (build('0'), build('1'));
+
+        let diff = Diff::compute(&before, &after);
+
+        assert!(diff.is_exact());
+        assert_eq!((diff.added(), diff.removed()), (1201, 1201));
+        assert_replays(&diff, &before, &after);
+    }
+
+    /// Nothing in these lines is held once by each side, so there is nothing to anchor on, and
+    /// the stretch is far past the table. A few edits are still a few changes.
+    #[test]
+    fn repetitive_lines_with_edits_far_apart_are_two_small_changes() {
+        let before: Vec<String> = (0..3000).map(|n| format!("row {}", n % 5)).collect();
+        let mut after = before.clone();
+        after[10] = "changed near the start".into();
+        after[2990] = "changed near the end".into();
+        let (before, after) = (joined(&before), joined(&after));
+
+        let diff = Diff::compute(&before, &after);
+
+        assert!(diff.is_exact());
+        assert_eq!((diff.added(), diff.removed()), (2, 2));
+        assert_eq!(
+            added(&diff),
+            ["changed near the start", "changed near the end"]
+        );
+        assert_replays(&diff, &before, &after);
+
+        let braces: Vec<String> = (0..2500).map(|n| ["{", "}"][n % 2].to_string()).collect();
+        let mut after = braces.clone();
+        after.insert(2480, "late".into());
+        after.insert(20, "early".into());
+        let (before, after) = (joined(&braces), joined(&after));
+
+        let diff = Diff::compute(&before, &after);
+
+        assert!(diff.is_exact());
+        assert_eq!((diff.added(), diff.removed()), (2, 0));
+        assert_eq!(added(&diff), ["early", "late"]);
+        assert_replays(&diff, &before, &after);
+    }
+
+    /// With nothing to anchor on, a text with many edits is lined up by a search that takes more
+    /// than the first search is allowed, and less than the diff may spend.
+    #[test]
+    fn a_repetitive_text_with_many_edits_is_searched_with_the_steps_that_are_left() {
+        let before: Vec<String> = (0..1400).map(|n| format!("row {}", n % 5)).collect();
+        let mut after = before.clone();
+        for (k, line) in after.iter_mut().enumerate().skip(2).step_by(4) {
+            *line = format!("changed {k}");
+        }
+        let (before, after) = (joined(&before), joined(&after));
+        let lines = before.lines().count() + after.lines().count();
+
+        let diff = Diff::compute(&before, &after);
+
+        // Reaching this many edits takes about half its square in steps, more than the first
+        // search may take for a stretch this size.
+        let edits = diff.added() + diff.removed();
+        assert!(edits * edits / 2 > SEARCH_STEPS_PER_LINE * lines);
+        assert!(diff.is_exact());
+        assert_eq!((diff.added(), diff.removed()), (350, 350));
+        assert_replays(&diff, &before, &after);
+    }
+
+    /// A shortest edit has as many changes as the table finds, and the table finds the fewest
+    /// there are.
+    #[test]
+    fn a_shortest_edit_is_as_short_as_the_table_makes_it() {
+        let mut rng = Lcg(0x1357);
+        let cost = |changes: &[Change]| {
+            changes
+                .iter()
+                .filter(|c| !matches!(c, Change::Kept(_)))
+                .count()
+        };
+        for round in 0..300 {
+            let letters = 2 + rng.next(5);
+            let old: Vec<String> = (0..1 + rng.next(60))
+                .map(|_| format!("{}", rng.next(letters)))
+                .collect();
+            let new: Vec<String> = if round % 2 == 0 {
+                (0..1 + rng.next(60))
+                    .map(|_| format!("{}", rng.next(letters)))
+                    .collect()
+            } else {
+                let mut edited = old.clone();
+                for _ in 0..rng.next(6) {
+                    let at = rng.next(edited.len());
+                    match rng.next(3) {
+                        0 if edited.len() > 1 => {
+                            edited.remove(at);
+                        }
+                        1 => edited.insert(at, format!("{}", rng.next(letters))),
+                        _ => edited[at] = format!("{}", rng.next(letters)),
+                    }
+                }
+                edited
+            };
+            let (old, new): (Vec<&str>, Vec<&str>) = (
+                old.iter().map(String::as_str).collect(),
+                new.iter().map(String::as_str).collect(),
+            );
+
+            let mut steps = MAX_STEPS;
+            let found = shortest_edit(&old, &new, &mut steps).expect("a short text is searched");
+            let table = subsequence_changes(&old, &new);
+
+            assert_eq!(cost(&found), cost(&table), "round {round}: {old:?} {new:?}");
+            assert_eq!(replayed(&found, |c| matches!(c, Change::Added(_))), old);
+            assert_eq!(replayed(&found, |c| matches!(c, Change::Removed(_))), new);
+        }
+    }
+
+    /// Whatever the edits are, and wherever they fall in a text with nothing to anchor on, the
+    /// changes account for both texts and are no more than the edits made.
+    #[test]
+    fn a_shortest_edit_accounts_for_random_edits_to_a_repetitive_text() {
+        let mut rng = Lcg(0x2387);
+        for round in 0..40 {
+            let before: Vec<String> = (0..2500).map(|n| format!("row {}", n % 5)).collect();
+            let mut after = before.clone();
+            let mut edits = 0;
+            // The first edit is near the start and the last near the end, so the stretch
+            // between them is far past the table.
+            for place in 0..4 {
+                let at = match place {
+                    0 => rng.next(50),
+                    3 => after.len() - 1 - rng.next(50),
+                    _ => rng.next(after.len()),
+                };
+                match rng.next(3) {
+                    0 => {
+                        after.remove(at);
+                    }
+                    1 => after.insert(at, format!("new {}", rng.next(1000))),
+                    _ => after[at] = format!("changed {}", rng.next(1000)),
+                }
+                edits += 1;
+            }
+            let (before, after) = (joined(&before), joined(&after));
+
+            let diff = Diff::compute(&before, &after);
+
+            assert!(diff.is_exact(), "round {round}");
+            assert!(
+                diff.added() + diff.removed() <= 2 * edits,
+                "round {round}: {} + {} for {edits} edits",
+                diff.added(),
+                diff.removed()
+            );
+            assert_replays(&diff, &before, &after);
+        }
+    }
+
+    /// Only a line that each side holds once is an anchor, and of those the longest chain in the
+    /// same order on both sides is taken, so a line that moved is left out.
+    #[test]
+    fn lines_held_once_by_each_side_are_the_only_anchors() {
+        let old = ["a", "r", "b", "r", "c", "m"];
+        let new = ["a", "r", "m", "b", "r", "c"];
+
+        assert_eq!(single_lines(&old, &new), [(0, 0), (2, 3), (4, 5)]);
+    }
+
+    /// Sections that are nearly the same, as repetitive text with a few edits in each is, are each
+    /// within the table. A table for each would use up the steps one diff may take, and a search
+    /// lines each up in a few hundred.
+    #[test]
+    fn near_identical_sections_do_not_use_the_budget_for_tables() {
+        let section = |k: usize, changed: bool| -> Vec<String> {
+            let mut lines = vec![format!("anchor {k}")];
+            lines.extend((0..998).map(|n| {
+                if changed && n % 16 == 7 {
+                    format!("changed {k} {n}")
+                } else {
+                    format!("row {}", n % 5)
+                }
+            }));
+            lines
+        };
+        let before: Vec<String> = (0..24).flat_map(|k| section(k, false)).collect();
+        let after: Vec<String> = (0..24).flat_map(|k| section(k, true)).collect();
+        let edited = 24 * (0..998).filter(|n| n % 16 == 7).count();
+        let (before, after) = (joined(&before), joined(&after));
+
+        let diff = Diff::compute(&before, &after);
+
+        assert!(2 * edited > MAX_EDITS, "one search lines the text up");
+        assert!(diff.is_exact());
+        assert_eq!((diff.added(), diff.removed()), (edited, edited));
+        assert_replays(&diff, &before, &after);
+    }
+
+    /// Each stretch is within the table, and together they are not within what one diff may
+    /// spend. The ones past it are counted as replaced, rather than the diff taking as long as
+    /// they need.
+    #[test]
+    fn a_diff_of_many_large_stretches_stops_at_its_budget() {
+        let (before, after) = dissimilar_stretches();
+        let (before, after) = (joined(&before), joined(&after));
+
+        let diff = Diff::compute(&before, &after);
+
+        assert!(!diff.is_exact());
+        assert!(diff.condensed(3).is_empty());
+        assert_eq!((diff.added(), diff.removed()), (12 * 999, 12 * 999));
+        // More than one stretch was given up on, and the span runs from the first to the last.
+        let (stuck, _) = diff.unaligned_lines().expect("an inexact diff names where");
+        assert!(stuck.len() > 999 && stuck.end == 12_000, "{stuck:?}");
+    }
+
+    /// Where a stretch has nothing to line up by, only its own lines are counted as replaced.
+    /// The changes on either side of it are counted as they are, and the span between the first
+    /// difference and the last is not.
+    #[test]
+    fn an_unalignable_stretch_is_counted_alone() {
+        let mut before = numbered(4000);
+        let mut after = before.clone();
+        after[10] = "changed near the start".into();
+        after[3990] = "changed near the end".into();
+        for k in 1000..3000 {
+            before[k] = ["p", "q"][k % 2].to_string();
+            after[k] = ["r", "s"][k % 2].to_string();
+        }
+        let (before, after) = (joined(&before), joined(&after));
+
+        let diff = Diff::compute(&before, &after);
+
+        assert!(!diff.is_exact());
+        assert!(diff.condensed(3).is_empty());
+        assert_eq!((diff.added(), diff.removed()), (2002, 2002));
+        assert_eq!(diff.differing_lines(), (10..3991, 10..3991));
+        assert_eq!(diff.unaligned_lines(), Some((1000..3000, 1000..3000)));
     }
 
     /// Trimming the matching head and tail must not misplace the changed region.
@@ -431,5 +1393,208 @@ mod tests {
         let diff = Diff::compute("x\nx\nx\n", "x\nx\nx\nx\n");
         assert_eq!(added(&diff), vec!["x"]);
         assert!(removed(&diff).is_empty());
+    }
+
+    fn hunks_of(before: &str, after: &str) -> Vec<Hunk> {
+        Diff::compute_terminated(before, after)
+            .hunks(1)
+            .expect("an exact diff has hunks")
+    }
+
+    /// Two edits far apart are two runs, and each names the lines it replaces on both sides, which
+    /// is what lets one be taken out of the text after and the other left.
+    #[test]
+    fn hunks_name_the_lines_each_run_replaces_on_both_sides() {
+        let before = "a\nb\nc\nd\ne\nf\ng\nh\n";
+        let after = "a\nB\nB2\nc\nd\ne\nf\nh\n";
+
+        let hunks = hunks_of(before, after);
+
+        assert_eq!(
+            hunks
+                .iter()
+                .map(|h| (h.before.clone(), h.after.clone()))
+                .collect::<Vec<_>>(),
+            [(1..2, 1..3), (6..7, 7..7)]
+        );
+        assert_eq!(
+            hunks[0].drawn(),
+            [
+                Change::Kept("a".into()),
+                Change::Removed("b".into()),
+                Change::Added("B".into()),
+                Change::Added("B2".into()),
+                Change::Kept("c".into()),
+            ]
+        );
+        assert_eq!(
+            hunks[1].drawn(),
+            [
+                Change::Kept("f".into()),
+                Change::Removed("g".into()),
+                Change::Kept("h".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn identical_texts_have_no_hunks() {
+        assert_eq!(hunks_of("a\nb\n", "a\nb\n"), []);
+    }
+
+    /// The context of a hunk stops at the run before it, so another hunk's lines are never drawn
+    /// as this one's unchanged lines.
+    #[test]
+    fn the_context_of_a_hunk_does_not_reach_into_another() {
+        let hunks = Diff::compute_terminated("a\nb\nc\nd\ne\n", "a\nB\nc\nD\ne\n")
+            .hunks(5)
+            .expect("an exact diff has hunks");
+
+        assert_eq!(hunks.len(), 2);
+        assert_eq!(
+            hunks[1].drawn(),
+            [
+                Change::Kept("c".into()),
+                Change::Removed("d".into()),
+                Change::Added("D".into()),
+                Change::Kept("e".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_inexact_diff_has_no_hunks() {
+        let (before, after) = dissimilar_stretches();
+        let (before, after) = (joined(&before), joined(&after));
+
+        let diff = Diff::compute_terminated(&before, &after);
+
+        assert!(!diff.is_exact());
+        assert_eq!(diff.hunks(3), None);
+    }
+
+    /// Putting one hunk back leaves the other exactly as the text after has it, and putting each
+    /// back in turn arrives at the text before.
+    #[test]
+    fn putting_a_hunk_back_leaves_the_other_hunks_as_they_are() {
+        let before = "a\nb\nc\nd\ne\nf\ng\nh\n";
+        let after = "a\nB\nB2\nc\nd\ne\nf\nh\n";
+        let hunks = hunks_of(before, after);
+
+        assert_eq!(
+            put_back(before, after, &hunks[0]).as_deref(),
+            Some("a\nb\nc\nd\ne\nf\nh\n")
+        );
+        assert_eq!(
+            put_back(before, after, &hunks[1]).as_deref(),
+            Some("a\nB\nB2\nc\nd\ne\nf\ng\nh\n")
+        );
+        let once = put_back(before, after, &hunks[1]).unwrap();
+        let again = hunks_of(before, &once);
+        assert_eq!(again.len(), 1);
+        assert_eq!(put_back(before, &once, &again[0]).as_deref(), Some(before));
+    }
+
+    /// A file whose last line has no terminator comes back without one, and a file that gained one
+    /// loses it again. Lines compared without their terminators would call both "no change".
+    #[test]
+    fn a_final_line_without_a_terminator_is_put_back_without_one() {
+        let (before, after) = ("a\nb", "a\nb\nc\n");
+        let hunks = hunks_of(before, after);
+
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(put_back(before, after, &hunks[0]).as_deref(), Some(before));
+
+        let (before, after) = ("a\nb\n", "a\nb");
+        let hunks = hunks_of(before, after);
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(put_back(before, after, &hunks[0]).as_deref(), Some(before));
+    }
+
+    /// A carriage return belongs to the line it ends, so a file turned from LF to CRLF is a change
+    /// to every line and putting it back restores the bytes, not the lines read without them.
+    #[test]
+    fn a_hunk_of_changed_terminators_is_put_back_byte_for_byte() {
+        let (before, after) = ("a\nb\nc\n", "a\r\nb\r\nc\r\n");
+        let hunks = hunks_of(before, after);
+
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].changes.len(), 6);
+        assert_eq!(put_back(before, after, &hunks[0]).as_deref(), Some(before));
+        assert!(Diff::compute(before, after).hunks(1).unwrap().is_empty());
+    }
+
+    /// A hunk that changes only how lines end is drawn so the two sides differ: the carriage return
+    /// stays on its line and a final line with no terminator says so. Without them the hunk reads as
+    /// a removal and an addition of the same text, and a person cannot tell what putting it back
+    /// would change.
+    #[test]
+    fn a_hunk_that_changes_only_how_lines_end_is_drawn_with_the_difference_visible() {
+        let crlf = hunks_of("a\nb\n", "a\r\nb\r\n");
+        assert_eq!(
+            crlf[0].drawn(),
+            [
+                Change::Removed("a".into()),
+                Change::Removed("b".into()),
+                Change::Added("a\r".into()),
+                Change::Added("b\r".into()),
+            ]
+        );
+
+        let no_newline = hunks_of("a\nb", "a\nb\n");
+        assert_eq!(
+            no_newline[0].drawn(),
+            [
+                Change::Kept("a".into()),
+                Change::Removed("b [no newline at end of file]".into()),
+                Change::Added("b".into()),
+            ]
+        );
+    }
+
+    /// A file turned from CRLF to LF with one line edited is a hunk of the whole file. The lines
+    /// whose ending is all that changed show it, and the line that was edited does not.
+    #[test]
+    fn only_the_lines_whose_ending_is_the_change_show_it() {
+        let hunks = hunks_of("a\r\nb\r\nc\r\n", "a\nB\nc\n");
+
+        assert_eq!(
+            hunks[0].drawn(),
+            [
+                Change::Removed("a\r".into()),
+                Change::Removed("b".into()),
+                Change::Removed("c\r".into()),
+                Change::Added("a".into()),
+                Change::Added("B".into()),
+                Change::Added("c".into()),
+            ]
+        );
+    }
+
+    /// In a CRLF file the carriage return ends every line, so a mark on each of them says nothing.
+    /// It shows only where the way lines end is what changed.
+    #[test]
+    fn a_hunk_of_a_crlf_file_is_drawn_without_a_mark_on_any_row() {
+        let hunks = hunks_of("a\r\nb\r\nc\r\n", "a\r\nB\r\nc\r\n");
+
+        assert_eq!(
+            hunks[0].drawn(),
+            [
+                Change::Kept("a".into()),
+                Change::Removed("b".into()),
+                Change::Added("B".into()),
+                Change::Kept("c".into()),
+            ]
+        );
+        assert!(hunks[0].changes.contains(&Change::Added("B\r\n".into())));
+    }
+
+    /// A hunk made over other texts names lines these do not have, and is refused rather than
+    /// applied to whatever lines are there.
+    #[test]
+    fn a_hunk_from_other_texts_is_not_put_back() {
+        let hunks = hunks_of("a\nb\nc\nd\n", "a\nb\nc\nD\nE\nF\n");
+
+        assert_eq!(put_back("a\n", "a\n", &hunks[0]), None);
     }
 }

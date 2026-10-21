@@ -1,3 +1,107 @@
+## [0.17.0](https://github.com/brave/bravebot/releases/tag/v0.17.0)
+
+ - Added messaging between background sessions: a session can send a message to another live session by name with `message_session`, after you approve the target and the text. Received messages are drawn as their own block. ([#1551](https://github.com/brave/bravebot/issues/1551))
+ - Added attaching dropped files and pasted pictures in the desktop window, as the terminal does. Each shows as a numbered marker in the message and a chip above the box.
+ - Added `deny` and `ask` permission rules to the managed file, so an administrator can refuse `Read(.env)` or `Bash(git push *)` on every machine. ([#1410](https://github.com/brave/bravebot/issues/1410))
+ - Added `--dangerously-bypass-approvals-and-sandbox`, which opens a session in bypass mode with the sandbox off. ([#2668](https://github.com/brave/bravebot/issues/2668))
+ - Added a token budget for a delegate: a `budget:` line in an agent definition and a `budget` field on `spawn_agent` stop a delegate that has spent it, which answers with what it has. The call can only lower a definition's budget. ([#2489](https://github.com/brave/bravebot/issues/2489))
+ - Added `until_exit` to `job_output`, which with `wait_seconds` waits for a background job to end even while it keeps printing, and returns what it printed since the last look in one answer. ([#2814](https://github.com/brave/bravebot/issues/2814))
+ - Added the `maxRunningDelegates` setting, the most delegates one turn may have running at once. ([#2819](https://github.com/brave/bravebot/issues/2819))
+ - Added dragging the border between the info panel and the transcript to resize the panel, and keeping the width for the next session. ([#2731](https://github.com/brave/bravebot/issues/2731))
+ - Added a resize pointer over the border between the info panel and the transcript in Kitty, Ghostty and foot.
+ - Added `--issue` and `--pr`, which give a new or resumed session its issue and pull request links. ([#1267](https://github.com/brave/bravebot/issues/1267))
+ - Added the `awaySummaryIdleSeconds` setting, which changes how long the terminal has to be unfocused after a turn before the automatic recap. ([#1580](https://github.com/brave/bravebot/issues/1580))
+ - Added the context window a running Ollama holds a model with to the import question, with a warning when it is smaller than the window bravebot assumes. ([#1383](https://github.com/brave/bravebot/issues/1383))
+ - Added a list of the modes `/sandbox` takes once the word is typed, and the same for the forms `/limit`, `/review` and `/reach` read.
+ - Changed `@brave/bravebot` on npm to ship the binary as per-platform packages with no install script, so it installs under `--ignore-scripts` and `--strict-allow-scripts`. ([#2569](https://github.com/brave/bravebot/issues/2569))
+ - Changed the sandbox mode `read-only` to close the network and lend no remote, cloud, cluster or container credential, so `git push` and `gh pr create` fail under it. ([#2228](https://github.com/brave/bravebot/issues/2228))
+ - Changed the limit on delegates in one turn from 32 started to 64 running at once. A delegate that has finished gives its place back to the next one the turn starts. ([#2819](https://github.com/brave/bravebot/issues/2819))
+ - Changed a rate limit to be waited out for as long as the service asks, up to two minutes, instead of retrying after one and two seconds. A longer ask fails at once and says how long the service wanted. ([#1412](https://github.com/brave/bravebot/issues/1412))
+ - Changed a `run` line in a directory you trusted at the startup question to start without asking when the sandbox confines it. The line runs with the network closed. ([#2586](https://github.com/brave/bravebot/issues/2586))
+ - Changed local MCP servers to follow the session's network setting: a closed network gives a server none, and a host list holds it to that list. ([#2029](https://github.com/brave/bravebot/issues/2029))
+ - Changed `attribution` to be read from your own settings files only, not from a checkout's project or local files. ([#2667](https://github.com/brave/bravebot/issues/2667))
+ - Changed a goal to stop sending the work back after three rounds in a row with no tool call. It stays set and the next prompt is judged against it. ([#1379](https://github.com/brave/bravebot/issues/1379))
+ - Changed a background session to say its mode when you attach, and to refuse `--bg` bypass, since nobody is watching to answer. ([#2127](https://github.com/brave/bravebot/issues/2127))
+ - Fixed deny and ask rules missing a file reached by another name: a hard link, a second path to the working directory, another Unicode spelling, or a project file named by its relative name. ([#2327](https://github.com/brave/bravebot/issues/2327))
+ - Fixed the resume list and the desktop open resuming a session that is running in the background. They now say to attach.
+ - Fixed `bravebot --bg` starting a session on a machine with no model service configured. ([#2123](https://github.com/brave/bravebot/issues/2123))
+ - Fixed a session handed to `/bg` losing the agent definition it was working under. ([#2119](https://github.com/brave/bravebot/issues/2119))
+ - Fixed cancelling a turn deleting the prompts other sessions had saved to the history. ([#2583](https://github.com/brave/bravebot/issues/2583))
+ - Fixed `Up` and `Ctrl-R` listing other days' prompts under "this session" in a resumed session.
+ - Fixed a failed or stopped turn leaving no spend, timing or task list in the record. ([#2106](https://github.com/brave/bravebot/issues/2106))
+ - Fixed a one-shot run leaving no timing in its session record, and its audit trail out of a resumed session. ([#2354](https://github.com/brave/bravebot/issues/2354))
+ - Fixed compaction using the 24,000-token default for the configured default model, a `/agent` model and every desktop turn, instead of the window the model states. ([#2108](https://github.com/brave/bravebot/issues/2108))
+ - Fixed the model deny and allow lists not matching a gateway model written as the gateway's own name. ([#2125](https://github.com/brave/bravebot/issues/2125))
+ - Fixed `sort` warning and failing inside the macOS sandbox. ([#2584](https://github.com/brave/bravebot/issues/2584))
+ - Fixed a settings file that is a link to a device such as `/dev/zero` hanging startup. ([#2122](https://github.com/brave/bravebot/issues/2122))
+ - Fixed an approved write through `..` into an opened directory being refused. ([#2649](https://github.com/brave/bravebot/issues/2649))
+ - Fixed Enter on a `/handoff` brief while a turn ran carrying out its first line as a command. ([#2115](https://github.com/brave/bravebot/issues/2115))
+ - Fixed the automatic recap not noticing that you left or returned while a turn was running. ([#2138](https://github.com/brave/bravebot/issues/2138))
+ - Fixed rows with emoji or halfwidth marks overflowing the block in the terminal. ([#2109](https://github.com/brave/bravebot/issues/2109))
+ - Fixed the info panel drawing `cache read 0` and `cache written 0` for a backend that reports no cache.
+ - Fixed `doctor` and `auth status` printing credentials in endpoint URLs and AWS account details. ([#2136](https://github.com/brave/bravebot/issues/2136), [#2137](https://github.com/brave/bravebot/issues/2137))
+ - Fixed the opening screen and `/status` not showing that `read-only` closes the network. ([#2228](https://github.com/brave/bravebot/issues/2228))
+ - Fixed `/add-dir` being offered for a path inside a credential location such as `~/.ssh`, where it cannot work. ([#2582](https://github.com/brave/bravebot/issues/2582))
+ - Fixed the failure text after a signed commit or a push over ssh in the sandbox, which now says whether the ssh agent was lent. ([#2650](https://github.com/brave/bravebot/issues/2650), [#2585](https://github.com/brave/bravebot/issues/2585))
+ - Fixed Windows sandbox handling of programs ending in `.exe`, which never matched their toolchain or credential scope. ([#2116](https://github.com/brave/bravebot/issues/2116))
+ - Fixed the editor integration loading the address in any HTML tag with an attribute that reached it.
+
+## [0.16.0](https://github.com/brave/bravebot/releases/tag/v0.16.0)
+
+ - Added `/hunks`, which lists the hunks the last turn wrote and puts one back as it was before the turn, leaving the rest of the file alone. ([#1568](https://github.com/brave/bravebot/issues/1568))
+ - Added `/note`, which saves a note in the session record without sending it to the model. The resume search and `bravebot sessions search` look in notes too. ([#2468](https://github.com/brave/bravebot/issues/2468))
+ - Added a list of background sessions grouped by state when `bravebot sessions` runs in a terminal, where Enter attaches to the session under the cursor. Piped output and `--json` print lines as before. ([#1545](https://github.com/brave/bravebot/issues/1545))
+ - Added automatic restart of a background session whose process ends while it waits for a prompt, at most three times an hour. ([#1545](https://github.com/brave/bravebot/issues/1545))
+ - Added `bravebot sessions list [--json] [--limit <n>]`, which lists the recorded sessions of the current directory, newest first. ([#1512](https://github.com/brave/bravebot/issues/1512))
+ - Added `-i "<prompt>"` (or `--interactive`), which opens the interface and sends the prompt as its first turn. It also takes `--model` and `--effort` for that session. ([#2279](https://github.com/brave/bravebot/issues/2279))
+ - Added OpenAI with an API key: an `openai` provider entry reaches `api.openai.com` without a `baseURL`. ([#1107](https://github.com/brave/bravebot/issues/1107))
+ - Added project output styles at `.bravebot/styles/<name>.md` for `/style`, offered only from a directory you have trusted. ([#1584](https://github.com/brave/bravebot/issues/1584))
+ - Added a `reason` for a permission rule in your own settings, shown when the rule refuses something and in `permissions check`. ([#1538](https://github.com/brave/bravebot/issues/1538))
+ - Added Ctrl-_ to undo the last edit to the prompt you are typing, as far back as a thousand edits. ([#1436](https://github.com/brave/bravebot/issues/1436))
+ - Added this-session and this-project scopes to Up and the Ctrl-R prompt search, alongside everywhere. ([#2356](https://github.com/brave/bravebot/issues/2356))
+ - Added opening `/model`, `/config`, `/theme` and `/effort` pickers while a turn runs, and `/export` now writes the transcript so far instead of waiting for the turn. ([#1128](https://github.com/brave/bravebot/issues/1128))
+ - Added error and warning counts after `edit_file` and a `diagnostics` operation for `lsp`, both from a language server that is already running. ([#1460](https://github.com/brave/bravebot/issues/1460))
+ - Added the `ssh-key` scope for a `run`, which asks you again which key a push should use after one was refused. ([#2085](https://github.com/brave/bravebot/issues/2085))
+ - Added a notice when a standing instructions file passes 16 KB, or all of them together pass 32 KB. The files are still loaded in full. ([#1391](https://github.com/brave/bravebot/issues/1391))
+ - Added French text for 18 messages that were shown in English.
+ - Changed the answer to the startup trust question: a yes is now kept under `~/.bravebot/trusted` and covers later sessions in that directory or below its git root. A no is never kept, and the separate `r` key and third desktop button are gone.
+ - Changed MCP tool lists to be asked about every session. An earlier approval no longer skips the question.
+ - Changed `/clear`, `/branch` and `/resume` to forget the paths programs were let reach, the hosts you answered for and your answers to the model's questions.
+ - Changed commands to read session records under `~/.bravebot/sessions`. Writing under `~/.bravebot` is still refused.
+ - Changed an approved `run` with no sandbox, and any line under `--sandbox off`, to allow redirecting output outside the workspace after you approve it.
+ - Changed `write_file` to keep a replaced file's line endings and byte order mark. ([#1478](https://github.com/brave/bravebot/issues/1478))
+ - Changed a one-shot run to exit with status 4 when a request for no sandbox or a credential scope was refused. ([#2390](https://github.com/brave/bravebot/issues/2390))
+ - Improved search and listing speed: several `list_files` and `search` calls in one reply now run at the same time, and a search for alternative words is about 50 times faster on a large tree. ([#2510](https://github.com/brave/bravebot/issues/2510))
+ - Improved typing in the terminal, which no longer slows down as the transcript or the directory after an `@` grows. ([#2495](https://github.com/brave/bravebot/issues/2495))
+ - Improved the desktop run card to say how programs are confined, and the plan card to say that nothing the run reads can change the plan.
+ - Improved quarantined content blocks, which no longer repeat that the content was kept from the model. Content in no model's context still says so.
+ - Improved refusals to say what to do: a path inside the workspace is named relative to its root, a refused directory is offered as itself, and a refused mode says whether it reads or writes more than the pin allows. ([#2371](https://github.com/brave/bravebot/issues/2371), [#2326](https://github.com/brave/bravebot/issues/2326), [#2240](https://github.com/brave/bravebot/issues/2240))
+ - Fixed `/compact` summarising two short prompts and keeping eighty thousand tokens of file reads. A cut is now refused unless it frees at least as many bytes as it keeps. ([#2512](https://github.com/brave/bravebot/issues/2512))
+ - Fixed a prompt handed back to the box after a stopped turn being sent to the model again with the next attempt. ([#2511](https://github.com/brave/bravebot/issues/2511))
+ - Fixed Ctrl-C and Escape leaving the session after `/compact`, `/btw`, `/recap`, `/handoff` or a goal check. They now stop that request. ([#2153](https://github.com/brave/bravebot/issues/2153))
+ - Fixed the editor, `/caffeinate` on Linux and `doctor --push-identity` starting programs found in the project directory or an activated virtualenv. ([#2474](https://github.com/brave/bravebot/issues/2474), [#2470](https://github.com/brave/bravebot/issues/2470), [#2543](https://github.com/brave/bravebot/issues/2543))
+ - Fixed `/reach` accepting a directory at a credential location such as `~/.aws`. ([#2176](https://github.com/brave/bravebot/issues/2176))
+ - Fixed deny rules not applying to files named with `@` or `--file`, dropped files and `lsp` answers. ([#2174](https://github.com/brave/bravebot/issues/2174))
+ - Fixed file names spelled with a precomposed letter or a letter plus a combining mark being treated as different files by trust and deny rules. ([#2312](https://github.com/brave/bravebot/issues/2312))
+ - Fixed `edit_file` showing lines next to an edit, such as a credential in `.env`, without the check a read goes through. ([#2148](https://github.com/brave/bravebot/issues/2148))
+ - Fixed a loaded skill reading files through a link that leaves its directory. ([#2160](https://github.com/brave/bravebot/issues/2160))
+ - Fixed a write approval showing no diff when two edits are far apart in a long file. ([#2387](https://github.com/brave/bravebot/issues/2387))
+ - Fixed `xargs` and `find -exec {} +` failing under the macOS sandbox. ([#2508](https://github.com/brave/bravebot/issues/2508))
+ - Fixed `run` lines refused for an end anchor such as `grep -E "x$"`. The refusals for substitutions, arithmetic and parentheses now say to use single quotes or quote the argument. ([#2394](https://github.com/brave/bravebot/issues/2394), [#2509](https://github.com/brave/bravebot/issues/2509), [#2384](https://github.com/brave/bravebot/issues/2384))
+ - Fixed the message for a failed signing step, which sent people to turn the sandbox off when the ssh agent did not hold the key. It now says to use `ssh-add`. ([#2402](https://github.com/brave/bravebot/issues/2402))
+ - Fixed a `/jobs stop` typed as a turn ended leaving the row at "being stopped" over a running program. ([#2175](https://github.com/brave/bravebot/issues/2175))
+ - Fixed a queued `/exit`, `/clear` or `/goal` waiting behind up to ten more goal rounds, and stopping a turn not ending the loop it belonged to. ([#2145](https://github.com/brave/bravebot/issues/2145), [#2155](https://github.com/brave/bravebot/issues/2155))
+ - Fixed `/init` and `/review` being offered a later look, which could start a loop that repeated a prompt bravebot wrote. ([#2163](https://github.com/brave/bravebot/issues/2163))
+ - Fixed answers ending with a line about no later look being scheduled when the request had nothing to do with watching. ([#2507](https://github.com/brave/bravebot/issues/2507))
+ - Fixed an empty `todo_write` report clearing the plan shown in the panel. ([#2165](https://github.com/brave/bravebot/issues/2165))
+ - Fixed pasting while the prompt search is open, and the vi-style prompt keys: `F` and `T` now reach the first character of a line, and `d;`, `c,` and similar take the repeated jump. ([#2149](https://github.com/brave/bravebot/issues/2149), [#2150](https://github.com/brave/bravebot/issues/2150), [#2151](https://github.com/brave/bravebot/issues/2151))
+ - Fixed manifest runs failing when a processor's answer left out its marker line. They now ask once more, and an answer only shown to you stands as it is. ([#852](https://github.com/brave/bravebot/issues/852))
+ - Fixed the desktop app forgetting a worker's checkout between turns, which let the next session delete it. ([#1050](https://github.com/brave/bravebot/issues/1050))
+ - Fixed the desktop Send button doing nothing after the trust question was answered, completion of names that contain a space, and bot names that ended in a hyphen. ([#2444](https://github.com/brave/bravebot/issues/2444), [#2166](https://github.com/brave/bravebot/issues/2166), [#2164](https://github.com/brave/bravebot/issues/2164))
+ - Fixed the desktop MCP tool-list card not showing what the check said. ([#2169](https://github.com/brave/bravebot/issues/2169))
+ - Fixed the AWS CLI session expiry ignoring a time zone offset, which made Bedrock sessions look valid for the wrong time. ([#2435](https://github.com/brave/bravebot/issues/2435))
+ - Fixed four security advisories by moving to a newer TLS library.
+
 ## [0.15.0](https://github.com/brave/bravebot/releases/tag/v0.15.0)
 
  - Added background sessions with `--bg` and `/bg`, so work can continue after the terminal closes. Use `bravebot sessions`, `attach`, `reply` and `sessions stop` to manage them, and `/detach` to leave without stopping work. ([#1545](https://github.com/brave/bravebot/issues/1545))

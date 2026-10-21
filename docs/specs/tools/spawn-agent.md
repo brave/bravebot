@@ -4,12 +4,13 @@ title: spawn_agent
 status: normative
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
 documented-by: docs/website/docs/reference/tools.md
 ---
 
 ## Scope
 
-The call that starts a delegated agent. `kind` and `mcp_servers` are routing; `task` and `each`
+The call that starts a delegated agent. `kind`, `mcp_servers` and `budget` are routing; `task` and `each`
 are content. The call answers as soon as the kernel has approved it, and the report follows later.
 What a delegate is, what it may do and how long it may live is [delegation.md](../delegation.md);
 this spec is the call surface.
@@ -66,6 +67,7 @@ from the label the delegate's own context earned.
 
 `verified-by: bravebot_agent::turn::a_delegates_report_reaches_the_planner_that_asked_for_it`
 `verified-by: bravebot_agent::turn::what_a_delegate_read_never_reaches_the_planner_that_asked`
+`verified-by: bravebot_agent::turn::the_shape_a_report_takes_follows_the_label_of_the_delegate_that_wrote_it`
 
 <a id="AGENT-5"></a>
 ### AGENT-5: one call may fan a task out, and every delegate it starts is gated on its own
@@ -84,13 +86,14 @@ on the critical path and only the driver reads it.
 **Why each is gated separately.** A fan-out is several runs. A gate that saw one of them would be
 approving the rest on the strength of a sibling, and the entries are the part that differs.
 
-**Why a ceiling at all.** Not authority: the planner can already start as many one call at a time
+**Why a ceiling at all.** Not authority: the planner can already have as many running one call at a time
 as the turn's ceiling allows, and each passes the same gate either way. It is the cost of asking that changes, and a
-field turning one sentence into an unbounded number of runs is worth a bound.
+field turning one sentence into an unbounded number of runs at once is worth a bound.
 
 `verified-by: bravebot_agent::turn::one_call_can_fan_a_task_out_over_several_delegates`
 `verified-by: bravebot_agent::turn::a_fan_out_past_the_ceiling_is_refused_and_starts_nothing`
 `verified-by: bravebot_agent::turn::a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not`
+`verified-by: bravebot_agent::turn::a_fan_out_that_names_no_delegate_is_refused_and_starts_nothing`
 
 <a id="AGENT-6"></a>
 ### AGENT-6: `mcp_servers` lists the servers a worker keeps, and can only take servers away
@@ -132,3 +135,29 @@ narrowing, so the most a list can do is leave the worker as it would have been
 `verified-by: bravebot_core::policy::a_worker_delegate_holds_the_servers_its_parent_holds_and_no_other`
 `verified-by: bravebot_agent::tools::a_server_list_that_is_not_a_list_of_names_is_refused`
 `verified-by: bravebot_agent::mcp::a_worker_spawned_keeping_no_server_is_offered_no_servers_tool`
+
+<a id="AGENT-7"></a>
+### AGENT-7: `budget` bounds each delegate's tokens, and can only lower the definition's
+
+`budget` is optional: a count of tokens above zero, written as a number or in the words `/limit`
+takes (`500k`, `2m`). Each delegate the call starts carries the least of this figure and its
+definition's `budget:` ([DELEGATE-29](../delegation.md#DELEGATE-29)), and of what its parent has
+left under its own, so a call without the field leaves the definition's in force and a figure above
+the definition's changes nothing. In a fan-out the figure applies to each delegate separately, and
+one delegate's spend is not another's. A delegate that spends it loses its tools and answers with
+what it has, and the planner is told so beside the report.
+
+A value that is not a count of tokens above zero is refused with what the field takes, and nothing
+starts. The figure must be public and is read only after the integrity gate has passed, as `kind`
+is ([AGENT-1](#AGENT-1)); a private figure is refused, as a private `mcp_servers` list is
+([AGENT-6](#AGENT-6)). Credits are not accepted, since they cannot be attributed to one delegate.
+
+**Why the call may set it.** A figure that only lowers a bound leaves what the delegate may do as
+it was, so there is nothing for it to widen. [DELEGATE-6](../delegation.md#DELEGATE-6) keeps the
+round bound out of the call because a larger figure would be authority; a smaller one is not.
+
+`verified-by: bravebot_agent::tools::a_budget_that_is_not_a_count_of_tokens_is_refused`
+`verified-by: bravebot_core::policy::a_call_budget_can_only_lower_the_definitions`
+`verified-by: bravebot_core::policy::a_private_budget_cannot_direct_a_delegate`
+`verified-by: bravebot_core::policy::each_delegate_of_a_fan_out_carries_the_figure`
+`verified-by: bravebot_agent::turn::a_call_budget_stops_a_delegate_and_cannot_raise_the_definitions`

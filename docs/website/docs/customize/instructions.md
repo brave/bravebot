@@ -155,6 +155,29 @@ Sources are resolved afresh every turn, so editing `AGENTS.md` mid-session takes
 thing you send. A source that is not there is not an error. No `AGENTS.md`, no skills directory, no
 user directory at all: each is the ordinary case and offers nothing.
 
+### Size
+
+Because every request carries them, a long instructions file costs its length on every turn of the
+session. Two fixed figures apply to sources that have passed the trust gate, and both only ever
+warn: a source is never dropped or cut short for its size.
+
+| Over | What happens |
+|---|---|
+| 16384 bytes in one file | The file loads, and you are told which file it is and how big |
+| 32768 bytes across all sources | You are told the total, once, at the source that crosses it |
+
+```
+AGENTS.md is 41232 bytes, and every request this session sends carries it
+```
+
+However large a file is, it still reaches the prompt. Half a conventions document is worse than a
+whole one that cost a sentence to say so: the rules that happened to be in the second half would be
+gone with no sign of it, and the first half would read as the whole.
+
+Both the figures and the notices concern files that are there. A source that is absent is still
+silent, and the check is a byte count: nothing a file says decides whether it loads or what is said
+about it. `--append-system-prompt` is not measured, since there is no file behind it.
+
 ## Where you are working
 
 The system prompt also states a handful of facts about your machine, so the planner does not have to
@@ -275,6 +298,10 @@ directory nobody vouched for has to be absent.
 What was skipped is counted, never named. A directory in an untrusted project can be given a name
 that reads like an instruction, and that name would otherwise be on your screen as though the agent
 had written it.
+
+A skipped skill directory is left out of that count only when a skill with the same directory name,
+from a more specific root you vouched for and that is read later, takes its place. A built-in skill,
+one in `~/.bravebot` and one from a less specific root do not cover it, so it is still counted.
 
 The notice is said when it is learned, before the first request goes out, rather than when the turn
 ends. A turn that fails or is cancelled has already told you what it was working without.

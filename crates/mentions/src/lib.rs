@@ -89,6 +89,70 @@ fn anchored<'a>(
     (root, typed, String::new())
 }
 
+/// How long a directory must have gone unchanged before what was read from it is kept.
+///
+/// A modification time says only that something changed at that moment, so a listing taken in the
+/// same tick as a change cannot be told from the one before it. A directory last touched longer ago
+/// than this has no such change still to come in the clock's resolution, and a touched one is read
+/// again every time.
+const SETTLED: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The most directories kept, so a session that walks a large tree holds a bounded amount.
+const MOST_LISTINGS: usize = 32;
+
+type Listing = std::sync::Arc<Vec<(String, bool)>>;
+
+/// The names in a directory and whether each is a directory, read again only when it has changed.
+///
+/// Typing towards a path asks about the same directory on every key, and a directory of many files
+/// makes each of those a full read. One `stat` answers whether the read is still good.
+fn listing(canonical: &Path) -> Option<Listing> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::SystemTime;
+    static KEPT: Mutex<Option<HashMap<PathBuf, (SystemTime, Listing)>>> = Mutex::new(None);
+
+    let modified = std::fs::metadata(canonical)
+        .and_then(|meta| meta.modified())
+        .ok();
+    let settled = modified.is_some_and(|at| {
+        SystemTime::now()
+            .duration_since(at)
+            .is_ok_and(|age| age >= SETTLED)
+    });
+    if let (true, Some(at)) = (settled, modified) {
+        let kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((read_at, names)) = kept.as_ref().and_then(|kept| kept.get(canonical))
+            && *read_at == at
+        {
+            return Some(names.clone());
+        }
+    }
+
+    let names: Listing = std::sync::Arc::new(
+        std::fs::read_dir(canonical)
+            .ok()?
+            .flatten()
+            .map(|entry| {
+                let is_directory = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                (
+                    entry.file_name().to_string_lossy().to_string(),
+                    is_directory,
+                )
+            })
+            .collect(),
+    );
+    if let (true, Some(at)) = (settled, modified) {
+        let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let kept = kept.get_or_insert_with(HashMap::new);
+        if kept.len() >= MOST_LISTINGS {
+            kept.clear();
+        }
+        kept.insert(canonical.to_path_buf(), (at, names.clone()));
+    }
+    Some(names)
+}
+
 /// Entries matching a half-typed reference, directories first and then files, each alphabetical.
 ///
 /// `typed` is what follows the `@`. An empty one lists the workspace root. Anything with a slash in
@@ -122,14 +186,13 @@ pub fn matching(root: &Path, typed: &str, sources: &Sources) -> Vec<Entry> {
         return Vec::new();
     }
 
-    let Ok(reading) = std::fs::read_dir(&canonical) else {
+    let Some(listing) = listing(&canonical) else {
         return Vec::new();
     };
 
-    let mut entries: Vec<Entry> = reading
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().to_string();
+    let mut entries: Vec<Entry> = listing
+        .iter()
+        .filter_map(|(name, is_directory)| {
             if !name.starts_with(prefix) {
                 return None;
             }
@@ -141,22 +204,21 @@ pub fn matching(root: &Path, typed: &str, sources: &Sources) -> Vec<Entry> {
             // Decided from the name alone, without asking what the entry is. A worktree's `.git`
             // is a regular file holding a pointer to the real one, and a `node_modules` a person
             // symlinked elsewhere is a symlink, so a type test would offer both of them back.
-            if bravebot_filetype::is_ignored_directory(&name) {
+            if bravebot_filetype::is_ignored_directory(name) {
                 return None;
             }
-            let is_directory = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
             let path = if directory.is_empty() {
                 format!("{tag}{name}")
             } else {
                 format!("{tag}{directory}/{name}")
             };
             Some(Entry {
-                path: if is_directory {
+                path: if *is_directory {
                     format!("{path}/")
                 } else {
                     path
                 },
-                is_directory,
+                is_directory: *is_directory,
                 note: None,
                 title: None,
             })
@@ -380,7 +442,13 @@ pub fn enter_completes(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../agent/test-support/aliases.rs"]
+mod aliases;
+
+#[cfg(test)]
 mod tests {
+    use super::aliases;
     use super::*;
 
     /// A scratch workspace, removed with the test.
@@ -415,6 +483,73 @@ mod tests {
 
     fn paths(entries: &[Entry]) -> Vec<&str> {
         entries.iter().map(|e| e.path.as_str()).collect()
+    }
+
+    /// Back-dates a directory's modification time, so it reads as one nothing has touched lately.
+    fn settled_at(path: &std::path::Path, hours_ago: u64) {
+        let when = std::time::UNIX_EPOCH
+            + std::time::Duration::from_secs(1_700_000_000 - hours_ago * 3600);
+        std::fs::File::open(path)
+            .expect("open")
+            .set_modified(when)
+            .expect("set modified");
+    }
+
+    /// A directory nothing has touched for a while is read once, however many keys ask about it.
+    /// The directory is changed behind the cache's back and its modification time put back, so the
+    /// only way the old names can still come out is that the directory was not read again.
+    #[test]
+    fn a_settled_directory_is_not_read_again_while_it_is_unchanged() {
+        let scratch = Scratch::new("settled");
+        let listed = scratch.path.join("crates/tui");
+        settled_at(&listed, 5);
+        let before = matching(&scratch.path, "crates/tui/", &[]);
+        assert_eq!(paths(&before), ["crates/tui/lib.rs"]);
+
+        std::fs::write(listed.join("extra.rs"), "").expect("write");
+        settled_at(&listed, 5);
+        let again = matching(&scratch.path, "crates/tui/", &[]);
+        assert_eq!(
+            paths(&again),
+            ["crates/tui/lib.rs"],
+            "an unchanged directory was read again"
+        );
+    }
+
+    /// A directory whose modification time has moved is read again, and one touched just now is
+    /// read every time, since a change in the same clock tick as a read cannot be told apart.
+    #[test]
+    fn a_changed_or_recently_touched_directory_is_read_afresh() {
+        let scratch = Scratch::new("changed");
+        let listed = scratch.path.join("crates/tui");
+        settled_at(&listed, 5);
+        let _ = matching(&scratch.path, "crates/tui/", &[]);
+
+        std::fs::write(listed.join("extra.rs"), "").expect("write");
+        settled_at(&listed, 6);
+        let moved = matching(&scratch.path, "crates/tui/", &[]);
+        assert_eq!(
+            paths(&moved),
+            ["crates/tui/extra.rs", "crates/tui/lib.rs"],
+            "a directory whose time moved was served from the cache"
+        );
+
+        let now = std::time::SystemTime::now();
+        let stamp = |path: &std::path::Path| {
+            std::fs::File::open(path)
+                .expect("open")
+                .set_modified(now)
+                .expect("set modified");
+        };
+        stamp(&listed);
+        let _ = matching(&scratch.path, "crates/tui/", &[]);
+        std::fs::write(listed.join("newest.rs"), "").expect("write");
+        stamp(&listed);
+        let touched = matching(&scratch.path, "crates/tui/", &[]);
+        assert!(
+            paths(&touched).contains(&"crates/tui/newest.rs"),
+            "a directory touched just now was served from the cache"
+        );
     }
 
     /// An empty reference lists the root, directories first, so walking deeper is the first thing
@@ -515,6 +650,17 @@ mod tests {
     fn a_directory_is_not_collected_as_a_file() {
         assert!(referenced("look in @crates/").is_empty());
         assert_eq!(referenced("@crates/tui/lib.rs"), vec!["crates/tui/lib.rs"]);
+    }
+
+    /// An address inside a sentence is not a reference: only a word that begins with `@` is, so
+    /// nothing in `me@example.com` is collected, and a real reference beside it still is.
+    #[test]
+    fn an_address_inside_a_sentence_is_not_collected_as_a_reference() {
+        assert!(referenced("mail me@example.com now").is_empty());
+        assert_eq!(
+            referenced("mail me@example.com about @notes.md"),
+            vec!["notes.md".to_string()]
+        );
     }
 
     /// A finished name is decided from the workspace, so the cap that bounds what is displayed
@@ -622,6 +768,65 @@ mod tests {
             assert_eq!(referenced(&line), vec![path.to_string()], "{line}");
             assert_eq!(typed_reference(&line).as_deref(), Some(path), "{line}");
         }
+    }
+
+    /// Names whose completion does not read back as the file, each with the issue that tracks it.
+    /// A backslash is written before a space and before nothing else, so a reference ends at the
+    /// first other whitespace character and names the file without it, or none, and a name ending in
+    /// a backslash takes the space after it into the name. The test below fails for a name listed
+    /// here that reads back, so the list is revised with the fix.
+    const NOT_READ_BACK: &[(&str, &str)] = &[
+        ("a.md\t", "#2863"),
+        ("a.md\n", "#2863"),
+        ("a.md\u{a0}", "#2863"),
+        ("a.md\u{3000}", "#2863"),
+        ("a.md\\", "#2863"),
+        ("\t", "#2863"),
+        ("\u{a0}", "#2863"),
+        ("\u{3000}", "#2863"),
+    ];
+
+    /// What a person picks from the list is the file the sent line names, whatever the name holds
+    /// (NAME-8, TRUST-2). The reference a naming records a rule for is read out of the line, so a
+    /// step there that ends a name early names the file without the rest of it, which is another
+    /// file where the volume holds both.
+    #[test]
+    fn every_awkward_name_is_offered_and_read_back_as_the_file_it_is() {
+        let mut asked = 0;
+        for (index, (name, _)) in aliases::AWKWARD_NAMES.iter().enumerate() {
+            let scratch = Scratch::new(&format!("awkward-{index}"));
+            let file = scratch.path.join(name);
+            std::fs::create_dir_all(file.parent().expect("a name is in a directory"))
+                .expect("directory");
+            if std::fs::write(&file, "").is_err() {
+                continue;
+            }
+            asked += 1;
+
+            assert!(
+                paths(&matching(&scratch.path, name, &[])).contains(name),
+                "{name:?} is not offered under its own name"
+            );
+            assert!(
+                names_a_file(&scratch.path, name, &[]),
+                "{name:?} is not found as a finished name"
+            );
+            let written = escape(name);
+            let reads_back = referenced(&format!("see @{written} now")) == [name.to_string()]
+                && typed_reference(&format!("see @{written}")).as_deref() == Some(*name);
+            match NOT_READ_BACK.iter().find(|(listed, _)| listed == name) {
+                None => assert!(
+                    reads_back,
+                    "the line a completion writes for {name:?} does not name that file"
+                ),
+                Some((_, issue)) => assert!(
+                    !reads_back,
+                    "the line a completion writes for {name:?} now names that file: remove it from \
+                     NOT_READ_BACK; {issue} tracked it"
+                ),
+            }
+        }
+        assert!(asked > 20, "only {asked} names were made");
     }
 
     /// A name with a space is offered, found as finished, and is the word a completion replaces.

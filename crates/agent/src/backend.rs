@@ -327,13 +327,27 @@ fn of_egress(error: &bravebot_net::EgressError) -> Diagnosis {
         | EgressError::Stopped { .. } => Diagnosis::of(Category::Transport),
         // The service answered and was still writing: nothing about the connection to check.
         EgressError::OutOfTime { .. } => Diagnosis::of(Category::Incomplete),
-        EgressError::Status { status, .. } => Diagnosis::of(match status {
-            401 | 403 => Category::Unauthorized,
-            429 => Category::RateLimited,
-            408 | 500..=599 => Category::Unavailable,
-            _ => Category::Refused,
-        })
-        .with_status(*status),
+        EgressError::Status {
+            status,
+            retry_after,
+            ..
+        } => {
+            let diagnosis = Diagnosis::of(match status {
+                401 | 403 => Category::Unauthorized,
+                429 => Category::RateLimited,
+                408 | 500..=599 => Category::Unavailable,
+                _ => Category::Refused,
+            })
+            .with_status(*status);
+            match retry_after {
+                // Only a wait the client would not sit through: one it did sit through is over by
+                // the time the failure is told, and saying it would overstate how long to wait.
+                Some(wait) if *status == 429 && *wait > bravebot_aichat::LONGEST_WAIT => {
+                    diagnosis.asking_for_a_wait_of(*wait)
+                }
+                _ => diagnosis,
+            }
+        }
     }
 }
 
@@ -697,11 +711,19 @@ impl<'a> Backend<'a> {
     /// which upstream served it is a different question from which model did: `provider.order` picks
     /// between hosts of the same model, so a name that comes back changed is a substitution there as
     /// much as on the aichat endpoint.
+    ///
+    /// False for an `openai` entry, whose names are aliases for dated models: the reply names the
+    /// one the alias resolved to, which is the alias working. Compared anyway, nearly every OpenAI
+    /// turn would report a substitution.
     pub fn reports_the_model_it_was_asked_for(config: &Config, model: &str) -> bool {
-        !config
-            .bedrock
-            .as_ref()
-            .is_some_and(|bedrock| bedrock.offers(model))
+        let behind_an_alias = config
+            .provider_for(model)
+            .is_some_and(|(provider, _)| provider.answers_under_the_model_behind_an_alias());
+        !behind_an_alias
+            && !config
+                .bedrock
+                .as_ref()
+                .is_some_and(|bedrock| bedrock.offers(model))
     }
 
     /// The name the service was actually asked for, given the name a session holds.
@@ -1472,6 +1494,36 @@ mod tests {
         ));
     }
 
+    /// OpenAI names a model by an alias and answers with the dated model behind it, so the name that
+    /// comes back differing is the alias working. Another gateway beside it is still compared, and
+    /// both spellings of an OpenAI name are covered: qualified by the id, and bare where the block
+    /// lists it.
+    #[test]
+    fn an_openai_alias_is_not_expected_to_be_the_name_that_comes_back() {
+        let config = with_providers(
+            r#"{"provider": {
+                "openai": {"env": ["A_TOKEN_VARIABLE"], "models": {"an-alias": {}}},
+                "openrouter": {
+                    "env": ["A_TOKEN_VARIABLE"],
+                    "options": {"baseURL": "https://openrouter.example.invalid/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            }}"#,
+        );
+        for model in ["openai/an-alias", "an-alias", "openai/an-alias-not-listed"] {
+            assert!(
+                !Backend::reports_the_model_it_was_asked_for(&config, model),
+                "{model} was expected to come back under its own name"
+            );
+        }
+        for model in ["z-ai/glm-4.6", "openrouter/z-ai/glm-4.6"] {
+            assert!(
+                Backend::reports_the_model_it_was_asked_for(&config, model),
+                "{model} was not compared with the name that came back"
+            );
+        }
+    }
+
     /// A request the configuration cannot sign is refused rather than sent unauthenticated, which
     /// would fail at the far end for a reason nothing local could explain.
     #[test]
@@ -1712,6 +1764,7 @@ mod tests {
         let refused_credential = bravebot_net::EgressError::Status {
             url: "https://ai-chat.example/v1".to_string(),
             status: 401,
+            retry_after: None,
         };
         assert!(!BackendError::from(ChatError::Egress(refused_credential)).is_unreachable());
         assert!(!BackendError::from(ChatError::NoContent).is_unreachable());
@@ -1834,6 +1887,7 @@ mod tests {
         let refused = BackendError::from(BedrockError::Egress(bravebot_net::EgressError::Status {
             url: "https://bedrock-runtime.example/model/invoke".into(),
             status: 403,
+            retry_after: None,
         }));
         let why = refused.diagnosis();
         assert_eq!(why.category, Category::Unauthorized, "{why:?}");
@@ -1860,6 +1914,7 @@ mod tests {
             BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
                 url: "https://service.example/v1/chat/completions".into(),
                 status,
+                retry_after: None,
             }))
             .diagnosis()
         };
@@ -1868,6 +1923,33 @@ mod tests {
         assert_eq!(of_status(503).category, Category::Unavailable);
         assert_eq!(of_status(400).category, Category::Refused);
         assert_eq!(of_status(503).status, Some(503));
+    }
+
+    /// The wait a service asked for on a rate limit is kept as a number on the diagnosis when it
+    /// is longer than the client waits, and on no other status: a 503's header is a timer for a retry, not a limit to tell a person about.
+    #[test]
+    fn a_rate_limit_keeps_the_wait_the_service_asked_for() {
+        let of = |status: u16, retry_after: Option<std::time::Duration>| {
+            BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
+                url: "https://service.example/v1/chat/completions".into(),
+                status,
+                retry_after,
+            }))
+            .diagnosis()
+            .retry_after
+        };
+        let wait = std::time::Duration::from_secs(600);
+        assert_eq!(of(429, Some(wait)), Some(wait));
+        assert_eq!(of(429, None), None);
+        assert_eq!(of(429, Some(std::time::Duration::ZERO)), None);
+        assert_eq!(of(503, Some(wait)), None);
+        // A wait the client sat through is not told as one still to come.
+        let ceiling = bravebot_aichat::LONGEST_WAIT;
+        assert_eq!(of(429, Some(ceiling)), None);
+        assert_eq!(
+            of(429, Some(ceiling + std::time::Duration::from_secs(1))),
+            Some(ceiling + std::time::Duration::from_secs(1))
+        );
     }
 
     /// A hop refused for dropping TLS is this process declining to send, not a request that did
@@ -1944,5 +2026,43 @@ mod tests {
         );
         assert_eq!(failure.diagnosis().category, Category::Transport);
         assert_eq!(failure.diagnosis().attempts, Some(3));
+    }
+
+    /// COMPACT-14: only 400 and 422 say the body was refused, on either backend and through the
+    /// attempt count, so a turn does not spend a summary on a refusal that a shorter conversation
+    /// cannot cure.
+    #[test]
+    fn only_a_400_or_a_422_is_a_refusal_of_the_body() {
+        let status = |status: u16| bravebot_net::EgressError::Status {
+            url: "https://service.example/v1".to_string(),
+            status,
+            retry_after: None,
+        };
+        for refused in [400, 422] {
+            assert!(
+                BackendError::from(ChatError::Egress(status(refused))).refused_the_body(),
+                "{refused} from the chat backend"
+            );
+            assert!(
+                BackendError::from(BedrockError::Egress(status(refused))).refused_the_body(),
+                "{refused} from Bedrock"
+            );
+            assert!(
+                BackendError::from(ChatError::Egress(status(refused)))
+                    .counted(2, None, None)
+                    .refused_the_body(),
+                "{refused} after attempts were counted"
+            );
+        }
+        for other in [200, 401, 403, 404, 413, 429, 500, 502, 503] {
+            assert!(
+                !BackendError::from(ChatError::Egress(status(other))).refused_the_body(),
+                "{other} from the chat backend was read as a refused body"
+            );
+            assert!(
+                !BackendError::from(BedrockError::Egress(status(other))).refused_the_body(),
+                "{other} from Bedrock was read as a refused body"
+            );
+        }
     }
 }

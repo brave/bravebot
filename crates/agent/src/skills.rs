@@ -465,6 +465,27 @@ impl Notice {
         })
     }
 
+    /// That a standing instruction source is long enough to be worth saying so (INSTR-15).
+    ///
+    /// The file still loaded. `source` is a path from INSTR-1's fixed set and `bytes` is its
+    /// length, so this names a file and a number and nothing the file holds.
+    pub(crate) fn source_is_large(source: &str, bytes: usize) -> Self {
+        Self::new(t!(source_is_large, source = source, bytes = bytes))
+    }
+
+    /// That the standing instructions together are long enough to be worth saying so (INSTR-15).
+    ///
+    /// Said once for the turn, at the source that crosses the line, since the total is one fact.
+    pub(crate) fn sources_large_together(bytes: usize, limit: usize) -> Self {
+        Self::new(t!(sources_large_together, bytes = bytes, limit = limit))
+    }
+
+    /// That `~/.bravebot/AGENTS.md` was not read, because the way to it goes through the workspace
+    /// (SKILL-3).
+    pub(crate) fn home_agents_file_reached_through_the_workspace() -> Self {
+        Self::new(t!(home_agents_file_reached_through_the_workspace))
+    }
+
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -559,6 +580,32 @@ const BUILT_IN: [BuiltIn; 1] = [BuiltIn {
     body: LOOP,
 }];
 
+/// What the planner is told about the documentation skill, ending in the one condition it is for.
+const HELP_DESCRIPTION: &str = "The documentation of this version of bravebot: its commands, \
+                                keys, settings, modes and safety rules. Load it when the user \
+                                asks a question about using bravebot itself.";
+
+/// A skill made of text written into this program, which passes no gate and has no file.
+fn built_in_skill(name: &str, description: &str, body: &str) -> Skill {
+    Skill {
+        name: name.to_string(),
+        description: description.to_string(),
+        argument_hint: None,
+        // A string literal in this file, derived from nothing that arrived from anywhere. It
+        // is trusted for being this program's own words, which is what the label says.
+        body: Labelled::trusted(body.to_string()),
+        origin: "built-in".to_string(),
+        directory: None,
+        files: Vec::new(),
+        reach: None,
+        source: Source::BuiltIn,
+        // A built-in is this program's own text, so there is no file to have named a model or
+        // an effort and no key nothing reads: it runs as the session does.
+        runs_as: RunsAs::default(),
+        unread: Vec::new(),
+    }
+}
+
 /// What the planner is told about being inside a loop.
 const LOOP: &str = "\
 A loop repeats one prompt: the line the user typed when they started it. Every tick sends that \
@@ -643,6 +690,20 @@ pub fn discover<S: Sink>(
     workspace: &Workspace,
     home: Option<&Path>,
 ) -> (Catalogue, Vec<Notice>) {
+    discover_listing(policy, workspace, home, true)
+}
+
+/// [`discover`], with the files beside each skill listed only where `list_files` says so.
+///
+/// The listing walks every skill's directory and asks the rules and the trust map about each file in
+/// it, and only `load_skill` reads the result. A caller that draws names and descriptions leaves it
+/// out.
+fn discover_listing<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    home: Option<&Path>,
+    list_files: bool,
+) -> (Catalogue, Vec<Notice>) {
     let mut catalogue = Catalogue::default();
     let mut notices = Vec::new();
 
@@ -651,24 +712,18 @@ pub fn discover<S: Sink>(
     // nothing to vouch for: this is the program's own text, not a source somebody supplied, so it
     // can neither be refused nor be missing, and there is never a notice about it.
     for built_in in BUILT_IN {
-        catalogue.insert(Skill {
-            name: built_in.name.to_string(),
-            description: built_in.description.to_string(),
-            argument_hint: None,
-            // A string literal in this file, derived from nothing that arrived from anywhere. It
-            // is trusted for being this program's own words, which is what the label says.
-            body: Labelled::trusted(built_in.body.to_string()),
-            origin: "built-in".to_string(),
-            directory: None,
-            files: Vec::new(),
-            reach: None,
-            source: Source::BuiltIn,
-            // A built-in is this program's own text, so there is no file to have named a model or
-            // an effort and no key nothing reads: it runs as the session does.
-            runs_as: RunsAs::default(),
-            unread: Vec::new(),
-        });
+        catalogue.insert(built_in_skill(
+            built_in.name,
+            built_in.description,
+            built_in.body,
+        ));
     }
+    // The documentation compiled into this program, offered the same way (SKILL-17).
+    catalogue.insert(built_in_skill(
+        crate::help::SKILL,
+        HELP_DESCRIPTION,
+        crate::help::body(),
+    ));
 
     // The program's own skills above are not customizations and stay. Everything below is a file
     // somebody wrote.
@@ -678,10 +733,17 @@ pub fn discover<S: Sink>(
 
     let home_skills = home.map(|home| home.join(SKILLS));
     let passed_over = match &home_skills {
-        Some(root) => discover_home(policy, workspace, root, &mut catalogue, &mut notices),
+        Some(root) => discover_home(
+            policy,
+            workspace,
+            root,
+            list_files,
+            &mut catalogue,
+            &mut notices,
+        ),
         None => 0,
     };
-    let read = discover_workspace(policy, workspace, &mut catalogue, &mut notices);
+    let read = discover_workspace(policy, workspace, list_files, &mut catalogue, &mut notices);
     // Not where the project's pass read the same directory, as it does in a session started in the
     // home directory: that pass has already said what it did with each of them (SKILL-6). Compared
     // by the directories alone, so no entry's name is held or compared.
@@ -711,6 +773,32 @@ pub fn resolved<S: Sink>(
     permissions: bravebot_core::permissions::Permissions,
     sink: &mut S,
 ) -> Catalogue {
+    resolve(workspace, home, trust, permissions, sink, true)
+}
+
+/// [`resolved`] without the files beside each skill, for an interface that offers the names as they
+/// are typed and never loads a skill.
+///
+/// Every other field is what [`resolved`] returns, so the same skills are offered. Reading the
+/// files of every skill on each slash would make the list lag behind the keys.
+pub fn offered<S: Sink>(
+    workspace: &Workspace,
+    home: Option<&Path>,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+    sink: &mut S,
+) -> Catalogue {
+    resolve(workspace, home, trust, permissions, sink, false)
+}
+
+fn resolve<S: Sink>(
+    workspace: &Workspace,
+    home: Option<&Path>,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+    sink: &mut S,
+    list_files: bool,
+) -> Catalogue {
     let mut routing = bravebot_core::policy::Routing::new();
     routing.insert_trusted("skills", WORKSPACE_SKILL_ROOTS.join(", "));
     let Ok(policy) = Policy::begin(
@@ -726,7 +814,7 @@ pub fn resolved<S: Sink>(
         .with_permissions(permissions)
         .with_root(workspace.root())
         .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
-    discover(&mut policy, workspace, home).0
+    discover_listing(&mut policy, workspace, home, list_files).0
 }
 
 /// Skills from `~/.bravebot/skills`, labelled from where they sit.
@@ -739,6 +827,7 @@ fn discover_home<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     root: &Path,
+    list_files: bool,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
 ) -> usize {
@@ -776,10 +865,14 @@ fn discover_home<S: Sink>(
                 let directory = root.join(&name);
                 // Trusted by provenance like the file beside them (SKILL-3), so only a deny rule
                 // keeps one off the list.
-                let files = files_beside(&directory, |relative| {
-                    let named = directory.join(relative);
-                    !workspace.rule_denies_reading(policy, &named.to_string_lossy())
-                });
+                let files = if list_files {
+                    files_beside(&directory, |relative| {
+                        let named = directory.join(relative);
+                        !workspace.rule_denies_reading(policy, &named.to_string_lossy())
+                    })
+                } else {
+                    Vec::new()
+                };
                 catalogue.insert(Skill {
                     name: front.name,
                     description: front.description,
@@ -812,7 +905,7 @@ const MAX_LINKS_TO_A_HOME_SKILL: usize = 40;
 /// inside the workspace is found wherever it leads. A turn can change such a link, so where it
 /// leads says nothing about who wrote what is there. An entry whose place cannot be resolved, and
 /// a path with too many links, count as going through.
-fn goes_through_the_workspace(workspace: &Workspace, path: &Path) -> bool {
+pub(crate) fn goes_through_the_workspace(workspace: &Workspace, path: &Path) -> bool {
     let steps = |path: &Path| -> Vec<PathBuf> {
         path.components()
             .rev()
@@ -867,6 +960,7 @@ fn goes_through_the_workspace(workspace: &Workspace, path: &Path) -> bool {
 fn discover_workspace<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
+    list_files: bool,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
 ) -> Vec<PathBuf> {
@@ -889,7 +983,9 @@ fn discover_workspace<S: Sink>(
         .collect();
     let mut skipped = Vec::new();
     for (position, root) in roots.iter().enumerate() {
-        if let Some(held) = discover_workspace_root(policy, workspace, root, catalogue, notices) {
+        if let Some(held) =
+            discover_workspace_root(policy, workspace, root, list_files, catalogue, notices)
+        {
             skipped.push((position, held));
         }
     }
@@ -941,6 +1037,7 @@ fn discover_workspace_root<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     skills_root: &str,
+    list_files: bool,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
 ) -> Option<usize> {
@@ -997,10 +1094,14 @@ fn discover_workspace_root<S: Sink>(
                 let directory = format!("{skills_root}/{name}");
                 // A file name is content, so each is asked of the rules and of the trust map as the
                 // file itself would be before it is named (SKILL-4).
-                let files = files_beside(&root.join(&name), |beside| {
-                    let named = format!("{directory}/{beside}");
-                    !workspace.rule_denies_reading(policy, &named) && policy.trusts_path(&named)
-                });
+                let files = if list_files {
+                    files_beside(&root.join(&name), |beside| {
+                        let named = format!("{directory}/{beside}");
+                        !workspace.rule_denies_reading(policy, &named) && policy.trusts_path(&named)
+                    })
+                } else {
+                    Vec::new()
+                };
                 catalogue.insert(Skill {
                     name: front.name,
                     description: front.description,
@@ -1048,7 +1149,9 @@ const MAX_LISTED_DEPTH: usize = 6;
 /// A link is left out whatever it points at, and the directory itself is searched where it lands, so
 /// a link out of the directory is never followed and never named (LOAD-4). A name that is not text,
 /// or that holds a control character, is left out as well: it would be written into a result a
-/// planner reads, where a newline would start a line of its own.
+/// planner reads, where a newline would start a line of its own. A directory `list_files` skips
+/// (`__pycache__`, `node_modules`) and a compiled `.pyc` are left out too: they are generated, and
+/// would fill the cap and become the first file offered as the example.
 fn files_beside(directory: &Path, keep: impl Fn(&str) -> bool) -> Vec<String> {
     let Ok(landed) = directory.canonicalize() else {
         return Vec::new();
@@ -1087,6 +1190,9 @@ fn collect_files(
         }
         let relative = format!("{prefix}{name}");
         if kind.is_dir() {
+            if bravebot_filetype::is_ignored_directory(&name) {
+                continue;
+            }
             collect_files(
                 &entry.path(),
                 &format!("{relative}/"),
@@ -1094,7 +1200,11 @@ fn collect_files(
                 keep,
                 found,
             );
-        } else if kind.is_file() && relative != SKILL_FILE && keep(&relative) {
+        } else if kind.is_file()
+            && relative != SKILL_FILE
+            && !name.ends_with(".pyc")
+            && keep(&relative)
+        {
             found.push(relative);
         }
         if found.len() >= MAX_LISTED_FILES {

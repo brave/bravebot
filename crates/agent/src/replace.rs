@@ -21,8 +21,9 @@
 //! says the ending was kept ([`crate::diff::Diff::line_endings`]).
 
 use std::fmt;
+use std::ops::Range;
 
-use crate::diff::LineEnding;
+use crate::diff::{Diff, LineEnding};
 
 /// Why a replacement was not performed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,14 +115,19 @@ fn to_crlf(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\n', "\r\n")
 }
 
-/// How many unchanged lines are shown either side of what changed.
+/// How many unchanged lines are shown either side of each change.
 const CONTEXT_LINES: usize = 3;
 
-/// The most lines an excerpt may run to before it is cut short.
+/// How few unchanged lines are shown either side of each change once the regions would otherwise
+/// run past [`MAX_EXCERPT_LINES`]. One is enough to place a deletion, which has no line of its own.
+const NARROWEST_CONTEXT_LINES: usize = 1;
+
+/// The most lines of the file an excerpt shows before it is cut short. The notes between regions
+/// are not counted.
 ///
-/// A `replace_all` across a long file spans from its first change to its last, which can be the
-/// whole file. The point of the excerpt is to let a planner see what its edit did, and a planner
-/// that wanted the file back would have read it.
+/// A `replace_all` across a long file changes lines from its first occurrence to its last, which can
+/// be the whole file. The point of the excerpt is to let a planner see what its edit did, and a
+/// planner that wanted the file back would have read it.
 const MAX_EXCERPT_LINES: usize = 40;
 
 /// The lines of an edited file that its result shows, kept apart from how they are drawn.
@@ -131,10 +137,12 @@ const MAX_EXCERPT_LINES: usize = 40;
 /// the other.
 #[derive(Debug, Clone)]
 pub struct Excerpt {
-    /// One run of consecutive lines, or two with the middle of a long span cut out between them.
+    /// Runs of consecutive lines in the order the file has them. The lines between two runs are not
+    /// shown.
     runs: Vec<Run>,
-    /// How many lines were cut from between the two runs.
-    omitted: usize,
+    /// The run that follows the lines cut for length, where some were. The lines between any other
+    /// two runs are unchanged.
+    cut_before: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -146,12 +154,21 @@ struct Run {
 }
 
 impl Excerpt {
-    /// The lines as the planner is shown them: numbered, with a note where the middle was cut.
+    /// The lines as the planner is shown them: numbered, with a note between two runs saying how
+    /// many lines are not shown and whether they are unchanged or were cut.
     pub fn render(&self) -> String {
         let mut shown = Vec::new();
         for (at, run) in self.runs.iter().enumerate() {
             if at > 0 {
-                shown.push(format!("         … {} more lines …", self.omitted));
+                let previous = &self.runs[at - 1];
+                let skipped = run.first_line - (previous.first_line + previous.lines.len());
+                let which = if self.cut_before == Some(at) {
+                    "more"
+                } else {
+                    "unchanged"
+                };
+                let noun = if skipped == 1 { "line" } else { "lines" };
+                shown.push(format!("         … {skipped} {which} {noun} …"));
             }
             shown.extend(
                 run.lines
@@ -164,7 +181,7 @@ impl Excerpt {
     }
 
     /// The text of each run with the number of its first line, which is every line that
-    /// [`Excerpt::render`] draws and none that it cuts.
+    /// [`Excerpt::render`] draws and none that it leaves out.
     pub fn runs(&self) -> impl Iterator<Item = (usize, String)> + '_ {
         self.runs
             .iter()
@@ -172,16 +189,23 @@ impl Excerpt {
     }
 }
 
-/// The changed region of `after`, with a little of the text either side of it.
+/// The changed regions of `after`, each with a little of the text either side of it.
 ///
 /// Computed by comparing rather than by locating the replacement: a deletion has no new text to
 /// find, an insertion's new text may appear elsewhere too, and `replace_all` changes several
-/// places at once. The common prefix and suffix of the two versions bound everything that moved,
-/// whichever of those happened.
+/// places at once. A change is a run of lines the two versions do not share, so passages a long way
+/// apart are separate regions and the unchanged lines between them are left out, with a note of how
+/// many. Regions whose surrounding lines touch, or are a line apart, are one.
 ///
 /// Lines are compared with their terminators, so an edit that only changes `\r\n` to `\n`, or adds
 /// or removes the final newline, still names the lines it touched. The terminator is left off what
 /// is shown.
+///
+/// The regions together are held to `MAX_EXCERPT_LINES`. The context either side narrows first, to
+/// `NARROWEST_CONTEXT_LINES`, so that every change stays visible while the changed lines fit. Past
+/// that the middle is cut and the note says how many lines went, since the last changes are as much
+/// a part of what happened as the first and a reader who sees only the top cannot tell a finished
+/// edit from one that stopped halfway.
 ///
 /// Returns `None` only where the two texts are identical, which `replace` refuses before ever
 /// reaching here.
@@ -189,67 +213,99 @@ pub fn changed_region(before: &str, after: &str) -> Option<Excerpt> {
     if before == after {
         return None;
     }
-    let old: Vec<&str> = before.split_inclusive('\n').collect();
     let new: Vec<&str> = after.split_inclusive('\n').collect();
+    let changed = changed_lines(before, after);
 
-    let head = old
-        .iter()
-        .zip(new.iter())
-        .take_while(|(a, b)| a == b)
-        .count();
-    // Measured from the end, and never back past the common prefix: two files that differ only in
-    // length share a suffix that would otherwise overlap the head and count lines twice.
-    let tail = old
-        .iter()
-        .rev()
-        .zip(new.iter().rev())
-        .take_while(|(a, b)| a == b)
-        .count()
-        .min(old.len().saturating_sub(head))
-        .min(new.len().saturating_sub(head));
-
-    let from = head.saturating_sub(CONTEXT_LINES);
-    let to = (new.len() - tail + CONTEXT_LINES).min(new.len());
-
-    let mut lines: Vec<String> = new[from..to]
-        .iter()
-        .map(|line| {
-            let text = line.strip_suffix('\n').unwrap_or(line);
-            let text = text.strip_suffix('\r').unwrap_or(text);
-            text.to_string()
-        })
-        .collect();
-
-    // Cut from the middle rather than the end: the last changed lines are as much a part of what
-    // happened as the first, and a reader who sees only the top cannot tell a finished edit from
-    // one that stopped halfway.
-    if lines.len() > MAX_EXCERPT_LINES {
-        let keep = MAX_EXCERPT_LINES / 2;
-        let omitted = lines.len() - keep * 2;
-        let end = lines.split_off(lines.len() - keep);
-        lines.truncate(keep);
-        return Some(Excerpt {
-            runs: vec![
-                Run {
-                    first_line: from + 1,
-                    lines,
-                },
-                Run {
-                    first_line: to - keep + 1,
-                    lines: end,
-                },
-            ],
-            omitted,
-        });
+    let mut spans = Vec::new();
+    for context in (NARROWEST_CONTEXT_LINES..=CONTEXT_LINES).rev() {
+        spans = widened(&changed, context, new.len());
+        if shown_in(&spans) <= MAX_EXCERPT_LINES {
+            break;
+        }
+    }
+    let mut cut_before = None;
+    if shown_in(&spans) > MAX_EXCERPT_LINES {
+        (spans, cut_before) = cut_in_the_middle(spans, MAX_EXCERPT_LINES / 2);
     }
 
-    Some(Excerpt {
-        runs: vec![Run {
-            first_line: from + 1,
-            lines,
-        }],
-        omitted: 0,
-    })
+    let runs = spans
+        .into_iter()
+        .map(|span| Run {
+            first_line: span.start + 1,
+            lines: new[span]
+                .iter()
+                .map(|line| {
+                    let text = line.strip_suffix('\n').unwrap_or(line);
+                    let text = text.strip_suffix('\r').unwrap_or(text);
+                    text.to_string()
+                })
+                .collect(),
+        })
+        .collect();
+    Some(Excerpt { runs, cut_before })
+}
+
+/// The lines of `after` that each change made, as zero-based half-open ranges in file order. A
+/// deletion has an empty range at the place the lines were.
+///
+/// Where the diff cannot line the two texts up, which only a very large and very different pair
+/// does, everything between the first difference and the last is one change.
+fn changed_lines(before: &str, after: &str) -> Vec<Range<usize>> {
+    let diff = Diff::compute_terminated(before, after);
+    match diff.hunks(0) {
+        Some(hunks) if !hunks.is_empty() => hunks.into_iter().map(|hunk| hunk.after).collect(),
+        _ => vec![diff.differing_lines().1],
+    }
+}
+
+/// The lines to show for `changed`: each range with `context` lines either side, where ranges whose
+/// lines touch, overlap or lie one line apart are one, since a note for one line takes the row the
+/// line would. A range that is empty and has no line to show is dropped.
+fn widened(changed: &[Range<usize>], context: usize, lines: usize) -> Vec<Range<usize>> {
+    let mut spans: Vec<Range<usize>> = Vec::new();
+    for range in changed {
+        let from = range.start.saturating_sub(context);
+        let to = (range.end + context).min(lines);
+        match spans.last_mut() {
+            Some(last) if from <= last.end + 1 => last.end = last.end.max(to),
+            _ => spans.push(from..to),
+        }
+    }
+    spans.retain(|span| !span.is_empty());
+    spans
+}
+
+fn shown_in(spans: &[Range<usize>]) -> usize {
+    spans.iter().map(Range::len).sum()
+}
+
+/// The first and last `keep` lines of `spans`, and the position in what is returned of the first
+/// span after the cut. `spans` must hold more than twice `keep` lines.
+fn cut_in_the_middle(spans: Vec<Range<usize>>, keep: usize) -> (Vec<Range<usize>>, Option<usize>) {
+    let mut head = Vec::new();
+    let mut left = keep;
+    for span in &spans {
+        let take = span.len().min(left);
+        if take == 0 {
+            break;
+        }
+        head.push(span.start..span.start + take);
+        left -= take;
+    }
+    let mut tail = Vec::new();
+    left = keep;
+    for span in spans.iter().rev() {
+        let take = span.len().min(left);
+        if take == 0 {
+            break;
+        }
+        tail.push(span.end - take..span.end);
+        left -= take;
+    }
+    tail.reverse();
+    let cut_before = head.len();
+    head.extend(tail);
+    (head, Some(cut_before))
 }
 
 #[cfg(test)]
@@ -381,6 +437,30 @@ mod tests {
         assert!(shown.contains("LINE 199"), "the end is missing: {shown}");
     }
 
+    /// The note names how many lines the cut took, which is the region less the lines shown, and
+    /// the region counts the context either side of the change and not the changed lines alone.
+    #[test]
+    fn a_cut_excerpt_says_how_many_lines_it_dropped() {
+        let before: String = (1..=300).map(|n| format!("line {n}\n")).collect();
+        let mut after = String::new();
+        for n in 1..=300 {
+            match n {
+                101..=200 => after.push_str(&format!("LINE {n}\n")),
+                _ => after.push_str(&format!("line {n}\n")),
+            }
+        }
+        let shown = changed_region(&before, &after)
+            .expect("something changed")
+            .render();
+        let region = 100 + 2 * NARROWEST_CONTEXT_LINES;
+        let dropped = region - MAX_EXCERPT_LINES;
+        assert!(
+            shown.contains(&format!("… {dropped} more lines …")),
+            "the note did not name {dropped} dropped lines: {shown}"
+        );
+        assert_eq!(shown.lines().count(), MAX_EXCERPT_LINES + 1);
+    }
+
     /// What is scanned for a credential has to be what the planner is shown, at the numbers the
     /// person would open their editor at. Lines counted from the top of the excerpt rather than of
     /// the file would send them to the wrong place.
@@ -419,6 +499,321 @@ mod tests {
             !everything.contains("LINE 100"),
             "a line the excerpt cuts was handed back to be scanned"
         );
+    }
+
+    /// `lines` numbered lines, `line 001` to `line 120` and so on, with each of `changed` (counted
+    /// from one) rewritten as `LINE nnn`.
+    fn numbered_file(lines: usize, changed: &[usize]) -> (String, String) {
+        let line = |n: usize, upper: bool| {
+            if upper {
+                format!("LINE {n:03}\n")
+            } else {
+                format!("line {n:03}\n")
+            }
+        };
+        (
+            (1..=lines).map(|n| line(n, false)).collect(),
+            (1..=lines).map(|n| line(n, changed.contains(&n))).collect(),
+        )
+    }
+
+    /// An edit with several passages far apart changes the lines between them in no way, so the
+    /// result shows each passage and says what it left out, rather than one span from the first
+    /// change to the last with the middle cut. A passage in the cut middle is a change the planner
+    /// is told landed only by a count.
+    #[test]
+    fn passages_far_apart_are_each_shown_with_their_own_lines() {
+        let (before, after) = numbered_file(120, &[5, 60, 115]);
+        let shown = changed_region(&before, &after)
+            .expect("something changed")
+            .render();
+        for changed in ["LINE 005", "LINE 060", "LINE 115"] {
+            assert!(shown.contains(changed), "{changed} is not shown: {shown}");
+        }
+        for context in [
+            "line 002", "line 008", "line 057", "line 063", "line 112", "line 118",
+        ] {
+            assert!(
+                shown.contains(context),
+                "{context} should be the edge of a region: {shown}"
+            );
+        }
+        for left_out in [
+            "line 001", "line 009", "line 056", "line 064", "line 111", "line 119",
+        ] {
+            assert!(
+                !shown.contains(left_out),
+                "{left_out} lies outside every region: {shown}"
+            );
+        }
+        assert!(
+            shown
+                .lines()
+                .find(|l| l.contains("LINE 060"))
+                .unwrap()
+                .trim_start()
+                .starts_with("60 "),
+            "the middle passage is at the wrong number: {shown}"
+        );
+    }
+
+    /// The note between two regions says how many lines it stands for and that none of them
+    /// changed, which is what lets a reader trust the lines they are not shown.
+    #[test]
+    fn the_lines_between_two_regions_are_counted_as_unchanged() {
+        let (before, after) = numbered_file(120, &[5, 60, 115]);
+        let shown = changed_region(&before, &after)
+            .expect("something changed")
+            .render();
+        // Lines 9 to 56 and 64 to 111.
+        assert_eq!(
+            shown.matches("… 48 unchanged lines …").count(),
+            2,
+            "{shown}"
+        );
+        assert!(
+            !shown.contains("more lines"),
+            "nothing was cut for length: {shown}"
+        );
+    }
+
+    /// Regions are one when their lines touch or a single line separates them, since a note for
+    /// one line takes the row the line would and says less. Two lines apart they are two, and the
+    /// note counts both.
+    #[test]
+    fn regions_a_line_or_less_apart_are_one_and_a_wider_gap_is_counted() {
+        // Three lines of context from line 5 reach line 8, where the context before line 12 starts.
+        let (before, after) = numbered_file(30, &[5, 12]);
+        let touching = changed_region(&before, &after)
+            .expect("something changed")
+            .render();
+        assert!(!touching.contains('…'), "{touching}");
+        assert_eq!(touching.matches("line 008").count(), 1, "{touching}");
+        assert_eq!(touching.lines().count(), 14, "lines 2 to 15: {touching}");
+
+        // Line 9 is the one line between the context of line 5 and the context before line 13.
+        let (before, after) = numbered_file(30, &[5, 13]);
+        let one_apart = changed_region(&before, &after)
+            .expect("something changed")
+            .render();
+        assert!(!one_apart.contains('…'), "{one_apart}");
+        assert!(
+            one_apart.lines().any(|l| l.ends_with("line 009")),
+            "the line between the regions is not shown: {one_apart}"
+        );
+
+        let (before, after) = numbered_file(30, &[5, 14]);
+        let two_apart = changed_region(&before, &after)
+            .expect("something changed")
+            .render();
+        assert_eq!(
+            two_apart.matches("… 2 unchanged lines …").count(),
+            1,
+            "{two_apart}"
+        );
+        assert!(
+            !two_apart.lines().any(|l| l.ends_with("line 009")),
+            "a line the note stands for is shown: {two_apart}"
+        );
+    }
+
+    /// Several passages near the cap keep all of their changed lines by showing fewer lines around
+    /// each. Six passages of one line are 42 lines with three lines of context either side, which
+    /// is over the limit, and 30 with two.
+    #[test]
+    fn many_regions_show_less_context_before_any_is_cut() {
+        let changed = [10, 30, 50, 70, 90, 110];
+        let (before, after) = numbered_file(120, &changed);
+        let excerpt = changed_region(&before, &after).expect("something changed");
+        let shown = excerpt.render();
+        for n in changed {
+            assert!(
+                shown.contains(&format!("LINE {n:03}")),
+                "line {n} was cut: {shown}"
+            );
+        }
+        assert!(
+            !shown.contains("more lines"),
+            "the context was not narrowed before a cut: {shown}"
+        );
+        assert!(
+            shown.contains("line 008") && !shown.contains("line 007"),
+            "the context narrowed to two lines either side, not another number: {shown}"
+        );
+        assert_eq!(excerpt.runs().count(), 6);
+    }
+
+    /// The context narrows as far as one line when two would still run over. Ten passages are 50
+    /// lines with two lines of context either side and 30 with one.
+    #[test]
+    fn the_context_narrows_to_one_line_when_two_would_still_run_over() {
+        let changed: Vec<usize> = (1..=10).map(|n| n * 11).collect();
+        let (before, after) = numbered_file(130, &changed);
+        let shown = changed_region(&before, &after)
+            .expect("something changed")
+            .render();
+        for n in &changed {
+            assert!(
+                shown.contains(&format!("LINE {n:03}")),
+                "line {n} was cut: {shown}"
+            );
+        }
+        assert!(!shown.contains("more lines"), "{shown}");
+        assert!(
+            shown.contains("line 010") && shown.contains("line 012"),
+            "the line either side of the first passage is missing: {shown}"
+        );
+        assert!(
+            !shown.contains("line 009") && !shown.contains("line 013"),
+            "more than one line of context was kept: {shown}"
+        );
+    }
+
+    /// A region of exactly the limit is not cut and keeps its context. Thirty-four changed lines
+    /// with three either side are forty.
+    #[test]
+    fn a_region_of_exactly_the_limit_keeps_its_three_lines_of_context() {
+        let changed: Vec<usize> = (20..54).collect();
+        let (before, after) = numbered_file(100, &changed);
+        let shown = changed_region(&before, &after)
+            .expect("something changed")
+            .render();
+        assert_eq!(shown.lines().count(), MAX_EXCERPT_LINES, "{shown}");
+        assert!(
+            shown.contains("line 017") && shown.contains("line 056"),
+            "the three lines either side were narrowed: {shown}"
+        );
+        assert!(!shown.contains("more lines"), "{shown}");
+    }
+
+    /// A deletion at either end of a file has context on one side only, and a file emptied by an
+    /// edit has nothing to show. Neither is an error.
+    #[test]
+    fn a_deletion_at_either_end_shows_the_lines_beside_it_and_emptying_a_file_shows_none() {
+        let first = changed_region("a\nb\nc\n", "b\nc\n")
+            .expect("something changed")
+            .render();
+        assert_eq!(first, "     1  b\n     2  c");
+        let last = changed_region("a\nb\nc\n", "a\nb\n")
+            .expect("something changed")
+            .render();
+        assert_eq!(last, "     1  a\n     2  b");
+
+        let emptied = changed_region("a\nb\n", "").expect("something changed");
+        assert_eq!(emptied.render(), "");
+        assert_eq!(emptied.runs().count(), 0);
+    }
+
+    /// Past what narrowing can save, the first and last lines are kept and the lines between,
+    /// whichever regions they belong to, are one cut that says it is a cut and not unchanged
+    /// lines. Thirty passages ten lines apart are 90 lines with one line of context, and the cut
+    /// lies across several of them.
+    #[test]
+    fn regions_that_cannot_all_fit_are_cut_in_the_middle_and_the_cut_is_named() {
+        let changed: Vec<usize> = (1..=30).map(|n| n * 10).collect();
+        let (before, after) = numbered_file(320, &changed);
+        let excerpt = changed_region(&before, &after).expect("something changed");
+        let shown = excerpt.render();
+
+        // Each region is three lines. Twenty lines are the first six regions and the first two
+        // lines of the seventh, which ends at line 70, and the same from the end, which starts at
+        // line 240.
+        assert!(
+            shown.contains("LINE 010") && shown.contains("LINE 070"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("LINE 300") && shown.contains("LINE 250"),
+            "{shown}"
+        );
+        assert!(
+            !shown.contains("LINE 150"),
+            "a passage in the middle was shown: {shown}"
+        );
+        // Lines 71 to 239 are cut.
+        assert_eq!(shown.matches("… 169 more lines …").count(), 1, "{shown}");
+        let notes = shown.lines().filter(|l| l.contains('…')).count();
+        assert_eq!(
+            shown.lines().count() - notes,
+            MAX_EXCERPT_LINES,
+            "the total was not held to the limit: {shown}"
+        );
+        assert!(
+            shown.contains("… 7 unchanged lines …"),
+            "a gap inside what is kept is a gap of unchanged lines: {shown}"
+        );
+    }
+
+    /// What is scanned for a credential is the runs, so a credential in the lines between two
+    /// regions is not handed back, and one beside a passage in the middle is.
+    #[test]
+    fn each_region_is_handed_back_with_its_own_first_line_and_the_gaps_are_not() {
+        let (before, after) = numbered_file(120, &[5, 60, 115]);
+        let runs: Vec<(usize, String)> = changed_region(&before, &after)
+            .expect("something changed")
+            .runs()
+            .collect();
+        let firsts: Vec<usize> = runs.iter().map(|(first, _)| *first).collect();
+        assert_eq!(firsts, [2, 57, 112]);
+        assert_eq!(
+            runs[1].1,
+            "line 057\nline 058\nline 059\nLINE 060\nline 061\nline 062\nline 063"
+        );
+        let everything: String = runs.iter().map(|(_, text)| text.as_str()).collect();
+        assert!(
+            !everything.contains("line 030") && !everything.contains("line 090"),
+            "a line between two regions was handed back to be scanned"
+        );
+    }
+
+    /// A deletion is a change with no line of its own, so it is a region of the lines it joined.
+    /// A deletion far from an insertion is shown as well as the insertion.
+    #[test]
+    fn a_deletion_far_from_another_change_is_its_own_region() {
+        let (before, _) = numbered_file(100, &[]);
+        let after = before
+            .replace("line 005\n", "line 005\ninserted\n")
+            .replace("line 050\n", "");
+        let shown = changed_region(&before, &after)
+            .expect("something changed")
+            .render();
+        assert!(
+            shown.contains("inserted"),
+            "the insertion is missing: {shown}"
+        );
+        assert!(
+            shown.contains("line 049") && shown.contains("line 051"),
+            "the lines either side of the deletion are missing: {shown}"
+        );
+        assert!(!shown.contains("line 050"), "{shown}");
+        let at = |text: &str| -> usize {
+            shown
+                .lines()
+                .find(|l| l.contains(text))
+                .and_then(|l| l.split_whitespace().next())
+                .and_then(|n| n.parse().ok())
+                .unwrap_or_else(|| panic!("{text} is not numbered in {shown}"))
+        };
+        // The deletion shifts nothing before it and one line after the insertion.
+        assert_eq!((at("line 049"), at("line 051")), (50, 51));
+    }
+
+    /// A pair of files too large and too different for the diff to line up has no hunks to name,
+    /// and the excerpt falls back to one span from the first difference to the last, cut in the
+    /// middle, instead of showing nothing.
+    #[test]
+    fn a_pair_too_different_to_line_up_still_shows_one_cut_span() {
+        let before: String = (0..2000).map(|n| format!("old {n}\n")).collect();
+        let after: String = (0..2000).map(|n| format!("new {n}\n")).collect();
+        assert!(!Diff::compute_terminated(&before, &after).is_exact());
+        let shown = changed_region(&before, &after)
+            .expect("something changed")
+            .render();
+        assert!(
+            shown.contains("new 0") && shown.contains("new 1999"),
+            "{shown}"
+        );
+        assert!(shown.contains("… 1960 more lines …"), "{shown}");
     }
 
     #[test]

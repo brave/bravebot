@@ -41,6 +41,7 @@ fn a_write() -> WriteRequest {
         intent: Intent::Edit,
         untrusted: false,
         remark: None,
+        protected: false,
         credentials: Vec::new(),
         may_always: false,
         record: None,
@@ -81,6 +82,7 @@ fn harness() -> Harness {
             pending,
             target: 1,
             finished: Arc::new(AtomicBool::new(false)),
+            interjections: None,
         },
     }
 }
@@ -233,6 +235,7 @@ fn refusing_nothing_queues_nothing() {
             pending: Arc::new(Mutex::new(None)),
             target: 1,
             finished: Arc::new(AtomicBool::new(false)),
+            interjections: None,
         },
     );
 
@@ -338,9 +341,12 @@ fn an_unanswerable_output_read_refuses() {
             command: "git status".into(),
             output: "on branch main".into(),
             lines: 1,
+            hidden: 0,
             reference: "$1".into(),
             verdict: bravebot_core::vetting::Verdict::Inconclusive("not checked"),
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }),
         Decision::Reject,
         "approving output nobody could see is the one thing this cannot mean"
@@ -355,10 +361,13 @@ fn an_unanswerable_vouch_refuses() {
     assert_eq!(
         harness.confirmer.confirm_vouch(&VouchRequest {
             path: "notes.md".into(),
+            rule: "notes.md".into(),
             preview: "first line".into(),
             truncated: true,
             verdict: bravebot_core::vetting::Verdict::Inconclusive("not checked"),
             reason: None,
+            label: String::new(),
+            reason_label: None,
         }),
         Decision::Reject
     );
@@ -493,7 +502,6 @@ fn a_tool_list() -> bravebot_agent::confirm::ToolListRequest {
         tools: Vec::new(),
         refused: 0,
         withheld: 0,
-        changed: false,
         verdict: bravebot_core::vetting::Verdict::Safe,
         reason: None,
     }
@@ -664,7 +672,8 @@ fn refusing_an_mcp_question_is_a_no_in_its_own_shape() {
         Kind::McpCall.refusal(),
         Reply::McpCall(CallDecision {
             decision: Decision::Reject,
-            stand: false
+            stand: false,
+            note: None
         })
     ));
     assert!(matches!(
@@ -729,9 +738,12 @@ fn vetted_content_never_approves_itself_or_consumes_another_kind_of_reply() {
                 expects: "data".into(),
                 content: "untrusted content".into(),
                 lines: 1,
+                hidden: 0,
                 verdict,
                 reason: None,
                 picture: None,
+                label: None,
+                reason_label: None,
             }),
             Decision::Reject
         );
@@ -753,9 +765,12 @@ fn vetted_content_requires_its_own_explicit_approval() {
             expects: "notes".into(),
             content: "text".into(),
             lines: 1,
+            hidden: 0,
             verdict: bravebot_core::vetting::Verdict::Unsafe,
             reason: Some("instructions".into()),
             picture: None,
+            label: None,
+            reason_label: None,
         }),
         Decision::Approve
     );
@@ -1293,6 +1308,7 @@ fn question_numbers_are_not_reused_by_a_later_turn_of_the_same_session() {
             pending: Arc::clone(&pending),
             target: 1,
             finished: Arc::new(AtomicBool::new(false)),
+            interjections: None,
         };
         let answerer = std::thread::spawn(move || {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);

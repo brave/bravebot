@@ -17,11 +17,11 @@ use bravebot_core::programs::TrustedPrograms;
 use bravebot_core::todo::Row;
 use bravebot_core::trust::TrustStore;
 use bravebot_session::sessions::Handle;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 
 /// Everything a session carries between turns.
 ///
@@ -62,6 +62,10 @@ pub struct State {
     /// map says. Held so a turn taken here restores the reach beside the rules it inherited,
     /// and so saving writes the grant back rather than dropping it on the session's behalf.
     pub directories: Vec<PathBuf>,
+    /// The checkouts the session's delegates were given and it keeps, which each turn's workspace
+    /// is given because it is dropped when the turn ends (CHECKOUT-16). `None` until the first
+    /// turn, or until a record that lists checkouts is opened.
+    pub kept: Option<bravebot_agent::workspace::KeptBetweenTurns>,
     /// How the session is written down.
     ///
     /// `None` for a fresh session until its first turn creates it, so a window somebody
@@ -133,10 +137,10 @@ impl Scratch {
         }
     }
 
-    /// Where it is, where the session has one.
-    pub fn path(&self) -> Option<&Path> {
+    /// The directory as the session made it, where the session has one.
+    pub fn directory(&self) -> Option<bravebot_agent::ScratchDirectory> {
         match self {
-            Self::Held(held) => Some(held.path()),
+            Self::Held(held) => held.directory(),
             Self::Unavailable(_) => None,
         }
     }
@@ -176,6 +180,7 @@ impl State {
             conversation: Conversation::new(),
             answers: Answers::opening(trust, TrustedPrograms::new(), Default::default()),
             directories: Vec::new(),
+            kept: None,
             handle: None,
             turns: 0,
             history: Some(Vec::new()),
@@ -216,6 +221,7 @@ impl State {
             conversation: Conversation::restored(record.conversation.clone()),
             answers: Answers::opening(trust, record.trusted_programs(project), Default::default()),
             directories: record.directories.iter().map(PathBuf::from).collect(),
+            kept: None,
             handle: Some(handle),
             turns: record.turns,
             history: record.history.clone(),
@@ -274,6 +280,7 @@ impl State {
             conversation: Conversation::restored(before),
             answers: Answers::opening(trust, programs, Default::default()),
             directories,
+            kept: None,
             handle: Some(handle),
             turns,
             // The parent's boundaries are offsets into a conversation this one has cut, so none
@@ -292,6 +299,32 @@ impl State {
             scratch: Scratch::open(),
             question_ids: Arc::new(AtomicU64::new(0)),
         }
+    }
+}
+
+/// What a person typed while a turn ran, for the turn to read at its next round boundary
+/// (INPUT-10).
+///
+/// The dispatch thread adds to the back and the worker takes from the front, so lines reach the
+/// planner in the order they were typed. Neither side waits: the worker polls it between rounds
+/// and a full lock is only ever held for a push or a pop. A poisoned lock reads as empty, since it
+/// is only poisoned by a panic elsewhere and the turn is ending either way.
+#[derive(Debug, Clone, Default)]
+pub struct Interjections(Arc<Mutex<VecDeque<String>>>);
+
+impl Interjections {
+    /// Add a line for the turn to take at its next boundary.
+    fn push(&self, said: String) -> bool {
+        let Ok(mut waiting) = self.0.lock() else {
+            return false;
+        };
+        waiting.push_back(said);
+        true
+    }
+
+    /// Take the oldest line, or `None`. Never waits.
+    pub fn take(&self) -> Option<String> {
+        self.0.lock().ok()?.pop_front()
     }
 }
 
@@ -317,6 +350,9 @@ pub struct Running {
     /// must not learn this by probing the answer channel: sending anything down that to
     /// see whether it is still connected would deliver a real decision to a real write.
     pub finished: Arc<AtomicBool>,
+    /// Lines typed into this turn, taken by the worker at a round boundary. A manifest run has
+    /// none, because it plans before anything is read and never asks between rounds (MANIFEST-9).
+    pub interjections: Option<Interjections>,
 }
 
 /// The next number for a turn or run to be stopped by. It counts across sessions, which is
@@ -326,7 +362,70 @@ pub fn next_target() -> u64 {
     NEXT.fetch_add(1, Ordering::SeqCst) + 1
 }
 
+/// A [`Running`] together with the halves of it the worker thread keeps.
+pub struct Started {
+    /// What the session holds while the work runs.
+    pub running: Running,
+    /// The worker's end of the stop.
+    pub cancel: Cancel,
+    /// The worker's view of the question slot.
+    pub pending: crate::turn::Pending,
+    /// Where the worker receives answers.
+    pub answers: Receiver<Reply>,
+    /// The flag the worker sets on its way out.
+    pub finished: Arc<AtomicBool>,
+    /// What a cancel names to stop this work, the same number [`Running::target`] holds.
+    pub target: u64,
+    /// The worker's end of [`Running::interjections`].
+    pub interjections: Interjections,
+}
+
 impl Running {
+    /// A turn or run beginning: a fresh stop, answer channel, question slot, finished flag and
+    /// target. Nothing is reused from earlier work, since a reused stop could cancel work before
+    /// it started and a reused channel could deliver yesterday's answer to today's question.
+    pub fn start() -> Started {
+        let cancel = Cancel::new();
+        let (answers_tx, answers_rx) = mpsc::channel();
+        let pending: crate::turn::Pending = Arc::new(Mutex::new(None));
+        let finished = Arc::new(AtomicBool::new(false));
+        let target = next_target();
+        let interjections = Interjections::default();
+        let running = Running {
+            cancel: cancel.clone(),
+            answers: answers_tx,
+            pending: Arc::clone(&pending),
+            target,
+            finished: Arc::clone(&finished),
+            interjections: Some(interjections.clone()),
+        };
+        Started {
+            running,
+            cancel,
+            pending,
+            answers: answers_rx,
+            finished,
+            target,
+            interjections,
+        }
+    }
+
+    /// Hand the turn a line the person typed while it runs, and say whether it will be read.
+    ///
+    /// `false` for work that has ended, work that is being stopped, and work that never asks
+    /// between rounds. The caller then has a turn of its own to make of the line, which is what
+    /// INPUT-10 says becomes of one the turn does not take. A `true` is not a promise: a turn that
+    /// answers without another round ends with the line unread, and the `turn.interjected` event is
+    /// what says it was.
+    pub fn interject(&self, said: String) -> bool {
+        if self.is_finished() || self.cancel.is_cancelled() {
+            return false;
+        }
+        self.interjections
+            .as_ref()
+            .is_some_and(|waiting| waiting.push(said))
+    }
+
     /// Answer the question that is waiting, if this is an answer to that question.
     ///
     /// Both halves have to match. The id makes an approval single-use, and the kind makes

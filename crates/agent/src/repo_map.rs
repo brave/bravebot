@@ -614,6 +614,53 @@ class Widget : public Base {
         assert!(target < new, "{}", map.body);
     }
 
+    /// A name mentioned many times in one file is read by one file, and a name mentioned once in
+    /// each of several files is read by several. Counting occurrences ranks the first above the
+    /// second, so a map would lead with whatever one caller repeats. The declaring files are named
+    /// so that path order alone ranks the losing declaration first.
+    #[test]
+    fn a_name_is_credited_once_for_each_file_that_mentions_it_however_often_it_is_named() {
+        let map = built(
+            &[
+                ("a_repeated.rs", "pub fn repeated() {}\n"),
+                ("z_spread.rs", "pub fn spread() {}\n"),
+                (
+                    "one.rs",
+                    "fn one() { repeated(); repeated(); repeated(); repeated(); repeated(); spread(); }\n",
+                ),
+                ("two.rs", "fn two() { spread(); }\n"),
+                ("three.rs", "fn three() { spread(); }\n"),
+            ],
+            DEFAULT_BUDGET,
+        );
+        let spread = map.body.find("fn spread()").expect("shown");
+        let repeated = map.body.find("fn repeated()").expect("shown");
+        assert!(spread < repeated, "{}", map.body);
+    }
+
+    /// Declarations that rank alike are kept in path order when the budget cannot hold them all,
+    /// not in the order the files were handed in, so the same repository gives the same map
+    /// whichever order it was read in.
+    #[test]
+    fn declarations_that_rank_alike_are_kept_in_path_order_when_the_budget_cuts_them() {
+        let declarations = |prefix: &str| -> String {
+            (0..40)
+                .map(|n| format!("pub fn {prefix}_function_number_{n}() {{}}\n"))
+                .collect()
+        };
+        let a = declarations("first");
+        let b = declarations("second");
+        for files in [
+            [("b.rs", b.as_str()), ("a.rs", a.as_str())],
+            [("a.rs", a.as_str()), ("b.rs", b.as_str())],
+        ] {
+            let map = built(&files, MIN_BUDGET);
+            assert!(map.shown < map.found, "the budget cut nothing");
+            assert!(map.body.starts_with("a.rs:"), "{}", map.body);
+            assert!(!map.body.contains("b.rs:"), "{}", map.body);
+        }
+    }
+
     #[test]
     fn the_budget_bounds_the_body_and_the_count_says_what_it_cut() {
         let text: String = (0..400)

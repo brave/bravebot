@@ -969,4 +969,19 @@ mod tests {
         );
         assert!(!RememberedLine::of(&view("1081")).is_family());
     }
+
+    /// RUN-2: the reading back is drawn by the code that draws the plan, so a line started through
+    /// a link reads back as the link and the file it leads to, and not as the file alone.
+    #[test]
+    fn a_line_started_through_a_link_is_read_back_as_the_plan_draws_it() {
+        let mut cargo = step("cargo", &["test"]);
+        cargo.started_as = PathBuf::from("/home/me/.cargo/bin/cargo");
+        cargo.resolved = PathBuf::from("/home/me/.cargo/bin/rustup");
+        let plan = plan_of(Steps::Pipeline(vec![cargo]));
+        assert_eq!(
+            RememberedLine::of(&plan).display(),
+            "/home/me/.cargo/bin/cargo -> /home/me/.cargo/bin/rustup test"
+        );
+        assert_eq!(RememberedLine::of(&plan).display(), plan.display());
+    }
 }

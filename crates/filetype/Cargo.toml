@@ -1,6 +1,6 @@
 [package]
 name = "bravebot-filetype"
-description = "Whether the start of a file says it is text, shared by the agent and the file helper"
+description = "Whether a file is text, and what its name says it is, shared by the agent, the front ends and the file helper"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

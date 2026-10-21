@@ -3,7 +3,7 @@
 
 use bravebot_i18n::t;
 
-use crate::state::Session;
+use crate::state::{Bound, Session};
 
 /// The line that opens the model picker instead of starting a turn.
 pub(crate) const MODEL_COMMAND: &str = "/model";
@@ -44,14 +44,30 @@ pub(crate) const ADD_DIR_CLOSE: &str = "close";
 /// The line that moves the session to another working directory, taking the path as its argument.
 pub(crate) const CD_COMMAND: &str = "/cd";
 
-/// The line that withdraws the answer an earlier session was told to remember about the working
-/// directory, so the next session begun there is asked (TRUST-24).
+/// The line that withdraws the yes an earlier session kept about the working directory, so the
+/// next session begun there is asked (TRUST-24).
 pub(crate) const FORGET_TRUST_COMMAND: &str = "/forget-trust";
 
 /// The line that lists, adds and removes the reach remembered for commands (SANDBOX-23).
 pub(crate) const REACH_COMMAND: &str = "/reach";
 
+/// The line that lists the MCP servers, starts one that is not running, or turns one off for the
+/// session (SERVERS-19).
+pub(crate) const MCP_COMMAND: &str = "/mcp";
+
+/// The word after `/mcp` that lists the servers, as the bare command does.
+pub(crate) const MCP_LIST: &str = "list";
+
+/// The word after `/mcp` that starts the servers that are not running, or the one named after it.
+pub(crate) const MCP_RECONNECT: &str = "reconnect";
+
+/// The word after `/mcp` that turns the server named after it off for the session.
+pub(crate) const MCP_DISABLE: &str = "disable";
+
 /// The line that reports the sandbox mode, or sets it from the next turn (SANDBOX-22).
+///
+/// Typed while a turn runs, every word but `off` is carried out as typed, and the turn keeps the mode
+/// it began with (CMD-8).
 pub(crate) const SANDBOX_COMMAND: &str = "/sandbox";
 
 /// The line that reports what this session is and what it may touch.
@@ -91,6 +107,11 @@ pub(crate) const BACKGROUND_COMMAND: &str = "/bg";
 
 /// The line that renames this session, taking the new name as its argument.
 pub(crate) const RENAME_COMMAND: &str = "/rename";
+
+/// The line that adds a note to the session record, taking the note as its argument.
+///
+/// The note is kept beside the conversation and never in it (SESSION-36).
+pub(crate) const NOTE_COMMAND: &str = "/note";
 
 /// The lines that say which issue and which pull request the session is for, taking the link.
 pub(crate) const ISSUE_COMMAND: &str = "/issue";
@@ -138,6 +159,21 @@ pub(crate) const CHECKOUTS_COMMAND: &str = "/checkouts";
 /// The one line that ends the session instead of starting a turn.
 pub(crate) const EXIT_COMMAND: &str = "/exit";
 
+/// The words other terminal agents leave on when they are typed alone, with no slash.
+///
+/// Not commands: [`EXIT_COMMAND`] is the only line that leaves, so a question about leaving stays a
+/// question (CMD-2). A line that is only one of these is sent as the prompt it is, and the row under
+/// the box says so while the turn it begins runs.
+pub(crate) const LEAVE_WORDS: [&str; 2] = ["exit", "quit"];
+
+/// Whether the line is only one of [`LEAVE_WORDS`], in any case and with spaces around it.
+pub(crate) fn is_a_lone_leave_word(line: &str) -> bool {
+    let line = line.trim();
+    LEAVE_WORDS
+        .iter()
+        .any(|word| line.eq_ignore_ascii_case(word))
+}
+
 /// The line that writes the transcript as a markdown file.
 pub(crate) const EXPORT_COMMAND: &str = "/export";
 
@@ -156,6 +192,12 @@ pub(crate) const UNDO_COMMAND: &str = "/undo";
 /// the table's empty argument column is what keeps `/undo the last thing I asked for` a prompt
 /// (CMD-2), and a command that takes a number cannot also do that.
 pub(crate) const REWIND_COMMAND: &str = "/rewind";
+
+/// The line that lists the hunks the last turn wrote, and puts one of them back by its number.
+///
+/// A word of its own rather than an argument to `/rewind`, which goes back whole turns and is read
+/// as a count of them (SESSION-21).
+pub(crate) const HUNKS_COMMAND: &str = "/hunks";
 
 /// The line that plans one task in full before anything is read, taking the task as its argument.
 ///
@@ -209,14 +251,37 @@ impl Command {
     /// words it takes. The completion list keeps the short `argument` so its description column
     /// stays narrow.
     pub fn typed_hint(&self) -> String {
-        if self.name == EFFORT_COMMAND {
-            let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
-                .iter()
-                .map(|level| level.as_str())
-                .collect();
-            format!("[{}]", levels.join(" | "))
-        } else {
-            self.argument.to_string()
+        match self.name {
+            EFFORT_COMMAND => {
+                let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
+                    .iter()
+                    .map(|level| level.as_str())
+                    .collect();
+                format!("[{}]", levels.join(" | "))
+            }
+            SANDBOX_COMMAND => {
+                let modes: Vec<&str> = bravebot_sandbox::SandboxMode::ALL
+                    .iter()
+                    .map(|mode| mode.name())
+                    .collect();
+                format!("[{}]", modes.join(" | "))
+            }
+            LIMIT_COMMAND => format!("[<n>[k|m] | <n> credits | {LIMIT_OFF}]"),
+            REVIEW_COMMAND => {
+                use crate::review_command::{COMMIT, PULL_REQUEST, SINCE, STAGED};
+                format!("[{STAGED} | {SINCE} <ref> | {COMMIT} <ref> | {PULL_REQUEST} <n>] [focus]")
+            }
+            REACH_COMMAND => {
+                let scopes: Vec<&str> = bravebot_sandbox::scope::Scope::REACHABLE
+                    .iter()
+                    .map(|scope| scope.name())
+                    .collect();
+                format!(
+                    "[<{} | dir> [write] [always] -- <command> | remove <n> | keys]",
+                    scopes.join(" | ")
+                )
+            }
+            _ => self.argument.to_string(),
         }
     }
 }
@@ -224,21 +289,34 @@ impl Command {
 /// What Enter on a command does while a turn is running, which turns on what the command touches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MidTurn {
-    /// Carried out as it is typed. It reads what the session keeps or ends something it has
-    /// standing, which the turn does not hold, or sets a token the turn reads at its own next step.
+    /// Carried out as it is typed. It reads what the session keeps, ends something it has standing,
+    /// sets a token the turn reads at its own next step, adds a file under the working directory, or
+    /// changes only how the screen is drawn or what the box edits in, none of which changes what
+    /// the turn is running under, and no line waiting ahead of it changes either.
+    ///
+    /// Where the bare word opens a picker, the picker is held as a mode of the session while the
+    /// turn runs, so the turn's own questions are still drawn over it.
     Runs,
     /// Carried out as it is typed where it reads or ends what is standing, and waiting where it
     /// would start something: a loop or a goal armed mid-turn needs a look of its own.
     RunsUnlessItStarts,
-    /// Carried out as it is typed when nothing typed before it is waiting. It changes only what the
-    /// session keeps for itself or keeps for a later session, which the turn does not hold, but a
-    /// line waiting ahead of it may replace that: `/clear` begins another session and `/cd` moves to
-    /// another directory, and a change made first would land on the one being left.
+    /// Carried out as it is typed when no line waiting ahead of it could change what it acts on. It
+    /// changes only what the session keeps for itself or keeps for a later session, which the turn
+    /// does not hold, but a line waiting ahead of it may replace that: `/clear` begins another
+    /// session, `/cd` moves to another directory and a prompt starts a turn built with what it
+    /// finds, and a change made first would land on the one being left or the turn begun under it.
+    /// A waiting `/sandbox` line changes the mode and nothing else, so it holds none of them back.
+    ///
+    /// Where the bare word opens a picker, the picker is held as a mode of the session while the
+    /// turn runs, so the turn's own questions are still drawn over it.
     Changes,
-    /// As [`MidTurn::Changes`] where the line names what to set, and waiting where the bare word
-    /// would open a picker: a picker takes the terminal, and the turn's own questions are drawn
-    /// there.
-    RunsWhenNamed,
+    /// Carried out as it is typed under the rule [`MidTurn::Changes`] gives, except where the form
+    /// typed would ask the person a question, which waits: the screen is the turn's while it runs,
+    /// and a yes given to a question drawn under another one is not one anybody read.
+    ///
+    /// `/sandbox`: a mode moves what the next turn is built with and nothing the turn in flight
+    /// holds, and the move to `off` asks first (SANDBOX-22).
+    ChangesUnlessItAsks,
     /// Waits for the turn to end, because it acts on the conversation, the workspace, the
     /// terminal or the network, and the turn holds all four.
     Waits,
@@ -249,7 +327,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 45] {
+pub fn commands() -> [Command; 48] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -273,25 +351,25 @@ pub fn commands() -> [Command; 45] {
             name: MODEL_COMMAND,
             argument: "",
             description: t!(command_model),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::Changes,
         },
         Command {
             name: THEME_COMMAND,
             argument: "[name]",
             description: t!(command_theme),
-            mid_turn: MidTurn::RunsWhenNamed,
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: EFFORT_COMMAND,
             argument: "[level]",
             description: t!(command_effort),
-            mid_turn: MidTurn::RunsWhenNamed,
+            mid_turn: MidTurn::Changes,
         },
         Command {
             name: CONFIG_COMMAND,
             argument: "",
             description: t!(command_config),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: ADD_DIR_COMMAND,
@@ -312,6 +390,12 @@ pub fn commands() -> [Command; 45] {
             mid_turn: MidTurn::Changes,
         },
         Command {
+            name: NOTE_COMMAND,
+            argument: "<note>",
+            description: t!(command_note),
+            mid_turn: MidTurn::Changes,
+        },
+        Command {
             name: ADVISOR_COMMAND,
             argument: "[model | off]",
             description: t!(command_advisor),
@@ -319,7 +403,7 @@ pub fn commands() -> [Command; 45] {
         },
         Command {
             name: LIMIT_COMMAND,
-            argument: "[tokens | credits | off]",
+            argument: "[<amount> | off]",
             description: t!(command_limit),
             mid_turn: MidTurn::Runs,
         },
@@ -393,7 +477,7 @@ pub fn commands() -> [Command; 45] {
             name: SANDBOX_COMMAND,
             argument: "[<mode>]",
             description: t!(command_sandbox),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::ChangesUnlessItAsks,
         },
         Command {
             name: LOOP_COMMAND,
@@ -489,7 +573,7 @@ pub fn commands() -> [Command; 45] {
             name: EXPORT_COMMAND,
             argument: "[path]",
             description: t!(command_export),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: COPY_COMMAND,
@@ -516,9 +600,21 @@ pub fn commands() -> [Command; 45] {
             mid_turn: MidTurn::Waits,
         },
         Command {
+            name: HUNKS_COMMAND,
+            argument: "[number]",
+            description: t!(command_hunks),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
             name: EXIT_COMMAND,
             argument: "",
             description: t!(command_exit),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: MCP_COMMAND,
+            argument: "[reconnect | disable] [alias]",
+            description: t!(command_mcp),
             mid_turn: MidTurn::Waits,
         },
     ]
@@ -541,34 +637,46 @@ pub fn completions(line: &str) -> Vec<Command> {
         .collect()
 }
 
-/// The line `/effort ` plus the start of a level becomes, or `None` where Tab has nothing to add.
+/// The line `/effort ` or `/sandbox ` plus the start of one of its words becomes, or `None` where
+/// Tab has nothing to add.
 ///
-/// The level words are this program's own, so completing one reads nothing a person did not type.
-/// A start that fits one level becomes that level, and a start that fits several is carried as far
-/// as they agree.
+/// The words are this program's own, so completing one reads nothing a person did not type. A
+/// start that fits one word becomes that word, and a start that fits several is carried as far as
+/// they agree.
 pub(crate) fn complete_argument(line: &str) -> Option<String> {
-    let typed = line
-        .trim_start()
-        .strip_prefix(EFFORT_COMMAND)?
-        .strip_prefix(' ')?;
+    let line = line.trim_start();
+    if let Some(typed) = line.strip_prefix(EFFORT_COMMAND) {
+        let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
+            .iter()
+            .map(|level| level.as_str())
+            .collect();
+        return complete_word(EFFORT_COMMAND, typed, &levels);
+    }
+    let typed = line.strip_prefix(SANDBOX_COMMAND)?;
+    let modes: Vec<&str> = bravebot_sandbox::SandboxMode::ALL
+        .iter()
+        .map(|mode| mode.name())
+        .collect();
+    complete_word(SANDBOX_COMMAND, typed, &modes)
+}
+
+fn complete_word(command: &str, after: &str, words: &[&str]) -> Option<String> {
+    let typed = after.strip_prefix(' ')?;
     if typed.is_empty() || typed.contains(char::is_whitespace) {
         return None;
     }
     let typed = typed.to_ascii_lowercase();
-    let mut fits = bravebot_aichat::protocol::Effort::ALL
-        .iter()
-        .map(|level| level.as_str())
-        .filter(|level| level.starts_with(&typed));
+    let mut fits = words.iter().filter(|word| word.starts_with(&typed));
     let mut shared = fits.next()?.to_string();
-    for level in fits {
+    for word in fits {
         let agreed = shared
             .bytes()
-            .zip(level.bytes())
+            .zip(word.bytes())
             .take_while(|(a, b)| a == b)
             .count();
         shared.truncate(agreed);
     }
-    (shared != typed).then(|| format!("{EFFORT_COMMAND} {shared}"))
+    (shared != typed).then(|| format!("{command} {shared}"))
 }
 
 /// The argument given to `command`, if that is what the line is.
@@ -614,8 +722,7 @@ fn row_typed(line: &str) -> Option<Command> {
 ///
 /// Read off the table's column, and for the two words that both read and start, off the form the
 /// argument takes: `/loop stop` ends what is standing, and `/loop 5m check the deploy` would start
-/// a loop while the turn in flight is still the session's work. For the two that set something,
-/// off whether the line names it: `/theme nord` sets a theme, and `/theme` alone opens a picker.
+/// a loop while the turn in flight is still the session's work.
 pub(crate) fn runs_while_working(line: &str) -> bool {
     let Some(command) = row_typed(line) else {
         return false;
@@ -623,8 +730,10 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
     match command.mid_turn {
         MidTurn::Runs | MidTurn::Changes => true,
         MidTurn::Waits => false,
-        MidTurn::RunsWhenNamed => {
-            argument_to(line, command.name).is_some_and(|named| !named.is_empty())
+        MidTurn::ChangesUnlessItAsks => {
+            let argument = argument_to(line, command.name).unwrap_or_default();
+            bravebot_sandbox::SandboxMode::parse(argument)
+                != Some(bravebot_sandbox::SandboxMode::Off)
         }
         MidTurn::RunsUnlessItStarts => {
             let argument = argument_to(line, command.name).unwrap_or_default();
@@ -641,18 +750,81 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
     }
 }
 
-/// Whether a line that would be carried out mid-turn waits anyway, for what is queued ahead of it.
+/// Whether a waiting line is a `/sandbox` one, which moves the mode the next turn is built with and
+/// writes nothing else (SANDBOX-22). The mode is read where a turn is built, by `/resume` and
+/// `/status`, and when the transcript is drawn, and by no command that changes something, so
+/// each of those gives the same result before it as after it. `/sandbox` itself is held back by
+/// the rule for a line of the same command.
+fn only_moves_the_sandbox(waiting: &str) -> bool {
+    command_typed(waiting) == Some(SANDBOX_COMMAND)
+}
+
+/// The line, among those waiting ahead of position `at` in the queue, that a command carried out
+/// mid-turn has to wait behind, with where that line is going. `at` is the command's own position
+/// where it is already queued, and the length of the queue where it is about to join it.
 ///
 /// Behind a waiting line of the same command: `/loop stop` typed after a waiting
 /// `/loop 5m check the deploy` would find no loop to stop, and the loop would start after it. And a
-/// command that changes something waits behind any line at all, so it lands where it was typed:
-/// `/rename` ahead of a waiting `/clear` would name the session being left.
+/// command that changes something waits behind a line that could change what it acts on, so it
+/// lands where it was typed: `/rename` ahead of a waiting `/clear` would name the session being
+/// left, and `/effort` ahead of a waiting prompt would change the level that prompt was typed
+/// under. Every line could, but a waiting `/sandbox` ([`only_moves_the_sandbox`]).
+pub(crate) fn held_back_by<'a>(
+    session: &'a Session,
+    at: usize,
+    line: &str,
+) -> Option<(Bound, &'a str)> {
+    let command = row_typed(line)?;
+    let changes = matches!(
+        command.mid_turn,
+        MidTurn::Changes | MidTurn::ChangesUnlessItAsks
+    );
+    session.queued_ahead(at).find(|(goes, waiting)| match goes {
+        Bound::CarriedOut => {
+            command_typed(waiting) == Some(command.name)
+                || (changes && !only_moves_the_sandbox(waiting))
+        }
+        Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn | Bound::Run => changes,
+    })
+}
+
+/// Whether a line that would be carried out mid-turn waits anyway, for what is queued ahead of it.
 pub(crate) fn waits_behind_the_queue(session: &Session, line: &str) -> bool {
-    let changes = row_typed(line).is_some_and(|command| {
-        matches!(command.mid_turn, MidTurn::Changes | MidTurn::RunsWhenNamed)
-    });
-    (changes && !session.queued.is_empty())
-        || session
-            .commands_waiting()
-            .any(|waiting| command_typed(waiting) == command_typed(line))
+    held_back_by(session, session.queued.len(), line).is_some()
+}
+
+/// A waiting line as the words that say a command waits behind it name it.
+///
+/// A command by the line that was typed, so a person can find it in the queue. A prompt and a shell
+/// line by what they are, since either may run to a paragraph and neither is the reason.
+pub(crate) fn named(goes: Bound, line: &str) -> String {
+    const ROOM: usize = 40;
+    match goes {
+        Bound::CarriedOut => crate::render::printable(&crate::render::head_of(line, ROOM)),
+        Bound::Run => t!(queued_a_shell_line).to_string(),
+        Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn => {
+            t!(queued_a_prompt).to_string()
+        }
+    }
+}
+
+/// What is said under the turn when a command typed while it runs is queued, so the line does not
+/// wait without a reason (CMD-8). Read before the line is taken off the box, and from the same
+/// facts [`runs_while_working`] and [`held_back_by`] decided it with.
+pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
+    let command = row_typed(line)?;
+    let word = command.name;
+    Some(if runs_while_working(line) {
+        let (goes, ahead) = held_back_by(session, session.queued.len(), line)?;
+        t!(
+            command_waits_behind,
+            command = word,
+            line = named(goes, ahead)
+        )
+        .to_string()
+    } else if command.mid_turn == MidTurn::ChangesUnlessItAsks {
+        t!(command_waits_to_ask, command = word).to_string()
+    } else {
+        t!(command_waits_for_the_turn, command = word).to_string()
+    })
 }

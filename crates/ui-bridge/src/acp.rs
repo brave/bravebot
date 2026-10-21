@@ -16,7 +16,7 @@ use crate::bridge::Bridge;
 use crate::protocol::{Event, Request};
 use bravebot_agent::diff::Change;
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -74,8 +74,9 @@ struct Shared {
     write: Writer,
     wake: Box<dyn Fn() + Send>,
     sessions: HashMap<String, Session>,
-    /// Sessions the bridge asked the trust question about before `session/new` had returned.
-    unasked: HashSet<String>,
+    /// Sessions the bridge asked the trust question about before `session/new` had returned, with
+    /// the record a yes is kept in where the question offered to keep it.
+    unasked: HashMap<String, Option<String>>,
     asked: HashMap<u64, Asked>,
     next: u64,
     queued: Vec<Queued>,
@@ -134,7 +135,7 @@ impl Acp {
             write,
             wake,
             sessions: HashMap::new(),
-            unasked: HashSet::new(),
+            unasked: HashMap::new(),
             asked: HashMap::new(),
             next: 0,
             queued: Vec::new(),
@@ -310,16 +311,40 @@ impl Acp {
             held.prompt = Some(id);
             held.cancelled = false;
             let directory = held.directory.clone();
-            shared.unasked.remove(&session).then_some(directory)
+            shared
+                .unasked
+                .remove(&session)
+                .map(|keeping| (directory, keeping))
         };
-        if let Some(directory) = trust {
+        if let Some((directory, keeping)) = trust {
             let mut shared = self.lock();
             let title = format!("Trust {}", plain(&directory));
+            // A yes is kept wherever the bridge offered to keep it, so the question says so and
+            // names the record, since nobody can endorse a record they were not shown.
+            let (allow, text) = match keeping {
+                Some(record) => (
+                    "Trust and remember",
+                    format!(
+                        "A yes is kept: later sessions started in this directory, or below it if it is a git root, are not asked. It is written to {}. Delete the lines naming this directory from that file to be asked again.",
+                        plain(&record)
+                    ),
+                ),
+                None => (
+                    "Trust for this session",
+                    "This answer cannot be kept here, so a session started in this directory later asks again.".to_string(),
+                ),
+            };
             shared.ask(
                 &session.clone(),
                 Asked::Trust { session, turn },
-                json!({ "toolCallId": "trust", "title": title, "kind": "other", "status": "pending" }),
-                options(false, "Trust this directory", "Do not trust"),
+                json!({
+                    "toolCallId": "trust",
+                    "title": title,
+                    "kind": "other",
+                    "status": "pending",
+                    "content": [{ "type": "content", "content": { "type": "text", "text": text } }],
+                }),
+                options(false, allow, "Do not trust"),
             );
             return;
         }
@@ -470,17 +495,35 @@ fn plain(text: &str) -> String {
     without_loading(&pictured(text))
 }
 
-/// The tags that make a renderer open a connection to draw them.
-const LOADING_TAGS: [&str; 14] = [
+/// Bare tags an editor still gets, because they carry no attribute to load anything from but
+/// whose content or kind does: a `<style>` body can `@import` an address and a `<script>` runs.
+const BARE_BUT_LOADING: [&str; 15] = [
     "img", "image", "picture", "source", "video", "audio", "track", "iframe", "frame", "embed",
-    "object", "link", "script", "svg",
+    "object", "link", "script", "svg", "style",
 ];
 
-/// `text` with no markdown image and no HTML tag that loads a resource. An editor draws an image
-/// the moment a message arrives, with no click, so `![](https://host/?q=<what the model read>)`
-/// would carry out whatever the model put in the address. Each is cut by a space, which is visible
-/// and leaves the address in the message for a reader to see. A link is left alone, since drawing
-/// one loads nothing.
+/// Whether `rest`, the text after a `<`, is a tag with no attribute at all, such as `<b>`,
+/// `</code>` or the `<String>` in `Vec<String>`. With nothing between the name and the `>` there
+/// is no `src`, `href`, `background` or `style` for an editor to fetch from.
+fn is_bare_tag(rest: &str) -> bool {
+    let rest = rest.strip_prefix('/').unwrap_or(rest);
+    let Some((name, _)) = rest.split_once('>') else {
+        return false;
+    };
+    name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !BARE_BUT_LOADING
+            .iter()
+            .any(|tag| tag.eq_ignore_ascii_case(name))
+}
+
+/// `text` with no markdown image and no HTML tag that could load a resource. An editor draws an
+/// image the moment a message arrives, with no click, so `![](https://host/?q=<what the model
+/// read>)` would carry out whatever the model put in the address. The same goes for a tag with an
+/// attribute that names an address (`<input type=image src=..>`, `<div style="background:url(..)">`,
+/// `<table background=..>`), so every `<` that starts a tag, a closing tag, a comment or an
+/// instruction is cut by a space unless the tag is bare. A cut is visible and leaves the address in
+/// the message for a reader to see. A link is left alone, since drawing one loads nothing.
 fn without_loading(text: &str) -> String {
     let text = text.replace("![", "! [");
     let mut out = String::with_capacity(text.len());
@@ -488,14 +531,8 @@ fn without_loading(text: &str) -> String {
     while let Some(at) = rest.find('<') {
         out.push_str(&rest[..=at]);
         rest = &rest[at + 1..];
-        let name = rest
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .next()
-            .unwrap_or_default();
-        if LOADING_TAGS
-            .iter()
-            .any(|tag| tag.eq_ignore_ascii_case(name))
-        {
+        let starts_tag = rest.starts_with(|c: char| c.is_ascii_alphabetic() || "/!?".contains(c));
+        if starts_tag && !is_bare_tag(rest) {
             out.push(' ');
         }
     }
@@ -557,7 +594,7 @@ fn turn_params(session: &str, blocks: Option<&Value>) -> Result<Value, String> {
                     .ok_or("a resource link holds a string `uri`")?;
                 let path = path_of(uri)
                     .ok_or_else(|| format!("only a file: link can be attached, not {uri}"))?;
-                if bravebot_agent::workspace::media_for(&path).is_some() {
+                if bravebot_filetype::by_name::media_for(&path).is_some() {
                     attachments.push(path);
                 } else {
                     dropped.push(path);
@@ -635,7 +672,8 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
     let data = &event.data;
     match event.name {
         "trust.request" => {
-            shared.unasked.insert(session);
+            let keeping = data["keeping"].as_str().map(str::to_string);
+            shared.unasked.insert(session, keeping);
         }
         "narration" => {
             if let Some(text) = data["text"].as_str() {
@@ -875,6 +913,12 @@ fn text_of<'a>(data: &'a Value, key: &str) -> &'a str {
     data[key].as_str().unwrap_or_default()
 }
 
+/// How many characters of the text drew as nothing before the agent wrote them out, as the bridge
+/// carried it. Absent from a request an older agent sent, which drew none.
+fn hidden_of(data: &Value) -> usize {
+    data["hidden"].as_u64().map_or(0, |n| n as usize)
+}
+
 /// What a check made of the content, read from the verdict word the bridge sent. The checker's own
 /// sentence is not read, for the reason the terminal leaves it out.
 fn check_of(data: &Value) -> bravebot_approval::Check {
@@ -940,6 +984,7 @@ fn vet_text(data: &Value) -> String {
         expects: text_of(data, "expects"),
         check: check_of(data),
         content: text_of(data, "content"),
+        hidden: hidden_of(data),
         picture: picture.map(|(path, pdf)| bravebot_approval::Picture { path, pdf }),
     })
     .join("\n")
@@ -968,7 +1013,6 @@ fn tools_text(data: &Value) -> String {
         tools: &tools,
         refused: data["refused"].as_u64().map_or(0, |n| n as usize),
         withheld: data["withheld"].as_u64().map_or(0, |n| n as usize),
-        changed: data["changed"].as_bool() == Some(true),
         check: check_of(data),
     })
     .join("\n")
@@ -1004,7 +1048,7 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             format!(
                 "{} {}",
                 data["intent"].as_str().unwrap_or("write"),
-                text("path")
+                bravebot_agent::confirm::shown_name(text("path"))
             ),
             "edit",
             write_text(data),
@@ -1025,14 +1069,27 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
         "output" => (
             format!("read the output of {}", text("command")),
             "read",
-            bravebot_approval::output_lines(text("summary"), check_of(data), text("output"))
-                .join("\n"),
+            bravebot_approval::output_lines(
+                text("summary"),
+                check_of(data),
+                text("output"),
+                hidden_of(data),
+            )
+            .join("\n"),
         ),
         "vouch" => (
-            format!("trust {}", text("path")),
+            format!(
+                "trust {}",
+                bravebot_agent::confirm::shown_name(text("path"))
+            ),
             "read",
-            bravebot_approval::vouch_lines(text("path"), check_of(data), text("preview"))
-                .join("\n"),
+            bravebot_approval::vouch_lines(
+                text("path"),
+                text("rule"),
+                check_of(data),
+                text("preview"),
+            )
+            .join("\n"),
         ),
         "vet" => (format!("read {}", text("origin")), "read", vet_text(data)),
         "manifest" => (
@@ -1041,7 +1098,10 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             bravebot_approval::manifest_lines(text("task"), &strings(&data["steps"])).join("\n"),
         ),
         "exposure" => (
-            format!("read {}, which holds a credential", text("path")),
+            format!(
+                "read {}, which holds a credential",
+                bravebot_agent::confirm::shown_name(text("path"))
+            ),
             "read",
             bravebot_approval::exposure_lines(text("path"), &strings(&data["credentials"]))
                 .join("\n"),
@@ -1166,6 +1226,7 @@ mod tests {
                 lines: 1,
                 label: "untrusted".to_string(),
             }),
+            protected: false,
             credentials: vec!["API_KEY on line 31".to_string()],
             may_always: false,
             record: None,
@@ -1192,6 +1253,54 @@ mod tests {
         let data = crate::wire::write_request(7, &request);
         assert_eq!(write_text(&data), expected);
         assert!(expected.contains("\u{241b}[2J") && !expected.contains('\u{1b}'));
+    }
+
+    /// PROMPT-1: the editor reads a file the line writes and a directory it is confined to as the
+    /// terminal draws them, so a name that would draw as nothing, or as another name, is quoted
+    /// and spelled and `note.md ` is not read as `note.md`.
+    #[test]
+    fn a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another() {
+        use bravebot_agent::confirm::RunRequest;
+        use bravebot_core::command::{Pipeline, Stage};
+        let drawn = |written: &str, directory: &str| {
+            let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+            let mut run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w");
+            run.plan.writes = vec![written.into()];
+            run.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                directories: vec![directory.into()],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: Vec::new(),
+                writes_git_directories: false,
+            });
+            run_text(&crate::wire::run_request(1, &run)).expect("text")
+        };
+        let drawn_lines = |written: &str, directory: &str| -> Vec<String> {
+            drawn(written, directory)
+                .lines()
+                .map(str::to_string)
+                .collect()
+        };
+        let plain = drawn_lines("note.md", "/work");
+        assert!(plain.contains(&"  note.md".to_string()), "{plain:?}");
+        assert!(plain.contains(&"  /work".to_string()), "{plain:?}");
+        for (name, spelled) in [
+            (" ", "\"\u{2423}\""),
+            ("note.md ", "\"note.md\u{2423}\""),
+            ("a\u{202e}b", "\"a\\u{202e}b\""),
+            ("a\u{200b}b", "\"a\\u{200b}b\""),
+        ] {
+            for lines in [drawn_lines(name, "/work"), drawn_lines("note.md", name)] {
+                assert!(
+                    lines.contains(&format!("  {spelled}")),
+                    "{name:?}: {lines:?}"
+                );
+                assert!(!lines.contains(&format!("  {name}")), "{name:?}: {lines:?}");
+            }
+        }
     }
 
     /// Run, fetch, server, call and move read to the editor as `bravebot_approval` words them from
@@ -1428,7 +1537,7 @@ mod tests {
             (
                 "mcp-tools",
                 json!({"alias": "a", "tools": [{"name": "a:t", "arguments": ["q: string"],
-                    "description": "does it"}], "refused": 1, "changed": true,
+                    "description": "does it"}], "refused": 1,
                     "vetting": vetting}),
             ),
             (
@@ -1465,6 +1574,76 @@ mod tests {
             }
         }
         assert!(describe("something-new", &json!({"summary": "do it"})).is_none());
+    }
+
+    /// PROMPT-1: an editor is shown a question's title and body as words. The title names the file
+    /// for a write, a vouch and a credential read, and a name that would draw as nothing, or as
+    /// another name, is spelled in it, as it is in the terminal.
+    #[test]
+    fn the_title_of_a_question_about_a_file_spells_a_name_that_would_draw_as_another() {
+        use bravebot_agent::confirm::{ExposureRequest, Intent, VouchRequest, WriteRequest};
+        let write = |path: &str| {
+            crate::wire::write_request(
+                1,
+                &WriteRequest {
+                    written_since_checkout: false,
+                    path: path.into(),
+                    contents: "a\n".into(),
+                    existing: None,
+                    diff: bravebot_agent::diff::Diff::compute("", "a\n"),
+                    intent: Intent::Create,
+                    untrusted: false,
+                    remark: None,
+                    protected: false,
+                    credentials: Vec::new(),
+                    may_always: false,
+                    record: None,
+                },
+            )
+        };
+        let vouch = |path: &str| {
+            crate::wire::vouch_request(
+                2,
+                &VouchRequest {
+                    path: path.into(),
+                    rule: format!("/work/{path}"),
+                    preview: "a".into(),
+                    label: "(U,priv)".into(),
+                    truncated: false,
+                    verdict: bravebot_core::vetting::Verdict::Safe,
+                    reason: None,
+                    reason_label: None,
+                },
+            )
+        };
+        let exposure = |path: &str| {
+            crate::wire::exposure_request(
+                3,
+                &ExposureRequest {
+                    path: path.into(),
+                    credentials: vec!["an API key at line 1".into()],
+                },
+            )
+        };
+        let titled = |stem: &str, data: Value| shown(stem, data).0;
+        assert_eq!(titled("confirm", write("note.md")), "create note.md");
+        assert_eq!(
+            titled("confirm", write("note.md ")),
+            "create \"note.md\u{2423}\""
+        );
+        assert_eq!(titled("vouch", vouch("note.md")), "trust note.md");
+        assert_eq!(
+            titled("vouch", vouch("note.md ")),
+            "trust \"note.md\u{2423}\""
+        );
+        assert_eq!(
+            titled("exposure", exposure("note.md")),
+            "read note.md, which holds a credential"
+        );
+        assert_eq!(
+            titled("exposure", exposure("note.md ")),
+            "read \"note.md\u{2423}\", which holds a credential"
+        );
     }
 
     #[test]
@@ -1512,9 +1691,12 @@ mod tests {
             command: "tail -n 100 build.log".to_string(),
             output: output.clone(),
             lines: 100,
+            hidden: 0,
             reference: "ref:1".to_string(),
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
+            label: String::new(),
+            reason_label: None,
         };
 
         let (_, _, text) = shown("output", crate::wire::output_request(4, &request));
@@ -1536,9 +1718,12 @@ mod tests {
             expects: "a build log".to_string(),
             content: content.clone(),
             lines: 100,
+            hidden: 0,
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
             picture: None,
+            label: None,
+            reason_label: None,
         };
 
         let (_, _, text) = shown("vet", crate::wire::vet_request(5, &request));
@@ -1548,6 +1733,58 @@ mod tests {
             content.lines().collect::<Vec<_>>(),
             "{text}"
         );
+    }
+
+    /// PROMPT-1: an editor is told how many characters of the text it is shown drew as nothing,
+    /// above the text, and a text with none is not told of any. The agent wrote each one out as a
+    /// token, so what the editor draws is the same text the terminal draws.
+    #[test]
+    fn an_editor_is_told_how_many_characters_of_a_text_draw_as_nothing() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A} text";
+        let said = bravebot_i18n::t!(hidden_characters, count = 2usize).to_string();
+        for hidden in [2, 0] {
+            let output = bravebot_agent::confirm::OutputRequest {
+                command: "cat notes".to_string(),
+                output: text.to_string(),
+                lines: 1,
+                hidden,
+                reference: "ref:1".to_string(),
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+                label: String::new(),
+                reason_label: None,
+            };
+            let vet = bravebot_agent::confirm::VetRequest {
+                origin: "notes".to_string(),
+                expects: "notes".to_string(),
+                content: text.to_string(),
+                lines: 1,
+                hidden,
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+                picture: None,
+                label: None,
+                reason_label: None,
+            };
+            for (stem, wire) in [
+                ("output", crate::wire::output_request(4, &output)),
+                ("vet", crate::wire::vet_request(5, &vet)),
+            ] {
+                let (_, _, shown) = shown(stem, wire);
+                let rows: Vec<&str> = shown.lines().collect();
+                let saying = rows.iter().position(|row| *row == said);
+                let margin = format!("{} {text}", bravebot_approval::QUARANTINE_BAR);
+                let text_at = rows.iter().position(|row| *row == margin);
+                assert!(text_at.is_some(), "`{stem}`: {shown}");
+                match hidden {
+                    0 => assert!(saying.is_none(), "`{stem}`: {shown}"),
+                    _ => assert!(
+                        saying.is_some() && saying < text_at,
+                        "`{stem}` did not say {hidden} characters drew as nothing above the text: {shown}"
+                    ),
+                }
+            }
+        }
     }
 
     /// A hundred lines with an instruction on the seventieth, past the head a prompt might show.
@@ -1592,7 +1829,7 @@ mod tests {
             write: Box::new(move |message| sink.lock().unwrap().push(message)),
             wake: Box::new(|| {}),
             sessions: HashMap::new(),
-            unasked: HashSet::new(),
+            unasked: HashMap::new(),
             asked: HashMap::new(),
             next: 0,
             queued: Vec::new(),
@@ -1622,7 +1859,7 @@ mod tests {
             write: Box::new(move |message| sink.lock().unwrap().push(message)),
             wake: Box::new(|| {}),
             sessions: HashMap::new(),
-            unasked: HashSet::new(),
+            unasked: HashMap::new(),
             asked: HashMap::new(),
             next: 0,
             queued: Vec::new(),
@@ -1650,6 +1887,22 @@ mod tests {
         assert_eq!(
             plain("<IMG src=x><picture><SvG/><iframe>"),
             "< IMG src=x>< picture>< SvG/>< iframe>"
+        );
+        assert_eq!(
+            plain(concat!(
+                "<input type=\"image\" src=\"https://h.test/?q=1\">",
+                "<div style=\"background:url(https://h.test/?q=2)\">x</div>",
+                "<style>@import url(https://h.test/?q=3);</style>",
+                "<table background=\"https://h.test/?q=4\"><td background=h>",
+                "<!-- c --><?x?>",
+            )),
+            concat!(
+                "< input type=\"image\" src=\"https://h.test/?q=1\">",
+                "< div style=\"background:url(https://h.test/?q=2)\">x</div>",
+                "< style>@import url(https://h.test/?q=3);< /style>",
+                "< table background=\"https://h.test/?q=4\">< td background=h>",
+                "< !-- c -->< ?x?>",
+            )
         );
         assert_eq!(
             plain("[a link](https://h.test/) Vec<String> <b>bold</b> 1 < 2"),

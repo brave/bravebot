@@ -15,8 +15,11 @@ use gix_object::bstr::ByteSlice;
 use gix_object::tree::EntryKind;
 use gix_object::{Kind, TreeRef};
 
+use super::config::parse_config;
+use super::out::join;
 use super::status::{EXTENDED_SKIP_WORKTREE, FLAG_EXTENDED, Stat, boolean};
-use super::{Declined, Repository, TREE_DEPTH, join, parse_config, read_if_present};
+use super::survey::read_if_present;
+use super::{Declined, Repository, TREE_DEPTH};
 
 /// How much of a tree one checkout writes.
 #[derive(Debug, Clone, Copy)]

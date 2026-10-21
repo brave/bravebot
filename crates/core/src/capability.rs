@@ -34,8 +34,8 @@ impl fmt::Display for ServerAlias {
     }
 }
 
-/// A named capability. Holding the corresponding [`CapabilityToken`] is what permits
-/// an operation; the enum itself is just an identifier.
+/// A named capability. The enum is an identifier; whether one is granted is answered by
+/// [`CapabilitySet::contains`], which the policy layer's capability gate asks.
 ///
 /// Not `Copy`, because one variant names the server it is about.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -90,10 +90,9 @@ impl Capability {
     /// accounted for is the exhaustive match a test walking this makes against it, which stops
     /// compiling until somebody says what the new capability observes.
     ///
-    /// The alias in the MCP variant stands for every server. What a capability observes,
-    /// whether it is an effect, and whether it needs the network are properties of the
-    /// protocol, and those are the questions a walk over this list asks. Which server a
-    /// grant is about is [`CapabilitySet`]'s question rather than this one.
+    /// The alias in the MCP variant stands for every server. What a capability observes is a
+    /// property of the protocol, and that is the question a walk over this list asks. Which
+    /// server a grant is about is [`CapabilitySet`]'s question rather than this one.
     pub fn all() -> [Self; 8] {
         [
             Self::FileRead,
@@ -130,22 +129,6 @@ impl Capability {
         }
     }
 
-    /// Whether this capability changes the world, as opposed to observing it.
-    ///
-    /// Effects are what the action gates guard; observations only need labelling.
-    pub fn is_effect(&self) -> bool {
-        matches!(
-            self,
-            Self::FileWrite | Self::GitWrite | Self::ShellExec | Self::McpCall(_)
-        )
-    }
-
-    /// Whether this capability requires network egress, and so must pass through the
-    /// single egress chokepoint.
-    pub fn needs_network(&self) -> bool {
-        matches!(self, Self::WebFetch | Self::McpCall(_))
-    }
-
     /// The class of effect, which is what this capability *is* rather than what one
     /// instance of it is called. An MCP call's server is not in it: see [`fmt::Display`],
     /// which is what names a capability to a person and to the trail.
@@ -173,25 +156,6 @@ impl fmt::Display for Capability {
             Self::McpCall(alias) => write!(f, "mcp_call:{alias}"),
             other => f.write_str(other.as_str()),
         }
-    }
-}
-
-/// Proof that a capability was granted.
-///
-/// Cannot be constructed outside this crate, so downstream code cannot forge a grant
-/// It must receive one from a [`CapabilitySet`] built by the policy layer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CapabilityToken {
-    capability: Capability,
-}
-
-impl CapabilityToken {
-    pub(crate) fn mint(capability: Capability) -> Self {
-        Self { capability }
-    }
-
-    pub fn capability(&self) -> &Capability {
-        &self.capability
     }
 }
 
@@ -236,15 +200,6 @@ impl CapabilitySet {
         // one says nothing about.
         self.granted.retain(|granted| granted != &withdrawn);
         self.granted.len() != before
-    }
-
-    /// Hand out a token if this capability was granted.
-    ///
-    /// The token is the only way to satisfy an operation that requires a capability,
-    /// so a caller cannot proceed by asserting it has permission.
-    pub fn token_for(&self, capability: &Capability) -> Option<CapabilityToken> {
-        self.contains(capability)
-            .then(|| CapabilityToken::mint(capability.clone()))
     }
 }
 
@@ -305,10 +260,10 @@ mod tests {
     #[test]
     fn a_language_server_grant_is_separate_from_a_file_read() {
         let reads_only = CapabilitySet::from_iter([Capability::FileRead]);
-        assert!(reads_only.token_for(&Capability::LanguageServer).is_none());
+        assert!(!reads_only.contains(&Capability::LanguageServer));
 
         let asks_only = CapabilitySet::from_iter([Capability::LanguageServer]);
-        assert!(asks_only.token_for(&Capability::FileRead).is_none());
+        assert!(!asks_only.contains(&Capability::FileRead));
     }
 
     #[test]
@@ -330,34 +285,10 @@ mod tests {
     }
 
     #[test]
-    fn effects_and_observations_are_distinguished() {
-        assert!(Capability::FileWrite.is_effect());
-        assert!(Capability::ShellExec.is_effect());
-        assert!(!Capability::FileRead.is_effect());
-        assert!(!Capability::WebFetch.is_effect());
-    }
-
-    #[test]
-    fn network_capabilities_are_identified() {
-        assert!(Capability::WebFetch.needs_network());
-        assert!(Capability::McpCall(ServerAlias::new("weather")).needs_network());
-        assert!(!Capability::FileRead.needs_network());
-        assert!(!Capability::ShellExec.needs_network());
-    }
-
-    #[test]
     fn an_empty_set_grants_nothing() {
         let set = CapabilitySet::none();
         assert!(set.is_empty());
-        assert!(set.token_for(&Capability::FileRead).is_none());
-    }
-
-    #[test]
-    fn a_token_is_issued_only_for_granted_capabilities() {
-        let set = CapabilitySet::from_iter([Capability::FileRead]);
-        let token = set.token_for(&Capability::FileRead).expect("granted");
-        assert_eq!(token.capability(), &Capability::FileRead);
-        assert!(set.token_for(&Capability::FileWrite).is_none());
+        assert!(!set.contains(&Capability::FileRead));
     }
 
     /// SERVERS-9: a grant names one server, so it answers about that server and no other.
@@ -370,8 +301,7 @@ mod tests {
         let set = CapabilitySet::from_iter([Capability::McpCall(weather.clone())]);
 
         assert!(set.contains(&Capability::McpCall(weather)));
-        assert!(!set.contains(&Capability::McpCall(payments.clone())));
-        assert!(set.token_for(&Capability::McpCall(payments)).is_none());
+        assert!(!set.contains(&Capability::McpCall(payments)));
     }
 
     /// SERVERS-9: withdrawing a grant takes the server out of reach at once, and takes

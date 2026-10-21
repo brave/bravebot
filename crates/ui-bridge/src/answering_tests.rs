@@ -75,6 +75,7 @@ fn a_turn(answerers: &Answerers) -> Turn {
             pending,
             target: 1,
             finished: Arc::new(AtomicBool::new(false)),
+            interjections: None,
         },
         emitter,
         said,
