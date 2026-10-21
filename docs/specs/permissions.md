@@ -669,6 +669,7 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_ui_bridge::rules::a_padded_unreadable_rule_is_not_listed_as_in_force`
 `verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
 `verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`
+`verified-by: bravebot_cli::running::doctor_names_a_padded_path_rule_that_an_earlier_version_read_as_the_file_without_the_padding`
 `verified-by: bravebot_agent::permissions::a_checkouts_unreadable_allow_entry_is_named_to_a_run_nobody_is_watching`
 `verified-by: bravebot_config::settings::an_object_entry_with_no_rule_is_carried_out_to_be_reported`
 
