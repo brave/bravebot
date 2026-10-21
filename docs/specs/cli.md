@@ -199,6 +199,7 @@ over one set of failures is one of them going out of date.
 `verified-by: bravebot_cli::running::a_write_nobody_could_approve_exits_on_the_refused_status_and_says_so`
 `verified-by: bravebot_cli::running::a_manifest_plan_nobody_could_approve_exits_on_the_refused_status`
 `verified-by: bravebot_cli::main::a_write_and_a_fetch_nobody_could_be_asked_about_count_for_the_status_and_are_listed_once`
+`verified-by: bravebot_cli::main::an_mcp_call_nobody_could_be_asked_about_counts_for_the_status_and_is_listed_once`
 
 <a id="CLI-7"></a>
 ### CLI-7: `doctor` reports configuration and confinement without changing anything
@@ -560,9 +561,9 @@ it wrote one (CLI-25), how many rounds it took, what it
 cost in tokens, every tool it called with what it acted on and whether that call was refused, and every refusal with the principle it upholds. A tool is named as the driver
 matched it rather than by the word a person is shown. What a call acted on is the name it was given
 rather than a resolved path, since the driver carries that argument without reading it. A refusal
-is listed once: a write or a fetch nobody could approve is the entry the policy recorded under
-`approval` ([TRACE-1](trace.md#TRACE-1)), and the confirmer's own record of it is kept for the
-status of CLI-6 and is not listed again.
+is listed once: a write, a fetch or a call to a server's tool nobody could approve is the entry the
+policy recorded under `approval` ([TRACE-1](trace.md#TRACE-1)), and the confirmer's own record of
+it is kept for the status of CLI-6 and is not listed again.
 
 A failed run retains measured cumulative token usage from completed work. The latest report
 replaces earlier reports; a successful outcome is charged once. Required numeric token fields
@@ -608,6 +609,7 @@ what may change, every field is either frozen by accident or broken without warn
 `verified-by: bravebot_cli::json::a_recorded_run_names_its_session`
 `verified-by: bravebot_cli::running::a_write_nobody_could_approve_exits_on_the_refused_status_and_says_so`
 `verified-by: bravebot_cli::main::a_write_and_a_fetch_nobody_could_be_asked_about_count_for_the_status_and_are_listed_once`
+`verified-by: bravebot_cli::main::an_mcp_call_nobody_could_be_asked_about_counts_for_the_status_and_is_listed_once`
 
 <a id="CLI-13"></a>
 ### CLI-13: `--settings` names a file that outranks every layer found

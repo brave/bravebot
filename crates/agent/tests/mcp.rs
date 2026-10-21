@@ -23,7 +23,7 @@ use bravebot_config::mcp::{
 use bravebot_config::{Config, Managed};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
-use bravebot_core::event::RecordingSink;
+use bravebot_core::event::{Event, RecordingSink};
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_core::trust::TrustStore;
 use bravebot_mcp::HttpServer;
@@ -1050,6 +1050,167 @@ fn a_refused_call_reaches_no_server() {
         sent[1].contains("did not approve calling weather:get_forecast"),
         "the planner was not told the call was refused: {}",
         sent[1]
+    );
+}
+
+/// What a call put to the person left in the trail under `gate`, in the order it was written, for
+/// the refusals only.
+fn refused_under(sink: &RecordingSink, gate: &str) -> Vec<String> {
+    sink.blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: recorded,
+                reason,
+                ..
+            } if *recorded == gate => Some(reason.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// How one turn that calls the weather tool went, under the rules `permissions` and with the
+/// person answering `answer` where they are asked.
+struct CallTurn {
+    trail: RecordingSink,
+    clean: bool,
+    /// How many times the call was put to the person.
+    asked: usize,
+    /// How many requests the server was sent for the call itself.
+    reached: usize,
+}
+
+fn a_turn_calling_the_weather(
+    name: &str,
+    answer: CallDecision,
+    permissions: bravebot_core::permissions::Permissions,
+) -> CallTurn {
+    let scratch = Scratch::new(name);
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("fine"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, answer);
+    let workspace = Workspace::new(scratch.project()).expect("workspace");
+    let mut trail = RecordingSink::new();
+    let outcome = turns::run(
+        &config_for(&endpoint),
+        &Egress::new(),
+        &workspace,
+        &Task::new("what is the forecast")
+            .with_mcp(Some(session))
+            .with_permissions(permissions),
+        &mut confirmer,
+        &mut trail,
+    )
+    .expect("the turn runs");
+    CallTurn {
+        trail,
+        clean: outcome.clean,
+        asked: confirmer.calls.len(),
+        reached: methods(&server)
+            .iter()
+            .filter(|method| *method == "tools/call")
+            .count(),
+    }
+}
+
+/// TRACE-1: a call to a server's tool that is put to the person and not approved is a refusal in
+/// the trail, under `approval` and naming the tool, and the turn does not end as clean. A no and a
+/// no with words beside it reach the policy as the same answer, so each leaves the same entry.
+///
+/// Without the record the trail holds the question and nothing about its answer, which reads the
+/// same as a call that went ahead, and the turn is clean though the call was not made. The
+/// controls are the same call approved, and approved with the answer that stops asking, which
+/// record no refusal, so an entry written for every question put would fail them.
+#[test]
+fn a_call_the_person_does_not_approve_is_recorded_as_a_refusal() {
+    let sentence = "weather:get_forecast: the call was not approved, so the server was not called";
+    for (case, answer) in [
+        ("a no", CallDecision::reject()),
+        (
+            "a no with words beside it",
+            CallDecision::reject().with_note("ask for Paris, France"),
+        ),
+    ] {
+        let turn = a_turn_calling_the_weather(
+            "call-not-approved",
+            answer,
+            bravebot_core::permissions::Permissions::new(),
+        );
+        assert_eq!(turn.asked, 1, "{case}: the call was not put to the person");
+        assert_eq!(turn.reached, 0, "{case}: a refused call reached the server");
+        assert_eq!(
+            refused_under(&turn.trail, "approval"),
+            [sentence],
+            "{case}: the refusal was not recorded once, under the tool"
+        );
+        assert!(
+            !turn.clean,
+            "{case}: a turn whose call was refused read as clean"
+        );
+    }
+
+    for (case, answer) in [
+        ("approved", CallDecision::approve()),
+        (
+            "approved, and asked no more",
+            CallDecision::approve_and_stand(),
+        ),
+    ] {
+        let turn = a_turn_calling_the_weather(
+            "call-approved",
+            answer,
+            bravebot_core::permissions::Permissions::new(),
+        );
+        assert_eq!(turn.asked, 1, "{case}: the call was not put to the person");
+        assert_eq!(
+            turn.reached, 1,
+            "{case}: an approved call did not reach the server"
+        );
+        assert_eq!(
+            refused_under(&turn.trail, "approval"),
+            Vec::<String>::new(),
+            "{case}: an approved call was recorded as refused"
+        );
+        assert!(
+            turn.clean,
+            "{case}: a turn whose call was approved read as unclean"
+        );
+    }
+}
+
+/// TRACE-1: a call a `deny` rule refuses is a refusal under `mcp_call` and was never put to the
+/// person, so the answer to a question is not recorded for it. The regression it rejects is a
+/// record written wherever the call comes back to the planner as refused, which names every
+/// refusal as one the person made.
+#[test]
+fn a_call_a_rule_refuses_is_not_recorded_as_one_the_person_did_not_approve() {
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Mcp(weather:get_forecast)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "the rule in this test did not parse");
+    let turn = a_turn_calling_the_weather("call-denied", CallDecision::approve(), permissions);
+    assert_eq!(turn.asked, 0, "a rule's call was put to the person");
+    assert_eq!(turn.reached, 0, "a denied call reached the server");
+    assert_eq!(
+        refused_under(&turn.trail, "approval"),
+        Vec::<String>::new(),
+        "a call a rule refused was recorded as one the person did not approve"
+    );
+    assert_eq!(
+        refused_under(&turn.trail, "mcp_call").len(),
+        1,
+        "the rule's refusal was not recorded once"
+    );
+    assert!(
+        !turn.clean,
+        "a turn whose call a rule refused read as clean"
     );
 }
 

@@ -161,6 +161,15 @@ BLOCK   approval: write_file: the write was not approved, so nothing was written
 BLOCK   approval: fetch_url: the fetch was not approved, so nothing was fetched
 ```
 
+A call to an MCP server's tool that was put to you and not approved gets the same line, naming the
+call as the server's alias and the tool's name. Answering no, pressing Ctrl-C, and a question nobody
+could be asked leave it, with or without words typed beside the answer. A call a `deny` rule refused
+was never put to you and has its own `mcp_call` line.
+
+```
+BLOCK   approval: weather:get_forecast: the call was not approved, so the server was not called
+```
+
 ## The hosts a run's programs asked for are recorded
 
 When the sandbox holds a run to [a list of hosts](../customize/configuration.md#sandboxnetwork), the

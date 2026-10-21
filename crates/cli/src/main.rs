@@ -3587,6 +3587,33 @@ mod tests {
         assert_eq!(listed, ["run", "manifest_plan"]);
     }
 
+    /// CLI-6, CLI-12, TRACE-1: a call to a server's tool nobody could be asked about ends the run on
+    /// the refused status and is listed once. The policy records it in the trail, so the confirmer
+    /// keeps its own record for the status alone, for the reason a write's is kept: a delegate's
+    /// policy holds its refusals apart from the turn's, and this confirmer is shared with it. The
+    /// regressions it rejects are a call that is not kept, which a delegate's unapproved call needs
+    /// to end the run on the refused status, and one listed again beside the trail's entry.
+    #[test]
+    fn an_mcp_call_nobody_could_be_asked_about_counts_for_the_status_and_is_listed_once() {
+        let mut shown = Vec::new();
+        let mut unattended = OneShot::new(&b"y\n"[..], &mut shown, false);
+        let answer = unattended.confirm_mcp_call(&bravebot_agent::confirm::McpCallRequest {
+            alias: "weather".to_string(),
+            tool: "get_forecast".to_string(),
+            arguments: vec![("city".to_string(), "\"Paris\"".to_string())],
+            description: None,
+            may_stand: true,
+        });
+        assert_eq!(answer.decision, Decision::Reject);
+
+        let gates: Vec<_> = unattended.declined().iter().map(|d| d.gate).collect();
+        assert_eq!(gates, ["mcp_call"]);
+        assert!(
+            with_declined(Vec::new(), unattended.declined()).is_empty(),
+            "a call the trail holds was listed again"
+        );
+    }
+
     /// A pipe or a redirected stderr is nobody, and then a plan is refused like every other
     /// question. The answer is not read either: bytes arriving on a pipe are whatever fed it rather
     /// than somebody agreeing, and nothing was written for them to be agreeing to.

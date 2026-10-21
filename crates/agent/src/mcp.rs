@@ -1103,6 +1103,7 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
             decision, stand, ..
         } = answer;
         if decision == Decision::Reject {
+            policy.refuse_unapproved_call(alias, tool);
             return Called::Problem(format!(
                 "refused: the user did not approve calling {name}. Do not retry the same \
                  call{}",
