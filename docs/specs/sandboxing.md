@@ -2245,6 +2245,12 @@ lines of the person's `~/.ssh/config` ([SANDBOX-16](#SANDBOX-16)). In particular
 - A stage that starts with an option (`sh -c ...`, `git -C dir push`) has no operation to key on,
   so `/reach` refuses the line, and a grant for a command given no arguments covers it only while
   it is given none. Otherwise a grant made for one script would follow every script.
+- A remembered scope for a program the table names is attached only to a stage whose whole argv
+  the table gives that scope ([SANDBOX-16](#SANDBOX-16)), so `git push --receive-pack=<file>
+  origin`, `git pull -s <name>`, `kubectl get pods --kubeconfig=<file>` and `docker ps --config=<dir>`
+  carry neither the scope's rows nor the egress it keeps, whatever grant was remembered for the
+  program and its operation word. A scope for a program the table does not name
+  (`/reach aws -- make check`) is keyed on the shape alone, since the table reads no argv for it.
 - A grant is for the workspace root it was typed in, and the record keeps that root with the
   identity of the directory there (its creation time and inode, as the kept answer of
   [TRUST-23](trust-map.md#TRUST-23) does). It is read only where the session's workspace root is
@@ -2282,6 +2288,7 @@ scope the planner asked a line for ([SANDBOX-27](#SANDBOX-27)); none remembers a
 
 `verified-by: bravebot_agent::reach::a_grant_covers_the_file_and_the_operation_it_was_made_for`
 `verified-by: bravebot_agent::reach::an_assignment_in_front_of_a_step_removes_every_grant`
+`verified-by: bravebot_agent::reach::a_grant_for_a_program_the_table_names_covers_only_an_argv_the_table_gives_the_scope`
 `verified-by: bravebot_agent::reach::a_grant_is_read_back_by_the_sessions_it_was_made_for`
 `verified-by: bravebot_agent::reach::a_revoked_grant_is_gone_until_it_is_allowed_again`
 `verified-by: bravebot_agent::reach::a_line_that_is_not_a_grant_grants_nothing`
@@ -2304,6 +2311,7 @@ scope the planner asked a line for ([SANDBOX-27](#SANDBOX-27)); none remembers a
 `verified-by: bravebot_agent::reach::a_row_bound_to_another_directory_at_the_same_path_is_dropped`
 `verified-by: bravebot_agent::reach::remove_reaches_only_the_rows_of_this_checkout`
 `verified-by: bravebot_agent::confine::a_remembered_scope_reaches_the_command_it_was_made_for_and_no_other`
+`verified-by: bravebot_agent::confine::a_remembered_scope_is_not_attached_to_an_argv_the_table_refuses`
 `verified-by: bravebot_agent::confine::a_remembered_directory_is_read_and_written_only_where_the_grant_says`
 `verified-by: bravebot_agent::confine::a_remembered_reach_is_withheld_where_the_step_or_the_machine_has_changed`
 `verified-by: bravebot_agent::confine::the_plan_and_the_failure_line_name_a_remembered_scope`

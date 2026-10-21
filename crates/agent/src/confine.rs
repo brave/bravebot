@@ -6001,6 +6001,162 @@ mod tests {
         }
     }
 
+    /// A remembered scope is attached to a stage only where the scope table would give the stage
+    /// that scope for its whole argv. The regression it rejects: keying on the program and the
+    /// operation word alone, so a remembered `git push` lends the credential rows and the closed
+    /// network's egress to `git push --receive-pack=<file>`, which a fresh scope is refused. Each
+    /// row is an argv the table refuses for its program, with the grant a person would remember
+    /// for the same program and operation word; `git push origin` is the argv it is given to.
+    #[test]
+    fn a_remembered_scope_is_not_attached_to_an_argv_the_table_refuses() {
+        let netrc = format!("{HOME}/.netrc");
+        let rows: &[(&str, Option<&str>, &str, &[&str])] = &[
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "--receive-pack=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "--rec=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "--exec=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "--upload-pack=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &[
+                    "push",
+                    "--config=core.sshCommand=/work/project/hook.sh",
+                    "origin",
+                ],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "origin", "ext::sh -c id"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "foo://host/repo"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("pull"),
+                "remote",
+                &["pull", "--strategy=hook", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("pull"),
+                "remote",
+                &["pull", "-s", "hook", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("fetch"),
+                "remote",
+                &["fetch", "--upload-pack=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("clone"),
+                "remote",
+                &["clone", "-u", "/work/project/hook.sh", "o"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("clone"),
+                "remote",
+                &["clone", "--template=/work/project/dir", "o"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("ls-remote"),
+                "remote",
+                &["ls-remote", "--upload-pack=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/gh",
+                Some("repo"),
+                "remote",
+                &[
+                    "repo",
+                    "clone",
+                    "o/r",
+                    "--",
+                    "--upload-pack=/work/project/hook.sh",
+                ],
+            ),
+            (
+                "/usr/bin/kubectl",
+                Some("get"),
+                "kubernetes",
+                &["get", "pods", "--kubeconfig=/work/project/config"],
+            ),
+            (
+                "/usr/bin/docker",
+                Some("ps"),
+                "docker",
+                &["ps", "--config=/work/project/dir"],
+            ),
+        ];
+        for (binary, operation, scope, argv) in rows {
+            let confined = confinement(&["/work/project"])
+                .with_network(Network::Closed)
+                .with_grants(vec![remembered(binary, *operation, a_scope(scope), false)]);
+            let refused = step(binary, argv);
+            let given = step(binary, &[argv[0], "origin"]);
+            let wanted = |confined: &Confinement, step: &Step| {
+                let policy = confined.policy(step, Path::new("/work"), &[]);
+                (
+                    reads(&policy, &netrc) || reads(&policy, &format!("{HOME}/.config/gh")),
+                    confined.egress(step),
+                    confined.describe(&[step]).sentences(),
+                )
+            };
+
+            let (read, egress, sentences) = wanted(&confined, &refused);
+            assert!(!read, "{argv:?} read a credential row");
+            assert!(!egress, "{argv:?} kept the network");
+            assert!(
+                sentences
+                    .iter()
+                    .all(|sentence| !sentence.contains("remembered for this command")),
+                "{argv:?} named a remembered scope: {sentences:?}"
+            );
+
+            let (read, egress, sentences) = wanted(&confined, &given);
+            assert!(
+                egress
+                    && sentences
+                        .iter()
+                        .any(|sentence| sentence.contains("remembered for this command")),
+                "{binary} {operation:?} was not given the scope it was remembered for: {egress} {sentences:?}"
+            );
+            if *scope == "remote" {
+                assert!(read, "{binary} {operation:?} read no credential row");
+            }
+        }
+    }
+
     /// A remembered scope is a credential scope for the closed network too, and a remembered
     /// directory is not. The regressions it rejects: a remote credential lent to a stage with no
     /// way to use it, and a directory read earning the network.
