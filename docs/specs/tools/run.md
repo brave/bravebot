@@ -252,8 +252,10 @@ settings and the person's answer and never from what a stage wrote or printed:
   or a rule that says ask ([permissions.md](../permissions.md));
 - no stage's program is a file under a directory the plan may write to, and no stage is given such a file
   as an argument where the file is executable or the stage is an interpreter or wrapper (`sh`, `python3`,
-  `node`, `env` and the like, known by the file its program resolved to). An argument is read as the words
-  in it, so `sh -c "./gen.sh a"` and `node --require=./hook.js` name the file they run. A stage could have
+  `node`, `env` and the like, known by the file its program resolved to). An argument is looked up whole,
+  since a file name may hold a space or any character a word is cut at, and as the words in it, read with the
+  quoting a shell applies and with an option's value after its `=`, so `sh "run script.sh"`, `sh -c "./gen.sh a"`,
+  `sh -c "'run script.sh'"` and `node --require=./hook.js` name the file they run. A stage could have
   written it, and under this answer the line that runs it would not ask.
 
 A line this answer lets through starts with the network closed for that line, whatever the session's
@@ -281,7 +283,10 @@ was told, and none can be decided by anything a stage did.
 ([SANDBOX-20](../sandboxing.md#SANDBOX-20)), such as a one-off `python3 -c` that fetches a page, fails in a trusted
 directory whose yes said so, and getting the network back means running it with `unconfined`, which asks.
 A program that runs files it finds by itself (`make`, `cargo`, `npm`, a module named with `-m`) still runs what a stage wrote unasked, held to the sandbox the stage that wrote it had. An interpreter this
-list does not name does the same for a file that is not executable.
+list does not name does the same for a file that is not executable. A command string is read for its
+quoting and not expanded, so a name written with `$'...'`, a variable, a glob or a nested command string,
+or an option's value that holds an `=` and is followed by another `=`, is not found, and the file runs
+unasked under the same sandbox.
 
 A line whose call asks for a credential scope (`signing` among them) or a toolchain list ([SANDBOX-26](../sandboxing.md#SANDBOX-26))
 is asked about whatever answers the same line without the request: a vouched entry and a
@@ -319,6 +324,8 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_agent::confine::one_stage_that_keeps_the_network_or_writes_a_git_directory_unholds_the_line`
 `verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_is_not_held`
 `verified-by: bravebot_agent::confine::an_interpreter_handed_a_file_the_plan_could_write_is_not_held`
+`verified-by: bravebot_agent::confine::a_file_name_holding_a_separator_is_looked_up_as_one_name`
+`verified-by: bravebot_agent::confine::a_quoted_name_in_a_command_string_names_the_file_it_runs`
 `verified-by: bravebot_agent::trusted::an_answer_kept_before_the_question_said_so_does_not_say_so_until_answered_again`
 `verified-by: bravebot_agent::confined_lines::trust_of_the_directory_answers_a_held_line_and_nothing_else`
 
