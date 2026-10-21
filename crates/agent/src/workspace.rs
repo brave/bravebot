@@ -4943,7 +4943,9 @@ impl Workspace {
         locked(&self.touched).loaded.clone()
     }
 
-    /// Record that the rule file at `origin` was added to a prompt, after the ones before it.
+    /// Record that the rule file at `origin` was added to a prompt. A turn that starts later adds
+    /// the rules already recorded again, and a repeat keeps its first place, so the order stays the
+    /// one the turn that first added them put them in (INSTR-16).
     pub(crate) fn note_rule_added(&self, origin: &str) {
         let mut touched = locked(&self.touched);
         if !touched.loaded.iter().any(|added| added == origin) {

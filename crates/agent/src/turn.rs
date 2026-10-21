@@ -1183,7 +1183,9 @@ fn rule_notices(
     notices
 }
 
-/// Record that the rule files `loaded` went into a prompt, in that order (INSTR-16).
+/// Record the order the rule files `loaded` went into a prompt in, which `Held::take` sorts the
+/// rules a later turn loads by, so a later turn puts them in the same place this turn did
+/// (INSTR-16).
 fn note_rules_added(workspace: &Workspace, loaded: &[crate::rules::Loaded]) {
     for loaded in loaded {
         workspace.note_rule_added(&loaded.origin);
