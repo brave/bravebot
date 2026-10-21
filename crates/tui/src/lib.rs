@@ -44,6 +44,7 @@ pub mod indicator;
 pub mod init_command;
 pub mod input;
 pub mod invisible;
+pub mod issue_link;
 pub mod jobs_command;
 pub mod keybindings;
 pub mod list_picker;

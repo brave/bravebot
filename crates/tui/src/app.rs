@@ -2299,6 +2299,7 @@ fn begin_session(
         None => session.adopt_model(&settings, config),
     }
     session.set_reference_sources(workspace.reference_sources());
+    session.adopt_repository(crate::issue_link::Repository::of(workspace.root()));
     let mut mcp_servers = std::mem::take(servers);
     let absent = std::mem::take(&mut mcp_servers.notes);
     session.servers = mcp_servers;
@@ -3170,6 +3171,7 @@ fn change_directory(
     // here starts one for this directory with the person asked again.
     *servers = None;
     session.now_in_workspace(&moved.root);
+    session.adopt_repository(crate::issue_link::Repository::of(&moved.root));
     session.set_reference_sources(workspace.reference_sources());
     // An MCP server is not a tree's, so it stays; answer 2 is about a project, so it moves.
     if let Some(mcp) = &session.servers.session {
@@ -30051,6 +30053,71 @@ mod tests {
             1,
             "the grant was not recorded for the checkout it was given in"
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// VIEW-32: a number in a reply links into the repository of the directory the session is in,
+    /// so a move to another checkout changes where it links and a move to one with no GitHub
+    /// origin ends the links. Left as it was, a number would open an issue of the repository the
+    /// session had left.
+    #[test]
+    fn moving_to_another_checkout_changes_the_repository_numbers_link_into() {
+        let root = crate::testutil::scratch_dir("bravebot-cd-repository-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let remotes = [
+            ("a", "git@github.com:brave/first.git"),
+            ("b", "https://github.com/netzenbot/second"),
+            ("c", "https://gitlab.com/brave/third.git"),
+        ];
+        for (name, remote) in remotes {
+            let git = root.join(name).join(".git");
+            std::fs::create_dir_all(&git).expect("scratch");
+            std::fs::write(
+                git.join("config"),
+                format!("[remote \"origin\"]\n\turl = {remote}\n"),
+            )
+            .expect("write config");
+        }
+
+        let mut workspace = Workspace::new(root.join("a")).expect("workspace");
+        let mut session = Session::new("none");
+        session.adopt_repository(crate::issue_link::Repository::of(workspace.root()));
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
+        let linking_to = |session: &Session| {
+            session
+                .repository()
+                .and_then(|repository| repository.address("7"))
+        };
+        assert_eq!(
+            linking_to(&session).as_deref(),
+            Some("https://github.com/brave/first/issues/7")
+        );
+
+        for (name, wanted) in [
+            ("b", Some("https://github.com/netzenbot/second/issues/7")),
+            ("c", None),
+        ] {
+            let target = root.join(name);
+            assert_eq!(
+                change_directory(
+                    &mut session,
+                    &mut workspace,
+                    &mut answers,
+                    "a-session",
+                    target.to_str().expect("utf-8 path"),
+                    |_, _| Some(true),
+                ),
+                Changed::Moved
+            );
+            assert_eq!(
+                linking_to(&session).as_deref(),
+                wanted,
+                "after moving to {name}"
+            );
+        }
 
         std::fs::remove_dir_all(&root).ok();
     }

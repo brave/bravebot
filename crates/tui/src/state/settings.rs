@@ -724,6 +724,18 @@ impl Session {
         self.reidentify(identity)
     }
 
+    /// Record the repository a `#<number>` in a reply links into, from the checkout the session is
+    /// in, or none where its `origin` is not on GitHub. Read where the session opens and where it
+    /// moves to another directory, since reading it opens a file.
+    pub fn adopt_repository(&mut self, repository: Option<crate::issue_link::Repository>) {
+        self.repository = repository;
+    }
+
+    /// The repository a `#<number>` in a reply links into, where there is one.
+    pub fn repository(&self) -> Option<&crate::issue_link::Repository> {
+        self.repository.as_ref()
+    }
+
     /// Record the id the info panel shows, answering as [`Session::identify`] does.
     pub fn name_id(&mut self, id: Option<&str>) -> bool {
         let identity = Identity {

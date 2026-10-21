@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use crate::state::{Delegate, Laid, Output, Session, Watched};
 use crate::theme;
 
-use super::transcript::{assistant_lines, draw_transcript};
+use super::transcript::{assistant_lines, draw_transcript, link_references};
 use super::{
     QUARANTINE_BAR, TURN_MARKER, dim, head_of, highlight_selection, marked_rows, one_line,
 };
@@ -117,7 +117,11 @@ fn draw_aside(
     }
     lines.push(Line::raw(""));
     match &aside.answer {
-        Some(answer) => lines.extend(assistant_lines(answer, areas[1].width)),
+        Some(answer) => lines.extend(assistant_lines(
+            answer,
+            areas[1].width,
+            session.repository().is_some(),
+        )),
         // A resumed aside whose answer the record could not hold. Said rather than drawn as an
         // empty screen, which reads as an answer that was never given.
         None => lines.push(Line::from(Span::styled(
@@ -133,6 +137,7 @@ fn draw_aside(
     let total = paragraph.line_count(areas[1].width) as u16;
     let offset = offset_from_end(total, areas[1].height, session.scroll);
     frame.render_widget(paragraph.scroll((offset, 0)), areas[1]);
+    link_references(frame, areas[1], session);
 
     draw_watching_footer(frame, areas[2], session);
     highlight_selection(frame, session);

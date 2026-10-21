@@ -750,6 +750,9 @@ pub struct Session {
     prompt_files: Option<std::path::PathBuf>,
     /// What the info panel says this session is.
     identity: Identity,
+    /// The GitHub repository a `#<number>` in a reply links into: the one the checkout's `origin`
+    /// names, where it is on GitHub (VIEW-32).
+    repository: Option<crate::issue_link::Repository>,
     /// Scroll offset from the bottom, in lines.
     pub scroll: u16,
     /// The scroller, while it is open.
@@ -1410,6 +1413,7 @@ impl Session {
             away: Default::default(),
             prompt_files: None,
             identity: Identity::default(),
+            repository: None,
             scroll: 0,
             scroller: None,
             last_request: None,
