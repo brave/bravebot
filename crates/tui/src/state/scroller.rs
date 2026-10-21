@@ -34,6 +34,9 @@ pub struct Laid {
     /// The first row, the last row and the transcript index of each call that has more to show
     /// than it draws, top to bottom. Empty unless the scroller is open.
     pub expandable: Vec<(u16, u16, usize)>,
+    /// The screen rows of the transcript that continue the line drawn above them, because the
+    /// line was wider than the transcript and wrapped. A copy joins them without a line break.
+    pub continued: Vec<u16>,
     /// The regions of the screen a selection can begin in, empty for a view that has none.
     pub panes: Vec<(crate::select::Pane, ratatui::layout::Rect)>,
 }

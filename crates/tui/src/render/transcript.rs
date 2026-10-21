@@ -807,6 +807,7 @@ fn draw_kept(frame: &mut Frame, area: Rect, session: &Session) -> Option<Laid> {
     let mut at = starts[first];
     let mut shown: Vec<Line<'static>> = Vec::new();
     let mut skip = 0;
+    let mut continued = Vec::new();
     let head = entries.lines[first..]
         .iter()
         .zip(starts[first..].windows(2).map(|pair| pair[1] - pair[0]));
@@ -819,6 +820,7 @@ fn draw_kept(frame: &mut Frame, area: Rect, session: &Session) -> Option<Laid> {
             skip = offset - at;
         }
         shown.push(line.clone());
+        note_continued(&mut continued, at, rows, offset, height, area.y);
         at += rows;
         if at >= offset + height {
             break;
@@ -834,6 +836,7 @@ fn draw_kept(frame: &mut Frame, area: Rect, session: &Session) -> Option<Laid> {
         width,
         height: area.height,
         rows: total.min(usize::from(u16::MAX)) as u16,
+        continued,
         ..Laid::default()
     })
 }
@@ -846,6 +849,26 @@ fn draw_kept(frame: &mut Frame, area: Rect, session: &Session) -> Option<Laid> {
 pub(super) fn link_references(frame: &mut Frame, area: Rect, session: &Session) {
     if let Some(repository) = session.repository() {
         crate::issue_link::link_references(frame.buffer_mut(), area, repository);
+    }
+}
+
+/// Record the screen rows, among those a line of `rows` rows starting at row `at` of the
+/// transcript is drawn over, that are not the first of it: the ones the wrap made.
+///
+/// `offset` is the first row of the transcript on the screen, `height` how many it shows, and
+/// `top` the screen row the transcript starts at.
+fn note_continued(
+    out: &mut Vec<u16>,
+    at: usize,
+    rows: usize,
+    offset: usize,
+    height: usize,
+    top: u16,
+) {
+    for row in (at + 1)..(at + rows) {
+        if row >= offset && row < offset + height {
+            out.push(top + (row - offset) as u16);
+        }
     }
 }
 
@@ -897,6 +920,10 @@ pub(super) fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) 
         return laid;
     }
     let (lines, mut laid) = lay_out(session, area.width, area.height);
+    let line_rows: Vec<usize> = lines
+        .iter()
+        .map(|line| usize::from(rows_of(line, area.width)))
+        .collect();
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
 
     // Scroll counts up from the bottom, so new output stays in view by default. The count has to
@@ -918,6 +945,22 @@ pub(super) fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) 
     } else {
         max_offset
     };
+
+    let (mut at, height) = (0usize, usize::from(area.height));
+    for rows in line_rows {
+        if at >= usize::from(offset) + height {
+            break;
+        }
+        note_continued(
+            &mut laid.continued,
+            at,
+            rows,
+            usize::from(offset),
+            height,
+            area.y,
+        );
+        at += rows;
+    }
 
     frame.render_widget(paragraph.scroll((offset, 0)), area);
     link_references(frame, area, session);
