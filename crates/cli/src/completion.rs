@@ -27,7 +27,7 @@ pub(crate) const COMMANDS: [&str; 13] = [
 ];
 
 /// What follows `auth`.
-const AUTH: [&str; 2] = ["login", "logout"];
+const AUTH: [&str; 3] = ["login", "logout", "status"];
 
 /// What follows `mcp`.
 const MCP: [&str; 8] = [

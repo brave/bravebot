@@ -26,9 +26,20 @@
 //!
 //! # Nothing from the environment that a run would not get
 //!
-//! The environment is inherited less the names [`crate::scrub`] takes off, so this agent's own
+//! The environment is inherited less the names [`bravebot_config::scrub::withheld`], so this agent's own
 //! credentials do not travel into a program the person attached to a moment any more than they
-//! travel into one the planner asked for.
+//! travel into one the planner asked for. Its `PATH` is reduced as the section below says.
+//!
+//! # What `checkout-made` is handed
+//!
+//! A hook is told the moment and nothing else, with one exception: the hook for a checkout that
+//! has just been written is also given the checkout's directory and the working directory it was
+//! made from, in two variables of its environment ([`Made`]). A setup command copies from the one
+//! to the other, and a path is the whole of what it needs. Neither is a string a model wrote or one
+//! read out of a file: the first is the driver's (the state directory, the workspace's key and the
+//! checkout's number) and the second is the directory the person's session works in. They travel as
+//! the bytes the file system holds, which a JSON line could not do for a directory whose name is
+//! not text.
 //!
 //! # Where a bare name is found
 //!
@@ -36,12 +47,17 @@
 //! [`bravebot_sandbox::programs::find`], which skips every `PATH` directory a confined stage may
 //! write (SANDBOX-30), so a stage cannot choose what runs with the person's access by writing a
 //! file under a hook's name.
+//!
+//! The same holds for the names the hook looks up itself: a script with an `env` shebang, or a
+//! launcher that starts another program by name. The hook is started with bravebot's `PATH` reduced
+//! by [`bravebot_sandbox::programs::SearchPath::Reduced`] to the entries that lookup searches, so a
+//! stage cannot choose what runs by writing a file under its interpreter's name either.
 
 use bravebot_config::hooks::{Hook, Hooks, Moment};
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// How long a hook that states no `timeout` may run before it is stopped.
@@ -54,6 +70,24 @@ pub const LIMIT: Duration = Duration::from_secs(30);
 
 /// How often the wait looks up to see whether the process is done.
 const TICK: Duration = Duration::from_millis(50);
+
+/// The variable naming the checkout a `checkout-made` hook is run for.
+pub const CHECKOUT_VARIABLE: &str = "BRAVEBOT_CHECKOUT";
+
+/// The variable naming the working directory the checkout was made from.
+pub const WORKING_DIRECTORY_VARIABLE: &str = "BRAVEBOT_WORKING_DIRECTORY";
+
+/// The two directories a `checkout-made` hook is handed beside the moment (HOOK-5).
+///
+/// Only [`fire_checkout_made`] takes them, so no other moment can be fired with them.
+#[derive(Debug, Clone, Copy)]
+pub struct Made<'a> {
+    /// The checkout's root, where the hook runs.
+    pub checkout: &'a Path,
+    /// The directory the checkout was made from, which holds what a checkout does not: the files
+    /// the repository ignores.
+    pub working_directory: &'a Path,
+}
 
 /// What became of one hook.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,12 +165,50 @@ pub enum Watch<'a> {
 /// So that a person can be told what holds the turn while it is held (HOOK-8). The two edges
 /// carry the moment's own word and the program as the person's file spelled it, and nothing a
 /// hook produced: no branch here or in a caller takes a hook's output or status as a reason.
+///
+/// The moment for a new checkout is [`fire_checkout_made`], which also hands its hooks the
+/// directories they are for.
 pub fn fire_watched(
     hooks: &Hooks,
     moment: Moment,
     tool: Option<&str>,
     directory: &Path,
     limit: Duration,
+    watch: &mut dyn FnMut(Watch<'_>),
+) -> Vec<Fired> {
+    fire_each(hooks, moment, tool, directory, limit, None, watch)
+}
+
+/// Run the hooks attached to [`Moment::CheckoutMade`], in the checkout, each handed the two
+/// directories of `made` beside the moment (HOOK-5), telling `watch` as [`fire_watched`] does.
+///
+/// A function of its own rather than a payload [`fire_watched`] takes, so that the directories can
+/// reach this moment's hooks and no other's.
+pub fn fire_checkout_made(
+    hooks: &Hooks,
+    made: Made<'_>,
+    limit: Duration,
+    watch: &mut dyn FnMut(Watch<'_>),
+) -> Vec<Fired> {
+    fire_each(
+        hooks,
+        Moment::CheckoutMade,
+        None,
+        made.checkout,
+        limit,
+        Some(made),
+        watch,
+    )
+}
+
+/// Run each hook `moment` selects, one after the other, handing `made` to each where there is any.
+fn fire_each(
+    hooks: &Hooks,
+    moment: Moment,
+    tool: Option<&str>,
+    directory: &Path,
+    limit: Duration,
+    made: Option<Made<'_>>,
     watch: &mut dyn FnMut(Watch<'_>),
 ) -> Vec<Fired> {
     if hooks.is_empty() {
@@ -151,7 +223,7 @@ pub fn fire_watched(
                 moment: moment.as_str(),
                 program: &program,
             });
-            let trouble = run(hook, &said, directory, limit);
+            let trouble = run(hook, &said, directory, limit, made);
             watch(Watch::Over);
             Fired {
                 program,
@@ -165,8 +237,8 @@ pub fn fire_watched(
 /// The whole of what a hook is told, as one line of JSON.
 ///
 /// Built from the moment's own word, which is a literal of this crate's. Nothing a model wrote and
-/// nothing read out of a file is in it, so there is no question of what a hook is handed: the same
-/// three lines, forever, whatever the turn was doing.
+/// nothing read out of a file is in it, so there is no question of what a hook is told: the same
+/// line for a moment, forever, whatever the turn was doing.
 ///
 /// An object rather than the bare word so the line has somewhere to grow a second key without every
 /// hook that reads the first having to be taught that the shape changed.
@@ -189,7 +261,13 @@ fn program_to_start(program: &str) -> Option<PathBuf> {
 }
 
 /// Start one hook, hand it the line, and wait for it.
-fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<Trouble> {
+fn run(
+    hook: &Hook,
+    said: &str,
+    directory: &Path,
+    default: Duration,
+    made: Option<Made<'_>>,
+) -> Option<Trouble> {
     let limit = hook.timeout().unwrap_or(default);
     let (program, arguments) = hook.run().split_first()?;
     let Some(program) = program_to_start(program) else {
@@ -197,10 +275,29 @@ fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<T
             std::io::Error::from(std::io::ErrorKind::NotFound).to_string(),
         ));
     };
-    let mut command = Command::new(program);
+    // Without this agent's own credentials, and with the names the hook starts itself (an `env`
+    // shebang, a launcher) searching only the entries the lookup above searches, whether it was
+    // named bare or by a path (SANDBOX-30).
+    let withheld = bravebot_config::scrub::withheld();
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::named_by_person(program),
+        bravebot_sandbox::programs::Inherits::Without(&withheld),
+        bravebot_sandbox::programs::SearchPath::Reduced,
+    );
     // The vector, never a string. There is no shell between the file and the process, so an
     // argument holding a space or a semicolon is one argument and arrives as one.
     command.args(arguments).current_dir(directory);
+    // The directories as the bytes the file system holds, so a name that is not text reaches the
+    // hook as it is, and without the `\\?\` Windows puts before a resolved path, which a batch file
+    // or `cmd` does not take.
+    if let Some(made) = made {
+        let spelled = |directory: &Path| {
+            bravebot_sandbox::rules::without_verbatim_prefix(directory.to_path_buf())
+        };
+        command
+            .env(CHECKOUT_VARIABLE, spelled(made.checkout))
+            .env(WORKING_DIRECTORY_VARIABLE, spelled(made.working_directory));
+    }
     command
         .stdin(Stdio::piped())
         // Discarded rather than inherited or collected. Inherited, a hook would draw over the
@@ -208,7 +305,6 @@ fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<T
         // A hook with something to say says it the way any other program on the machine does.
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    crate::scrub::apply(&mut command);
 
     let mut child = match bravebot_sandbox::process::starting_a_program(|| command.spawn()) {
         Ok(child) => child,
@@ -261,6 +357,10 @@ mod tests {
         assert_eq!(
             announcement(Moment::TurnFinished),
             "{\"event\":\"turn-finished\"}\n"
+        );
+        assert_eq!(
+            announcement(Moment::CheckoutMade),
+            "{\"event\":\"checkout-made\"}\n"
         );
     }
 
@@ -329,7 +429,7 @@ mod tests {
         let path = std::env::join_paths([planted, system.clone()]).unwrap();
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env("PATH", &path)
@@ -340,6 +440,102 @@ mod tests {
         let report = String::from_utf8_lossy(&child.stderr).into_owned();
         let _ = std::fs::remove_dir_all(&session);
         let _ = std::fs::remove_dir_all(&system);
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(child.status.success(), "{report}");
+    }
+
+    /// SANDBOX-30: a hook that is a script with an `env` shebang, or a launcher that runs another
+    /// program by name, looks that program up on the `PATH` the hook was started with. An
+    /// interpreter a confined stage wrote into a directory the session keeps out, first on that
+    /// `PATH`, must not be the one that runs: the hook is started unconfined, with the person's
+    /// access to `~/.ssh` and `~/.aws`. The test binary runs again with `PATH` holding the
+    /// session's `.venv/bin`, an installed directory and the system directories, in that order.
+    /// `env-hook` is `#!/usr/bin/env interp` and sits in the installed directory, where each
+    /// `interp` records that it ran. It is named bare and then by its absolute path, since a hook
+    /// started either way looks its interpreter up through the same `PATH`. A hook started with
+    /// bravebot's whole `PATH` runs the planted `interp`.
+    #[cfg(unix)]
+    #[test]
+    fn a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written() {
+        use std::os::unix::fs::PermissionsExt;
+        const TEST: &str = "hooks::tests::a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written";
+        const SESSION: &str = "BRAVEBOT_TEST_HOOK_INTERPRETER_SESSION";
+        const INSTALLED: &str = "BRAVEBOT_TEST_HOOK_INTERPRETER_INSTALLED";
+
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            let installed = PathBuf::from(std::env::var_os(INSTALLED).unwrap());
+            bravebot_sandbox::programs::keep_out(&session);
+            std::fs::write(session.join("ran"), "").unwrap();
+
+            let absolute = installed.join("env-hook");
+            for name in ["env-hook", absolute.to_str().unwrap()] {
+                let hooks = Hooks::parse(&format!(
+                    r#"{{"hooks": [{{"on": "turn-finished", "run": [{name:?}]}}]}}"#
+                ));
+                let fired = fire(&hooks, Moment::TurnFinished, None, &session);
+
+                assert_eq!(
+                    fired[0].trouble, None,
+                    "the hook named {name} did not run to its end: {fired:?}"
+                );
+                assert!(
+                    !session.join("planted-ran").exists(),
+                    "the hook named {name} looked its interpreter up in a directory a stage may write"
+                );
+                assert!(
+                    session.join("installed-ran").exists(),
+                    "the hook named {name} did not run the installed interpreter"
+                );
+                std::fs::remove_file(session.join("installed-ran")).unwrap();
+            }
+            return;
+        }
+
+        let session = crate::testutil::scratch_dir("hooks-interpreter-session");
+        let installed = crate::testutil::scratch_dir("hooks-interpreter-installed");
+        for directory in [&session, &installed] {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        let planted = session.join(".venv/bin");
+        std::fs::create_dir_all(&planted).unwrap();
+        std::fs::create_dir_all(&installed).unwrap();
+        let write = |directory: &Path, name: &str, body: String| {
+            let file = directory.join(name);
+            std::fs::write(&file, body).unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let records =
+            |marker: &str| format!("#!/bin/sh\n: > '{}'\n", session.join(marker).display());
+        write(&planted, "interp", records("planted-ran"));
+        write(&installed, "interp", records("installed-ran"));
+        write(
+            &installed,
+            "env-hook",
+            "#!/usr/bin/env interp\n".to_string(),
+        );
+        let path = std::env::join_paths([
+            planted,
+            installed.clone(),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+            .env(SESSION, &session)
+            .env(INSTALLED, &installed)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+
+        let ran = session.join("ran").exists();
+        let report = String::from_utf8_lossy(&child.stderr).into_owned();
+        for directory in [&session, &installed] {
+            let _ = std::fs::remove_dir_all(directory);
+        }
         assert!(ran, "the child did not run the test: {report}");
         assert!(child.status.success(), "{report}");
     }

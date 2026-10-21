@@ -56,17 +56,20 @@ try {
   assert.deepEqual(await offered(), ['scripts/', 'src/', 'README.md'], 'node_modules is not offered')
   await page.screenshot({ path: join(output, 'at-mentions-light.png') })
 
-  // ---- a prefix narrows, the arrows walk, Esc closes and leaves the text -----------------------
+  // ---- a prefix narrows and the names found below follow, the arrows walk the whole list, Esc
+  // closes and leaves the text ----------------------------------------------------------------
   await page.keyboard.type('s')
-  await page.waitForFunction(() => document.querySelectorAll('[data-test="mention-option"]').length === 2)
+  await page.waitForFunction(() => document.querySelectorAll('[data-test="mention-option"]').length === 5)
+  assert.deepEqual(await offered(), ['scripts/', 'src/', 'src/main.rs', 'src/nested/', 'src/nested/deep.md'], 'the prefix first, then what was found below')
   await selected('scripts/')
-  await page.keyboard.press('ArrowDown')
-  await selected('src/')
-  await page.keyboard.press('ArrowDown')
-  await selected('src/')
-  await page.keyboard.press('ArrowUp')
-  await page.keyboard.press('ArrowUp')
-  await selected('scripts/')
+  for (const row of ['src/', 'src/main.rs', 'src/nested/', 'src/nested/deep.md', 'src/nested/deep.md']) {
+    await page.keyboard.press('ArrowDown')
+    await selected(row)
+  }
+  for (const row of ['src/nested/', 'src/main.rs', 'src/', 'scripts/']) {
+    await page.keyboard.press('ArrowUp')
+    await selected(row)
+  }
   await page.keyboard.press('Escape')
   await list.waitFor({ state: 'hidden' })
   assert.equal(await value(), 'What colour is in @s', 'Escape closed the list and kept the line')
@@ -111,6 +114,14 @@ try {
   await page.locator('.attached', { hasText: 'Read src/nested/deep.md' }).waitFor()
   const rows = await page.locator('.entries .attached').allInnerTexts()
   assert.deepEqual(rows.map((text) => text.trim()), ['Read src/nested/deep.md'], 'one Read row, drawn before the reply came back')
+
+  // ---- a fragment of a name finds the file below, and Tab writes its whole path ----------------
+  await field.fill('Open @dp')
+  await list.waitFor()
+  assert.deepEqual(await offered(), ['src/nested/deep.md'], 'a fragment found the file in a directory below')
+  await page.keyboard.press('Tab')
+  await valueIs('Open @src/nested/deep.md ')
+  await field.fill('')
 
   // ---- a name with a space is completed to the escaped text, and Enter completes a half of one ---
   mkdirSync(join(project, 'My Documents'))
@@ -168,9 +179,9 @@ try {
   assert.equal(rounds.length, 3, 'the held turn reached the model')
   await page.locator('.composer .stop').waitFor()
   await field.fill('Read @../outside.txt')
-  await field.press('Enter')
+  await field.press('Alt+Enter')
   await field.fill('After the refused one')
-  await field.press('Enter')
+  await field.press('Alt+Enter')
   const tray = page.locator('.queued-messages')
   await tray.waitFor()
   held = null
@@ -221,7 +232,7 @@ try {
   assert.equal(rounds.length, 4, 'a project file is not named from the home folder')
 
   assert.deepEqual(errors, [])
-  console.log(`PASS: @ offers the project, narrows, walks and completes; Enter completes a half name and sends a finished one; the model got the file and the transcript drew its Read row; @../outside.txt was refused at send, by turn.send itself too, and a queued one went back to the head of a paused queue; a bot conversation in its home folder read and listed that folder and refused a project file. Screenshots in ${output}/at-mentions-{light,dark}.png`)
+  console.log(`PASS: @ offers the project, narrows, finds a fragment in a directory below, walks and completes; Enter completes a half name and sends a finished one; the model got the file and the transcript drew its Read row; @../outside.txt was refused at send, by turn.send itself too, and a queued one went back to the head of a paused queue; a bot conversation in its home folder read and listed that folder and refused a project file. Screenshots in ${output}/at-mentions-{light,dark}.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'at-mentions-failure.png') }).catch(() => undefined)
   throw error

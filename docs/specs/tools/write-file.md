@@ -52,7 +52,8 @@ choosing where an effect lands.
 
 A write needs a person's approval, which mints a single-use endorsement bound to that exact path,
 so it cannot be replayed or redirected. Where nobody can be asked, writes are refused rather than
-applied unseen.
+applied unseen. A path the workspace does not reach is refused before anybody is asked, since no
+answer makes it reachable ([TRUST-10](../trust-map.md#TRUST-10)).
 
 **Why.** The wrong file destroys work rather than wasting a step.
 
@@ -60,6 +61,7 @@ applied unseen.
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
 `verified-by: bravebot_agent::turn::a_refused_overwrite_leaves_the_original`
 `verified-by: bravebot_agent::turn::an_approved_write_cannot_escape_the_workspace`
+`verified-by: bravebot_agent::turn::a_write_outside_every_opened_directory_is_refused_before_the_person_is_asked`
 `verified-by: bravebot_agent::turn::an_approved_write_does_not_authorise_a_write_somewhere_else`
 `verified-by: bravebot_core::policy::an_unendorsed_destination_is_refused`
 `verified-by: bravebot_core::policy::an_endorsement_does_not_outlive_the_destination_it_authorised`

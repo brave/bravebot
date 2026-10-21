@@ -18,6 +18,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 
+use crate::colour_codes;
 use crate::state::{Delegate, Laid, Session};
 use crate::theme;
 use crate::wrap;
@@ -481,10 +482,26 @@ fn activity_lines(
 /// The user is shown this and the planner is not, which is the arrangement working rather than a
 /// hole in it. They own the directory. What must never happen is these bytes reaching a model's
 /// context, and a terminal is not a context.
+///
+/// The colour codes in the preview are taken out and counted (VIEW-30). The heading is not
+/// touched, since its origin can be a filename and a person is shown every byte of one.
 fn quarantined_lines(shown: &Shown, width: usize) -> Vec<Line<'static>> {
     let marked = Style::default().fg(theme::running());
     let margin = Span::styled(format!("  {QUARANTINE_BAR} "), marked);
-    quarantined_rows(shown, &margin, width)
+
+    let mut plain = shown.clone();
+    let mut dropped = 0;
+    for line in &mut plain.preview {
+        let (without, taken) = colour_codes::without(line);
+        *line = without;
+        dropped += taken;
+    }
+
+    let mut lines = quarantined_rows(&plain, &margin, width);
+    if let Some(note) = colour_codes::note(dropped) {
+        lines.extend(marked_rows(&margin, &[Span::styled(note, dim())], width));
+    }
+    lines
 }
 
 /// The same block against a margin the caller owns.
@@ -555,9 +572,12 @@ fn returned_lines(returned: &Returned, expanded: bool, width: usize) -> Vec<Line
     };
     let margin = Span::raw("    ");
     let room = width.saturating_sub(margin.width()).max(1);
+    let mut dropped = 0;
     let mut rows: Vec<Line<'static>> = drawn
         .iter()
         .flat_map(|line| {
+            let (line, taken) = colour_codes::without(line);
+            dropped += taken;
             // Measured as drawn: an escape is no column wide until it is made visible.
             let line = printable(&line.replace('\t', "    "));
             let cut = if wrap::display_width(&line) <= room {
@@ -586,6 +606,11 @@ fn returned_lines(returned: &Returned, expanded: bool, width: usize) -> Vec<Line
         } else {
             rows.extend(said);
         }
+    }
+
+    // Last, whichever side the glimpse was taken from, since it is about the lines above it.
+    if let Some(note) = colour_codes::note(dropped) {
+        rows.extend(marked_rows(&margin, &[Span::styled(note, dim())], width));
     }
     rows
 }
@@ -707,7 +732,10 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     let (left, panel) = if crate::panel::drawn(session, frame.area().width) {
         let [left, panel] = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(1), Constraint::Length(crate::panel::WIDTH)])
+            .constraints([
+                Constraint::Min(1),
+                Constraint::Length(session.panel_columns(frame.area().width)),
+            ])
             .areas(body);
         (left, Some(panel))
     } else {
@@ -837,7 +865,7 @@ fn draw_history_search(frame: &mut Frame, session: &Session) -> Laid {
 /// The opposite end from [`tail_of`], and for the opposite reason: a path is identified by its
 /// end and a sentence by its beginning. A queued prompt runs to one row, and the words that say
 /// which prompt it is are the first ones.
-fn head_of(line: &str, room: usize) -> String {
+pub(crate) fn head_of(line: &str, room: usize) -> String {
     // A prompt may be a paragraph; it is one row here, so the rest is not shown at all.
     let first = line.lines().next().unwrap_or("");
     let characters: Vec<char> = first.chars().collect();
@@ -950,6 +978,42 @@ mod tests {
             );
         }
 
+        /// WATCH-8. What the delegate was asked stands above its lines, on a row of its own, and
+        /// stays there while a person reads back through more calls than the screen holds. A task
+        /// drawn among the lines would scroll away with them and answer which run this is only at
+        /// the top.
+        #[test]
+        fn a_delegates_view_names_what_it_was_asked_above_its_lines_and_keeps_it_there() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "FIND-THE-PARSER-ENTRY");
+            for n in 0..60 {
+                let file = format!("CALLED-FILE-{n:02}");
+                session.finish_activity(Activity::running("Read", file).done("1 line"));
+            }
+            session.watch();
+
+            let row_of =
+                |rows: &[String], needle: &str| rows.iter().position(|row| row.contains(needle));
+
+            for (scroll, a_line) in [(0, "CALLED-FILE-59"), (1000, "CALLED-FILE-00")] {
+                session.scroll = scroll;
+                let rows = rows_at(&session, 90, 24);
+                let asked = row_of(&rows, "FIND-THE-PARSER-ENTRY")
+                    .unwrap_or_else(|| panic!("scroll {scroll}: the task was not drawn: {rows:?}"));
+                let line = row_of(&rows, a_line)
+                    .unwrap_or_else(|| panic!("scroll {scroll}: no line was drawn: {rows:?}"));
+                assert!(
+                    asked < line,
+                    "scroll {scroll}: the task was not above the delegate's lines: {rows:?}"
+                );
+                assert!(
+                    !rows[asked].contains("CALLED-FILE"),
+                    "scroll {scroll}: the task shares a row with a line: {}",
+                    rows[asked]
+                );
+            }
+        }
+
         /// Two questions a person watching has, and the last tool line answers neither: is this
         /// still going, and which of them am I looking at.
         #[test]
@@ -1011,6 +1075,41 @@ mod tests {
             assert!(
                 screen.contains("THE-PARSER-IS-IN-LEX"),
                 "the view did not say how the delegate ended: {screen}"
+            );
+        }
+
+        /// WATCH-8: what the delegate was asked stands above its lines, so a reader who was not
+        /// told the task can tell what the lines were for.
+        #[test]
+        fn a_delegates_view_opens_on_what_it_was_asked_above_its_lines() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "FIND-THE-PARSER-ENTRY");
+            session.start_activity(Activity::running("Read", "PECULIAR-FILE-NAME"));
+            session.watch();
+
+            let screen = rendered(&session);
+            let asked = screen
+                .find("FIND-THE-PARSER-ENTRY")
+                .unwrap_or_else(|| panic!("the task was not drawn: {screen}"));
+            let work = screen
+                .find("PECULIAR-FILE-NAME")
+                .unwrap_or_else(|| panic!("the work was not drawn: {screen}"));
+            assert!(asked < work, "the task was drawn below the lines: {screen}");
+        }
+
+        /// WATCH-5: a delegate that has finished still has its lines to open.
+        #[test]
+        fn a_finished_delegates_lines_are_still_there_to_be_opened() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "reader", "find the parser");
+            session.start_activity(Activity::running("Read", "PECULIAR-FILE-NAME"));
+            session.delegate_finished(id, "answered".to_string(), false, None);
+            session.watch();
+
+            let screen = rendered(&session);
+            assert!(
+                screen.contains("PECULIAR-FILE-NAME"),
+                "a finished delegate's lines were cleared: {screen}"
             );
         }
 
@@ -2063,6 +2162,34 @@ mod tests {
             );
         }
 
+        /// WATCH-5. The block in the transcript stops drawing the work behind a finished
+        /// delegate, and the work is still there to be opened in the delegate's own view. A
+        /// finish that cleared the lines would collapse the block and leave nothing behind it.
+        #[test]
+        fn a_finished_delegates_work_is_still_there_to_be_opened() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "reader", "find the parser");
+            session.start_activity(Activity::running("Read", "PECULIAR-FILE-NAME"));
+            session.delegate_finished(
+                id,
+                "a reader delegate answered after 2 rounds".to_string(),
+                false,
+                None,
+            );
+            assert!(
+                !rendered(&session).contains("PECULIAR-FILE-NAME"),
+                "the block did not collapse, so opening the delegate proves nothing"
+            );
+
+            session.watch();
+
+            let screen = rendered(&session);
+            assert!(
+                screen.contains("PECULIAR-FILE-NAME"),
+                "the work of a finished delegate was gone from its view: {screen}"
+            );
+        }
+
         /// The block is where somebody who never opens the mode reads what came of a delegate,
         /// and the round count says nothing about what it found.
         #[test]
@@ -2217,8 +2344,9 @@ mod tests {
                 label: "(U,priv)".to_string(),
                 preview: vec![
                     "the haystack holds a needle".to_string(),
-                    // What the terminal would act on, on its way to a glyph.
-                    "a needle behind \u{1b}[31m an escape".to_string(),
+                    // What the terminal would act on, on its way to a glyph, beside a colour code,
+                    // which is taken out and not drawn.
+                    "a needle behind \u{1b}[31m\u{1b}[2J an escape".to_string(),
                 ],
                 lines: 40,
             };
@@ -3820,6 +3948,125 @@ mod tests {
             assert!(!output.contains("into"), "{output}");
         }
 
+        /// The row of the line that follows `line` in `rows`, which is its mark.
+        fn mark_under<'a>(rows: &'a [String], line: &str) -> &'a str {
+            let at = rows
+                .iter()
+                .position(|row| row.trim() == line)
+                .unwrap_or_else(|| panic!("{line:?} is not drawn: {rows:#?}"));
+            &rows[at + 1]
+        }
+
+        /// A command that would have been carried out as it was typed, but waits behind a line ahead
+        /// of it, says which line, so "after this" is not the whole of why it is still there. A
+        /// prompt and a shell line are named by what they are. The regression it rejects is every
+        /// waiting command marked the same, which leaves a person looking at `/rename` under the box
+        /// and unable to tell what holds it.
+        #[test]
+        fn a_command_waiting_behind_a_line_names_that_line_on_its_mark() {
+            let queue_command = |session: &mut Session, line: &str| {
+                for c in line.chars() {
+                    session.type_char(c);
+                }
+                assert!(session.queue_command());
+            };
+            let mut after_a_command = working();
+            queue_command(&mut after_a_command, "/clear");
+            queue_command(&mut after_a_command, "/rename deploy watch");
+            queue_command(&mut after_a_command, "/note a thought");
+            let mut after_a_prompt = queued_behind(working(), "look at b.txt");
+            queue_command(&mut after_a_prompt, "/effort high");
+            let mut after_a_shell_line = working();
+            after_a_shell_line.shell = true;
+            for c in "ls -la".chars() {
+                after_a_shell_line.type_char(c);
+            }
+            assert!(after_a_shell_line.queue_shell());
+            queue_command(&mut after_a_shell_line, "/rename deploy watch");
+
+            let rows = rows_at(&after_a_command, 100, 30);
+            assert!(
+                mark_under(&rows, "/rename deploy watch").contains("after /clear"),
+                "{rows:#?}"
+            );
+            assert!(
+                mark_under(&rows, "/note a thought").contains("after /clear"),
+                "{rows:#?}"
+            );
+            let rows = rows_at(&after_a_prompt, 100, 30);
+            assert!(
+                mark_under(&rows, "/effort high").contains("after the prompt before it"),
+                "{rows:#?}"
+            );
+            let rows = rows_at(&after_a_shell_line, 100, 30);
+            assert!(
+                mark_under(&rows, "/rename deploy watch")
+                    .contains("after the shell line before it"),
+                "{rows:#?}"
+            );
+        }
+
+        /// A command that waits for the turn on its own account is not held by the lines ahead of
+        /// it: `/clear` waits whatever is typed before it, so its mark does not name a prompt it
+        /// would have waited behind in any case.
+        #[test]
+        fn a_command_that_waits_for_the_turn_does_not_name_the_line_ahead_of_it() {
+            let mut session = queued_behind(working(), "look at b.txt");
+            for c in "/clear".chars() {
+                session.type_char(c);
+            }
+            assert!(session.queue_command());
+
+            let rows = rows_at(&session, 100, 24);
+
+            let mark = mark_under(&rows, "/clear");
+            assert!(mark.contains(CARRIED_OUT), "{rows:#?}");
+            assert!(!mark.contains("after the prompt"), "{rows:#?}");
+        }
+
+        /// During an aside every command queues, so a command can sit ahead of the line that would
+        /// have held it back had it been typed after. Its mark names only what is ahead of it.
+        #[test]
+        fn a_command_does_not_name_a_line_typed_after_it() {
+            let mut session = Session::new("kernel-enforced");
+            session.begin_aside();
+            for line in ["/note a thought", "/clear"] {
+                for c in line.chars() {
+                    session.type_char(c);
+                }
+                assert!(session.queue_command());
+            }
+
+            let rows = rows_at(&session, 100, 24);
+
+            let mark = mark_under(&rows, "/note a thought");
+            assert!(mark.contains(CARRIED_OUT), "{rows:#?}");
+            assert!(!mark.contains("after /clear"), "{rows:#?}");
+        }
+
+        /// Where the mark has no room for the line a command waits behind, as with a line typed in
+        /// wide characters, it says where the line goes in the plain words. The regression it rejects
+        /// is a mark dropped whole, which leaves a waiting command with no mark at all.
+        #[test]
+        fn a_mark_with_no_room_for_the_line_it_waits_behind_says_where_the_line_goes() {
+            let mut session = working();
+            for line in ["/cd 日本語日本語日本語日本語", "/rename deploy watch"] {
+                for c in line.chars() {
+                    session.type_char(c);
+                }
+                assert!(session.queue_command());
+            }
+
+            let rows = rows_at(&session, 40, 24);
+
+            let at = rows
+                .iter()
+                .position(|row| row.contains("/rename deploy watch"))
+                .unwrap_or_else(|| panic!("/rename is not drawn: {rows:#?}"));
+            assert!(rows[at + 1].contains(CARRIED_OUT), "{rows:#?}");
+            assert!(!rows[at + 1].contains("after /cd"), "{rows:#?}");
+        }
+
         /// The last row carries both where its line is going and the key that sends the queue now,
         /// and on an 80-column terminal it holds both whatever that line is. The offer is only made
         /// while a turn runs and has not been asked to stop, so those three are every line it can
@@ -4475,6 +4722,62 @@ mod tests {
             );
         }
 
+        /// VIEW-30: a command's output the planner read is drawn without its colour codes, and one
+        /// row under the lines says how many there were.
+        #[test]
+        fn a_glimpse_counts_its_colour_codes_and_does_not_draw_them() {
+            let rows = drawn_rows(&returned_lines(
+                &glimpse(
+                    &["\u{1b}[36m├\u{1b}[0m one", "\u{1b}[1mtwo\u{1b}[0m"],
+                    2,
+                    false,
+                ),
+                false,
+                80,
+            ));
+
+            assert_eq!(
+                rows,
+                ["    ├ one", "    two", "    4 colour codes not drawn"]
+            );
+        }
+
+        /// VIEW-30: a line is cut to one row by what it draws as, so the codes it no longer draws
+        /// cannot make a line that fits look too wide.
+        #[test]
+        fn a_glimpse_line_is_measured_without_its_colour_codes() {
+            let words = "x".repeat(30);
+            let line = format!("\u{1b}[1m{words}\u{1b}[0m\u{1b}[1m\u{1b}[0m");
+            let rows = drawn_rows(&returned_lines(&glimpse(&[&line], 1, false), false, 40));
+
+            assert_eq!(rows[0], format!("    {words}"));
+        }
+
+        /// VIEW-30: the count is about the lines above it, so it is the last row even where the
+        /// glimpse was taken from the end and its note about earlier lines is the first.
+        #[test]
+        fn a_glimpse_from_the_end_counts_its_colour_codes_last() {
+            let rows = drawn_rows(&returned_lines(
+                &glimpse(&["\u{1b}[1mfailed\u{1b}[0m"], 5, true),
+                false,
+                80,
+            ));
+
+            assert!(rows[0].contains("earlier"), "{rows:?}");
+            assert_eq!(
+                rows.last().map(String::as_str),
+                Some("    2 colour codes not drawn")
+            );
+        }
+
+        /// VIEW-30: a glimpse with no colour code says nothing about them.
+        #[test]
+        fn a_glimpse_without_colour_codes_says_nothing_about_them() {
+            let rows = drawn_rows(&returned_lines(&glimpse(&["plain"], 1, false), false, 80));
+
+            assert_eq!(rows, ["    plain"]);
+        }
+
         /// Tool lines come in runs and read as one block. Spacing them apart would double the
         /// height of every turn that read more than a file or two.
         #[test]
@@ -4653,6 +4956,95 @@ mod tests {
 
         let hint = hint_row_at(&session, 90, 24);
         assert!(hint.contains("ctrl-c again to exit"), "{hint}");
+    }
+
+    /// A person who typed `exit` to leave is looking at a turn starting, and nothing on the screen
+    /// says the line went to the model as a prompt. The row under the box is where they are already
+    /// looking, and it names the keys that stop the turn and leave, for as long as that turn runs.
+    #[test]
+    fn the_row_under_the_box_says_a_sent_leave_word_went_to_the_model_as_a_prompt() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let said = "Sent as a prompt; ctrl-c stops it, /exit leaves";
+        let mut session = typed("exit");
+        let before = hint_row_at(&session, 90, 24);
+        assert!(!before.contains(said), "said before any Enter: {before}");
+
+        crate::app::handle_key(
+            &mut session,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert!(session.a_turn_is_running(), "the line did not start a turn");
+        let sent = hint_row_at(&session, 90, 24);
+        assert!(sent.contains(said), "{sent}");
+
+        session.complete("done", Vec::new(), 0);
+        let after = hint_row_at(&session, 90, 24);
+        assert!(!after.contains(said), "left up after the turn: {after}");
+    }
+
+    /// The note is about a lone `exit` or `quit` and no other line: a prompt that merely contains
+    /// the word is a question like any other, and a note saying it was a leave word would be wrong.
+    #[test]
+    fn the_row_under_the_box_says_nothing_of_a_prompt_that_is_more_than_a_leave_word() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut session = typed("how do I exit");
+        crate::app::handle_key(
+            &mut session,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert!(session.a_turn_is_running(), "the line did not start a turn");
+
+        let hint = hint_row_at(&session, 90, 24);
+        assert!(!hint.contains("Sent as a prompt"), "{hint}");
+    }
+
+    /// The note takes its room ahead of the parts of the line, and the permission mode is the part
+    /// given up last because it decides whether the next write stops to ask. A note too wide for
+    /// eighty columns clears the whole left side, so the person reading it is told how to leave and
+    /// not told that every write is going through.
+    #[test]
+    fn the_note_on_a_sent_leave_word_leaves_the_permission_mode_on_an_eighty_column_row() {
+        use bravebot_agent::PermissionMode;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        for (mode, vi) in [
+            (PermissionMode::Bypass, false),
+            (PermissionMode::AcceptEdits, true),
+            (PermissionMode::Plan, true),
+        ] {
+            let mut session = Session::new("kernel-enforced").starting_in_bypass();
+            while session.permission_mode() != mode {
+                session.cycle_permission_mode();
+            }
+            if vi {
+                session.choose_editing(crate::vim::Editing::Vi);
+            }
+            for c in "exit".chars() {
+                session.type_char(c);
+            }
+            crate::app::handle_key(
+                &mut session,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            );
+            assert!(session.a_turn_is_running(), "the line did not start a turn");
+
+            let hint = hint_row_at(&session, 80, 24);
+            assert!(
+                hint.contains("Sent as a prompt; ctrl-c stops it, /exit leaves"),
+                "{mode:?}: {hint}"
+            );
+            let named =
+                crate::status::named_mode(mode, true).expect("every mode but asking is named");
+            assert!(
+                hint.contains(named),
+                "{mode:?} (vi: {vi}) was cleared by the note: {hint}"
+            );
+            if vi {
+                assert!(hint.contains("INSERT"), "{mode:?} lost the vi mode: {hint}");
+            }
+        }
     }
 
     /// Rubbing the marker out is the only way a person has to change their mind about a file, and
@@ -5727,10 +6119,7 @@ mod tests {
         assert!(labelled(&row_for(&output, 120, "/cost"), "now"));
         assert!(labelled(&row_for(&output, 120, "/compact"), "queued"));
         assert!(labelled(&row_for(&output, 120, "/model"), "now/queued"));
-        assert!(labelled(
-            &row_for(&output, 120, "/theme [name]"),
-            "now/queued"
-        ));
+        assert!(labelled(&row_for(&output, 120, "/theme [name]"), "now"));
     }
 
     /// Rejects: a `now` label on a command that Enter would queue, because a line of the same
@@ -6145,6 +6534,19 @@ mod tests {
         assert!(
             narrow.contains(&t!(input_history_widen, chord = "alt-n")),
             "{narrow}"
+        );
+    }
+
+    /// MOUSE-4: the list names the modifier that gives a drag back to the terminal, since capturing
+    /// the mouse took its own selection away.
+    #[test]
+    fn the_shortcuts_name_the_terminals_own_selection() {
+        let listed = shortcuts(crate::vim::Editing::Ordinary, &Keybindings::default());
+        assert!(
+            listed
+                .iter()
+                .any(|(key, meaning)| key == "shift-drag" && meaning.contains("terminal")),
+            "no row names the bypass modifier"
         );
     }
 
@@ -6882,6 +7284,50 @@ mod tests {
             output.contains("4.2k"),
             "what the turn cost was not reported: {output}"
         );
+    }
+
+    /// VIEW-13: a finished turn's row carries what it cost and how long it took, and the other two
+    /// endings carry neither, since they produced no answer to price.
+    #[test]
+    fn only_a_finished_turns_row_carries_its_cost_and_duration() {
+        let ended = |ending| {
+            let mut session = Session::new("partial");
+            session.type_char('a');
+            session.submit();
+            session.complete("done", Vec::new(), 0);
+            session.finished = Some(crate::state::Finished {
+                turn: 1,
+                tokens: 4_200,
+                took: std::time::Duration::from_secs(75),
+                ending,
+            });
+            rendered(&session)
+        };
+
+        let done = ended(bravebot_agent::Ending::Done);
+        assert!(done.contains("turn 1 done"), "{done}");
+        assert!(done.contains("4.2k"), "no cost: {done}");
+        assert!(done.contains("1m 15s"), "no duration: {done}");
+
+        for (word, ending) in [
+            (
+                "turn 1 cancelled",
+                bravebot_agent::Ending::Stopped { attempts: None },
+            ),
+            (
+                "turn 1 failed",
+                bravebot_agent::Ending::Failed(bravebot_agent::Diagnosis::of(
+                    bravebot_agent::Category::Transport,
+                )),
+            ),
+        ] {
+            let row = ended(ending);
+            assert!(row.contains(word), "{word} not reported: {row}");
+            assert!(
+                !row.contains("4.2k") && !row.contains("1m 15s"),
+                "{word} carried a cost or a duration: {row}"
+            );
+        }
     }
 
     /// A tick beside a turn that did not finish would say the wrong thing about it.
@@ -7646,6 +8092,50 @@ mod tests {
         assert!(!back.contains("below") && !back.contains("held"), "{back}");
     }
 
+    /// The cue reminds a person that the view is held while the turn goes on, and it sits on the
+    /// line whose accent is kept for the parts that change what a key does. Drawn in the accent it
+    /// reads as one of them (VIEW-27). Read from the cells of the whole cue, from `held` to
+    /// `return`.
+    #[test]
+    fn the_held_cue_is_drawn_dim() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+        let mut session = Session::new("none");
+        for turn in 0..40 {
+            session.type_char('q');
+            session.submit();
+            session.complete(format!("reply number {turn}"), Vec::new(), 0);
+        }
+        rows_of_a_frame(&mut session);
+        session.scroll_up(60);
+        assert!(session.rows_below() > 0, "the view was not held");
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, &session);
+            })
+            .expect("draw succeeds");
+        let buffer = terminal.backend().buffer();
+        let hint_row = buffer.area().height - 1;
+        let symbols: Vec<&str> = (0..buffer.area().width)
+            .map(|column| buffer.cell((column, hint_row)).expect("cell").symbol())
+            .collect();
+        let from = (0..symbols.len())
+            .find(|at| symbols[*at..].concat().starts_with("held"))
+            .expect("the cue was not drawn");
+        let through = (from..symbols.len())
+            .find(|at| symbols[*at..].concat().starts_with("return"))
+            .expect("the cue did not name the key back")
+            + "return".len();
+
+        assert_ne!(theme::muted(), theme::accent());
+        for column in (from..through).filter(|column| symbols[*column] != " ") {
+            let ink = buffer.cell((column as u16, hint_row)).expect("cell").fg;
+            assert_eq!(ink, theme::muted(), "column {column} of the cue");
+        }
+    }
+
     /// The cue is the first of the things the hint line keeps for its own sake to go, so a terminal
     /// with no room for it loses the cue and keeps the mode, in the ordinary line and the shell
     /// line. Left out of either order, the line would be cleared whole and the mode with it.
@@ -8058,6 +8548,29 @@ mod tests {
     fn the_input_box_stops_growing_at_the_cap() {
         let huge = input_height(&typed(&"word ".repeat(500)), 50, 40);
         assert_eq!(huge as usize, wrap::MAX_ROWS + 2, "the cap was not applied");
+    }
+
+    /// The line being composed is the one thing a person must always be able to see, and the cap
+    /// is what leaves the transcript the majority of a standard terminal. A cap compared with the
+    /// constant that sets it passes at any value, so the ten rows are written as ten (INPUT-1).
+    #[test]
+    fn the_input_box_holds_ten_rows_of_text_and_no_more() {
+        let width = 50u16;
+        let row = "Ω".repeat(input_text_width(width));
+        for (written, shown) in [(9, 9), (10, 10), (11, 10), (40, 10)] {
+            let session = typed(&row.repeat(written));
+            assert_eq!(
+                input_height(&session, width, 60),
+                shown + 2,
+                "{written} rows of text"
+            );
+            let drawn = rendered_at(&session, width, 60);
+            assert_eq!(
+                drawn.matches('Ω').count(),
+                shown as usize * input_text_width(width),
+                "{written} rows of text: {drawn}"
+            );
+        }
     }
 
     /// Past the cap the view follows the cursor, so typing at the end stays visible.

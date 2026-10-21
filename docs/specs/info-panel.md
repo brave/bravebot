@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/title.rs
   - crates/tui/src/panel.rs
+  - crates/tui/src/pointer.rs
 documented-by: docs/website/docs/using/sessions.md
 ---
 
@@ -80,7 +81,9 @@ moves it ([INPUT-32](terminal-input.md#INPUT-32)), and a moved panel leaves `ctr
 panel is open to `~/.bravebot/panel`, and the next start reads it, as the theme is
 ([SESSION-9](sessions.md#SESSION-9)). No file, or a file that says neither `open` nor `closed`,
 leaves the panel closed. The choice is not in the session record, so a resume opens with the panel
-as the last press left it.
+as the last press left it. The width the panel was last dragged to ([PANEL-6](#PANEL-6)) is kept
+the same way in `~/.bravebot/panel-width`, a single whole number of columns; no file, or one that
+holds anything else, leaves the panel at 36.
 
 **Why `ctrl-x`.** Ctrl-I is Tab to a terminal, Ctrl-H, Ctrl-M and Ctrl-[ are Backspace, Enter and
 Escape, Ctrl-Z suspends, Ctrl-Q is flow control, and the box answers the other Ctrl letters. A
@@ -94,11 +97,13 @@ is back on its default until the file moves the panel too.
 `verified-by: bravebot_tui::persist::whether_the_panel_was_left_open_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::a_press_opens_the_next_session_too_and_a_corrupt_choice_leaves_it_closed`
 `verified-by: bravebot_session::store::only_the_two_panel_words_are_a_choice`
+`verified-by: bravebot_session::store::only_a_positive_whole_number_is_a_panel_width`
+`verified-by: bravebot_tui::persist::the_dragged_width_is_read_back_next_session_and_a_corrupt_one_leaves_36`
 
 <a id="PANEL-6"></a>
 ### PANEL-6: the panel takes its columns from the transcript, and only where the rest still fits
 
-The panel is 36 columns on the right of the screen, its left edge a border, and runs from the top
+The panel is 36 columns on the right of the screen unless it has been dragged to another width, its left edge a border, and runs from the top
 row to the row above the hint line, which keeps the full width. The transcript and the input box
 take the columns to its left and wrap to them. It is drawn only on a terminal at least 100 columns
 wide, which leaves the transcript 64. A press to open it on a narrower terminal changes nothing and
@@ -108,9 +113,36 @@ it closes it on a terminal of any width, so a panel closed while narrowed out of
 when the terminal is widened. Whether the panel is drawn and whether it is open are separate facts,
 and the clauses below are about the first.
 
+Dragging the border moves it: a left-button press on the border column starts a drag, the drag sets
+the panel to the columns right of the pointer, and the release ends it and keeps the width
+([PANEL-5](#PANEL-5)). The width is held between 24 columns and what leaves the transcript 64, so
+the 100-column threshold holds at the default width. A terminal resized while the panel is open
+draws it at the stored width clamped to the new size, and the stored width is left as it was. A
+press on the border starts no selection in either pane ([MOUSE-2](mouse.md#MOUSE-2)), and the
+release of a drag that began there copies nothing.
+
+In a terminal that draws a pointer shape on request, the pointer is the resize one while it is over
+the border column, from the panel's first row to its last, and while a drag of the border is held.
+It is asked for with OSC 22 when the shape changes and not for each report of the pointer, and it is
+given back when the pointer leaves the border, when the panel closes, and before the terminal is
+handed back. Kitty, Ghostty and foot are asked, with the name `ew-resize`. Any other terminal is
+written nothing and keeps its own pointer. The terminals asked are also told of motion with no
+button held ([INPUT-33](terminal-input.md#INPUT-33)), which is how the pointer is found over the
+border.
+
 `verified-by: bravebot_tui::panel::the_panel_is_drawn_from_a_hundred_columns_and_not_below`
 `verified-by: bravebot_tui::panel::a_press_on_a_narrow_terminal_does_not_open_the_panel_and_does_close_it`
 `verified-by: bravebot_tui::panel::the_transcript_and_the_input_wrap_to_the_columns_the_panel_leaves`
+`verified-by: bravebot_tui::panel::a_drag_on_the_border_moves_it_and_the_transcript_rewraps`
+`verified-by: bravebot_tui::panel::the_width_is_clamped_at_both_ends`
+`verified-by: bravebot_tui::panel::a_narrowed_terminal_reclamps_without_forgetting_the_choice`
+`verified-by: bravebot_tui::panel::a_drag_from_the_border_never_selects_or_copies`
+`verified-by: bravebot_tui::panel::the_resize_pointer_is_over_the_border_column_and_nowhere_else`
+`verified-by: bravebot_tui::panel::a_drag_holds_the_resize_pointer_and_its_end_follows_the_border`
+`verified-by: bravebot_tui::panel::a_panel_closed_under_the_pointer_gives_the_resize_pointer_back`
+`verified-by: bravebot_tui::pointer::a_shape_is_written_when_it_changes_and_not_while_it_stays`
+`verified-by: bravebot_tui::pointer::a_terminal_with_no_known_name_is_written_nothing`
+`verified-by: bravebot_tui::pointer::only_terminals_documented_to_take_css_names_are_asked`
 
 <a id="PANEL-7"></a>
 ### PANEL-7: the panel ends with the key that hides it
@@ -225,11 +257,24 @@ progress would fall below the cut, the rows shown move down the list until it is
 last row counts the rows left out above the ones shown apart from those below them (`+12 earlier`,
 `+15 earlier, +7 more`, `+3 more`).
 
+A row that is neither completed nor cancelled is drawn as work being done only while a turn is
+running. While none is, as after the turn that wrote the list has ended and in a resumed session,
+such a row is left open: its mark is hollow (`□`) where work being done has the filled one, so the
+two differ under `NO_COLOR`, and its text is dim. A compaction or another working state that is
+not a turn leaves it open too. Rows that are completed or cancelled are drawn as they are in any
+other plan.
+
+**Why.** Nothing is working on a row once the turn has ended. A filled mark beside an answer that
+says the work is finished reads as work still going.
+
 `verified-by: bravebot_tui::panel::the_plan_stays_after_the_turn_and_clear_empties_it`
 `verified-by: bravebot_tui::panel::an_empty_report_after_one_with_rows_keeps_that_plan`
 `verified-by: bravebot_tui::state::a_failed_or_stopped_turn_after_an_empty_report_keeps_its_plan`
 `verified-by: bravebot_tui::state::a_rewind_or_an_unsent_prompt_leaves_no_plan_after_an_empty_report`
 `verified-by: bravebot_tui::panel::a_plan_longer_than_the_room_keeps_the_task_in_progress_and_counts_each_side_of_it`
+`verified-by: bravebot_tui::panel::a_row_a_turn_left_open_is_drawn_apart_from_work_being_done`
+`verified-by: bravebot_tui::panel::a_working_session_that_is_not_in_a_turn_draws_open_rows_as_left_open`
+`verified-by: bravebot_tui::sessions::a_resumed_session_draws_the_plan_it_was_left_with_as_left_open`
 
 <a id="PANEL-11"></a>
 ### PANEL-11: the panel draws only on what the person and the driver said
@@ -342,3 +387,17 @@ produced ([PANEL-11](#PANEL-11)). [PANEL-4](#PANEL-4) holds: no marker is writte
 `verified-by: bravebot_tui::app::a_question_turns_the_title_to_waiting_and_other_messages_do_not`
 `verified-by: bravebot_tui::app::every_approval_a_manifest_step_draws_turns_the_title_to_waiting`
 `verified-by: bravebot_tui::app::a_manifest_step_marks_the_title_waiting_while_it_asks_and_working_after`
+
+## Known costs
+
+- **A terminal that is not asked shows no resize pointer.** Over the border it draws its own pointer,
+  so a person there finds that the border drags by trying it. iTerm2 and xterm read the sequence
+  ([PANEL-6](#PANEL-6)) but take other names for the shape, a subset of X11's that iTerm2 does not
+  list and X11's own for xterm, and each is asked once the name it takes for this shape is confirmed
+  in that terminal. VTE-based terminals and Alacritty do not read the sequence. A terminal not asked
+  is also not told of motion with no button held ([INPUT-33](terminal-input.md#INPUT-33)), so it
+  pays nothing for a pointer shape it cannot draw.
+
+- **A prompt or a picker opened under the pointer leaves the resize pointer in place.** The prompts
+  and pickers read their own events and none of them reads the pointer, so a pointer on the border
+  when one opens keeps its shape until the prompt closes and the pointer next moves.

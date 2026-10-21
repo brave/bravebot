@@ -37,6 +37,10 @@
 //!   that a person asking for none of it says so once in a file rather than in prose an agent
 //!   has to be reading at the moment it writes one. Its text is stated to the planner, so it is read
 //!   from the person's own files alone, as `references` is.
+//! - `language`, this program's own: the catalog the interface is read in, as a locale tag such as
+//!   `fr` or `fr-CA`, or `auto` for what the environment says. It is read from the person's own
+//!   file alone and before the command line is read, so a file the command line names cannot carry
+//!   it: see [`Settings::language`].
 //! - `vetting`, this program's own, since nothing else has the idea. It is the one block read from
 //!   the **home layer alone**: see [`Settings::auto_vetting`].
 //!
@@ -149,10 +153,14 @@ const READ_KEYS: &[&str] = &[
     "fallbackModel",
     crate::git_identities::BLOCK,
     "keybindings",
+    "language",
     "limit",
+    "maxRunningDelegates",
     "mcp",
     "mcpServers",
     "model",
+    "notificationCondition",
+    "notificationMethod",
     PERMISSIONS_BLOCK,
     "processorModel",
     "promptCacheTtl",
@@ -307,6 +315,19 @@ pub struct Settings {
     /// `None` is the built-in idle time, which belongs to the interface that decides when a recap
     /// is owed, for the reason [`Settings::wheel_rows`] gives about its own count.
     away_summary_idle_seconds: Option<u64>,
+    /// What the top-level `maxRunningDelegates` key said, if it said a whole positive count.
+    ///
+    /// `None` is the built-in bound, which belongs to the kernel that holds a turn's tree of
+    /// delegates, for the reason [`Settings::wheel_rows`] gives about its own count.
+    max_running_delegates: Option<u32>,
+    /// What the top-level `notificationMethod` key named, if it named anything.
+    ///
+    /// The word as the file spelled it, for the reason `editor_mode` above keeps one: which words
+    /// name a method is the interface's to say, since it is the one that writes to the terminal.
+    notification_method: Option<String>,
+    /// What the top-level `notificationCondition` key named, if it named anything, kept as
+    /// [`Settings::notification_method`] keeps its word.
+    notification_condition: Option<String>,
     /// What `vetting.auto` said, where the layer that said it was entitled to.
     ///
     /// Read from the **home** layer and no other, which is why [`Settings::layered`] settles this
@@ -423,6 +444,14 @@ pub struct Settings {
     /// Kept because a style's words open the system prompt, so which one a session starts in is the
     /// person's to say and not a checkout's.
     style_ignored: Vec<PathBuf>,
+    /// The catalog the person's own file asked the interface to be read in, as the file spelled it.
+    language: Option<String>,
+    /// The layers that named `language` and were not obeyed, weakest first.
+    ///
+    /// Kept because the interface is in one language for the whole process and is chosen before
+    /// the command line is read, so the one file that can say which is the person's own: a
+    /// checkout's file would be choosing the language for whoever opened the checkout.
+    language_ignored: Vec<PathBuf>,
     /// The layers that named `references` and were not obeyed, weakest first.
     ///
     /// Kept because an entry makes a directory reachable and puts its description in front of the
@@ -547,6 +576,9 @@ pub struct Settings {
     /// this crate the second place it is written down. The bound a configured count is held to is
     /// the interface's too, since what a sane number of rows is depends on the screen.
     wheel_rows: Option<usize>,
+    /// What `tui.mouse` said, if it said a boolean. `Some(false)` is the interface leaving the
+    /// mouse to the terminal.
+    tui_mouse: Option<bool>,
     providers: Vec<crate::provider::Provider>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
@@ -800,6 +832,27 @@ impl Settings {
         self
     }
 
+    /// The language the person's own settings file asks the interface to be read in, and nothing
+    /// else the files say.
+    ///
+    /// Read ahead of the command line, because every sentence the program says after that is in the
+    /// catalog this chooses and the first of them can be a refusal of a flag. Only the home layer
+    /// exists for it: no checkout is read and no file the command line names is known yet, which is
+    /// also why neither of them may carry the key (LOCALE-8).
+    pub fn written_language() -> Option<String> {
+        Self::language_in(home())
+    }
+
+    /// As [`Settings::written_language`], for a named home, so a test needs no ambient one.
+    ///
+    /// The one key out of the one file, through the reader every layer goes through, so the file is
+    /// held to the same bound and the document clears itself when this returns. Nothing else the
+    /// file says is built: this runs for every command, before the ones that need the rest.
+    fn language_in(home: Option<PathBuf>) -> Option<String> {
+        let document = read(&user_settings_file(&home?))?;
+        word(&document.root, "language")
+    }
+
     /// As [`Settings::load`], for a named home, working directory and command line, so a test needs
     /// no ambient ones.
     ///
@@ -899,6 +952,7 @@ impl Settings {
         let mut processor_ignored = Vec::new();
         let mut agent_ignored = Vec::new();
         let mut style_ignored = Vec::new();
+        let mut language_ignored = Vec::new();
         let mut references_ignored = Vec::new();
         let mut attribution_ignored = Vec::new();
         let mut misshapen = Vec::new();
@@ -983,6 +1037,11 @@ impl Settings {
                 if root.remove("style") {
                     style_ignored.push(path.clone());
                 }
+            }
+            // Read before the command line is, so the file a flag names is not yet known to the
+            // reader that answers for the interface: the home layer alone says which language.
+            if !own && root.remove("language") {
+                language_ignored.push(path.clone());
             }
             // Entitled the way an allow rule is rather than the way `model` is: a named file that
             // resolves inside the workspace is a checkout's file, and a reference makes a
@@ -1239,6 +1298,7 @@ impl Settings {
         settings.processor_ignored = processor_ignored;
         settings.agent_ignored = agent_ignored;
         settings.style_ignored = style_ignored;
+        settings.language_ignored = language_ignored;
         settings.references_ignored = references_ignored;
         settings.attribution_ignored = attribution_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
@@ -1342,6 +1402,15 @@ impl Settings {
                 .get("awaySummaryIdleSeconds")
                 .and_then(serde_json::Value::as_u64)
                 .filter(|seconds| *seconds > 0),
+            // A count past what a `u32` holds is more delegates than a turn could start, which is
+            // no bound at all, so it is read as the largest the kernel counts rather than dropped.
+            max_running_delegates: root
+                .get("maxRunningDelegates")
+                .and_then(serde_json::Value::as_u64)
+                .filter(|count| *count > 0)
+                .map(|count| u32::try_from(count).unwrap_or(u32::MAX)),
+            notification_method: word(root, "notificationMethod"),
+            notification_condition: word(root, "notificationCondition"),
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
             // from and so the only one entitled to answer.
@@ -1379,6 +1448,7 @@ impl Settings {
             download_max: download_max_bytes(root),
             run_deadlines: run_deadlines(root),
             wheel_rows: wheel_rows(root),
+            tui_mouse: tui_mouse(root),
             // The word one root states, there being no file to name. [`Settings::layered`]
             // overwrites it with what the layers come to.
             run_network: match network_word(root) {
@@ -1421,6 +1491,8 @@ impl Settings {
             agent_ignored: Vec::new(),
             style: word(root, "style"),
             style_ignored: Vec::new(),
+            language: word(root, "language"),
+            language_ignored: Vec::new(),
         }
     }
 
@@ -1597,6 +1669,31 @@ impl Settings {
     /// absence, and so is anything that is not a whole count.
     pub fn away_summary_idle_seconds(&self) -> Option<u64> {
         self.away_summary_idle_seconds
+    }
+
+    /// The most delegates the settings in force let one turn have running at once, if they say.
+    ///
+    /// `None` where nobody named a usable count, which is the built-in bound: that belongs to the
+    /// kernel that holds the tree, and answering with it here would put a second copy of it in
+    /// this crate. Zero would let a turn start no delegate at all, which is what turning
+    /// delegation off is for, so it is absence, and so is anything that is not a whole count.
+    pub fn max_running_delegates(&self) -> Option<u32> {
+        self.max_running_delegates
+    }
+
+    /// The way the settings in force ask the terminal to be told a turn ended or a question is
+    /// waiting, if they named one.
+    ///
+    /// The word the file spelled, unrecognised words and all, so the interface that writes to the
+    /// terminal decides which words name a method and reports one it does not know.
+    pub fn notification_method(&self) -> Option<&str> {
+        self.notification_method.as_deref()
+    }
+
+    /// When the settings in force ask for that notice, if they named a condition, as the word the
+    /// file spelled.
+    pub fn notification_condition(&self) -> Option<&str> {
+        self.notification_condition.as_deref()
     }
 
     /// What `vetting.auto` said in the home layer, if it said anything.
@@ -1965,6 +2062,16 @@ impl Settings {
         self.wheel_rows
     }
 
+    /// Whether `tui.mouse` said anything: `Some(false)` asks the interface not to capture the
+    /// mouse, so the terminal's own selection and wheel keep working.
+    ///
+    /// A boolean and nothing else, for the reason [`Settings::terminal_title`] gives: the key
+    /// exists to turn something off, so only a real `false` may do it and a quoted `"false"` is
+    /// absence.
+    pub fn tui_mouse(&self) -> Option<bool> {
+        self.tui_mouse
+    }
+
     /// Whether anything was set at all.
     pub fn is_empty(&self) -> bool {
         self.env.is_empty()
@@ -1983,6 +2090,9 @@ impl Settings {
             && self.update_check.is_none()
             && self.away_summary_enabled.is_none()
             && self.away_summary_idle_seconds.is_none()
+            && self.max_running_delegates.is_none()
+            && self.notification_method.is_none()
+            && self.notification_condition.is_none()
             && self.vetting.is_none()
             && self.narrowing.is_empty()
             // A key named as something other than a boolean said something too, and `doctor` names
@@ -2001,6 +2111,7 @@ impl Settings {
             && self.download_max.is_none()
             && self.run_deadlines.is_empty()
             && self.wheel_rows.is_none()
+            && self.tui_mouse.is_none()
             && self.run_network.is_none()
             && self.run_network_ignored.is_empty()
             && self.run_network_unreadable.is_empty()
@@ -2041,6 +2152,8 @@ impl Settings {
             && self.agent_ignored.is_empty()
             && self.style_ignored.is_empty()
             && self.style.is_none()
+            && self.language_ignored.is_empty()
+            && self.language.is_none()
             && self.references_ignored.is_empty()
             && self.attribution_ignored.is_empty()
     }
@@ -2096,6 +2209,20 @@ impl Settings {
     /// The files that named `style` from a layer not entitled to, weakest first.
     pub fn style_ignored(&self) -> impl Iterator<Item = &Path> {
         self.style_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The language the person's own file asked the interface to be read in, as the file spelled it
+    /// (LOCALE-8).
+    ///
+    /// A locale tag or `auto`, neither of which is matched to a catalog here: `bravebot-i18n` owns
+    /// which catalogs shipped.
+    pub fn language(&self) -> Option<&str> {
+        self.language.as_deref()
+    }
+
+    /// The files that named `language` from a layer other than the person's own, weakest first.
+    pub fn language_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.language_ignored.iter().map(PathBuf::as_path)
     }
 
     /// The files that named `agent` from a layer not entitled to, weakest first.
@@ -2194,6 +2321,7 @@ impl Settings {
             .chain(self.agent.is_some().then_some("agent"))
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.style.is_some().then_some("style"))
+            .chain(self.language.is_some().then_some("language"))
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
             .chain(self.limit.is_some().then_some("limit"))
@@ -2214,6 +2342,21 @@ impl Settings {
                 self.away_summary_idle_seconds
                     .is_some()
                     .then_some("awaySummaryIdleSeconds"),
+            )
+            .chain(
+                self.max_running_delegates
+                    .is_some()
+                    .then_some("maxRunningDelegates"),
+            )
+            .chain(
+                self.notification_method
+                    .is_some()
+                    .then_some("notificationMethod"),
+            )
+            .chain(
+                self.notification_condition
+                    .is_some()
+                    .then_some("notificationCondition"),
             )
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain(self.narrowing.named())
@@ -2254,6 +2397,7 @@ impl Settings {
             )
             .chain(self.sandbox_hosts.keys())
             .chain(self.wheel_rows.is_some().then_some("tui.wheelRows"))
+            .chain(self.tui_mouse.is_some().then_some("tui.mouse"))
             .chain(self.env.keys().map(String::as_str))
     }
 
@@ -3263,6 +3407,14 @@ fn wheel_rows(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize
         .and_then(|rows| usize::try_from(rows).ok())
 }
 
+/// The `tui.mouse` switch, read the way the top-level booleans are: only a real boolean counts.
+fn tui_mouse(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
+    let serde_json::Value::Object(tui) = root.get("tui")? else {
+        return None;
+    };
+    tui.get("mouse").and_then(serde_json::Value::as_bool)
+}
+
 /// Whether `character` separates one segment of a path from the next on this host.
 fn separates(character: char) -> bool {
     character == '/' || (std::path::MAIN_SEPARATOR == '\\' && character == '\\')
@@ -4243,6 +4395,43 @@ mod tests {
             0,
             "the block was reported as a key nothing reads"
         );
+    }
+
+    /// MOUSE-4: only a real `false` turns mouse capture off, so a quoted `"false"` or a misplaced key
+    /// leaves the wheel and the drag working, and the nearest layer that named it wins.
+    #[test]
+    fn only_a_boolean_turns_mouse_capture_off() {
+        let settings = Settings::parse(r#"{"tui": {"mouse": false}}"#);
+        assert_eq!(settings.tui_mouse(), Some(false));
+        assert!(!settings.is_empty());
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["tui.mouse"]);
+
+        assert_eq!(
+            Settings::parse(r#"{"tui": {"mouse": true}}"#).tui_mouse(),
+            Some(true)
+        );
+        for text in [
+            r#"{"tui": {"mouse": "false"}}"#,
+            r#"{"tui": {"mouse": 0}}"#,
+            r#"{"tui": {"mouse": null}}"#,
+            r#"{"tui": {}}"#,
+            r#"{"tui": false}"#,
+            r#"{"mouse": false}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).tui_mouse(),
+                None,
+                "{text:?} turned the mouse off"
+            );
+        }
+
+        let layered = Layers::new("tui-mouse-layers")
+            .global(r#"{"tui": {"mouse": true}}"#)
+            .project(r#"{"tui": {"mouse": false}}"#)
+            .read();
+        assert_eq!(layered.tui_mouse(), Some(false));
+        assert_eq!(layered.unread_keys().count(), 0);
     }
 
     /// A build a person runs every day outlasts the built-in default on some trees, and the figure
@@ -5488,6 +5677,37 @@ mod tests {
             "https://personal.invalid/v1"
         );
         assert_eq!(settings.providers_ignored().count(), 1);
+    }
+
+    /// A checkout that stretches a timeout or multiplies attempts would spend the person's account
+    /// and time on its own say-so, so a project or local layer's `provider` block is ignored
+    /// whole, retry count and quiet gap with it, and the home layer's figures stay in force.
+    #[test]
+    fn a_project_layer_cannot_change_a_gateways_retry_count_or_idle_gap() {
+        let settings = Layers::new("provider-patience")
+            .global(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "maxRetries": 1, "idleTimeoutMs": 30000}}}}"#,
+            )
+            .project(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "maxRetries": 7, "idleTimeoutMs": 600000}}}}"#,
+            )
+            .local(
+                r#"{"provider": {"other": {"options": {
+                    "baseURL": "https://other.invalid/v1", "maxRetries": 7}}}}"#,
+            )
+            .read();
+        assert_eq!(settings.providers().len(), 1);
+        let patience = settings.providers()[0].patience;
+        assert_eq!(patience.max_retries, Some(1));
+        assert_eq!(
+            patience.idle_timeout,
+            Some(std::time::Duration::from_secs(30))
+        );
+        assert_eq!(settings.providers_ignored().count(), 2);
     }
 
     /// A file the command line named beats every file that was found (BACKEND-24), and naming it
@@ -6814,6 +7034,89 @@ mod tests {
         assert_eq!(only_global.away_summary_idle_seconds(), Some(90));
     }
 
+    /// DELEGATE-7: the most delegates a turn may have running is a whole positive count. Zero
+    /// would be a turn that may start none, and anything that is not a whole count is no figure,
+    /// so each leaves the built-in bound in force. A count too large to hold is the largest one,
+    /// not the built-in bound, and the nearest layer that named one wins.
+    #[test]
+    fn a_settings_file_names_how_many_delegates_a_turn_may_have_running() {
+        let settings = Settings::parse(r#"{"maxRunningDelegates": 12}"#);
+        assert_eq!(settings.max_running_delegates(), Some(12));
+        assert!(!settings.is_empty());
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            ["maxRunningDelegates"]
+        );
+
+        assert_eq!(
+            Settings::parse(r#"{"maxRunningDelegates": 5000000000}"#).max_running_delegates(),
+            Some(u32::MAX),
+            "a count past what the kernel holds was not read as the largest it holds"
+        );
+
+        for text in [
+            r#"{"maxRunningDelegates": 0}"#,
+            r#"{"maxRunningDelegates": -5}"#,
+            r#"{"maxRunningDelegates": 1.5}"#,
+            r#"{"maxRunningDelegates": "12"}"#,
+            r#"{"maxRunningDelegates": null}"#,
+            r#"{"agents": {"maxRunningDelegates": 12}}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).max_running_delegates(),
+                None,
+                "{text:?} named a bound"
+            );
+        }
+
+        let layered = Layers::new("delegates-layers")
+            .global(r#"{"maxRunningDelegates": 12}"#)
+            .project(r#"{"maxRunningDelegates": 4}"#)
+            .read();
+        assert_eq!(layered.max_running_delegates(), Some(4));
+        assert_eq!(layered.unread_keys().count(), 0);
+
+        let only_global = Layers::new("delegates-global")
+            .global(r#"{"maxRunningDelegates": 12}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
+            .read();
+        assert_eq!(only_global.max_running_delegates(), Some(12));
+    }
+
+    /// VIEW-31: the two keys are words the interface interprets, so each is handed on as written, a
+    /// blank is absence, the nearest layer that named one wins, and this build reads both.
+    #[test]
+    fn a_settings_file_names_how_and_when_the_terminal_is_notified() {
+        let settings = Settings::parse(
+            r#"{"notificationMethod": " bel ", "notificationCondition": "always"}"#,
+        );
+        assert_eq!(settings.notification_method(), Some("bel"));
+        assert_eq!(settings.notification_condition(), Some("always"));
+        assert!(!settings.is_empty());
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            ["notificationMethod", "notificationCondition"]
+        );
+
+        for text in [
+            r#"{"notificationMethod": ""}"#,
+            r#"{"notificationMethod": true}"#,
+            r#"{"tui": {"notificationMethod": "bel"}}"#,
+            "{}",
+        ] {
+            assert_eq!(Settings::parse(text).notification_method(), None, "{text}");
+        }
+
+        let layered = Layers::new("notification-layers")
+            .global(r#"{"notificationMethod": "osc9", "notificationCondition": "always"}"#)
+            .project(r#"{"notificationMethod": "off"}"#)
+            .read();
+        assert_eq!(layered.notification_method(), Some("off"));
+        assert_eq!(layered.notification_condition(), Some("always"));
+        assert_eq!(layered.unread_keys().count(), 0);
+    }
+
     /// INPUT-43: the key turns a request that spends on, so only a real `true` does it. A quoted
     /// `"true"` read as true would spend for somebody who wrote something else.
     #[test]
@@ -7095,6 +7398,46 @@ mod tests {
 
         assert_eq!(settings.network_values().count(), 0);
         assert_eq!(settings.get("AWS_REGION"), Some("eu-west-1"));
+    }
+
+    /// A checkout names the region of an account the person's own file turned on, and the region
+    /// is written into the host the signed request goes to. A value that would move the host
+    /// configures no account, and the same layers with a real region do, which is what tells the
+    /// two apart from a checkout whose region is never read.
+    #[test]
+    fn a_checkouts_region_that_would_move_the_request_configures_no_account() {
+        let person = r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-arn"}}"#;
+        let account = |name: &str, checkout: &str| {
+            let settings = Layers::new(name).global(person).project(checkout).read();
+            crate::Config::from_sources(
+                &settings,
+                &crate::managed::Managed::default(),
+                &crate::keys::Keys::default(),
+                |_| None,
+                |key| match key {
+                    crate::env_var::SIGNING_KEY => Some("test-signing-key".into()),
+                    crate::env_var::KEY_ID => Some("test-key-id".into()),
+                    crate::env_var::ENDPOINT => Some("https://example.invalid".into()),
+                    _ => None,
+                },
+            )
+            .expect("configured")
+            .bedrock
+        };
+
+        let real = account(
+            "region-checkout-real",
+            r#"{"env": {"AWS_REGION": "eu-west-1"}}"#,
+        )
+        .expect("a checkout's real region reaches the account");
+        assert_eq!(real.host(), "bedrock-runtime.eu-west-1.amazonaws.com");
+
+        let moved = account(
+            "region-checkout-moves-the-host",
+            r#"{"env": {"AWS_REGION": "x.attacker.example/"}}"#,
+        );
+        assert_eq!(moved, None, "a checkout chose the host the request goes to");
     }
 
     /// A file the command line named is the person's act unless it sits in the checkout, which is
@@ -7413,6 +7756,74 @@ mod tests {
             .read();
         assert_eq!(named.style(), Some("terse"));
         assert_eq!(named.style_ignored().count(), 0);
+    }
+
+    /// LOCALE-8: the catalog is chosen once for the process and before the command line is read, so
+    /// the person's own file is the only one that can name it, and every other layer that does is
+    /// reported.
+    #[test]
+    fn only_the_persons_own_file_can_name_the_language() {
+        let settings = Layers::new("language-layers")
+            .global(r#"{"language": " fr "}"#)
+            .project(r#"{"language": "ja"}"#)
+            .local(r#"{"language": "en-US"}"#)
+            .named(r#"{"language": "ja"}"#)
+            .read();
+        assert_eq!(settings.language(), Some("fr"));
+        assert_eq!(settings.language_ignored().count(), 3);
+
+        let only_project = Layers::new("language-only-project")
+            .project(r#"{"language": "ja"}"#)
+            .read();
+        assert_eq!(only_project.language(), None);
+        assert_eq!(only_project.language_ignored().count(), 1);
+
+        let named = Layers::new("language-named")
+            .named(r#"{"language": "ja"}"#)
+            .read();
+        assert_eq!(named.language(), None);
+        assert_eq!(named.language_ignored().count(), 1);
+    }
+
+    /// LOCALE-8: the reader that answers before the command line is read sees the home layer and
+    /// nothing else, so a checkout the process happens to start in cannot choose the language.
+    #[test]
+    fn the_language_read_ahead_of_the_command_line_is_the_home_layers() {
+        let layers = Layers::new("language-ahead")
+            .global(r#"{"language": "fr"}"#)
+            .project(r#"{"language": "ja"}"#);
+        assert_eq!(
+            Settings::language_in(Some(layers.home.clone())).as_deref(),
+            Some("fr")
+        );
+
+        let only_project =
+            Layers::new("language-ahead-project-only").project(r#"{"language": "ja"}"#);
+        assert_eq!(Settings::language_in(Some(only_project.home.clone())), None);
+        assert_eq!(Settings::language_in(None), None);
+    }
+
+    /// LOCALE-8: a blank or non-string `language` names nothing, so the environment answers.
+    #[test]
+    fn a_language_that_is_blank_or_not_a_string_names_nothing() {
+        for text in [
+            r#"{"language": ""}"#,
+            r#"{"language": "  "}"#,
+            r#"{"language": 1}"#,
+            r#"{"language": ["fr"]}"#,
+        ] {
+            assert_eq!(
+                Settings::parse(text).language(),
+                None,
+                "{text} named a language"
+            );
+        }
+        assert_eq!(
+            Settings::parse(r#"{"language": "fr"}"#)
+                .names()
+                .collect::<Vec<_>>(),
+            ["language"]
+        );
     }
 
     /// INSTR-12: a blank or non-string `style` names nothing.

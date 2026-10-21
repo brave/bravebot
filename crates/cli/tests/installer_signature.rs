@@ -25,6 +25,7 @@
 //! [RELEASE-15]: ../../../docs/specs/releases.md
 
 #![cfg(target_os = "linux")]
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};

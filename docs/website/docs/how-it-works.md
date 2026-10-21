@@ -152,7 +152,9 @@ back.
 
 **A delegate can start delegates of its own**, so one handed a task that needs five files read can
 hand them out rather than read them one after another. The tree stops three levels below the turn,
-and one turn starts at most 32 delegates across every level and branch. Each is numbered by its
+and one turn has at most 64 delegates running at once across every level and branch, a figure the
+[`maxRunningDelegates`](customize/configuration.md#maxrunningdelegates) setting changes. A delegate that has
+finished gives its place back. Each is numbered by its
 place in the tree: `d1.2` is the second delegate that `d1` started. Every level is approved and
 narrowed exactly as the first is, so a nested delegate holds nothing the delegate above it did not.
 

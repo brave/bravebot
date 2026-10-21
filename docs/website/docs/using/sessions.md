@@ -55,6 +55,16 @@ bravebot sessions search since:2w workspace:../app flaky test
 `workspace:` names the directory whose sessions are searched, and defaults to the current one. It
 exits 1 and prints nothing when no session matches.
 
+`bravebot sessions list [--json] [--limit <n>]` prints the sessions recorded for this directory, newest
+first, one per line: the id, how long ago it was last written, the title, the branch, the front end
+that wrote it and whether it can be continued. `--limit` defaults to 20, and a line on stderr says how
+many were left out. `--json` prints one object per line with `id`, `title`, `directory`, `updated`,
+`branch`, `front` and `continuable`, and nothing else. A limit of zero, one that is not a number, a
+repeated flag or any other word is refused. Only sessions whose recorded directory is this one are
+listed, so two directories that share a store do not show each other's sessions, which the
+`--resume` picker still does. A bare `bravebot sessions` lists
+[background sessions](#sessions-in-the-background) instead.
+
 `--continue` takes the session the picker would offer first and picks it up exactly as naming its id
 would. It passes over a [manifest run](#a-manifest-run-is-recorded-but-cannot-be-continued) rather
 than refusing it. Where this directory holds nothing continuable it says so and fails rather than
@@ -223,7 +233,8 @@ resume brings back the question alone.
 ## Naming a session
 
 A session's title is the first line of what you asked, cut rather than mangled if it is long. A
-prompt with nothing in it still has a title.
+prompt with nothing in it still has a title. A `/compact` typed before any prompt writes no record
+and does not fix the title; the first prompt that says something names the session.
 
 ```
 /rename dependency audit
@@ -236,7 +247,8 @@ The terminal's title follows the name, as `bravebot · dependency audit`, so a r
 several sessions can be told apart. It is set once the session has a name and changes when the name
 does, and your shell's own title comes back when you leave. While a turn is running the title starts
 with `✦`, and while an approval or a question is waiting for you it starts with `[!]`, so the tab
-that needs an answer can be found without opening each one. At the box there is no marker. A terminal that cannot save a title is
+that needs an answer can be found without opening each one. A [`/manifest`](../reference/commands.md#manifest-task) run
+shows `[!]` while one of its approvals is open. At the box there is no marker. A terminal that cannot save a title is
 left with an empty one rather than this session's name. An incognito session leaves the title alone,
 and so does setting [`terminalTitle`](../customize/configuration.md#terminaltitle) to `false`.
 
@@ -264,33 +276,44 @@ again for that note.
 ## Telling sessions apart
 
 The title says which session a terminal holds. The info panel says the rest: press Ctrl-X, or type
-`/panel`, and a column 36 wide opens on the right of the screen with
+`/panel`, and a column 36 wide opens on the right of the screen. Drag the border between it and the transcript to give
+it more room or less; it keeps at least 24 columns and leaves the transcript at least 64. Kitty,
+Ghostty and foot change the pointer to a resize arrow over the border. It holds
 
 - the session's name, with a GitHub pull request or issue address in it shown as
   `brave/bravebot#1975` and still a link to the address in a terminal that supports links,
   its directory and its branch, and below them its id over two rows, the one
   `bravebot --resume`, `--fork` and `/resume` take, so you can resume or fork a running session from
   another terminal without `/status`; it appears once the session has been saved,
-- the model you chose and the effort level in force,
+- the model you chose and the effort level in force. A model your configuration names is drawn by the
+  name the `/model` picker gives it, with the service after a tier's name, as `Sonnet (Bedrock)`, rather
+  than by the inference-profile ARN a Bedrock tier is requested by; `/status` draws it the same way and
+  keeps the request name on the line beneath,
 - the goal, while one stands,
 - the pull request and the issue the session is for, once you give them with `/pr` and `/issue`,
-  each cut from the left where it is long so the number at the end stays in view. A GitHub pull
-  request or issue address is shown as `brave/bravebot#1975` and is still a link to the address in
-  a terminal that supports links,
-- how full the context is, the tokens the session has spent (the figure `/cost` opens with), the
-  cache hit rate, and what the last turn read from the cache and wrote
-  into it, as two figures,
+  each cut from the left where it is long so the number at the end stays in view,
+- how full the context is (read again after each round of a turn, so the first turn of a session shows
+  a figure before it ends), the tokens the session has spent (the figure `/cost` opens with, which
+  counts what a running [delegate](../how-it-works.md#delegates) has completed as it completes, nested
+  delegates included), the
+  cache hit rate, and what the turn read from the cache and wrote
+  into it, as two figures. A figure that is zero is not drawn, so a service that reports no cache
+  shows neither and a turn that only wrote to the cache shows the write alone. The cache figures update after each round of a turn in flight, including
+  the first turn, and a round that reports nothing spent leaves the previous figures in place,
 - the language servers the session has started, by program name, and the MCP servers, by alias,
-- the plan, which stays after the turn ends. Where it runs past the bottom it keeps the task in
-  progress in view and counts the rows left out above and below it, as `+12 earlier` or
-  `+3 more`.
+- the plan, which stays after the turn ends. A task still pending or in progress is drawn with a
+  filled `■` while a turn is running, and dim with a hollow `□` while none is, as after the turn
+  that wrote the list has ended or in a resumed session. Where it runs past the bottom it keeps the
+  task in progress in view and counts the rows left out above and below it, as `+12 earlier` or
+  `+3 more`. A task list with no rows leaves the plan as the last list that had rows. `/clear`, a
+  rewind and a new turn clear it.
 
 Its last row names the key that hides it. While it is drawn, the context and cache figures leave the
 hint line under the box, unless the terminal is too short for the panel to show them; the mode, a
 running loop and the job count stay there. It needs a terminal at least 100 columns wide: a press
 to open it on a narrower one leaves a note, and narrowing the terminal while the panel is open hides
 it until the terminal is wide again. A press to close it works at any width. Whether it was left open is kept in
-`~/.bravebot/panel` for the next session. The panel draws only what you typed, the plan, the
+`~/.bravebot/panel` for the next session, and the width you dragged it to in `~/.bravebot/panel-width`. The panel draws only what you typed, the plan, the
 session's own counters, the servers you approved and where the session runs, and never a reply or anything a tool returned.
 
 ```
@@ -302,6 +325,49 @@ Each takes one `http` or `https` link with a host and refuses anything else, a l
 line break, an escape or a character outside ASCII in it included. Alone, each says what is set, and `/issue clear` or `/pr clear` removes
 one. Both are written to the session record at once, a resume brings them back, and `/clear` starts
 a session with neither.
+
+## Sessions in the background
+
+`bravebot --bg "<prompt>"` starts a session whose process keeps running after the terminal closes,
+and [`/bg`](../reference/commands.md#bg) hands a running session to one. Only a line you typed starts
+one: the planner, a delegate, a hook, a loop tick or piped input cannot. `--bg` asks about everything,
+as a new session does. `/bg` keeps the permission mode the session was in. Bypass is refused, and a
+rule in a settings file that allows something does not answer a question for you there. A
+background session states its mode on its opening lines and again when `attach` joins it. The
+refusal of bypass says that a session nobody watches does not run in a mode that answers every
+question, and names a one-shot run (`-p`) as the way to ask for that. `--dangerously-bypass-approvals-and-sandbox`
+is refused the same way. With no model service configured, `--bg` is refused in the terminal you
+typed it in, with the configuration status and the three routes (Bedrock, an OpenAI-compatible
+gateway, importing Leo), and no background process is started.
+
+| Command | What it does |
+|---|---|
+| `bravebot sessions` | one line per background session of every project: id, name, state, directory, time since its last turn and your last prompt. In a terminal it opens a list grouped by state, where Enter attaches |
+| `bravebot sessions --json` | the same fields as JSON |
+| `bravebot attach <id>` | draw the session as a foreground one, with a held question put to you. One terminal attaches at a time |
+| `bravebot reply <id> "<text>"` | send the text as the session's next prompt. It is refused while the session is working or waiting for an answer, and it never answers a held question |
+| `bravebot sessions stop <id>` | stop the turn and the process. The record is kept |
+
+A session is `working`, `needs input`, `idle`, `interrupted` or `stopped`. A question the session would
+ask is held until you attach and answer it, however long that takes. That includes the question about
+starting an [MCP server](../customize/mcp-servers.md) nobody has approved, which is held as
+`needs input (server)` and drawn as a foreground session draws it. The question about sending a
+[message to another session](../reference/tools.md#message_session) is held the same way. Closing the terminal, losing the
+connection or typing `/detach` leaves the session running, with a turn in progress and a held question
+unchanged. `/detach` is not sent to the planner.
+
+A session with nothing running and no terminal attached for an hour is stopped, and the next `attach`
+or `reply` starts it again from its record in the mode every session opens in. A process that ends
+between turns is started again, up to three times in an hour, idle and in the directory it worked in. It
+takes the environment of the terminal that ran the first `--bg`, so a variable exported in a later
+terminal does not reach it. One that ends during a turn is marked
+`interrupted`, the turn is not run again, and the planner is told so on the next prompt. In a git
+repository the session works in a checkout of its own, so two sessions do not edit one tree. A
+session running in the background cannot be resumed from another terminal: `--resume` and
+`--continue` say to attach. The start-up resume picker and `--from-pr` refuse such a record the
+same way: Enter on its row says to attach. Attaching and replying are accepted only from a program that can read the
+session's state directory, because each start writes a fresh random secret there that the session's
+socket requires. A confined stage cannot read that directory.
 
 ## Deleting a session
 
@@ -373,7 +439,9 @@ the workspace.
 
 The run is written down as **its own record** and the session records its name, so the session still
 resumes as a conversation while the run stays a run the picker refuses. A run you stopped is not
-written at all, since there is nothing in it to read.
+written at all, since there is nothing in it to read. A run that fails or is stopped after it wrote a
+file keeps what it learned about that file: the file stays untrusted, and the saved session resumes with
+the same trust.
 
 The plan is [put to you before it runs](headless.md#a-plan-is-put-to-you-first), drawn and scrolled
 here rather than printed on one line. In [plan mode](../security/permissions.md#answering-in-advance-modes)
@@ -383,7 +451,9 @@ a plan with a write in it does not run at all, decided before the plan is put to
 
 [`/undo`](../reference/commands.md#undo) puts the session back where it stood before the most recent
 turn: the files that turn wrote go back to what they held, a file it created is removed, and the
-conversation, turn count, spend, timing and remembered command approvals go back with them.
+conversation, turn count, spend, timing and remembered command approvals go back with them. The prompt
+of the earliest turn taken back returns to the input box, as a prompt, when the box is empty and no
+turn is running.
 **Saying it again goes back another turn**, as far as the last five.
 
 File trust follows what undo restored or left on disk. Restored files get the lower of their backup's
@@ -393,6 +463,11 @@ those turns stays distrusted if undo leaves it untouched; you can grant trust ag
 restoration leaves that path untrusted without withdrawing unrelated grants.
 
 ### Reading a rewind before running one
+
+A task continued with `bravebot -p "task" --continue` (or `--resume <id>`) adds a rewind point of its
+own behind the record's earlier ones. `/undo` in the session you resume next takes back only that
+turn, files and conversation, and warns about a program the turn ran or a language server the
+session started, since neither can be put back.
 
 `/rewind` on its own lists the points the session can go back to, most recent first and numbered
 from one. Each row says how many turns back it is, which turn it would land before, what that turn
@@ -455,7 +530,8 @@ Leaving the newest entry puts back the half-written line you were on. Submitting
 a prompt arriving while you browse does not shift the view.
 
 History persists across runs under `~/.bravebot/history` and is capped. Consecutive duplicates
-collapse into one, and a prompt you cancelled is removed again.
+collapse into one, and a prompt you cancelled is removed again. Only that one line is removed from the
+file, so prompts other sessions saved in the meantime stay.
 
 **Ctrl-R searches it.** See
 [Interactive mode](interactive-mode.md#searching-the-prompts-you-have-sent). Each prompt is stored
@@ -484,7 +560,9 @@ replaces the earlier figure rather than leaving it standing. See
 [Configuration](../customize/configuration.md#context-budget) for setting it by hand.
 
 A cut has to free more than it keeps, so a conversation with nothing worth giving up is left long
-rather than summarised once per round.
+rather than summarised once per round. That is measured twice, in exchanges and in bytes: a cut that
+would summarise two short prompts and keep tens of thousands of tokens of file reads is not made, and
+the cut by round is tried instead.
 
 A skill the planner loaded before the cut is not left to the summary. Its text is sent again after
 the summary, word for word: the newest load of each skill, the first 5,000 tokens of any one skill
@@ -492,6 +570,12 @@ the summary, word for word: the newest load of each skill, the first 5,000 token
 is cut says so and names `load_skill` for the rest. These count as kept when deciding whether a cut
 frees enough. A skill whose result was sent as prose, which is the fallback for a round whose calls
 carried no ids, is summarised like any other message.
+
+The planner's task list is kept the same way. When a compaction takes the latest accepted
+`todo_write` list out of the conversation, the summary ends with that list word for word, so the
+steps and their order survive. A list still in the kept part is not repeated, a refused `todo_write` is
+not the latest list, and the copy is carried through later compactions until the planner writes a
+newer one.
 
 Compaction never touches three things: the quarantine, which holds the only copy of what a surviving
 reference names; the reference counter, since a slot name handed out twice would collide; and the

@@ -5,6 +5,8 @@
 //! Driven through the binary against a model service of the test's own. Whether a program was held
 //! to its profile is read off what the tool handed back to the model.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;

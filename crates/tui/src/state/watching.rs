@@ -250,6 +250,14 @@ impl Session {
         self.jobs().filter(|(_, job)| job.is_running()).count()
     }
 
+    /// The names of the background jobs running now, in the order they started.
+    pub fn running_job_names(&self) -> Vec<String> {
+        self.jobs()
+            .filter(|(_, job)| job.is_running())
+            .map(|(_, job)| job.name.clone())
+            .collect()
+    }
+
     /// Keep a question asked beside the work, and open the view on it.
     ///
     /// Opened rather than left behind a key, because the person asked a question and an answer

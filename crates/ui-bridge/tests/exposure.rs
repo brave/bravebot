@@ -5,6 +5,8 @@
 //! Driven through the binary against a model service of the test's own. Everything the bridge
 //! writes is kept, so a test can say that the value was in none of it.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;

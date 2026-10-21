@@ -50,6 +50,17 @@ tabs and their frames, reading a page or frame, and searching history and bookma
 since they reach what you have open, have visited and have saved. A tool that is off is refused
 before the browser is asked anything.
 
+Below the switches, **Blocked sites** is a list you write, one site to a line, such as
+`https://mail.example.com`. Whatever is switched on, no tool lists, searches, reads or opens a site
+on it. Tabs, frames, history entries and bookmarks at a blocked site are left out of results, so a
+list can hold fewer rows than Brave has, and a call that names one is refused with a message that
+names the list and not the site. A site is matched as written: `https://example.com` does not cover
+`https://www.example.com` or `http://example.com`, so list each one. A line that is not an
+`http://` or `https://` address of a host, `https://*.example.com` for one, or that holds two sites,
+is not accepted: nothing is saved until it is fixed, the page says which line, and the list saved
+before still applies. The list starts empty, and it saves when you click outside the box, and says
+"Not saved yet" until then.
+
 `list_frames` finds the tab whose URL is exactly the one asked for, and returns the HTTP and HTTPS
 URLs of its frames. Its result is shown to you and kept out of the session's planner: choose one URL
 and provide it in your next message. `read_page` reads the top page, or the exact `frame_url` you
@@ -70,6 +81,8 @@ What the extension returns reaches the session as any server's result does: untr
   `brave://extensions`, or Brave could not start the relay. Run `install` again if the relay has
   moved since you last did, since the manifest names it by its path.
 - **`<tool>` is turned off in the BraveBot extension's options.** Turn it on, as in step 5.
+- **That site is in the blocked sites list in the BraveBot extension's options.** The site is on the
+  list you wrote under **Blocked sites**. Take it off to let the tools reach it.
 - **The Brave extension did not reply within 30 seconds.** The call can be made again.
 
 ## Removing it

@@ -57,6 +57,7 @@ fn waiting_on_a_write(request: u64) -> (Running, mpsc::Receiver<Reply>) {
         pending,
         target: 7,
         finished: Arc::new(AtomicBool::new(false)),
+        interjections: None,
     };
     (running, receiver)
 }

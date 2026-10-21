@@ -506,6 +506,31 @@ mod tests {
         assert_eq!(rooted.unrooted().key("src/a.rs"), "/work/src/a.rs");
     }
 
+    /// Whitespace at an end of a name is part of it under a checkout's root too, so a name made of
+    /// it is a file in the checkout and not the checkout itself, and a root that ends in it is a
+    /// directory of its own.
+    #[test]
+    fn a_rooted_handle_keeps_whitespace_at_the_end_of_a_name_and_of_its_root() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        let rooted = authority.rooted_at("/state/c1");
+
+        assert_eq!(rooted.key("./ "), "/state/c1/ ");
+        assert_eq!(rooted.key("a.md "), "/state/c1/a.md ");
+        assert_eq!(rooted.key(" a.md"), "/state/c1/ a.md");
+        assert_eq!(rooted.key(""), "/state/c1");
+
+        rooted.publish("./ ", Integrity::Trusted);
+        assert_eq!(
+            rooted.integrity_of("attacker.md"),
+            None,
+            "a rule about a file named with whitespace decided the checkout"
+        );
+
+        let spaced = authority.rooted_at("/state/c1 ");
+        assert_eq!(spaced.key("a.md"), "/state/c1 /a.md");
+        assert_eq!(spaced.key(""), "/state/c1 ");
+    }
+
     /// On a volume that folds case, untrusted bytes written through one spelling of a file are
     /// read as untrusted under every spelling, whichever spelling the earlier trusted write used
     /// and whichever sorts first.

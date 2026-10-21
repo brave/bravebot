@@ -186,11 +186,11 @@ impl WriteRequest {
         match self.intent {
             Intent::Create => {
                 let lines = self.diff.added();
-                format!("create {} ({lines} lines)", self.path)
+                format!("create {} ({lines} lines)", shown_name(&self.path))
             }
             _ => format!(
                 "{verb} {} (+{} -{})",
-                self.path,
+                shown_name(&self.path),
                 self.diff.added(),
                 self.diff.removed()
             ),
@@ -842,7 +842,9 @@ impl RunRequest {
 pub struct OutputRequest {
     /// The command that produced it, as it was approved.
     pub command: String,
-    /// What it printed, in full.
+    /// What it printed, in full, with each character that draws as nothing written out as a
+    /// visible token ([`bravebot_core::invisible::spelled`]). The planner's copy is the slot's own
+    /// bytes and is not this.
     pub output: String,
     /// The label it was released under, in the same short form the trail uses (LABEL-10).
     pub label: String,
@@ -853,6 +855,9 @@ pub struct OutputRequest {
     /// count is made in the policy layer, on the still-labelled content, in the same reshape
     /// that produced the rows above.
     pub lines: usize,
+    /// How many characters of it draw as nothing, which are the tokens `output` holds. Counted in
+    /// the same reshape that wrote them out, for the reason `lines` is.
+    pub hidden: usize,
     /// The reference the planner named, for the account given afterwards.
     pub reference: String,
     /// What a check said about the same bytes, or that it did not complete.
@@ -897,7 +902,9 @@ pub struct VetRequest {
     pub origin: String,
     /// What the planner said it expects the slot to hold, in its own words.
     pub expects: String,
-    /// The content, in full. Empty for a picture, which is shown as a file to open instead.
+    /// The content, in full, with each character that draws as nothing written out as a visible
+    /// token ([`bravebot_core::invisible::spelled`]). Empty for a picture, which is shown as a
+    /// file to open instead.
     pub content: String,
     /// The label the content was released under, in the same short form the trail uses
     /// (LABEL-10). `None` for a picture, which is opened in the person's own viewer and has no
@@ -906,6 +913,8 @@ pub struct VetRequest {
     /// How many lines that is, counted before the bytes were released, as
     /// [`OutputRequest::lines`] is.
     pub lines: usize,
+    /// How many characters of it draw as nothing, as [`OutputRequest::hidden`] is.
+    pub hidden: usize,
     /// What the check said, or that it did not complete.
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
@@ -1059,6 +1068,90 @@ impl ServerRequest {
     }
 }
 
+/// A file name as a person is shown it, so a name that would draw as nothing, or as another name,
+/// is drawn as what it is.
+///
+/// A name that is empty, has a space at either end of it or of a directory in it, or holds a
+/// character that draws as nothing (a zero-width character, a bidirectional control, a tag
+/// character, a no-break space) or as a blank cell (the blank braille pattern) comes back quoted
+/// with each such character spelled `\u{..}`, a space at an edge as `␣`, and a control character
+/// as its picture (DEL as its own, a C1 control as `\u{..}`). Any other name comes back unchanged,
+/// so the plain case reads as it always did. Every front end that names a path in a prompt draws
+/// it through this, so the three cannot disagree about which names are marked.
+pub fn shown_name(name: &str) -> String {
+    shown(&name.chars().map(Piece::Char).collect::<Vec<_>>())
+}
+
+/// [`shown_name`] over a path held as one, for the prompts and lists that draw a path rather than
+/// a name the planner wrote.
+///
+/// A byte of the path that is not part of a UTF-8 character is spelled `\xNN` and the name is
+/// quoted, so two paths that differ only in such bytes are not drawn alike. The path stays a `Path`
+/// everywhere a grant or a rule is made from it: this is for display and decides nothing.
+pub fn shown_path(path: &std::path::Path) -> String {
+    let mut pieces = Vec::new();
+    for chunk in path.as_os_str().as_encoded_bytes().utf8_chunks() {
+        pieces.extend(chunk.valid().chars().map(Piece::Char));
+        pieces.extend(chunk.invalid().iter().copied().map(Piece::Byte));
+    }
+    shown(&pieces)
+}
+
+/// One thing a name holds: a character, or a byte that is not part of one.
+#[derive(Clone, Copy)]
+enum Piece {
+    Char(char),
+    Byte(u8),
+}
+
+fn shown(pieces: &[Piece]) -> String {
+    let invisible = |c: char| {
+        c.is_control()
+            || (c.is_whitespace() && c != ' ')
+            || bravebot_core::invisible::draws_as_nothing(c)
+            || bravebot_core::invisible::draws_as_blank(c)
+    };
+    // The start and end of the name and of each directory in it, which is where a space stops
+    // being between two words and becomes part of what a name ends in.
+    let edge = |at: Option<usize>| match at.and_then(|at| pieces.get(at)) {
+        None => true,
+        Some(Piece::Char(c)) => std::path::is_separator(*c),
+        Some(Piece::Byte(_)) => false,
+    };
+    let spaced_at_an_edge = |at: usize| edge(at.checked_sub(1)) || edge(Some(at + 1));
+    let plain = !pieces.is_empty()
+        && !pieces.iter().enumerate().any(|(at, piece)| match *piece {
+            Piece::Byte(_) => true,
+            Piece::Char(' ') => spaced_at_an_edge(at),
+            Piece::Char(c) => invisible(c),
+        });
+    let mut out = String::new();
+    if plain {
+        for piece in pieces {
+            if let Piece::Char(c) = *piece {
+                out.push(c);
+            }
+        }
+        return out;
+    }
+    out.push('"');
+    for (at, piece) in pieces.iter().enumerate() {
+        match *piece {
+            Piece::Byte(byte) => out.push_str(&format!("\\x{byte:02x}")),
+            Piece::Char(' ') if spaced_at_an_edge(at) => out.push('\u{2423}'),
+            Piece::Char('"') => out.push_str("\\\""),
+            Piece::Char('\u{7f}') => out.push('\u{2421}'),
+            Piece::Char(c) if (c as u32) < 0x20 => {
+                out.push(char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'));
+            }
+            Piece::Char(c) if invisible(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            Piece::Char(c) => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// A quarantined file the model would like to read.
 ///
 /// Offered at the moment a read is refused, so the trust question is put where it matters rather
@@ -1068,6 +1161,11 @@ impl ServerRequest {
 pub struct VouchRequest {
     /// The file, as the user knows it. They are the only party shown this.
     pub path: String,
+    /// The name the trust map will hold the rule under, in full, which is what a yes writes
+    /// (TRUST-8). It covers that path and everything beneath it, so it is drawn under the path:
+    /// a name that collapses to the project root says so there. Shown to the person and branched
+    /// on by nothing.
+    pub rule: String,
     /// The first lines of it, so the decision is about something they have seen.
     ///
     /// Empty where the file's text cannot be shown, whatever the reason: an empty file, and one
@@ -1127,7 +1225,7 @@ impl ExposureRequest {
     pub fn summary(&self) -> String {
         format!(
             "let the model read {}, which holds {}",
-            self.path,
+            shown_name(&self.path),
             tally(self.credentials.len(), "credential", "credentials")
         )
     }
@@ -2846,6 +2944,168 @@ impl fmt::Display for Decision {
 mod tests {
     use super::*;
 
+    /// PROMPT-1: a name that would draw as nothing, or as another name, is drawn as what it is,
+    /// and a name that is fine is left alone. One row per way a name goes unseen.
+    #[test]
+    fn a_name_that_draws_as_nothing_is_shown_as_what_it_is() {
+        for (name, shown) in [
+            ("note.md", "note.md"),
+            ("two words.md", "two words.md"),
+            ("", "\"\""),
+            (" ", "\"\u{2423}\""),
+            ("note.md ", "\"note.md\u{2423}\""),
+            (" note.md", "\"\u{2423}note.md\""),
+            ("note.md\t", "\"note.md\u{2409}\""),
+            ("note.md\u{a0}", "\"note.md\\u{a0}\""),
+            ("\u{3000}", "\"\\u{3000}\""),
+            ("a\u{200b}b", "\"a\\u{200b}b\""),
+            ("a\u{202e}b", "\"a\\u{202e}b\""),
+            ("a\u{2066}b", "\"a\\u{2066}b\""),
+            ("a\u{e0041}b", "\"a\\u{e0041}b\""),
+            ("a\u{fe0f}b", "\"a\\u{fe0f}b\""),
+            ("a\u{3164}b", "\"a\\u{3164}b\""),
+            ("\u{2800}", "\"\\u{2800}\""),
+            ("a\u{2800}b", "\"a\\u{2800}b\""),
+            ("\u{2801}", "\u{2801}"),
+            ("a\u{34f}b", "\"a\\u{34f}b\""),
+            ("a\u{1b}b", "\"a\u{241b}b\""),
+            ("a\u{7f}b", "\"a\u{2421}b\""),
+            ("a\u{85}b", "\"a\\u{85}b\""),
+            ("a\u{9f}b", "\"a\\u{9f}b\""),
+        ] {
+            assert_eq!(shown_name(name), shown, "{name:?}");
+        }
+        assert_ne!(shown_name("note.md "), shown_name("note.md"));
+    }
+
+    /// PROMPT-1: the one-line description of a write and of a credential read names the file the
+    /// way a prompt does. The question in lines and a window's accessible text draw the description
+    /// and nothing else, so a name that would draw as another name is spelled in it.
+    #[test]
+    fn a_description_of_a_write_or_a_credential_read_spells_the_name() {
+        for (intent, plain, spelled) in [
+            (
+                Intent::Create,
+                "create note.md (1 lines)",
+                "create \"note.md\u{2423}\" (1 lines)",
+            ),
+            (
+                Intent::Overwrite,
+                "overwrite note.md (+1 -0)",
+                "overwrite \"note.md\u{2423}\" (+1 -0)",
+            ),
+            (
+                Intent::Edit,
+                "edit note.md (+1 -0)",
+                "edit \"note.md\u{2423}\" (+1 -0)",
+            ),
+        ] {
+            let write = |path: &str| WriteRequest {
+                path: path.to_string(),
+                intent,
+                ..a_write()
+            };
+            assert_eq!(write("note.md").summary(), plain);
+            assert_eq!(write("note.md ").summary(), spelled);
+        }
+        let exposure = |path: &str| ExposureRequest {
+            path: path.to_string(),
+            credentials: vec!["an API key at line 1".to_string()],
+        };
+        assert_eq!(
+            exposure("note.md").summary(),
+            "let the model read note.md, which holds 1 credential"
+        );
+        assert_eq!(
+            exposure("a\u{202e}b").summary(),
+            "let the model read \"a\\u{202e}b\", which holds 1 credential"
+        );
+    }
+
+    /// PROMPT-1: a path is spelled as a name is, whole.
+    #[test]
+    fn a_path_is_shown_as_the_name_it_spells() {
+        assert_eq!(
+            shown_path(std::path::Path::new("/opt/include")),
+            "/opt/include"
+        );
+        assert_eq!(
+            shown_path(std::path::Path::new("/opt/include ")),
+            "\"/opt/include\u{2423}\""
+        );
+        assert_eq!(
+            shown_path(std::path::Path::new("/opt/in\u{202e}clude")),
+            "\"/opt/in\\u{202e}clude\""
+        );
+    }
+
+    /// PROMPT-1: a space at the end of a directory inside a path is spelled as one at the end of the
+    /// whole name is, so `/work/state /file` cannot read as `/work/state/file`. A space between two
+    /// words, and a name with no space at an edge, is left as it is.
+    #[test]
+    fn a_directory_in_a_path_that_starts_or_ends_in_a_space_is_shown_as_what_it_is() {
+        for (name, shown) in [
+            ("/work/state/file", "/work/state/file"),
+            ("/work/my state/file", "/work/my state/file"),
+            ("/work/state /file", "\"/work/state\u{2423}/file\""),
+            ("/work/ state/file", "\"/work/\u{2423}state/file\""),
+            ("/work/ /file", "\"/work/\u{2423}/file\""),
+            ("state /", "\"state\u{2423}/\""),
+            ("/work/state /file ", "\"/work/state\u{2423}/file\u{2423}\""),
+        ] {
+            assert_eq!(shown_name(name), shown, "{name:?}");
+            assert_eq!(shown_path(std::path::Path::new(name)), shown, "{name:?}");
+        }
+        assert_ne!(
+            shown_name("/work/state /file"),
+            shown_name("/work/state/file")
+        );
+    }
+
+    /// PROMPT-1: a backslash is a directory separator only where the host says it is, so a Unix
+    /// name that holds one is not marked for the space after it.
+    #[cfg(unix)]
+    #[test]
+    fn a_space_after_a_backslash_is_part_of_the_name_where_a_backslash_is_not_a_separator() {
+        assert_eq!(shown_name("a\\ b"), "a\\ b");
+    }
+
+    /// PROMPT-1, PATH-003: a path holding a byte that is not UTF-8 is drawn with that byte spelled,
+    /// so it is not drawn as the name its replacement-character rendering spells, and two paths that
+    /// differ only in such bytes are not drawn alike. A character that is valid UTF-8 is drawn as
+    /// itself next to one that is not.
+    #[cfg(unix)]
+    #[test]
+    fn a_byte_that_is_not_text_is_shown_as_the_byte_and_not_as_another_name() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let shown = |bytes: &[u8]| shown_path(std::path::Path::new(OsStr::from_bytes(bytes)));
+        assert_eq!(shown(b"tool-\xff"), "\"tool-\\xff\"");
+        assert_eq!(shown(b"tool-\xfe"), "\"tool-\\xfe\"");
+        assert_eq!(shown("tool-\u{fffd}".as_bytes()), "tool-\u{fffd}");
+        assert_eq!(
+            shown(b"/work/caf\xc3\xa9-\xe9/x"),
+            "\"/work/caf\u{e9}-\\xe9/x\""
+        );
+        assert_eq!(shown(b"a\xc3"), "\"a\\xc3\"");
+        assert_eq!(shown(b"\xf0\x9f\x98"), "\"\\xf0\\x9f\\x98\"");
+        assert_eq!(
+            shown(b"/work/state /f\xff"),
+            "\"/work/state\u{2423}/f\\xff\""
+        );
+        let drawn = [
+            shown(b"tool-\xff"),
+            shown(b"tool-\xfe"),
+            shown(b"tool-"),
+            shown("tool-\u{fffd}".as_bytes()),
+        ];
+        for (at, one) in drawn.iter().enumerate() {
+            for other in &drawn[at + 1..] {
+                assert_ne!(one, other);
+            }
+        }
+    }
+
     /// PROMPT-12: a note is one line, cut to a length, and nothing where there is nothing in it.
     #[test]
     fn a_note_is_one_bounded_line() {
@@ -3108,6 +3368,7 @@ mod tests {
             command: "git log".to_string(),
             output: "one line\n".to_string(),
             lines: 1,
+            hidden: 0,
             reference: "output_1".to_string(),
             verdict: Verdict::Safe,
             reason: None,
@@ -3119,6 +3380,7 @@ mod tests {
     fn a_vouch() -> VouchRequest {
         VouchRequest {
             path: "vendor/lib.js".to_string(),
+            rule: "vendor/lib.js".to_string(),
             preview: "// a library\n".to_string(),
             truncated: false,
             verdict: Verdict::Safe,

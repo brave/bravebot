@@ -13,6 +13,7 @@ use gix_object::bstr::ByteSlice;
 use gix_object::tree::EntryKind;
 
 use super::config::parse_config;
+use super::diff::family;
 use super::out::{Out, in_scope, join};
 use super::survey::{present, read_if_present};
 use super::{Declined, Repository};
@@ -974,6 +975,129 @@ struct Tracked {
     stages: u8,
 }
 
+/// The entries of the repository's index and when it was last written, or none where there is no
+/// index file.
+fn read_index(repo: &Repository) -> Result<(Vec<IndexEntry>, (u32, u32)), Declined> {
+    let index_file = repo.admin.join("index");
+    match std::fs::symlink_metadata(&index_file) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(Declined::Linked),
+        Ok(meta) => {
+            let bytes = std::fs::read(&index_file).map_err(|_| Declined::Unreadable)?;
+            Ok((parse_index(&bytes)?, modified(&meta)))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((Vec::new(), (0, 0))),
+        Err(_) => Err(Declined::Unreadable),
+    }
+}
+
+/// HEAD's files as a flat map, empty where there is no commit yet.
+fn head_files(
+    repo: &Repository,
+    out: &mut Out<'_>,
+    filter: Option<&str>,
+) -> Result<BTreeMap<Vec<u8>, (u32, ObjectId)>, Declined> {
+    let mut head = BTreeMap::new();
+    match repo.head() {
+        Ok(commit) => {
+            let tree = repo.info(&commit)?.tree;
+            flatten(repo, out, tree, "", filter, &mut head)?;
+        }
+        Err(Declined::NoCommits) => {}
+        Err(other) => return Err(other),
+    }
+    Ok(head)
+}
+
+/// The tree entry kind a file mode names.
+fn kind_of_mode(mode: u32) -> EntryKind {
+    match mode & 0o170000 {
+        0o120000 => EntryKind::Link,
+        0o160000 => EntryKind::Commit,
+        _ if mode & 0o100 != 0 => EntryKind::BlobExecutable,
+        _ => EntryKind::Blob,
+    }
+}
+
+/// Answer `staged`: what is in the index and not in HEAD, as the hunks `git diff --cached
+/// --no-renames` prints.
+///
+/// Nothing is read from the working tree. A path in conflict and a path only marked with `git add
+/// -N` hold no staged content, so each is named in a line of its own and given no hunks.
+pub(super) fn staged(
+    repo: &Repository,
+    out: &mut Out<'_>,
+    filter: Option<&str>,
+) -> Result<(), Declined> {
+    let (entries, _) = read_index(repo)?;
+    let head = head_files(repo, out, filter)?;
+
+    let mut index: BTreeMap<Vec<u8>, (u32, ObjectId)> = BTreeMap::new();
+    let mut unmerged: Vec<Vec<u8>> = Vec::new();
+    let mut skipped: HashSet<Vec<u8>> = HashSet::new();
+    for entry in entries {
+        if entry.stage != 0 {
+            skipped.insert(entry.path.clone());
+            unmerged.push(entry.path);
+        } else if entry.intent_to_add {
+            skipped.insert(entry.path);
+        } else {
+            index.insert(entry.path, (entry.mode, entry.id));
+        }
+    }
+
+    let mut paths: Vec<&Vec<u8>> = head.keys().chain(index.keys()).collect();
+    paths.sort();
+    paths.dedup();
+    for bytes in paths {
+        if out.late() || (out.text.cut && out.text.full()) {
+            break;
+        }
+        let Ok(path) = std::str::from_utf8(bytes) else {
+            out.withheld_any = true;
+            continue;
+        };
+        if !in_scope(path, filter) {
+            continue;
+        }
+        let (old, new) = (head.get(bytes), index.get(bytes));
+        // A conflicted or intent-to-add path has no entry at stage 0, which is not a deletion.
+        if old == new || (new.is_none() && skipped.contains(bytes)) {
+            continue;
+        }
+        if (out.withheld)(path) {
+            out.withheld_any = true;
+            continue;
+        }
+        if !out.room() {
+            break;
+        }
+        let side =
+            |entry: Option<&(u32, ObjectId)>| entry.map(|(mode, id)| (kind_of_mode(*mode), *id));
+        match (side(old), side(new)) {
+            (Some(x), Some(y)) if family(x.0) != family(y.0) => {
+                repo.patch(out, path, Some(x), None)?;
+                repo.patch(out, path, None, Some(y))?;
+            }
+            (x, y) => repo.patch(out, path, x, y)?,
+        }
+    }
+    unmerged.sort();
+    unmerged.dedup();
+    for bytes in &unmerged {
+        let Ok(path) = std::str::from_utf8(bytes) else {
+            out.withheld_any = true;
+            continue;
+        };
+        if in_scope(path, filter) && !(out.withheld)(path) {
+            out.text.line(&format!("* Unmerged path {path}"));
+        }
+    }
+    if out.text.lines == 0 && !out.timed_out && !out.withheld_any {
+        out.text.line("(nothing is staged)");
+    }
+    Ok(())
+}
+
 /// Answer `status` for the repository at `repo`, whose working tree is the directory holding its
 /// `.git`.
 pub(super) fn answer(
@@ -990,26 +1114,8 @@ pub(super) fn answer(
         Case::Sensitive
     };
 
-    let index_file = repo.admin.join("index");
-    let (entries, index_time) = match std::fs::symlink_metadata(&index_file) {
-        Ok(meta) if meta.file_type().is_symlink() => return Err(Declined::Linked),
-        Ok(meta) => {
-            let bytes = std::fs::read(&index_file).map_err(|_| Declined::Unreadable)?;
-            (parse_index(&bytes)?, modified(&meta))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Vec::new(), (0, 0)),
-        Err(_) => return Err(Declined::Unreadable),
-    };
-
-    let mut head = BTreeMap::new();
-    match repo.head() {
-        Ok(commit) => {
-            let tree = repo.info(&commit)?.tree;
-            flatten(repo, out, tree, "", filter, &mut head)?;
-        }
-        Err(Declined::NoCommits) => {}
-        Err(other) => return Err(other),
-    }
+    let (entries, index_time) = read_index(repo)?;
+    let head = head_files(repo, out, filter)?;
 
     let mut tracked: BTreeMap<Vec<u8>, Tracked> = BTreeMap::new();
     for entry in entries {

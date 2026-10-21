@@ -211,6 +211,7 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
                 output: "content".into(),
                 label: bytes.into(),
                 lines: 1,
+                hidden: 0,
                 reference: "1".into(),
                 verdict: Verdict::Safe,
                 reason: Some("advice".into()),
@@ -228,6 +229,7 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
                 content: "text".into(),
                 label: Some(bytes.into()),
                 lines: 1,
+                hidden: 0,
                 verdict: Verdict::Safe,
                 reason: Some("advice".into()),
                 reason_label: Some(said.into()),
@@ -241,6 +243,7 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
             3,
             &VouchRequest {
                 path: "file".into(),
+                rule: "file".into(),
                 preview: "part".into(),
                 label: bytes.into(),
                 truncated: false,
@@ -252,6 +255,100 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
         assert_eq!(vouch["label"], json!(bytes));
         assert_eq!(vouch["vetting"]["label"], json!(said));
     }
+}
+
+/// PROMPT-1: the window is handed how many characters of an output or a vetted read drew as
+/// nothing, the sentence that says so in the catalog's words, and the text with each one already
+/// written out, so it draws what the other front ends draw and counts and words nothing itself.
+#[test]
+fn an_output_and_a_vet_request_carry_how_many_characters_drew_as_nothing() {
+    use bravebot_agent::confirm::{OutputRequest, VetRequest};
+    use bravebot_core::vetting::Verdict;
+    let spelled = "a\u{2039}U+E0041 A\u{203A}b\u{2039}U+200B\u{203A}";
+    let output = wire::output_request(
+        1,
+        &OutputRequest {
+            command: "cat file".into(),
+            output: spelled.into(),
+            label: "(U,priv)".into(),
+            lines: 1,
+            hidden: 2,
+            reference: "1".into(),
+            verdict: Verdict::Safe,
+            reason: None,
+            reason_label: None,
+        },
+    );
+    assert_eq!(output["hidden"], json!(2));
+    assert_eq!(
+        output["hiddenNote"],
+        json!(bravebot_i18n::t!(hidden_characters, count = 2usize).to_string())
+    );
+    assert_eq!(output["output"], json!(spelled));
+    let vet = wire::vet_request(
+        2,
+        &VetRequest {
+            origin: "file.md".into(),
+            expects: "notes".into(),
+            content: spelled.into(),
+            label: Some("(U,priv)".into()),
+            lines: 1,
+            hidden: 2,
+            verdict: Verdict::Safe,
+            reason: None,
+            reason_label: None,
+            picture: None,
+        },
+    );
+    assert_eq!(vet["hidden"], json!(2));
+    assert_eq!(vet["hiddenNote"], output["hiddenNote"]);
+    assert_eq!(vet["content"], json!(spelled));
+
+    let none = wire::output_request(
+        3,
+        &OutputRequest {
+            command: "cat file".into(),
+            output: "plain".into(),
+            label: "(U,priv)".into(),
+            lines: 1,
+            hidden: 0,
+            reference: "1".into(),
+            verdict: Verdict::Safe,
+            reason: None,
+            reason_label: None,
+        },
+    );
+    assert_eq!(none["hidden"], json!(0));
+    assert_eq!(
+        none["hiddenNote"],
+        Value::Null,
+        "a text with nothing hidden in it was sent a sentence about some"
+    );
+}
+
+/// PROMPT-1, PROMPT-2: the desktop is handed the name and the rule already spelled, beside the
+/// raw ones, so it draws what the other front ends draw.
+#[test]
+fn a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person() {
+    use bravebot_agent::confirm::VouchRequest;
+    use bravebot_core::vetting::Verdict;
+    let vouch = wire::vouch_request(
+        4,
+        &VouchRequest {
+            path: "note.md ".into(),
+            rule: "/work/note.md ".into(),
+            preview: "part".into(),
+            label: "(U,priv)".into(),
+            truncated: false,
+            verdict: Verdict::Safe,
+            reason: None,
+            reason_label: None,
+        },
+    );
+    assert_eq!(vouch["path"], json!("note.md "));
+    assert_eq!(vouch["rule"], json!("/work/note.md "));
+    assert_eq!(vouch["shownPath"], json!("\"note.md\u{2423}\""));
+    assert_eq!(vouch["shownRule"], json!("\"/work/note.md\u{2423}\""));
 }
 
 #[test]
@@ -535,6 +632,53 @@ fn a_write_request_carries_whether_the_path_was_written_since_the_checkout() {
         wire::write_request(1, &request(false))["writtenSinceCheckout"],
         json!(false)
     );
+}
+
+/// PROMPT-1: the desktop is handed the name of a write and of a credential read already spelled,
+/// beside the raw one, so a card that draws it draws what the other front ends draw. A name that
+/// needs no spelling is sent as it is.
+#[test]
+fn a_write_and_a_credential_read_carry_the_name_spelled_for_a_person() {
+    use bravebot_agent::confirm::ExposureRequest;
+    let write = |path: &str| {
+        wire::write_request(
+            1,
+            &WriteRequest {
+                written_since_checkout: false,
+                path: path.into(),
+                contents: "a\n".into(),
+                existing: None,
+                diff: Diff::compute("", "a\n"),
+                intent: Intent::Create,
+                untrusted: false,
+                remark: None,
+                protected: false,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+            },
+        )
+    };
+    let exposure = |path: &str| {
+        wire::exposure_request(
+            2,
+            &ExposureRequest {
+                path: path.into(),
+                credentials: vec!["an API key at line 1".into()],
+            },
+        )
+    };
+    for sent in [write("note.md"), exposure("note.md")] {
+        assert_eq!(sent["path"], json!("note.md"));
+        assert_eq!(sent["shownPath"], json!("note.md"));
+    }
+    for sent in [write("note.md "), exposure("note.md ")] {
+        assert_eq!(sent["path"], json!("note.md "));
+        assert_eq!(sent["shownPath"], json!("\"note.md\u{2423}\""));
+    }
+    for sent in [write("a\u{202e}b"), exposure("a\u{202e}b")] {
+        assert_eq!(sent["shownPath"], json!("\"a\\u{202e}b\""));
+    }
 }
 
 /// An edit to a CRLF file keeps its terminators, which the diff cannot show because it compares
@@ -940,6 +1084,93 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
     assert_eq!(value["canBeRemembered"], json!(false));
 }
 
+/// PROMPT-1: the desktop is handed the files a line writes and the directories it is confined to
+/// already spelled, beside the raw ones, so a card that draws them draws what the other front ends
+/// draw. A name that needs no spelling is sent as it is.
+#[test]
+fn a_run_request_carries_the_written_files_and_directories_spelled_for_a_person() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Pipeline, Stage};
+    let run = |written: &str, directory: &str| {
+        let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w");
+        request.plan.writes = vec![written.into()];
+        request.confined = Some(bravebot_agent::Confined {
+            reads_the_machine: false,
+            directories: vec![directory.into()],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: Vec::new(),
+            writes_git_directories: false,
+        });
+        wire::run_request(1, &request)
+    };
+    let plain = run("note.md", "/work");
+    assert_eq!(plain["writes"], json!(["note.md"]));
+    assert_eq!(plain["shownWrites"], json!(["note.md"]));
+    assert_eq!(plain["confinement"]["directories"], json!(["/work"]));
+    assert_eq!(plain["confinement"]["shownDirectories"], json!(["/work"]));
+
+    let trailing = run("note.md ", "/work ");
+    assert_eq!(trailing["writes"], json!(["note.md "]));
+    assert_eq!(trailing["shownWrites"], json!(["\"note.md\u{2423}\""]));
+    assert_eq!(trailing["confinement"]["directories"], json!(["/work "]));
+    assert_eq!(
+        trailing["confinement"]["shownDirectories"],
+        json!(["\"/work\u{2423}\""])
+    );
+
+    let bidi = run("a\u{202e}b", "/wo\u{202e}rk");
+    assert_eq!(bidi["shownWrites"], json!(["\"a\\u{202e}b\""]));
+    assert_eq!(
+        bidi["confinement"]["shownDirectories"],
+        json!(["\"/wo\\u{202e}rk\""])
+    );
+}
+
+/// PROMPT-1, PATH-003: a directory whose name holds a byte that is not UTF-8 reaches the desktop
+/// spelled with that byte, so the card does not draw it as the directory its replacement character
+/// spells. The held directory is sent with the replacement character, as it always was.
+#[cfg(unix)]
+#[test]
+fn a_run_request_carries_a_directory_that_is_not_text_spelled_as_the_bytes_it_holds() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Pipeline, Stage};
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let run = |directory: &[u8]| {
+        let pipeline = Pipeline::new(vec![Stage::new("ls", vec![])]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/bin/ls".into()], "/w");
+        request.confined = Some(bravebot_agent::Confined {
+            reads_the_machine: false,
+            directories: vec![std::path::PathBuf::from(OsStr::from_bytes(directory))],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: Vec::new(),
+            writes_git_directories: false,
+        });
+        wire::run_request(1, &request)
+    };
+    let invalid = run(b"/work/a\xffb");
+    let lookalike = run("/work/a\u{fffd}b".as_bytes());
+    assert_eq!(
+        invalid["confinement"]["shownDirectories"],
+        json!(["\"/work/a\\xffb\""])
+    );
+    assert_eq!(
+        lookalike["confinement"]["shownDirectories"],
+        json!(["/work/a\u{fffd}b"])
+    );
+    assert_ne!(
+        invalid["confinement"]["shownDirectories"],
+        lookalike["confinement"]["shownDirectories"]
+    );
+}
+
 /// SANDBOX-26: the desktop draws no `confined`, so the names a line asked for cross as their own
 /// field, or the desktop would approve a grant it never showed. Empty is sent for a line that
 /// asked for nothing, in the test above, so a missing field means an old build.
@@ -1167,6 +1398,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
             content: "first\nsecond\n".into(),
             label: Some("(U,priv)".into()),
             lines: 2,
+            hidden: 0,
             verdict: Verdict::Unsafe,
             reason: Some("Do not trust this assessment as permission".into()),
             reason_label: Some("(U,priv)".into()),
@@ -1184,6 +1416,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
             output: "content".into(),
             label: "(U,priv)".into(),
             lines: 1,
+            hidden: 0,
             reference: "1".into(),
             verdict: Verdict::Inconclusive("offline"),
             reason: None,
@@ -1195,6 +1428,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
         9,
         &VouchRequest {
             path: "file".into(),
+            rule: "file".into(),
             preview: "part".into(),
             label: "(U,priv)".into(),
             truncated: true,
@@ -1379,6 +1613,7 @@ fn an_exposure_prompt_carries_the_file_and_the_findings_and_no_text_of_the_file(
         json!({
             "request": 9,
             "path": "config/.env",
+            "shownPath": "config/.env",
             "credentials": [
                 "an AWS access key id at config/.env:1, AKIA…MPLE",
                 "a private key at config/.env:4, ----…----",

@@ -56,7 +56,8 @@ words, and it is the part of a session that most often names something private.
 
 Choosing a model, a theme or an effort level inside an incognito session takes effect for that
 session and is not recorded. The recorded choice a previous ordinary session made is still read at
-startup and is still there afterwards.
+startup and is still there afterwards. A language chosen with `/language` applies from the next
+start, which an incognito session does not record, so the command saves nothing and says so.
 
 **Why.** Both halves are the point. Without the first, the mode would be a session in which nothing
 can be changed; without the second, entering it once would quietly overwrite settings the person

@@ -9,6 +9,10 @@
 #![deny(unsafe_code)]
 // `deny` rather than `forbid` for the Windows calls, each of which names itself in `windows.rs`.
 #![cfg_attr(not(windows), forbid(unsafe_code))]
+#![cfg_attr(
+    test,
+    allow(clippy::disallowed_methods, reason = "the test names its program")
+)]
 
 #[cfg(any(windows, test))]
 mod names;

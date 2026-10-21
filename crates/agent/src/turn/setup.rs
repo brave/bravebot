@@ -61,10 +61,19 @@ pub(super) fn scheduling_for(task: &Task) -> tools::Scheduling {
     }
 }
 
-/// Whether the turn may arm a watch. A definition's addressed turn may not (ADDRESS-8).
+/// Whether the turn may arm a watch. A definition's addressed turn may not (ADDRESS-8), and
+/// neither may a run the command line took `watch_file` away from, since the read's description
+/// would otherwise send the planner to a tool that is not beside it (ARM-6).
 pub(super) fn arming_for(task: &Task) -> crate::watch::Arming {
+    arming_under(task, bravebot_core::tool_set::allows("watch_file"))
+}
+
+/// [`arming_for`] with the command line's answer about `watch_file` given, so it can be tried
+/// without settling the process-wide limit.
+pub(super) fn arming_under(task: &Task, watch_file_allowed: bool) -> crate::watch::Arming {
     match task.addressing {
         Some(_) => crate::watch::Arming::Unavailable,
+        None if !watch_file_allowed => crate::watch::Arming::Unavailable,
         None => task.arming,
     }
 }
@@ -109,6 +118,9 @@ pub(super) fn offered_tools<S: Sink>(
         if task.courier.is_some() {
             tools::offer_message_session(&mut offered);
         }
+        if task.permission_mode.get() == crate::PermissionMode::Plan {
+            tools::offer_propose_plan(&mut offered);
+        }
         offered.retain(|tool| bravebot_core::tool_set::allows(&tool.function.name));
         let names: Vec<&str> = offered
             .iter()
@@ -120,19 +132,30 @@ pub(super) fn offered_tools<S: Sink>(
             // definition narrowed past `run` leaves descriptions naming a tool that is no
             // longer beside them. Written again against what is left, which costs a second
             // table only in that case.
-            if !addressed.tools().iter().any(|tool| tool == "run") {
+            //
+            // So is the kinds `spawn_agent` offers where the definition named the delegates it
+            // may start, since the person's turn then starts only those (DELEGATE-30).
+            let without_run = !addressed.tools().iter().any(|tool| tool == "run");
+            if without_run || policy.delegates() != delegates {
+                let running = match without_run {
+                    true => tools::Running::Withheld,
+                    false => running,
+                };
                 offered = tools::for_planner(
                     scheduling,
                     arming,
-                    delegates,
+                    policy.delegates(),
                     task.deadlines,
-                    tools::Running::Withheld,
+                    running,
                 );
                 if advisor.is_some() {
                     tools::offer_advisor(&mut offered);
                 }
                 if task.courier.is_some() {
                     tools::offer_message_session(&mut offered);
+                }
+                if task.permission_mode.get() == crate::PermissionMode::Plan {
+                    tools::offer_propose_plan(&mut offered);
                 }
                 offered.retain(|tool| bravebot_core::tool_set::allows(&tool.function.name));
             }
@@ -143,13 +166,24 @@ pub(super) fn offered_tools<S: Sink>(
     let mut offered = tools::for_delegate(
         spec.capabilities(),
         spec.tools(),
-        spec.may_delegate().then_some(delegates),
+        delegate_may_delegate(spec, delegates).then_some(delegates),
         task.deadlines,
     );
     if workspace.checkout().is_some() {
         offered.retain(|tool| tool.function.name != "lsp");
     }
     Ok((None, offered))
+}
+
+/// Whether a delegate is offered `spawn_agent` and told it may delegate: it sits above the bottom
+/// of the tree, its definition did not leave the tool out, and the set its `spawns:` line left
+/// holds a delegate to start. A line whose every name resolved to nothing leaves none, and the
+/// tool's `kind` would then be an empty enumeration (DELEGATE-30).
+fn delegate_may_delegate(
+    spec: &bravebot_core::delegate::DelegateSpec,
+    delegates: &Definitions,
+) -> bool {
+    spec.may_delegate() && !delegates.is_empty()
 }
 
 /// Who answers a read of what a run printed: nobody in a bypass with no screening, a check's
@@ -277,15 +311,20 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
 /// specific thing: a rule about this turn rather than about how work is done here. On both
 /// prompts, since a delegate writing files in plan mode would be the mode failing exactly where
 /// nobody is watching the writes. Only plan mode says anything: see
-/// `PermissionMode::instruction`.
+/// `PermissionMode::instruction`. The rule files a touched path brings in come after it, so that one
+/// a round adds is appended to what was sent (INSTR-16), and their heading says the mode and the
+/// user's words from the command line stand over them.
 ///
-/// `started_in` is the mode the turn began in, read once by the caller, which also updates it as
-/// the rounds go. `style` is the output style the turn resolved, which may differ from the one the
-/// task carries (INSTR-12). `memory` is what a definition's kept memory says, which the caller
-/// reads through its policy and so keeps hold of.
+/// `delegates` is the set the turn resolved, as narrowed by its `spawns:` lines, which decides
+/// whether a delegate is told it may delegate. `started_in` is the mode the turn began in, read
+/// once by the caller, which also updates it as the rounds go. `style` is the output style the
+/// turn resolved, which may differ from the one the task carries (INSTR-12). `memory` is what a
+/// definition's kept memory says, which the caller reads through its policy and so keeps hold of.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn system_prompt(
     task: &Task,
     workspace: &Workspace,
+    delegates: &Definitions,
     addressed: Option<&Addressed>,
     style: Option<&Style>,
     preamble: &crate::preamble::Preamble,
@@ -306,7 +345,7 @@ pub(super) fn system_prompt(
                     spec.capabilities(),
                     spec.prompt(),
                     &memory(spec.keeps_memory(), spec.definition()),
-                    spec.may_delegate(),
+                    delegate_may_delegate(spec, delegates),
                 ),
             );
             system.push(Provenance::Driver, checkout_notice);
@@ -356,5 +395,7 @@ pub(super) fn system_prompt(
         }
     }
     system.push(Provenance::Driver, mode);
+    // After everything else, so a rule a round adds later is appended to what was sent (INSTR-16).
+    system.extend(preamble.rules.clone());
     system
 }

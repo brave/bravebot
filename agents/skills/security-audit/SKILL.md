@@ -3,7 +3,7 @@ name: security-audit
 description:
   'Audit this repository against the rule that untrusted content never enters the
   driver or the planner. Enumerates the label surface mechanically, then reads the
-  code in ten lanes, tries to disprove every candidate, and files one issue per
+  code in fourteen lanes, tries to disprove every candidate, and files one issue per
   finding that survives, through the issue-poster definition, skipping anything the tracker
   already holds.
   Triggers on: security audit, /security-audit, make check-security, find security
@@ -20,7 +20,7 @@ untrusted content in their context.** The driver is `bravebot-core` and `bravebo
 The planner is the model. This skill answers one question about that: **does the guarantee
 hold?**
 
-- **Full run** (default): all ten lanes.
+- **Full run** (default): all fourteen lanes.
 - **Scoped run** (`/security-audit laundering gates`): named lanes only.
 - **Branch run** (`/security-audit changed`): the lanes a branch's diff touches. This is the
   one to run before asking for review on a diff that touches a label.
@@ -72,12 +72,13 @@ that reports what is wrong.
 The heavy data goes through files, never through this session's context:
 
 1. **security-audit.py** (zero model tokens) enumerates the audit surface, runs the
-   deterministic checks, and writes one prompt file per lane. Its stdout is a small JSON
-   pointer.
+   deterministic checks, writes the titles of the tracker's `security` issues to a file, and
+   writes one prompt file per lane. Its stdout is a small JSON pointer.
 2. **Lanes** (subagent tokens only) each read one prompt file, read the code themselves, and
    write candidates to a JSON file.
-3. **verify-findings.py** (zero model tokens) pairs each candidate with a verifier prompt.
-4. **Verifiers** (subagent tokens only) each try to kill one candidate.
+3. **verify-findings.py** (zero model tokens) groups the candidates that name one file and make
+   one claim, and pairs each group with a verifier prompt.
+4. **Verifiers** (subagent tokens only) each try to kill one candidate, or one group of them.
 5. **collect-findings.py** (zero model tokens) merges, renders the report, sets the exit code.
 6. **draft-issues.py** (zero model tokens) writes one issue body per confirmed finding.
 7. **issue-poster** files the ones the tracker does not already hold, one delegate per draft.
@@ -101,6 +102,15 @@ Stdout is `{"work_dir": ..., "manifest": ...}`. The mechanical report goes to st
 it, since those findings are already decided and the user should see them first.
 
 Parse stdout for `work_dir`. If the run was `mechanical-only`, print the report and stop.
+
+The enumerator also reads the tracker, with a read-only `gh issue list` for the issues labelled
+`security`, open and closed, and writes their titles to `{work_dir}/tracker.txt`. Every lane is told
+to compare a candidate with that file before it reports one: a defect an open issue already holds is
+left out of `candidates` and named in `already_tracked`, so the tokens go to defects nobody has
+filed, and a closed issue is named in the candidate's evidence for the verifier to judge. Where `gh` cannot be run or is not signed in, the file says so, the lanes report what they
+find, and the verifiers still search the tracker. `--tracker FILE` reads the JSON that
+`gh issue list --json number,title,state` prints instead, for a run with no network or against an
+older tree. A `mechanical-only` run never reads the tracker.
 
 ### Step 2: read the manifest
 
@@ -135,7 +145,10 @@ is a finding the collector reports.
 python3 agents/skills/security-audit/verify-findings.py --work-dir "$WORK_DIR"
 ```
 
-Print its output: one line per candidate with its lane, its claim and its prompt file.
+Print its output: one line per verification with its lane, its claim and its prompt file. A line that
+says its candidate is checked together with others names candidates, from other lanes or the same
+one, that name the same file and make a similar claim, so one verifier reads the code once for all of
+them (four at most). The output also names each defect a lane left out because the tracker holds it.
 
 ### Step 5: launch the verifiers
 
@@ -143,7 +156,7 @@ This step is the quality argument for the whole skill, so it is not optional and
 merged into step 3. A lane that found something is a lane that wants to have found something.
 A candidate nobody argued against is a candidate nobody checked.
 
-One subagent (subagent_type: `general-purpose`) per candidate, **all in a single message**:
+One subagent (subagent_type: `general-purpose`) per verification, **all in a single message**:
 
 ```
 Read your verification instructions from: {prompt_file}
@@ -159,6 +172,10 @@ and it is not a general prohibition on reading bytes that arrived over a network
 candidate whose bytes reach neither context is **dropped, not filed**, and that document warns
 that a wrong trust argument reads exactly like a safety feature.
 
+A verifier given a group says in `grouped` which of the other candidates describe the defect it
+decided first, and gives its own verdict under `separate` for each that does not. A candidate its
+verdict does not account for is reported as unverified and is not filed.
+
 Wait for all of them.
 
 ### Step 6: collect (zero model tokens)
@@ -168,7 +185,8 @@ python3 agents/skills/security-audit/collect-findings.py --work-dir "$WORK_DIR"
 ```
 
 Print its output. Exit code 1 means something at severity `error` survived. `high` and
-`medium` are errors; `low` is a warning.
+`medium` are errors; `low` is a warning. A confirmed defect that more than one lane reported lists
+every lane.
 
 ### Step 7: draft an issue per finding (zero model tokens)
 
@@ -180,6 +198,12 @@ Print its output. One body per confirmed finding is now on disk: the user impact
 happens, the clause quoted, the code it happens in, where the bytes come from and what the
 code does with them, how to reproduce it, what it buys an attacker, the argument for its own
 kind label, and the fix. Read none of them.
+
+A body never says a case is left undone without citing the issue that tracks it. It is written
+from the candidate's fields and the verifier's verdict, so a lane covers every site with the same
+weakness in the candidate or reports it as a candidate of its own, and neither a lane nor a verifier
+writes one into a field as a case left for later. The poster reads each body for such a statement
+in step 9.
 
 ### Step 8: capture the screens that were asked for
 
@@ -217,9 +241,10 @@ draft that got one shows it and a draft that did not is unchanged.
 Hand each draft to the [issue-poster](../../agents/issue-poster.md) definition, one delegate at a
 time and no more than twelve in a run, with the draft's title, its body file, the labels the
 draft names, the assignee only where the user named somebody, and this instruction: the issue is
-a finding nobody has read, so apply no `importance`, `urgency` or `size`. A lane that
-malfunctions malfunctions at scale and a shared tracker is the wrong place to find that out, so
-stop at twelve and list the titles left.
+a finding nobody has read, so apply no `importance`, `urgency` or `size`, and where its body says a
+case is left undone that no issue covers, file nothing for the case, post nothing and report the
+statement. A lane that malfunctions malfunctions at scale and a shared tracker is the wrong place to
+find that out, so stop at twelve and list the titles left.
 
 The poster does what no model can be relied on to do here:
 
@@ -242,16 +267,21 @@ for is in their queue either way.
 ### Step 10: say what happened
 
 In two or three lines: how many lanes ran, how many candidates were dropped by the verifiers,
-what to look at first, and how many issues were filed against how many the tracker already had.
-Nothing else. The report is the deliverable.
+what to look at first, how many defects the lanes left out because the tracker held them, how many
+issues were filed against how many the tracker already had, and any draft a poster held back for a
+statement about an undone case. Nothing else. The report is the
+deliverable.
 
 ---
 
-## The ten lanes
+## The fourteen lanes
 
 Each is a prompt file with the sites it starts from already filled in, so no lane is a vague
 instruction to go and look at things. The first four are the four shapes a violation takes in a
-diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-the-rule.md).
+diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-the-rule.md). The
+last four start from a mechanical list of sites. A review of the whole tree by crate costs far more
+than these lanes do (about seven million subagent tokens for the one that found the defects they were
+written from), so run it occasionally and not with every audit.
 
 | Lane | The question | Starts from |
 |---|---|---|
@@ -263,8 +293,12 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 | `clause-permits-violation` | could an implementation satisfy every clause here and still break the rule? | the normative clauses of the trust specs |
 | `unpinned-guarantee` | what holds today that nothing would fail on if it stopped? | `verified-by: none` clauses, the `by-construction` brackets that answered the rest, and label-touching code no spec governs |
 | `supply-chain` | what executes with this tree checked out or gets linked into the binary, and who decides what that is? | the workflows, the lock file, and the second network client |
-| `shown-before-answered` | for each prompt, what does the person need to see to decide, who controls its length, and is the approving key gated on it having been drawn? | every `ask` function in the files the prompting spec governs |
+| `shown-before-answered` | for each prompt, what does the person need to see to decide, who controls its length, is the approving key gated on it having been drawn, is the drawn text the bytes a yes releases, and does a replay keep the rows that decide? | every `ask` function in the files the prompting spec governs, the line interface, the editor protocol and the background host's replay buffer |
 | `approval-binding` | can a kept answer's key match an effect the person was never shown, now or after a transition or a change to the tree? | each row of the register of kept answers in `docs/specs/prompting.md`, and the questions and sets its `kept_in` list maps to them |
+| `identity` | is a decision made on a spelling and the thing then used by name, with a path in between that a stage or a clone can rewrite? | every `canonicalize`, `hard_links`, `read_link`, `symlink_metadata` and `PathFd::new` site, every question put to a deny rule about a spelled path, and the rows `crates/agent/src/confine.rs` puts into a stage's profile |
+| `checkout-controls` | what can a cloned repository's files set, and does any of it decide a destination, a credential, a permission, a program that starts or a printed string? | `layered_since`, `unread_keys` and `rule_texts`, `Settings::names`, the fields of `Settings`, and the BACKEND-24 and BACKEND-33 clauses |
+| `output-sinks` | does text from an untrusted or checkout-supplied source reach a terminal, a window or a file another program reads with control characters or invisible characters left in? | every `println!`-family macro, `t!` and `say` call with a non-literal argument in `crates/cli`, `crates/tui` and `crates/approval`, and the `<pre>`, `innerHTML` and `dangerouslySetInnerHTML` sites in `ui/` |
+| `tooling` | what does a maintainer's tool run, from where, on whose files and with which credentials? | `agents/*.py`, `agents/skills/*/*.py`, `contrib/`, `.githooks`, the skill and agent definitions, and the `Makefile` lines that set git configuration |
 
 ---
 
@@ -289,6 +323,7 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 | A job holding `id-token: write` or a secret that installs or runs a dependency | mechanical | error |
 | A checkout of a bare name a branch and a tag can share, rather than a `refs/` ref | mechanical | error |
 | A required context naming no job, or a job running a check that no context requires | mechanical | error |
+| A `clippy.toml` that does not refuse `std::process::Command::new`, a second clippy configuration inside a crate, or an allow of that refusal with no reason | mechanical | error |
 | A clause at `verified-by: none` | mechanical | warning |
 | A confirmer method, a remembered set or a trust question with no row in the register, an entry naming a row the table lacks, one member listed twice or a list in another spec, a cell left empty, or a row naming no test or a test that does not exist | mechanical | error |
 | A register entry for a question or a set that is no longer declared | mechanical | warning |
@@ -297,6 +332,10 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 | A decision taken from a released value | lane, then verifier | error |
 | A clause a conforming implementation can satisfy and still break the rule | lane, then verifier | error |
 | A guarantee that holds and nothing pins | lane, then verifier | warning |
+| A decision made on a spelling that a stage or a clone can make untrue before the thing is used | lane, then verifier | error |
+| A value a cloned repository's files set that decides a destination, a credential, a permission, a program or a printed string | lane, then verifier | error |
+| Untrusted text written to a terminal, a window or a file with control or invisible characters left in | lane, then verifier | error |
+| A tool a maintainer runs that executes a branch's files with the maintainer's credentials | lane, then verifier | error |
 | A lane that returned nothing usable | mechanical | error |
 
 ---

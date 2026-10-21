@@ -288,6 +288,26 @@ impl Session {
         self.effort = effort;
     }
 
+    /// The language `/language` last saved, for saying so.
+    ///
+    /// Read only for a session that persists, which is the rule every read of a saved pick here
+    /// follows: a test must not be handed the developer's own preference.
+    pub fn saved_language(&self) -> Option<String> {
+        self.persist
+            .then(bravebot_session::store::load_language)
+            .flatten()
+    }
+
+    /// Keep the language the person chose for the next start, or forget the choice where `None`,
+    /// and say whether that was done.
+    ///
+    /// Nothing in this session changes with it, since the interface is in one language for the
+    /// whole process: a session that persists nothing has nowhere to keep the choice, and answers
+    /// that it kept none.
+    pub fn choose_language(&mut self, tag: Option<&str>) -> bool {
+        self.persist && bravebot_session::store::save_language(tag)
+    }
+
     /// Put `effort` in force for this session over every saved pick and file, and record nothing,
     /// for the reason [`Session::name_model`] records no model.
     pub fn name_effort(&mut self, effort: Effort) {
@@ -446,6 +466,18 @@ impl Session {
         self.wheel_rows = rows.clamp(WHEEL_ROWS_FLOOR, WHEEL_ROWS_CEILING);
     }
 
+    /// Record whether the interface captures the mouse, from `tui.mouse`. Only a `false` turns it
+    /// off, so an absent key leaves the capture on.
+    pub fn adopt_mouse(&mut self, configured: Option<bool>) {
+        self.mouse = configured != Some(false);
+    }
+
+    /// Whether the interface asks the terminal to report the mouse. Where it does not, the
+    /// terminal's own selection and wheel work as they do outside a session.
+    pub fn mouse_captured(&self) -> bool {
+        self.mouse
+    }
+
     /// Name the directory a line's first word is looked up in. Left unset, no line is one (CMD-17).
     pub fn adopt_prompt_files(&mut self, directory: Option<std::path::PathBuf>) {
         self.prompt_files = directory;
@@ -503,6 +535,78 @@ impl Session {
             .then(bravebot_session::store::load_panel)
             .flatten()
             .unwrap_or(false);
+        self.panel_width = self
+            .persist
+            .then(bravebot_session::store::load_panel_width)
+            .flatten()
+            .unwrap_or(crate::panel::WIDTH);
+    }
+
+    /// The columns the info panel takes on a frame `columns` wide, border included: the width the
+    /// person dragged it to, held between its minimum and what leaves the transcript its own.
+    pub fn panel_columns(&self, columns: u16) -> u16 {
+        crate::panel::clamped(self.panel_width, columns)
+    }
+
+    /// Whether a press here is on the panel's border, the column a drag resizes it by.
+    fn on_panel_border(&self, row: u16, column: u16) -> bool {
+        self.laid.panes.iter().any(|(pane, rect)| {
+            *pane == crate::select::Pane::Panel
+                && rect.x == column
+                && rect.y <= row
+                && row < rect.bottom()
+        })
+    }
+
+    /// Begin dragging the panel's border where the button went down, and say whether it was
+    /// there. A press that is not leaves the session untouched.
+    pub fn begin_panel_drag(&mut self, row: u16, column: u16) -> bool {
+        if !self.on_panel_border(row, column) {
+            return false;
+        }
+        self.panel_drag = true;
+        self.clear_selection();
+        true
+    }
+
+    /// Whether a drag that began on the panel's border is still held.
+    pub fn dragging_panel(&self) -> bool {
+        self.panel_drag
+    }
+
+    /// Record where a mouse report put the pointer. Every kind of report says, so the position is
+    /// as current as the last thing the terminal sent.
+    pub(crate) fn note_pointer(&mut self, row: u16, column: u16) {
+        self.pointer = Some((row, column));
+    }
+
+    /// The shape the pointer should have: the one for a border that can be dragged while it is over
+    /// the panel's border or such a drag is held, and the terminal's own otherwise. Read against the
+    /// layout as it is now, so a border that moved or a panel that closed under a pointer at rest
+    /// is not where the pointer still is.
+    pub(crate) fn pointer_shape(&self) -> crate::pointer::Shape {
+        let over = self
+            .pointer
+            .is_some_and(|(row, column)| self.on_panel_border(row, column));
+        if over || self.panel_drag {
+            crate::pointer::Shape::ResizeColumns
+        } else {
+            crate::pointer::Shape::Default
+        }
+    }
+
+    /// Move the border to `column`: the panel is whatever is to its right.
+    pub fn drag_panel_to(&mut self, column: u16) {
+        let columns = self.laid.columns;
+        self.panel_width = crate::panel::clamped(columns.saturating_sub(column), columns);
+    }
+
+    /// End the drag and keep the width it reached for the next session.
+    pub fn end_panel_drag(&mut self) {
+        self.panel_drag = false;
+        if self.persist {
+            bravebot_session::store::save_panel_width(self.panel_width);
+        }
     }
 
     /// Take the answer an earlier session gave to `/caffeinate`'s explanation.

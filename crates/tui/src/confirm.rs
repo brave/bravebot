@@ -1162,6 +1162,76 @@ mod tests {
         assert!(!drawn.contains("hooks"), "{drawn}");
     }
 
+    /// PROMPT-1: the run prompt draws a file the line writes, and a directory it is confined to,
+    /// with a name that would draw as nothing, or as another name, quoted and spelled, so a yes to
+    /// `note.md ` cannot be read as one to `note.md`.
+    #[test]
+    fn the_run_prompt_marks_an_unreadable_written_file_and_directory() {
+        let screen = |written: &str, directory: &str| {
+            let mut request = a_run(false);
+            request.plan.writes = vec![written.into()];
+            request.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                directories: vec![directory.into()],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: Vec::new(),
+                writes_git_directories: false,
+            });
+            run_screen(&request, (160, 40), 0, &mut RowsShown::default())
+                .0
+                .join("\n")
+        };
+        let plain = screen("note.md", "/work");
+        assert!(plain.contains("note.md"), "{plain}");
+        assert!(plain.contains("/work"), "{plain}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let written = screen(name, "/work");
+            assert_ne!(written, plain, "{name:?}");
+            assert!(written.contains(spelled), "{name:?}\n{written}");
+            let confined = screen("note.md", name);
+            assert_ne!(confined, plain, "{name:?}");
+            assert!(confined.contains(spelled), "{name:?}\n{confined}");
+        }
+    }
+
+    /// PROMPT-1, PATH-003: the run prompt draws a directory it is confined to, and a file the line
+    /// writes, under a directory whose name holds a byte that is not UTF-8 with that byte spelled, so
+    /// neither is drawn as the one its replacement-character rendering spells.
+    #[cfg(unix)]
+    #[test]
+    fn the_run_prompt_draws_a_path_that_is_not_text_as_the_bytes_it_holds() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let screen = |directory: &[u8]| {
+            let directory = std::path::PathBuf::from(OsStr::from_bytes(directory));
+            let mut request = a_run(false);
+            request.plan.writes = vec![directory.join("note.md")];
+            request.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                directories: vec![directory],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: Vec::new(),
+                writes_git_directories: false,
+            });
+            run_screen(&request, (160, 40), 0, &mut RowsShown::default())
+                .0
+                .join("\n")
+        };
+        let invalid = screen(b"/work/a\xffb");
+        let lookalike = screen("/work/a\u{fffd}b".as_bytes());
+        assert_ne!(invalid, lookalike);
+        assert!(invalid.contains("\"/work/a\\xffb\""), "{invalid}");
+        assert!(invalid.contains("\"/work/a\\xffb/note.md\""), "{invalid}");
+        assert!(lookalike.contains("/work/a\u{fffd}b"), "{lookalike}");
+        assert!(!lookalike.contains("\\xff"), "{lookalike}");
+    }
+
     /// SANDBOX-18: where nothing holds a `.git` back from a program that is not git, the heading a
     /// person approves under says that such a program can write a repository's hooks and
     /// configuration, at the size a terminal opens at, above the directories it names.
@@ -2983,6 +3053,7 @@ mod tests {
             expects: "the release notes for version 2".into(),
             content: content.into(),
             lines: content.lines().count(),
+            hidden: 0,
             verdict,
             reason: reason.map(str::to_string),
             picture: None,
@@ -3028,6 +3099,32 @@ mod tests {
         .iter()
         .map(|text| squeezed(text))
         .collect()
+    }
+
+    /// PROMPT-1: the names the removal would delete are drawn as what they are, so a file called
+    /// `note.md ` is not listed as the file called `note.md`.
+    #[test]
+    fn the_remove_checkout_question_marks_a_name_that_would_draw_as_another() {
+        let screen = |name: &str| {
+            let mut checkout = a_checkout_forty_files_were_written_in();
+            checkout.candidates.named = std::iter::once(name.to_string()).collect();
+            remove_checkout_screen(&checkout, (100, 30), 0).0.join("\n")
+        };
+        let plain = screen("note.md");
+        assert!(plain.contains("note.md"), "{plain}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let drawn = screen(name);
+            assert_ne!(drawn, plain, "{name:?}");
+            assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+        }
+        // The checkout's own directory is drawn in the same question, and named from the project's.
+        let mut checkout = a_checkout_forty_files_were_written_in();
+        checkout.path = "/state/checkouts/a\u{202e}b/c2".into();
+        let drawn = remove_checkout_screen(&checkout, (100, 30), 0).0.join("\n");
+        assert!(
+            drawn.contains("\"/state/checkouts/a\\u{202e}b/c2\""),
+            "{drawn}"
+        );
     }
 
     /// CHECKOUT-15. The question names the checkout, where it is and what removing it deletes, and
@@ -3106,6 +3203,36 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    /// PROMPT-1, CHECK-10: content holding characters that draw as nothing is shown with each one
+    /// written out, and the prompt says how many there are above them. Content with none says
+    /// nothing about any.
+    #[test]
+    fn the_vet_prompt_says_how_many_characters_draw_as_nothing_and_shows_each() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A} text";
+        let mut request = a_vetting(Verdict::Safe, None, text);
+        request.hidden = 2;
+        let rows = rows_of(100, 40, |frame| {
+            draw_vet(frame, &request, 0, None, &mut Seen::default());
+        });
+        let drawn = box_text(&rows);
+        assert!(
+            drawn.contains(&squeezed(&t!(hidden_characters, count = 2usize))),
+            "the prompt did not say characters drew as nothing: {rows:#?}"
+        );
+        assert!(
+            drawn.replace('┃', "").contains(&squeezed(text)),
+            "the characters were not written out in the text: {rows:#?}"
+        );
+        request.hidden = 0;
+        let rows = rows_of(100, 40, |frame| {
+            draw_vet(frame, &request, 0, None, &mut Seen::default());
+        });
+        assert!(
+            !box_text(&rows).contains("U+XXXX"),
+            "a prompt with nothing hidden in it said something was: {rows:#?}"
+        );
     }
 
     /// VET-4: whatever the terminal draws, the prompt names a copy to open and says what a person
@@ -3584,6 +3711,7 @@ mod tests {
             command: "find /Applications -name 'Brave Browser Nightly.app'".into(),
             output: text.into(),
             lines: text.lines().count(),
+            hidden: 0,
             reference: "ref:5".into(),
             verdict: Verdict::Safe,
             reason: None,
@@ -3633,11 +3761,52 @@ mod tests {
         );
     }
 
+    /// A yes releases every byte of the output to the model, so a colour code in it is drawn in
+    /// full and not counted: where nobody is deciding about the bytes colour codes are left out of
+    /// the drawing (VIEW-30), and here somebody is.
+    #[test]
+    fn the_output_prompt_draws_a_colour_code_in_full() {
+        let drawn = rendered_output(&an_output("\u{1b}[31mred\u{1b}[0m\n"));
+
+        assert!(drawn.contains("\u{241b}[31mred\u{241b}[0m"), "{drawn}");
+        assert!(!drawn.contains("colour code"), "{drawn}");
+    }
+
     /// A command that printed nothing is a fact worth stating. An empty box reads as a prompt that
     /// failed to render, and the reviewer would be answering about nothing.
     #[test]
     fn output_that_is_empty_says_so() {
         assert!(rendered_output(&an_output("")).contains("printed nothing"));
+    }
+
+    /// PROMPT-1, OUTPUT-1: output holding characters that draw as nothing is shown with each one
+    /// written out, and the prompt says how many there are above them. Output with none says
+    /// nothing about any.
+    #[test]
+    fn the_output_prompt_says_how_many_characters_draw_as_nothing_and_shows_each() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A} text";
+        let mut request = an_output(text);
+        request.hidden = 2;
+        let rows = rows_of(100, 24, |frame| {
+            draw_output(frame, &request, 0, &mut Seen::default());
+        });
+        let drawn = box_text(&rows);
+        assert!(
+            drawn.contains(&squeezed(&t!(hidden_characters, count = 2usize))),
+            "the prompt did not say characters drew as nothing: {rows:#?}"
+        );
+        assert!(
+            drawn.replace('┃', "").contains(&squeezed(text)),
+            "the characters were not written out in the text: {rows:#?}"
+        );
+        request.hidden = 0;
+        let rows = rows_of(100, 24, |frame| {
+            draw_output(frame, &request, 0, &mut Seen::default());
+        });
+        assert!(
+            !box_text(&rows).contains("U+XXXX"),
+            "a prompt with nothing hidden in it said something was: {rows:#?}"
+        );
     }
 
     /// The person has to be told what approving does, since the consequence is not visible in the
@@ -4275,6 +4444,7 @@ mod tests {
     fn a_vouch(path: &str, preview: impl Into<String>, truncated: bool) -> VouchRequest {
         VouchRequest {
             path: path.into(),
+            rule: path.into(),
             preview: preview.into(),
             truncated,
             verdict: Verdict::Safe,
@@ -4785,6 +4955,106 @@ mod tests {
         assert!(drawn.contains("padded.txt"), "{drawn}");
         assert!(!drawn.contains("nothing of this file"), "{drawn}");
         assert!(drawn.contains('…'), "{drawn}");
+    }
+
+    /// PROMPT-1, PROMPT-2: a name that would draw as nothing, or as another name, is drawn quoted
+    /// with its characters spelled, and the rule a yes writes is drawn under it.
+    #[test]
+    fn the_vouch_prompt_marks_an_unreadable_name_and_says_the_rule() {
+        let screen = |path: &str, rule: &str| {
+            let mut request = a_vouch(path, "a line", false);
+            request.rule = rule.into();
+            rows_of(100, 30, |frame| {
+                draw_vouch(frame, &request, 0, &mut Seen::default());
+            })
+            .join("\n")
+        };
+        let plain = screen("note.md", "/work/note.md");
+        assert!(plain.contains("/work/note.md"), "{plain}");
+        for name in [" ", "note.md ", "a\u{202e}b", "a\u{200b}b"] {
+            let drawn = screen(name, &format!("/work/{name}"));
+            assert_ne!(drawn, screen("note.md", "/work/note.md"), "{name:?}");
+            assert!(drawn.contains("Trust \""), "{name:?}\n{drawn}");
+            assert!(drawn.contains("trusts \"/work/"), "{name:?}\n{drawn}");
+        }
+    }
+
+    /// The names a prompt has to draw as what they are: each is the planner's spelling of a name
+    /// that would draw as nothing, or as another name, and the quoted form a person is shown.
+    const UNSEEN_NAMES: [(&str, &str); 6] = [
+        (" ", "\"\u{2423}\""),
+        ("note.md ", "\"note.md\u{2423}\""),
+        ("a\u{202e}b", "\"a\\u{202e}b\""),
+        ("a\u{200b}b", "\"a\\u{200b}b\""),
+        ("/work/state /file", "\"/work/state\u{2423}/file\""),
+        ("a\u{2800}b", "\"a\\u{2800}b\""),
+    ];
+
+    /// PROMPT-1: the write prompt, for a create and for an overwrite, draws a name that would draw
+    /// as nothing quoted with its characters spelled, so a yes to `note.md ` cannot be read as one
+    /// to `note.md`.
+    #[test]
+    fn the_write_prompt_marks_an_unreadable_name() {
+        let screen = |path: &str, existing: Option<&str>| {
+            let mut asked = request("a line", existing);
+            asked.path = path.into();
+            rows_of(100, 30, |frame| {
+                draw(frame, &asked, 0, &mut Seen::default());
+            })
+            .join("\n")
+        };
+        for existing in [None, Some("old")] {
+            let plain = screen("note.md", existing);
+            assert!(plain.contains("note.md"), "{plain}");
+            for (name, spelled) in UNSEEN_NAMES {
+                let drawn = screen(name, existing);
+                assert_ne!(drawn, plain, "{name:?}");
+                assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+            }
+        }
+    }
+
+    /// PROMPT-1: the credential-read prompt draws the file it names the same way.
+    #[test]
+    fn the_exposure_prompt_marks_an_unreadable_name() {
+        let screen = |path: &str| {
+            let request = ExposureRequest {
+                path: path.into(),
+                credentials: vec!["an API key at line 1".into()],
+            };
+            rows_of(100, 30, |frame| {
+                draw_exposure(frame, &request, 0, &mut Seen::default());
+            })
+            .join("\n")
+        };
+        let plain = screen("note.md");
+        assert!(plain.contains("note.md"), "{plain}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let drawn = screen(name);
+            assert_ne!(drawn, plain, "{name:?}");
+            assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+        }
+    }
+
+    /// PROMPT-1, SANDBOX-28: the prompt about a directory programs may reach draws the path the
+    /// grant is made for, so a path ending in whitespace is not drawn as the one without it.
+    #[test]
+    fn the_path_prompt_marks_an_unreadable_name() {
+        let screen = |path: &str| {
+            let mut request = a_path_request(true);
+            request.path = std::path::PathBuf::from(path);
+            path_screen(&request, (160, 24), 0).0.join("\n")
+        };
+        let plain = screen("/opt/include");
+        assert!(plain.contains("/opt/include"), "{plain}");
+        for (name, spelled) in [
+            ("/opt/include ", "\"/opt/include\u{2423}\""),
+            ("/opt/in\u{202e}clude", "\"/opt/in\\u{202e}clude\""),
+        ] {
+            let drawn = screen(name);
+            assert_ne!(drawn, plain, "{name:?}");
+            assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+        }
     }
 
     /// The offer this branch was reported for. A person promoting a file is answering the question
@@ -5471,6 +5741,17 @@ mod tests {
         grants: Vec<(char, Vec<String>)>,
     }
 
+    /// The first and the last few words of a sentence that wraps over several rows, squeezed, which
+    /// are the pieces [`scroll_through`] can ask for: a piece is drawn once a draw shows it whole,
+    /// and a sentence longer than a box is not whole in any one draw.
+    fn sentence_ends(sentence: &str) -> [String; 2] {
+        let words: Vec<&str> = sentence.split_whitespace().collect();
+        [
+            squeezed(&words[..3].join(" ")),
+            squeezed(&words[words.len() - 3..].join(" ")),
+        ]
+    }
+
     /// Each question with its deciding fields grown past what one screen holds.
     fn oversized(kind: Kind) -> Option<Case> {
         match kind {
@@ -5549,10 +5830,12 @@ mod tests {
                 let request = OutputRequest {
                     verdict: Verdict::Unsafe,
                     reason: Some(reason.join(" ")),
+                    hidden: 3,
                     ..an_output(&numbered('o', 100).join("\n"))
                 };
                 let drawn = request.clone();
                 let mut deciding = reason;
+                deciding.extend(sentence_ends(&t!(hidden_characters, count = 3usize)));
                 deciding.push("o0000".to_string());
                 Some(Case {
                     draw: pinned(move |frame, scroll, memory| {
@@ -5569,13 +5852,17 @@ mod tests {
             }
             Kind::Vet => {
                 let reason = numbered('r', 500);
-                let request = a_vetting(
-                    Verdict::Unsafe,
-                    Some(&reason.join(" ")),
-                    &numbered('c', 50).join("\n"),
-                );
+                let request = VetRequest {
+                    hidden: 3,
+                    ..a_vetting(
+                        Verdict::Unsafe,
+                        Some(&reason.join(" ")),
+                        &numbered('c', 50).join("\n"),
+                    )
+                };
                 let drawn = request.clone();
                 let mut deciding = reason;
+                deciding.extend(sentence_ends(&t!(hidden_characters, count = 3usize)));
                 deciding.push("c0000".to_string());
                 Some(Case {
                     draw: pinned(move |frame, scroll, memory| {
@@ -5785,7 +6072,7 @@ mod tests {
     /// Text counts as drawn once a draw so far has shown it whole. Each piece is shorter than a
     /// row and a step overlaps the last draw by a row, so a piece that wraps is whole in one draw.
     fn scroll_through(
-        kind: Kind,
+        kind: impl std::fmt::Debug,
         case: &Case,
         (width, height): (u16, u16),
         step: fn(&Looked) -> i16,
@@ -5870,6 +6157,54 @@ mod tests {
                 scroll_through(kind, &case, size, |_| 1);
                 scroll_through(kind, &case, size, Looked::page);
             }
+        }
+    }
+
+    /// The MCP server start question with a declaration far taller than the box. It is asked
+    /// through `servers::Asker`, not a `Reply`, so [`oversized`] cannot hold it.
+    fn oversized_start() -> Case {
+        use bravebot_config::mcp::{Declaration, Timeouts};
+        let reads = numbered('r', 40);
+        let declaration = Declaration::Stdio {
+            argv: vec!["/opt/tool/serve".into()],
+            variables: Vec::new(),
+            env: Default::default(),
+            reads: reads.iter().map(|word| format!("/data/{word}")).collect(),
+            directory: None,
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+        };
+        let mut deciding = vec!["/opt/tool/serve".to_string()];
+        deciding.extend(reads);
+        let lines = bravebot_agent::servers::Question {
+            alias: "files",
+            file: ".mcp.json",
+            declaration: &declaration,
+            program: None,
+            changed: false,
+        }
+        .lines();
+        Case {
+            draw: pinned(move |frame, scroll, memory| {
+                mcp::draw_start(frame, "files", &lines, scroll, &mut memory.seen)
+            }),
+            answer: Box::new(|key, looked| approves(start_answer_for(key, looked.pinned()))),
+            approving: vec!['1', '2'],
+            refusing: '3',
+            grants: Vec::new(),
+            deciding,
+        }
+    }
+
+    /// PROMPT-4, SERVERS-4: the server start question takes neither `1` nor `2` until every row of
+    /// the declaration has been drawn, a row or a page at a time, at both sizes.
+    #[test]
+    fn the_server_start_question_takes_no_yes_before_every_row_of_the_declaration_is_drawn() {
+        let case = oversized_start();
+        for size in [(80, 24), (60, 15)] {
+            scroll_through("server start", &case, size, |_| 1);
+            scroll_through("server start", &case, size, Looked::page);
         }
     }
 
@@ -6275,6 +6610,20 @@ mod tests {
         let host = HostRequest {
             hosts: vec!["example.com".into()],
         };
+        let declaration = bravebot_config::mcp::Declaration::http("https://example.com/mcp".into())
+            .expect("a declaration");
+        let start = bravebot_agent::servers::Question {
+            alias: "files",
+            file: ".mcp.json",
+            declaration: &declaration,
+            program: None,
+            changed: false,
+        };
+        assert_eq!(
+            ask_to_start(&mut terminal, &start),
+            bravebot_agent::servers::Answer::No,
+            "server start"
+        );
         let answers = [
             (
                 "fetch",

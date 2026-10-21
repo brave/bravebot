@@ -10,6 +10,7 @@ governs:
 guards:
   - symbol: Labelled::new
     sites:
+      - crates/agent/src/commit_message.rs: 1
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
@@ -31,13 +32,15 @@ guards:
       - crates/mcp/src/stdio.rs: 2
       - crates/net/src/lib.rs: 2
   - symbol: Labelled::declassify
+    every-spelling: yes
     sites:
       - crates/agent/src/aside.rs: 3
+      - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/manifest.rs: 5
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 36
+      - crates/agent/src/tools.rs: 37
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
@@ -54,12 +57,13 @@ guards:
     sites:
       - crates/agent/src/agents.rs: 1
       - crates/agent/src/attached.rs: 1
+      - crates/agent/src/commit_message.rs: 3
       - crates/agent/src/tools/message.rs: 1
       - crates/agent/src/manifest.rs: 11
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
       - crates/agent/src/styles.rs: 1
-      - crates/agent/src/tools.rs: 22
+      - crates/agent/src/tools.rs: 24
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
@@ -131,11 +135,12 @@ guards:
   - symbol: Policy::render_in_place
     sites:
       - crates/agent/src/aside.rs: 1
+      - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/manifest.rs: 8
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 35
+      - crates/agent/src/tools.rs: 39
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
@@ -149,7 +154,7 @@ guards:
   - symbol: Policy::label_model_output
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 5
+      - crates/agent/src/tools.rs: 6
       - crates/core/src/policy.rs: 22
   - symbol: Policy::adopt_model_output
     sites:
@@ -281,8 +286,11 @@ and where the slot came from a quarantined listing every one of them is a filena
 never shown. So each accessor that hands one back takes a witness minted in the same module the
 declassification witness is minted in, and the `guards` list above pins their uses file by file,
 the way it pins a declassification. A decision relocated into the kernel and taken from a slot's
-address therefore moves a pinned count, and one relocated into any module of `bravebot-core`
-outside the gates does not compile at all, bar the single release named next.
+address moves a pinned count where it releases the address again, and one relocated into any module
+of `bravebot-core` outside the gates does not compile at all, bar the single release named next.
+The counts pin releases, not the decisions taken from bytes a counted release already produced, so
+a branch added inside a function that holds a counted use moves nothing and is found by reading the
+diff ([reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md)).
 
 Three gates let a slot's address leave the kernel, each recorded and each pinned file by file in
 `guards`, so a further reader of a slot's address anywhere downstream is a line in a diff rather
@@ -313,7 +321,7 @@ into the other does not remove it.
 `verified-by: bravebot_core::policy::reading_an_argument_is_recorded`
 `verified-by: bravebot_agent::turn::a_write_reads_the_file_it_replaces_through_a_gate_that_records_it`
 `verified-by: bravebot_core::policy::decoding_a_transport_envelope_is_recorded_and_hands_back_the_label`
-`verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub))`
+`verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub); the compile_fail doctests on Labelled in crates/core/src/value.rs pin equality, Hash, Display, Deref and AsRef, and check_labelled_impls in the security-audit skill reads a derive, a nested-generic bound and a wrapped impl header for the rest)`
 `verified-by: by-construction (Declassification::authorise is pub(in crate::policy), so no other module of bravebot-core and no crate downstream of it can mint a witness)`
 `verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from, Policy::names_for_display, Policy::promote_reference_for_read and Policy::destination_from_reference are the four that can, and each records its release. Those eight and these four are the whole of the surface returning a slot's address and every use of each is pinned above)`
 `verified-by: bravebot_core::policy::a_listed_files_name_does_not_decide_how_the_trail_words_the_check`
@@ -453,6 +461,7 @@ and the content has no say in it.
 | a file read from the workspace | private, and trusted only where somebody vouched for the path | `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted` |
 | a listing or a search across several paths | private, and trusted only where every path it visited is | `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is` |
 | the file names a language server reported | private, and trusted only where every path it names is, so one nobody vouched for quarantines the answer; the same road as a listing, and the capability's `(U,priv)` is where it starts | `verified-by: bravebot_agent::lsp::locations_are_labelled_by_the_files_they_name` |
+| the severities and line numbers a language server reported for a file it was asked about | trusted and private, from the capability's own label and not from the queried file's entry, because a severity is a fixed enumeration and a line is an integer and the sentence carries no word the server wrote; the numbers are still computed from bytes nobody may have vouched for, which is the fifth entry of [Known costs](#known-costs) | `verified-by: bravebot_agent::lsp::diagnostics_for_a_file_nobody_vouched_for_report_lines_and_not_messages` |
 | a file the user named in a prompt or dropped on the window | trusted, because naming a file is vouching for it | `verified-by: bravebot_core::policy::a_file_the_user_named_is_read_as_trusted_though_nothing_else_is` |
 | what a program printed | untrusted and private, since what it did is unknown | `verified-by: bravebot_core::policy::an_opaque_program_always_yields_untrusted_private_output` |
 | what a program that can only transform its input printed, fed content | private, and trusted only where what was fed in is, because a program prints what it was given and a run is not a release | `verified-by: bravebot_core::policy::a_filter_fed_an_untrusted_label_prints_untrusted_output` `verified-by: bravebot_core::policy::a_filter_fed_a_trusted_label_prints_trusted_private_output` |
@@ -568,9 +577,11 @@ arrives at all.
 
 ## Known costs
 
-- **Four places do look at untrusted bytes in order to decide something.** Three are in the policy
-  layer and the fourth is the search, which is in `bravebot-agent`. The clauses above say nothing
-  may, so these are exceptions, and they are written down rather than left to be found.
+- **Seven places do look at untrusted bytes in order to decide something.** Three are in the policy
+  layer, the fourth is the search, which is in `bravebot-agent`, the fifth is the diagnostics
+  sentence, the sixth is `read_git` and the seventh is the text-or-binary sniff of a read, which are
+  in `bravebot-agent` too. The clauses above say
+  nothing may, so these are exceptions, and they are written down rather than left to be found.
 
   The first is splitting a processor's answer. A processor hands back a single piece of text that
   holds two things: a remark meant for the person watching, and the document to be written. It
@@ -641,8 +652,8 @@ arrives at all.
     is that the alternative is somebody editing a settings file to get it, which is a decision made
     further from the thing it is about.
   - **Force the word `safe` where somebody turned auto-vetting on.** Then it promotes, and nobody
-    reads the bytes. This is the one thing on the list that reaches the planner's context without a
-    person in between, and it is why the mode is off until somebody asks for it in one of the three
+    reads the bytes. This is the one thing on the list that puts the attacker's bytes in the planner's context
+    without a person in between, and it is why the mode is off until somebody asks for it in one of the three
     ways [CHECK-11](vetting.md#CHECK-11) names, and why the settings key that asks for it cannot be
     written into a checkout. What it buys is bounded by everything the verdict does not decide: one
     slot, whichever one the planner named, once, at `(T,priv)` so nothing leaves the machine and
@@ -653,7 +664,15 @@ arrives at all.
     words drawn in it and the checker ([CHECK-15](vetting.md#CHECK-15)), and what it buys is the
     same one slot, once.
   - **Force the word `unsafe`, or reply with nothing a verdict can be read out of.** That lands on
-    the prompt with the warning, which is the direction this is built to fail in.
+    the prompt with the warning, which is the direction this is built to fail in. Where nobody
+    can be asked, which is a run that bypasses permissions with auto-vetting on, there is no
+    prompt: the verdict alone answers, anything but `safe` is a refusal, and the planner is told
+    the slot was kept back and not to ask again ([CHECK-12](vetting.md#CHECK-12), "nobody to fall
+    back to", and the Known cost "A screened run with nobody to ask" in [vetting.md](vetting.md)).
+    What it buys is the denial of one slot read the planner asked for, decided by the check's
+    reply with no person in between, at no cost to the attacker. It promotes nothing, chooses no
+    destination, changes no label and writes no trust rule, and none of their bytes reach the
+    planner on this path. The same refusal follows a check that could not complete.
   - **Put their words in the reason.** It reaches a person's screen and stops there. It is drawn
     inside a margin it cannot forge, no model is given it, and it is kept out of the audit trail.
     It can still *lie*, since nothing holds a reason against the content it describes and nothing
@@ -721,3 +740,125 @@ arrives at all.
   search run as a processor job is a model call that produces a document or a remark, so it would no
   longer be a pattern match. Moving the comparison into `bravebot-core` is not a third, since that
   crate is the driver as well.
+
+- **The fifth is the diagnostics sentence, whose numbers a language server computed from files
+  nobody vouched for.** The `lsp` tool's `diagnostics` operation tells the planner how many errors a
+  server found, the line each starts on (up to 20, then "and N more"), a warning count and a count of
+  notes of any other kind ([LSP-13](tools/lsp.md#LSP-13)). The sentence is worded by `bravebot-agent`
+  from those numbers, so the driver's wording branches on them, and it is labelled from the
+  capability's own `(T,priv)` because it names no path the server reported
+  ([LABEL-8](#LABEL-8)). The server computes the numbers from the queried file and from every file it
+  indexed that file against, so a file in a vendored, cloned or distrusted tree, or a dependency of a
+  vouched-for one, sets them. Suppose an attacker owns such a file. Everything that buys them is on
+  this list:
+
+  - **Set how many errors, warnings and other notes the planner is told about.** Any count the server
+    can be made to publish.
+  - **Set which line numbers are named.** Up to 20 error lines per call, and whether an "and N more"
+    clause follows. That is a few hundred bits per call.
+  - **Choose whether the sentence says "no errors reported yet".** It is worded as nothing stronger,
+    so it is not a statement that the file is clean ([LSP-12](tools/lsp.md#LSP-12)).
+
+  The driver supplies every word around those numbers, and none of the server's text is carried: a
+  diagnostic's message, code and source travel as a reference the planner cannot read
+  ([LSP-13](tools/lsp.md#LSP-13)). So the gain is attention and not content. It can move the planner
+  toward a build or a read, and it is a covert channel with no decoder in the attacker's hands.
+
+  What is **not** on the list is the thing that would matter. The planner picks the `path`, a routing
+  field, and the attacker's bytes never choose it. No destination is chosen, since `edit_file` refuses
+  an untrusted file ([EDIT-2](tools/edit-file.md#EDIT-2)) and every effect is still approved. No text
+  the attacker wrote reaches the planner. The residue is that the planner reads these numbers and can
+  be moved by them, as far as an error count and a list of lines can move it. This is the same shape
+  as the search entry above: a handful of numbers decided by untrusted bytes.
+
+  Two alternatives cost more. Labelling the sentence from the capability's `(U,priv)` quarantines it
+  whole for any unvouched answer, and the planner then cannot be told that a file it is working on has
+  errors. Gating the sentence on the queried file's trust-map entry, as the write-time sentence is
+  gated, does not close it, since the counts depend on other files too and
+  [LSP-3](tools/lsp.md#LSP-3) rules out borrowing the queried file's entry for what a server computed.
+
+- **The sixth is `read_git` comparing blobs committed from paths the map distrusts.** `read_git`
+  opens a repository whose whole `.git` the map vouches for ([GIT-2](tools/read-git.md#GIT-2)), and
+  a blob in it holds the bytes of the working-tree file it was committed from, which may be a path
+  the map distrusts. A `search` tests each line of such a blob against the pattern, a `diff`
+  compares both sides of it to decide the hunks and whether the two are too different to compare,
+  and `show` checks whether it is binary to choose between a description and its text. The
+  comparison is in `bravebot-agent`, which is the driver too ([LABEL-4](#LABEL-4)). Where every
+  path an answer shows is vouched for, the bytes are trusted and the comparison is the case
+  [LABEL-5](#LABEL-5) allows. The rest of this entry is about an answer that also shows a path
+  nobody vouched for.
+
+  Each path is recorded as shown before its blob is read, and the answer is labelled from those
+  paths once the walk has finished ([GIT-3](tools/read-git.md#GIT-3)), so one unvouched path makes
+  the whole answer untrusted. The lines the comparison keeps reach the planner only as a reference,
+  as the search's do. Suppose an attacker owns the committed bytes of such a path. Everything that
+  buys them is on this list:
+
+  - **Set the answer's line and byte counts.** Within the caps `read_git` keeps: 2,000 lines, 2,000
+    characters a line and 1 MiB a blob, and the count cap. The planner is shown both numbers for
+    any quarantined content ([LABEL-3](#LABEL-3)), and an attacker who owns a file already sets
+    them for a read of it.
+  - **Make the answer report itself incomplete.** By filling a cap, or by making the walk run to
+    its deadline, or a diff run to its bound of four million steps. The planner is told the answer
+    is incomplete and nothing else: the skip that lists the next page is printed inside the
+    quarantined body, so unlike the search's offset it does not reach the planner.
+  - **Tell the planner by a count whether the pattern it chose matched.** The line count of a
+    search over a single distrusted blob is one number the blob decided.
+  - **Choose which matches or hunks fall on which page, and make one of their own files print
+    nothing.** The first happens inside the body the planner cannot read. The second is a blob that
+    is binary or past the size cap, which a search names or describes and does not print.
+
+  What is **not** on the list: the label, which depends only on the paths shown, each recorded
+  before its blob is read, any destination, any argument of a later call, and a line of the blob. The pattern, the path and the skip are the
+  planner's own arguments and no byte of a blob reaches them. This entry cannot take the search's
+  wording that the result is labelled "before any file is opened" or that which files the walk
+  reaches is never decided by a byte of a file. `read_git` labels an answer after the walk has
+  finished, and a page boundary that earlier blobs' matching lines decided stops the walk, so those
+  bytes choose which later paths are reached. That is sound only because every path read is pushed
+  to the shown list before its blob is, which is what keeps the label from being steerable.
+
+  Two alternatives cost more than this does. Leaving unread every blob whose path the map distrusts
+  and reporting how many were left out would close the entry, and it changes what a history
+  question can find in a repository that holds vendored code, which is a product decision for the
+  maintainers and not made here. Moving the comparison into `bravebot-core` is not another, since
+  that crate is the driver as well.
+
+  The two claims the entry rests on, that only the counts and the incomplete notice follow what the
+  blob holds and that the skip stays in the body, are pinned under
+  [GIT-14](tools/read-git.md#GIT-14).
+
+- **The seventh is the text-or-binary decision on a read of a file nobody vouched for.** For a path
+  the map does not vouch for, `read_file` does not open the file to hand back text, it defers a
+  slot ([READ-1](tools/read-file.md#READ-1)). It still has to say now whether the file is text, as
+  [READ-3](tools/read-file.md#READ-3) requires, so `Workspace::survey` in `bravebot-agent` reads the
+  first 8 KiB and `bravebot_filetype::looks_binary` tests it for a NUL byte or more than 30 percent
+  control characters. A file that fails is refused to the planner in the driver's own words, "is a
+  binary file, so it cannot be read as text", and one that passes becomes a reference with a byte
+  count. The same test runs again over the whole file, followed by a check that it is valid UTF-8,
+  when a slot is filled or a page is read (`Workspace::read` and `page`). The comparison is in
+  `bravebot-agent`, which is the driver too ([LABEL-4](#LABEL-4)), and the `filetype` crate holds
+  no `declassify`, so no pinned count moves when it changes. Where the path is vouched for, the bytes
+  are trusted and the comparison is the case [LABEL-5](#LABEL-5) allows. The rest of this entry is
+  about a path nobody vouched for.
+
+  Suppose an attacker owns the file. Everything that buys them is on this list:
+
+  - **Choose which of two driver-worded results the planner is shown for the file.** A reference
+    with a size, or the refusal above. That is one bit, and the planner was already free to read a
+    different path.
+  - **Put the file out of reach of a processor.** A NUL in the first 8 KiB, or bytes that are not
+    valid UTF-8 anywhere, makes a later fill of the slot fail with the same refusal.
+
+  What is **not** on the list: the label, which depends on the path alone, any destination, any
+  argument of a later call, and any byte of the file. The size the planner is told is the file's own
+  size and already the attacker's to set, and the sentence is one the driver wrote. The search
+  skipping a file that is not valid text, in the fourth entry, is the same kind of decision.
+
+  The alternative costs behaviour and is a product decision for the maintainers, not made here: a
+  quarantined read decides from the path and the size alone, and the text-or-binary answer is found
+  when a processor or a write reads the bytes. That would give the planner one result shape for
+  every unvouched file, and it changes [READ-3](tools/read-file.md#READ-3). Moving the sniff into
+  `bravebot-core` is not another, since that crate is the driver as well.
+
+  The result shape is pinned by `a_binary_read_tells_the_model_it_is_binary` in
+  `crates/agent/tests/turn.rs`, which fails if the refusal stops being said.

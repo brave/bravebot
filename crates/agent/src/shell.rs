@@ -36,8 +36,8 @@ use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use std::fmt;
-use std::io::Read;
-use std::process::{Child, Command, Stdio};
+use std::io::{ErrorKind, Read};
+use std::process::{Child, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -135,13 +135,42 @@ pub fn shell_named(variable: Option<String>) -> String {
 /// does. There is no quoting to get wrong because nothing is interpolated: the string the user
 /// typed is the string the shell receives.
 pub fn run(line: &str, directory: &std::path::Path, cancel: &Cancel) -> Result<Ran, ShellError> {
+    run_sending(line, directory, cancel, None)
+}
+
+/// [`run`], and each piece of what the command prints is sent to `live` as the command writes it,
+/// from either stream, in the order the pieces were read.
+///
+/// For the person watching a command that has not ended. The pieces are text for the screen alone:
+/// they are not labelled, and nothing is released through the gate for them. What reaches the
+/// planner is what [`record`] releases from the returned [`Ran`], which is built from the same bytes
+/// and is the whole of them. A piece is whole characters, since a read can stop inside one and the
+/// rest of it is held for the next piece. A receiver that has gone away stops the sending and
+/// nothing else: the command runs on and the result is the same.
+pub fn run_live(
+    line: &str,
+    directory: &std::path::Path,
+    cancel: &Cancel,
+    live: &mpsc::Sender<String>,
+) -> Result<Ran, ShellError> {
+    run_sending(line, directory, cancel, Some(live))
+}
+
+fn run_sending(
+    line: &str,
+    directory: &std::path::Path,
+    cancel: &Cancel,
+    live: Option<&mpsc::Sender<String>>,
+) -> Result<Ran, ShellError> {
     if line.trim().is_empty() {
         return Err(ShellError::Io("there was no command to run".to_string()));
     }
 
+    use bravebot_sandbox::programs::{Inherits, Resolved, SearchPath};
     let shell = shell();
+    let program = Resolved::named_by_person(&shell);
     let mut child = match bravebot_sandbox::process::starting_a_program(|| {
-        Command::new(&shell)
+        bravebot_sandbox::programs::start(&program, Inherits::All, SearchPath::Inherited)
             .arg("-c")
             .arg(line)
             .current_dir(directory)
@@ -163,8 +192,8 @@ pub fn run(line: &str, directory: &std::path::Path, cancel: &Cancel) -> Result<R
 
     // Drained on threads of their own, started before the wait. A command writing more than a pipe
     // holds would otherwise block forever against a buffer nobody is reading.
-    let out = drain(child.stdout.take());
-    let err = drain(child.stderr.take());
+    let out = drain(child.stdout.take(), live.cloned());
+    let err = drain(child.stderr.take(), live.cloned());
 
     let started = Instant::now();
     let code = loop {
@@ -263,7 +292,7 @@ pub fn record<S: Sink>(
 /// The private form of [`record`], for a person who wants to read a log or an `.env` in their own
 /// shell without it going to the model service. It takes no `Conversation`, so there is nothing for
 /// it to push into, and the output still passes the gate [`record`] passes it through, so what is
-/// drawn is what the gate released.
+/// drawn when the command has ended is what the gate released.
 ///
 /// Under the same call-site rule as [`record`]: `line` is only ever a line a person typed.
 pub fn show<S: Sink>(line: &str, ran: &Ran, sink: &mut S) -> Result<Recorded, ShellError> {
@@ -296,8 +325,10 @@ fn released<S: Sink>(line: &str, ran: &Ran, sink: &mut S) -> Result<String, Shel
 
     // Everything downstream uses what the gate returned, never the string that went in, so the gate
     // decides whether these bytes go anywhere at all. Were a later change to label a command's
-    // output untrusted, this refuses and neither the planner nor the screen sees it. Reading the
-    // label and then using a copy taken beforehand would make the check decorative.
+    // output untrusted, this refuses and neither the planner nor the entry the screen keeps for a
+    // command that ended with a result has it (what [`run_live`] sent while it ran is the screen's
+    // alone). Reading the label and then using a copy taken beforehand would make the check
+    // decorative.
     policy
         .read_trusted_content("shell", &labelled)
         .map_err(|denial| ShellError::Io(denial.to_string()))
@@ -316,18 +347,107 @@ fn outcome(ran: &Ran) -> String {
 }
 
 /// Read a pipe on a thread, lossily, so output that is not UTF-8 does not fail the run.
-fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> Option<mpsc::Receiver<String>> {
+///
+/// Where `live` is given, what each read returned is also sent on as text as it is read. The text
+/// the thread hands back at the end is decoded from all the bytes at once, so the two agree on what
+/// an invalid byte becomes.
+fn drain<R: Read + Send + 'static>(
+    pipe: Option<R>,
+    mut live: Option<mpsc::Sender<String>>,
+) -> Option<mpsc::Receiver<String>> {
     let mut pipe = pipe?;
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut raw = Vec::new();
-        let text = match pipe.read_to_end(&mut raw) {
-            Ok(_) => String::from_utf8_lossy(&raw).into_owned(),
-            Err(_) => String::new(),
-        };
+        let mut decoder = Utf8Pieces::default();
+        let mut buffer = [0u8; READ];
+        loop {
+            match pipe.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => {
+                    raw.extend_from_slice(&buffer[..count]);
+                    if live.is_some() {
+                        send(&mut live, decoder.push(&buffer[..count]));
+                    }
+                }
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+        if live.is_some() {
+            send(&mut live, decoder.finish());
+        }
+        // What was read is kept when the pipe fails part way, since it is what was sent on, and a
+        // result that said nothing was printed would contradict what a person watched.
+        let text = String::from_utf8_lossy(&raw).into_owned();
         let _ = tx.send(text);
     });
     Some(rx)
+}
+
+const READ: usize = 8192;
+
+/// A receiver that has gone away means the screen has, and the command still has to run to its end
+/// with the result it would have had, so a failed send turns sending off and does nothing else.
+fn send(live: &mut Option<mpsc::Sender<String>>, piece: String) {
+    if piece.is_empty() {
+        return;
+    }
+    if live.as_ref().is_some_and(|live| live.send(piece).is_err()) {
+        *live = None;
+    }
+}
+
+/// Text decoded from bytes that arrive in pieces, where a piece can end inside a character.
+///
+/// The end of an incomplete character is held until the next piece completes it, so no piece draws
+/// as the replacement character what the next one makes whole. Bytes that are not UTF-8 at all
+/// become the replacement character as [`String::from_utf8_lossy`] makes them, so the pieces put
+/// together read the same as the whole decoded at once.
+#[derive(Default)]
+struct Utf8Pieces {
+    held: Vec<u8>,
+}
+
+impl Utf8Pieces {
+    /// The text `bytes` complete, with the end of an unfinished character kept for the next call.
+    fn push(&mut self, bytes: &[u8]) -> String {
+        self.held.extend_from_slice(bytes);
+        let mut text = String::new();
+        let mut at = 0;
+        loop {
+            match std::str::from_utf8(&self.held[at..]) {
+                Ok(valid) => {
+                    text.push_str(valid);
+                    at = self.held.len();
+                    break;
+                }
+                Err(error) => {
+                    let valid = at + error.valid_up_to();
+                    text.push_str(&String::from_utf8_lossy(&self.held[at..valid]));
+                    match error.error_len() {
+                        Some(length) => {
+                            text.push(char::REPLACEMENT_CHARACTER);
+                            at = valid + length;
+                        }
+                        None => {
+                            at = valid;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        self.held.drain(..at);
+        text
+    }
+
+    /// What is left when the stream has ended: an unfinished character is the replacement character.
+    fn finish(&mut self) -> String {
+        let text = String::from_utf8_lossy(&self.held).into_owned();
+        self.held.clear();
+        text
+    }
 }
 
 /// Kill the shell and reap it, so nothing is left behind.
@@ -339,4 +459,43 @@ fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> Option<mpsc::Receiver<Str
 fn stop(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pipe that delivers some bytes and then fails.
+    struct FailsAfter(Option<&'static [u8]>);
+
+    impl Read for FailsAfter {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.take() {
+                Some(bytes) => {
+                    buffer[..bytes.len()].copy_from_slice(bytes);
+                    Ok(bytes.len())
+                }
+                None => Err(std::io::Error::other("the pipe failed")),
+            }
+        }
+    }
+
+    /// What was read before a pipe failed is what the result holds, because it is what was sent on
+    /// and drawn while the command ran. A result that said nothing was printed would contradict
+    /// what a person watched.
+    #[test]
+    fn what_was_read_before_a_pipe_failed_is_kept() {
+        let (live, pieces) = mpsc::channel();
+
+        let text = drain(Some(FailsAfter(Some(b"before the failure\n"))), Some(live))
+            .expect("a reader")
+            .recv()
+            .expect("the text");
+
+        assert_eq!(text, "before the failure\n");
+        assert_eq!(
+            pieces.try_iter().collect::<String>(),
+            "before the failure\n"
+        );
+    }
 }

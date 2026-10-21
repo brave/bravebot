@@ -115,7 +115,7 @@ These are not accepted risks or implementation details that can be skipped. The 
 - **Current assumption:** a review of the engine's call sites found calls running one at a time, so the swap needs overlapping calls. This is not yet confirmed by a test of the engine.
 - **Evidence needed:** an id the engine assigns to a call and carries on both events, the change to the session view's wire shape and its spec, and a test with overlapping calls that finish in either order.
 - **Before:** any engine work that runs calls in parallel, and before the Calls made list is relied on as a record of what touched content from outside.
-- **Issue to file:** "Give tool calls an id so a finish lands on the row of its own call".
+- **Issue:** [#2769](https://github.com/brave/bravebot/issues/2769), "Give tool calls an id in the session view, so a finish lands on its own call's row when calls overlap".
 
 ### Q7. When does the mobile app close a session it opened?
 
@@ -124,7 +124,7 @@ These are not accepted risks or implementation details that can be skipped. The 
 - **Current assumption:** acceptable while the only target is a test fake.
 - **Evidence needed:** what close, detach and take-over mean on the first real target, which of them the app may call for a session it opened, what to do with a result that arrives late, and a bound on the sessions kept. Tests for switching, a target change and exit.
 - **Before:** the first target with real sessions.
-- **Issue to file:** "Release the sessions the mobile app opens when it switches, changes target or exits".
+- **Issue:** [#2770](https://github.com/brave/bravebot/issues/2770), "Release the sessions the mobile app opens when it switches, changes target or exits".
 
 ### Q8. How does the app know a target can list its sessions?
 
@@ -133,7 +133,7 @@ These are not accepted risks or implementation details that can be skipped. The 
 - **Current assumption:** the first target implements listing, so no gate is needed yet.
 - **Evidence needed:** read `sessionList` once from `describe()`, which can itself reject; hide the list or explain its absence when it is `false`; show a failed load differently from an empty list. Tests with a client that reports `false` and one whose list fails.
 - **Before:** a target built on the stdio client, or any target without listing.
-- **Issue to file:** "Show the sessions drawer by capability, and tell a person when listing fails".
+- **Issue:** [#2771](https://github.com/brave/bravebot/issues/2771), "Show the mobile sessions drawer by target capability, and tell a person when listing fails".
 
 ## Keeping this record current
 

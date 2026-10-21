@@ -5,7 +5,6 @@ status: normative
 governs:
   - crates/agent/src/exec.rs
   - crates/agent/src/remembered.rs
-  - crates/agent/src/scrub.rs
   - crates/config/build.rs
   - crates/config/src/scrub.rs
   - crates/core/src/command.rs
@@ -611,12 +610,36 @@ A pipeline is given 300 seconds unless the call named its own deadline, which it
 ceiling it cannot exceed; [CMDLINE-13](command-line.md#CMDLINE-13) is that bound. Both figures are
 the built-in ones rather than the only ones: a settings file may name its own, and
 [RUN-23](#RUN-23) is what it names. When the deadline
-runs out the stages are killed, and what they printed
+runs out the stages are stopped, and what they printed
 before that is collected and returned exactly as it is for a pipeline that ended by itself, under
 the label RUN-4 gives it. The stop is reported as structure, a duration on the result, so a
 caller says which of the two happened without reading a byte of what was printed. Collecting after
-a kill must be abandonable: a killed stage can leave a child holding the write end of the pipe, so
+a stop must be abandonable: a stage can leave a child holding the write end of the pipe, whether the
+child left the stage's process group or the stage ended by itself with the child still running, so
 the run may not wait on that pipe reaching its end, and keeps whatever had been read by then.
+
+**How a stage is stopped.** On Linux and macOS every stage leads a process group of its own. A stop
+asks each stage to end by sending `SIGTERM` to its group, so the programs the stage started are
+asked with it, and gives every group the same two seconds to empty, which is how long a program that
+undoes what it holds has to do so after the stage itself has gone. Whatever is left of a group after
+that is killed with `SIGKILL`. A group is signalled by its number only while its stage has not been
+waited for, or, for a stage that exited during the stop, while the group still has a member, since a
+member holds the number against reuse. A stage that ended by itself therefore leaves what it started
+as it was. A turn that ends with several jobs running reports each of them first, as it would have
+without a stop, and then stops them together: every job is asked before any is waited for, and the
+jobs share the two seconds. On Windows a stage in a container is killed with every process it
+started, and a stage that is not confined is killed on its own. A run stopped at its deadline, or by
+the person ([RUN-27](#RUN-27)), is reported with a sentence saying that a stop can leave lock files
+or partly written output behind, and that programs the line started may need checking.
+
+**Known cost: a stage is not in the session's process group.** A signal sent to the session's
+group, such as the `SIGINT` the terminal sends for Ctrl-C at a one-shot run, the `SIGHUP` of a
+closed terminal, or the `SIGTERM` that stops a background session, does not reach a stage, and a
+session that such a signal ends leaves the stages it was running. A stage the session ends itself, at
+the deadline, on a cancellation or when the turn ends, is stopped as above. The stage is also a
+background process group of the terminal, so one that reads the terminal is stopped by it until the
+deadline. A stage that ignores the request holds a stop for the two seconds. A confined stage on
+Linux is also the leader of a session of its own.
 
 **Why.** The limit is for the program that does not end, and the commonest such program is doing
 exactly what was asked: a server told to serve a page serves it, prints as it goes, and never
@@ -636,6 +659,13 @@ RUN-4's to decide.
 `verified-by: bravebot_agent::exec::a_pipeline_stopped_at_the_limit_still_returns_what_it_printed`
 `verified-by: bravebot_agent::exec::a_pipeline_that_ends_by_itself_is_not_marked_stopped`
 `verified-by: bravebot_agent::exec::a_grandchild_holding_the_pipe_does_not_hang_the_run`
+`verified-by: bravebot_agent::exec::a_stage_stopped_at_the_limit_is_asked_to_end_so_it_can_remove_what_it_holds`
+`verified-by: bravebot_agent::exec::a_program_the_stage_started_is_ended_with_it_at_the_limit`
+`verified-by: bravebot_agent::exec::a_program_the_stage_started_is_given_the_grace_after_the_stage_has_ended`
+`verified-by: bravebot_agent::exec::a_stage_that_ignores_the_request_to_end_is_killed_with_what_it_started`
+`verified-by: bravebot_agent::exec::what_a_stage_left_running_after_it_ended_by_itself_is_not_signalled`
+`verified-by: bravebot_agent::confine::a_confined_stage_stopped_at_the_limit_is_asked_to_end_and_what_it_started_ends_with_it`
+`verified-by: bravebot_agent::report::a_stop_says_it_can_leave_files_behind_and_a_run_still_going_does_not`
 
 <a id="RUN-12"></a>
 ### RUN-12: a program is not handed this agent's own credentials
@@ -644,7 +674,9 @@ The environment a stage receives is the one this process holds, less the credent
 authenticates to its backend with and with the session's own directory named in it
 ([TRUST-17](../trust-map.md#TRUST-17)). Every stage, not only the first. Removed rather than
 emptied, so a program that distinguishes an unset variable from a blank one sees what a machine that
-never held the credential sees.
+never held the credential sees. A `NAME=value` the line writes in front of a program does not bring
+one of them back: the removal is applied again after the line's own assignments, since the line is
+the planner's and not the person's own.
 
 Those credentials are the signing key and its key id, and every variable the `env` of a gateway in
 force names as a place its bearer token may live. The gateways in force are the managed layer's where
@@ -724,6 +756,9 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_config::lib::google_api_key_is_a_gateway_token_only_while_vertex_is_configured`
 `verified-by: bravebot_agent::exec::a_gateways_environment_token_does_not_reach_a_program_it_runs`
 `verified-by: bravebot_agent::exec::no_stage_of_a_pipeline_sees_a_gateways_environment_token`
+`verified-by: bravebot_agent::exec::a_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step`
+`verified-by: bravebot_agent::exec::a_background_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step`
+`verified-by: bravebot_lsp::server::a_server_is_not_handed_the_names_it_is_told_to_withhold`
 `verified-by: bravebot_agent::exec::a_background_job_is_not_handed_a_gateways_environment_token`
 `verified-by: bravebot_agent::exec::a_variable_no_provider_block_names_still_reaches_a_program`
 `verified-by: bravebot_agent::exec::switching_the_filtering_off_restores_a_gateways_environment_token`
@@ -868,10 +903,11 @@ on the part before it, and nothing waits here; a redirection names a destination
 no reader for. Both are refused rather than half-honoured, and so is a redirection that opens no
 file: what a background run cannot honour is a route, whether or not it names one.
 
-**The turn owns it, or the session does.** Dropping the handle kills the pipeline. A one-shot run, an
-incognito session and a delegate own their jobs per turn, so a job cannot outlive the turn that
-started one: a background program still running after its turn ended would be an effect nobody is
-watching, nobody is being asked about, and nobody can stop. An interactive session in the terminal
+**The turn owns it, or the session does.** Dropping the handle stops the pipeline as
+[RUN-11](#RUN-11) stops one at its deadline. A one-shot run, an incognito session and a delegate own
+their jobs per turn, so a job cannot outlive the turn that started one: a background program still
+running after its turn ended would be an effect nobody is watching, nobody is being asked about, and
+nobody can stop. An interactive session in the terminal
 interface owns them instead, so a job survives the end of its turn and is killed when the session
 ends, when `/clear` begins another conversation, or when the person stops it.
 
@@ -922,6 +958,8 @@ the job names the driver minted.
 `verified-by: bravebot_agent::exec::a_killed_background_pipeline_keeps_what_it_printed`
 `verified-by: bravebot_agent::exec::background_stages_are_chained_so_one_feeds_the_next`
 `verified-by: bravebot_agent::exec::dropping_a_background_pipeline_kills_it`
+`verified-by: bravebot_agent::exec::killing_a_background_job_ends_what_its_stage_started`
+`verified-by: bravebot_agent::tools::jobs_that_ignore_the_request_to_end_share_one_grace_at_the_turns_end`
 `verified-by: bravebot_agent::exec::a_background_pipeline_with_missing_resolutions_does_not_start`
 `verified-by: bravebot_agent::turn::a_job_a_session_keeps_is_running_in_the_next_turn_and_ends_with_the_session`
 `verified-by: bravebot_tui::state::a_kept_job_is_still_running_and_listed_in_the_next_turn`
@@ -959,6 +997,25 @@ output arriving that the caller has not been handed, the job ending, the wait ru
 turn being cancelled. Which of the four it was is not reported separately, because the answer already
 says it: how many new lines there are, whether the job has ended, and how long the wait actually
 lasted.
+
+**A wait that output does not end.** `job_output` also takes `until_exit`, a boolean that is only
+accepted with `wait_seconds` beside it, which then bounds the wait. A call that gives both comes
+back at the first of four things: the job ending, the wait running out, the turn being cancelled, or
+a stop the person asks for on any job of the turn ([RUN-27](#RUN-27)). Output arriving does not end
+it, including output that is already there, unseen, when the call is made. What it hands back is
+what the job printed since the last look, in one answer, under the label the job has and cut to the
+output cap as any look's is, so output that is quarantined comes back as one reference to all of it.
+`until_exit` given as anything but a boolean, as `true` with no `wait_seconds`, or as `true` beside
+`kill` is refused. A flag that is quietly ignored hands back the output-ended wait the caller did
+not ask for, a flag that quietly chose its own bound would hand back a window nobody asked about,
+and a `kill` is carried out after the wait, so beside this flag it would be held back by the whole
+bound. `false` is the same as leaving it out.
+
+**Why `until_exit` exists.** A job that prints more often than a round takes ends every output-ended
+wait at its next line, so a build that prints a line per crate costs one planner round per look, and
+where its output is quarantined one `read_output` call per look as well, and a job that is printing
+when the call is made never lets the wait last at all. A caller that only needs the result of such a
+job has no other way to ask for it in one call.
 
 **Between one second and ten minutes, and a value outside that is refused.** [RUN-11](#RUN-11)'s
 deadline is clamped instead, and the difference is what a caller can tell afterwards. A run whose
@@ -1003,7 +1060,9 @@ pipeline it started: how many bytes have arrived, and which steps have exited. T
 bookkeeping [RUN-16](#RUN-16) already provides for, and the byte count is only ever compared against
 itself. A program does therefore decide when a wait returns by choosing when to print, which is
 exactly what a caller asking to be told about new output asked for, and the bytes themselves still
-reach anybody only under the label the plan was given.
+reach anybody only under the label the plan was given. A wait with `until_exit` does not compare a
+byte count either: it asks which steps have exited and what the clock says, so a program cannot
+end it by printing.
 
 **What is new is counted per pipe.** A pipeline has one pipe for its standard output and one for each
 stage's standard error, and what a look hands back composes them with the output first. A single
@@ -1036,13 +1095,22 @@ the window.
 `verified-by: bravebot_agent::exec::waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_further`
 `verified-by: bravebot_agent::exec::waiting_for_more_returns_when_the_job_ends_without_printing`
 `verified-by: bravebot_agent::exec::a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound`
+`verified-by: bravebot_agent::exec::waiting_for_exit_is_not_ended_by_the_output_of_a_job_that_keeps_printing`
+`verified-by: bravebot_agent::exec::waiting_for_exit_lasts_its_bound_where_the_job_keeps_running_and_printing`
+`verified-by: bravebot_agent::exec::a_cancelled_wait_for_exit_comes_back_without_waiting_out_its_bound`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn`
 `verified-by: bravebot_agent::exec::what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other`
 `verified-by: bravebot_agent::exec::a_character_split_across_two_pipe_reads_is_handed_over_whole`
 `verified-by: bravebot_agent::tools::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`
 `verified-by: bravebot_agent::tools::job_output_offers_a_bounded_wait_rather_than_only_a_snapshot`
+`verified-by: bravebot_agent::tools::until_exit_is_a_boolean_that_needs_a_wait_and_no_kill_beside_it`
+`verified-by: bravebot_agent::tools::job_output_offers_a_wait_that_output_does_not_end`
 `verified-by: bravebot_agent::report::a_look_that_waited_is_described_with_both_the_window_and_the_warning`
 `verified-by: bravebot_agent::report::one_second_is_described_in_the_singular`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made`
+`verified-by: bravebot_agent::turn::one_job_output_call_that_waits_for_the_exit_is_handed_all_that_a_chatty_job_printed`
+`verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_printing`
+`verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_in_a_way_it_cannot_honour_is_refused_without_waiting`
 `verified-by: bravebot_agent::turn::a_job_output_call_reports_the_code_a_finished_job_exited_with`
 
 <a id="RUN-18"></a>
@@ -1904,9 +1972,10 @@ of a name the list does not hold, sets nothing and says so. A token belongs to o
 reaches no other job, the turn's or a delegate's.
 
 **What the planner is told.** That the job ended because the user stopped it, after how long; that
-what it printed is what it had printed by then and not all it would print; and that it should not
-start the job again unless the user asks. These are the driver's own words, a name it minted and a
-count read off a clock, so they are trusted text. What the job printed keeps the label
+what it printed is what it had printed by then and not all it would print; that a stop can leave lock
+files or partly written output behind; and that it should not start the job again unless the user
+asks. These are the driver's own words, a name it minted and a count read off a clock, so they are
+trusted text. What the job printed keeps the label
 [RUN-16](#RUN-16) gives it and reaches the planner as any job's finish does
 ([RUN-13](#RUN-13)). The stop says nothing about what a program printed, so it changes no label.
 
@@ -1940,6 +2009,7 @@ the wrong target, could only stop the whole turn and lose the rest of its work.
 `verified-by: bravebot_agent::tools::a_stop_no_round_read_is_reported_at_the_turns_end_as_the_persons`
 `verified-by: bravebot_agent::tools::a_job_that_exited_before_its_stop_was_read_is_reported_by_its_exit`
 `verified-by: bravebot_agent::turn::a_job_the_person_stops_is_killed_at_the_next_round_and_the_planner_told_why`
+`verified-by: bravebot_agent::report::a_stop_says_it_can_leave_files_behind_and_a_run_still_going_does_not`
 `verified-by: bravebot_agent::turn::a_look_at_a_job_the_person_stopped_stops_it_and_says_who_did`
 `verified-by: bravebot_agent::turn::a_look_at_another_job_comes_back_when_the_person_stops_one`
 `verified-by: bravebot_tui::jobs_command::the_bare_word_lists_the_jobs`

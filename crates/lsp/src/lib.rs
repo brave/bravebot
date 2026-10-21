@@ -18,6 +18,10 @@
 //! [mcp.md]: ../../../docs/specs/mcp.md
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::disallowed_methods, reason = "the test names its program")
+)]
 
 pub mod protocol;
 pub mod server;

@@ -18,6 +18,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/theme` | `[name]` | Choose which theme paints the interface |
 | `/effort` | `[level]` | Choose how hard to think before answering |
 | `/config` | | Choose how the input box edits text |
+| `/language` | `[tag \| auto]` | Choose the interface language for the next start, or drop the choice |
 | `/add-dir` | `<path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
@@ -33,6 +34,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/branch` | `[<name>]` | Copy this session and carry on in the copy, keeping the original to return to |
 | `/resume` | `[<id>]` | Pick up another session of this directory, by id or from a list |
 | `/bg` | | Hand this session to a background process that keeps running after the terminal closes |
+| `/detach` | | Leave a background session you attached to, leaving it running |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/reach` | `[<where> -- <command>]` | Remember a directory or credential for a command, or list and remove them |
 | `/sandbox` | `[<mode>]` | Show the sandbox mode, or change it from the next turn |
@@ -49,8 +51,10 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/memory` | | List each definition's memory, where it is kept and whether it is withheld |
+| `/mcp` | `[list \| reconnect [alias] \| disable <alias>]` | List the MCP servers, start one that is not running, or turn one off for the session |
 | `/init` | | Have the planner draft an `AGENTS.md` for this project |
 | `/review` | `[target] [focus]` | Have the planner review local changes or a pull request |
+| `/commit-message` | `[source] [format]` | Draft a commit message from the staged changes into the box, for you to edit |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
 | `/copy` | `[n]` | Put the last reply on the clipboard, or the one that many replies back |
 | `/undo` | | Rewind one turn and put back the files it wrote |
@@ -67,6 +71,10 @@ for.
 A command typed in full is drawn in the prompt's colour, and once a space follows it, the argument
 it takes appears dimly after the cursor until you start typing one.
 
+`exit` and `quit` typed without the slash are prompts, not commands. A line that is only one of them
+is sent at the first Enter like any other prompt, and while the turn it starts runs, the row under
+the box says that it was sent as a prompt, that Ctrl-C stops it and that `/exit` leaves.
+
 ## `/status`
 
 Reports everything the session knows about itself:
@@ -81,7 +89,9 @@ Reports everything the session knows about itself:
 - the [effort level](#effort-level), and whether this model reads one;
 - which deployment the endpoint names, and **which tier the last turn ran on**, rather than which
   tier the build was compiled to reach;
-- the confinement available here;
+- the confinement available here, and under `workspace-write` or `read-only` on a Linux kernel older
+  than Landlock ABI 9 a `Programs' unix sockets` row saying that every socket with a path is
+  reachable (D-Bus, `SSH_AUTH_SOCK`, `docker.sock`);
 - turns and tokens spent, and **where the time went**: how much was spent waiting on the model,
   running tools, and waiting for you to answer a prompt;
 - each [background job](run-tool.md#leaving-a-pipeline-running) of the last turn: its name, and the
@@ -92,6 +102,7 @@ Reports everything the session knows about itself:
 - **every command you vouched for**, which now run unasked and whose output is read as trusted.
   Typed while a turn runs, these two lines say the running turn holds them and show them once it
   ends, since the turn can add to both as it goes;
+- the [`/reach`](#reach) grants remembered for this workspace, numbered as `/reach` lists them;
 - what a [`/loop`](#loop-interval-prompt) is repeating and when the next tick is due, where one is
   running, or what a [`/goal`](#goal-condition) is working towards, how many rounds it has
   spent, how long it has been set and what the session has spent since.
@@ -120,7 +131,8 @@ where its words came from:
 | `unrecorded` | nothing recorded it, as for a message restored from a saved session |
 
 The view is read from the request that was sent, not rebuilt from the transcript, so it holds nothing
-the model did not. It writes nothing to disk, and an incognito session is unchanged. Typed while a
+the model did not. Above the spans it names each instruction file the system prompt was built from, with
+the bytes it contributed, or says none loaded. It writes nothing to disk, and an incognito session is unchanged. Typed while a
 turn runs it answers at once; It is the transcript scroller, so it scrolls and closes as that does. The view is of the main conversation, not of a
 delegate's. It takes no argument: `/request` followed by words is a prompt.
 
@@ -174,8 +186,8 @@ every turn uses that model, so `/model` opens no picker and says so.
 ## `/theme [name]`
 
 Opens a picker on the palette in force. With a name, `/theme nord` applies it without opening the
-panel, and typed while a turn runs with nothing waiting it is applied at once. The bare `/theme` waits
-for the turn to end.
+panel. Typed while a turn runs it is applied at once, ahead of anything waiting, and the bare `/theme`
+opens its picker over the turn.
 
 Up and Down move the cursor, and the theme under it is put in force while it is selected, so you are
 comparing themes against your own transcript rather than against a sample. Enter keeps the one on the
@@ -283,6 +295,21 @@ The choice is written to `~/.bravebot`, so it outlives the session and applies i
 See [`editorMode`](../customize/configuration.md#editormode) for the settings key that answers for
 somebody who has never used this panel.
 
+## `/language [tag | auto]`
+
+Says which language the interface is in and which catalogs there are, and names the choice saved with
+this command where there is one. With a tag, `/language fr` saves it for the next start. The interface
+is in one language for a whole session, so nothing on the screen changes until then. The tag saved is
+the one of the catalog that answered, so `fr_FR.UTF-8` is saved as `fr`. A tag that no catalog answers
+changes nothing and says so, with the catalogs there are. `/language auto` removes the saved choice, so
+the `language` key of your settings file and then your shell answer again. Typed while a turn runs, it is
+carried out at once.
+
+The choice is written to `~/.bravebot/language`, so it applies in every directory. A session that records
+nothing, an incognito one for example, says the choice was not saved and keeps none. See
+[Choosing a language](../customize/configuration.md#choosing-a-language) for the order the sources are
+read in, and for `BRAVEBOT_LOCALE`, which answers over this choice.
+
 ## `/add-dir <path>`
 
 Makes a directory both reachable and trusted, for this session. `--resume` carries both halves and
@@ -357,8 +384,7 @@ one for `git pull`, and a grant for one `make` is not one for another. A program
 `NAME=value` in front of it gets none.
 
 The reach is shown with the command in the plan you are asked to approve, with the day you
-allowed it. A directory must exist and is refused if it is your home or above it, `~/.ssh` or
-inside it, and it is checked again each time it is used. A credential scope is never writable. What
+allowed it. A directory must exist and is refused if it is your home or above it, or a place that holds a credential (such as `~/.ssh`, `~/.aws`, `~/.gnupg`, a browser profile or `~/.bravebot`) or inside one, and it is checked again each time it is used. A credential scope is never writable. What
 a program printed when it was refused is never read for a path.
 
 Typed while a turn runs, it waits for the turn to end. In an incognito session it reads what is
@@ -371,7 +397,7 @@ line and remembers each scope it asked for, read only, for the programs of the l
 session. `e` does the same until it is removed, in this checkout or, for a program the scope belongs to such as `git` for remote, in every checkout. It is the row `/reach` would
 have made, listed by `/reach` and taken away by `/reach remove`. The line is still asked about every
 time, with the scope shown on it, and neither key trusts what it prints. A toolchain list the
-planner asked for is not remembered, and a line with a `NAME=value` in front of a program, or a
+planner asked for is not remembered, and neither is the `signing` scope, `loopback` or `ssh-key`, which are asked about every time. A line with a `NAME=value` in front of a program, or a
 program started with an option such as `git -C dir push`, is not offered either key. The desktop app
 does not offer them.
 
@@ -402,7 +428,11 @@ Once `/sandbox ` is typed the box lists the four modes after it, and Tab finishe
 
 Moving to `off` asks first, because programs then start with no profile at all; answering no keeps the
 mode. A mode looser than the managed file's `sandbox.mode`, or `off` under a managed `run.network` of
-`closed`, is refused with a sentence naming that file. Otherwise the command ranks as `--sandbox`
+`closed`, is refused with a sentence naming that file. For a pinned `sandbox.mode`, the sentence says
+whether the mode you asked for reads more of the machine, writes more, or both. `strict` and
+`read-only` are each looser than the other in one of those ways, and a pin of `read-only` has no
+stricter mode, so only the pinned mode is accepted. A managed `run.network` that is neither `open`
+nor `closed` is read as `closed`, so it refuses `off` the same way. Otherwise the command ranks as `--sandbox`
 does, so `/sandbox workspace-write` replaces a checkout's `strict`. Only you can set it: no tool, skill, hook
 or `AGENTS.md` line can. The opening screen and `/status` name the mode in force. The desktop app has
 no such command yet.
@@ -562,7 +592,9 @@ keeps working, and a sentence saying the condition is nearly met would read as e
 depending on which words were searched for.
 
 **Ten rounds and it gives up.** The last reason is kept, so a goal that has given up can still say
-what it kept hearing. Four things end one besides a verdict, and each says so:
+what it kept hearing. Three rounds in a row in which the turn made no tool call stop the goal from
+sending work back, and it says so. The goal stays set, so your next prompt is judged against it, and a
+round that does call a tool restarts the count. Four things end one besides a verdict, and each says so:
 
 | What | When |
 |---|---|
@@ -578,6 +610,10 @@ the next turn there is something to judge.
 
 That is what makes a goal steerable. Stop the turn, say something else, and the condition is still
 there; the press that ends the goal is the one you make with nothing running.
+
+**A queued command that ends the goal stops the judging.** While a queued `/exit`, `/clear` or `/goal`
+waits for the turn to end, the goal is not judged, so no more rounds are sent before it takes effect.
+Any other queued command leaves the goal judged as before.
 
 Escape and Ctrl-C take the goal off while a check is in flight, stop the check, and nothing more is
 sent. With vi editing, an Escape from INSERT mode enters NORMAL mode first, as it does while a turn
@@ -653,7 +689,11 @@ The rest of the turn goes on. The stop is recorded in the session's trail as you
 
 `/jobs` is carried out as you type it while a turn runs, since a stop that waited would find nothing
 left to stop. Between turns nothing reads the flag, so a stop kills the job at once and the model is
-told at the next turn's first round that you stopped it.
+told at the next turn's first round that you stopped it. A stop still waiting when a turn ends, as when
+the model's last reply made no tool call, is carried out as the turn finishes. If a row still reads
+`being stopped` with no turn running, typing `/jobs stop` for it again carries the stop out. A kept
+job you stopped between turns keeps its own row in the watching display, and does not appear a
+second time as a plain command row.
 
 ## `/panel`
 
@@ -662,6 +702,17 @@ session's name, directory and branch, the goal, how full the context is with the
 the plan. It needs a terminal at least 100 columns wide, and says so on a narrower one. Whether it is
 open is kept for the next session. [Telling sessions apart](../using/sessions.md#telling-sessions-apart)
 has the rest.
+
+## `/mcp [list | reconnect [alias] | disable <alias>]`
+
+Bare or as `list`, it names each [MCP server](../customize/mcp-servers.md) the session runs and how its
+tools stand, and each server your settings request that is not running, saying whether it was turned
+off. `reconnect` starts every requested server that is not running and was not turned off here, and
+`reconnect weather` starts that one, including one turned off. A start takes the road a session takes
+as it opens, so a server whose declaration changed, or that nobody approved, is put to you again.
+`disable weather` stops the server and drops its grant. It writes nothing, so the next session starts
+the server as before. Typed while a turn runs, it waits for the turn to end. See
+[starting or stopping one during a session](../customize/mcp-servers.md#starting-or-stopping-one-during-a-session).
 
 ## `/caffeinate`
 
@@ -676,8 +727,10 @@ device policy allows that. The first `/caffeinate` says this and turns nothing o
 it on and records your answer in `~/.bravebot/caffeinate`, so later sessions turn it on at once. An
 incognito session asks every time.
 
-It runs `/usr/bin/caffeinate` on macOS, `systemd-inhibit` on Linux and PowerShell on Windows. If the
-program cannot be started, or stops by itself, the transcript says so and `/caffeinate` turns off.
+It runs `/usr/bin/caffeinate` on macOS, `systemd-inhibit` on Linux and PowerShell on Windows. On Linux
+`systemd-inhibit` is given the full path of `cat`, found only in directories a confined command cannot
+write. If there is no such `cat`, or the program cannot be started, or stops by itself, the transcript
+says so and `/caffeinate` turns off.
 
 ## `/checkouts [apply <n> | remove <n>]`
 
@@ -812,6 +865,32 @@ without it otherwise. The command writes
 nothing and the prompt forbids changes, commits, pushes and comments. A prompt file or skill named
 `review` is shadowed by the command.
 
+## `/commit-message [source] [format]`
+
+Drafts a commit message from changes and puts it in the input box. The source is one of:
+
+| Source | Drafts from |
+|---|---|
+| none, or `--staged` | what is staged, the index against `HEAD` |
+| `--range <a>..<b>` | the changes between two commits, or `<a>...<b>` from their merge base |
+
+Words after the source are the format you want: `/commit-message --staged use Conventional
+Commits`. The two flags only count as the first word, so `/commit-message use Conventional Commits`
+drafts from the staged changes in that format. A range that is not two plain revisions is refused
+with a usage note.
+
+The planner does not see the diff. The program reads it without starting `git`, under the rules
+`read_git` is held to, and gives it to a processor that has no tools and no conversation. The
+draft comes back into the box after the line `Use this as the commit message:`, so the line you
+send always starts with those words, whatever the draft starts with. Edit it, then Enter sends it to
+the planner as your own prompt, for instance to ask for a commit with that message. Escape drops it.
+Nothing is committed by the command itself.
+
+Nothing is drafted for a repository you have not trusted, for changes that show no file, or for a diff
+that holds what looks like a credential, and the line says which. A diff longer than one read takes is
+drafted from the part that was read, and the line says so. The model is the one `processorModel` names,
+or the session's. Typed while a turn runs it waits for the turn to end.
+
 ## `/agent <name> <task>`
 
 Runs one of your [delegate definitions](../customize/agents.md) on a task yourself, rather than
@@ -902,7 +981,8 @@ Summarises the conversation so far and keeps the recent part, on demand, at any 
 consulting the budget. Anything after the word is taken as typed and tells the summariser what the
 summary must keep: `/compact keep the lexer benchmarks and every path touched`. It is added to the
 summariser's closing instruction and goes nowhere else, and the audit trail records that a focus was
-given and its length, not the words. The **request** is shortened, never the record: the replaced messages go to an
+given and its length, not the words. A `/compact` typed before any prompt writes no record, so it
+does not give the session the title "untitled"; the first prompt that says something names it. The **request** is shortened, never the record: the replaced messages go to an
 archive that the transcript still reads and the session record still stores. See
 [Sessions](../using/sessions.md#long-conversations).
 
@@ -945,7 +1025,9 @@ that the planner could not have held.
 
 Begins a new session in this directory and keeps the current one resumable. Because it is a new
 session it asks the trust question again, restores no standing permissions, and closes any directory
-`/add-dir` had opened. A running [loop](#loop-interval-prompt) or [goal](#goal-condition) ends with
+`/add-dir` had opened. The paths you let programs reach with [`request_path`](tools.md#request_path), the hosts you
+allowed or declined, and your answers to the planner's questions end with it too, so each is asked
+again. A running [loop](#loop-interval-prompt) or [goal](#goal-condition) ends with
 the old session, and says so. With neither running it says nothing about them. The session's pull
 request and issue are not carried over.
 
@@ -963,7 +1045,8 @@ rewound.
 
 The copy holds what `--resume` of it would. The folders and programs you trusted stay trusted, and
 you are asked again about language servers, run prompts already shown and files you agreed to show
-despite the credential scan. The copy gets a scratch directory of its own.
+despite the credential scan. Paths you let programs reach, hosts you answered and your answers to the
+planner's questions are not carried either. The copy gets a scratch directory of its own.
 
 It needs a record to copy, so it says there is nothing to branch until the first turn has ended. It
 is refused in an incognito session, which writes none, and while the session keeps a checkout, which
@@ -982,8 +1065,9 @@ other permissions you gave do not, so the new session asks again. The old sessio
 was, and the new one's row in the `bravebot --resume` list says which session it came from.
 
 It needs a record to link back to, so it says there is nothing to hand off until the first turn has
-ended. A conversation that has met something untrusted offers no brief. Typed while a turn runs it
-waits for the turn to end.
+ended. A conversation that has met something untrusted offers no brief. Typed while a turn runs it waits for the turn to end. While a turn runs, Enter on a brief in
+the box does not run its first line as a command: the brief stays in the box for the press after
+the turn, and emptying the box ends the handoff.
 
 ## `/resume [id]`
 
@@ -1009,17 +1093,23 @@ Hands this session to a background process and leaves the screen. The process re
 the session has written, opens idle in the same directory and in the permission mode this session
 was in (asking, accepting edits or planning), and keeps running after the terminal closes. The
 terminal prints the id to join it with: `bravebot attach <id>` draws the session as this screen
-does, and `bravebot reply <id> "text"` sends it its next prompt. `bravebot sessions` lists it.
+does, and `bravebot reply <id> "text"` sends it its next prompt. `bravebot sessions` lists it, with the session's title and its last prompt.
 
 A background session holds a question it would ask until someone attaches, and a rule in a settings
 file that allows something does not answer for you there. Stopping it, or leaving it idle for an
 hour, ends the process and keeps the record, and the next `attach` or `reply` starts it again in the
 mode every session opens in.
 
+Inside an attached session, `/detach` ends the attachment and nothing else. See
+[Sessions in the background](../using/sessions.md#sessions-in-the-background).
+
 It is refused, with a line saying why and the session carrying on, in bypass, in an incognito
 session, before the session has a record to hand over (send a prompt first), in a session started
 with an option `--bg` also refuses (such as `--no-shell` or `--settings`), and while a loop, a goal
-or a watch is running, which the background session does not run. Typed while a turn runs it
+or a watch is running, which the background session does not run. It is also refused after `/sandbox`
+moved the mode: a background session starts in the mode every session opens in, so the line says
+`/bg` is refused because `/sandbox` moved this session, and to run `/sandbox` with the mode that
+session starts in first. Typed while a turn runs it
 waits for the turn to end. The word takes nothing after it: `/bg now` is sent as a prompt.
 
 ## `/export [path]`
@@ -1066,7 +1156,10 @@ held first, and a file one created is removed; where two rewound turns wrote the
 back to what it held before the first of them.
 
 The conversation, turn count, spend, timing, remembered commands and transcript return to the
-snapshot before the earliest rewound turn. Those turns' audit lines are dropped too.
+snapshot before the earliest rewound turn. Those turns' audit lines are dropped too. The prompt of the
+earliest turn rewound comes back into the input box so you can edit it and send it again. It arrives as
+a prompt (shell mode is switched off) and only into an empty box, so a line you have typed since is not
+overwritten, and not while a turn is running.
 
 File trust follows the bytes that remain. A restored file gets the lower of its trust when backed
 up and its trust before the turn. A file left untouched gets the lower of its current trust and its
@@ -1116,7 +1209,8 @@ Reads the rewind points before acting on one.
 Each row says how many turns back it is, which turn it would land before, what that turn was asked,
 and **every path that turn wrote over**, or that it wrote over none. `/rewind <n>` then goes back that
 many turns, which is what `/undo` said n times does, so what it puts back is every row from the first
-down to the one chosen.
+down to the one chosen. As with `/undo`, the prompt of the earliest turn gone back past returns to the
+input box as a prompt, when the box is empty and no turn is running.
 
 A rewind acts the moment it is typed and it overwrites files, including edits you made yourself since
 the turn. Deciding to run one is deciding about those files, so they have to be readable first, for
@@ -1220,10 +1314,18 @@ it and the picture or file goes with it.
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so
-`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/note`, `/issue`, `/pr`,
-`/forget-trust`, `/model`, `/theme`, `/effort`, `/config`, `/advisor` and `/style` change only what the session keeps, and are carried out as you
-type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
-waiting `/clear` names the new session. What they say goes into the history as you type them,
+`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/theme` and `/config` change only how the screen
+is drawn and what the box edits in, so they are carried out as you type them whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
+`/forget-trust`, `/model`, `/effort`, `/advisor`, `/style` and `/sandbox` (except `/sandbox off`, which waits) change what the session keeps, and are carried out as you
+type them unless a line waiting ahead of them could change what they act on. Behind such a line they wait too, so `/rename` typed after a
+waiting `/clear` names the new session, and the line they wait behind is named under the turn and on their mark under the box (`after /clear`).
+A waiting `/sandbox` line changes the sandbox mode and nothing else, so it holds back none of them but another `/sandbox`: a `/note` typed
+behind a waiting `/sandbox off` is written at once. `/issue` and `/pr` set a link on the session's record, which only `/clear`, `/handoff`,
+`/branch`, `/resume`, `/bg` and `/exit` replace, so they are carried out as you type them behind any other waiting line, a prompt
+included. `/model`, `/effort` and `/advisor` choose what a request is built with, so each waits behind a prompt, behind a command that sends a
+request or leaves for another session, and behind the other two. Behind a command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`,
+`/reach`, `/branch`, `/add-dir`, `/cd`, `/mcp`, `/rename`, `/note`, `/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox` they are carried
+out as you type them. What they say goes into the history as you type them,
 so it scrolls with the rest, and stays there when the turn ends. `/model`, `/theme`, `/effort` and `/config` alone open their list
 over the turn, which keeps running behind it: Escape closes the list without stopping the turn, and
 a question the turn asks takes the screen until you have answered it. A list still open when the turn
@@ -1233,7 +1335,7 @@ Every other command typed mid-turn comes off the box and joins the lines waiting
 exactly as a prompt does: the box clears, the history remembers it, and it is drawn under the box
 marked as waiting. It is never offered to the turn in flight, so nothing about it reaches the planner,
 and when the queue reaches it, it is carried out rather than sent. The queue drains in the order you
-typed, so a command behind a prompt waits for that prompt's turn. Nothing enters the transcript while
+typed, so a command behind a prompt waits for that prompt's turn. A waiting command says why it waits, in a line held under the turn. `/clear`, `/compact`, `/undo`, `/rewind`, `/cd`, `/add-dir` and `/exit` do not stop the turn, and Ctrl-Enter on one stops the turn and carries the command out. Nothing enters the transcript while
 it waits, and taking back what is waiting gives the command back to the box like any other line.
 
 During a compaction, a `/btw` question, a `/manifest` run or a goal check, every command waits.
@@ -1246,7 +1348,9 @@ by putting a file somewhere.
 A skill's name completes after a slash: beneath the commands at the start of a line, and on its own
 later in a sentence, as in `this is /release-no`. Taking one writes `/release-notes ` into the line,
 and the line is still a prompt. The planner is told it is you asking for that skill and loads it, so
-`/commit-style` never runs anything itself, and no skill becomes a command whatever it is called. See
+`/commit-style` never runs anything itself, and no skill becomes a command whatever it is called. A
+word that is a command in full still lists the skills that extend it: `/pr` offers `pr-fix` beneath
+the `/pr` command. See
 [Skills](../customize/skills.md#naming-a-skill-after-a-slash).
 
 ## Prompt files

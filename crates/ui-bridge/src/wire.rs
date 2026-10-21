@@ -457,6 +457,7 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
     json!({
         "request": id,
         "path": request.path,
+        "shownPath": bravebot_agent::confirm::shown_name(&request.path),
         "intent": intent(request.intent),
         "untrusted": request.untrusted,
         "remark": request.remark.as_ref().map(|r| json!({"preview": r.preview, "lines": r.lines, "label": r.label})),
@@ -531,6 +532,15 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         "line": request.plan.line,
         "plan": request.plan.steps.display(),
         "writes": request.plan.writes,
+        // Each path spelled as the other front ends draw it, so a path ending in whitespace or
+        // holding a character that draws as nothing is not drawn as another. The window draws
+        // this and never `writes`, as it draws `shownPath` and never `path`.
+        "shownWrites": request
+            .plan
+            .writes
+            .iter()
+            .map(|path| bravebot_agent::confirm::shown_path(path))
+            .collect::<Vec<_>>(),
         "stdin": request.stdin,
         "releasesPrivate": request.releases_private(),
         // The credential scopes and toolchain lists the planner asked this line to be lent, by
@@ -570,6 +580,12 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
                 .iter()
                 .map(|directory| directory.display().to_string())
                 .collect::<Vec<_>>(),
+            // Spelled as `shownWrites` is.
+            "shownDirectories": confined
+                .directories
+                .iter()
+                .map(|directory| bravebot_agent::confirm::shown_path(directory))
+                .collect::<Vec<_>>(),
             "sentences": confined.sentences(),
         })),
         // The sentence for that null, in the catalog's words and so in the person's language.
@@ -587,6 +603,10 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
 /// [`crate::turn::BridgeConfirmer::confirm_read_output`] cannot fall back to anything
 /// except no.
 ///
+/// `output` has each character that draws as nothing already written out, `hidden` counts them and
+/// `hiddenNote` is the sentence that says so, in the catalog's words, or null where there are none.
+/// The agent made all three, so the front end draws what it is sent and reads none of it.
+///
 /// It is released for a screen and stops there. Nothing here may be fed back to the model
 /// by the front-end; approving is how it reaches the planner, and that path runs through
 /// the kernel.
@@ -596,6 +616,8 @@ pub fn output_request(id: u64, request: &OutputRequest) -> Value {
         "command": request.command,
         "reference": request.reference,
         "lines": request.lines,
+        "hidden": request.hidden,
+        "hiddenNote": bravebot_approval::hidden_note(request.hidden),
         "output": request.output,
         "label": request.label,
         "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()),
@@ -612,6 +634,9 @@ pub fn vouch_request(id: u64, request: &VouchRequest) -> Value {
     json!({
         "request": id,
         "path": request.path,
+        "shownPath": bravebot_agent::confirm::shown_name(&request.path),
+        "rule": request.rule,
+        "shownRule": bravebot_agent::confirm::shown_name(&request.rule),
         "preview": request.preview,
         "label": request.label,
         "truncated": request.truncated,
@@ -851,6 +876,7 @@ pub fn exposure_request(id: u64, request: &ExposureRequest) -> Value {
     json!({
         "request": id,
         "path": request.path,
+        "shownPath": bravebot_agent::confirm::shown_name(&request.path),
         "credentials": request.credentials,
         "summary": request.summary(),
     })
@@ -1001,13 +1027,15 @@ fn vetting(
 
 /// A vetted read put to the person. Where the slot holds a picture or a PDF, `content` is empty
 /// and `picture` names the copy to open, the file's media type and its size, all of them the
-/// driver's (VET-4).
+/// driver's (VET-4). Otherwise `content` has each character that draws as nothing already written
+/// out, and `hidden` and `hiddenNote` count them and say so, as on an output request.
 pub fn vet_request(id: u64, request: &VetRequest) -> Value {
     let picture = request.picture.as_ref().map(|picture| {
         json!({ "path": picture.path.display().to_string(), "media": picture.media,
             "bytes": picture.bytes })
     });
     json!({ "request": id, "origin": request.origin, "expects": request.expects,
-        "summary": request.summary(), "content": request.content, "label": request.label, "lines": request.lines, "picture": picture,
+        "summary": request.summary(), "content": request.content, "label": request.label, "lines": request.lines,
+        "hidden": request.hidden, "hiddenNote": bravebot_approval::hidden_note(request.hidden), "picture": picture,
         "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()) })
 }

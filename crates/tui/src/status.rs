@@ -14,6 +14,7 @@
 //! are workspace-relative names shown to the person who owns the workspace, and the counts are this
 //! program's own arithmetic. No model reads any of it.
 
+use bravebot_agent::servers::{Access, EffectivePolicy, PolicyEgress};
 use bravebot_agent::watch;
 use bravebot_config::Config;
 use bravebot_core::label::Integrity;
@@ -151,7 +152,9 @@ pub struct Facts<'a> {
     /// Whether the session was started with the flag that skips permissions.
     pub began_in_bypass: bool,
     /// Whether the programs `run` starts write every path a request for writing would be granted,
-    /// as [`programs_write_unasked`] answers it.
+    /// as [`programs_write_unasked`] answers it, before the trust of the directory is read: a
+    /// workspace the person has not trusted accepts no request, so [`report`] says it only where
+    /// `trust` vouches for the directory.
     pub programs_write_unasked: bool,
     /// Whether a check that finds nothing promotes a slot without the person being asked.
     ///
@@ -328,7 +331,8 @@ fn sockets_line(reachable: bool, mode: bravebot_sandbox::SandboxMode) -> Option<
 /// Whether the stages this session's `run` starts write every path a request for writing would be
 /// granted, as [`bravebot_agent::confine::Confinement::writes_without_a_request`] answers for the
 /// home, sandbox mode and permission mode a turn builds its confinement from. This session is the
-/// lead session, so bypass alone decides whether the confinement is told to.
+/// lead session, so bypass alone decides whether the confinement is told to. It leaves out the
+/// trust of the directory, which a turn reads when a line runs and [`report`] reads from the map.
 pub fn programs_write_unasked(
     mode: bravebot_sandbox::SandboxMode,
     permission: bravebot_agent::PermissionMode,
@@ -555,7 +559,13 @@ pub fn report(facts: &Facts<'_>) -> Report {
                 t!(count_rules, count = rules.len()),
             ));
             for (path, integrity) in rules.iter() {
-                let shown = if path.is_empty() { "." } else { path };
+                // The empty name is the project root and is drawn as `.`. Any other name goes
+                // through `shown_name`, so a rule about a name made of whitespace, or ending in
+                // one, is not a row that reads as another name or as nothing.
+                let shown = match path.is_empty() {
+                    true => ".".to_string(),
+                    false => bravebot_agent::confirm::shown_name(path),
+                };
                 lines.push(match integrity {
                     Some(Integrity::Trusted) => Line::new("", shown).with_note(t!(status_trusted)),
                     Some(Integrity::Untrusted) => {
@@ -616,6 +626,10 @@ pub fn report(facts: &Facts<'_>) -> Report {
     }
 
     lines.extend(grant_lines(facts));
+
+    if let Some(session) = &facts.servers.session {
+        lines.extend(server_policy_lines(&session.policies()));
+    }
 
     Report { lines }
 }
@@ -795,15 +809,25 @@ fn standing_lines(facts: &Facts<'_>) -> Vec<Line> {
     }
 
     // Only where it is so, for the reason the network line is: the ordinary session writes the
-    // directories it was opened on, and a line saying so on each would be skimmed past.
+    // directories it was opened on, and a line saying so on each would be skimmed past. A
+    // directory the person has not trusted accepts no request, so its stages are given none of
+    // the rows and the line is not drawn; while a turn holds the trust map the report cannot tell
+    // which, and says that instead of a claim about an earlier moment (PATHREQ-5).
     if facts.programs_write_unasked {
-        lines.push(
-            Line::new(
+        if facts.turn_holds_rules {
+            lines.push(Line::new(
                 t!(status_programs_write),
-                t!(status_programs_write_anywhere),
-            )
-            .with_note(t!(status_programs_write_except)),
-        );
+                t!(status_held_by_the_turn),
+            ));
+        } else if facts.trust.is_trusted(".") {
+            lines.push(
+                Line::new(
+                    t!(status_programs_write),
+                    t!(status_programs_write_anywhere),
+                )
+                .with_note(t!(status_programs_write_except)),
+            );
+        }
     }
 
     // Beside it for the same reason, and only where it is on: this is the other standing answer
@@ -1071,6 +1095,80 @@ fn grant_lines(facts: &Facts<'_>) -> Vec<Line> {
             .with_note(t!(status_requested_paths_note)),
             facts.requested_paths,
         ));
+    }
+    lines
+}
+
+/// What each started local server's confinement grants: a heading naming it, a line each for what
+/// its policy says of the network, of subprocesses and of where it starts, then one line for each
+/// path its backend was handed and each path that policy was resolved without (SERVERS-20). What a
+/// row allows is its label, so a path that fills the width of the screen is still one line.
+///
+/// Nothing for a session that started no local server, which is the session this screen has always
+/// described. Every row rather than a count, since this is what a refusal from inside a server is
+/// checked against, and a count cannot say whether the path it refused was granted. The rows are
+/// the policy's own and no word a server sent is among them. A path is drawn in full, as a server
+/// names it in a refusal and as the prompts that name one draw it, so one that holds a control
+/// character, or a character that draws as nothing, is not a row that reads as another.
+fn server_policy_lines(servers: &[(String, EffectivePolicy)]) -> Vec<Line> {
+    let mut lines = Vec::new();
+    for (alias, policy) in servers {
+        lines.push(Line::new(
+            t!(status_server_policy),
+            bravebot_agent::mcp::shown(alias),
+        ));
+        lines.push(Line::new(
+            t!(status_server_policy_egress),
+            match policy.egress {
+                PolicyEgress::Closed => t!(status_server_policy_egress_closed),
+                PolicyEgress::Loopback => t!(status_server_policy_egress_loopback),
+                PolicyEgress::Open => t!(status_server_policy_egress_open),
+                PolicyEgress::Hosts => t!(status_server_policy_egress_hosts),
+            },
+        ));
+        lines.push(Line::new(
+            t!(status_server_policy_subprocesses),
+            match policy.children {
+                true => t!(status_server_policy_subprocesses_allowed),
+                false => t!(status_server_policy_subprocesses_refused),
+            },
+        ));
+        if let Some(directory) = &policy.starts_in {
+            lines.push(Line::new(
+                t!(status_server_policy_starts_in),
+                bravebot_agent::confirm::shown_path(directory),
+            ));
+        }
+        if policy.git_held_back {
+            lines.push(Line::new(
+                t!(status_server_policy_git),
+                t!(status_server_policy_git_held_back),
+            ));
+        }
+        for row in &policy.rows {
+            lines.push(Line::new(
+                match row.access {
+                    Access::Read => t!(status_server_policy_read),
+                    Access::Write => t!(status_server_policy_write),
+                    Access::ReadWrite => t!(status_server_policy_read_write),
+                },
+                bravebot_agent::confirm::shown_path(&row.path),
+            ));
+        }
+        if !policy.left_out.is_empty() {
+            let paths: Vec<String> = policy
+                .left_out
+                .iter()
+                .map(|path| bravebot_agent::confirm::shown_path(path))
+                .collect();
+            lines.extend(rows(
+                Line::new(
+                    t!(status_server_policy_left_out),
+                    t!(status_server_policy_left_out_reason),
+                ),
+                &paths,
+            ));
+        }
     }
     lines
 }
@@ -1776,33 +1874,39 @@ mod tests {
     #[test]
     fn a_name_a_provider_block_chose_is_shown_without_a_service_added() {
         let mut config = config_for("http://127.0.0.1:1", None);
-        config.bedrock = Some(bravebot_config::bedrock::Bedrock::from_provider(
-            "us-west-2".to_string(),
-            None,
-            vec![bravebot_config::bedrock::Entry {
-                tier: None,
-                id: "openai.gpt-5.6-sol".to_string(),
-                name: Some("GPT-5.6 Sol (Bedrock)".to_string()),
-                context_window: None,
-                output_limit: None,
-            }],
-        ));
+        config.bedrock = Some(
+            bravebot_config::bedrock::Bedrock::from_provider(
+                "us-west-2".to_string(),
+                None,
+                vec![bravebot_config::bedrock::Entry {
+                    tier: None,
+                    id: "openai.gpt-5.6-sol".to_string(),
+                    name: Some("GPT-5.6 Sol (Bedrock)".to_string()),
+                    context_window: None,
+                    output_limit: None,
+                }],
+            )
+            .expect("a valid region"),
+        );
         assert_eq!(
             model_label(&config, "openai.gpt-5.6-sol").as_deref(),
             Some("GPT-5.6 Sol (Bedrock)")
         );
 
-        config.bedrock = Some(bravebot_config::bedrock::Bedrock::from_provider(
-            "us-west-2".to_string(),
-            None,
-            vec![bravebot_config::bedrock::Entry {
-                tier: None,
-                id: "openai.gpt-5.6-sol".to_string(),
-                name: None,
-                context_window: None,
-                output_limit: None,
-            }],
-        ));
+        config.bedrock = Some(
+            bravebot_config::bedrock::Bedrock::from_provider(
+                "us-west-2".to_string(),
+                None,
+                vec![bravebot_config::bedrock::Entry {
+                    tier: None,
+                    id: "openai.gpt-5.6-sol".to_string(),
+                    name: None,
+                    context_window: None,
+                    output_limit: None,
+                }],
+            )
+            .expect("a valid region"),
+        );
         assert_eq!(
             model_label(&config, "openai.gpt-5.6-sol"),
             None,
@@ -2465,10 +2569,12 @@ mod tests {
         assert!(!shown.contains(asking), "{shown}");
     }
 
-    /// SANDBOX-22: a session whose programs write what a request would be granted says so, and a
-    /// session that does not is silent. The regressions it rejects are a line shown in `strict`, in
-    /// `off`, outside bypass, on Windows, or with no home directory, where the stage is given no
-    /// extra row.
+    /// SANDBOX-22, SANDBOX-28: a session whose programs write what a request would be granted says
+    /// so, and a session that does not is silent. The regressions it rejects are a line shown in
+    /// `strict`, in `off`, outside bypass, on Windows, or with no home directory, where the stage is
+    /// given no extra row, and a line shown for a directory the person has not trusted, which
+    /// accepts no request and so gives no row. While a turn holds the trust map the line says so
+    /// and states no reach, since either answer would be about an earlier moment.
     #[test]
     fn the_report_says_programs_write_what_a_request_would_be_granted_only_where_they_do() {
         use bravebot_agent::PermissionMode::{AcceptEdits, Ask, Bypass};
@@ -2495,16 +2601,32 @@ mod tests {
 
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
-        let mut facts = facts(&config, &trust);
+        let declined = TrustStore::new("/work");
         let said = |facts: &Facts<'_>| {
             report(facts)
                 .lines
-                .iter()
-                .any(|line| line.label == t!(status_programs_write))
+                .into_iter()
+                .find(|line| line.label == t!(status_programs_write))
+                .map(|line| line.value)
         };
-        assert!(!said(&facts));
+
+        let mut untrusted = facts(&config, &declined);
+        untrusted.programs_write_unasked = true;
+        assert_eq!(said(&untrusted), None, "a directory not trusted");
+
+        let mut facts = facts(&config, &trust);
+        assert_eq!(said(&facts), None, "the mode gives nothing");
         facts.programs_write_unasked = true;
-        assert!(said(&facts));
+        assert_eq!(
+            said(&facts).as_deref(),
+            Some(t!(status_programs_write_anywhere))
+        );
+        facts.turn_holds_rules = true;
+        assert_eq!(
+            said(&facts).as_deref(),
+            Some(t!(status_held_by_the_turn)),
+            "a turn holds the trust map"
+        );
     }
 
     fn rendered(report: &Report) -> String {
@@ -3176,6 +3298,142 @@ mod tests {
         assert!(note.contains("coins: one tool"), "{note}");
     }
 
+    /// The policy a started server's backend was handed, drawn for the tests of `/status`.
+    fn a_policy_for_the_report() -> EffectivePolicy {
+        use bravebot_agent::servers::PolicyRow;
+        let row = |path: &str, access| PolicyRow {
+            path: path.into(),
+            access,
+        };
+        EffectivePolicy {
+            rows: vec![
+                row("/srv/weather", Access::Read),
+                row("/srv/cache", Access::ReadWrite),
+                row("/var/out", Access::Write),
+            ],
+            egress: PolicyEgress::Hosts,
+            children: false,
+            starts_in: Some("/srv/cache".into()),
+            left_out: vec!["/opt/absent".into(), "/opt/also absent".into()],
+            git_held_back: true,
+        }
+    }
+
+    /// SERVERS-20: `/status` lists what a started server's backend was handed, one fact to a line:
+    /// the network, whether it may start subprocesses, where it starts, whether a `.git` is held
+    /// back, every row with what it allows, and the paths left out with the reason. A row is drawn
+    /// as the access it grants and no other, so a write-only row is not read as a read.
+    #[test]
+    fn a_started_servers_policy_is_listed_row_by_row_with_what_each_row_allows() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let started =
+            crate::mcp_command::tests::holding_started_under("weather", a_policy_for_the_report());
+
+        let drawn = report(&Facts {
+            servers: &started.servers,
+            ..facts(&config, &trust)
+        });
+
+        let at = drawn
+            .lines
+            .iter()
+            .position(|line| line.label == t!(status_server_policy))
+            .expect("the server's policy is on the report");
+        let listed: Vec<(&str, &str, &str)> = drawn.lines[at..]
+            .iter()
+            .map(|line| (line.label.as_str(), line.value.as_str(), line.note.as_str()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (t!(status_server_policy), "weather", ""),
+                (
+                    t!(status_server_policy_egress),
+                    t!(status_server_policy_egress_hosts),
+                    ""
+                ),
+                (
+                    t!(status_server_policy_subprocesses),
+                    t!(status_server_policy_subprocesses_refused),
+                    ""
+                ),
+                (t!(status_server_policy_starts_in), "/srv/cache", ""),
+                (
+                    t!(status_server_policy_git),
+                    t!(status_server_policy_git_held_back),
+                    ""
+                ),
+                (t!(status_server_policy_read), "/srv/weather", ""),
+                (t!(status_server_policy_read_write), "/srv/cache", ""),
+                (t!(status_server_policy_write), "/var/out", ""),
+                (
+                    t!(status_server_policy_left_out),
+                    t!(status_server_policy_left_out_reason),
+                    ""
+                ),
+                ("", "/opt/absent", ""),
+                ("", "/opt/also absent", ""),
+            ]
+        );
+    }
+
+    /// SERVERS-20: a session with no confined server has no policy to show, whether it started
+    /// nothing or only a server reached over HTTP, which is no process of the session's.
+    #[test]
+    fn a_session_with_no_confined_server_shows_no_server_policy() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let remote = crate::mcp_command::tests::holding(&["docs"]);
+
+        for servers in [&NO_SERVERS, &remote.servers] {
+            let drawn = report(&Facts {
+                servers,
+                ..facts(&config, &trust)
+            });
+
+            assert!(
+                drawn
+                    .lines
+                    .iter()
+                    .all(|line| line.label != t!(status_server_policy)),
+                "a policy was shown for a server that has none"
+            );
+        }
+    }
+
+    /// SERVERS-20: a path is drawn in full as the prompts that name one draw it, so a control
+    /// character in a directory name is its picture and not a sequence the terminal obeys, and a
+    /// character that draws as nothing is spelled out so two rows cannot look alike.
+    #[test]
+    fn a_path_in_a_servers_policy_is_drawn_without_sending_its_control_characters() {
+        let mut policy = a_policy_for_the_report();
+        policy.rows[0].path = "/srv/\u{1b}[2Jweather".into();
+        policy.rows[1].path = "/srv/data\u{3164}".into();
+        policy.rows[2].path = "/srv/my cache".into();
+        policy.left_out = vec!["/opt/\u{1b}[2Jabsent".into()];
+
+        let lines = server_policy_lines(&[("weather".to_string(), policy)]);
+
+        let values: Vec<&str> = lines.iter().map(|line| line.value.as_str()).collect();
+        assert_eq!(
+            values
+                .iter()
+                .filter(|value| value.contains("\u{241b}[2J"))
+                .count(),
+            2,
+            "a row and a path left out hold the escape as its picture: {values:?}"
+        );
+        assert!(values.contains(&r#""/srv/data\u{3164}""#), "{values:?}");
+        assert!(values.contains(&"/srv/my cache"), "{values:?}");
+        assert!(
+            values
+                .iter()
+                .all(|value| !value.contains('\u{1b}') && !value.contains('\u{3164}')),
+            "a character that is not drawn as itself reached the screen: {values:?}"
+        );
+    }
+
     /// The markings a write recorded are the part nothing else reports: a poisoned file is otherwise
     /// invisible until something refuses to read it.
     #[test]
@@ -3204,6 +3462,27 @@ mod tests {
         for index in 0..12 {
             assert!(shown.contains(&format!("file{index}.txt")), "{shown}");
         }
+    }
+
+    /// PROMPT-1: a rule about a name made of whitespace, or ending in it, is a row that says so. The
+    /// name as held draws as an empty row for the first and as another name for the second.
+    #[test]
+    fn a_rule_about_a_name_that_would_draw_as_another_is_listed_as_what_it_is() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let mut trust = trusting();
+        trust.distrust(" ");
+        trust.distrust("note.md ");
+        trust.distrust("a\u{202e}b");
+        trust.distrust("note.md");
+
+        let shown = rendered(&report(&facts(&config, &trust)));
+        for spelled in ["\"\u{2423}\"", "\"note.md\u{2423}\"", "\"a\\u{202e}b\""] {
+            assert!(shown.contains(spelled), "{spelled}\n{shown}");
+        }
+        // The plain name and the root keep the rows they had, and the whitespace-ended one is not
+        // one of them.
+        assert!(shown.contains("note.md untrusted"), "{shown}");
+        assert!(!shown.contains("note.md  untrusted"), "{shown}");
     }
 
     /// A directory opened with /add-dir is reachable and vouched for, so a panel that omitted it

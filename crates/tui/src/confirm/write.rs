@@ -220,7 +220,7 @@ pub(super) fn draw(
                 Style::default().fg(colour).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                request.path.clone(),
+                bravebot_agent::confirm::shown_name(&request.path),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::styled(

@@ -2083,6 +2083,72 @@ fn a_retry_is_written_to_the_diagnostic_log() {
     assert!(!log.contains("a private prompt"), "{log}");
 }
 
+/// A reply cut off after it began is written as the failure it was, once for each attempt it cut,
+/// as well as the retry it led to. The request got a 200 and a first frame, so the failure is in
+/// reading the rest. A log that holds the retry without it says a request was sent again with no
+/// reason.
+#[test]
+fn a_reply_cut_off_part_way_is_written_to_the_diagnostic_log_as_well_as_its_retries() {
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let begun = || {
+        Attempt::BrokenFrames(vec![frame(
+            r#"{"choices":[{"delta":{"content":"a private answer"}}]}"#,
+        )])
+    };
+    let (endpoint, _received) = serve_attempts(vec![begun(), begun(), begun()]);
+    let host = format!("host={}", endpoint.trim_start_matches("http://"));
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().to_path_buf()));
+    // Points the log nowhere again when an assertion below panics.
+    struct Unconfigure;
+    impl Drop for Unconfigure {
+        fn drop(&mut self) {
+            bravebot_diag::configure(bravebot_diag::Level::Error, None);
+        }
+    }
+    let unconfigure = Unconfigure;
+
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    // Backoffs no other test in this binary uses, so the retry lines below are this test's own.
+    let mut client = AichatClient::new(&config, &egress).with_backoff(Duration::from_millis(13));
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+    let failed = client.complete_streaming(&mut policy, &request, |_| {});
+    assert!(matches!(failed, Err(ChatError::Incomplete)), "{failed:?}");
+
+    let log: String = std::fs::read_dir(dir.path().join("logs"))
+        .expect("a failure makes the log")
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect();
+    drop(unconfigure);
+
+    let cut: Vec<_> = log
+        .lines()
+        .filter(|line| line.contains("ERROR net.fetch") && line.contains(&host))
+        .collect();
+    assert_eq!(cut.len(), 3, "one for each attempt that was cut: {log}");
+    assert!(
+        cut.iter().all(|line| line.contains("kind=transport")),
+        "{log}"
+    );
+    for line in [
+        "INFO aichat.retry attempt=2 backoff_ms=13",
+        "INFO aichat.retry attempt=3 backoff_ms=26",
+    ] {
+        assert!(log.contains(line), "missing {line:?} in {log}");
+    }
+    assert!(!log.contains("a private answer"), "{log}");
+}
+
 /// The listing is a plain GET on the base host. It carries no signature and no credential: the
 /// endpoint requires neither, and spending a subscription credential to read a public list would
 /// be spending one for nothing.
@@ -3079,4 +3145,370 @@ fn a_retry_after_of_zero_still_takes_the_backoff() {
         "a zero wait was taken at its word: {:?}",
         started.elapsed()
     );
+}
+
+/// A gateway block naming one model at `endpoint`, with `stated` written into its `options` beside
+/// the base URL, as a person writes a retry count or a quiet gap.
+fn gateway_stating(
+    endpoint: &str,
+    model: &str,
+    stated: &str,
+) -> bravebot_config::provider::Provider {
+    let block = format!(
+        r#"{{"provider": {{"a-gateway": {{
+            "options": {{"baseURL": "{endpoint}", {stated}}},
+            "models": {{"{model}": {{}}}}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+/// What a gateway sends when it finally answers, in the shape the path under test reads.
+fn answer_for(streaming: bool) -> Attempt {
+    if streaming {
+        a_reply()
+    } else {
+        Attempt::Json(
+            r#"{"model":"served-model","choices":[{"message":{"content":"hello"}}]}"#.into(),
+        )
+    }
+}
+
+/// Send one request to `gateway` as a client does, down the streamed or the whole path, returning
+/// the outcome and how many requests the client counted. The pause between attempts is shortened so
+/// a test of several retries is not a test of the wall clock.
+fn asked_of(
+    gateway: &bravebot_config::provider::Provider,
+    config: &Config,
+    egress: &Egress,
+    model: &str,
+    streaming: bool,
+) -> (Result<bravebot_aichat::Completion, ChatError>, u32) {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(config, egress)
+        .for_gateway(gateway, model, None)
+        .with_backoff(Duration::from_millis(1));
+    let request = ChatRequest::new(model, vec![Message::user("hi")]);
+    let result = if streaming {
+        client.complete_streaming(&mut policy, &request, |_| {})
+    } else {
+        client.complete(&mut policy, &request)
+    };
+    (result, client.attempts())
+}
+
+/// A service that is busy for good is a failure the person has asked to see after the first
+/// request, not after three, and a count of zero is the way to say so. Both paths have a loop of
+/// their own, so both are asked.
+#[test]
+fn a_gateway_stating_no_retries_is_asked_once() {
+    let model = "a-model-asked-once";
+    for streaming in [false, true] {
+        let (endpoint, received) =
+            serve_attempts(vec![Attempt::Status(503), answer_for(streaming)]);
+        let config = config_for(&endpoint);
+        let gateway = gateway_stating(&endpoint, model, r#""maxRetries": 0"#);
+
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
+
+        assert_eq!(
+            attempts, 1,
+            "streaming {streaming}: a request was sent again: {result:?}"
+        );
+        assert_eq!(received.try_iter().count(), 1, "streaming {streaming}");
+        assert!(
+            matches!(
+                result,
+                Err(ChatError::Egress(bravebot_net::EgressError::Status {
+                    status: 503,
+                    ..
+                }))
+            ),
+            "streaming {streaming}: {result:?}"
+        );
+    }
+}
+
+/// The count is how many times a request is sent *again*, so a stated four is five requests. A
+/// service that recovers on the fifth is reached, and one still busy then is given up on without a
+/// sixth, which is what tells a count from a count plus or minus one.
+#[test]
+fn a_gateway_stating_a_retry_count_is_asked_again_that_many_times() {
+    let model = "a-model-asked-five-times";
+    for streaming in [false, true] {
+        let busy = || (0..4).map(|_| Attempt::Status(503));
+
+        let (endpoint, received) = serve_attempts(busy().chain([answer_for(streaming)]).collect());
+        let config = config_for(&endpoint);
+        let gateway = gateway_stating(&endpoint, model, r#""maxRetries": 4"#);
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
+        assert!(
+            result.is_ok(),
+            "streaming {streaming}: a service that recovered on the fifth request was given up on: {result:?}"
+        );
+        assert_eq!(attempts, 5, "streaming {streaming}");
+        assert_eq!(received.try_iter().count(), 5, "streaming {streaming}");
+
+        let (endpoint, received) = serve_attempts(
+            busy()
+                .chain([Attempt::Status(503), answer_for(streaming)])
+                .collect(),
+        );
+        let config = config_for(&endpoint);
+        let gateway = gateway_stating(&endpoint, model, r#""maxRetries": 4"#);
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
+        assert!(
+            result.is_err(),
+            "streaming {streaming}: a sixth request was sent: {result:?}"
+        );
+        assert_eq!(attempts, 5, "streaming {streaming}");
+        assert_eq!(received.try_iter().count(), 5, "streaming {streaming}");
+    }
+}
+
+/// A block that says nothing about retries is the three requests every block has always had.
+#[test]
+fn a_gateway_stating_nothing_is_asked_three_times() {
+    let model = "a-model-asked-three-times";
+    for streaming in [false, true] {
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::Status(503),
+            Attempt::Status(503),
+            Attempt::Status(503),
+            answer_for(streaming),
+        ]);
+        let config = config_for(&endpoint);
+        let gateway = gateway_naming(&endpoint, model);
+
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
+
+        assert!(result.is_err(), "streaming {streaming}: {result:?}");
+        assert_eq!(attempts, 3, "streaming {streaming}");
+        assert_eq!(received.try_iter().count(), 3, "streaming {streaming}");
+    }
+}
+
+/// The count says how many times a request is sent again, not which failures are worth it. A
+/// credential the service refused is refused the same way each time, whatever the person allowed.
+#[test]
+fn a_larger_retry_count_does_not_make_a_refusal_worth_asking_again() {
+    let model = "a-model-refused-its-credential";
+    for streaming in [false, true] {
+        let (endpoint, received) =
+            serve_attempts(vec![Attempt::Status(401), answer_for(streaming)]);
+        let config = config_for(&endpoint);
+        let gateway = gateway_stating(&endpoint, model, r#""maxRetries": 7"#);
+
+        let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
+
+        assert_eq!(
+            attempts, 1,
+            "streaming {streaming}: a refusal was sent again: {result:?}"
+        );
+        assert_eq!(received.try_iter().count(), 1, "streaming {streaming}");
+        assert!(
+            matches!(
+                result,
+                Err(ChatError::Egress(bravebot_net::EgressError::Status {
+                    status: 401,
+                    ..
+                }))
+            ),
+            "streaming {streaming}: {result:?}"
+        );
+    }
+}
+
+/// A server that answers a whole reply as `pieces`, `pause` apart, after its headers.
+fn serve_json_trickled(pieces: Vec<&'static str>, pause: Duration) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            let _ = reader.read_exact(&mut body);
+
+            let length: usize = pieces.iter().map(|piece| piece.len()).sum();
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+            let _ = stream.flush();
+            for piece in &pieces {
+                thread::sleep(pause);
+                let _ = stream.write_all(piece.as_bytes());
+                let _ = stream.flush();
+            }
+        }
+    });
+
+    format!("http://127.0.0.1:{port}")
+}
+
+/// A reasoning model that stays silent past the gap the egress layer allows is waited for when the
+/// person said it may be, and given up on when they did not. The gaps are the same in both halves,
+/// so only the stated figure separates them, on the streamed path and on the whole one.
+#[test]
+fn a_gateway_stating_an_idle_gap_waits_that_long_for_a_reply_gone_quiet() {
+    let model = "a-model-that-goes-quiet";
+    let egress = || {
+        Egress::with_timeouts(bravebot_net::Timeouts {
+            idle: Duration::from_millis(300),
+            reply: Duration::from_secs(30),
+            ..bravebot_net::Timeouts::default()
+        })
+    };
+    let pause = Duration::from_millis(600);
+
+    for streaming in [false, true] {
+        let endpoint = if streaming {
+            serve_stream_paced(
+                vec![
+                    frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hel"}}]}"#),
+                    frame(r#"{"model":"served-model","choices":[{"delta":{"content":"lo"}}]}"#),
+                    frame("[DONE]"),
+                ],
+                pause,
+            )
+        } else {
+            serve_json_trickled(
+                vec![
+                    r#"{"model":"served-model","#,
+                    r#""choices":[{"message":"#,
+                    r#"{"content":"hello"}}]}"#,
+                ],
+                pause,
+            )
+        };
+        let config = config_for(&endpoint);
+
+        let unstated = gateway_stating(&endpoint, model, r#""maxRetries": 0"#);
+        let (result, _) = asked_of(&unstated, &config, &egress(), model, streaming);
+        assert!(
+            result.is_err(),
+            "streaming {streaming}: a gap longer than the default was waited through: {result:?}"
+        );
+
+        let stated = gateway_stating(
+            &endpoint,
+            model,
+            r#""maxRetries": 0, "idleTimeoutMs": 3000"#,
+        );
+        let (result, _) = asked_of(&stated, &config, &egress(), model, streaming);
+        let completion = result.unwrap_or_else(|error| {
+            panic!(
+                "streaming {streaming}: a stated gap of three seconds was not honoured: {error:?}"
+            )
+        });
+        assert_eq!(completion.model, "served-model");
+    }
+}
+
+/// The stated gap is also the shorter one: a person on a link that dies without saying so can ask
+/// for a quiet connection to be given up on well inside the default.
+#[test]
+fn a_gateway_stating_a_shorter_idle_gap_gives_up_on_a_quiet_reply_sooner() {
+    let model = "a-model-given-up-on-sooner";
+    let egress = Egress::with_timeouts(bravebot_net::Timeouts {
+        idle: Duration::from_secs(5),
+        reply: Duration::from_secs(30),
+        ..bravebot_net::Timeouts::default()
+    });
+    let endpoint = serve_stream_paced(
+        vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hel"}}]}"#),
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"lo"}}]}"#),
+            frame("[DONE]"),
+        ],
+        Duration::from_millis(700),
+    );
+    let config = config_for(&endpoint);
+
+    let unstated = gateway_stating(&endpoint, model, r#""maxRetries": 0"#);
+    let (result, _) = asked_of(&unstated, &config, &egress, model, true);
+    assert!(
+        result.is_ok(),
+        "the control reply is not one the default gap lets through: {result:?}"
+    );
+
+    let stated = gateway_stating(&endpoint, model, r#""maxRetries": 0, "idleTimeoutMs": 300"#);
+    let (result, _) = asked_of(&stated, &config, &egress, model, true);
+    assert!(
+        matches!(result, Err(ChatError::Incomplete)),
+        "a quiet reply was waited on past the stated 300 ms: {result:?}"
+    );
+}
+
+/// A model on this machine is waited on through any silence while a person can stop the turn, and a
+/// stated gap is a bound like the default one, so it does not reach such a model. A stated retry
+/// count does: it decides how often a request is sent again and nothing about how long a reply may
+/// go quiet. The gap stated is shorter than the silence, and nothing else bounds it.
+#[test]
+fn a_gateway_on_this_machine_is_waited_on_through_silence_whatever_gap_was_stated() {
+    let model = "a-model-on-this-machine";
+    let egress = Egress::with_timeouts(bravebot_net::Timeouts {
+        idle: Duration::from_secs(30),
+        reply: Duration::from_secs(30),
+        ..bravebot_net::Timeouts::default()
+    });
+    let endpoint = serve_stream_paced(
+        vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hel"}}]}"#),
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"lo"}}]}"#),
+            frame("[DONE]"),
+        ],
+        Duration::from_millis(700),
+    );
+    let config = config_for(&endpoint);
+    let gateway = gateway_stating(&endpoint, model, r#""maxRetries": 0, "idleTimeoutMs": 200"#);
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut client = AichatClient::new(&config, &egress)
+        .for_gateway(&gateway, model, None)
+        .with_cancel(Cancel::new());
+
+    let completion = client
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new(model, vec![Message::user("hi")]),
+            |_| {},
+        )
+        .expect("a model on this machine that went quiet was cut off by the gap a person stated");
+
+    assert_eq!(completion.model, "served-model");
+    assert_eq!(client.attempts(), 1);
 }

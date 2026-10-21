@@ -39,7 +39,7 @@ mod tags;
 pub use dates::parse_day;
 pub use declined::Declined;
 pub use out::Printed;
-pub use revision::{path_in, plausible_ref};
+pub use revision::{is_range, path_in, plausible_ref};
 pub use survey::{survey, survey_linked};
 
 use config::check_config;
@@ -102,6 +102,10 @@ pub enum Query {
     Status,
     Tags,
     Search,
+    /// HEAD's tree against the index, as `git diff --cached` prints it. Asked only by the driver,
+    /// for a commit message to be drafted from: [`Query::named`] never returns it, so no tool
+    /// argument can ask for it.
+    Staged,
 }
 
 impl Query {
@@ -125,6 +129,7 @@ impl Query {
             Query::Status => "status",
             Query::Tags => "tags",
             Query::Search => "search",
+            Query::Staged => "staged",
         }
     }
 }
@@ -326,6 +331,7 @@ impl Repository {
             Query::Show => self.show(&mut out, request, filter.as_deref())?,
             Query::Diff => self.diff(&mut out, request, filter.as_deref())?,
             Query::Status => status::answer(self, &mut out, filter.as_deref())?,
+            Query::Staged => status::staged(self, &mut out, filter.as_deref())?,
             Query::Tags => next = self.tags(&mut out, request)?,
             Query::Search => next = self.search(&mut out, request, filter.as_deref())?,
         }
@@ -2790,6 +2796,17 @@ mod tests {
         );
     }
 
+    /// GIT-15. The staged question has no name a tool argument can spell, so a planner cannot ask
+    /// for it, and every name that is spelled still names the question it always did.
+    #[test]
+    fn the_staged_question_is_not_one_a_tool_can_name() {
+        assert_eq!(Query::named("staged"), None);
+        assert_eq!(Query::named("cached"), None);
+        for name in ["log", "show", "diff", "status", "tags", "search"] {
+            assert_eq!(Query::named(name).map(Query::word), Some(name));
+        }
+    }
+
     #[cfg(unix)]
     mod status {
         use std::collections::BTreeMap;
@@ -2977,6 +2994,156 @@ mod tests {
 
             let under = status(&repo, Some("dir")).expect("answered");
             assert_eq!(under.text, " D dir/d.txt\n");
+        }
+
+        fn staged(repo: &Repo, path: Option<&str>, withheld: &dyn Fn(&str) -> bool) -> Answer {
+            repo.opened()
+                .expect("opened")
+                .answer(&request(Query::Staged, None, path), withheld)
+                .expect("answered")
+        }
+
+        /// GIT-15. The staged question prints the index against HEAD, and nothing a working-tree
+        /// edit changed.
+        #[test]
+        fn staged_prints_the_index_against_head_and_not_the_working_tree() {
+            let repo = Repo::new("staged-diff");
+            let old = repo.blob("one\ntwo\n");
+            let gone = repo.blob("gone\n");
+            let same = repo.blob("same\n");
+            commit(
+                &repo,
+                &[("a.txt", old), ("gone.txt", gone), ("same.txt", same)],
+            );
+            let edited = repo.blob("one\nTWO\n");
+            let added = repo.blob("new\n");
+            // The working tree holds a later edit than the one staged.
+            write(&repo, "a.txt", "one\nTWO\nand more\n");
+            write(&repo, "same.txt", "same, edited and not staged\n");
+            write(&repo, "new.txt", "new\n");
+            index(
+                &repo,
+                &[
+                    ("a.txt", FILE, edited, 0, false),
+                    ("new.txt", FILE, added, 0, false),
+                    ("same.txt", FILE, same, 0, false),
+                ],
+            );
+            let answer = staged(&repo, None, &|_| false);
+            let short = |id: ObjectId| id.to_hex_with_len(7).to_string();
+            assert_eq!(
+                answer.text,
+                format!(
+                    "diff --git a/a.txt b/a.txt\nindex {}..{} 100644\n--- a/a.txt\n+++ b/a.txt\n\
+                     @@ -1,2 +1,2 @@\n one\n-two\n+TWO\n\
+                     diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\nindex {}..0000000\n\
+                     --- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n\
+                     diff --git a/new.txt b/new.txt\nnew file mode 100644\nindex 0000000..{}\n\
+                     --- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n",
+                    short(old),
+                    short(edited),
+                    short(gone),
+                    short(added)
+                )
+            );
+            assert_eq!(answer.shown, ["a.txt", "gone.txt", "new.txt"]);
+
+            let one = staged(&repo, Some("new.txt"), &|_| false);
+            assert_eq!(one.shown, ["new.txt"]);
+        }
+
+        #[test]
+        fn staged_says_so_when_the_index_matches_head() {
+            let repo = Repo::new("staged-nothing");
+            let one = repo.blob("one\n");
+            commit(&repo, &[("a.txt", one)]);
+            index(&repo, &[("a.txt", FILE, one, 0, false)]);
+            write(&repo, "a.txt", "edited and not staged\n");
+            assert_eq!(
+                staged(&repo, None, &|_| false).text,
+                "(nothing is staged)\n"
+            );
+        }
+
+        #[test]
+        fn staged_leaves_out_a_withheld_path_and_says_so() {
+            let repo = Repo::new("staged-withheld");
+            let old = repo.blob("old\n");
+            let kept = repo.blob("kept\n");
+            commit(&repo, &[("secret.txt", old), ("open.txt", old)]);
+            let changed = repo.blob("changed\n");
+            index(
+                &repo,
+                &[
+                    ("open.txt", FILE, kept, 0, false),
+                    ("secret.txt", FILE, changed, 0, false),
+                ],
+            );
+            let answer = staged(&repo, None, &|path| path == "secret.txt");
+            assert!(answer.withheld);
+            assert_eq!(answer.shown, ["open.txt"]);
+            assert!(!answer.text.contains("changed"), "{}", answer.text);
+        }
+
+        /// PATH-003. A staged path that is not UTF-8 cannot be matched against a rule, so it is
+        /// withheld, and its lossy lookalike is an ordinary path that is shown.
+        #[test]
+        fn staged_withholds_a_path_that_is_not_utf8_and_shows_its_lookalike() {
+            let repo = Repo::new("staged-not-utf8");
+            let old = repo.blob("old\n");
+            commit(&repo, &[("keep.txt", old)]);
+            let bad = repo.blob("bad\n");
+            let lookalike = repo.blob("lookalike\n");
+            // The index writer takes &str, so the one byte that is not UTF-8 goes in afterwards,
+            // and the checksum over the entries is taken again.
+            let mut bytes = index_bytes(
+                &repo,
+                2,
+                &[
+                    ("keep.txt", FILE, old, 0, false),
+                    ("tool-\u{7f}", FILE, bad, 0, false),
+                    ("tool-\u{FFFD}", FILE, lookalike, 0, false),
+                ],
+                b"",
+            );
+            let at = bytes
+                .windows(6)
+                .position(|w| w == b"tool-\x7f")
+                .expect("placeholder");
+            bytes[at + 5] = 0xff;
+            let body = bytes.len() - 20;
+            let mut hasher = gix_hash::hasher(HashKind::Sha1);
+            hasher.update(&bytes[..body]);
+            let checksum = hasher.try_finalize().expect("hashed");
+            bytes.truncate(body);
+            bytes.extend_from_slice(checksum.as_bytes());
+            std::fs::write(repo.git.join("index"), bytes).expect("index");
+
+            let answer = staged(&repo, None, &|_| false);
+            assert!(answer.withheld);
+            assert_eq!(answer.shown, ["tool-\u{FFFD}"]);
+            assert!(answer.text.contains("lookalike"), "{}", answer.text);
+            assert!(!answer.text.contains("bad"), "{}", answer.text);
+        }
+
+        #[test]
+        fn staged_names_a_conflicted_path_and_prints_no_hunks_for_it() {
+            let repo = Repo::new("staged-conflict");
+            let base = repo.blob("base\n");
+            let ours = repo.blob("ours\n");
+            let theirs = repo.blob("theirs\n");
+            commit(&repo, &[("both.txt", base)]);
+            index(
+                &repo,
+                &[
+                    ("both.txt", FILE, base, 1, false),
+                    ("both.txt", FILE, ours, 2, false),
+                    ("both.txt", FILE, theirs, 3, false),
+                ],
+            );
+            let answer = staged(&repo, None, &|_| false);
+            assert_eq!(answer.text, "* Unmerged path both.txt\n");
+            assert!(answer.shown.is_empty());
         }
 
         #[test]
@@ -4200,6 +4367,234 @@ mod tests {
             made(&repo).expect("made");
             let written = std::fs::read_link(target(&repo).join("link")).expect("a link");
             assert_eq!(written, Path::new("a_b"));
+        }
+
+        /// A checkout with `README`, `src/lib.rs` and `docs/page.md` made, for the tests of what is
+        /// put into one and taken out of one.
+        fn made_with_files(tag: &str) -> Repo {
+            let repo = Repo::new(tag);
+            let readme = repo.blob("hello\n");
+            let lib = repo.blob("pub fn f() {}\n");
+            let src = repo.tree(&[("100644", "lib.rs", lib)]);
+            let page = repo.blob("page\n");
+            let docs = repo.tree(&[("100644", "page.md", page)]);
+            committed(
+                &repo,
+                &[
+                    ("100644", "README", readme),
+                    ("40000", "docs", docs),
+                    ("40000", "src", src),
+                ],
+            );
+            made(&repo).expect("made");
+            repo
+        }
+
+        /// CHECKOUT-23. A carried file replaces the one the checkout has and a new one is made, with
+        /// the directories above it, readable by its owner alone and runnable by it only where asked.
+        #[test]
+        fn a_carried_file_replaces_the_checkouts_and_is_owner_only() {
+            use crate::git::checkout::carry;
+            let repo = made_with_files("carry-writes");
+            let out = target(&repo);
+            carry(&out, "README", &mut "changed\n".as_bytes(), false, 100).expect("replaced");
+            carry(
+                &out,
+                "deep/er/run.sh",
+                &mut "#!/bin/sh\n".as_bytes(),
+                true,
+                100,
+            )
+            .expect("created");
+            carry(&out, "src/lib.rs", &mut "".as_bytes(), false, 100).expect("emptied");
+
+            let read = |path: &str| std::fs::read_to_string(out.join(path)).expect(path);
+            assert_eq!(read("README"), "changed\n");
+            assert_eq!(read("deep/er/run.sh"), "#!/bin/sh\n");
+            assert_eq!(read("src/lib.rs"), "");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = |path: &str| {
+                    std::fs::metadata(out.join(path))
+                        .expect(path)
+                        .permissions()
+                        .mode()
+                        & 0o777
+                };
+                assert_eq!(mode("README"), 0o600);
+                assert_eq!(mode("deep/er/run.sh"), 0o700);
+                assert_eq!(mode("deep"), 0o700);
+                assert_eq!(mode("deep/er"), 0o700);
+            }
+        }
+
+        /// CHECKOUT-23. Nothing is followed or replaced on the way: a link, a file where a
+        /// directory has to be, and a directory where the file goes each refuse the path and leave
+        /// what stands there, and a name a checkout does not hold is refused before anything is made.
+        #[test]
+        fn a_carried_file_is_refused_where_something_else_stands_in_its_way() {
+            use crate::git::checkout::{Carry, carry};
+            let repo = made_with_files("carry-in-the-way");
+            let out = target(&repo);
+            let elsewhere = repo.root.join("elsewhere");
+            std::fs::create_dir(&elsewhere).expect("elsewhere");
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&elsewhere, out.join("via")).expect("link");
+                assert_eq!(
+                    carry(&out, "via/x.txt", &mut "x".as_bytes(), false, 100),
+                    Err(Carry::InTheWay)
+                );
+                assert_eq!(
+                    std::fs::read_dir(&elsewhere).expect("elsewhere").count(),
+                    0,
+                    "a file was written through a link"
+                );
+            }
+            assert_eq!(
+                carry(&out, "README/inside.txt", &mut "x".as_bytes(), false, 100),
+                Err(Carry::InTheWay)
+            );
+            assert_eq!(
+                std::fs::read_to_string(out.join("README")).expect("README"),
+                "hello\n",
+                "a file where a directory had to be was replaced"
+            );
+            assert_eq!(
+                carry(&out, "docs", &mut "x".as_bytes(), false, 100),
+                Err(Carry::InTheWay)
+            );
+            assert!(
+                out.join("docs/page.md").exists(),
+                "a directory was replaced"
+            );
+
+            for name in [".git/hooks/pre-commit", ".GIT/config", "src/../escape.txt"] {
+                let refused = carry(&out, name, &mut "x".as_bytes(), false, 100);
+                assert!(
+                    matches!(refused, Err(Carry::Name(_))),
+                    "{name} was not refused as a name: {refused:?}"
+                );
+            }
+            assert!(!out.join("escape.txt").exists());
+            assert!(
+                std::fs::read_to_string(out.join(".git"))
+                    .expect(".git")
+                    .starts_with("gitdir: "),
+                "the checkout's .git was written into"
+            );
+        }
+
+        /// CHECKOUT-23. A file that cannot be copied to the end leaves what the checkout had at its
+        /// place, and nothing half written beside it. A source that holds more than the limit is
+        /// refused the same way.
+        #[test]
+        fn a_carried_file_that_fails_part_way_leaves_what_the_checkout_had() {
+            use crate::git::checkout::{Carry, carry};
+            struct Fails;
+            impl std::io::Read for Fails {
+                fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                    Err(std::io::Error::other("the source went away"))
+                }
+            }
+            let repo = made_with_files("carry-fails");
+            let out = target(&repo);
+            assert_eq!(
+                carry(&out, "new.txt", &mut Fails, false, 100),
+                Err(Carry::Unwritable)
+            );
+            assert!(!out.join("new.txt").exists(), "a partial file was left");
+            assert_eq!(
+                carry(&out, "deep/er/new.txt", &mut Fails, false, 100),
+                Err(Carry::Unwritable)
+            );
+            assert!(
+                !out.join("deep").exists(),
+                "directories a failed copy made were left"
+            );
+            assert_eq!(
+                carry(
+                    &out,
+                    "deep/er/new.txt",
+                    &mut "0123456789".as_bytes(),
+                    false,
+                    5
+                ),
+                Err(Carry::TooMuch)
+            );
+            assert!(
+                !out.join("deep").exists(),
+                "directories a refused copy made were left"
+            );
+            assert_eq!(
+                carry(&out, "README", &mut Fails, false, 100),
+                Err(Carry::Unwritable)
+            );
+            assert_eq!(
+                carry(&out, "README", &mut "0123456789".as_bytes(), false, 5),
+                Err(Carry::TooMuch)
+            );
+            assert_eq!(
+                std::fs::read_to_string(out.join("README")).expect("README"),
+                "hello\n",
+                "a file the checkout had was lost to a copy that failed"
+            );
+            assert_eq!(
+                carry(&out, "src/lib.rs", &mut "12345".as_bytes(), false, 5),
+                Ok(5),
+                "a source of exactly the limit was refused"
+            );
+            for directory in [out.clone(), out.join("src")] {
+                let beside: Vec<_> = std::fs::read_dir(&directory)
+                    .expect("a directory")
+                    .flatten()
+                    .filter(|entry| entry.file_name().to_string_lossy().contains("carrying"))
+                    .collect();
+                assert!(
+                    beside.is_empty(),
+                    "a file written beside the place was left in {}",
+                    directory.display()
+                );
+            }
+        }
+
+        /// CHECKOUT-23. Taking a file out removes it and the directories that leaves empty, goes no
+        /// further than the checkout, follows no link, and is not an error where it is not there.
+        #[test]
+        fn an_uncarried_file_goes_with_the_directories_only_it_held() {
+            use crate::git::checkout::{Carry, carry, uncarry};
+            let repo = made_with_files("uncarry");
+            let out = target(&repo);
+            carry(&out, "docs/deep/er.md", &mut "x".as_bytes(), false, 100).expect("created");
+            assert_eq!(uncarry(&out, "docs/deep/er.md"), Ok(true));
+            assert!(
+                !out.join("docs/deep").exists(),
+                "an empty directory was left"
+            );
+            assert!(
+                out.join("docs/page.md").exists(),
+                "a directory holding a file went"
+            );
+            assert_eq!(uncarry(&out, "docs/page.md"), Ok(true));
+            assert!(!out.join("docs").exists(), "an empty directory was left");
+            assert!(out.exists(), "the checkout itself was removed");
+            assert_eq!(uncarry(&out, "docs/page.md"), Ok(false));
+            assert_eq!(uncarry(&out, "never/there.md"), Ok(false));
+            assert_eq!(uncarry(&out, "src"), Err(Carry::InTheWay));
+            assert!(out.join("src/lib.rs").exists());
+            #[cfg(unix)]
+            {
+                let elsewhere = repo.root.join("elsewhere");
+                std::fs::create_dir(&elsewhere).expect("elsewhere");
+                std::fs::write(elsewhere.join("keep.txt"), "kept").expect("kept");
+                std::os::unix::fs::symlink(&elsewhere, out.join("via")).expect("link");
+                assert_eq!(uncarry(&out, "via/keep.txt"), Err(Carry::InTheWay));
+                assert!(
+                    elsewhere.join("keep.txt").exists(),
+                    "a file was removed through a link"
+                );
+            }
         }
 
         /// A directory that exists, or a `worktrees/` entry another worktree holds, refuses the

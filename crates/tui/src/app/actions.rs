@@ -639,6 +639,30 @@ impl Held<'_> {
         None
     }
 
+    pub(super) fn commit_message(
+        &mut self,
+        terminal: &mut Tty,
+        config: &Config,
+        asked: &crate::commit_message_command::Asked,
+    ) -> io::Result<()> {
+        // Closed for the reason an aside closes it: the request is charged to a turn the snapshot
+        // predates.
+        self.session.rewind.close();
+        let (done, events) = super::commit_message_animated(
+            terminal,
+            self.session,
+            config,
+            &self.answers.trust,
+            asked,
+            self.workspace,
+        )?;
+        if self.session.turns > 0 {
+            self.stored.append_audit(self.session.turns, &events);
+        }
+        super::commit_message_answered(self.session, done);
+        Ok(())
+    }
+
     pub(super) fn handoff(
         &mut self,
         terminal: &mut Tty,

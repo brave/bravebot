@@ -467,6 +467,13 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
 /// One note at a time, in this order, since they share the room: the parts of the line are fitted
 /// against the width this leaves.
 fn note_at_the_right(session: &Session) -> Option<String> {
+    // The word went to the model as the prompt it is, and a person who typed it to leave is looking
+    // at a turn starting. Nothing else on the screen says the line was a prompt or what stops it and
+    // leaves, and the turn is when they are looking for one (CMD-2).
+    if session.leave_word_sent && session.a_turn_is_running() {
+        return Some(format!("{}  ", t!(leave_word_sent)));
+    }
+
     // The line the person was writing has just gone, so the press that took it is the one thing
     // worth explaining: without this, a key they pressed to stop something emptied the box and
     // said nothing, and the next press of it ends the session.

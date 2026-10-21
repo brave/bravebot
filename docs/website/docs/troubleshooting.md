@@ -71,6 +71,12 @@ capability probes.
 For the network cases, `bravebot doctor` has a `network` section naming the trust roots in force, the
 proxy, and the hosts it is not used for.
 
+**What the model is told about a failed turn.** The requests after it carry a short note in
+bravebot's own words, with the failure's category and, where it is known, the number of requests
+sent, so asking `what happened?` gets an answer about the failure and not a promise to carry on.
+The note holds no text the service sent, is not drawn in the transcript, and is kept when you
+resume the session.
+
 **A turn failed but I was still charged for it.** That is deliberate. A later error or a stop does
 not undo the cost of requests that already finished, so what completed work spent stays counted in
 `/status` and in the session record. Requests that failed or never finished add nothing, and no

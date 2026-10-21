@@ -20,6 +20,18 @@
         color: #555;
         margin-left: 1.6rem;
       }
+      h2 {
+        font-size: 1.1rem;
+        margin-top: 2rem;
+      }
+      textarea {
+        box-sizing: border-box;
+        width: 100%;
+        font: 13px ui-monospace, monospace;
+      }
+      #blocked-note {
+        color: #555;
+      }
     </style>
   </head>
   <body>
@@ -29,6 +41,24 @@
       before each call.
     </p>
     <form id="tools"></form>
+    <h2 id="blocked-heading">Blocked sites</h2>
+    <p id="blocked-note">
+      No tool lists, searches, reads or opens a site written here, whatever is
+      switched on above, and a call that names one is refused. Tabs, frames,
+      history and bookmarks at a blocked site are left out of results, so a list
+      can hold fewer rows than Brave has. Write one site to a line, such as
+      <code>https://mail.example.com</code>. A site is matched as written:
+      <code>https://example.com</code> does not cover
+      <code>https://www.example.com</code> or <code>http://example.com</code>.
+    </p>
+    <textarea
+      id="blocked-sites"
+      rows="6"
+      spellcheck="false"
+      aria-labelledby="blocked-heading"
+      aria-describedby="blocked-note blocked-status"
+    ></textarea>
+    <div id="blocked-status" class="note" role="status"></div>
     <script type="module" src="options.js"></script>
   </body>
 </html>

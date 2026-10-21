@@ -536,6 +536,13 @@ Changing any of those produces a digest nothing approved, so the server is unapp
 path recorded by answer 2 does not answer for a changed digest: it reaches a server this person has
 not seen, and a changed argv is a server they have not seen.
 
+A program named rather than given as a path is looked for only in `PATH` entries a stage may not
+write, and a file that is a link into such a directory is not taken
+([SANDBOX-30](sandboxing.md#SANDBOX-30)'s lookup). The digest holds the name, so an approval of the
+name must not start a file a confined stage wrote into an activated virtualenv's `bin` or a
+`node_modules/.bin` ahead of the installation the person was shown. A name found only in such a
+directory is not found, as for any absent program.
+
 **Why.** Same reason [CMDLINE-3](tools/command-line.md#CMDLINE-3) binds an endorsement to the
 compiled plan rather than the line: the thing a person read has to be the thing that runs, and an
 approval keyed on an alias would let an edit to the argv inherit the answer given about a different
@@ -561,6 +568,7 @@ was written before the alias was kept, is still an approval, and takes its alias
 rewritten. The session's question says *that* the declaration changed and not which fields: only a
 digest is kept of what was approved, and a digest names no field.
 
+`verified-by: bravebot_agent::servers::an_approved_name_does_not_start_a_program_planted_in_a_directory_a_stage_may_write`
 `verified-by: bravebot_config::mcp::a_digest_covers_the_program_every_argument_the_names_and_the_directory`
 `verified-by: bravebot_config::mcp::a_digest_covers_every_stored_value_and_every_file_it_may_read`
 `verified-by: bravebot_config::mcp::a_declaration_storing_no_value_digests_as_it_did_before_values_could_be_stored`
@@ -691,8 +699,9 @@ the context its arguments were written in has met untrusted content.
 The arguments are drawn as the planner wrote them, one per row as a JSON value. The description is
 the one on the list the person vouched for, behind the margin and cut to two rows until `e`
 expands it. `1` or `y` is answer 1. `2` is answer 2. `3`, `n` or Esc is answer 3. Enter answers
-nothing, so a key pressed for the last question does not answer this one. Answer 3 sends nothing
-and tells the planner the person declined.
+nothing, so a key pressed for the last question does not answer this one. Answer 3 sends nothing,
+tells the planner the person declined, and is recorded in the trail as a refusal, as a call nobody
+could be asked about is ([TRACE-1](trace.md#TRACE-1)).
 
 A call that is not asked about, under an allow rule, answer 2 or bypassing, has no prompt to show
 its arguments, so the transcript row names the call by `alias:tool` and its arguments, asked or
@@ -720,6 +729,7 @@ the content out ends it. A workspace file the planner reads does not reach it.
 
 `verified-by: bravebot_agent::mcp::a_vouched_list_offers_its_tool_and_a_call_answers_quarantined`
 `verified-by: bravebot_agent::mcp::a_refused_call_reaches_no_server`
+`verified-by: bravebot_agent::mcp::a_call_the_person_does_not_approve_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::mcp::answer_two_stops_asking_for_the_one_tool_in_the_one_project`
 `verified-by: bravebot_agent::mcp::answer_two_follows_the_session_to_another_project`
 `verified-by: bravebot_agent::mcp::a_rule_decides_a_call_before_the_prompt`
@@ -796,10 +806,13 @@ drawn above the list.
 
 A yes is the person vouching for the list, and it is the one road by which the list is promoted
 ([LABEL-8](labels.md#LABEL-8)). A no offers none of its tools for the rest of the session and is not
-asked again. A turn stopped at the question has not answered it, so the next turn asks again. Nothing is recorded, so a later session asks again about a list that is the
+asked again. A turn stopped at the question has not answered it, so the next turn asks again. Nothing is recorded, so a later process asks again about a list that is the
 same: the driver has no way to tell that it is, short of deciding from the server's bytes, and a
 decision taken from them is the one thing the driver may not do ([LABEL-8](labels.md#LABEL-8)). A
-`tools` line in `mcp-approved` is passed over and dropped the next time the file is written. A project path that [SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a
+`tools` line in `mcp-approved` is passed over and dropped the next time the file is written. The answer, a yes or a no, belongs to the MCP session the process started, so
+the terminal's `/clear`, `/branch` and `/resume` keep it and the conversation after them is
+offered the list that was vouched for without the question again ([CMD-14](commands.md#CMD-14));
+only a new process asks. A project path that [SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a
 server and not for its list.
 
 Each tool is offered as a function named `mcp__{alias}__{tool}`, which is what a backend's function
@@ -839,6 +852,9 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_agent::mcp::a_declined_list_offers_nothing_and_is_not_asked_again`
 `verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_leaves_it_to_be_asked_again`
 `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing`
+`verified-by: bravebot_tui::app::clearing_keeps_the_answer_to_an_mcp_servers_list_for_the_process`
+`verified-by: bravebot_tui::app::a_branch_keeps_the_answer_to_an_mcp_servers_list_for_the_process`
+`verified-by: bravebot_tui::app::resuming_carries_the_answer_to_an_mcp_servers_list_for_the_process`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
 `verified-by: bravebot_tui::confirm::a_tool_list_draws_every_description_row_behind_the_margin`
@@ -1400,7 +1416,9 @@ are offered to the model, or none as the person answered. It says `none` where t
 no server. A requested server that was not started is not on it: that is said once, as the
 session opens, by the line giving the reason. Where a stdio server was started, the confinement
 line says the level is in force over those servers and over nothing else the session runs, which is
-the report [SANDBOX-10](sandboxing.md#SANDBOX-10) would otherwise make untrue.
+the report [SANDBOX-10](sandboxing.md#SANDBOX-10) would otherwise make untrue, and the paths and
+network that confinement grants each server are listed at the end of the report
+([SERVERS-20](#SERVERS-20)).
 
 `verified-by: bravebot_cli::running::an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved`
 `verified-by: bravebot_cli::running::a_declaration_that_cannot_be_used_is_listed_with_its_problem`
@@ -1711,7 +1729,8 @@ This spec cannot land without these. Each is named by what the clause says rathe
   through `PATH` is a different file on two machines, and [SERVERS-10](#SERVERS-10) makes `PATH` a
   thing the declaration names. Digesting the resolved path would make an approval machine-specific,
   which is either the correct reading of what was approved or a re-approval every time a toolchain
-  moves.
+  moves. [SERVERS-5](#SERVERS-5) keeps the name in the digest and closes the planting case another
+  way, by not searching a directory a stage may write (#2777).
 
 ## Known costs
 
@@ -1737,9 +1756,9 @@ This spec cannot land without these. Each is named by what the clause says rathe
 - **Three prompts is three prompts.** A server gate and a call gate are the shape asked for, and a
   list gate is what letting a server's words reach the planner costs. Together they are more asking
   than the tool this is measured against does, because the call gate here has no per-server "never
-  ask again". The standing answers are what pay it back. A list is asked about again only when it
-  changes, and a person who answers 2 at the other two has the same quiet session with a record of
-  having been asked.
+  ask again". The standing answers are what pay it back. A list is asked about again by every new process, changed or not,
+  and kept for the life of one, and a person who answers 2 at the other two has the same quiet
+  session with a record of having been asked.
 - **The useful case costs two steps.** A newcomer to a checkout that requests a server has to declare
   it themselves and then approve it. That is the price of a shared file that cannot hand anything
   over, and it is paid by the person who wanted the server.
@@ -1753,6 +1772,11 @@ This spec cannot land without these. Each is named by what the clause says rathe
   a tool answered about before goes unasked to a server that is no longer the one the answer was
   given to, and the same holds when the server redefines the tool under its name. A call carrying the
   person's private data still asks.
+- **A project answer follows a path, not a directory.** Answer 2 is filed under the project's path
+  with its links followed and no identity of the directory. A directory removed and made again at
+  that path, or a checkout replaced by another at the same path, is the project the person answered
+  for. It reaches only a request for an alias the person's own `mcp.json` declares
+  ([SERVERS-1](#SERVERS-1)), and not one whose declaration was approved as something else.
 - **The standing answers do not travel.** Recording them outside the checkout means a second machine
   asks again and a wiped workspace does not forget. `mcp forget` is the deliberate road; there is no
   accidental one.
@@ -1816,6 +1840,11 @@ This spec cannot land without these. Each is named by what the clause says rathe
   a name, so a link, a copy or another name for the same machine is not denied, and a command match
   leaves out the variables a server starts with. The allow list is the form that holds
   ([SERVERS-12](#SERVERS-12)).
+- **`/status` lists the rows of a server's policy and not what a platform grants beneath them.**
+  Linux and macOS let a server look at any path, which is no row
+  ([SANDBOX-13](sandboxing.md#SANDBOX-13)), and a Windows container reads the system directories its
+  group may, which the empty Windows base does not name, so a read the list does not account for can
+  still succeed there ([SERVERS-20](#SERVERS-20)).
 - **The desktop application starts its servers on a session's first turn.** That turn waits for
   the server question and for every handshake, up to the startup bounds above, before the model is
   asked anything, and the window says it is starting servers while it does. A turn stopped while
@@ -1865,3 +1894,55 @@ callable that the person turned off.
 `verified-by: bravebot_tui::mcp_command::turning_off_a_running_server_removes_it_and_the_last_leaves_none`
 `verified-by: bravebot_tui::app::the_mcp_command_carries_its_words_unparsed`
 `verified-by: bravebot_tui::app::the_mcp_command_waits_for_the_turn_in_flight`
+
+<a id="SERVERS-20"></a>
+### SERVERS-20: `/status` lists what the confinement of each started local server grants
+
+At the end of its report, `/status` has a `Server policy` line naming each local server the session
+started, and under it one line each for what the policy holds of egress (none, this machine only,
+any address, or only the proxy that applies the session's host list), whether the server may start
+subprocesses, and the directory it starts in. Where the platform refuses a write to a `.git` beneath
+a write row ([SANDBOX-14](sandboxing.md#SANDBOX-14)) and the policy does not lift it, a `.git` line
+says so, since a row that reads `write` does not reach one. Then comes one line for each path the
+policy names, labelled `read`, `write` or `read, write` for what the row grants, and the paths that
+were wanted and are in no row because this platform names no path that is not on disk
+([SANDBOX-9](sandboxing.md#SANDBOX-9)), under a `left out` line giving that reason. A write row
+carries the right to read beneath it on every platform but macOS, and is labelled as the platform
+grants it. A session that started no local server has none of these lines, and a server reached over
+HTTP is no process of the session's and has none.
+
+The lines come from the policy the server was launched with, taken as the launch built it: after
+the session's network decision ([SANDBOX-20](sandboxing.md#SANDBOX-20),
+[SANDBOX-24](sandboxing.md#SANDBOX-24)) and after the paths the backend cannot name were taken out.
+It is given to the server's handshake with the process, so a started local server has one, and is
+kept with the server for as long as the session holds it. A server `/mcp reconnect` started is listed
+under the policy it was started with, and `/mcp disable` removes its lines. A server's policy holds
+no refusal of a path beneath a row, so none is listed, and a policy that gains one has the lines
+extended to list it. The lines are the rows of the policy and not every access a platform grants
+beneath them, which a [known cost](#known-costs) lists. Nothing a server sent is among the lines, and
+no front end reads them back to decide anything.
+A path is drawn in full, as the prompts that name one draw it, with a control character as its
+picture and a character that draws as nothing spelled out.
+
+**Why.** A server that reports a refused read, write or connection from inside its confinement is
+checked against what the policy granted, and the policy is made of rows a person did not write: the
+platform's base, the directories the `PATH` names, the installation the program came from, the
+declared directory and the declared reads. Every row is listed where a count would be shorter,
+because a count cannot say whether the path in a refusal was granted. The paths left out are listed
+beside the rows because a note said once as the session opens is gone from the screen by the time a
+refusal is read. Taking the lines from the value the launch passes to the backend, and not from a
+second reading of the declaration, is what keeps a path shown as granted from being one the backend
+never received.
+
+Not built: `bravebot mcp get` prints the declaration and the digest and not the policy a session
+would build from it (#2910).
+
+`verified-by: bravebot_agent::servers::a_servers_view_lists_the_rows_its_backend_was_handed_and_names_each_path_left_out`
+`verified-by: bravebot_agent::servers::a_servers_view_keeps_apart_two_paths_a_lossy_rendering_would_join`
+`verified-by: bravebot_agent::servers::a_servers_view_says_how_its_policy_treats_the_network_programs_and_where_it_starts`
+`verified-by: bravebot_agent::servers::a_servers_policy_holds_no_refusal_for_the_view_to_show`
+`verified-by: bravebot_agent::servers::a_started_servers_view_is_the_policy_it_was_launched_with`
+`verified-by: bravebot_agent::mcp::a_session_names_the_policy_each_confined_server_was_started_under_and_no_other`
+`verified-by: bravebot_tui::status::a_started_servers_policy_is_listed_row_by_row_with_what_each_row_allows`
+`verified-by: bravebot_tui::status::a_session_with_no_confined_server_shows_no_server_policy`
+`verified-by: bravebot_tui::status::a_path_in_a_servers_policy_is_drawn_without_sending_its_control_characters`

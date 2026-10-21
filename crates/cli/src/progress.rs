@@ -33,6 +33,25 @@ const BLOCK_WIDTH: usize = 80;
 
 pub(crate) use bravebot_approval::printable;
 
+/// A file's path as [`printable`] draws it.
+pub(crate) fn printable_path(path: &std::path::Path) -> String {
+    printable(&path.display().to_string())
+}
+
+/// One dropped permission entry, said as [`bravebot_agent::permissions::describe`] says it, with
+/// the entry and the file it was written in pictured by [`printable`] (LAYER-3).
+///
+/// Both are text a checkout's settings file chose, and `describe` puts them into the sentence
+/// unchanged. The sentence's own words are left alone, so a message that runs over several lines
+/// keeps its breaks.
+pub(crate) fn described(rejected: &bravebot_core::permissions::Rejected) -> String {
+    bravebot_agent::permissions::describe(&bravebot_core::permissions::Rejected {
+        text: printable(&rejected.text),
+        reason: rejected.reason,
+        file: rejected.file.as_deref().map(printable),
+    })
+}
+
 /// One line of shown content as rows, each beginning with the margin.
 fn marked(margin: &str, line: &str) -> Vec<String> {
     // One column at least. A margin wider than the block still gets its margin, and the content
@@ -299,7 +318,15 @@ impl<W: Write> Progress<W> {
             label = &shown.label
         )];
         block.extend(shown.reach.note().map(|note| format!("  {note}")));
-        block.extend(shown.preview.iter().cloned());
+
+        // The preview's colour codes are taken out and counted (VIEW-30). The heading is not
+        // touched, since its origin can be a filename and a person is shown every byte of one.
+        let mut dropped = 0;
+        block.extend(shown.preview.iter().map(|line| {
+            let (plain, taken) = bravebot_tui::colour_codes::without(line);
+            dropped += taken;
+            plain
+        }));
 
         // Said rather than silently dropped: a preview that stops without saying so reads as the
         // whole of what was there.
@@ -309,6 +336,7 @@ impl<W: Write> Progress<W> {
                 count = shown.lines - shown.preview.len()
             ));
         }
+        block.extend(bravebot_tui::colour_codes::note(dropped));
 
         self.say("");
         for line in &block {
@@ -605,6 +633,93 @@ mod tests {
             written.contains('\u{241b}'),
             "the escape was not neutralised: {written:?}"
         );
+    }
+
+    /// A program that colours its output writes a code around each coloured word, and drawn as
+    /// pictures they bury the words. The block shows the words and says how many codes it left
+    /// out, behind the same margin as every other row (VIEW-30).
+    #[test]
+    fn colour_codes_in_a_block_are_counted_and_not_drawn() {
+        let written = log(|p| {
+            p.quarantined(quarantining(
+                vec!["\u{1b}[0m\u{1b}[36m\u{251c}\u{1b}[0m Announcement: a link".to_string()],
+                1,
+            ))
+        });
+
+        assert!(
+            written.contains("\u{251c} Announcement: a link"),
+            "got: {written:?}"
+        );
+        assert!(
+            !written.contains("[36m") && !written.contains("[0m") && !written.contains('\u{241b}'),
+            "a colour code was drawn as text: {written:?}"
+        );
+        let note = written
+            .lines()
+            .find(|row| row.contains("3 colour codes not drawn"))
+            .unwrap_or_else(|| panic!("the count was not written: {written:?}"));
+        assert_eq!(
+            note.chars().position(|c| !c.is_whitespace()),
+            note.chars().position(|c| c == BAR),
+            "the count begins with content rather than the margin: {note:?}"
+        );
+    }
+
+    /// Only a colour code is left out. An erase beside one is written as pictures and not counted
+    /// as a colour, and the heading's origin is a filename a person is shown every byte of.
+    #[test]
+    fn only_colour_codes_are_left_out_of_a_block() {
+        let mut shown = quarantining(vec!["\u{1b}[31mred\u{1b}[2Jcleared".to_string()], 1);
+        shown.origin = "a\u{1b}[8mb.md".to_string();
+        let written = log(|p| p.quarantined(shown));
+
+        assert!(
+            written.contains("red\u{241b}[2Jcleared"),
+            "got: {written:?}"
+        );
+        assert!(
+            written.contains("a\u{241b}[8mb.md"),
+            "the origin was changed: {written:?}"
+        );
+        assert!(
+            written.contains("1 colour code not drawn"),
+            "got: {written:?}"
+        );
+        assert!(!written.contains('\u{1b}'), "got: {written:?}");
+    }
+
+    /// A block with no colour code says nothing about them.
+    #[test]
+    fn a_block_without_colour_codes_says_nothing_about_them() {
+        let written = log(|p| p.quarantined(quarantining(vec!["plain".to_string()], 1)));
+
+        assert!(!written.contains("colour code"), "got: {written:?}");
+    }
+
+    /// The sentence about a dropped rule is the catalog's, and the rule and the file are a
+    /// checkout's. Both are drawn as pictures, and the sentence around them keeps its own breaks,
+    /// so the replacement is of the pieces rather than of the whole line.
+    #[test]
+    fn a_dropped_rule_and_the_file_it_was_written_in_are_described_as_pictures() {
+        let rejected = bravebot_core::permissions::Rejected {
+            text: "\u{1b}[8mrule".to_string(),
+            reason: bravebot_core::permissions::Unreadable::NotAList,
+            file: Some("\u{1b}[8mfile.json".to_string()),
+        };
+
+        let said = described(&rejected);
+
+        assert!(
+            !said.chars().any(|c| c.is_control() && c != '\n'),
+            "the sentence holds a control character from the checkout: {said:?}"
+        );
+        for piece in ["\u{241b}[8mrule", "\u{241b}[8mfile.json"] {
+            assert!(
+                said.contains(piece),
+                "{piece:?} was left out of the sentence rather than pictured: {said:?}"
+            );
+        }
     }
 
     /// A previewed line arrives trimmed to a width wider than most terminals. Left whole, the

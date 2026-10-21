@@ -38,9 +38,9 @@ use bravebot_agent::servers;
 
 use crate::exit::{Ending, fail};
 use crate::finish::{
-    Finished, ending_of_a_turn, failure_of_a_turn, print_trace, refusals, refused_with_the_usage,
-    report, say_notices, say_the_result, say_what_a_stopped_manifest_produced,
-    stopped_before_the_turn, what_ran,
+    Finished, ending_of_a_turn, failure_of_a_turn, refusals, refused_with_the_usage, report,
+    say_notices, say_the_result, say_what_a_stopped_manifest_produced, stopped_before_the_turn,
+    what_ran, with_declined,
 };
 use crate::flags::{
     ACCEPT_EDITS, BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, SAFE, SKIP_PERMISSIONS, TASK_FLAGS, VET,
@@ -294,6 +294,20 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
         }
     }
 
+    // Taken out before the refusals below read the first argument: a leading `--sandbox <mode>`
+    // would otherwise hide the command from them, and `completion` would go unrefused the flags it
+    // refuses (CLI-20). The mode is resolved further down, once the settings it reads are in place.
+    let sandbox_flag = match take_sandbox(args) {
+        Ok(flag) => flag,
+        Err(complaint) => {
+            return Err(stopped_before_the_turn(
+                as_json,
+                Ending::Argument,
+                complaint,
+            ));
+        }
+    };
+
     // Taken out here, like the settings file, because a session, a session in lines and a one-shot
     // run all use the name the same way. It is matched later, by whichever of them starts, because
     // the set it is matched against depends on the directory's trust (CLI-17).
@@ -375,16 +389,6 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // are: a turn started by any of the ways below holds its programs to the one answer settled
     // here, and a managed floor that the flag or a file goes under stops the session before it
     // starts rather than being met on the first `run`.
-    let sandbox_flag = match take_sandbox(args) {
-        Ok(flag) => flag,
-        Err(complaint) => {
-            return Err(stopped_before_the_turn(
-                as_json,
-                Ending::Argument,
-                complaint,
-            ));
-        }
-    };
     // Refused rather than resolved in favour of one of the two: a line that names a confining mode
     // beside a flag that says nothing is confined has two authors' worth of intent in it.
     let sandbox_flag = match sandbox_flag {
@@ -498,8 +502,15 @@ fn main() -> ExitCode {
     let _ = bravebot_sandbox::crash::disable_core_dumps();
 
     // Before anything is printed, and exactly once: every later lookup reads what this settled
-    // on. Nothing else in the tree consults the environment about a language.
-    bravebot_i18n::init_from_environment();
+    // on. Nothing else in the tree consults the environment about a language. What the person
+    // said is read here with it, ahead of the command line, since the first sentence the program
+    // says can be the refusal of a flag.
+    let picked = bravebot_session::store::load_language();
+    let written = bravebot_config::Settings::written_language();
+    bravebot_i18n::init_from_environment(bravebot_i18n::Said {
+        picked: picked.as_deref(),
+        written: written.as_deref(),
+    });
 
     // The process's own argv, parsed below into the documented flags. There is no other
     // way for a command line tool to learn what it was asked to do.
@@ -1136,7 +1147,7 @@ fn take_sandbox_filesystem(
 }
 
 /// Every tool name `--tools` may name: the ones a turn is offered, wherever a surface offers them,
-/// and the `advisor` and `message_session` a session may add.
+/// and the `advisor`, `message_session` and `propose_plan` a session may add.
 fn nameable_tools() -> Vec<String> {
     use bravebot_agent::tools::{Running, Scheduling, available};
     let mut names: Vec<String> = [Scheduling::ArrangingALook, Scheduling::PacingALoop]
@@ -1153,6 +1164,7 @@ fn nameable_tools() -> Vec<String> {
         .collect();
     names.push("advisor".to_string());
     names.push("message_session".to_string());
+    names.push("propose_plan".to_string());
     names.sort();
     names.dedup();
     names
@@ -1755,7 +1767,7 @@ fn prepare_the_run(
             "{}",
             t!(
                 session_permission_rule_ignored,
-                problem = bravebot_agent::permissions::describe(problem)
+                problem = progress::described(problem)
             )
         );
     }
@@ -1989,6 +2001,11 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
         permission_mode,
     } = prepared;
     let mut sink = json::Streaming::new(as_stream.then(|| json::Stream::new(std::io::stdout())));
+    // The trail goes to stderr as each gate decides, so a run that never finishes still shows
+    // what it decided (TRACE-5).
+    if trace {
+        sink = sink.with_live_trace(json::Stream::new(std::io::stderr()));
+    }
 
     // A one-shot run has nobody to ask about a write, so writes are refused rather than silently
     // applied. The one exception is a plan, which is put before the first step rather than in the
@@ -2068,6 +2085,9 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
         );
     }
 
+    // Read once the turn is over, which is when the confirmer's borrow ends.
+    let declined = one_shot.declined().to_vec();
+
     match outcome {
         Ok(outcome) => {
             // The reply is untrusted model output. Printing it is safe, since the
@@ -2105,8 +2125,11 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
                 .then(|| model_not_served(&asked, comparable, &outcome.model))
                 .flatten();
 
+            // An effect nobody could approve was refused as surely as one a rule refused. The
+            // policy records some of them, and a delegate's stay in its own policy, so the status
+            // reads what the confirmer kept (CLI-6).
             let ending = ending_of_a_turn(
-                outcome.clean,
+                outcome.clean && declined.is_empty(),
                 named_on_the_command_line,
                 not_served.is_some(),
             );
@@ -2143,7 +2166,7 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
                         cache_written: outcome.cached.written_tokens,
                     },
                     calls: reporter.calls(),
-                    refusals: &refusals(sink.recorded()),
+                    refusals: &with_declined(refusals(sink.recorded()), &declined),
                     notices: &outcome.notices,
                     structured: structured.as_deref(),
                 })
@@ -2153,8 +2176,8 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
                 reply: rendered.as_deref().unwrap_or(outcome.reply_for_display()),
                 notices: &outcome.notices,
                 attempt: attempt.as_deref(),
-                trail: trace.then_some((sink.recorded(), outcome.model.as_str())),
-                clean: outcome.clean,
+                model: trace.then_some(outcome.model.as_str()),
+                clean: outcome.clean && declined.is_empty(),
                 ending,
                 not_served: not_served.as_deref(),
             };
@@ -2181,9 +2204,9 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
         // whether or not --trace was asked for. Without it a failed plan is a one-line
         // complaint about a document nobody can see.
         Err(bravebot_agent::TurnError::Manifest { attempt, cause }) => {
-            report_a_failed_turn(&cause, Some(&attempt), trace, as_json, &reporter, &sink)
+            report_a_failed_turn(&cause, Some(&attempt), as_json, &reporter, &sink, &declined)
         }
-        Err(err) => report_a_failed_turn(&err, None, trace, as_json, &reporter, &sink),
+        Err(err) => report_a_failed_turn(&err, None, as_json, &reporter, &sink, &declined),
     }
 }
 
@@ -2292,26 +2315,22 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
 fn report_a_failed_turn(
     error: &bravebot_agent::TurnError,
     attempt: Option<&bravebot_agent::manifest::Attempt>,
-    trace: bool,
     as_json: bool,
     reporter: &progress::Progress<std::io::Stderr>,
     sink: &json::Streaming,
+    declined: &[one_shot::Declined],
 ) -> ExitCode {
-    let ending = exit::ending_of(error);
+    // A plan nobody approved stopped the run before anything happened, which is a gate refusing it
+    // and not a failure to run (CLI-6).
+    let ending = match declined.iter().any(|d| d.gate == "manifest_plan") {
+        true => Ending::Refused,
+        false => exit::ending_of(error),
+    };
     let stopped = fail(ending, error);
     say_notices(&mut std::io::stderr().lock(), reporter.notices());
-    match attempt {
-        Some(attempt) => say_what_a_stopped_manifest_produced(
-            &mut std::io::stderr().lock(),
-            attempt,
-            trace.then(|| sink.recorded()),
-        ),
-        None => {
-            if trace {
-                eprintln!();
-                print_trace(&mut std::io::stderr().lock(), sink.recorded());
-            }
-        }
+    // The trail, where `--trace` asked for one, was written as the gates ran.
+    if let Some(attempt) = attempt {
+        say_what_a_stopped_manifest_produced(&mut std::io::stderr().lock(), attempt);
     }
     if as_json {
         say_the_result(&what_ran(
@@ -2319,7 +2338,7 @@ fn report_a_failed_turn(
             &error.to_string(),
             reporter.spent(),
             reporter.calls(),
-            &refusals(sink.recorded()),
+            &with_declined(refusals(sink.recorded()), declined),
             reporter.notices(),
         ));
     }
@@ -2730,6 +2749,7 @@ fn resume_hint(left: &Resumable, started_in: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::finish::trace_line;
     use crate::test_support::*;
     use crate::workspace::unattended_trust_with;
     use bravebot_agent::Workspace;
@@ -2743,7 +2763,6 @@ mod tests {
     use bravebot_core::slot::SlotId;
     use bravebot_session::store::Effort;
     use bravebot_tui::app::AskedFor;
-    use std::io::Write;
     use std::path::PathBuf;
 
     /// These commands start no session, so a flag that shapes one has nothing to shape. Taking it
@@ -2905,22 +2924,21 @@ mod tests {
     /// file at the other end. This is the whole of what makes a one-shot run pipeable.
     #[test]
     fn stdout_carries_the_reply_and_nothing_else() {
-        let sink = trail_of(vec![Event::GatePassed {
-            gate: "display",
-            detail: "assistant reply shown to the user".into(),
-        }]);
         let (reply, beside) = written(&Finished {
             reply: "ok",
             notices: &["a skill was loaded".to_string()],
             attempt: None,
-            trail: Some((&sink, "qwen-3-235b")),
+            model: Some("qwen-3-235b"),
             clean: false,
             ending: Ending::Refused,
             not_served: None,
         });
 
         assert_eq!(reply, "ok\n");
-        assert!(beside.contains("audit trail"), "got: {beside}");
+        assert!(
+            !beside.contains("audit trail"),
+            "the trail was written a second time, after the gates had already written it: {beside}"
+        );
         assert!(beside.contains("note: a skill was loaded"), "got: {beside}");
         assert!(beside.contains("model: qwen-3-235b"), "got: {beside}");
         assert!(beside.contains("a policy gate refused"), "got: {beside}");
@@ -2956,7 +2974,7 @@ mod tests {
             reply: "ok",
             notices: &[],
             attempt: None,
-            trail: None,
+            model: None,
             clean: true,
             ending: Ending::Done,
             not_served: None,
@@ -3009,42 +3027,19 @@ mod tests {
             },
         ]);
 
-        let mut output = Vec::new();
-        print_trace(&mut output, &sink);
-        let trail = String::from_utf8(output).expect("utf-8");
-        let lines: Vec<&str> = trail.lines().collect();
+        let lines: Vec<String> = sink
+            .recorded()
+            .map(|(delegate, event)| trace_line(delegate, event))
+            .collect();
 
-        assert_eq!(lines[0], "audit trail");
-        assert_eq!(lines.len(), 8, "a line each, plus the heading: {trail}");
-        assert!(lines[1].contains("ok      capability: file_read granted"));
-        assert!(lines[2].contains("BLOCK   network: host not allowed"));
-        assert!(lines[3].starts_with("  observe "));
-        assert!(lines[4].starts_with("  slot    file:a.rs"));
-        assert!(lines[5].contains("holds b.rs, unread"));
-        assert!(lines[6].starts_with("  release reply "));
-        assert!(lines[7].contains("BLOCK") && lines[7].contains("write.path [routing]"));
-    }
-
-    /// The trail is written after the reply is already on stdout, so a stderr nobody is reading
-    /// must not take the run down with it: the exit code still has a turn to report on.
-    #[test]
-    fn a_closed_stream_does_not_stop_the_trail() {
-        struct Closed;
-        impl Write for Closed {
-            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
-            }
-        }
-
-        let mut sink = RecordingSink::new();
-        sink.emit(Event::GatePassed {
-            gate: "display",
-            detail: "assistant reply shown to the user".into(),
-        });
-        print_trace(&mut Closed, &sink);
+        assert_eq!(lines.len(), 7, "a line each: {lines:?}");
+        assert!(lines[0].contains("ok      capability: file_read granted"));
+        assert!(lines[1].contains("BLOCK   network: host not allowed"));
+        assert!(lines[2].starts_with("  observe "));
+        assert!(lines[3].starts_with("  slot    file:a.rs"));
+        assert!(lines[4].contains("holds b.rs, unread"));
+        assert!(lines[5].starts_with("  release reply "));
+        assert!(lines[6].contains("BLOCK") && lines[6].contains("write.path [routing]"));
     }
 
     fn args(parts: &[&str]) -> Vec<String> {
@@ -3344,6 +3339,19 @@ mod tests {
         );
     }
 
+    /// `propose_plan` is added to a plan-mode planner's list and not to `available`, so the list
+    /// `--tools` is checked against has to name it, or a person who limits the tools can never
+    /// keep it.
+    #[test]
+    fn the_tool_limit_may_name_propose_plan() {
+        let mut arguments = args(&["-p", "x", "--tools", "read_file,propose_plan"]);
+        let limit = take_tool_limit(&mut arguments).expect("a list of tools");
+        assert_eq!(
+            limit.only,
+            Some(vec!["read_file".to_string(), "propose_plan".to_string()])
+        );
+    }
+
     /// A list that is followed by `--no-shell` has taken it as a tool name, so the refusal names it
     /// and the arguments are left as typed.
     #[test]
@@ -3479,6 +3487,105 @@ mod tests {
         }
     }
 
+    /// CLI-6: what a one-shot run could not ask is kept, so the run can end on the status that says
+    /// a gate refused something. A plan a person typed `y` to leaves nothing, so a run that was
+    /// answered does not end on it.
+    #[test]
+    fn what_nobody_could_be_asked_is_kept_and_what_was_answered_is_not() {
+        let mut shown = Vec::new();
+        let mut unattended = OneShot::new(&b"y\n"[..], &mut shown, false);
+        unattended.confirm_manifest(&a_plan());
+        unattended.confirm_fetch(&bravebot_agent::confirm::FetchRequest {
+            url: "https://example.invalid/a".to_string(),
+            host: "example.invalid".to_string(),
+        });
+        let gates: Vec<_> = unattended.declined().iter().map(|d| d.gate).collect();
+        assert_eq!(gates, ["manifest_plan", "web_fetch"]);
+
+        let mut shown = Vec::new();
+        let mut answered = OneShot::new(&b"y\n"[..], &mut shown, true);
+        answered.confirm_manifest(&a_plan());
+        assert!(answered.declined().is_empty());
+    }
+
+    /// CLI-6, CLI-12, TRACE-1: a write or a fetch nobody could be asked about ends the run on the
+    /// refused status and is listed once. The policy records both in the trail, so the confirmer
+    /// keeps its own record of each for the status alone: a delegate's policy holds its refusals
+    /// apart from the turn's, and this confirmer is shared with it. A plan and a `run` are not
+    /// told to the policy and are listed from here. The regressions it rejects are an entry that
+    /// is dropped, which a delegate's unapproved write needs to end the run on the refused
+    /// status, a write or a fetch listed again beside the trail's, and a plan or a run marked as
+    /// already in the trail, which lists it nowhere.
+    #[test]
+    fn a_write_and_a_fetch_nobody_could_be_asked_about_count_for_the_status_and_are_listed_once() {
+        let write = WriteRequest {
+            written_since_checkout: false,
+            path: "notes.md".to_string(),
+            contents: "text".to_string(),
+            existing: None,
+            diff: bravebot_agent::diff::Diff::compute("", "text"),
+            intent: bravebot_agent::Intent::Create,
+            untrusted: false,
+            remark: None,
+            protected: false,
+            credentials: Vec::new(),
+            may_always: false,
+            record: None,
+        };
+        let run = bravebot_agent::confirm::RunRequest::from_pipeline(
+            &bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new(
+                "git",
+                vec!["log".into()],
+            )]),
+            &["/usr/bin/git".into()],
+            "/tmp/project",
+        );
+        let mut shown = Vec::new();
+        let mut unattended = OneShot::new(&b"y\n"[..], &mut shown, false);
+        unattended.confirm_write(&write);
+        unattended.confirm_fetch(&bravebot_agent::confirm::FetchRequest {
+            url: "https://example.invalid/a".to_string(),
+            host: "example.invalid".to_string(),
+        });
+        unattended.confirm_run(&run);
+        unattended.confirm_manifest(&a_plan());
+
+        let gates: Vec<_> = unattended.declined().iter().map(|d| d.gate).collect();
+        assert_eq!(gates, ["file_write", "web_fetch", "run", "manifest_plan"]);
+        let listed: Vec<_> = with_declined(Vec::new(), unattended.declined())
+            .iter()
+            .map(|refusal| refusal.gate)
+            .collect();
+        assert_eq!(listed, ["run", "manifest_plan"]);
+    }
+
+    /// CLI-6, CLI-12, TRACE-1: a call to a server's tool nobody could be asked about ends the run on
+    /// the refused status and is listed once. The policy records it in the trail, so the confirmer
+    /// keeps its own record for the status alone, for the reason a write's is kept: a delegate's
+    /// policy holds its refusals apart from the turn's, and this confirmer is shared with it. The
+    /// regressions it rejects are a call that is not kept, which a delegate's unapproved call needs
+    /// to end the run on the refused status, and one listed again beside the trail's entry.
+    #[test]
+    fn an_mcp_call_nobody_could_be_asked_about_counts_for_the_status_and_is_listed_once() {
+        let mut shown = Vec::new();
+        let mut unattended = OneShot::new(&b"y\n"[..], &mut shown, false);
+        let answer = unattended.confirm_mcp_call(&bravebot_agent::confirm::McpCallRequest {
+            alias: "weather".to_string(),
+            tool: "get_forecast".to_string(),
+            arguments: vec![("city".to_string(), "\"Paris\"".to_string())],
+            description: None,
+            may_stand: true,
+        });
+        assert_eq!(answer.decision, Decision::Reject);
+
+        let gates: Vec<_> = unattended.declined().iter().map(|d| d.gate).collect();
+        assert_eq!(gates, ["mcp_call"]);
+        assert!(
+            with_declined(Vec::new(), unattended.declined()).is_empty(),
+            "a call the trail holds was listed again"
+        );
+    }
+
     /// A pipe or a redirected stderr is nobody, and then a plan is refused like every other
     /// question. The answer is not read either: bytes arriving on a pipe are whatever fed it rather
     /// than somebody agreeing, and nothing was written for them to be agreeing to.
@@ -3538,6 +3645,7 @@ mod tests {
         };
         let vouch = VouchRequest {
             path: "notes.md".to_string(),
+            rule: "notes.md".to_string(),
             preview: "text".to_string(),
             truncated: false,
             verdict: bravebot_core::vetting::Verdict::Safe,
@@ -4569,7 +4677,7 @@ mod tests {
             reply: "ok",
             notices: &[],
             attempt: None,
-            trail: None,
+            model: None,
             clean: true,
             ending: Ending::Failed,
             not_served: Some("a-premium-model was not served"),
@@ -4620,7 +4728,7 @@ mod tests {
             reply: "ok",
             notices: &[],
             attempt: None,
-            trail: None,
+            model: None,
             clean: true,
             ending: Ending::Done,
             not_served: Some("a-premium-model was not served"),
@@ -4954,7 +5062,7 @@ mod tests {
             reply: "ok",
             notices: &[],
             attempt: Some("manifest proposed, which was not usable\n  not JSON\n"),
-            trail: None,
+            model: None,
             clean: true,
             ending: Ending::Done,
             not_served: None,
@@ -4965,7 +5073,8 @@ mod tests {
     }
 
     /// A manifest run that stopped is the one worth looking at, so what it produced is printed
-    /// whether or not `--trace` was asked for. Only the audit trail is the flag's to add.
+    /// whether or not `--trace` was asked for. The trail is not the flag's to add here: it was
+    /// written as the gates ran.
     #[test]
     fn a_stopped_manifest_prints_what_it_produced_without_the_trace_flag() {
         let attempt = bravebot_agent::manifest::Attempt {
@@ -4973,23 +5082,13 @@ mod tests {
             steps: vec!["1. read notes.md: done".to_string()],
             ..Default::default()
         };
-        let sink = trail_of(vec![Event::GatePassed {
-            gate: "display",
-            detail: "assistant reply shown to the user".into(),
-        }]);
 
-        let mut untraced = Vec::new();
-        say_what_a_stopped_manifest_produced(&mut untraced, &attempt, None);
-        let untraced = String::from_utf8(untraced).expect("utf-8");
-        assert!(untraced.contains("not JSON at all"), "got: {untraced}");
-        assert!(untraced.contains("read notes.md"), "got: {untraced}");
-        assert!(!untraced.contains("audit trail"), "got: {untraced}");
-
-        let mut traced = Vec::new();
-        say_what_a_stopped_manifest_produced(&mut traced, &attempt, Some(&sink));
-        let traced = String::from_utf8(traced).expect("utf-8");
-        assert!(traced.contains("not JSON at all"), "got: {traced}");
-        assert!(traced.contains("audit trail"), "got: {traced}");
+        let mut said = Vec::new();
+        say_what_a_stopped_manifest_produced(&mut said, &attempt);
+        let said = String::from_utf8(said).expect("utf-8");
+        assert!(said.contains("not JSON at all"), "got: {said}");
+        assert!(said.contains("read notes.md"), "got: {said}");
+        assert!(!said.contains("audit trail"), "got: {said}");
     }
 
     /// Nobody is watching a one-shot run, so the list that answers a prompt in advance answers

@@ -46,7 +46,7 @@ help:
 	@echo
 	@echo "Development:"
 	@echo "  make init                  Configure bravebot, Claude Code, Codex and Cursor; install hooks"
-	@echo "  make hooks                 Point git at the checked-in git hooks"
+	@echo "  make hooks                 Copy the checked-in git hooks into the git directory and point git at them"
 	@echo "  make build                 Debug build"
 	@echo "  make test                  Run all tests"
 	@echo "  make check                 Format check, clippy, tests, and toolchain age"
@@ -59,6 +59,7 @@ help:
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
 	@echo "  make check-versions        Whether every file stating the version states the same one"
 	@echo "  make check-narration       Whether this branch's commits and lines narrate their writer's process [BASE=ref]"
+	@echo "  make check-pr-body         Whether a pull request body (PR_BODY) has a Not covered line, with an issue per case"
 	@echo "  make check-docs            Build the documentation website under docs/website"
 	@echo "  make docs-changes          What has landed in the specs since the site was updated"
 	@echo "  make docs-updated-to-sha   The commit the documentation site is current as of"
@@ -100,6 +101,7 @@ help:
 	@echo "  make app-release                            Its disk images for both Mac architectures, unsigned"
 	@echo "  make app-release-linux                      Its .deb and .rpm for both Linux architectures, unsigned"
 	@echo "  make app-release-windows                    Its Windows installers for both architectures, unsigned"
+	@echo "  make cli-packages-linux                     The CLI's .deb and .rpm for both Linux architectures, unsigned"
 	@echo
 	@echo "  make clean          Remove build output"
 
@@ -113,9 +115,22 @@ init: hooks
 
 # .git/hooks is not versioned, so a fresh clone commits with nothing checking it
 # until this runs. Idempotent, and part of `init` so nobody has to know it exists.
+#
+# The hooks are copied into the repository's common git directory and git is pointed at the
+# copy by absolute path. A relative path is resolved against each worktree's own top level, so
+# in the worktree of a pull request git would run the hooks that pull request tracks, as
+# whoever runs git there. No branch tracks the copy. Run this again after .githooks changes.
+# A linked worktree installs nothing, since the copy would come from its branch. The directory
+# name is the one agents/pr_worktree.py reads (HOOKS_DIR).
 .PHONY: hooks
 hooks:
-	git config core.hooksPath .githooks
+	@common="$$(cd "$$(git rev-parse --git-common-dir)" && pwd -P)" && \
+	if [ "$$(git rev-parse --absolute-git-dir)" != "$$common" ]; then \
+		echo "hooks: nothing installed from a linked worktree, whose branch may track hooks nobody reviewed; run make hooks in the main checkout" >&2; \
+	else \
+		mkdir -p "$$common/bravebot-hooks" && cp -p .githooks/* "$$common/bravebot-hooks/" && \
+		git config core.hooksPath "$$common/bravebot-hooks" && echo "hooks: $$common/bravebot-hooks"; \
+	fi
 
 .PHONY: build
 build:
@@ -399,7 +414,7 @@ clean-worktrees:
 # All local checks before pushing, including the UI and Linux code paths.
 # Requires Docker and the desktop runtime dependencies described in checks.md.
 .PHONY: check-all-local check-all
-check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-agent-client check-mobile check-reviewdog
+check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-pr-body check-docs check-npm check-deps check-ui check-agent-client check-mobile check-reviewdog
 check-all: check-all-local check-msrv check-windows check-linux
 
 # The gates this branch's changes need, against its merge base with BASE, which check-reviewdog
@@ -539,6 +554,16 @@ locales:
 check-narration:
 	python3 contrib/check-narration.py --selftest
 	python3 contrib/check-narration.py $(if $(BASE),--base '$(BASE)')
+
+# Whether a pull request body has a Not covered line, which is `none` or a bullet per case, each
+# naming the issue that tracks it. The body is read from PR_BODY, as check-narration reads it, and
+# a run with no PR_BODY and not in a pull request has no body to read, so locally this runs the
+# selftest and checks a draft only where it is given one: PR_BODY="$(cat body.md)" make check-pr-body.
+# Only pull requests opened by netzenbot are held to the line, and PR_AUTHOR says who opened one.
+.PHONY: check-pr-body
+check-pr-body:
+	python3 contrib/check-pr-body.py --selftest
+	python3 contrib/check-pr-body.py
 
 # Whether every catalog matches contrib/untranslated-messages.txt, which records the messages each
 # translation is knowingly missing. A gap is allowed and silence about one is not: falling back to
@@ -857,6 +882,109 @@ app-installers-windows:
 	@set -e; for pair in $(APP_ARCHES); do \
 		arch=$${pair%%:*}; electron=$${pair#*:}; \
 		node ui/scripts/windows-installer.mjs --bundle="ui/dist/Brave Bot-win32-$$electron" --arch=$$arch --out=dist; \
+	done
+
+# The CLI's Linux packages, the ones the apt and dnf repositories will serve, built on a Linux
+# host from what the cross-build left in dist/:
+#
+#   reads   dist/bravebot-linux-<arch>
+#   writes  dist/bravebot-linux-<arch>.deb, dist/bravebot-linux-<arch>.rpm
+#
+# for <arch> amd64 and arm64, from `make linux-amd64 linux-arm64 strip`, and needing no Rust
+# toolchain. The four names are the ones the publish job uploads, so they are a contract: a
+# rename here publishes nothing. The payload is the one binary at /usr/bin/bravebot, and both
+# descriptions are written here from one architecture list, so neither format can be built for
+# an architecture the other is not.
+#
+# The packers are the app packages' two, for the reasons `app-packages-linux` gives: each builds
+# in its own /tmp from a tree staged on the host rather than in the mounted stage, since Docker
+# Desktop's file sharing does not preserve every mode a package records; each runs as root,
+# since installing rpmbuild needs it; and each hands its output back to whoever is packaging.
+# rpmbuild is given its target from the spec's `ExclusiveArch`, as `app-packages-linux` reads it.
+#
+# The dependencies are the binary's own, from its dynamic section: libm, libc, libpthread and
+# libdl, all four libc6 on Debian and glibc on Fedora, required at 2.30 or newer, the newest
+# symbol version either architecture asks for. The Electron list the app declares is not copied:
+# none of it is needed here.
+#
+# The package files carry no signature of their own: what is signed is the checksum each one is
+# published with, as it is for the Linux binaries. Serving them from the apt and dnf
+# repositories, whose metadata is signed, is the publish side's.
+
+# The assets' two architectures, and the name rpmbuild wants for each: an asset and its .deb
+# name agree, so a pair is the asset and its rpm name.
+CLI_ARCHES = amd64:x86_64 arm64:aarch64
+
+.PHONY: cli-packages-linux
+cli-packages-linux:
+	@set -e; missing=; builds=; for pair in $(CLI_ARCHES); do \
+		arch=$${pair%%:*}; \
+		test -f dist/bravebot-linux-$$arch || { missing="$$missing bravebot-linux-$$arch"; builds="$$builds linux-$$arch"; }; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "missing from dist/:$$missing" >&2; \
+		echo "run \`make$$builds strip\` first" >&2; exit 1; \
+	fi
+	@set -e; mkdir -p dist; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
+	for pair in $(CLI_ARCHES); do \
+		arch=$${pair%%:*}; rpmarch=$${pair#*:}; \
+		dir="$$stage/$$arch"; \
+		install -d -m 0755 "$$dir/payload/usr/bin"; \
+		install -m 0755 dist/bravebot-linux-$$arch "$$dir/payload/usr/bin/bravebot"; \
+		size=$$(( ($$(wc -c < dist/bravebot-linux-$$arch) + 1023) / 1024 )); \
+		{ printf '%s\n' \
+			'Package: bravebot' \
+			'Version: $(VERSION)' \
+			"Architecture: $$arch" \
+			'Maintainer: Brave Software, Inc. <support@brave.com>' \
+			"Installed-Size: $$size" \
+			'Depends: libc6 (>= 2.30)' \
+			'Section: devel' \
+			'Priority: optional' \
+			'Homepage: https://github.com/brave/bravebot' \
+			'Description: A general-purpose agent with structural resistance to indirect prompt injection' \
+			' bravebot is a general-purpose agent that runs in a terminal. Untrusted content can be' \
+			' carried and written, and it never decides what happens.'; } > "$$dir/control"; \
+		{ printf '%s\n' \
+			'%global __os_install_post %{nil}' \
+			'%global debug_package %{nil}' \
+			'%global _build_id_links none' \
+			'' \
+			'Name: bravebot' \
+			'Version: $(VERSION)' \
+			'Release: 1' \
+			'Summary: A general-purpose agent with structural resistance to indirect prompt injection' \
+			'License: MPL-2.0' \
+			'URL: https://github.com/brave/bravebot' \
+			'Packager: Brave Software, Inc. <support@brave.com>' \
+			"ExclusiveArch: $$rpmarch" \
+			'AutoReqProv: no' \
+			'Requires: glibc >= 2.30' \
+			'' \
+			'%description' \
+			'bravebot is a general-purpose agent that runs in a terminal. Untrusted content can be' \
+			'carried and written, and it never decides what happens.' \
+			'' \
+			'%install' \
+			'cp -a %{_sourcedir}/payload/. %{buildroot}/' \
+			'' \
+			'%files' \
+			'%defattr(-,root,root,-)' \
+			'/usr/bin/bravebot'; } > "$$dir/bravebot.spec"; \
+		docker run --rm -e OWNER="$$(id -u):$$(id -g)" -v "$$dir:/stage" -w /stage $(DEB_IMAGE) sh -c '\
+			cp -a payload /tmp/deb && mkdir /tmp/deb/DEBIAN && cp control /tmp/deb/DEBIAN/control && \
+			dpkg-deb --build --root-owner-group /tmp/deb out.deb && \
+			chown "$$OWNER" out.deb'; \
+		docker run --rm -e OWNER="$$(id -u):$$(id -g)" -v "$$dir:/stage" -w /stage $(RPM_IMAGE) sh -c '\
+			dnf -y --setopt=install_weak_deps=False install rpm-build >/dev/null && \
+			target=$$(sed -n "s/^ExclusiveArch: //p" bravebot.spec) && \
+			rpmbuild -bb --target "$${target:?bravebot.spec states no ExclusiveArch}" \
+				--define "_sourcedir /stage" --define "_topdir /tmp/rpm" \
+				--define "_rpmdir /stage" --define "_rpmfilename out.rpm" bravebot.spec && \
+			chown "$$OWNER" out.rpm'; \
+		mv "$$dir/out.deb" dist/bravebot-linux-$$arch.deb; \
+		mv "$$dir/out.rpm" dist/bravebot-linux-$$arch.rpm; \
+		echo "wrote dist/bravebot-linux-$$arch.deb dist/bravebot-linux-$$arch.rpm"; \
 	done
 
 # Symbols are kept during the build because Rust's own strip can corrupt some targets

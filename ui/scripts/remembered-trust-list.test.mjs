@@ -1,7 +1,8 @@
 // How the permissions list draws a yes kept about the working directory.
 //
-// TRUST-24 says the list gives when the person trusted the directory, the file the yes is kept in
-// and how to withdraw it. The bridge sends `at` and `path`; this pins that the window draws all three.
+// TRUST-24 says the list gives when the person trusted the directory, the file the yes is kept in,
+// the git worktree root where the answer was kept about one, and how to withdraw it. The bridge sends
+// `at`, `path` and `root`; this pins that the window draws all four.
 //
 // The component is rendered through `react-dom/server` and the markup is what is asserted on.
 
@@ -47,4 +48,16 @@ test('two answers given at different times are listed with different times', () 
 
   assert.ok(recent.includes('Trusted 2 hours ago'), recent)
   assert.ok(old.includes('Trusted 2 days ago'), old)
+})
+
+test('an answer kept about a git worktree root names that root', () => {
+  const markup = render({ at: now() - 60, path: '/h/.bravebot/trusted', root: '/work/repo' })
+
+  assert.ok(markup.includes('data-test="remembered-root"') && markup.includes('for /work/repo'), markup)
+})
+
+test('an answer kept about no root names none', () => {
+  const markup = render({ at: now() - 60, path: '/h/.bravebot/trusted' })
+
+  assert.ok(!markup.includes('remembered-root'), markup)
 })

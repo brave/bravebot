@@ -465,7 +465,7 @@ fn draw(
     let question = vec![
         asking(
             t!(trust_directory_question),
-            &directory.display().to_string(),
+            &bravebot_agent::confirm::shown_path(directory),
         ),
         // What a yes grants beyond the files stays above what scrolls with the question, so it is
         // on the screen whenever a yes can be taken (RUN-5).
@@ -510,7 +510,7 @@ fn draw(
                 Style::default().fg(theme::muted()),
             )));
             lines.push(Line::from(Span::styled(
-                path.display().to_string(),
+                bravebot_agent::confirm::shown_path(path),
                 Style::default().add_modifier(Modifier::BOLD),
             )));
             kept = from..u32::from(rows_of(&lines, width));
@@ -562,7 +562,10 @@ fn draw_named(
     scroll: u16,
 ) -> Drawn {
     let question = vec![
-        asking(t!(named_directory_question), directory),
+        asking(
+            t!(named_directory_question),
+            &bravebot_agent::confirm::shown_name(directory),
+        ),
         Line::raw(""),
     ];
     let lines = vec![
@@ -638,7 +641,7 @@ fn draw_granted(
             Style::default().add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
-            format!("    {}", rule.path.display()),
+            format!("    {}", bravebot_agent::confirm::shown_path(&rule.path)),
             Style::default().fg(theme::muted()),
         )));
         let rows = u32::from(rows_of(&lines[lines.len() - 2..], width));
@@ -705,7 +708,7 @@ fn withheld(why: &str) -> Line<'static> {
     ))
 }
 
-/// What is being asked, and the path it is being asked about.
+/// What is being asked, and the path it is being asked about, already spelled for a person.
 ///
 /// The path is the whole of what an answer is about, so it is drawn rather than summarised.
 fn asking(question: &str, directory: &str) -> Line<'static> {
@@ -1851,6 +1854,81 @@ mod tests {
         assert!(output.contains("/home/me/.ssh"), "no path: {output}");
         assert!(output.contains("open it"));
         assert!(output.contains("leave it closed"));
+    }
+
+    /// PROMPT-1: both directory questions draw the path they ask about with a name that would draw
+    /// as nothing, or as another name, quoted and spelled. A settings file chose the name in the
+    /// named question, so the person reading it cannot tell `/srv/shared ` from `/srv/shared`
+    /// unless the box says so.
+    #[test]
+    fn the_directory_questions_mark_a_name_that_would_draw_as_another() {
+        let named = |directory: &str| rendered(|frame| draw_named_at_rest(frame, directory));
+        let working = |directory: &str| rendered(|frame| draw_at_rest(frame, Path::new(directory)));
+        for (draw_it, plain) in [
+            (&named as &dyn Fn(&str) -> String, named("/srv/shared")),
+            (&working, working("/srv/shared")),
+        ] {
+            assert!(plain.contains("/srv/shared"), "{plain}");
+            for (name, spelled) in [
+                ("/srv/shared ", "\"/srv/shared\u{2423}\""),
+                ("/srv/sh\u{202e}ared", "\"/srv/sh\\u{202e}ared\""),
+            ] {
+                let drawn = draw_it(name);
+                assert_ne!(drawn, plain, "{name:?}");
+                assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+            }
+        }
+    }
+
+    /// PROMPT-1: the file a yes is kept in, and the file each proposed rule came from, are drawn
+    /// with a name that would draw as nothing, or as another name, quoted and spelled. The first is
+    /// under the person's state directory and the second under the checkout, so a directory name
+    /// neither of them typed reaches each row.
+    #[test]
+    fn the_trust_rows_name_a_file_with_a_name_that_would_draw_as_another() {
+        let tall = |draw_it: &dyn Fn(&mut ratatui::Frame)| {
+            let mut terminal = Terminal::new(TestBackend::new(100, 60)).expect("terminal");
+            terminal.draw(draw_it).expect("draw");
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        let kept = |directory: &str| {
+            let file = std::path::PathBuf::from(format!("{directory}/trust.json"));
+            tall(&|frame| {
+                draw(
+                    frame,
+                    Path::new("/work"),
+                    Some(file.as_path()),
+                    false,
+                    0,
+                    &mut false,
+                );
+            })
+        };
+        let from = |directory: &str| {
+            let file = format!("{directory}/settings.json");
+            let rules = proposed(&[(file.as_str(), "Edit(src/**)")]);
+            tall(&|frame| draw_granted_at_rest(frame, &rules))
+        };
+        for (draw_it, plain) in [
+            (&kept as &dyn Fn(&str) -> String, kept("/home/me/state")),
+            (&from, from("/home/me/state")),
+        ] {
+            assert!(plain.contains("/home/me/state/"), "{plain}");
+            for (directory, spelled) in [
+                ("/home/me/sta\u{202e}te", "\"/home/me/sta\\u{202e}te/"),
+                ("/home/me/sta\u{200b}te", "\"/home/me/sta\\u{200b}te/"),
+            ] {
+                let drawn = draw_it(directory);
+                assert_ne!(drawn, plain, "{directory:?}");
+                assert!(drawn.contains(spelled), "{directory:?}\n{drawn}");
+            }
+        }
     }
 
     /// Opening a directory grants two things at once, reach and trust, and neither is on the

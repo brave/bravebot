@@ -77,7 +77,10 @@ which lists the six as `optionalDependencies` at its own version and holds no bi
 `TAG` the target takes the latest GitHub release rather than the version in the tree, which may
 already be bumped past it. The workflow, not the target, refuses a tag that does not match its
 tree or a release missing an asset. OIDC trusted publishing; there is no `NPM_TOKEN`, and the
-trusted publisher on npmjs.com must name that workflow file for each of the seven packages.
+trusted publisher on npmjs.com must name that workflow file, and the `npm-publish` environment, for
+each of the seven packages. The publishing jobs wait on that environment's required reviewer, so
+the dispatch is followed by an approval from a second maintainer
+([branch-protection.md](branch-protection.md#the-npm-publish-environment)).
 
 Each platform package is built by `npm/scripts/stage-platform-package.js` on a runner of that
 platform's own kind. It verifies the binary against its published `.sha256` before writing it, and
@@ -206,8 +209,8 @@ transition renamed several of them, so those are named as alternatives and a pac
 release still installs on the other.
 
 `brave-bot` is the package name in both formats. Upgrades and conflicts key on it, so like the
-macOS bundle id it is fixed by the first release. It is not the CLI's `bravebot`, which an apt or
-dnf repository would want as a package of its own.
+macOS bundle id it is fixed by the first release. It is not the CLI's `bravebot`, which
+[the CLI packages](#the-cli-packages) below ship as a package of its own.
 
 The packages are fused and unsigned, as the Mac bundles are. Signing them, and an apt or dnf
 repository to serve updates from, are issue #770; the app has no updater on any platform.
@@ -217,6 +220,31 @@ release, because a container shares the host's kernel and AppArmor policy and so
 the sandbox the packages exist for. On a machine of each, the package has to install, start from
 its launcher with the sandbox on, start its agent, ignore `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`
 and `--inspect`, and uninstall cleanly.
+
+### The CLI packages
+
+```sh
+make linux-amd64 linux-arm64 strip
+make cli-packages-linux
+```
+
+Packages for the CLI, one per architecture under the name `bravebot`, from the same binaries the
+releases page publishes; the apt and dnf repositories that will serve them are
+[#1048](https://github.com/brave/bravebot/issues/1048). It reads `dist/bravebot-linux-<arch>` and
+writes `dist/bravebot-linux-<arch>.deb` and `dist/bravebot-linux-<arch>.rpm` for amd64 and arm64,
+on a Linux host and needing no Rust toolchain. The payload is the one binary at
+`/usr/bin/bravebot`; both formats are packed by the same two digest-pinned containers the app's
+packages use, described under [the Linux packages](#the-linux-packages) above; and those four
+names are the ones the publish job uploads.
+
+The dependencies declared are the binary's own, from its dynamic section: `libm`, `libc`,
+`libpthread` and `libdl`, all of them `libc6` on Debian and `glibc` on Fedora, required at version
+2.30 or newer in both formats, the newest symbol version either architecture asks for. Nothing
+from the Electron dependency list the app declares is copied, since none of it is needed. The
+package files carry no signature of their own. Each is published with its `.sha256` and the
+signature on that checksum, as the Linux binaries are, so a download can be verified before it
+is installed. Serving them from the apt and dnf repositories, whose metadata is signed, is
+[#1048](https://github.com/brave/bravebot/issues/1048).
 
 ### The Windows installers
 

@@ -11,6 +11,7 @@
 //! socket belongs to the test and the host never sees it; the host's own channel has no name.
 
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use serde_json::{Value, json};
 use std::collections::VecDeque;

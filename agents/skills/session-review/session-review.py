@@ -56,6 +56,8 @@ one_line = pa.one_line
 MAX = 8
 IDLE_MINUTES = 30
 MAX_PROBLEMS = 5
+# A summary of a session with notes says what was decided about each, so it runs longer than a title.
+SUMMARY_LIMIT = 1200
 MARKER_SUFFIX = ".analysis.jsonl"
 # Sessions imported from another tool say nothing about bravebot.
 IMPORTED = "claude-code-"
@@ -350,6 +352,9 @@ def outcomes(work):
         if analysis is None:
             decided[sid] = {"state": "pending", "reason": why, "problems": []}
             continue
+        if has_new_notes(entry) and not one_line(analysis.get("summary")):
+            decided[sid] = {"state": "pending", "reason": "the summary says nothing about the new notes", "problems": []}
+            continue
         problems = []
         for number, problem in enumerate(analysis["problems"], 1):
             pid = problem_id(sid, number)
@@ -368,8 +373,13 @@ def outcomes(work):
                     )
                 else:
                     problems.append({"id": pid, "state": "file", "fields": problem, "reason": check["reason"]})
-        decided[sid] = {"state": "read", "reason": one_line(analysis.get("summary")), "problems": problems}
+        decided[sid] = {"state": "read", "reason": one_line(analysis.get("summary"), SUMMARY_LIMIT), "problems": problems}
     return manifest, decided
+
+
+def has_new_notes(entry):
+    """Whether the review of this session considers a note no earlier review considered."""
+    return entry.get("notes", 0) > entry.get("from_note", 0)
 
 
 def verify(args):
@@ -460,11 +470,13 @@ def draft(args):
     entries = {e["id"]: e for e in manifest["sessions"]}
     out = work / "issues"
     out.mkdir(exist_ok=True)
-    drafts, held, waiting = [], [], []
+    drafts, held, waiting, noted = [], [], [], []
     for sid, session in decided.items():
         if session["state"] == "pending":
             waiting.append(sid)
             continue
+        if has_new_notes(entries[sid]):
+            noted.append((sid, session["reason"]))
         for problem in session["problems"]:
             if problem["state"] == "held":
                 held.append(problem)
@@ -488,6 +500,8 @@ def draft(args):
     (work / "drafts.json").write_text(json.dumps(drafts, indent=2), encoding="utf-8")
     for problem in held:
         print(f"  held   {problem['id']}  turn {problem['turn']}: {problem['title']}")
+    for sid, summary in noted:
+        print(f"  notes  {sid}  {summary}")
     print(f"{len(drafts)} drafted, {len(held)} held back as security concerns" + (f", {len(waiting)} undecided: {', '.join(waiting)}" if waiting else ""))
     return 0
 

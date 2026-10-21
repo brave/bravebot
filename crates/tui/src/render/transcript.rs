@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use std::sync::{Arc, OnceLock};
 
+use crate::colour_codes;
 use crate::logo;
 use crate::markdown;
 use crate::state::{Entry, Laid, Session, Speaker};
@@ -260,11 +261,10 @@ fn speaker_lines(session: &Session, entry: &Entry, width: u16) -> Vec<Line<'stat
         // Not a quarantine block either, which is the point of the whole feature: the user
         // typed the command, so the kernel labelled what it printed trusted, and dressing it as
         // untrusted would say the opposite of what is true.
-        Speaker::Output => {
-            for text in entry.text.lines() {
-                lines.push(Line::from(Span::raw(format!("  {}", printable(text)))));
-            }
-        }
+        //
+        // Its colour codes are taken out and counted rather than drawn (VIEW-30): a program that
+        // colours every word would otherwise be a screen of escape pictures.
+        Speaker::Output => output_lines(&entry.text, &mut lines),
         // A delegate the turn started, with its own work under it rather than mixed into
         // the turn's. Several run at once, so interleaved neither sequence could be read.
         Speaker::Delegate => {
@@ -339,6 +339,25 @@ fn entry_extras(
     }
 }
 
+/// What a command printed, drawn plainly under the command that printed it.
+///
+/// The entry a finished command leaves and the rows a running one has so far are both drawn here, so
+/// one step takes the colour codes out and one replaces every other control character, and neither
+/// can be drawn by a path that skips it. It is given the whole text each time and not a piece of
+/// it: a code or an escape that a read stopped inside is complete in the text a later frame draws,
+/// and until then it is drawn as the pictures `printable` makes of it (SHELL-7).
+fn output_lines(text: &str, lines: &mut Vec<Line<'static>>) {
+    let mut dropped = 0;
+    for text in text.lines() {
+        let (plain, taken) = colour_codes::without(text);
+        dropped += taken;
+        lines.push(Line::from(Span::raw(format!("  {}", printable(&plain)))));
+    }
+    if let Some(note) = colour_codes::note(dropped) {
+        lines.push(Line::from(Span::styled(format!("  {note}"), dim())));
+    }
+}
+
 /// The lines each entry is drawn as, appended to `lines`, with where each prompt and each call
 /// with more to show begins.
 ///
@@ -381,8 +400,9 @@ fn push_entries(
     }
 }
 
-/// What follows the entries: the reply still arriving, what a command typed during the turn
-/// answered, the invitation on the opening screen, and the close of a delegate's view.
+/// What follows the entries: the reply still arriving, what a command that is running has printed,
+/// what a command typed during the turn answered, the invitation on the opening screen, and the
+/// close of a delegate's view.
 ///
 /// Drawn from the session's live state rather than from entries, so it is built afresh on every
 /// frame and is as long as one reply, never as long as the conversation.
@@ -397,6 +417,27 @@ fn push_tail(session: &Session, width: u16, opening: bool, lines: &mut Vec<Line<
     // in a delegate's view as that delegate writing it.
     if !session.reply_so_far().is_empty() && !session.watching_a_delegate() {
         lines.extend(reply_lines(session, width).lines.iter().cloned());
+        lines.push(Line::raw(""));
+    }
+
+    // What a command is printing right now, under the command, in the shape its entry will have when
+    // it ends. Drawn from the session for the reason the reply above is: it is not an entry yet,
+    // and the entry arrives in this same place as the tail is dropped. Not drawn over a delegate's
+    // view, which is a different sequence than the one the command is in.
+    //
+    // Without the blank lines at its end, as the entry is drawn, so what is on the screen does not
+    // move when the entry replaces it.
+    if !session.watching_a_delegate()
+        && let Some((text, earlier)) = session.command_so_far()
+        && !text.trim().is_empty()
+    {
+        if earlier > 0 {
+            lines.push(Line::from(Span::raw(format!(
+                "  {}",
+                t!(transcript_earlier_lines, count = earlier)
+            ))));
+        }
+        output_lines(text.trim_end(), lines);
         lines.push(Line::raw(""));
     }
 

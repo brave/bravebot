@@ -10,6 +10,8 @@ use bravebot_aichat::protocol::Role;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::{Event, NullSink, RecordingSink};
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// A scratch directory that removes itself, so tests do not leave state behind.
 struct Scratch {
@@ -255,12 +257,19 @@ fn the_command_is_recorded_as_something_the_user_did() {
 }
 
 /// SHELL-2: nothing asks. The only things a command line is handed are the line, the directory it
-/// runs in and a cancel flag, and the only thing the recording step is handed besides the result is a
-/// sink for the trail. Neither takes a confirmer or any other way to put a question to the person,
-/// so adding an approval prompt to either changes the signature this binds and stops compiling.
+/// runs in and a cancel flag, and for a command shown as it prints, where to send what it prints.
+/// The only thing the recording step is handed besides the result is a sink for the trail. None of
+/// them takes a confirmer or any other way to put a question to the person, so adding an approval
+/// prompt to any of them changes the signature this binds and stops compiling.
 #[test]
 fn a_command_line_is_run_and_recorded_without_any_way_to_ask() {
     let run: fn(&str, &std::path::Path, &Cancel) -> Result<shell::Ran, ShellError> = shell::run;
+    let _run_live: fn(
+        &str,
+        &std::path::Path,
+        &Cancel,
+        &mpsc::Sender<String>,
+    ) -> Result<shell::Ran, ShellError> = shell::run_live;
     let record: fn(
         &str,
         &shell::Ran,
@@ -347,9 +356,10 @@ fn a_cancelled_command_records_nothing() {
     );
 }
 
-/// What the person sees and what the planner is told come from the same gated value. Returning the
-/// ungated copy would leave the check deciding nothing, since the bytes would reach the screen
-/// whatever it said.
+/// What the person sees when the command has ended and what the planner is told come from the same
+/// gated value. Returning the ungated copy would leave the check deciding nothing, since the bytes
+/// would reach the screen whatever it said. What is drawn while the command runs is
+/// [`what_a_command_prints_is_sent_before_the_command_ends`]'s, and is for the screen alone.
 #[test]
 fn what_is_shown_is_what_the_gate_released() {
     let scratch = Scratch::new("gated");
@@ -367,5 +377,178 @@ fn what_is_shown_is_what_the_gate_released() {
             .content
             .text()
             .contains(&recorded.text)
+    );
+}
+
+/// A loop that waits for the `release` file, and gives up after twenty seconds so a test that
+/// failed before it released the command does not leave a shell waiting for good.
+const UNTIL_RELEASED: &str =
+    "n=0; while [ ! -e release ] && [ $n -lt 400 ]; do sleep 0.05; n=$((n+1)); done";
+
+/// `script` as a line for whatever `$SHELL` is: the line runs a POSIX shell on it, since a loop and
+/// arithmetic are not spelled the same in every shell a person may have set. The script holds no
+/// single quote.
+fn in_a_posix_shell(script: &str) -> String {
+    format!("sh -c '{script}'")
+}
+
+/// How long a test waits for a piece the command has already printed. A broken implementation fails
+/// at this bound where the command is still waiting on the test, instead of hanging.
+const PIECE: Duration = Duration::from_secs(10);
+
+/// A scratch directory of this test run's own, so two runs of the suite on one host, such as the
+/// parallel slots of a build machine, do not remove each other's `release` file.
+fn own_scratch(name: &str) -> Scratch {
+    Scratch::new(&format!("{name}-{}", std::process::id()))
+}
+
+/// Run `line` as [`shell::run_live`] on a thread of its own, with the pieces it sends.
+fn run_live_on_a_thread(
+    line: &str,
+    at: &std::path::Path,
+    cancel: Cancel,
+) -> (
+    std::thread::JoinHandle<Result<shell::Ran, ShellError>>,
+    mpsc::Receiver<String>,
+) {
+    let (live, pieces) = mpsc::channel();
+    let (line, at) = (line.to_string(), at.to_path_buf());
+    let worker = std::thread::spawn(move || shell::run_live(&line, &at, &cancel, &live));
+    (worker, pieces)
+}
+
+/// Let a command that is waiting for the `release` file go on.
+fn release(at: &std::path::Path) {
+    std::fs::write(at.join("release"), "").expect("release the command");
+}
+
+/// SHELL-7: what a command has printed reaches the screen while the command is still running. The
+/// command here cannot end until the test has been sent its first line, so an implementation that
+/// collects everything and sends it after the exit never sends anything for the test to receive.
+#[test]
+fn what_a_command_prints_is_sent_before_the_command_ends() {
+    let scratch = own_scratch("live-before-end");
+    let (worker, pieces) = run_live_on_a_thread(
+        &in_a_posix_shell(&format!("echo early; {UNTIL_RELEASED}; echo late")),
+        &scratch.path,
+        Cancel::new(),
+    );
+
+    let first = pieces
+        .recv_timeout(PIECE)
+        .expect("nothing was sent while the command was still running");
+    assert_eq!(first, "early\n");
+
+    release(&scratch.path);
+    let ran = worker.join().expect("the worker ends").expect("it runs");
+    assert_eq!(ran.stdout, "early\nlate\n");
+    assert_eq!(pieces.recv_timeout(PIECE).expect("the rest"), "late\n");
+}
+
+/// What a command writes to standard error is as much a part of what a person watching it is waiting
+/// for as standard output: a build says what is wrong there.
+#[test]
+fn standard_error_is_sent_as_it_is_printed() {
+    let scratch = own_scratch("live-stderr");
+    let (worker, pieces) = run_live_on_a_thread(
+        &in_a_posix_shell(&format!("echo trouble >&2; {UNTIL_RELEASED}")),
+        &scratch.path,
+        Cancel::new(),
+    );
+
+    let first = pieces
+        .recv_timeout(PIECE)
+        .expect("standard error was held back until the command ended");
+    assert_eq!(first, "trouble\n");
+
+    release(&scratch.path);
+    let ran = worker.join().expect("the worker ends").expect("it runs");
+    assert_eq!(ran.stderr, "trouble\n");
+}
+
+/// A read can stop inside a character. The piece that ends there must not draw as the replacement
+/// character what the next piece makes whole, or the screen shows damage the output never had.
+#[test]
+fn a_character_a_read_stops_inside_is_sent_whole() {
+    let scratch = own_scratch("live-split-character");
+    // The first two of the three bytes of the euro sign, then the third once the test has seen "a".
+    let (worker, pieces) = run_live_on_a_thread(
+        &in_a_posix_shell(&format!(
+            "printf \"a\\342\\202\"; {UNTIL_RELEASED}; printf \"\\254\""
+        )),
+        &scratch.path,
+        Cancel::new(),
+    );
+
+    let first = pieces
+        .recv_timeout(PIECE)
+        .expect("the text before the split");
+    assert_eq!(first, "a", "the unfinished character was sent in pieces");
+
+    release(&scratch.path);
+    let ran = worker.join().expect("the worker ends").expect("it runs");
+    assert_eq!(ran.stdout, "a\u{20ac}");
+    assert_eq!(pieces.recv_timeout(PIECE).expect("the rest"), "\u{20ac}");
+}
+
+/// The pieces put together read as what the command printed, bytes that are not UTF-8 included, so
+/// the screen while it runs and the result when it ends do not disagree about them.
+#[test]
+fn the_pieces_put_together_are_what_the_command_printed() {
+    let scratch = own_scratch("live-lossy");
+    // A byte that starts nothing valid, and the start of a character the output ends in the middle of.
+    let (worker, pieces) = run_live_on_a_thread(
+        "printf 'one\\377two\\n'; printf 'end\\342\\202'",
+        &scratch.path,
+        Cancel::new(),
+    );
+
+    let ran = worker.join().expect("the worker ends").expect("it runs");
+    let sent: String = pieces.try_iter().collect();
+
+    assert_eq!(ran.stdout, "one\u{fffd}two\nend\u{fffd}");
+    assert_eq!(sent, ran.stdout);
+}
+
+/// Nobody reading the pieces is no reason for a command to stop or for its result to be less: the
+/// screen can be gone while the command is not.
+#[test]
+fn a_command_runs_on_when_nothing_is_reading_what_it_prints() {
+    let scratch = own_scratch("live-nobody-reading");
+    let (live, pieces) = mpsc::channel();
+    drop(pieces);
+
+    let ran = shell::run_live(
+        &in_a_posix_shell("echo out; echo err >&2"),
+        &scratch.path,
+        &Cancel::new(),
+        &live,
+    )
+    .expect("it runs");
+
+    assert_eq!(ran.stdout, "out\n");
+    assert_eq!(ran.stderr, "err\n");
+}
+
+/// What a stopped command printed was sent while it ran, and stopping it still ends in the
+/// cancellation that [`a_cancelled_command_records_nothing`] pins, which no result follows.
+#[test]
+fn a_stopped_command_has_sent_what_it_printed_and_is_still_cancelled() {
+    let scratch = own_scratch("live-stopped");
+    let cancel = Cancel::new();
+    let (worker, pieces) = run_live_on_a_thread(
+        &in_a_posix_shell("echo before-the-stop; exec sleep 30"),
+        &scratch.path,
+        cancel.clone(),
+    );
+
+    let first = pieces.recv_timeout(PIECE).expect("what it printed");
+    assert_eq!(first, "before-the-stop\n");
+    cancel.cancel();
+
+    let outcome = worker.join().expect("the worker ends");
+    assert!(
+        matches!(outcome, Err(ShellError::Cancelled)),
+        "expected a cancellation, got {outcome:?}"
     );
 }

@@ -90,8 +90,10 @@ CONTEXT_BEFORE, CONTEXT_AFTER = 2, 5
 # as wanting a shorter title instead, and the person posting it shortens it keeping both halves.
 TITLE_LIMIT = 256
 ANCHOR = re.compile(r'<a id="[^"]*"></a>')
-# `crates/core/src/policy.rs:40 the split is made here`: the place, then what is there.
-SITE = re.compile(r"([\w./\\-]+\.\w+):(\d+)\s*(.*)")
+# `crates/core/src/policy.rs:40 the split is made here`: the place, then what is there. A place can
+# name a range or several lines (`:40-52`, `:40,58`), which stay with the file; the first line is the
+# one a body opens.
+SITE = re.compile(r"([\w./\\-]+\.\w+):(\d+)((?:-\d+)?(?:,\d+(?:-\d+)?)*)\s*(.*)")
 
 
 _LOADED = []
@@ -186,8 +188,8 @@ def as_bullet(item):
     match = SITE.match(item)
     if not match:
         return f"- {item}"
-    place = f"- `{match.group(1)}:{match.group(2)}`"
-    return f"{place} {match.group(3)}".rstrip()
+    place = f"- `{match.group(1)}:{match.group(2)}{match.group(3)}`"
+    return f"{place} {match.group(4)}".rstrip()
 
 
 def sentence(text):
@@ -390,7 +392,9 @@ def draftable(findings, errors_only):
     """The findings a green CI run leaves unsaid, which are the ones worth an issue."""
     keep = []
     for finding in findings:
-        if finding.get("kind") in NOT_A_BUG:
+        # One the record carried was drafted by the run that decided it, and is in this report
+        # only because it still holds.
+        if finding.get("carried") or finding.get("kind") in NOT_A_BUG:
             continue
         if finding.get("source") != "review" and finding.get("severity") == collect.ERROR:
             continue
@@ -470,7 +474,7 @@ def main():
         return 2
 
     findings = list(manifest.get("mechanical_findings", []))
-    reviews, _ = collect.load_reviews(manifest)
+    reviews, _, _ = collect.load_reviews(manifest)
     findings.extend(reviews)
 
     out = Path(args.out) if args.out else Path(args.work_dir) / "issues"

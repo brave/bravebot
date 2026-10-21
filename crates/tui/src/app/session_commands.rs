@@ -113,6 +113,48 @@ pub(super) fn set_effort(session: &mut Session, word: &str) {
     }
 }
 
+/// Say which language the interface is in, choose one for the next start, or give the choice back
+/// to the settings file and the environment (LOCALE-8).
+///
+/// A tag that names no catalog changes nothing and says so, with the catalogs there are: the
+/// environment's own answer for one is the reference, which is right for a shell that was set up
+/// for something else and wrong for somebody who has just typed a language, who would be told they
+/// were reading it while they read English. What is saved is the tag of the catalog that answered,
+/// so the word on disk is one the build knows, whatever spelling was typed.
+pub(super) fn set_language(session: &mut Session, word: &str) {
+    let word = word.trim();
+    let available = bravebot_i18n::tags().join(", ");
+    let kept = |session: &mut Session, tag: Option<&str>| match tag {
+        Some(tag) if session.choose_language(Some(tag)) => {
+            t!(session_language_set, language = tag).to_string()
+        }
+        None if session.choose_language(None) => t!(session_language_auto).to_string(),
+        _ => t!(session_language_not_saved).to_string(),
+    };
+    if word.is_empty() {
+        session.note(t!(
+            session_language_in_use,
+            language = bravebot_i18n::locale().tag(),
+            available = available
+        ));
+        if let Some(saved) = session.saved_language() {
+            session.note(t!(session_language_saved, language = saved));
+        }
+    } else if word.eq_ignore_ascii_case(bravebot_i18n::AUTO) {
+        let said = kept(session, None);
+        session.note(said);
+    } else if let Some(locale) = bravebot_i18n::find(word) {
+        let said = kept(session, Some(locale.tag()));
+        session.note(said);
+    } else {
+        session.note(t!(
+            session_no_such_language,
+            language = word,
+            available = available
+        ));
+    }
+}
+
 /// Name the model the planner may consult, say which it may, or drop the choice.
 ///
 /// The name is held to what `--advisor` holds it to: resolved as every route to a model resolves,
@@ -220,23 +262,29 @@ pub(super) fn set_limit(session: &mut Session, figure: &str) {
 ///
 /// Looked up as `/style` looks a name up, so a name that is not a style is said and leaves none in
 /// force. Nothing is said for one that is, and a `--system-prompt` run holds it as `/style` does.
-pub(super) fn adopt_style(session: &mut Session, named: Option<&str>) {
-    adopt_style_in(session, named, bravebot_agent::home::directory().as_deref());
+pub(super) fn adopt_style(session: &mut Session, workspace: &Workspace, named: Option<&str>) {
+    adopt_style_in(
+        session,
+        workspace,
+        named,
+        bravebot_agent::home::directory().as_deref(),
+    );
 }
 
 /// [`adopt_style`] with the `~/.bravebot` directory named, so a test can give it a scratch one.
 pub(super) fn adopt_style_in(
     session: &mut Session,
+    workspace: &Workspace,
     named: Option<&str>,
     home: Option<&std::path::Path>,
 ) {
     let Some(word) = named else {
         return;
     };
-    match bravebot_agent::styles::find(home, word) {
+    match bravebot_agent::styles::find(workspace, home, word) {
         Some(style) => session.choose_style(Some(style)),
         None => {
-            let styles = bravebot_agent::styles::available(home).join(", ");
+            let styles = bravebot_agent::styles::available(workspace, home).join(", ");
             session.note(t!(session_style_unknown, style = word, styles = styles));
         }
     }
@@ -248,14 +296,24 @@ pub(super) fn adopt_style_in(
 /// `~/.bravebot/styles` and the project's the trust map vouched for, and is never read from the
 /// line into the prompt. The pick lasts for the
 /// session and is not recorded.
-pub(super) fn set_style(session: &mut Session, word: &str) {
-    set_style_in(session, word, bravebot_agent::home::directory().as_deref());
+pub(super) fn set_style(session: &mut Session, workspace: &Workspace, word: &str) {
+    set_style_in(
+        session,
+        workspace,
+        word,
+        bravebot_agent::home::directory().as_deref(),
+    );
 }
 
 /// [`set_style`] with the `~/.bravebot` directory named, so a test can give it a scratch one.
-pub(super) fn set_style_in(session: &mut Session, word: &str, home: Option<&std::path::Path>) {
+pub(super) fn set_style_in(
+    session: &mut Session,
+    workspace: &Workspace,
+    word: &str,
+    home: Option<&std::path::Path>,
+) {
     let word = word.trim();
-    let mut styles = bravebot_agent::styles::available(home);
+    let mut styles = bravebot_agent::styles::available(workspace, home);
     styles.extend(session.project_styles().iter().cloned());
     let styles = styles.join(", ");
     if word.is_empty() {
@@ -271,7 +329,7 @@ pub(super) fn set_style_in(session: &mut Session, word: &str, home: Option<&std:
     } else if word == STYLE_OFF {
         session.choose_style(None);
         session.note(t!(session_style_cleared));
-    } else if let Some(style) = bravebot_agent::styles::find(home, word).or_else(|| {
+    } else if let Some(style) = bravebot_agent::styles::find(workspace, home, word).or_else(|| {
         // Taken on the held list, so a name nothing vouched for is no style, and picked by name
         // alone: the turn reads the words under its own trust map.
         let held = session.project_styles().iter().any(|name| name == word);
@@ -461,7 +519,7 @@ pub(super) fn branch_session(
             ));
             answers.forget_what_no_record_keeps();
             workspace.forget_reach_and_hosts();
-            session.answers.clear();
+            session.answers.forget();
             true
         }
         Err(refused) => {

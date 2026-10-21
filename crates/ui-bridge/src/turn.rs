@@ -21,7 +21,7 @@ use bravebot_agent::confirm::{
     ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_agent::report::{Activity, Landing, Phase, Reporter, Shown};
-use bravebot_core::ask::{Answer, Asking};
+use bravebot_core::ask::{Answer, AnswerMemo, Asking};
 use bravebot_core::delegate::DelegateId;
 use bravebot_core::event::Sink;
 use bravebot_core::todo::Row;
@@ -256,6 +256,13 @@ impl Reporter for BridgeReporter {
         self.prompt_at = Some(at);
     }
 
+    /// The planner has read a line the person typed while the turn ran, so a front end moves it
+    /// from waiting to said. Emitted at the moment it is taken, and always before the turn's end,
+    /// so a line still waiting when the turn ends was not read.
+    fn interjected(&mut self, said: String) {
+        self.say("turn.interjected", json!({ "prompt": said }));
+    }
+
     fn todos(&mut self, rows: Vec<Row>) {
         let wired: Vec<_> = rows.iter().map(wire::row).collect();
         self.task_list = rows;
@@ -470,6 +477,13 @@ pub struct BridgeConfirmer {
     declined_a_plan: bool,
     /// Which kinds somebody can answer now. Every kind, until a host says otherwise.
     answerers: crate::answerers::Answerers,
+    /// What the person typed while this turn ran. Empty for a confirmer nobody can type into.
+    interjections: crate::running::Interjections,
+    /// What the person answered to the planner's questions, for the rest of the session (ASK-8).
+    /// Shared by every turn of it; [`Self::remembering`] gives a confirmer the session's own.
+    answered: Arc<Mutex<AnswerMemo>>,
+    /// A line for each question this turn did not put because the person had answered it already.
+    reused: Vec<String>,
 }
 
 impl BridgeConfirmer {
@@ -490,7 +504,43 @@ impl BridgeConfirmer {
             cancel,
             declined_a_plan: false,
             answerers: crate::answerers::Answerers::default(),
+            interjections: crate::running::Interjections::default(),
+            answered: Arc::default(),
+            reused: Vec::new(),
         }
+    }
+
+    /// Answer a question the person already answered in this session from `answered`, and keep
+    /// what they answer from now on there.
+    ///
+    /// A confirmer without it remembers for itself alone, which is a turn: the session's memo is
+    /// what lets a later turn's repeat of a question go unasked.
+    pub(crate) fn remembering(mut self, answered: Arc<Mutex<AnswerMemo>>) -> Self {
+        self.answered = answered;
+        self
+    }
+
+    /// What this turn answered from memory instead of asking, one line for each question, in the
+    /// words the terminal says it in.
+    pub fn reused(&self) -> &[String] {
+        &self.reused
+    }
+
+    /// The session's answers. A turn that panicked holding the lock left nothing half written,
+    /// since the memo only ever gains or replaces a whole entry, so it is read as it stands.
+    fn memo(&self) -> std::sync::MutexGuard<'_, AnswerMemo> {
+        self.answered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Read what the person types into this turn from `interjections` at each round boundary.
+    pub(crate) fn taking_interjections(
+        mut self,
+        interjections: crate::running::Interjections,
+    ) -> Self {
+        self.interjections = interjections;
+        self
     }
 
     /// Ask only what `answerers` says somebody can answer, and refuse the rest without showing it.
@@ -727,10 +777,10 @@ impl Confirmer for BridgeConfirmer {
         }
     }
 
-    // The UI queues messages for the next turn; the protocol has no mid-turn input.
-    // In particular, polling must neither block nor consume an approval reply.
+    // Whatever `turn.interject` left since the last boundary. Polling must neither block nor
+    // consume an approval reply, and this reads a queue of its own, never the answers.
     fn interjection(&mut self) -> Option<String> {
-        None
+        self.interjections.take()
     }
 
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
@@ -802,9 +852,38 @@ impl Confirmer for BridgeConfirmer {
     ///
     /// Answers are read against the prompts they answer, which is what stops a front-end
     /// returning an index for a choice that does not exist.
+    ///
+    /// A question the person answered earlier in the session is not put again. What is put is the
+    /// rest of the series, and the remembered answers are woven back in at their own places. What
+    /// a front end's reply carries is remembered, a decline among it, since [`wire::answers`] reads
+    /// an entry it cannot use as one and that is what the planner is told. A question nobody could
+    /// be asked, or that the reply has no entry for, stays unsettled.
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
-        match self.ask(Kind::Ask, "ask.request", |id| wire::ask_request(id, asking)) {
-            Some(Reply::Ask(answers)) => wire::fitted(answers, asking),
+        // A planner that loops back over a decision does not make the person restate it, and a
+        // series where some are settled puts only the rest (ASK-8).
+        let settled = self.memo().read(asking);
+        for prompt in settled.reused() {
+            let said = bravebot_i18n::t!(session_answered_already, question = &prompt.question)
+                .to_string();
+            // Once for each question, however many times the turn asked it.
+            if !self.reused.contains(&said) {
+                self.reused.push(said);
+            }
+        }
+        if settled.is_settled() {
+            return settled.finish(&mut self.memo(), Vec::new());
+        }
+
+        match self.ask(Kind::Ask, "ask.request", |id| {
+            wire::ask_request(id, settled.outstanding())
+        }) {
+            Some(Reply::Ask(answers)) => {
+                let fresh = wire::fitted(answers, settled.outstanding());
+                settled.finish(&mut self.memo(), fresh)
+            }
+            // Nobody could be asked. What the person answered before still stands, and the rest
+            // is not remembered as declined.
+            _ if settled.reuses_any() => settled.finish(&mut self.memo(), Vec::new()),
             _ => Vec::new(),
         }
     }
