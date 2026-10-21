@@ -2380,8 +2380,10 @@ strict one, refuses the request, and a conversation can change service between t
 `verified-by: bravebot_aichat::protocol::a_tool_calls_extra_content_is_kept_from_the_stream_and_sent_back`
 `verified-by: bravebot_aichat::protocol::a_tool_call_without_extra_content_is_built_as_before`
 `verified-by: bravebot_aichat::protocol::a_record_written_before_extra_content_reads_back_unchanged`
+`verified-by: bravebot_aichat::protocol::a_stored_call_carrying_extra_content_reads_back_with_it`
 `verified-by: bravebot_aichat::protocol::extra_content_is_taken_from_every_call_in_a_body_and_the_call_stays`
 `verified-by: bravebot_aichat::lib::extra_content_reaches_only_a_google_vertex_service`
+`verified-by: bravebot_aichat::lib::extra_content_is_not_sent_to_braves_own_endpoint`
 
 <a id="BACKEND-53"></a>
 ### BACKEND-53: a turn whose model keeps failing moves to the fallback model a person named

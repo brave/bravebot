@@ -1755,6 +1755,21 @@ mod tests {
         assert_eq!(serde_json::to_value(&call).expect("serializes"), stored);
     }
 
+    /// A conversation saved with a Vertex call and opened again must still send the call back with
+    /// the signature, or the first request after the resume is refused.
+    #[test]
+    fn a_stored_call_carrying_extra_content_reads_back_with_it() {
+        let stored = serde_json::json!({
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "list", "arguments": "{}"},
+            "extra_content": {"google": {"thought_signature": "opaque-signature"}},
+        });
+        let call: ToolCallRequest = serde_json::from_value(stored.clone()).expect("a stored call");
+        assert_eq!(call.extra_content.as_ref(), Some(&stored["extra_content"]));
+        assert_eq!(serde_json::to_value(&call).expect("serializes"), stored);
+    }
+
     #[test]
     fn extra_content_is_taken_from_every_call_in_a_body_and_the_call_stays() {
         let mut body = serde_json::json!({"messages": [
