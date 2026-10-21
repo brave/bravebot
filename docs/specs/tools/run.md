@@ -994,6 +994,25 @@ turn being cancelled. Which of the four it was is not reported separately, becau
 says it: how many new lines there are, whether the job has ended, and how long the wait actually
 lasted.
 
+**A wait that output does not end.** `job_output` also takes `until_exit`, a boolean that is only
+accepted with `wait_seconds` beside it, which then bounds the wait. A call that gives both comes
+back at the first of four things: the job ending, the wait running out, the turn being cancelled, or
+a stop the person asks for on any job of the turn ([RUN-27](#RUN-27)). Output arriving does not end
+it, including output that is already there, unseen, when the call is made. What it hands back is
+what the job printed since the last look, in one answer, under the label the job has and cut to the
+output cap as any look's is, so output that is quarantined comes back as one reference to all of it.
+`until_exit` given as anything but a boolean, as `true` with no `wait_seconds`, or as `true` beside
+`kill` is refused. A flag that is quietly ignored hands back the output-ended wait the caller did
+not ask for, a flag that quietly chose its own bound would hand back a window nobody asked about,
+and a `kill` is carried out after the wait, so beside this flag it would be held back by the whole
+bound. `false` is the same as leaving it out.
+
+**Why `until_exit` exists.** A job that prints more often than a round takes ends every output-ended
+wait at its next line, so a build that prints a line per crate costs one planner round per look, and
+where its output is quarantined one `read_output` call per look as well, and a job that is printing
+when the call is made never lets the wait last at all. A caller that only needs the result of such a
+job has no other way to ask for it in one call.
+
 **Between one second and ten minutes, and a value outside that is refused.** [RUN-11](#RUN-11)'s
 deadline is clamped instead, and the difference is what a caller can tell afterwards. A run whose
 deadline was shortened still ends, and the answer says how long it took, so nothing is hidden. A wait
@@ -1037,7 +1056,9 @@ pipeline it started: how many bytes have arrived, and which steps have exited. T
 bookkeeping [RUN-16](#RUN-16) already provides for, and the byte count is only ever compared against
 itself. A program does therefore decide when a wait returns by choosing when to print, which is
 exactly what a caller asking to be told about new output asked for, and the bytes themselves still
-reach anybody only under the label the plan was given.
+reach anybody only under the label the plan was given. A wait with `until_exit` does not compare a
+byte count either: it asks which steps have exited and what the clock says, so a program cannot
+end it by printing.
 
 **What is new is counted per pipe.** A pipeline has one pipe for its standard output and one for each
 stage's standard error, and what a look hands back composes them with the output first. A single
@@ -1070,13 +1091,22 @@ the window.
 `verified-by: bravebot_agent::exec::waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_further`
 `verified-by: bravebot_agent::exec::waiting_for_more_returns_when_the_job_ends_without_printing`
 `verified-by: bravebot_agent::exec::a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound`
+`verified-by: bravebot_agent::exec::waiting_for_exit_is_not_ended_by_the_output_of_a_job_that_keeps_printing`
+`verified-by: bravebot_agent::exec::waiting_for_exit_lasts_its_bound_where_the_job_keeps_running_and_printing`
+`verified-by: bravebot_agent::exec::a_cancelled_wait_for_exit_comes_back_without_waiting_out_its_bound`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn`
 `verified-by: bravebot_agent::exec::what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other`
 `verified-by: bravebot_agent::exec::a_character_split_across_two_pipe_reads_is_handed_over_whole`
 `verified-by: bravebot_agent::tools::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`
 `verified-by: bravebot_agent::tools::job_output_offers_a_bounded_wait_rather_than_only_a_snapshot`
+`verified-by: bravebot_agent::tools::until_exit_is_a_boolean_that_needs_a_wait_and_no_kill_beside_it`
+`verified-by: bravebot_agent::tools::job_output_offers_a_wait_that_output_does_not_end`
 `verified-by: bravebot_agent::report::a_look_that_waited_is_described_with_both_the_window_and_the_warning`
 `verified-by: bravebot_agent::report::one_second_is_described_in_the_singular`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made`
+`verified-by: bravebot_agent::turn::one_job_output_call_that_waits_for_the_exit_is_handed_all_that_a_chatty_job_printed`
+`verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_printing`
+`verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_in_a_way_it_cannot_honour_is_refused_without_waiting`
 `verified-by: bravebot_agent::turn::a_job_output_call_reports_the_code_a_finished_job_exited_with`
 
 <a id="RUN-18"></a>

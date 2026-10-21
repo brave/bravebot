@@ -2811,6 +2811,36 @@ fn wait_from(arguments: &Value) -> Result<Option<std::time::Duration>, &'static 
     }
 }
 
+/// Whether a `job_output` call asked for a wait that output does not end.
+///
+/// Refused where the flag is not a boolean, is `true` with no `wait_seconds` to bound it, or is
+/// `true` beside `kill`. A flag taken as `false` hands back a wait that output ends, which is what
+/// the caller asked not to have, and one that chose a bound of its own would hand back a window
+/// nobody asked about, which is what [`wait_from`] refuses to do to a value outside its range. A
+/// `kill` is carried out after the wait, so beside this flag it would be held back by the whole
+/// bound on any job that is still running.
+fn until_exit_from(
+    arguments: &Value,
+    wait: Option<std::time::Duration>,
+    kill: bool,
+) -> Result<bool, &'static str> {
+    match arguments.get("until_exit") {
+        Some(value) if !value.is_null() => match value.as_bool() {
+            Some(true) if wait.is_none() => Err(
+                "error: 'until_exit' needs 'wait_seconds' beside it, which is the longest the \
+                 call waits for the job to end",
+            ),
+            Some(true) if kill => Err(
+                "error: 'until_exit' waits for the job to end and 'kill' ends it after the wait, \
+                 so a call gives one of them",
+            ),
+            Some(until_exit) => Ok(until_exit),
+            None => Err("error: 'until_exit' must be true or false"),
+        },
+        _ => Ok(false),
+    }
+}
+
 fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -9152,8 +9182,10 @@ fn job_output<S: Sink, R: Reporter>(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let wait = match wait_from(arguments) {
-        Ok(wait) => wait,
+    let (wait, until_exit) = match wait_from(arguments).and_then(|wait| {
+        until_exit_from(arguments, wait, kill).map(|until_exit| (wait, until_exit))
+    }) {
+        Ok(asked) => asked,
         Err(refusal) => return Produced::problem(refusal),
     };
 
@@ -9187,16 +9219,21 @@ fn job_output<S: Sink, R: Reporter>(
 
     // None where there was nothing to wait for: a caller with unseen output already waiting for it
     // asked to be told about output, and it is here. Whether there is any is byte counts the driver
-    // kept per pipe, never a comparison of what was printed.
+    // kept per pipe, never a comparison of what was printed. A caller that asked for the exit is
+    // not waiting to be told about output, so unseen output is no reason not to wait for the exit.
     let waited = wait
-        .filter(|_| !job.running.has_more(&job.seen))
+        .filter(|_| until_exit || !job.running.has_more(&job.seen))
         .map(|bound| {
             // Timed, so the answer can say which window it watched. A wait that ends early because the
             // job printed or exited is otherwise indistinguishable from one that sat out its whole
             // bound, and the difference is the whole of what a caller learns from silence.
             let began = std::time::Instant::now();
-            job.running
-                .wait_for_more(&job.seen, bound, tools.cancel, &stops);
+            if until_exit {
+                job.running.wait_for_exit(bound, tools.cancel, &stops);
+            } else {
+                job.running
+                    .wait_for_more(&job.seen, bound, tools.cancel, &stops);
+            }
             began.elapsed()
         });
 
@@ -13551,6 +13588,112 @@ mod tests {
             tool.function.description.contains("wait_seconds"),
             "job_output's description never names the argument: {}",
             tool.function.description
+        );
+    }
+
+    /// `until_exit` turns a wait that output ends into one that only the exit, the bound, the token
+    /// or a stop ends. A flag taken for `false` where it was not understood hands back a wait that
+    /// output ends, one given with no `wait_seconds` has no bound to wait to, and one given with
+    /// `kill` holds the kill back by the whole bound, so a value the call cannot honour is refused
+    /// instead of read generously.
+    #[test]
+    fn until_exit_is_a_boolean_that_needs_a_wait_and_no_kill_beside_it() {
+        use std::time::Duration;
+
+        let thirty = Some(Duration::from_secs(30));
+
+        // Left out, null and false are the wait every call made before the flag existed, with or
+        // without a bound and with or without a kill.
+        for arguments in [
+            json!({}),
+            json!({"until_exit": null}),
+            json!({"until_exit": false}),
+        ] {
+            for kill in [false, true] {
+                assert_eq!(until_exit_from(&arguments, thirty, kill), Ok(false));
+                assert_eq!(until_exit_from(&arguments, None, kill), Ok(false));
+            }
+        }
+
+        assert_eq!(
+            until_exit_from(&json!({"until_exit": true}), thirty, false),
+            Ok(true)
+        );
+
+        let refusal = until_exit_from(&json!({"until_exit": true}), None, false)
+            .expect_err("a wait for the exit with no bound is refused");
+        assert!(
+            refusal.contains("'wait_seconds'"),
+            "the refusal does not name what to add: {refusal}"
+        );
+
+        let refusal = until_exit_from(&json!({"until_exit": true}), thirty, true)
+            .expect_err("a wait for the exit beside a kill is refused");
+        assert!(
+            refusal.contains("'kill'"),
+            "the refusal does not name the argument it cannot be given with: {refusal}"
+        );
+
+        // Neither a string nor a number is a boolean, whatever the bound beside it.
+        for not_a_boolean in [json!("true"), json!(1), json!(0), json!([true])] {
+            let refusal = until_exit_from(&json!({"until_exit": not_a_boolean}), thirty, false)
+                .expect_err("a value that is not a boolean is refused");
+            assert!(
+                refusal.contains("true or false"),
+                "the refusal does not say what is allowed: {refusal}"
+            );
+        }
+    }
+
+    /// The flag is how a planner gets one call to cover a job that prints often, so it has to be in
+    /// the schema the planner reads, typed as a boolean, and the descriptions have to say what it
+    /// changes: output stops ending the wait, and a bound is still needed.
+    #[test]
+    fn job_output_offers_a_wait_that_output_does_not_end() {
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "job_output")
+        .expect("job_output is offered");
+
+        let until_exit = &tool.function.parameters["properties"]["until_exit"];
+        assert_eq!(until_exit["type"], "boolean", "until_exit is not offered");
+        let said = until_exit["description"].as_str().expect("it is described");
+        for stated in [
+            "does not end the wait",
+            "Needs wait_seconds",
+            "cannot be given with kill",
+        ] {
+            assert!(
+                said.contains(stated),
+                "until_exit no longer says '{stated}': {said}"
+            );
+        }
+        // Not required, or every look at a job would have to choose.
+        let required = tool.function.parameters["required"]
+            .as_array()
+            .expect("job_output names what it requires");
+        assert!(
+            !required.iter().any(|name| name == "until_exit"),
+            "until_exit is required of every look: {required:?}"
+        );
+        // The planner reads the tool's description before it reads a parameter's, and the case the
+        // flag is for is one it has to recognise there.
+        assert!(
+            tool.function.description.contains("until_exit"),
+            "job_output's description never names the flag: {}",
+            tool.function.description
+        );
+        let wait = tool.function.parameters["properties"]["wait_seconds"]["description"]
+            .as_str()
+            .expect("wait_seconds is described");
+        assert!(
+            wait.contains("until_exit"),
+            "wait_seconds says output ends it and not that until_exit changes that: {wait}"
         );
     }
 

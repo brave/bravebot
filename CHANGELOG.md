@@ -1,5 +1,6 @@
 ## [0.16.0](https://github.com/brave/bravebot/releases/tag/v0.16.0)
 
+ - Added `until_exit` to `job_output`, which with `wait_seconds` waits for a background job to end even while it keeps printing, and returns what it printed since the last look in one answer. ([#2814](https://github.com/brave/bravebot/issues/2814))
  - Added the `maxRunningDelegates` setting, the most delegates one turn may have running at once. ([#2819](https://github.com/brave/bravebot/issues/2819))
  - Changed the limit on delegates in one turn from 32 started to 64 running at once. A delegate that has finished gives its place back to the next one the turn starts. ([#2819](https://github.com/brave/bravebot/issues/2819))
  - Added dragging the border between the info panel and the transcript to resize the panel, and keeping the width for the next session. ([#2731](https://github.com/brave/bravebot/issues/2731))
