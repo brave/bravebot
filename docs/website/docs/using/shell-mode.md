@@ -51,6 +51,10 @@ The label is a first label from provenance, exactly like the label on a program'
 own configuration. It is admissible for the reason a vouched-for command's output is: a person took
 responsibility, and nothing inspected anything.
 
+A command that colours its output is drawn without its colour codes, with a row under the output
+saying how many were left out ([the transcript](transcript.md)). That changes what the screen draws
+and not what the model is sent.
+
 ## Keeping the output to yourself
 
 Type `!!` to run one command whose output is shown and never sent to the model: `!!cat .env`. The

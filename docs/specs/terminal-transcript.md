@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/avatar.rs
   - crates/tui/src/blocks.rs
+  - crates/tui/src/colour_codes.rs
   - crates/tui/src/indicator.rs
   - crates/tui/src/logo.rs
   - crates/tui/src/preview.rs
@@ -99,6 +100,8 @@ named in it can be a filename read out of a quarantined listing.
 Every control character is replaced with a visible glyph on the way to the screen, in the heading
 as well as the content. Replaced rather than dropped, since a character silently removed is one the
 user cannot tell was ever in the file.
+[VIEW-30](#VIEW-30) is the one exception: a complete colour code in output drawn for reading is
+taken out and counted.
 
 `verified-by: bravebot_tui::marking::quarantined_content_cannot_paint_its_own_margin`
 `verified-by: bravebot_tui::marking::a_neutralised_escape_is_still_visible`
@@ -817,3 +820,60 @@ draws no protocol the question could find, so leaving it out loses no picture.
 
 `verified-by: bravebot_tui::preview::apple_terminal_is_not_sent_the_kitty_query_and_other_terminals_are`
 `verified-by: bravebot_tui::lib::only_the_name_apple_terminal_sets_is_apple_terminal`
+
+
+<a id="VIEW-30"></a>
+### VIEW-30: the colour codes in output are counted and not drawn
+
+A program that colours its output writes a code before and after each coloured word. In output
+drawn for a person to read, the complete colour codes are taken out of the text, and a row under
+the text says how many there were, such as `14 colour codes not drawn`. That row has the same margin
+as the rows above it. Output with no colour code says nothing about them.
+
+A colour code is `ESC [`, up to 64 characters from `0-9`, `;` and `:`, and `m`. Every other escape
+sequence and control character is replaced with a visible glyph as [VIEW-3](#VIEW-3) says. That
+includes a cursor movement, an erase, a window title, a sequence with another parameter or final
+byte, one cut short by the end of the line, and a run of parameters longer than 64. The colour codes
+are taken out first and the replacement runs after, so an escape that is left, or that two halves
+of another code are joined to leave when a code between them is taken out, is replaced like any
+other, and the terminal is sent no escape.
+
+It applies to the output of a command typed in shell mode, to the preview in a quarantined block,
+to the lines drawn under a call the planner read, and to the quarantined block a one-shot run
+writes to stderr. Everything else draws every byte. That includes a block's heading, where the
+origin can be a filename, a path or a name wherever one is drawn, the hunks of a write, and every
+prompt that asks a person to approve text: a write, a command's output, a read, a message, a server
+and its tools. A yes on those releases the text or acts on it, and a code that sets the colour of
+text to the colour of its background is the kind of thing the person is deciding about.
+
+**Why.** The replacement of VIEW-3 pictures the escape and leaves the rest of the code as ordinary
+text, so a CI log that colours every token draws as `␛[0m␛[36m├␛[0m` and is hard to read. A colour
+code only sets colours. VIEW-3 replaces control characters so that content cannot move the cursor,
+erase the margin or ask the terminal something, and a colour code with its escape taken out does
+none of those. VIEW-3 replaces a control character and does not drop it so that the person can tell
+it was there, and the count gives the person the same for colour codes.
+
+`verified-by: bravebot_tui::colour_codes::the_codes_of_a_coloured_line_are_taken_out_and_counted`
+`verified-by: bravebot_tui::colour_codes::every_spelling_of_a_colour_code_is_taken_out_whole`
+`verified-by: bravebot_tui::colour_codes::a_sequence_that_is_not_a_colour_code_is_left_in_place`
+`verified-by: bravebot_tui::colour_codes::a_run_of_parameters_longer_than_a_colour_has_is_left_in_place`
+`verified-by: bravebot_tui::colour_codes::taking_a_code_out_can_join_two_halves_and_leaves_their_escape_for_printable`
+`verified-by: bravebot_tui::colour_codes::codes_beside_wide_characters_are_taken_out_cleanly`
+`verified-by: bravebot_tui::colour_codes::nothing_is_said_where_nothing_was_taken_out`
+`verified-by: bravebot_tui::marking::colour_codes_in_a_preview_are_counted_and_not_drawn`
+`verified-by: bravebot_tui::marking::only_colour_codes_are_left_out_of_a_preview`
+`verified-by: bravebot_tui::marking::a_code_joined_by_taking_another_out_is_still_drawn_as_pictures`
+`verified-by: bravebot_tui::marking::a_colour_code_in_the_origin_is_drawn_in_full`
+`verified-by: bravebot_tui::marking::a_preview_without_colour_codes_says_nothing_about_them`
+`verified-by: bravebot_tui::shell_mode::coloured_output_is_drawn_without_its_codes_and_they_are_counted`
+`verified-by: bravebot_tui::shell_mode::output_keeps_every_other_escape_beside_the_codes_it_leaves_out`
+`verified-by: bravebot_tui::shell_mode::output_without_colour_codes_says_nothing_about_them`
+`verified-by: bravebot_tui::render::a_glimpse_counts_its_colour_codes_and_does_not_draw_them`
+`verified-by: bravebot_tui::render::a_glimpse_line_is_measured_without_its_colour_codes`
+`verified-by: bravebot_tui::render::a_glimpse_from_the_end_counts_its_colour_codes_last`
+`verified-by: bravebot_tui::render::a_glimpse_without_colour_codes_says_nothing_about_them`
+`verified-by: bravebot_tui::confirm::the_output_prompt_draws_a_colour_code_in_full`
+`verified-by: bravebot_approval::lib::a_colour_code_in_output_awaiting_a_yes_is_written_in_full`
+`verified-by: bravebot_cli::progress::colour_codes_in_a_block_are_counted_and_not_drawn`
+`verified-by: bravebot_cli::progress::only_colour_codes_are_left_out_of_a_block`
+`verified-by: bravebot_cli::progress::a_block_without_colour_codes_says_nothing_about_them`

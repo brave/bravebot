@@ -3726,6 +3726,17 @@ mod tests {
         );
     }
 
+    /// A yes releases every byte of the output to the model, so a colour code in it is drawn in
+    /// full and not counted: where nobody is deciding about the bytes colour codes are left out of
+    /// the drawing (VIEW-30), and here somebody is.
+    #[test]
+    fn the_output_prompt_draws_a_colour_code_in_full() {
+        let drawn = rendered_output(&an_output("\u{1b}[31mred\u{1b}[0m\n"));
+
+        assert!(drawn.contains("\u{241b}[31mred\u{241b}[0m"), "{drawn}");
+        assert!(!drawn.contains("colour code"), "{drawn}");
+    }
+
     /// A command that printed nothing is a fact worth stating. An empty box reads as a prompt that
     /// failed to render, and the reviewer would be answering about nothing.
     #[test]

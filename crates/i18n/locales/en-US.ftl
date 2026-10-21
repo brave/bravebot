@@ -2502,6 +2502,12 @@ transcript-earlier-lines = { $count ->
     [one] … { $count } earlier line
    *[other] … { $count } earlier lines
     }
+# Said under output a program coloured: how many colour codes were taken out of the text and not
+# drawn, so that a person can still tell they were there.
+colour-codes-not-drawn = { $count ->
+    [one] { $count } colour code not drawn
+   *[other] { $count } colour codes not drawn
+    }
 transcript-unchanged = { $count ->
     [one] … { $count } unchanged line
    *[other] … { $count } unchanged lines

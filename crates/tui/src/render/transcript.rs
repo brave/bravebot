@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use std::sync::{Arc, OnceLock};
 
+use crate::colour_codes;
 use crate::logo;
 use crate::markdown;
 use crate::state::{Entry, Laid, Session, Speaker};
@@ -260,9 +261,18 @@ fn speaker_lines(session: &Session, entry: &Entry, width: u16) -> Vec<Line<'stat
         // Not a quarantine block either, which is the point of the whole feature: the user
         // typed the command, so the kernel labelled what it printed trusted, and dressing it as
         // untrusted would say the opposite of what is true.
+        //
+        // Its colour codes are taken out and counted rather than drawn (VIEW-30): a program that
+        // colours every word would otherwise be a screen of escape pictures.
         Speaker::Output => {
+            let mut dropped = 0;
             for text in entry.text.lines() {
-                lines.push(Line::from(Span::raw(format!("  {}", printable(text)))));
+                let (plain, taken) = colour_codes::without(text);
+                dropped += taken;
+                lines.push(Line::from(Span::raw(format!("  {}", printable(&plain)))));
+            }
+            if let Some(note) = colour_codes::note(dropped) {
+                lines.push(Line::from(Span::styled(format!("  {note}"), dim())));
             }
         }
         // A delegate the turn started, with its own work under it rather than mixed into

@@ -81,7 +81,8 @@ The kernel is where decisions derived from content are *taken*, not where they b
 `bravebot-tui` and `bravebot-cli` show quarantined content to the person watching. A terminal is
 not a context, and an agent that will not say which file it is working on has protected nobody.
 Everything shown is marked with a margin the renderer draws, and has its control characters
-replaced, so the content cannot draw its own.
+replaced, so the content cannot draw its own. A complete colour code in output drawn for reading is
+taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)).
 
 `verified-by: bravebot_tui::marking::quarantined_content_cannot_paint_its_own_margin`
 `verified-by: bravebot_tui::render::quarantined_content_is_shown_and_marked_on_every_line`

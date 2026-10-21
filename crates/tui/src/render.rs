@@ -18,6 +18,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 
+use crate::colour_codes;
 use crate::state::{Delegate, Laid, Session};
 use crate::theme;
 use crate::wrap;
@@ -481,10 +482,26 @@ fn activity_lines(
 /// The user is shown this and the planner is not, which is the arrangement working rather than a
 /// hole in it. They own the directory. What must never happen is these bytes reaching a model's
 /// context, and a terminal is not a context.
+///
+/// The colour codes in the preview are taken out and counted (VIEW-30). The heading is not
+/// touched, since its origin can be a filename and a person is shown every byte of one.
 fn quarantined_lines(shown: &Shown, width: usize) -> Vec<Line<'static>> {
     let marked = Style::default().fg(theme::running());
     let margin = Span::styled(format!("  {QUARANTINE_BAR} "), marked);
-    quarantined_rows(shown, &margin, width)
+
+    let mut plain = shown.clone();
+    let mut dropped = 0;
+    for line in &mut plain.preview {
+        let (without, taken) = colour_codes::without(line);
+        *line = without;
+        dropped += taken;
+    }
+
+    let mut lines = quarantined_rows(&plain, &margin, width);
+    if let Some(note) = colour_codes::note(dropped) {
+        lines.extend(marked_rows(&margin, &[Span::styled(note, dim())], width));
+    }
+    lines
 }
 
 /// The same block against a margin the caller owns.
@@ -555,9 +572,12 @@ fn returned_lines(returned: &Returned, expanded: bool, width: usize) -> Vec<Line
     };
     let margin = Span::raw("    ");
     let room = width.saturating_sub(margin.width()).max(1);
+    let mut dropped = 0;
     let mut rows: Vec<Line<'static>> = drawn
         .iter()
         .flat_map(|line| {
+            let (line, taken) = colour_codes::without(line);
+            dropped += taken;
             // Measured as drawn: an escape is no column wide until it is made visible.
             let line = printable(&line.replace('\t', "    "));
             let cut = if wrap::display_width(&line) <= room {
@@ -586,6 +606,11 @@ fn returned_lines(returned: &Returned, expanded: bool, width: usize) -> Vec<Line
         } else {
             rows.extend(said);
         }
+    }
+
+    // Last, whichever side the glimpse was taken from, since it is about the lines above it.
+    if let Some(note) = colour_codes::note(dropped) {
+        rows.extend(marked_rows(&margin, &[Span::styled(note, dim())], width));
     }
     rows
 }
@@ -2220,8 +2245,9 @@ mod tests {
                 label: "(U,priv)".to_string(),
                 preview: vec![
                     "the haystack holds a needle".to_string(),
-                    // What the terminal would act on, on its way to a glyph.
-                    "a needle behind \u{1b}[31m an escape".to_string(),
+                    // What the terminal would act on, on its way to a glyph, beside a colour code,
+                    // which is taken out and not drawn.
+                    "a needle behind \u{1b}[31m\u{1b}[2J an escape".to_string(),
                 ],
                 lines: 40,
             };
@@ -4594,6 +4620,62 @@ mod tests {
                 row.contains('\u{241b}') && row.contains("cleared"),
                 "the escape was dropped rather than shown: {row}"
             );
+        }
+
+        /// VIEW-30: a command's output the planner read is drawn without its colour codes, and one
+        /// row under the lines says how many there were.
+        #[test]
+        fn a_glimpse_counts_its_colour_codes_and_does_not_draw_them() {
+            let rows = drawn_rows(&returned_lines(
+                &glimpse(
+                    &["\u{1b}[36m├\u{1b}[0m one", "\u{1b}[1mtwo\u{1b}[0m"],
+                    2,
+                    false,
+                ),
+                false,
+                80,
+            ));
+
+            assert_eq!(
+                rows,
+                ["    ├ one", "    two", "    4 colour codes not drawn"]
+            );
+        }
+
+        /// VIEW-30: a line is cut to one row by what it draws as, so the codes it no longer draws
+        /// cannot make a line that fits look too wide.
+        #[test]
+        fn a_glimpse_line_is_measured_without_its_colour_codes() {
+            let words = "x".repeat(30);
+            let line = format!("\u{1b}[1m{words}\u{1b}[0m\u{1b}[1m\u{1b}[0m");
+            let rows = drawn_rows(&returned_lines(&glimpse(&[&line], 1, false), false, 40));
+
+            assert_eq!(rows[0], format!("    {words}"));
+        }
+
+        /// VIEW-30: the count is about the lines above it, so it is the last row even where the
+        /// glimpse was taken from the end and its note about earlier lines is the first.
+        #[test]
+        fn a_glimpse_from_the_end_counts_its_colour_codes_last() {
+            let rows = drawn_rows(&returned_lines(
+                &glimpse(&["\u{1b}[1mfailed\u{1b}[0m"], 5, true),
+                false,
+                80,
+            ));
+
+            assert!(rows[0].contains("earlier"), "{rows:?}");
+            assert_eq!(
+                rows.last().map(String::as_str),
+                Some("    2 colour codes not drawn")
+            );
+        }
+
+        /// VIEW-30: a glimpse with no colour code says nothing about them.
+        #[test]
+        fn a_glimpse_without_colour_codes_says_nothing_about_them() {
+            let rows = drawn_rows(&returned_lines(&glimpse(&["plain"], 1, false), false, 80));
+
+            assert_eq!(rows, ["    plain"]);
         }
 
         /// Tool lines come in runs and read as one block. Spacing them apart would double the
