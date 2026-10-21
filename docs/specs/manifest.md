@@ -380,7 +380,7 @@ screen. Content the plan wrote itself releases nothing.
 A release fixes the account and the place. Whom an act addresses within that place, such as the
 recipient of a reply, is what its definition takes from the item the act lands on: the plan line
 names it, and the authority's popup shows it before anything is sent, but the release does not fix
-it, and an item a fetch chose without narrowing is one its content chose.
+it, and an item a fetch chose without narrowing is one its content chose. Known costs records it.
 
 **Why.** The plan is written from the task before anything is read, so a release fixed from it
 lets fetched content change what a slot says and never where it goes.
@@ -401,3 +401,11 @@ lets fetched content change what a slot says and never where it goes.
   is why it is a cost rather than a hole in MANIFEST-10: a processor's output is a slot, and every
   step that lands a slot anywhere names the destination on its own line and is put to the person
   again as its turn comes.
+- **A release fixes the account and the place, not whom an act addresses there.** An act whose
+  definition takes a value from the item it lands on, such as a reply's recipient, addresses whoever
+  that item names. Where the fetch that chose the item did not narrow, as a fetch of the newest
+  message does not, the content fetched decides who that is. The plan line names what the authority
+  fills in and from which fetch, and the authority's popup shows the recipient before anything is
+  sent, which is the person's check; nothing earlier refuses it. Requiring such an act's fetch to
+  narrow, as an act on every match must, would close it, at the cost of definitions that list
+  narrowing terms for every act that takes a value from its item (MANIFEST-13).
