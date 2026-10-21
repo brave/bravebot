@@ -2063,10 +2063,12 @@ the settings' `off` is still read there as `workspace-write`.
 The mode is chosen separately from the permission mode ([MODE-1](permission-modes.md#MODE-1))
 and from `--dangerously-skip-permissions`. Neither changes which mode is in force, and neither
 widens a mode, with one exception. Under bypass ([MODE-4](permission-modes.md#MODE-4)) and
-`workspace-write`, on macOS and Linux, the stages of the lead session's `run` may write every path a
-`request_path` for writing would be granted ([SANDBOX-28](#SANDBOX-28)) without the planner asking.
+`workspace-write`, on macOS and Linux, in a workspace the person has trusted, the stages of the lead
+session's `run` may write every path a `request_path` for writing would be granted
+([SANDBOX-28](#SANDBOX-28)) without the planner asking.
 This widens `workspace-write`'s writes and nothing else: no read, no network access, nothing under
-`strict`, nothing for a delegate, and nothing on Windows. One line may start with no profile where a
+`strict`, nothing for a delegate, nothing in a workspace that is not trusted, and nothing on Windows.
+One line may start with no profile where a
 person approves it ([SANDBOX-29](#SANDBOX-29)), which is the mode `off` for that line only.
 
 Under `off` the opening screen and `/status` do not report a closed network, since nothing then holds
@@ -2091,14 +2093,15 @@ access `read-only` withholds. The pin is a floor because it is the
 administrator's rule about the machine, and a flag that overrode it would be the setting they wrote
 the pin to prevent. A pin looser than what a person asks for is not applied, so a person may be
 stricter than the machine requires. Bypass may widen `workspace-write`'s writes because under bypass every
-`request_path` is already granted without asking, so a stage starts with what the planner could
-get with one request instead of failing first. `strict` is not widened, since a person who chose it
-asked for less than the default. `read-only` is not widened either: bypass answers a question and
-does not change which mode is in force. The file tools are held to `read-only` because they write
-the same directories its programs cannot, and accepting edits and bypassing answer the write prompt
-unasked, so a mode that held back programs alone would hand the project back through `write_file`
-in the two permission modes a person picks to stop being asked, and a redirection written on a `run`
-line would hand it back to a planner the file tools had refused. The refusal comes before the
+`request_path` a session accepts is already granted without asking, so a stage starts with what the
+planner could get with one request instead of failing first. `strict` is not widened, since a
+person who chose it asked for less than the default. `read-only` is not widened either: bypass
+answers a question and does not change which mode is in force. The file tools are held to
+`read-only` because they write the same directories its programs cannot, and accepting edits and
+bypassing answer the write prompt unasked, so a mode that held back programs alone would hand the
+project back through `write_file` in the two permission modes a person picks to stop being asked,
+and a redirection written on a `run` line would hand it back to a planner the file tools had
+refused. The refusal comes before the
 permission mode is reached, as a deny rule's does ([MODE-6](permission-modes.md#MODE-6)), so no
 mode answers it.
 
@@ -2108,7 +2111,7 @@ adds the directory. `off` is the whole of the confinement removed: a window neve
 the command line prints it on its opening line. On Windows, where `read-only` reads no more than
 `strict` and writes less, a pin of `strict` keeps `read-only`, while a pin of `read-only` still
 refuses `strict`, which writes the session's directories. Under
-bypass, a `workspace-write` stage of the lead
+bypass in a trusted workspace, a `workspace-write` stage of the lead
 session writes every path outside the refusals [SANDBOX-28](#SANDBOX-28) lists, which includes
 shell start-up files and other repositories on the machine. Under `read-only`, a program that writes
 a session directory is refused with `Operation not permitted`. Builds, formatters and `git commit`
@@ -2921,7 +2924,8 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   a sub-task is reach the person never set up.
 - The desktop shows no card for it and refuses, which grants nothing.
 - **Under bypass, nothing needs asking for.** Where the permission mode answers every question
-  ([MODE-4](permission-modes.md#MODE-4)), the mode is `workspace-write`, and the platform is macOS or
+  ([MODE-4](permission-modes.md#MODE-4)), the mode is `workspace-write`, the workspace is trusted
+  ([TRUST-7](trust-map.md#TRUST-7), [TRUST-26](trust-map.md#TRUST-26)) and the platform is macOS or
   Linux, the stages of the lead session's `run` are given at the start what a request for writing
   would be granted: every path the account can write, except `/`, a drive root, the home
   directory and any directory above it as a whole (the entries already in them stay writable, and
@@ -2932,12 +2936,16 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   through links. It is for programs only: the file tools keep the reach
   [TRUST-10](trust-map.md#TRUST-10) gives them, and a `request_path` under bypass still opens a
   directory for them ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). Under `strict` each path is
-  still requested, under `off` there is no profile, in a delegate's `run` nothing is added
+  still requested, under `off` there is no profile, in a workspace that is not trusted no request is
+  accepted ([PATHREQ-5](tools/request-path.md#PATHREQ-5)) and the stages keep the session's
+  directories, in a delegate's `run` nothing is added
   ([DELEGATE-12](delegation.md#DELEGATE-12)), and on Windows, where a grant is an
   access-control entry written onto each directory, each path is still requested. Nothing a
   program wrote or printed decides which rows exist. The trace's `sandbox` gate says the stages
   were given what a request would be granted, `/status` says it in its `Programs write` line, and
-  the profile line a failed step carries names it.
+  the profile line a failed step carries names it. Where the stages are given none of the rows,
+  none of the three says anything about what a request would be granted, and `/status` says
+  that the running turn holds the answer while a turn holds the trust map.
 
 **Why.** A stage that cannot write a path the work needs fails with `Operation not permitted`, and
 the planner has no way to say which path it needed. Without a per-path request, the only way to let
@@ -2950,8 +2958,9 @@ Under bypass nobody is there to answer, and a run that fails with `Operation not
 sibling directory costs the planner a turn to learn what the profile already knows it will be
 granted. Giving those stages the rows a yes would have given them removes the failed run and gives
 them nothing a request would not: the same refusals hold, and the permission mode already answers
-the request with a yes. It is the one way the permission mode widens a sandbox mode
-([SANDBOX-22](#SANDBOX-22)).
+the request with a yes. In a workspace that is not trusted a request is refused, so there is no yes
+for the rows to stand in for and the stages are given none of them. It is the one way the permission
+mode widens a sandbox mode ([SANDBOX-22](#SANDBOX-22)).
 
 **What it costs.** A program that writes anywhere the account can reaches more than the session's
 directories, including a unix socket under such a row on macOS, where a network-outbound row
@@ -2996,6 +3005,7 @@ the whole of what is held back.
 `verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_a_file_run_later_or_a_new_entry_in_home`
 `verified-by: bravebot_agent::confine::a_bypass_stage_keeps_a_denied_write_and_strict_keeps_the_request`
 `verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
+`verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add`
 `verified-by: bravebot_agent::turn::a_delegate_of_a_confining_turn_cannot_write_outside_the_session`
 `verified-by: bravebot_core::policy::the_trail_says_the_programs_were_given_what_a_request_would_be`
 `verified-by: bravebot_tui::status::the_report_says_programs_write_what_a_request_would_be_granted_only_where_they_do`

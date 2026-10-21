@@ -516,7 +516,12 @@ impl<'a> Tools<'a> {
     }
 
     /// What this call's programs are confined to, or `None` where they are not.
-    fn confinement(&self) -> Option<crate::confine::Confinement> {
+    ///
+    /// `workspace_trusted` is [`workspace_is_trusted`], which the tools cannot ask themselves since
+    /// the trust map is the policy's. It decides whether bypass gives the stages what a
+    /// `request_path` for writing would be granted: only where a request is accepted
+    /// ([`requests_are_accepted`]), so a session that refuses every request is given no row for one.
+    fn confinement(&self, workspace_trusted: bool) -> Option<crate::confine::Confinement> {
         if !self.confines_programs() {
             return None;
         }
@@ -537,7 +542,13 @@ impl<'a> Tools<'a> {
                 .with_filesystem(&bravebot_config::sandbox_filesystem())
                 .with_path_reach(&self.workspace.path_reach())
                 .with_unasked_writes(
-                    !self.delegated && self.permission_mode.get() == crate::PermissionMode::Bypass,
+                    !self.delegated
+                        && self.permission_mode.get() == crate::PermissionMode::Bypass
+                        && requests_are_accepted(
+                            self.confine_runs,
+                            self.sandbox,
+                            workspace_trusted,
+                        ),
                 )
                 .with_host_grants(&self.workspace.granted_hosts())
                 .with_identities(bravebot_config::git_identities::settled());
@@ -7020,7 +7031,7 @@ fn request_path<S: Sink, C: Confirmer>(
     if write && tools.sandbox == bravebot_sandbox::SandboxMode::ReadOnly {
         return Produced::problem(NOT_ACCEPTING_WRITES);
     }
-    let Some(confinement) = tools.confinement() else {
+    let Some(confinement) = tools.confinement(workspace_is_trusted(policy, tools.workspace)) else {
         return Produced::problem(NOT_ACCEPTING_PATHS);
     };
 
@@ -8024,7 +8035,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // they do under the mode `off`, for this line only, and the next line is built from the
     // session's mode again.
     let mut confinement = tools
-        .confinement()
+        .confinement(workspace_is_trusted(policy, tools.workspace))
         .filter(|_| !unconfined)
         .map(|confinement| {
             confinement
@@ -19418,9 +19429,9 @@ mod tests {
             };
 
             let (off, on) = with_tools(&workspace, |tools| {
-                let off = tools.confinement().is_some();
+                let off = tools.confinement(true).is_some();
                 tools.confine_runs = true;
-                (off, tools.confinement())
+                (off, tools.confinement(true))
             });
 
             assert!(!off);
@@ -19434,9 +19445,11 @@ mod tests {
             }
         }
 
-        /// SANDBOX-22: a stage writes what a request would be granted only on the lead session, in
-        /// bypass. The regressions it rejects are a delegate given it because the permission mode
-        /// it was lent is bypass, and a session outside bypass given it.
+        /// SANDBOX-22, SANDBOX-28: a stage writes what a request would be granted only on the lead
+        /// session, in bypass, in a workspace where a request is accepted. The regressions it
+        /// rejects are a delegate given it because the permission mode it was lent is bypass, a
+        /// session outside bypass given it, and a bypass session given it in a workspace that is
+        /// not trusted, where every request is refused.
         #[cfg(unix)]
         #[test]
         fn only_the_lead_session_in_bypass_is_given_what_a_request_would_be() {
@@ -19446,11 +19459,12 @@ mod tests {
             let profile: &'static std::path::Path =
                 Box::leak(scratch.path.clone().into_boxed_path());
 
-            for (mode, delegated, given) in [
-                (Bypass, false, true),
-                (Bypass, true, false),
-                (Ask, false, false),
-                (AcceptEdits, false, false),
+            for (mode, delegated, trusted, given) in [
+                (Bypass, false, true, true),
+                (Bypass, false, false, false),
+                (Bypass, true, true, false),
+                (Ask, false, true, false),
+                (AcceptEdits, false, true, false),
             ] {
                 let said = with_tools(&workspace, |tools| {
                     tools.confine_runs = true;
@@ -19458,11 +19472,14 @@ mod tests {
                     tools.delegated = delegated;
                     tools.permission_mode = crate::LiveMode::new(mode);
                     tools
-                        .confinement()
+                        .confinement(trusted)
                         .expect("a platform with a base")
                         .writes_without_a_request()
                 });
-                assert_eq!(said, given, "{mode:?}, delegated {delegated}");
+                assert_eq!(
+                    said, given,
+                    "{mode:?}, delegated {delegated}, trusted {trusted}"
+                );
             }
         }
 
@@ -19490,7 +19507,7 @@ mod tests {
             let confinement = |workspace: &Workspace| {
                 with_tools(workspace, |tools| {
                     tools.confine_runs = true;
-                    tools.confinement().expect("a platform with a base")
+                    tools.confinement(true).expect("a platform with a base")
                 })
             };
             let granted = |workspace: &Workspace| {
@@ -19588,7 +19605,7 @@ mod tests {
                     tools.home = home;
                     tools.profile = Some(profile);
                     tools.remembering = session;
-                    let confinement = tools.confinement().expect("a platform with a base");
+                    let confinement = tools.confinement(true).expect("a platform with a base");
                     confinement.describe(&[&step]).sentences().len()
                 })
             };
@@ -19608,7 +19625,7 @@ mod tests {
                 tools.home = Some(state_path);
                 tools.profile = Some(profile);
                 tools.remembering = Some("mine");
-                let confinement = tools.confinement().expect("a platform with a base");
+                let confinement = tools.confinement(true).expect("a platform with a base");
                 confinement.describe(&[&step]).sentences().len()
             });
             assert_eq!(carried_in_other, 0);
