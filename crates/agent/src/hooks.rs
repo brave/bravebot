@@ -60,13 +60,21 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-/// How long a hook that states no `timeout` may run before it is stopped.
+/// How long a hook that states no `timeout` may run before it is stopped, except for one on
+/// `session-ended`, which has [`SESSION_END_LIMIT`].
 ///
 /// Short, because every hook holds the turn open while it runs and a person watching a session has
 /// no way to tell a slow hook from a slow model. A formatter or a notification finishes well inside
 /// this; anything that does not wants to be a background job of its own rather than something a
 /// turn waits on.
 pub const LIMIT: Duration = Duration::from_secs(30);
+
+/// How long a `session-ended` hook that states no `timeout` may run before it is stopped.
+///
+/// Shorter than [`LIMIT`], because the person is leaving: this hook holds the process open after
+/// everything else is done, with nothing on screen to say why. An entry that states its own
+/// `timeout` keeps it, since that is a bound the person wrote (HOOK-7).
+pub const SESSION_END_LIMIT: Duration = Duration::from_secs(5);
 
 /// How often the wait looks up to see whether the process is done.
 const TICK: Duration = Duration::from_millis(50);
@@ -135,8 +143,9 @@ pub fn fire(hooks: &Hooks, moment: Moment, tool: Option<&str>, directory: &Path)
 /// own `timeout` keeps it.
 ///
 /// So that a test of what happens to a hook that outstays its welcome does not have to wait the
-/// real bound out. Nothing else states one: how long a turn will wait on a hook is this module's
-/// decision and the file's, not a caller's.
+/// real bound out. Nothing else states one but [`SessionMoments`], whose `session-ended` has a
+/// shorter default: how long a turn will wait on a hook is this module's decision and the file's,
+/// not a caller's.
 pub fn fire_within(
     hooks: &Hooks,
     moment: Moment,
@@ -145,6 +154,104 @@ pub fn fire_within(
     limit: Duration,
 ) -> Vec<Fired> {
     fire_watched(hooks, moment, tool, directory, limit, &mut |_| {})
+}
+
+/// The hooks in force for a run that reads them once: what the file in the state directory declares,
+/// and none in a safe session, which is what leaves nothing to fire.
+pub fn in_force(home: Option<&Path>) -> Hooks {
+    match bravebot_core::safe::engaged() {
+        true => Hooks::default(),
+        false => Hooks::load(home),
+    }
+}
+
+/// The two ends of a session an interface opened, which that interface fires (HOOK-10).
+///
+/// A turn fires none of this. A session is many turns, and a command that should run once when it
+/// opens would otherwise run again at each turn, so the interface owning the session holds one of
+/// these for as long as the session lasts and the turns never see it.
+///
+/// The hooks are read once, when the session begins, and the same ones fire at its end: a file
+/// edited halfway through does not give a session an end it did not begin with. Both run in the
+/// directory the session opened in, so a relative path in a `session-ended` hook is the one its
+/// `session-started` twin ran from, however far `/cd` has since moved the session.
+///
+/// No rewind coverage gap is marked for either, as a turn's hooks mark one. A rewind point puts back
+/// what a turn wrote: `session-started` runs before the first turn does and `session-ended` after
+/// the last, so there is no turn whose restore either could leave incomplete.
+pub struct SessionMoments {
+    hooks: Hooks,
+    directory: PathBuf,
+    /// The bound of a `session-ended` hook that states no `timeout`.
+    end_limit: Duration,
+    started: bool,
+    ended: bool,
+}
+
+impl SessionMoments {
+    /// Read the hooks for a session opened in `directory`.
+    pub fn read(home: Option<&Path>, directory: &Path) -> Self {
+        Self {
+            hooks: in_force(home),
+            directory: directory.to_path_buf(),
+            end_limit: SESSION_END_LIMIT,
+            started: false,
+            ended: false,
+        }
+    }
+
+    /// The same, for a stated bound on a `session-ended` hook that states none of its own.
+    ///
+    /// So that a test of a hook that outstays it does not have to wait the real bound out, as
+    /// [`fire_within`] is for the turn's.
+    pub fn ending_within(mut self, limit: Duration) -> Self {
+        self.end_limit = limit;
+        self
+    }
+
+    /// Whether [`Self::started`] is about to run a hook, so an interface can draw what the person
+    /// is waiting on before the hook holds it back.
+    pub fn will_start_a_hook(&self) -> bool {
+        !self.started
+            && self
+                .hooks
+                .firing(Moment::SessionStarted, None)
+                .next()
+                .is_some()
+    }
+
+    /// Fire `session-started`, and say what went wrong where something did.
+    ///
+    /// Once: a call after the first fires nothing, so an interface that begins another conversation
+    /// inside the session it has open (`/resume`) cannot fire it a second time.
+    pub fn started(&mut self) -> Vec<String> {
+        if std::mem::replace(&mut self.started, true) {
+            return Vec::new();
+        }
+        crate::turn::trouble_sentences(fire(
+            &self.hooks,
+            Moment::SessionStarted,
+            None,
+            &self.directory,
+        ))
+    }
+
+    /// Fire `session-ended`, and say what went wrong where something did.
+    ///
+    /// Only for a session that fired `session-started`, so one that never began leaves nothing to
+    /// end, and once however the interface is left.
+    pub fn ended(&mut self) -> Vec<String> {
+        if !self.started || std::mem::replace(&mut self.ended, true) {
+            return Vec::new();
+        }
+        crate::turn::trouble_sentences(fire_within(
+            &self.hooks,
+            Moment::SessionEnded,
+            None,
+            &self.directory,
+            self.end_limit,
+        ))
+    }
 }
 
 /// One edge of a hook running, for whoever is drawing the wait.
@@ -365,6 +472,14 @@ mod tests {
         assert_eq!(
             announcement(Moment::Compacted),
             "{\"event\":\"compacted\"}\n"
+        );
+        assert_eq!(
+            announcement(Moment::SessionStarted),
+            "{\"event\":\"session-started\"}\n"
+        );
+        assert_eq!(
+            announcement(Moment::SessionEnded),
+            "{\"event\":\"session-ended\"}\n"
         );
     }
 

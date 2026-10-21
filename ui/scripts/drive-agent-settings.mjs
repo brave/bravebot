@@ -68,6 +68,13 @@ try {
   await dialog.getByText('No override selected', { exact: true }).waitFor()
   await dialog.getByText('No hooks configured.', { exact: true }).waitFor()
   await dialog.getByRole('button', { name: 'Add hook', exact: true }).click()
+  // The two session moments are offered, and the form says the desktop app does not fire them yet.
+  await dialog.locator('[data-test="hook-when-0"]').click()
+  await page.getByRole('option', { name: 'Session ends', exact: true }).click()
+  await dialog.getByText('The desktop app does not fire this moment yet.').waitFor()
+  await dialog.locator('[data-test="hook-when-0"]').click()
+  await page.getByRole('option', { name: 'Turn ends', exact: true }).click()
+  await dialog.getByText('The desktop app does not fire this moment yet.').waitFor({ state: 'detached' })
   // An entry with no program is one the agent reads no hook out of, and a file this panel wrote and
   // the agent cannot read whole is a file this panel then refuses to edit.
   await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()

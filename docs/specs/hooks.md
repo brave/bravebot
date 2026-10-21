@@ -13,6 +13,9 @@ governs:
   - crates/agent/src/turn/task.rs
   - crates/agent/src/turn/sentences.rs
   - crates/agent/src/delegate.rs
+  - crates/cli/src/main.rs
+  - crates/cli/src/plain.rs
+  - crates/tui/src/app.rs
   - crates/agent/src/confirm.rs
   - crates/agent/src/permission_mode.rs
   - crates/ui-bridge/src/hooks.rs
@@ -66,7 +69,7 @@ learn.
 `verified-by: by-construction (one path is ever built, by joining the file name onto the state directory the caller was given; nothing reads a hooks file from a working directory or an ancestor of one)`
 
 <a id="HOOK-2"></a>
-### HOOK-2: six moments, and each fires the hooks written for it
+### HOOK-2: eight moments, and each fires the hooks written for it
 
 A declaration names one moment. These are the moments:
 
@@ -78,6 +81,8 @@ A declaration names one moment. These are the moments:
 | `prompt-shown` | just before a prompt or an `ask_user` question is put to a person who can answer it |
 | `checkout-made` | once the driver has written a checkout for a delegate, before that delegate's first request |
 | `compacted` | after a summary has been adopted in place of the older part of the conversation |
+| `session-started` | when an interface a person opened has begun a session, before it sends a turn |
+| `session-ended` | when that interface is left, however it ended |
 
 A `tool-finished` entry may name a `tool`, and then fires for calls of that name alone; one that
 names none fires for every call. A tool named on any of the other moments is about a call
@@ -87,7 +92,8 @@ fire declares no hook and leaves the rest of the file in force.
 
 The turn moments belong to the turn a person asked for. A delegate is a run inside that turn,
 started by a call nobody typed, so a turn that spawns three delegates still fires `turn-started`
-once. A call a delegate made is a call, and fires `tool-finished` like any other.
+once. A call a delegate made is a call, and fires `tool-finished` like any other. The session
+moments belong to the interface a person opened, and HOOK-10 says when each fires.
 
 `prompt-shown` is about a question that reaches a person, so it fires once for each one that does and
 for none that is answered without them: not where nobody can be asked ([PROMPT-9](prompting.md#PROMPT-9)),
@@ -161,6 +167,8 @@ and a turn that died is exactly when they want telling.
 `verified-by: bravebot_agent::turn::a_summary_that_could_not_be_made_fires_no_hook`
 `verified-by: bravebot_agent::turn::a_delegate_s_compaction_fires_no_compacted_hook`
 `verified-by: bravebot_tui::app::the_thread_that_summarises_fires_the_hooks_in_the_sessions_directory`
+`verified-by: bravebot_config::hooks::a_session_moment_fires_only_the_hooks_written_for_it`
+`verified-by: bravebot_config::hooks::a_tool_named_on_a_session_moment_fires_for_nothing`
 
 <a id="HOOK-3"></a>
 ### HOOK-3: a hook is a program and its arguments, never a line a shell parses
@@ -253,6 +261,7 @@ would reach a hook as another directory through a line of JSON.
 
 `verified-by: bravebot_agent::hooks::a_hook_is_told_the_moment_and_nothing_else`
 `verified-by: bravebot_agent::hooks::the_line_a_hook_is_told_is_built_from_the_moment_alone`
+`verified-by: bravebot_agent::hooks::a_session_start_hook_fires_once_however_often_it_is_asked`
 `verified-by: bravebot_agent::hooks::a_hook_is_given_no_environment_of_its_own`
 `verified-by: bravebot_agent::hooks::a_checkout_hook_is_handed_the_checkout_and_the_working_directory_it_was_made_from`
 `verified-by: bravebot_agent::hooks::a_checkout_hook_is_handed_a_directory_whose_name_is_not_text_as_it_is`
@@ -292,11 +301,11 @@ decision is taken from something a person wrote rather than from something a pro
 A hook that could not be started, that ended badly, or that was still running when its bound ran out
 and was stopped, is said to the person, naming the moment, the program and, for a hook that was stopped, the
 bound in seconds. The bound is 30 seconds unless the entry states a `timeout`, which is a whole number
-of seconds from 1 to 600; an entry whose `timeout` is anything else declares no hook, as HOOK-3 treats
-a malformed argument. It reaches a live display as
-it happens and the turn's own account of itself as well, so a run with nowhere to draw says it too.
-A `compacted` hook that `/compact` fires has no turn and so no account, and reaches the live display
-alone.
+of seconds from 1 to 600, and 5 seconds for a `session-ended` entry that states none (HOOK-10). An entry
+whose `timeout` is anything else declares no hook, as HOOK-3 treats a malformed argument. It reaches a
+live display as it happens and the turn's own account of itself as well, so a run with nowhere to draw
+says it too. A `compacted` hook that `/compact` fires has no turn and so no account, and reaches the
+live display alone.
 A turn that fails has no account, and a caller that draws nothing as the turn runs keeps what it was
 told and says it beside the failure.
 A moment inside a delegate is a moment of the turn that spawned it and reaches that turn's account,
@@ -338,6 +347,11 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_config::hooks::an_oversized_file_declares_no_hooks`
 `verified-by: bravebot_config::hooks::a_hooks_file_is_read_up_to_64_kb_and_not_a_byte_past_it`
 `verified-by: bravebot_agent::hooks::the_default_bound_is_thirty_seconds`
+`verified-by: bravebot_agent::hooks::the_default_bound_of_a_session_end_is_five_seconds`
+`verified-by: bravebot_agent::hooks::a_session_end_hook_is_stopped_at_the_bound_the_end_has`
+`verified-by: bravebot_agent::hooks::a_session_end_hook_that_states_a_timeout_keeps_it`
+`verified-by: bravebot_agent::hooks::a_session_hook_that_goes_wrong_is_said_naming_the_moment_and_program`
+`verified-by: bravebot_cli::running::a_session_hook_that_could_not_start_is_said_whether_the_run_answered_or_failed`
 
 <a id="HOOK-8"></a>
 ### HOOK-8: one reader decides what a hook is, and what it read is what is shown
@@ -407,6 +421,63 @@ A check is announced the same way, for the same reason.
 display to hand, and a running status drawn over the prompt it precedes would be gone before the
 prompt is. What it says when it goes wrong is still said (HOOK-7), as soon as the turn next has
 somewhere to say it, which is the end of the call the question came up in.
+
+`session-started` and `session-ended` are the other exception: the interface that owns the session
+fires them with no turn to hold open, so nothing is drawn while either runs. What they say when they
+go wrong is still said (HOOK-7).
+
+<a id="HOOK-10"></a>
+### HOOK-10: a session moment belongs to the interface a person opened, and fires once for it
+
+`session-started` fires once, when an interface a person opened has begun a session and before it
+sends a turn: the full-screen interface once every question it opens with is answered, a session in
+lines (`--plain`) before it reads its first prompt, and a one-shot run before its turn.
+`session-ended` fires once when that interface is left, however it ended, and only where
+`session-started` fired: the full-screen interface after it has handed the terminal back, a session
+in lines when its input ends, and a one-shot run when its turn is over, before it reports. A run
+refused before it could send anything, and an interface left at one of the questions it opens with,
+began no session and fire neither. A session started with `--safe` reads no hooks, so it fires
+neither.
+
+A turn fires neither moment, and neither does a delegate. `/resume` and `/clear` begin another
+conversation in an interface that is already open and fire neither. A session a background process
+holds fires neither. The interface that handed a session to a background process with `/bg` does not
+fire `session-ended`, since the session goes on.
+
+The hooks are read once, when the session begins, and the same ones fire at its end. Both moments run
+in the directory the session opened in. A `session-ended` hook that states no `timeout` is held to 5
+seconds, and one that states a `timeout` keeps it (HOOK-7). A hook is told the moment and nothing else
+(HOOK-5) and decides nothing (HOOK-6). What it says when it goes wrong is said where the interface has
+somewhere to say it: in the transcript when the full-screen interface opens, on the terminal once that
+interface is left, on standard error for a session in lines, and in the notices of a one-shot run's
+result.
+
+**Why.** A session is many turns, so a command meant to run once when it opens would run at every
+turn if a turn fired it. The interface that opens a session is the one place that knows when it begins
+and when it ends, so it fires the moments and a turn never does.
+
+`session-ended` is held to a shorter bound than the other moments because the person is leaving and
+nothing on the screen explains the wait. A hook that needs longer writes a `timeout`, which HOOK-7
+keeps as written.
+
+The hooks are read once for the reason a turn reads them once: a file edited halfway through would
+give a session an end it did not begin with. Both moments run where the session opened, so a relative
+path in the hook that ends a session is the path its twin started from, whatever `/cd` has done since.
+
+`verified-by: bravebot_agent::hooks::a_session_start_hook_fires_once_however_often_it_is_asked`
+`verified-by: bravebot_agent::hooks::a_session_end_hook_fires_once_and_only_for_a_session_that_began`
+`verified-by: bravebot_agent::hooks::each_end_of_a_session_fires_the_hooks_written_for_it`
+`verified-by: bravebot_agent::hooks::a_session_hook_runs_in_the_directory_the_session_opened_in`
+`verified-by: bravebot_agent::hooks::the_hooks_a_session_began_with_are_the_ones_that_fire_at_its_end`
+`verified-by: bravebot_agent::turn::a_turn_and_its_delegate_fire_neither_end_of_a_session`
+`verified-by: bravebot_cli::running::a_one_shot_run_is_a_session_of_one_turn_between_the_two_session_moments`
+`verified-by: bravebot_cli::running::a_one_shot_run_whose_turn_failed_still_ends_its_session`
+`verified-by: bravebot_cli::running::a_run_refused_before_its_turn_opens_no_session`
+`verified-by: bravebot_cli::running::a_session_in_lines_starts_once_however_many_prompts_follow_and_ends_with_its_input`
+`verified-by: bravebot_cli::running::a_session_in_lines_left_at_its_startup_question_opens_no_session`
+`verified-by: bravebot_cli::running::a_safe_run_fires_no_session_moment`
+`verified-by: bravebot_cli::running::a_background_session_fires_turn_moments_and_neither_session_moment`
+`verified-by: bravebot_agent::hooks::an_interface_is_told_whether_a_start_hook_will_run`
 
 ## The file
 
@@ -485,6 +556,21 @@ somewhere to say it, which is the end of the call the question came up in.
   for up to that long.
 - **A delegate's compaction fires nothing.** The delegate's conversation is its own, so a person
   whose delegates compact does not hear of it.
-- **There is no moment for a session.** A session is many turns, and something that should happen
-  once when the program opens fires per turn instead. The interactive interface is where a session
-  begins and ends, and nothing there fires a hook yet.
+- **A session the bridge holds fires neither session moment.** The desktop interface, an editor
+  hosting a session over ACP and the local host fire no `session-started` and no `session-ended`
+  hook, so an entry for either fires in the terminal interface alone (#2925).
+- **`session-started` holds the first prompt back while it runs.** The hook runs before the first
+  turn is sent, up to the bound in HOOK-7, so a slow one delays the session it announces. Starting one
+  in the background is not offered, for the reason a hook that does not wait is not. A hook that
+  starts a long-running service starts it on its own and exits.
+- **`session-ended` is advisory.** A process that is killed outright, or stopped by a signal
+  such as Ctrl-C in a one-shot run or a session in lines, runs none, and a hook that outstays its 5
+  seconds is stopped while the person is waiting to be handed their prompt back.
+- **A session handed to the background fires no `session-ended`.** `/bg` leaves the terminal and the
+  session goes on in another process, which fires neither moment, so a hook cannot end what
+  `session-started` began for it.
+- **A conversation begun inside an open interface fires nothing.** `/resume` and `/clear` begin
+  another conversation in the interface that is already open, so a command meant to run once for each
+  conversation runs once for the interface.
+- **A hook added to the file while a session runs is not part of it.** The hooks a session fires at
+  its end are the ones it read at its start (HOOK-10).

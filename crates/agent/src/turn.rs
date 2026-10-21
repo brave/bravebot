@@ -872,7 +872,7 @@ pub fn compact<S: Sink, R: Reporter>(
     // nothing about the compaction it was told of (HOOK-6, HOOK-7).
     if let (Ok(Some(_)), Some(hooked)) = (&done, hooked) {
         fire_hooks(
-            &hooks_in_force(hooked.home),
+            &crate::hooks::in_force(hooked.home),
             bravebot_config::hooks::Moment::Compacted,
             None,
             hooked.workspace,
@@ -2246,16 +2246,6 @@ fn reads_that_run_together(
     if together < 2 { 0 } else { together }
 }
 
-/// The hooks in force for a person whose own directory is `home`.
-///
-/// Not read at all in a safe session, which is what leaves no hook to fire.
-fn hooks_in_force(home: Option<&std::path::Path>) -> bravebot_config::hooks::Hooks {
-    match bravebot_core::safe::engaged() {
-        true => bravebot_config::hooks::Hooks::default(),
-        false => bravebot_config::hooks::Hooks::load(home),
-    }
-}
-
 /// Run the hooks a person attached to `moment`, and answer with what went wrong where something
 /// did.
 ///
@@ -2364,7 +2354,7 @@ fn say_prompt_notices<R: Reporter + ?Sized>(
 }
 
 /// What went wrong, in a sentence each, for the hooks that did not run and end well.
-fn trouble_sentences(fired_all: Vec<crate::hooks::Fired>) -> Vec<String> {
+pub(crate) fn trouble_sentences(fired_all: Vec<crate::hooks::Fired>) -> Vec<String> {
     let mut said = Vec::new();
     for fired in fired_all {
         let Some(trouble) = fired.trouble else {
@@ -2453,7 +2443,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // Read once, here, rather than at each moment. What the file says is a property of the machine
     // and not of a round, and a turn whose hooks changed halfway through would be the harder thing
     // to explain to whoever edited it mid-session.
-    let hooks = hooks_in_force(task.home.as_deref());
+    //
+    // Not read at all in a safe session, which is what leaves no hook to fire.
+    let hooks = crate::hooks::in_force(task.home.as_deref());
 
     // The turn moments belong to the turn a person asked for. A delegate is a run inside this one,
     // started by a call the person did not make, so firing "the turn began" for each of them would

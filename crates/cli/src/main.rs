@@ -2243,11 +2243,22 @@ fn run_and_report(
     // The id of the record this run wrote, which the result object carries (CLI-25).
     let mut session: Option<String> = None;
 
+    // The run is a session of one turn, so it opens before the turn is sent and ends once the
+    // record is written (HOOK-10). A run refused before this point opened nothing.
+    let mut moments = bravebot_agent::hooks::SessionMoments::read(
+        bravebot_agent::home::directory().as_deref(),
+        workspace.root(),
+    );
+    let opened = moments.started();
+    for sentence in &opened {
+        bravebot_agent::report::Reporter::notice(&mut reporter, sentence.clone());
+    }
+
     // Both modes take the same arguments and return the same outcome. The whole of the
     // difference is inside: one asks the model what to do next after every result, the other
     // asked once, before there were any.
     let mut unmet: Option<goal_run::Unmet> = None;
-    let outcome = match mode {
+    let mut outcome = match mode {
         Mode::Turn => {
             let (outcome, kept, why) = run_turn(
                 TurnRun {
@@ -2299,6 +2310,18 @@ fn run_and_report(
             bravebot_session::sessions::Front::Terminal,
             bravebot_stamp::BUILD,
         );
+    }
+
+    // Before the reply is written, so a hook that could not run is said beside it and in the result
+    // object. A run that failed carries what the reporter was told, and one that answered carries
+    // the outcome's own list, so both are given the sentences.
+    let closed = moments.ended();
+    for sentence in &closed {
+        bravebot_agent::report::Reporter::notice(&mut reporter, sentence.clone());
+    }
+    if let Ok(outcome) = &mut outcome {
+        outcome.notices.splice(0..0, opened);
+        outcome.notices.extend(closed);
     }
 
     // Read once the turn is over, which is when the confirmer's borrow ends.
@@ -3045,7 +3068,11 @@ fn interactive(
         disabled: Vec::new(),
     };
 
-    match bravebot_tui::app::run(
+    let mut moments = bravebot_agent::hooks::SessionMoments::read(
+        bravebot_agent::home::directory().as_deref(),
+        workspace.root(),
+    );
+    let ended = bravebot_tui::app::run(
         &mut config,
         &workspace,
         confinement,
@@ -3056,7 +3083,17 @@ fn interactive(
         links,
         skip_permissions,
         prompts,
-    ) {
+        &mut moments,
+    );
+    // After the terminal is handed back, so what a hook that went wrong said survives on the screen
+    // the person is left looking at. Nothing is fired for a session that never began, nor for one
+    // handed to a background process, which goes on without the interface (HOOK-10).
+    let closed = match &ended {
+        Ok(bravebot_tui::app::Ended::Background { .. }) => Vec::new(),
+        _ => moments.ended(),
+    };
+    say_notices(&mut std::io::stderr().lock(), &closed);
+    match ended {
         // Printed after the terminal is handed back, so it survives on the screen the person is
         // left looking at rather than going onto the alternate screen with everything else. A
         // session is worth resuming far more often than anybody thinks to write its name down

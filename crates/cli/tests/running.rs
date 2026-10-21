@@ -1690,6 +1690,288 @@ fn a_run_whose_turn_failed_still_says_what_its_hooks_said() {
     );
 }
 
+/// A hooks file with one entry per moment named, each of which appends the moment's own word to
+/// `log`. Run through `/bin/sh` as a person-named program, so no script is written for a run to
+/// start while another test's child still holds the descriptor it was written through.
+#[cfg(unix)]
+fn hooks_that_log(moments: &[&str], log: &Path) -> String {
+    hooks_that_log_to(moments, &log.display().to_string())
+}
+
+/// The same, appending to `destination`, which the shell the hook runs through expands.
+#[cfg(unix)]
+fn hooks_that_log_to(moments: &[&str], destination: &str) -> String {
+    let entries: Vec<String> = moments
+        .iter()
+        .map(|moment| {
+            format!(
+                r#"{{"on": "{moment}", "run": ["/bin/sh", "-c", "echo {moment} >> {destination}"]}}"#
+            )
+        })
+        .collect();
+    format!(r#"{{"hooks": [{}]}}"#, entries.join(", "))
+}
+
+/// HOOK-10 through the binary: a one-shot run is a session of one turn, so `session-started` fires
+/// before the turn is sent and `session-ended` once it is over, with the turn's own moments between.
+/// The regressions it rejects are a run that fires neither end, and one that fires them on the wrong
+/// side of the turn, which stops a service before the turn that used it.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_is_a_session_of_one_turn_between_the_two_session_moments() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let scratch =
+        Scratch::new("cli-running-session-moments").with_settings(&settings_for(&gateway));
+    let log = scratch.path.join("moments.txt");
+    let scratch = scratch.with_hooks(&hooks_that_log(
+        &[
+            "session-ended",
+            "turn-finished",
+            "session-started",
+            "turn-started",
+        ],
+        &log,
+    ));
+
+    let output = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "say something"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(stdout.trim(), "all done", "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&log).expect("the hooks ran"),
+        "session-started\nturn-started\nturn-finished\nsession-ended\n"
+    );
+}
+
+/// HOOK-10: a run whose turn failed has still begun a session, and `session-ended` fires however it
+/// ended, as `turn-finished` does.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_whose_turn_failed_still_ends_its_session() {
+    let scratch = Scratch::new("cli-running-session-moments-failed");
+    let log = scratch.path.join("moments.txt");
+    let scratch = scratch.with_hooks(&hooks_that_log(&["session-started", "session-ended"], &log));
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("127.0.0.1:1"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&log).expect("the hooks ran"),
+        "session-started\nsession-ended\n"
+    );
+}
+
+/// HOOK-10: a run refused before it could send anything opened no session, so neither end fires. The
+/// regression it rejects is firing `session-started` at the top of the program, where a run the
+/// configuration cannot serve starts a service for nothing and then stops it.
+#[cfg(unix)]
+#[test]
+fn a_run_refused_before_its_turn_opens_no_session() {
+    let scratch = Scratch::new("cli-running-session-moments-refused");
+    let log = scratch.path.join("moments.txt");
+    let scratch = scratch.with_hooks(&hooks_that_log(&["session-started", "session-ended"], &log));
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "ai-chat.example.invalid"),
+        ],
+        &["-p", "say something"],
+    );
+
+    assert!(!output.status.success(), "{:?}", said(&output));
+    assert!(
+        !log.exists(),
+        "a session moment fired for a run that never began: {:?}",
+        std::fs::read_to_string(&log)
+    );
+}
+
+/// HOOK-7, HOOK-10: a hook on either end of a session that cannot be started is said, naming the
+/// moment and the program, in the result object of a run that answered and beside the failure of one
+/// that did not. The regression it rejects is a sentence kept only where one of the two endings
+/// prints it, which leaves the other run with a hook that quietly stopped working.
+#[cfg(unix)]
+#[test]
+fn a_session_hook_that_could_not_start_is_said_whether_the_run_answered_or_failed() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let scratch = Scratch::new("cli-running-session-moments-said")
+        .with_settings(&settings_for(&gateway))
+        .with_hooks(
+            r#"{"hooks": [
+                {"on": "session-started", "run": ["/no/such/opener"]},
+                {"on": "session-ended", "run": ["/no/such/closer"]}
+            ]}"#,
+        );
+
+    let answered = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["-p", "--json", "say something"],
+    );
+    let (stdout, stderr) = said(&answered);
+    assert!(answered.status.success(), "{stderr}");
+    let report: serde_json::Value = serde_json::from_str(stdout.trim()).expect("a result object");
+    let notices: Vec<&str> = report["notices"]
+        .as_array()
+        .expect("notices")
+        .iter()
+        .filter_map(|notice| notice.as_str())
+        .collect();
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    assert!(
+        notices[0].contains("session-started") && notices[0].contains("/no/such/opener"),
+        "{notices:?}"
+    );
+    assert!(
+        notices[1].contains("session-ended") && notices[1].contains("/no/such/closer"),
+        "{notices:?}"
+    );
+
+    let failed = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["-p", "say something"],
+    );
+    let (stdout, stderr) = said(&failed);
+    assert!(!failed.status.success(), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("/no/such/opener"), "{stderr}");
+    assert!(stderr.contains("/no/such/closer"), "{stderr}");
+}
+
+/// HOOK-10 in a session in lines: `session-started` fires once however many prompts follow, and
+/// `session-ended` fires when the input ends. The regression it rejects is a session that fires its
+/// start at each prompt, which runs a command meant to run once as often as the person types.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_starts_once_however_many_prompts_follow_and_ends_with_its_input() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let scratch =
+        Scratch::new("cli-running-plain-session-moments").with_settings(&settings_for(&gateway));
+    let log = scratch.path.join("moments.txt");
+    let scratch = scratch.with_hooks(&hooks_that_log(
+        &[
+            "session-ended",
+            "turn-finished",
+            "session-started",
+            "turn-started",
+        ],
+        &log,
+    ));
+
+    let output = in_a_terminal_answering(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--plain"],
+        "y\nfirst\nsecond\n",
+    );
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert_eq!(
+        std::fs::read_to_string(&log).expect("the hooks ran"),
+        "session-started\nturn-started\nturn-finished\nturn-started\nturn-finished\nsession-ended\n"
+    );
+}
+
+/// HOOK-10 in a session in lines: the end of the input at the startup question starts no session, so
+/// neither end fires. The regression it rejects is a session that fires `session-ended` for one that
+/// never began.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_left_at_its_startup_question_opens_no_session() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let scratch = Scratch::new("cli-running-plain-session-moments-unopened")
+        .with_settings(&settings_for(&gateway));
+    let log = scratch.path.join("moments.txt");
+    let scratch = scratch.with_hooks(&hooks_that_log(&["session-started", "session-ended"], &log));
+
+    let output = in_a_terminal_answering(&scratch.path, AT_A_GATEWAY, &["--plain"], "");
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        !log.exists(),
+        "a session moment fired for a session that never began: {:?}",
+        std::fs::read_to_string(&log)
+    );
+}
+
+/// HOOK-10 with `--safe`: a safe run reads none of the person's hooks, so neither end of its session
+/// fires. The regression it rejects is a session moment that reads the hooks file itself and skips
+/// the switch every other loader consults.
+#[cfg(unix)]
+#[test]
+fn a_safe_run_fires_no_session_moment() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let scratch =
+        Scratch::new("cli-running-session-moments-safe").with_settings(&settings_for(&gateway));
+    let log = scratch.path.join("moments.txt");
+    let scratch = scratch.with_hooks(&hooks_that_log(&["session-started", "session-ended"], &log));
+
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--safe", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(stdout.trim(), "all done", "{stderr}");
+    assert!(
+        !log.exists(),
+        "a safe run fired a session moment: {:?}",
+        std::fs::read_to_string(&log)
+    );
+}
+
+/// HOOK-10 over the process: a background session's process is a session no interface opened, so it
+/// fires its turn moments and neither session moment. The first run is a one-shot, which fires both
+/// ends around its one turn, and what the background process adds to the log is its own turn. The
+/// regression it rejects is the process firing `session-started` as it starts.
+#[cfg(unix)]
+#[test]
+fn a_background_session_fires_turn_moments_and_neither_session_moment() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("reviewed"));
+    let hooks = hooks_that_log_to(
+        &[
+            "session-ended",
+            "turn-finished",
+            "session-started",
+            "turn-started",
+        ],
+        "$HOME/moments.txt",
+    );
+    let (home, mut host, id) = a_host_resumed_from_a_record(&gateway, true, Some(&hooks));
+
+    let _ = the_record_after_the_second_turn(&home.0, &id);
+    let _ = host.kill();
+    let _ = host.wait();
+
+    assert_eq!(
+        std::fs::read_to_string(home.0.join("moments.txt")).expect("the hooks ran"),
+        "session-started\nturn-started\nturn-finished\nsession-ended\nturn-started\nturn-finished\n"
+    );
+}
+
 /// The whole of the reported defect: a configuration that cannot be used, an argument the program
 /// does not have, and a backend nothing is listening on all exited 1, so a caller could not tell
 /// "fix the config" from "try again in a minute" without reading English.
@@ -9653,10 +9935,23 @@ fn a_host_resumed_from_a_record_naming_a_definition(
     gateway: &Gateway,
     keep_definition: bool,
 ) -> (ShortHome, std::process::Child, String) {
+    a_host_resumed_from_a_record(gateway, keep_definition, None)
+}
+
+/// The same, with `hooks` written as the person's hooks file before the first run.
+#[cfg(unix)]
+fn a_host_resumed_from_a_record(
+    gateway: &Gateway,
+    keep_definition: bool,
+    hooks: Option<&str>,
+) -> (ShortHome, std::process::Child, String) {
     let home = ShortHome::new();
     let state = home.0.join(".bravebot");
     std::fs::create_dir_all(state.join("agents")).expect("the definitions directory");
     std::fs::write(state.join("settings.json"), settings_for(gateway)).expect("settings");
+    if let Some(hooks) = hooks {
+        std::fs::write(state.join("hooks.json"), hooks).expect("the hooks file");
+    }
     std::fs::write(
         state.join("agents/rule-reviewer.md"),
         a_definition("rule-reviewer", "kind: reader\n"),

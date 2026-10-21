@@ -63,10 +63,10 @@ pub fn hooks_file(directory: &Path) -> PathBuf {
 /// A moment a hook can be attached to, in a person's terms.
 ///
 /// Deliberately short. Each is something somebody can point at in a session that has happened:
-/// the turn began, a call finished, the turn is over, a question is waiting on them, a checkout was
-/// made for a delegate, the conversation was shortened. The audit trail's events are a different
-/// vocabulary answering a different question, and a person writing a hook should not have to learn
-/// what a gate or a slot is.
+/// the session opened, the turn began, a call finished, the turn is over, a question is waiting on
+/// them, a checkout was made for a delegate, the conversation was shortened, the session closed. The
+/// audit trail's events are a different vocabulary answering a different question, and a person
+/// writing a hook should not have to learn what a gate or a slot is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Moment {
     /// The turn a person asked for has begun, before anything is sent.
@@ -82,6 +82,10 @@ pub enum Moment {
     /// A summary has replaced the older part of the conversation in the request, whether the budget
     /// forced it or the person asked for it.
     Compacted,
+    /// An interface a person opened has begun a session, before any turn is sent.
+    SessionStarted,
+    /// The interface a person opened is being left, however that came about.
+    SessionEnded,
 }
 
 impl Moment {
@@ -97,6 +101,8 @@ impl Moment {
             "prompt-shown" => Some(Self::PromptShown),
             "checkout-made" => Some(Self::CheckoutMade),
             "compacted" => Some(Self::Compacted),
+            "session-started" => Some(Self::SessionStarted),
+            "session-ended" => Some(Self::SessionEnded),
             _ => None,
         }
     }
@@ -110,6 +116,8 @@ impl Moment {
             Self::PromptShown => "prompt-shown",
             Self::CheckoutMade => "checkout-made",
             Self::Compacted => "compacted",
+            Self::SessionStarted => "session-started",
+            Self::SessionEnded => "session-ended",
         }
     }
 }
@@ -127,7 +135,7 @@ pub struct Hook {
     /// The program and its arguments. Never empty: an entry with nothing to run is not kept.
     run: Vec<String>,
     /// How long this hook may run, in whole seconds, where the entry stated one. `None` is the
-    /// bound a turn uses for every hook that states none.
+    /// bound its moment has for every hook that states none.
     timeout: Option<u64>,
 }
 
@@ -405,7 +413,7 @@ mod tests {
             .collect()
     }
 
-    /// HOOK-2: the six moments are the vocabulary, and each is spelled the way the file spells it.
+    /// HOOK-2: the eight moments are the vocabulary, and each is spelled the way the file spells it.
     #[test]
     fn each_moment_is_named_by_the_word_a_file_spells_it_with() {
         for (moment, word) in [
@@ -415,6 +423,8 @@ mod tests {
             (Moment::PromptShown, "prompt-shown"),
             (Moment::CheckoutMade, "checkout-made"),
             (Moment::Compacted, "compacted"),
+            (Moment::SessionStarted, "session-started"),
+            (Moment::SessionEnded, "session-ended"),
         ] {
             assert_eq!(Moment::parse(word), Some(moment));
             assert_eq!(moment.as_str(), word);
@@ -573,6 +583,46 @@ mod tests {
             programs(&hooks, Moment::Compacted, None),
             vec![vec!["shrunk".to_string()]]
         );
+    }
+
+    /// HOOK-2, HOOK-10: the two ends of a session are moments of their own. An entry written for one
+    /// fires at that one, and not at the other or at any moment of a turn.
+    #[test]
+    fn a_session_moment_fires_only_the_hooks_written_for_it() {
+        let hooks = Hooks::parse(
+            r#"{"hooks": [
+                {"on": "session-started", "run": ["open"]},
+                {"on": "session-ended", "run": ["close"]},
+                {"on": "turn-started", "run": ["begin"]}
+            ]}"#,
+        );
+        assert_eq!(
+            programs(&hooks, Moment::SessionStarted, None),
+            vec![vec!["open".to_string()]]
+        );
+        assert_eq!(
+            programs(&hooks, Moment::SessionEnded, None),
+            vec![vec!["close".to_string()]]
+        );
+        assert_eq!(
+            programs(&hooks, Moment::TurnStarted, None),
+            vec![vec!["begin".to_string()]]
+        );
+    }
+
+    /// HOOK-2: a session is not a call, so a tool named on either end of one is about a call that
+    /// does not happen there, and the entry is shown as firing for nothing.
+    #[test]
+    fn a_tool_named_on_a_session_moment_fires_for_nothing() {
+        let hooks = Hooks::parse(
+            r#"{"hooks": [
+                {"on": "session-started", "tool": "write_file", "run": ["open"]},
+                {"on": "session-ended", "tool": "write_file", "run": ["close"]}
+            ]}"#,
+        );
+        assert!(programs(&hooks, Moment::SessionStarted, None).is_empty());
+        assert!(programs(&hooks, Moment::SessionEnded, None).is_empty());
+        assert!(hooks.declared().iter().all(Hook::fires_for_nothing));
     }
 
     /// HOOK-2: two entries for one moment are two commands, in the order the file listed them.
