@@ -3683,6 +3683,10 @@ fn slash_anchor(file: &Path, a_checkouts_file: bool, workspace: Option<&Path>) -
 /// ([PERM-3](../../../docs/specs/permissions.md#PERM-3)), and the rule language anchors that at one
 /// directory it is handed for every rule it reads, so a rule from any other file is told where it
 /// starts before the layers merge. Any other rule, and any other specifier, comes back as it was.
+///
+/// The specifier is taken as written, not trimmed. Whitespace at an end of a path specifier is what
+/// the rule language reports, and it cannot once the rewrite has trimmed it away: `/x ` is spelled
+/// `./x ` and `/ x` is not a single-slash rule.
 fn anchor_slash_rule(rule: &str, anchor: &str) -> String {
     let Some((name, rest)) = rule.trim().split_once('(') else {
         return rule.to_string();
@@ -3690,7 +3694,6 @@ fn anchor_slash_rule(rule: &str, anchor: &str) -> String {
     let Some(specifier) = rest.strip_suffix(')') else {
         return rule.to_string();
     };
-    let specifier = specifier.trim();
     let name = name.trim_end();
     let mut characters = specifier.chars();
     let single_slash =
@@ -5586,6 +5589,20 @@ mod tests {
             .naming_the_project_layer()
             .read();
         assert_eq!(settings.permissions().deny, ["Read(./secrets/**)"]);
+    }
+
+    /// PERM-3, TRUST-2: the step that starts a `/x` rule where its layer says takes the specifier as
+    /// written. Whitespace at the end of the name stays in the rule, where the rule language reports
+    /// it, and whitespace in front of the slash is not a single slash that an anchor applies to.
+    #[test]
+    fn a_slash_rule_keeps_the_whitespace_at_an_end_of_its_specifier() {
+        let settings = Layers::new("slash-rule-whitespace")
+            .project(r#"{"permissions": {"deny": ["Read(/secrets \t)", "Edit( /notes.md)"]}}"#)
+            .read();
+        assert_eq!(
+            settings.permissions().deny,
+            ["Read(./secrets \t)", "Edit( /notes.md)"]
+        );
     }
 
     /// PERM-3: a `/x` rule whose start is inside the workspace is spelled from the workspace, since

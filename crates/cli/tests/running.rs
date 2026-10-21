@@ -3281,6 +3281,50 @@ fn doctor_names_a_permission_entry_that_is_not_a_rule() {
     );
 }
 
+/// COMPAT-001 for PERM-3, from a settings file an earlier version read: `Read( .env )` was trimmed
+/// to `.env` and denied it, and is now a rule that names a path with whitespace at its ends. The
+/// file is not rewritten and not discarded. `doctor` names the rule in the spelling the file used
+/// and says what to remove, the rule beside it still counts, and the run does not pass, so the
+/// person who upgraded is told that `.env` is no longer held by that line.
+///
+/// Running the binary because the old file reaches the report through the settings layer, the rule
+/// parser and the wording, and a test of any one of them passes while the other two drop the rule
+/// without a word.
+#[test]
+fn doctor_names_a_padded_path_rule_that_an_earlier_version_read_as_the_file_without_the_padding() {
+    let scratch = Scratch::new("cli-running-padded-path-rule")
+        .with_settings(r#"{"permissions": {"deny": ["Read( .env )", "Read(./secrets/**)"]}}"#);
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains("'Read( .env )' has whitespace at the start or end of its path"),
+        "doctor did not name the padded rule as the file spelled it: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("remove it"),
+        "doctor did not say what to remove: {stdout}"
+    );
+    // Only the rule beside it is counted. The padded rule is reported and is not in force.
+    assert!(
+        stdout.contains("permissions 1 rule"),
+        "the padded rule was counted as in force, or the rule beside it was lost: {stdout}"
+    );
+    assert!(
+        !output.status.success(),
+        "a rule this build no longer reads was reported and the run still passed: {stdout}"
+    );
+}
+
 /// BACKEND-24 and PERM-11 from the process that reads the files: a checkout's `permissions` block
 /// that is not an object leaves the person's own rules in force, and `doctor` names what it ignored
 /// and the file that wrote it.

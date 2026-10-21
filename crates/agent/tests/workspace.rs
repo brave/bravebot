@@ -547,12 +547,11 @@ fn a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule()
     );
 }
 
-/// Names a rule's text cannot spell, each with the issue that tracks it. A rule line is trimmed
-/// when it is read and so is the specifier inside the brackets, so a name with whitespace at an end
-/// is read as the name without it and a name of whitespace alone is read as `./`, which names no
-/// file. A `*` is always a wildcard, so no rule is about the file called `*.md` and nothing else.
-/// The test below fails for a name listed here that a rule can spell, so the list is revised with
-/// the fix.
+/// Names a rule's text cannot spell, each with the issue that tracks it. A path specifier with
+/// whitespace at an end is reported and not read, since the whitespace is as likely padding as part
+/// of the name, so a name with whitespace at an end and a name of whitespace alone have no rule. A
+/// `*` is always a wildcard, so no rule is about the file called `*.md` and nothing else. The test
+/// below fails for a name listed here that a rule can spell, so the list is revised with the fix.
 const NOT_SPELLABLE_IN_A_RULE: &[(&str, &str)] = &[
     ("a.md ", "#2864"),
     ("a.md\t", "#2864"),
@@ -574,7 +573,7 @@ const NOT_SPELLABLE_IN_A_RULE: &[(&str, &str)] = &[
 /// pair tests above.
 #[test]
 fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
-    use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject};
+    use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject, Unreadable};
 
     let names = aliases::held_names();
     let mut asked = 0;
@@ -613,6 +612,22 @@ fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
                             permissions.for_path(subject, path) == Decision::Ruled(ruling)
                         };
                         if !spellable {
+                            let decides_a_file = aliases::AWKWARD_NAMES
+                                .iter()
+                                .any(|(another, _)| decides(another));
+                            if named.trim() != *named {
+                                // Told, and in force for no file, so it is never read as the rule
+                                // about another one.
+                                assert!(
+                                    rejected.len() == 1
+                                        && rejected[0].reason == Unreadable::WhitespaceAtAnEnd
+                                        && !decides_a_file,
+                                    "a rule for {named:?} must be reported for its whitespace and \
+                                     decide no file, and a name a rule can spell is removed from \
+                                     NOT_SPELLABLE_IN_A_RULE"
+                                );
+                                continue;
+                            }
                             let about_that_file_alone = decides(named)
                                 && names
                                     .iter()
