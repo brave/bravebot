@@ -2214,6 +2214,29 @@ status-mcp-servers-tools =
        *[other] { $alias }: { $count } tools offered to the model
     }
 status-mcp-servers-declined = { $alias }: no tool offered, as you answered
+# The heading of what one started local server's confinement grants, then a line each for the
+# network, subprocesses and where it starts, and one for each path its backend was handed. Each
+# path's label is what the server may do at it.
+status-server-policy = Server policy
+status-server-policy-egress = egress
+status-server-policy-egress-closed = none
+status-server-policy-egress-loopback = this machine only
+status-server-policy-egress-open = any address
+status-server-policy-egress-hosts = only through the allowed-hosts proxy
+status-server-policy-subprocesses = subprocesses
+status-server-policy-subprocesses-allowed = allowed
+status-server-policy-subprocesses-refused = refused
+status-server-policy-starts-in = starts in
+# macOS refuses a write to a .git beneath a write row, so a row labelled write does not reach one.
+status-server-policy-git = .git
+status-server-policy-git-held-back = not written under a write row
+status-server-policy-read = read
+status-server-policy-write = write
+status-server-policy-read-write = read, write
+# The paths that were wanted and are not rows, because this platform grants no path that is not on
+# disk and these are not. The paths follow, one to a line.
+status-server-policy-left-out = left out
+status-server-policy-left-out-reason = not on disk, and this platform grants no path that is not
 status-loop = Loop
 status-loop-every = every { $every }
 status-loop-self-paced = paced by each turn

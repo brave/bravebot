@@ -1851,8 +1851,8 @@ fn start_under(
                         continue;
                     }
                 };
-                let (policy, left_out) = nameable(&alias, policy, &granted);
-                notes.extend(left_out);
+                let (policy, effective, note) = nameable(&alias, policy, &granted);
+                notes.extend(note);
                 let variables = proxied
                     .into_iter()
                     .fold(at_home(variables, &own), |held, (name, value)| {
@@ -1885,13 +1885,18 @@ fn start_under(
                 std::thread::spawn(move || {
                     // Held apart from the handshake, so a server that fails one has been stopped
                     // by the time its home is removed.
-                    let outcome =
-                        handshake_local(server, declared, timeouts, &tools, &exclude_tools).map(
-                            |reached| match throwaway {
-                                Some(throwaway) => reached.holding(throwaway),
-                                None => reached,
-                            },
-                        );
+                    let outcome = handshake_local(
+                        server,
+                        declared,
+                        effective,
+                        timeouts,
+                        &tools,
+                        &exclude_tools,
+                    )
+                    .map(|reached| match throwaway {
+                        Some(throwaway) => reached.holding(throwaway),
+                        None => reached,
+                    });
                     let _ = sender.send((alias, outcome, None));
                 });
             }
@@ -1991,6 +1996,7 @@ fn wait_for(alias: &str, timeouts: Timeouts) -> (String, Instant, u64) {
 fn handshake_local(
     mut server: StdioServer,
     declared: Digest,
+    confined_by: EffectivePolicy,
     timeouts: Timeouts,
     tools: &[String],
     exclude_tools: &[String],
@@ -2001,11 +2007,10 @@ fn handshake_local(
     let listing =
         bravebot_mcp::listed_or_none(&alias, server.list_tools())?.filtered(tools, exclude_tools);
     server.set_bound(timeouts.tool());
-    Ok(crate::mcp::Reached::new(
-        Connection::Stdio(server),
-        listing,
-        declared,
-    ))
+    Ok(
+        crate::mcp::Reached::new(Connection::Stdio(server), listing, declared)
+            .confined_by(confined_by),
+    )
 }
 
 /// A remote server's handshake, through the one egress gate every request passes, with where it
@@ -2091,7 +2096,128 @@ fn temporary_directory() -> PathBuf {
     temporary.canonicalize().unwrap_or(temporary)
 }
 
-/// The part of `policy` this backend can be asked for, and the note saying what that left out.
+/// How a started server may use the network, as its policy states it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyEgress {
+    /// No connection to any address.
+    Closed,
+    /// Connections to this machine alone, which only macOS grants a policy that has no network.
+    Loopback,
+    /// Connections to any address.
+    Open,
+    /// Connections to the proxy that applies the session's host list, and nothing else by address.
+    Hosts,
+}
+
+/// What a server's policy lets it do at a path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    Read,
+    Write,
+    ReadWrite,
+}
+
+impl Access {
+    /// What two rows for one path grant together.
+    fn with(self, other: Access) -> Access {
+        match self == other {
+            true => self,
+            false => Access::ReadWrite,
+        }
+    }
+}
+
+/// One path a server's policy lets it read, write, or both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyRow {
+    pub path: PathBuf,
+    pub access: Access,
+}
+
+/// What a local server was started under (SERVERS-20): the rows of the policy its backend was
+/// handed, what that policy says of the network and of starting programs, where the server starts,
+/// and the paths the policy was resolved without.
+///
+/// Taken from the policy value the server is launched with and from nothing the server said, so a
+/// row shown here is a row granted, and no content decides what it contains. Paths are kept as
+/// paths and are drawn by whoever shows them: a lossy rendering made here would join two rows a
+/// volume holds apart.
+///
+/// A server's policy holds no refusal of a path beneath a row, and none is shown: the rows
+/// [`confinement`] builds carry no `unreadable` or `unwritable` entry, which a test holds it to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectivePolicy {
+    /// Every path the policy lets the server read or write, each once, in the order the policy
+    /// names them with the read rows first.
+    pub rows: Vec<PolicyRow>,
+    pub egress: PolicyEgress,
+    /// Whether the server may start programs of its own.
+    pub children: bool,
+    /// The directory the server starts in, where the policy names one.
+    pub starts_in: Option<PathBuf>,
+    /// Every path that was wanted and is not in `rows` because this platform names no path that is
+    /// not on disk, and this one was not (SANDBOX-9).
+    pub left_out: Vec<PathBuf>,
+    /// Whether a write row stops short of a `.git` beneath it, which macOS does for a policy that
+    /// grants any write and does not lift it (SANDBOX-14). A row says `write` and a write there is
+    /// still refused, so this is part of what the rows mean.
+    pub git_held_back: bool,
+}
+
+impl EffectivePolicy {
+    /// The view of `policy`, which was resolved without `left_out`, as this platform's backend
+    /// applies it.
+    pub fn of(policy: &SandboxPolicy, left_out: Vec<PathBuf>) -> Self {
+        Self::on(policy, left_out, cfg!(target_os = "macos"))
+    }
+
+    /// [`EffectivePolicy::of`] on a platform that is, or is not, macOS: the things only macOS's
+    /// backend does differently are loopback, the `.git` hold-back, and a write row that does not
+    /// carry the right to read beneath it.
+    fn on(policy: &SandboxPolicy, left_out: Vec<PathBuf>, macos: bool) -> Self {
+        debug_assert!(
+            policy.unreadable.is_empty() && policy.unwritable.is_empty(),
+            "a server's policy refuses a path beneath a row, which the view does not list: {policy:?}"
+        );
+        let mut rows: Vec<PolicyRow> = Vec::new();
+        let mut grant =
+            |path: &PathBuf, access: Access| match rows.iter_mut().find(|row| row.path == *path) {
+                Some(row) => row.access = row.access.with(access),
+                None => rows.push(PolicyRow {
+                    path: path.clone(),
+                    access,
+                }),
+            };
+        for path in &policy.readable {
+            grant(path, Access::Read);
+        }
+        for row in &policy.writable {
+            grant(
+                &row.path,
+                match macos {
+                    true => Access::Write,
+                    false => Access::ReadWrite,
+                },
+            );
+        }
+        Self {
+            rows,
+            egress: match (policy.allow_network, policy.egress_only_to) {
+                (true, Some(_)) => PolicyEgress::Hosts,
+                (true, None) => PolicyEgress::Open,
+                (false, _) if macos && policy.allow_loopback => PolicyEgress::Loopback,
+                (false, _) => PolicyEgress::Closed,
+            },
+            children: policy.allow_subprocesses,
+            starts_in: policy.starting_in.clone(),
+            left_out,
+            git_held_back: macos && !policy.writable.is_empty() && !policy.git_directories_writable,
+        }
+    }
+}
+
+/// The part of `policy` this backend can be asked for, the view of exactly that part, and the note
+/// saying what that left out.
 ///
 /// A backend that cannot name a path missing from the disk is asked for the rest of the policy
 /// rather than refusing the server over a toolchain the machine never had (SANDBOX-9), so the
@@ -2104,13 +2230,16 @@ fn temporary_directory() -> PathBuf {
 /// is looking for, which is the whole of what this is for. Each is drawn as a word from a
 /// declaration is drawn, since a `PATH` the declaration names is granted as written and is left
 /// out here where it is not on disk.
+///
+/// The view is made here, from the policy that is returned, so that it cannot describe a policy
+/// other than the one the server is launched with.
 fn nameable(
     alias: &str,
     policy: SandboxPolicy,
     capabilities: &Capabilities,
-) -> (SandboxPolicy, Option<String>) {
+) -> (SandboxPolicy, EffectivePolicy, Option<String>) {
     let resolved = policy.nameable_under(capabilities);
-    let left_out = (!resolved.omitted.is_empty()).then(|| {
+    let note = (!resolved.omitted.is_empty()).then(|| {
         let paths: Vec<String> = resolved
             .omitted
             .iter()
@@ -2123,7 +2252,8 @@ fn nameable(
         )
         .to_string()
     });
-    (resolved.policy, left_out)
+    let view = EffectivePolicy::of(&resolved.policy, resolved.omitted);
+    (resolved.policy, view, note)
 }
 
 /// [`confinement`] on this machine: its platform's base, and the person's own profile directory as
@@ -3556,7 +3686,8 @@ mod tests {
             .allow_read(&absent)
             .allow_write(&blurred);
 
-        let (policy, note) = nameable("weather", wanted, &a_backend_naming_an_absent_path(false));
+        let (policy, _, note) =
+            nameable("weather", wanted, &a_backend_naming_an_absent_path(false));
 
         assert_eq!(policy.readable, vec![there]);
         assert!(policy.writable.is_empty());
@@ -3582,10 +3713,328 @@ mod tests {
         let absent = scratch("cli-servers-nothing-left-out").join("absent");
         let wanted = SandboxPolicy::strict().allow_read(&absent);
 
-        let (policy, note) = nameable("weather", wanted, &a_backend_naming_an_absent_path(true));
+        let (policy, _, note) = nameable("weather", wanted, &a_backend_naming_an_absent_path(true));
 
         assert_eq!(policy.readable, vec![absent]);
         assert_eq!(note, None);
+    }
+
+    /// SERVERS-20: the view of a started server is the policy its backend was handed and not the one
+    /// that was wanted. A path the backend cannot name is in `left_out` and in no row, a path
+    /// granted for reading and for writing is one row that says both, and a path granted one way
+    /// says that way and no other. Where a write row carries the right to read beneath it, as it
+    /// does on every platform but macOS, a write-only row says both.
+    #[test]
+    fn a_servers_view_lists_the_rows_its_backend_was_handed_and_names_each_path_left_out() {
+        let root = scratch("cli-servers-view-rows");
+        let [read, write, both, absent_read, absent_write] =
+            ["read", "write", "both", "absent read", "absent write"].map(|name| root.join(name));
+        for directory in [&read, &write, &both] {
+            std::fs::create_dir_all(directory).expect("a directory that is there");
+        }
+        let wanted = SandboxPolicy::strict()
+            .allow_read(&read)
+            .allow_read(&absent_read)
+            .allow_read(&both)
+            .allow_write(&write)
+            .allow_write(&both)
+            .allow_write(&absent_write);
+
+        let (handed, view, _) =
+            nameable("weather", wanted, &a_backend_naming_an_absent_path(false));
+
+        let row = |path: &PathBuf, access| PolicyRow {
+            path: path.clone(),
+            access,
+        };
+        let written = match cfg!(target_os = "macos") {
+            true => Access::Write,
+            false => Access::ReadWrite,
+        };
+        assert_eq!(
+            view.rows,
+            [
+                row(&read, Access::Read),
+                row(&both, Access::ReadWrite),
+                row(&write, written),
+            ],
+            "a row is read, write or both, and once"
+        );
+        assert_eq!(view.left_out, [absent_read, absent_write]);
+        let mut granted: Vec<&PathBuf> = handed
+            .readable
+            .iter()
+            .chain(handed.writable.iter().map(|grant| &grant.path))
+            .collect();
+        granted.sort();
+        granted.dedup();
+        let mut shown: Vec<&PathBuf> = view.rows.iter().map(|row| &row.path).collect();
+        shown.sort();
+        assert_eq!(shown, granted, "the view names the paths the backend got");
+    }
+
+    /// SERVERS-20: the view shows no refusal because a server's policy holds none. The rows
+    /// `confinement` builds, on every platform's base and after each of the session's network
+    /// decisions, name no path to refuse beneath a row, so a policy that gains one has to teach the
+    /// view to say so.
+    #[test]
+    fn a_servers_policy_holds_no_refusal_for_the_view_to_show() {
+        let root = scratch("cli-servers-no-refusal");
+        let program = installed(&root.join("opt/bin"), "weather-mcp");
+        let key = root.join("key");
+        std::fs::write(&key, "k").expect("the key");
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let policy = confinement(
+                Some(prelude),
+                &program,
+                &[root.join("opt/bin")],
+                std::slice::from_ref(&key),
+                Some(&root),
+                &root.join("kept"),
+                &root.join("tmp"),
+                Some(&root.join("home")),
+                None,
+            )
+            .expect("a policy on this platform's base");
+            let closed = crate::confine::held_to_the_session_network(
+                policy.clone(),
+                &program,
+                Network::Closed,
+                None,
+                &limited_to_a_port(true),
+            )
+            .expect("a platform that denies the network holds the server")
+            .0;
+            let hosts = listing(Some(&["mine.example"]), &[]);
+            let proxied = crate::confine::held_to_the_session_network(
+                policy.clone(),
+                &program,
+                Network::Open,
+                Some(&hosts),
+                &limited_to_a_port(true),
+            )
+            .expect("held to the proxy")
+            .0;
+
+            for held in [&policy, &closed, &proxied] {
+                assert!(held.unreadable.is_empty(), "{prelude:?}: {held:?}");
+                assert!(held.unwritable.is_empty(), "{prelude:?}: {held:?}");
+            }
+        }
+    }
+
+    /// SERVERS-20: two paths that a lossy rendering would draw alike are two rows. A path that is
+    /// not UTF-8 and the path its replacement-character spelling names are different files.
+    #[cfg(unix)]
+    #[test]
+    fn a_servers_view_keeps_apart_two_paths_a_lossy_rendering_would_join() {
+        use std::os::unix::ffi::OsStrExt;
+        let invalid = PathBuf::from(OsStr::from_bytes(b"/srv/x\xff"));
+        let lookalike = PathBuf::from("/srv/x\u{fffd}");
+        let policy = SandboxPolicy::strict()
+            .allow_read(&invalid)
+            .allow_write(&lookalike);
+
+        let view = EffectivePolicy::of(&policy, Vec::new());
+
+        let written = match cfg!(target_os = "macos") {
+            true => Access::Write,
+            false => Access::ReadWrite,
+        };
+        assert_eq!(
+            view.rows,
+            [
+                PolicyRow {
+                    path: invalid,
+                    access: Access::Read
+                },
+                PolicyRow {
+                    path: lookalike,
+                    access: written
+                },
+            ]
+        );
+    }
+
+    /// SERVERS-20: what the policy says of the network, of starting programs and of where the
+    /// server starts is what is shown. A host list holds the server to a proxy and is not the same
+    /// statement as open egress, a policy that refuses the network is closed whatever port it still
+    /// names, and the two things only macOS acts on, loopback and the hold-back of a `.git`, are
+    /// said of that platform alone, as is a write row that is only written. The platform is a
+    /// parameter, so each side is checked on every host.
+    #[test]
+    fn a_servers_view_says_how_its_policy_treats_the_network_programs_and_where_it_starts() {
+        let open = SandboxPolicy::strict().allow_network_egress();
+        let hosts = SandboxPolicy::strict().allow_network_egress_only_to(8080);
+        let closed = SandboxPolicy::strict();
+        let closed_with_a_port = SandboxPolicy {
+            egress_only_to: Some(8080),
+            ..SandboxPolicy::strict()
+        };
+        for (policy, egress) in [
+            (open, PolicyEgress::Open),
+            (hosts, PolicyEgress::Hosts),
+            (closed, PolicyEgress::Closed),
+            (closed_with_a_port, PolicyEgress::Closed),
+        ] {
+            for macos in [true, false] {
+                assert_eq!(
+                    EffectivePolicy::on(&policy, Vec::new(), macos).egress,
+                    egress
+                );
+            }
+        }
+        let loopback = SandboxPolicy::strict().allow_loopback();
+        assert_eq!(
+            EffectivePolicy::on(&loopback, Vec::new(), true).egress,
+            PolicyEgress::Loopback
+        );
+        assert_eq!(
+            EffectivePolicy::on(&loopback, Vec::new(), false).egress,
+            PolicyEgress::Closed,
+            "only macOS acts on loopback, so no other platform grants it"
+        );
+
+        let here = Path::new("/work");
+        let starting = SandboxPolicy::strict()
+            .allow_subprocesses()
+            .starting_in(here);
+        let view = EffectivePolicy::of(&starting, Vec::new());
+        assert!(view.children);
+        assert_eq!(view.starts_in.as_deref(), Some(here));
+        let view = EffectivePolicy::of(&SandboxPolicy::strict(), Vec::new());
+        assert!(!view.children);
+        assert_eq!(view.starts_in, None);
+
+        let writing = SandboxPolicy::strict().allow_write("/work");
+        let write_row = |macos| {
+            let rows = EffectivePolicy::on(&writing, Vec::new(), macos).rows;
+            rows.first().map(|row| row.access)
+        };
+        assert_eq!(write_row(true), Some(Access::Write));
+        assert_eq!(
+            write_row(false),
+            Some(Access::ReadWrite),
+            "a write row carries the right to read beneath it everywhere but macOS"
+        );
+        let held_back = |policy: &SandboxPolicy, macos| {
+            EffectivePolicy::on(policy, Vec::new(), macos).git_held_back
+        };
+        assert!(held_back(&writing, true), "macOS holds a .git back");
+        assert!(!held_back(&writing, false), "no other platform does");
+        assert!(
+            !held_back(&writing.clone().allow_git_directory_writes(), true),
+            "a policy that lifts the hold-back has none"
+        );
+        assert!(
+            !held_back(&SandboxPolicy::strict().allow_read("/work"), true),
+            "a policy that grants no write holds nothing back"
+        );
+    }
+
+    /// SERVERS-20: a launch is where the view is taken, so it describes what the launch was handed:
+    /// after the session's network decision rather than before it, after the paths this backend
+    /// cannot name were taken out, and with the rows the declaration made.
+    #[cfg(unix)]
+    #[test]
+    fn a_started_servers_view_is_the_policy_it_was_launched_with() {
+        let root = scratch("cli-servers-launch-view")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        let denies_the_network = bravebot_sandbox::for_current_platform()
+            .map(|sandbox| sandbox.capabilities().network_denial_enforced)
+            .unwrap_or(false);
+        if Prelude::current().is_none()
+            || !bravebot_sandbox::confinement_works_here()
+            || !denies_the_network
+        {
+            eprintln!("SKIPPED (no confinement that denies the network here)");
+            return;
+        }
+        let absent = temporary_directory().join("bravebot-view-absent-directory");
+        assert!(!absent.exists(), "{} is on disk", absent.display());
+        let keys = root.join("keys");
+        std::fs::create_dir_all(&keys).expect("keys");
+        let key = keys.join("api-key");
+        std::fs::write(&key, "the key").expect("the key");
+        let program = installed(&root.join("bin"), "weather-mcp");
+        std::fs::write(&program, HOME_WRITING_SERVER).expect("write the server");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let state = root.join("state");
+        std::fs::create_dir_all(&state).expect("state");
+        let home = Home {
+            directory: Some(state.clone()),
+            writable: true,
+        };
+        let declared = digested(&["weather-mcp"]);
+        let plan = Plan::Stdio {
+            program,
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: vec![absent.clone()],
+            reads: vec![key.clone()],
+            directory: Some(work.clone()),
+            declared,
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+        };
+        let granting = Capabilities {
+            network_denial_enforced: true,
+            ..a_backend_naming_an_absent_path(false)
+        };
+        let mut notes = Vec::new();
+
+        let started = start_under(
+            Some(granting),
+            (Network::Closed, None),
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(started.len(), 1, "the server did not start: {notes:?}");
+        let session = Session::new(started, root.clone(), None, false, Managed::default());
+        let [(alias, view)] = session
+            .policies()
+            .try_into()
+            .expect("one local server, one view");
+        assert_eq!(alias, "weather");
+        assert_eq!(
+            view.egress,
+            PolicyEgress::Closed,
+            "the view predates the network"
+        );
+        assert!(session.confined(), "a started local server has a policy");
+        assert!(view.children);
+        assert_eq!(view.starts_in.as_deref(), Some(work.as_path()));
+        assert_eq!(view.git_held_back, cfg!(target_os = "macos"));
+        let row = |path: &Path| view.rows.iter().find(|row| row.path == path);
+        let own = mcp::server_home(&state, &declared);
+        assert_eq!(
+            row(&own).map(|row| row.access),
+            Some(Access::ReadWrite),
+            "the server's own directory is read and written"
+        );
+        assert_eq!(
+            row(&work).map(|row| row.access),
+            Some(Access::ReadWrite),
+            "the declared directory is read and written"
+        );
+        assert_eq!(
+            row(&key).map(|row| row.access),
+            Some(Access::Read),
+            "a declared read is read and nothing else"
+        );
+        assert_eq!(
+            row(&absent),
+            None,
+            "a path that was left out is still a row"
+        );
+        assert!(view.left_out.contains(&absent), "{:?}", view.left_out);
     }
 
     /// SERVERS-10: a stored value reaches the server as the declaration holds it, and this
@@ -3886,7 +4335,7 @@ done
         let sandbox = bravebot_sandbox::for_current_platform().expect("a backend");
         let policy = confinement_here(program, &[], reads, Some(work), own)
             .expect("a policy to start under");
-        Vec::from_iter(nameable("weather", policy, &sandbox.capabilities()).1)
+        Vec::from_iter(nameable("weather", policy, &sandbox.capabilities()).2)
     }
 
     #[cfg(unix)]

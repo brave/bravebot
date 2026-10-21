@@ -17,6 +17,7 @@ use crate::confirm::{
 use crate::processor::Chat;
 use crate::report::Reporter;
 use crate::scratch::SessionScratch;
+use crate::servers::EffectivePolicy;
 use bravebot_aichat::protocol::{Tool, Usage};
 use bravebot_config::mcp::{
     self as records, Approvals, Declaration, Declarations, Digest, Problem, Standing,
@@ -49,6 +50,7 @@ pub struct Reached {
     listing: Listing,
     declaration: Digest,
     home: Option<SessionScratch>,
+    policy: Option<EffectivePolicy>,
 }
 
 impl Reached {
@@ -60,7 +62,15 @@ impl Reached {
             listing,
             declaration,
             home: None,
+            policy: None,
         }
+    }
+
+    /// The same server, with the policy its process was started under (SERVERS-20). A server with
+    /// one is a process the session confined.
+    pub fn confined_by(mut self, policy: EffectivePolicy) -> Self {
+        self.policy = Some(policy);
+        self
     }
 
     /// The same server, holding the directory it was handed as its home in a session that keeps
@@ -170,13 +180,14 @@ struct Server {
     alias: String,
     /// Replaced when the person moves the server where its reply pointed (SERVERS-11).
     declaration: Mutex<Digest>,
-    /// Whether this is a process the session confined, read once so nothing asking waits on a call.
-    local: bool,
     /// Locked for a question's length only, so a screen asking how things stand is never kept
     /// waiting on a call.
     state: Mutex<State>,
     /// Locked for one call at a time.
     connection: Mutex<Connection>,
+    /// What the process was started under, where it is one this session confined, which a local
+    /// server is and a remote one is not (SERVERS-20). Held here so nothing asking waits on a call.
+    policy: Option<EffectivePolicy>,
     /// After `connection`, since fields drop in order: the process is stopped before its home goes.
     _home: Option<SessionScratch>,
 }
@@ -277,9 +288,9 @@ impl Session {
                 Arc::new(Server {
                     alias: reached.alias().to_string(),
                     declaration: Mutex::new(reached.declaration),
-                    local: matches!(reached.connection, Connection::Stdio(_)),
                     state: Mutex::new(State::Unasked(reached.listing)),
                     connection: Mutex::new(reached.connection),
+                    policy: reached.policy,
                     _home: reached.home,
                 })
             })
@@ -360,7 +371,17 @@ impl Session {
 
     /// Whether any server reached is a process this session confined, which a remote one is not.
     pub fn confined(&self) -> bool {
-        self.0.servers.iter().any(|server| server.local)
+        self.0.servers.iter().any(|server| server.policy.is_some())
+    }
+
+    /// What each confined server was started under, in order. A server this session did not start
+    /// as a process of its own is not among them (SERVERS-20).
+    pub fn policies(&self) -> Vec<(String, EffectivePolicy)> {
+        self.0
+            .servers
+            .iter()
+            .filter_map(|server| Some((server.alias.clone(), server.policy.clone()?)))
+            .collect()
     }
 
     /// How each server's tools stand, in order.

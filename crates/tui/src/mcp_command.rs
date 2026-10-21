@@ -498,11 +498,30 @@ pub(crate) mod tests {
     }
 
     /// A session holding each of `aliases` as running, with `servers` reading it.
-    fn holding(aliases: &[&'static str]) -> Session {
+    pub(crate) fn holding(aliases: &[&'static str]) -> Session {
         let mut session = Session::new("none");
         session.servers.session = Some(bravebot_agent::mcp::Session::new(
             aliases.iter().map(|alias| reached(alias)).collect(),
             std::env::temp_dir(),
+            None,
+            false,
+            bravebot_config::Managed::default(),
+        ));
+        refresh(&mut session.servers);
+        session
+    }
+
+    /// A session holding `alias` with `policy` against it, on the same stand-in connection `holding`
+    /// uses: what is under test is what a screen draws from a session's policies, and a launch that
+    /// makes them is checked in `bravebot_agent::servers`.
+    pub(crate) fn holding_started_under(
+        alias: &'static str,
+        policy: servers::EffectivePolicy,
+    ) -> Session {
+        let mut session = Session::new("none");
+        session.servers.session = Some(bravebot_agent::mcp::Session::new(
+            vec![reached(alias).confined_by(policy)],
+            std::path::PathBuf::from("/work"),
             None,
             false,
             bravebot_config::Managed::default(),

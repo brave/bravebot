@@ -1414,7 +1414,9 @@ are offered to the model, or none as the person answered. It says `none` where t
 no server. A requested server that was not started is not on it: that is said once, as the
 session opens, by the line giving the reason. Where a stdio server was started, the confinement
 line says the level is in force over those servers and over nothing else the session runs, which is
-the report [SANDBOX-10](sandboxing.md#SANDBOX-10) would otherwise make untrue.
+the report [SANDBOX-10](sandboxing.md#SANDBOX-10) would otherwise make untrue, and the paths and
+network that confinement grants each server are listed at the end of the report
+([SERVERS-20](#SERVERS-20)).
 
 `verified-by: bravebot_cli::running::an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved`
 `verified-by: bravebot_cli::running::a_declaration_that_cannot_be_used_is_listed_with_its_problem`
@@ -1836,6 +1838,11 @@ This spec cannot land without these. Each is named by what the clause says rathe
   a name, so a link, a copy or another name for the same machine is not denied, and a command match
   leaves out the variables a server starts with. The allow list is the form that holds
   ([SERVERS-12](#SERVERS-12)).
+- **`/status` lists the rows of a server's policy and not what a platform grants beneath them.**
+  Linux and macOS let a server look at any path, which is no row
+  ([SANDBOX-13](sandboxing.md#SANDBOX-13)), and a Windows container reads the system directories its
+  group may, which the empty Windows base does not name, so a read the list does not account for can
+  still succeed there ([SERVERS-20](#SERVERS-20)).
 - **The desktop application starts its servers on a session's first turn.** That turn waits for
   the server question and for every handshake, up to the startup bounds above, before the model is
   asked anything, and the window says it is starting servers while it does. A turn stopped while
@@ -1885,3 +1892,55 @@ callable that the person turned off.
 `verified-by: bravebot_tui::mcp_command::turning_off_a_running_server_removes_it_and_the_last_leaves_none`
 `verified-by: bravebot_tui::app::the_mcp_command_carries_its_words_unparsed`
 `verified-by: bravebot_tui::app::the_mcp_command_waits_for_the_turn_in_flight`
+
+<a id="SERVERS-20"></a>
+### SERVERS-20: `/status` lists what the confinement of each started local server grants
+
+At the end of its report, `/status` has a `Server policy` line naming each local server the session
+started, and under it one line each for what the policy holds of egress (none, this machine only,
+any address, or only the proxy that applies the session's host list), whether the server may start
+subprocesses, and the directory it starts in. Where the platform refuses a write to a `.git` beneath
+a write row ([SANDBOX-14](sandboxing.md#SANDBOX-14)) and the policy does not lift it, a `.git` line
+says so, since a row that reads `write` does not reach one. Then comes one line for each path the
+policy names, labelled `read`, `write` or `read, write` for what the row grants, and the paths that
+were wanted and are in no row because this platform names no path that is not on disk
+([SANDBOX-9](sandboxing.md#SANDBOX-9)), under a `left out` line giving that reason. A write row
+carries the right to read beneath it on every platform but macOS, and is labelled as the platform
+grants it. A session that started no local server has none of these lines, and a server reached over
+HTTP is no process of the session's and has none.
+
+The lines come from the policy the server was launched with, taken as the launch built it: after
+the session's network decision ([SANDBOX-20](sandboxing.md#SANDBOX-20),
+[SANDBOX-24](sandboxing.md#SANDBOX-24)) and after the paths the backend cannot name were taken out.
+It is given to the server's handshake with the process, so a started local server has one, and is
+kept with the server for as long as the session holds it. A server `/mcp reconnect` started is listed
+under the policy it was started with, and `/mcp disable` removes its lines. A server's policy holds
+no refusal of a path beneath a row, so none is listed, and a policy that gains one has the lines
+extended to list it. The lines are the rows of the policy and not every access a platform grants
+beneath them, which a [known cost](#known-costs) lists. Nothing a server sent is among the lines, and
+no front end reads them back to decide anything.
+A path is drawn in full, as the prompts that name one draw it, with a control character as its
+picture and a character that draws as nothing spelled out.
+
+**Why.** A server that reports a refused read, write or connection from inside its confinement is
+checked against what the policy granted, and the policy is made of rows a person did not write: the
+platform's base, the directories the `PATH` names, the installation the program came from, the
+declared directory and the declared reads. Every row is listed where a count would be shorter,
+because a count cannot say whether the path in a refusal was granted. The paths left out are listed
+beside the rows because a note said once as the session opens is gone from the screen by the time a
+refusal is read. Taking the lines from the value the launch passes to the backend, and not from a
+second reading of the declaration, is what keeps a path shown as granted from being one the backend
+never received.
+
+Not built: `bravebot mcp get` prints the declaration and the digest and not the policy a session
+would build from it (#2910).
+
+`verified-by: bravebot_agent::servers::a_servers_view_lists_the_rows_its_backend_was_handed_and_names_each_path_left_out`
+`verified-by: bravebot_agent::servers::a_servers_view_keeps_apart_two_paths_a_lossy_rendering_would_join`
+`verified-by: bravebot_agent::servers::a_servers_view_says_how_its_policy_treats_the_network_programs_and_where_it_starts`
+`verified-by: bravebot_agent::servers::a_servers_policy_holds_no_refusal_for_the_view_to_show`
+`verified-by: bravebot_agent::servers::a_started_servers_view_is_the_policy_it_was_launched_with`
+`verified-by: bravebot_agent::mcp::a_session_names_the_policy_each_confined_server_was_started_under_and_no_other`
+`verified-by: bravebot_tui::status::a_started_servers_policy_is_listed_row_by_row_with_what_each_row_allows`
+`verified-by: bravebot_tui::status::a_session_with_no_confined_server_shows_no_server_policy`
+`verified-by: bravebot_tui::status::a_path_in_a_servers_policy_is_drawn_without_sending_its_control_characters`
