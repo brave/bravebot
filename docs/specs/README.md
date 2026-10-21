@@ -60,6 +60,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [goal.md](goal.md) | `GOAL` | 20 | one condition a person set, judged after every turn, until it holds |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
 | [sessions.md](sessions.md) | `SESSION` | 37 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
+| [commits.md](commits.md) | `COMMIT` | 11 | a commit of the files each turn wrote: which paths, what message, how git is started, and how `/undo` takes the commit back (proposed, nothing built) |
 | [mouse.md](mouse.md) | `MOUSE` | 7 | dragging, double and triple clicking and shift-clicking to copy text: which cells a selection may take |
 | [info-panel.md](info-panel.md) | `PANEL` | 15 | telling many sessions apart: the terminal's title and the info panel |
 | [background-sessions.md](background-sessions.md) | `BG` | 16 | proposed, the roster, its list (grouped by state on a terminal) and stop, `--bg`, `/bg`, attach, reply and the supervisor that restarts an idle process built: sessions that keep running after the terminal closes, with a list, attach and reply |
