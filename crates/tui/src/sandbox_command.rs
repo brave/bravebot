@@ -149,6 +149,7 @@ pub fn question(keeping: SandboxMode) -> Asking {
             multiple: false,
             key: String::new(),
         }],
+        ..Default::default()
     }
 }
 

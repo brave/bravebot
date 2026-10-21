@@ -20688,6 +20688,51 @@ fn a_skipped_question_comes_back_as_a_decline_beside_the_rest() {
     assert!(second.contains("The user chose: main"), "{second}");
 }
 
+/// ASK-9: a question closed on the clock reaches the model as no answer from somebody who may be
+/// away, beside the answer already given. The model is not told the person declined, since nobody
+/// did, and it is not handed a reply nobody gave.
+#[test]
+fn a_question_closed_on_the_clock_comes_back_as_no_answer_beside_the_rest() {
+    let scratch = Scratch::new("ask-timed-out");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "ask_user",
+            r#"{"questions":[{"header":"Cache","question":"Which cache layer?","options":[{"label":"HTTP"}]},{"header":"Branch","question":"Which branch?","options":[{"label":"main"}]}]}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut confirmer = AnswersWith::new(vec![
+        bravebot_core::ask::Answer::Chosen(vec![0]),
+        bravebot_core::ask::Answer::TimedOut,
+    ]);
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("push the change"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(second.contains("The user chose: HTTP"), "{second}");
+    assert!(
+        second.contains("No answer was given in the time allowed"),
+        "{second}"
+    );
+    assert!(second.contains("may be away"), "{second}");
+    assert!(!second.contains("declined"), "{second}");
+}
+
 /// Where nobody can be asked, every question is declined rather than answered on their behalf.
 /// The model is told the reply came from a person, so inventing one is worse than not asking.
 #[test]

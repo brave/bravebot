@@ -471,6 +471,9 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
             .to_string()
         },
     );
+    ignored(settings.ask_idle_ignored(), |path| {
+        t!(doctor_settings_ask_idle_ignored, path = path).to_string()
+    });
     ignored(settings.references_ignored(), |path| {
         t!(doctor_settings_references_ignored, path = path).to_string()
     });

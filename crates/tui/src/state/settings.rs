@@ -466,6 +466,22 @@ impl Session {
         self.wheel_rows = rows.clamp(WHEEL_ROWS_FLOOR, WHEEL_ROWS_CEILING);
     }
 
+    /// Record how long a planner's question waits for a key before it is closed, from
+    /// `askIdleSeconds` (ASK-9). Absence waits for as long as it takes; what counts as usable is
+    /// `Settings::parse`'s rule alone.
+    pub fn adopt_ask_idle(&mut self, seconds: Option<u64>) {
+        self.ask_idle = seconds.map(Duration::from_secs);
+    }
+
+    /// How long `asking` waits with no key pressed before it is closed, where it may be at all.
+    ///
+    /// Only what the driver marked as the planner's own question is closed on a clock, and the
+    /// time is the person's setting: a plan, a spend limit and a repeated call wait for the person
+    /// whatever the settings say, and nothing a question says is read here.
+    pub fn ask_idle_for(&self, asking: &bravebot_core::ask::Asking) -> Option<Duration> {
+        self.ask_idle.filter(|_| asking.closes_when_idle)
+    }
+
     /// Record whether the interface captures the mouse, from `tui.mouse`. Only a `false` turns it
     /// off, so an absent key leaves the capture on.
     pub fn adopt_mouse(&mut self, configured: Option<bool>) {

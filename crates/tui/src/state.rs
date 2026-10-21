@@ -635,6 +635,9 @@ pub struct Session {
     wheel_rows: u16,
     /// Whether the mouse is captured, from `tui.mouse`. On unless the settings turned it off.
     mouse: bool,
+    /// How long a question the planner puts waits with no key pressed before it is closed without
+    /// an answer, from `askIdleSeconds` (ASK-9). `None` waits for as long as it takes.
+    ask_idle: Option<Duration>,
     /// Which vi mode the box is in, where vi is the style.
     ///
     /// Every session opens in INSERT, where a typed character is a typed character. Opening in NORMAL
@@ -1379,6 +1382,7 @@ impl Session {
             bindings: crate::keybindings::Keybindings::default(),
             wheel_rows: WHEEL_ROWS,
             mouse: true,
+            ask_idle: None,
             mode: crate::vim::Mode::default(),
             half_typed: None,
             count: None,
@@ -4749,6 +4753,15 @@ impl Session {
         self.note(message);
     }
 
+    /// Say on the transcript that a question was closed on the clock, where `answers` hold one
+    /// (ASK-9), so a person who comes back can see that it was put and nobody answered.
+    pub fn note_closed_on_the_clock(&mut self, answers: &[bravebot_core::ask::Answer]) {
+        let closed = answers.contains(&bravebot_core::ask::Answer::TimedOut);
+        if let (true, Some(idle)) = (closed, self.ask_idle) {
+            self.note(t!(session_question_timed_out, seconds = idle.as_secs()));
+        }
+    }
+
     pub fn toggle_trail(&mut self) {
         self.show_trail = !self.show_trail;
     }
@@ -7700,6 +7713,29 @@ mod tests {
             None,
             "a declined question outlived /clear"
         );
+    }
+
+    /// ASK-9: the time is the person's, and it closes the planner's questions only. A plan, a spend
+    /// limit and a repeated call are the driver's own, so they wait for the person with the setting
+    /// in force. Rejects: the time applied to every question the interface puts.
+    #[test]
+    fn only_the_planners_own_questions_are_closed_on_the_clock() {
+        use bravebot_core::ask::Asking;
+        let planners = Asking {
+            closes_when_idle: true,
+            ..Default::default()
+        };
+        let drivers = Asking::default();
+
+        let mut session = Session::new(".");
+        assert_eq!(session.ask_idle_for(&planners), None);
+
+        session.adopt_ask_idle(Some(90));
+        assert_eq!(
+            session.ask_idle_for(&planners),
+            Some(Duration::from_secs(90))
+        );
+        assert_eq!(session.ask_idle_for(&drivers), None);
     }
 
     use bravebot_core::label::Label;

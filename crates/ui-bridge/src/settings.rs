@@ -99,6 +99,10 @@ fn ignored(settings: &Settings) -> Vec<Value> {
     ));
     ignored.extend(named("agent", settings.agent_ignored().collect()));
     ignored.extend(named("style", settings.style_ignored().collect()));
+    ignored.extend(named(
+        "askIdleSeconds",
+        settings.ask_idle_ignored().collect(),
+    ));
     ignored.extend(named("references", settings.references_ignored().collect()));
     ignored
 }

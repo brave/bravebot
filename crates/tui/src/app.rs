@@ -2218,6 +2218,7 @@ fn adopt_settings(
     session
         .away
         .adopt_idle(settings.away_summary_idle_seconds());
+    session.adopt_ask_idle(settings.ask_idle_seconds());
     // A background job belongs to the session here and ends with it, except where nothing may
     // outlive the process that wrote it (RUN-15).
     if !bravebot_core::incognito::engaged() {
@@ -5886,8 +5887,9 @@ fn run_turn_animated(
                     let _ = answer_tx.send(crate::remote_confirm::Reply::Host(answer.decision()));
                 }
                 crate::remote_confirm::ToMain::Ask(asking) => {
+                    let idle = session.ask_idle_for(&asking);
                     let answers = crate::ask::put(session, &asking, |outstanding| {
-                        crate::ask::ask(terminal, outstanding)
+                        crate::ask::ask_within(terminal, outstanding, idle)
                     });
                     let _ = answer_tx.send(crate::remote_confirm::Reply::Ask(answers));
                 }
@@ -30390,6 +30392,30 @@ mod tests {
             session.away.due(start + Duration::from_secs(90), turns),
             "the idle time in the settings was not adopted"
         );
+    }
+
+    /// ASK-9: the time the settings file names reaches the session through `adopt_settings`, and a
+    /// file that names none leaves a question waiting for as long as it takes.
+    #[test]
+    fn adopting_settings_puts_the_question_idle_time_in_force() {
+        let planners = bravebot_core::ask::Asking {
+            closes_when_idle: true,
+            ..Default::default()
+        };
+        let mut session = Session::new("none");
+        adopt_settings(
+            &mut session,
+            &bravebot_config::Settings::parse(r#"{"askIdleSeconds": 90}"#),
+            None,
+        );
+        assert_eq!(
+            session.ask_idle_for(&planners),
+            Some(std::time::Duration::from_secs(90))
+        );
+
+        let mut unset = Session::new("none");
+        adopt_settings(&mut unset, &bravebot_config::Settings::parse("{}"), None);
+        assert_eq!(unset.ask_idle_for(&planners), None);
     }
 
     /// MOUSE-4: `tui.mouse` reaches the session through `adopt_settings`. The editor and the pager

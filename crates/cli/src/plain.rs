@@ -3514,6 +3514,7 @@ mod tests {
                         multiple: false,
                         key: "which".to_string(),
                     }],
+                    ..Default::default()
                 });
             }),
             held(Held::Question)

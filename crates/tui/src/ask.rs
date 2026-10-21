@@ -10,16 +10,22 @@
 //!
 //! Declining is always one keypress away. A question the user does not want is a question they
 //! can dismiss, and a picker with no exit would make the model able to stall the session.
+//!
+//! A person who has walked away is not declining, and the picker is told how long to wait for them
+//! (ASK-9). Past that, every question still open is closed as [`Answer::TimedOut`], which the planner
+//! reads as no answer from somebody who may be away.
 
 use bravebot_core::ask::{Answer, Asking, Prompt, Row};
 use bravebot_i18n::t;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, KeyCode};
+use ratatui::crossterm::event::{self, Event, KeyCode};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
+use std::io;
+use std::time::{Duration, Instant};
 
 use crate::input;
 use crate::state::Session;
@@ -94,7 +100,22 @@ const CHIP_WIDTH: usize = 12;
 /// question. Saying nothing is the one reply that cannot be wrong about how many questions there
 /// were.
 pub fn ask<B: Backend>(terminal: &mut Terminal<B>, asking: &Asking) -> Vec<Answer> {
-    ask_titled(terminal, asking, None)
+    ask_within(terminal, asking, None)
+}
+
+/// [`ask`] for the planner's questions, closing them without an answer once `idle` passes with no
+/// key pressed (ASK-9).
+///
+/// `None` waits for as long as it takes, which is [`ask`]. The time is the person's own setting and
+/// the clock is the only thing it is compared with, so nothing a question or an answer says
+/// reaches the decision. Any key restarts it, and a series that is answered a question at a time
+/// gets the whole time again for each.
+pub fn ask_within<B: Backend>(
+    terminal: &mut Terminal<B>,
+    asking: &Asking,
+    idle: Option<Duration>,
+) -> Vec<Answer> {
+    ask_titled(terminal, asking, None, idle)
 }
 
 /// [`ask`] for a question the driver puts and not the planner, so the box is not called "the agent
@@ -103,38 +124,91 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, asking: &Asking) -> Vec<Answe
 /// A person who sees that title takes the question for a request from the model, which is what
 /// they are taught to read with suspicion. `title` is a sentence from this program's own catalog.
 pub fn ask_as<B: Backend>(terminal: &mut Terminal<B>, asking: &Asking, title: &str) -> Vec<Answer> {
-    ask_titled(terminal, asking, Some(title))
+    ask_titled(terminal, asking, Some(title), None)
 }
 
 fn ask_titled<B: Backend>(
     terminal: &mut Terminal<B>,
     asking: &Asking,
     title: Option<&str>,
+    idle: Option<Duration>,
 ) -> Vec<Answer> {
     if asking.prompts.is_empty() {
         return Vec::new();
     }
     let mut picker = Picker::new(asking);
     picker.named = title.map(str::to_string);
+    converse(terminal, &mut picker, idle, &mut Keyboard)
+}
+
+/// Where the picker's events and its clock come from, so a test can say what arrives when.
+trait Events {
+    fn now(&mut self) -> Instant;
+
+    /// The next event, or `None` once `within` has passed with none. A `within` of `None` waits for
+    /// one however long that is.
+    fn next(&mut self, within: Option<Duration>) -> io::Result<Option<Event>>;
+}
+
+/// The terminal and the system clock.
+struct Keyboard;
+
+impl Events for Keyboard {
+    fn now(&mut self) -> Instant {
+        Instant::now()
+    }
+
+    fn next(&mut self, within: Option<Duration>) -> io::Result<Option<Event>> {
+        if let Some(within) = within
+            && !input::poll(within)?
+        {
+            return Ok(None);
+        }
+        input::read().map(Some)
+    }
+}
+
+/// Draw the question, take keys, and return the answers once there is nothing left to ask.
+///
+/// `idle` is how long the person may go without pressing a key before every question still open is
+/// closed with [`Answer::TimedOut`] (ASK-9). It is measured from the last key press, or from when
+/// the questions were put, and nothing else restarts it: a release, the pointer and a change of
+/// size are not somebody answering.
+fn converse<B: Backend>(
+    terminal: &mut Terminal<B>,
+    picker: &mut Picker<'_>,
+    idle: Option<Duration>,
+    events: &mut impl Events,
+) -> Vec<Answer> {
+    let mut quiet_since = events.now();
 
     loop {
+        let left = idle
+            .map(|idle| idle.saturating_sub(events.now().saturating_duration_since(quiet_since)));
+
         // A terminal that cannot show the question cannot collect a considered answer, so
         // decline rather than take a keypress against something nobody saw.
         if terminal.draw(|frame| picker.draw(frame)).is_err() {
             return Vec::new();
         }
 
-        let key = match input::read() {
-            Ok(taken) => match input::key_of(&taken) {
+        let key = match events.next(left) {
+            Ok(Some(taken)) => match input::key_of(&taken) {
                 // Presses only. The interface asks the terminal for disambiguated keys, which
                 // reports releases too, and a release taken for a press answers the next question
                 // with the key that answered this one.
                 Some(key) if key.kind == event::KeyEventKind::Press => key.code,
                 _ => continue,
             },
+            // Nothing arrived in the time left. With none left, the person was not there: a key
+            // pressed before the time was up is still waiting when this loop was late, and a wait
+            // of no length takes it first.
+            Ok(None) if left == Some(Duration::ZERO) => return picker.time_out(),
+            Ok(None) => continue,
             // Losing the event stream must not invent an answer.
             Err(_) => return Vec::new(),
         };
+        quiet_since = events.now();
 
         match picker.press(key) {
             Step::Waiting => continue,
@@ -230,6 +304,18 @@ impl<'a> Picker<'a> {
         }
         self.here = State::starting(self.prompt());
         Step::Waiting
+    }
+
+    /// Close every question still open, the one on screen among them, because nobody pressed a key
+    /// in time.
+    ///
+    /// What is already settled stays. What is marked or half typed on the question on screen is not
+    /// kept: the person never confirmed it, and reporting an unconfirmed mark as their answer is
+    /// the invented reply ASK-7 rules out.
+    fn time_out(&mut self) -> Vec<Answer> {
+        let mut answers = std::mem::take(&mut self.answers);
+        answers.resize(self.asking.prompts.len(), Answer::TimedOut);
+        answers
     }
 
     fn press(&mut self, key: KeyCode) -> Step {
@@ -675,7 +761,8 @@ impl<'a> Picker<'a> {
 /// is what keeps that from being invisible: an answer given once and reused silently would look
 /// like a question that was never asked. `ask` draws the questions still outstanding, so the count
 /// in its title is the number the person has to answer. What the person answers is remembered for
-/// the next time, and a question `ask` returned no answer for is drawn again (ASK-8).
+/// the next time, and a question `ask` returned no answer for is drawn again (ASK-8). So is one
+/// `ask` closed on the clock, which the transcript says was closed (ASK-9).
 pub fn put(
     session: &mut Session,
     asking: &Asking,
@@ -687,6 +774,7 @@ pub fn put(
     }
 
     let fresh = ask(settled.outstanding());
+    session.note_closed_on_the_clock(&fresh);
 
     settled.finish(&mut session.answers, fresh)
 }
@@ -779,6 +867,7 @@ mod tests {
     fn one(prompt: &Prompt) -> Asking {
         Asking {
             prompts: vec![prompt.clone()],
+            ..Default::default()
         }
     }
 
@@ -962,6 +1051,7 @@ mod tests {
     fn a_series() -> Asking {
         Asking {
             prompts: vec![prompt(false), platforms()],
+            ..Default::default()
         }
     }
 
@@ -1847,6 +1937,7 @@ mod tests {
 
         let both = Asking {
             prompts: vec![prompt(false), platforms()],
+            ..Default::default()
         };
         let given = put(&mut session, &both, |shown| {
             assert_eq!(
@@ -1881,6 +1972,62 @@ mod tests {
         assert_eq!(drawn, 1, "a question nobody was asked was not drawn again");
     }
 
+    /// ASK-8, ASK-9: a question closed on the clock is not remembered. A person who was away said
+    /// nothing, so a planner asking it again is asking for the first time, and a remembered "no
+    /// answer" would be given back in their place. What was answered beside it is remembered, and
+    /// the transcript says a question was closed so the person who returns can see it.
+    #[test]
+    fn a_question_closed_on_the_clock_is_asked_again_and_the_one_beside_it_is_remembered() {
+        let both = Asking {
+            prompts: vec![prompt(false), platforms()],
+            ..Default::default()
+        };
+
+        let mut session = Session::new(".");
+        session.adopt_ask_idle(Some(90));
+        let given = put(&mut session, &both, |_| {
+            vec![Answer::Chosen(vec![0]), Answer::TimedOut]
+        });
+        assert_eq!(given, vec![Answer::Chosen(vec![0]), Answer::TimedOut]);
+        assert!(
+            said(&session).contains(&t!(session_question_timed_out, seconds = 90).to_string()),
+            "{:?}",
+            said(&session)
+        );
+
+        let mut drawn = Vec::new();
+        put(&mut session, &both, |shown| {
+            drawn = shown.prompts.clone();
+            vec![Answer::Declined]
+        });
+        assert_eq!(
+            drawn,
+            vec![platforms()],
+            "the question nobody answered was not put again, or the one answered was"
+        );
+
+        let mut brief = Session::new(".");
+        brief.adopt_ask_idle(Some(1));
+        put(&mut brief, &both, |_| {
+            vec![Answer::TimedOut, Answer::TimedOut]
+        });
+        let said_once = said(&brief).join("\n");
+        assert!(
+            said_once.contains("after 1 second with"),
+            "a single second was counted as seconds: {said_once}"
+        );
+
+        let mut settled = Session::new(".");
+        settled.adopt_ask_idle(Some(90));
+        put(&mut settled, &both, |_| {
+            vec![Answer::Chosen(vec![0]), Answer::Declined]
+        });
+        assert!(
+            said(&settled).is_empty(),
+            "a series nobody was late for said it had been closed"
+        );
+    }
+
     /// A question that differs in its tag is another question, and is drawn.
     #[test]
     fn a_question_that_differs_in_its_tag_is_drawn_though_the_sentence_was_answered() {
@@ -1906,5 +2053,220 @@ mod tests {
         });
 
         assert_eq!(drawn, 1);
+    }
+
+    /// A terminal and a clock that run on a script instead of a person: what arrives, and at what
+    /// time since the questions were put. Waiting past the last thing scripted with no limit would
+    /// never end, which is reported as a failure rather than a hang.
+    struct Scripted {
+        started: Instant,
+        elapsed: Duration,
+        arriving: std::collections::VecDeque<(u64, Event)>,
+        /// How long the loop is held up between the time it starts and the first time it looks
+        /// at the clock again, as a process that was stopped or starved would be.
+        stall: Duration,
+        readings: usize,
+    }
+
+    impl Scripted {
+        fn new(arriving: Vec<(u64, Event)>) -> Self {
+            Self {
+                started: Instant::now(),
+                elapsed: Duration::ZERO,
+                arriving: arriving.into(),
+                stall: Duration::ZERO,
+                readings: 0,
+            }
+        }
+
+        fn stalled_for(mut self, stall: Duration) -> Self {
+            self.stall = stall;
+            self
+        }
+    }
+
+    impl Events for Scripted {
+        fn now(&mut self) -> Instant {
+            self.readings += 1;
+            if self.readings == 2 {
+                self.elapsed += self.stall;
+            }
+            self.started + self.elapsed
+        }
+
+        fn next(&mut self, within: Option<Duration>) -> io::Result<Option<Event>> {
+            let limit = within.map(|within| self.elapsed + within);
+            let due = self
+                .arriving
+                .front()
+                .map(|(at, _)| Duration::from_secs(*at));
+            match (due, limit) {
+                (Some(at), limit) if limit.is_none_or(|limit| at <= limit) => {
+                    self.elapsed = self.elapsed.max(at);
+                    Ok(self.arriving.pop_front().map(|(_, event)| event))
+                }
+                (_, Some(limit)) => {
+                    self.elapsed = limit;
+                    Ok(None)
+                }
+                (_, None) => Err(io::Error::other("waiting with nothing left to arrive")),
+            }
+        }
+    }
+
+    fn pressed(code: KeyCode) -> Event {
+        Event::Key(event::KeyEvent::new(code, event::KeyModifiers::NONE))
+    }
+
+    /// The answers a series ends with when `arriving` happens and the picker waits `idle`, and how
+    /// long it had been going when it ended.
+    fn waited(
+        asking: &Asking,
+        idle: Option<u64>,
+        arriving: Vec<(u64, Event)>,
+    ) -> (Vec<Answer>, Duration) {
+        waited_after_a_stall(asking, idle, arriving, Duration::ZERO)
+    }
+
+    fn waited_after_a_stall(
+        asking: &Asking,
+        idle: Option<u64>,
+        arriving: Vec<(u64, Event)>,
+        stall: Duration,
+    ) -> (Vec<Answer>, Duration) {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        let mut picker = Picker::new(asking);
+        let mut events = Scripted::new(arriving).stalled_for(stall);
+        let given = converse(
+            &mut terminal,
+            &mut picker,
+            idle.map(Duration::from_secs),
+            &mut events,
+        );
+        (given, events.elapsed)
+    }
+
+    fn three_questions() -> Asking {
+        Asking {
+            prompts: vec![prompt(false), platforms(), prompt(false)],
+            ..Default::default()
+        }
+    }
+
+    /// ASK-9: the question on screen and the ones behind it close with no answer, and the answer
+    /// already given stays. The time runs from the last key, so it ends a whole `idle` after the
+    /// answer to the first question and not after the questions were put.
+    #[test]
+    fn a_series_left_alone_closes_from_the_question_on_screen_and_keeps_what_was_answered() {
+        let (given, ended) = waited(
+            &three_questions(),
+            Some(60),
+            vec![(10, pressed(KeyCode::Enter))],
+        );
+        assert_eq!(
+            given,
+            vec![Answer::Chosen(vec![0]), Answer::TimedOut, Answer::TimedOut]
+        );
+        assert_eq!(ended, Duration::from_secs(70));
+    }
+
+    /// Any key press restarts the time, not only the one that answers. A person who is scrolling
+    /// the options is there, and closing the question under them is what the setting is not for.
+    #[test]
+    fn a_key_that_answers_nothing_still_restarts_the_time() {
+        let (given, ended) = waited(
+            &one(&prompt(false)),
+            Some(60),
+            vec![
+                (50, pressed(KeyCode::Down)),
+                (100, pressed(KeyCode::Down)),
+                (150, pressed(KeyCode::Enter)),
+            ],
+        );
+        assert_eq!(given, vec![Answer::Chosen(vec![2])]);
+        assert_eq!(ended, Duration::from_secs(150));
+    }
+
+    /// Nothing but a key press is somebody at the keyboard. A change of size or the terminal being
+    /// left is reported to the picker and leaves the time running.
+    #[test]
+    fn an_event_that_is_not_a_key_press_does_not_restart_the_time() {
+        let (given, ended) = waited(
+            &one(&prompt(false)),
+            Some(60),
+            vec![(30, Event::Resize(80, 24)), (50, Event::FocusLost)],
+        );
+        assert_eq!(given, vec![Answer::TimedOut]);
+        assert_eq!(ended, Duration::from_secs(60));
+    }
+
+    /// With no time set a question waits however long it takes, so the setting is the only thing
+    /// that closes one. A picker that carried a time of its own would close this one.
+    #[test]
+    fn with_no_time_set_a_question_waits_for_as_long_as_it_takes() {
+        let (given, ended) = waited(
+            &one(&prompt(false)),
+            None,
+            vec![(3 * 24 * 60 * 60, pressed(KeyCode::Enter))],
+        );
+        assert_eq!(given, vec![Answer::Chosen(vec![0])]);
+        assert_eq!(ended, Duration::from_secs(3 * 24 * 60 * 60));
+    }
+
+    /// What was marked or typed and never confirmed is not an answer. Reporting it would hand the
+    /// planner a reply the person did not give, which is the thing the time out exists to avoid.
+    #[test]
+    fn marks_and_half_typed_words_are_not_an_answer_when_the_time_runs_out() {
+        let (marked, _) = waited(
+            &one(&prompt(true)),
+            Some(60),
+            vec![
+                (1, pressed(KeyCode::Char(' '))),
+                (2, pressed(KeyCode::Down)),
+                (3, pressed(KeyCode::Char(' '))),
+            ],
+        );
+        assert_eq!(marked, vec![Answer::TimedOut]);
+
+        let (typed, _) = waited(
+            &one(&prompt(false)),
+            Some(60),
+            vec![
+                (1, pressed(KeyCode::Char('o'))),
+                (2, pressed(KeyCode::Char('h'))),
+                (3, pressed(KeyCode::Char('i'))),
+            ],
+        );
+        assert_eq!(typed, vec![Answer::TimedOut]);
+    }
+
+    /// A key pressed inside the time is an answer even when the loop reached it late, as a process
+    /// that was stopped and resumed does. Without one waiting, the same stall is the time running
+    /// out. Rejects: a deadline honoured before the keys already queued are read.
+    #[test]
+    fn a_key_waiting_when_the_loop_runs_late_is_still_an_answer() {
+        let stall = Duration::from_secs(100);
+        let (given, _) = waited_after_a_stall(
+            &one(&prompt(false)),
+            Some(60),
+            vec![(50, pressed(KeyCode::Enter))],
+            stall,
+        );
+        assert_eq!(given, vec![Answer::Chosen(vec![0])]);
+
+        let (given, _) = waited_after_a_stall(&one(&prompt(false)), Some(60), Vec::new(), stall);
+        assert_eq!(given, vec![Answer::TimedOut]);
+    }
+
+    /// A key that arrives in the last moment is an answer, so a person who presses it as the time
+    /// is up is not told they were away.
+    #[test]
+    fn a_key_arriving_as_the_time_is_up_is_still_an_answer() {
+        let (given, _) = waited(
+            &one(&prompt(false)),
+            Some(60),
+            vec![(60, pressed(KeyCode::Enter))],
+        );
+        assert_eq!(given, vec![Answer::Chosen(vec![0])]);
     }
 }

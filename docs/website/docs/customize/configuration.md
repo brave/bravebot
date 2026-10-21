@@ -446,6 +446,7 @@ one thing leaves everything else in force:
 | `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
 | `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and a `--settings` file outside the project; a project or local file's are ignored and reported |
 | `git.identities` | your own file and a `--settings` file outside the project, the later one's entry for an owner replacing the earlier one's; a project or local file's are ignored and reported |
+| `askIdleSeconds` | your own file and a `--settings` file outside the project; a project or local file's is ignored and reported |
 | anything else | the closest file that set it wins |
 
 A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
@@ -510,6 +511,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
 | `awaySummaryEnabled` | whether a session is recapped by itself after you have been away ([below](#awaysummaryenabled)) |
 | `awaySummaryIdleSeconds` | how long after a turn finishes the automatic recap waits ([below](#awaysummaryidleseconds)) |
+| `askIdleSeconds` | how long a question from the agent waits with no key pressed before it is closed ([below](#askidleseconds)) |
 | `notificationMethod`, `notificationCondition` | how and when the terminal is told a turn ended or a question is waiting ([below](#notificationmethod-and-notificationcondition)) |
 | `suggestions` | whether the empty box offers a suggested next prompt ([below](#suggestions)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
@@ -911,6 +913,30 @@ How many seconds the terminal has to have been unfocused since the last turn fin
 [`awaySummaryEnabled`](#awaysummaryenabled)'s automatic recap is made. Without this key it is 300.
 A whole number above zero; zero, a negative or fractional number, or a number in quotes leaves it at
 300. It changes nothing else about the recap, and `/recap` is not delayed by it.
+
+### `askIdleSeconds`
+
+```json
+{ "askIdleSeconds": 600 }
+```
+
+How many seconds a question from the agent, put with [`ask_user`](../reference/tools.md#ask_user),
+waits with no key pressed before the terminal closes it. Without this key it waits for as long as it
+takes. The question on screen and every question behind it are closed without an answer, the
+answers already given are kept, and the agent is told that no answer was given in the time allowed
+and that you may be away, so it can go on with its own judgment and ask again later. Any key press
+starts the time again. What you had marked or half typed on the question that closed is not sent.
+The session says that a question was closed, and a question that closed is asked again if the agent
+asks it again.
+
+A whole number above zero; zero, a negative or fractional number, or a number in quotes leaves a
+question waiting. Only your own file and a `--settings` file outside the project set it: a
+`.bravebot/settings.json` that arrived with a checkout is ignored and named by `bravebot doctor`,
+since a question closed on a clock is one you were not asked.
+
+It closes the agent's questions in the terminal interface only. A plan to approve, a spend limit and
+a repeated call always wait for you, and so do questions in a session started with `--plain`, in a
+background session, and in the desktop app.
 
 ### `notificationMethod` and `notificationCondition`
 

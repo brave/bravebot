@@ -1091,6 +1091,12 @@ Questions are put one at a time. You may choose an option, answer in your own wo
 skipped question is an answer to work with rather than a reason to ask again. An answer is remembered
 for the session, question by question.
 
+With [`askIdleSeconds`](../customize/configuration.md#askidleseconds) set, the terminal closes a question
+that sits that long with no key pressed, and every question behind it. The planner is told that no
+answer was given in the time allowed and that you may be away, not that you declined, and the answers
+you had already given stay. A question closed this way is not remembered, so the planner can ask it
+again.
+
 **Asking stops once the planner's context has met something untrusted**, because at that point the
 question itself could have been shaped by content nobody vouched for. A quarantined read does not stop
 it asking, since a reference carries no instruction. Where nobody can be asked, as in a one-shot run,
