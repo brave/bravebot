@@ -5367,7 +5367,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// SKILL-18. A skill the person named whose body the gate would not show the planner stops the
+    /// SKILL-20. A skill the person named whose body the gate would not show the planner stops the
     /// turn with a sentence naming the skill. Nothing of it is put in front of the planner and the
     /// trail does not record it as supplied, since a turn that went on would run under instructions
     /// the person believes are in force and are not.
