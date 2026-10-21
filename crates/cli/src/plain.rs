@@ -293,6 +293,15 @@ fn run(
     let resumed = hosted_as
         .as_deref()
         .and_then(|id| bravebot_session::sessions::load(workspace.root(), id));
+    // A session started again, and the index of its workspace, are what the sweep of what has
+    // outlived the retention period must leave whatever their age (STATE-4).
+    bravebot_session::retention::at_startup(
+        settings.retention(),
+        bravebot_session::retention::InUse {
+            session: hosted_as.as_deref(),
+            workspace: Some(workspace.root()),
+        },
+    );
     let Some(trust) = resumed
         .as_ref()
         .and_then(|record| record.trust_map(workspace.root()))

@@ -627,6 +627,16 @@ doctor-settings-references-ignored =
     references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-attribution-ignored =
     attribution in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+# retentionDays is read from the person's own file alone, since a checkout choosing when their
+# records are deleted would delete them by being opened. A line that does nothing is worth saying so.
+doctor-settings-retention-ignored =
+    retentionDays in { $path } is not obeyed: it is read from ~/.bravebot/settings.json only
+# The sweep that removes old session records, language server indexes and findings waits while the
+# period it was asked for cannot be determined, and removes nothing, so a person who set a period
+# is not swept on the built-in one instead.
+doctor-retention = retention
+doctor-retention-paused =
+    nothing is removed for age until { $path } is readable and retentionDays in it is a whole number of days above zero
 # A key that only ever refuses, spelled as something other than a boolean. It is read as absence, so
 # the session is as permissive as one that named nothing, and nothing else would say so.
 doctor-settings-narrowing-ignored =

@@ -62,6 +62,10 @@ fn main() {
         std::env::current_dir().ok().as_deref(),
         settings.as_deref(),
     );
+    bravebot_ui_bridge::settings::start_the_sweep_for_process(
+        std::env::current_dir().ok().as_deref(),
+        settings.as_deref(),
+    );
 
     let (input, lines) = mpsc::channel();
     let out = Arc::new(Mutex::new(std::io::stdout()));

@@ -1783,6 +1783,17 @@ fn prepare_the_run(
     // reason, since dropping it is what removes it.
     let _scratch = scratch_for_this_run(&mut workspace);
 
+    // The record this run continues, and the index of its workspace, are what the sweep of what has
+    // outlived the retention period must leave whatever their age (STATE-4): a person who named a
+    // record is resuming it.
+    bravebot_session::retention::at_startup(
+        settings.retention(),
+        bravebot_session::retention::InUse {
+            session: continued.as_ref().map(|record| record.id.as_str()),
+            workspace: Some(workspace.root()),
+        },
+    );
+
     let egress = bravebot_net::Egress::new();
 
     for problem in &rejected {

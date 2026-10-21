@@ -1506,9 +1506,11 @@ stay behind because they were given for work that the brief describes only in wo
   a directory is not saying that every file in it is worth copying anywhere: overwriting a file of
   credentials inside a project the user trusts copies them out of it and into the state directory.
   They leave the record once the point ages out, and 0600 covers them while they are there, but a
-  session that ends on such a turn leaves them in its record until the record is deleted. Nothing
-  here distinguishes a file worth keeping from one that is not, because nothing here reads the
-  bytes.
+  session that ends on such a turn leaves them in its record until the record is deleted: by the
+  person ([SESSION-30](#SESSION-30)), or once nothing has written the record for the retention
+  period, which is 30 days where none is stated
+  ([state-directory.md](state-directory.md#STATE-4)). Nothing here distinguishes a file worth keeping
+  from one that is not, because nothing here reads the bytes.
 
 - **A resumed session cannot rewind a file nobody vouched for.** What such a file held is kept in
   memory for the session that took the backup and left out of the record, so after a resume that

@@ -2382,6 +2382,18 @@ fn begin_session(
     // person who left at it has nothing created for a session they declined to have.
     let scratch = opened_scratch(&mut session, &mut workspace);
 
+    // The session this is, resumed or new, and the index of its workspace are what the sweep of
+    // what has outlived the retention period must leave, whatever their age (STATE-4). Once the
+    // session exists and not before, so a record a person picked to resume is not removed from
+    // under the pick.
+    bravebot_session::retention::at_startup(
+        settings.retention(),
+        bravebot_session::retention::InUse {
+            session: Some(stored.id()),
+            workspace: Some(workspace.root()),
+        },
+    );
+
     // After the trust answer, because that question is the first thing on the screen and an aside
     // about a newer release does not come before it. Nothing is fetched here: the line is read off
     // what an earlier launch wrote down, and the ask that answers the next launch runs behind the

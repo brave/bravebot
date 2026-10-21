@@ -79,9 +79,9 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/skills/<name>/SKILL.md` | skills available in every project |
 | `~/.bravebot/agents/<name>.md` | [delegate definitions](agents.md) available in every project |
 | `~/.bravebot/rules/<name>.md` | [rules](instructions.md) for every project, in force every turn or once a file their `paths` match is touched |
-| `~/.bravebot/sessions/<directory>/` | session records and audit trails |
-| `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace ([`lsp`](../reference/tools.md#the-index-is-cached-and-it-is-not-small)) |
-| `~/.bravebot/findings/<workspace>.jsonl` | the credentials a turn's own writes were found to hold, one per workspace |
+| `~/.bravebot/sessions/<directory>/` | session records and audit trails, removed after [`retentionDays`](#retentiondays) |
+| `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace, removed after [`retentionDays`](#retentiondays) ([`lsp`](../reference/tools.md#the-index-is-cached-and-it-is-not-small)) |
+| `~/.bravebot/findings/<workspace>.jsonl` | the credentials a turn's own writes were found to hold, one per workspace, removed after [`retentionDays`](#retentiondays) |
 | `~/.bravebot/granted/<directory>.jsonl` | the permission rules a checkout proposed that you granted, one file per directory ([`permissions`](#permissions)) |
 | `~/.bravebot/trusted/<directory>.jsonl` | the yes to the startup question, one file per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
 | `~/.bravebot/untrusted/<directory>.jsonl` | the [delegate definitions' memories](agents.md#memory) a write left untrusted, one per directory |
@@ -118,6 +118,11 @@ keeps them private.
 
 Every operation here degrades to doing nothing. A missing home directory, a read-only disk or a
 corrupt file does not stop a session starting.
+
+Session records, language server indexes and findings files are removed once nothing has written them
+for [`retentionDays`](#retentiondays) days, 30 where you state none. What you asked to keep is left
+whatever its age: the rules you granted, your answers to the startup question, the prompt history and
+every file you wrote yourself.
 
 `~/.bravebot` is one fixed name under the profile directory **the environment names**, and there is
 no fallback. `HOME` names it on Unix. On Windows `HOME` is read first and `USERPROFILE` second, the
@@ -510,6 +515,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
 | `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
+| `retentionDays` | how many days a session record, a language server index and a findings file are kept ([below](#retentiondays)) |
 | `awaySummaryEnabled` | whether a session is recapped by itself after you have been away ([below](#awaysummaryenabled)) |
 | `awaySummaryIdleSeconds` | how long after a turn finishes the automatic recap waits ([below](#awaysummaryidleseconds)) |
 | `askIdleSeconds` | how long a question from the agent waits with no key pressed before it is closed ([below](#askidleseconds)) |
@@ -921,6 +927,38 @@ A `reader` or `checker` delegate, a delegate left with no server, and a run limi
 offered no `load_tool`.
 A number or a size like `"20k"`; anything else, and zero, leaves every tool in full, which is the
 default. It lasts a turn, so a later turn loads again.
+
+### `retentionDays`
+
+```json
+{ "retentionDays": 14 }
+```
+
+How many days a session record, a language server index and a file of findings are kept after
+anything last wrote them. When a session starts, each one older than that is removed: a record goes
+with its audit trail and its search index, and an index goes once no language server has started on
+it for that long. Without this key it is 30. A whole number of one or more; one day is the least, so
+nothing written in the last day is removed.
+
+Only `~/.bravebot/settings.json` states it. A project or local settings file, and a file named with
+`--settings`, cannot, since a project's settings arrive with a clone and one saying `1` would remove
+your records by being opened. `bravebot doctor` names a file that tried.
+
+If your own settings file cannot be read, or `retentionDays` is zero, negative, fractional, a string
+or anything else that is not a whole number of days, nothing is removed until it can be, and `doctor`
+names the file. The built-in 30 is not used in its place, since a record removed on a period you did
+not choose cannot be brought back.
+
+The session you are starting is never removed, so resuming a record older than the period works, and
+neither is a session running in the background or the language server index of the workspace you
+start in. Your
+rules, your answers to the startup question, your prompt history and the acceptances of findings are
+not swept. An [incognito](../using/sessions.md#a-session-that-leaves-nothing-behind) session removes
+nothing. A session left open in another terminal for longer than the period has its record removed by
+a new one, and its next save writes it again.
+
+To keep a conversation past the period, run [`/export`](../reference/commands.md#export-path) first, or
+state a larger number.
 
 ### `awaySummaryEnabled`
 

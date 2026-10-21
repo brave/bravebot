@@ -219,7 +219,9 @@ Vouching for a directory is not saying every file in it is worth copying elsewhe
 overwrites a file of credentials **inside a project you trusted** puts its previous contents into the
 record, so they leave the project and land in the state directory. They go once the point ages out a
 few turns later, and mode 0600 covers them while they are there, but a session that ends on such a
-turn leaves them in its record until the record is deleted.
+turn leaves them in its record until the record is deleted: by you, as
+[below](#deleting-a-session), or once nothing has written it for
+[`retentionDays`](../customize/configuration.md#retentiondays) days, which is 30 where you state none.
 :::
 
 A pasted picture *is* written down, because it was never quarantined. It is part of your own message,
@@ -379,6 +381,11 @@ prompt history is one file for every project and stays, and so do the sessions o
 directories. A session running in the background is left until you stop it with
 `bravebot sessions stop`. A session open in another terminal is not seen, and its next save writes
 its record back, so close it first. Both work under `--incognito`.
+
+Nothing needs to be asked for to remove an old one: when a session starts, every record nothing has
+written for [`retentionDays`](../customize/configuration.md#retentiondays) days is removed, with its
+trail and its search index, and the session you are starting is left whatever its age. A record that
+is gone cannot be resumed, forked or searched, so run `/export` first to keep the words.
 
 ## Importing sessions from Claude Code
 

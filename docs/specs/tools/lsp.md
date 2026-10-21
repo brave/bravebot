@@ -449,6 +449,11 @@ An index an earlier build left under a path this one does not use is removed rat
 where it is. Nothing reads it, so it is an index of the user's source sitting at whatever mode it
 was made with, for as long as the machine lasts.
 
+**An index is aged by when a server last started on it.** Each start stamps a file inside the index,
+and an index whose stamp is older than the retention period is removed
+([state-directory.md](../state-directory.md#STATE-4)). The directory's own time says nothing about
+use, because a server writes deeper inside while it runs.
+
 Every directory a server is pointed at is created by this process, at the modes
 [state-directory.md](../state-directory.md#STATE-1) gives them, and a server whose directories
 cannot be created does not start. A server handed one that is not there creates it itself, at the
@@ -500,6 +505,7 @@ incognito has already accepted.
 `verified-by: bravebot_lsp::server::a_session_with_a_state_directory_indexes_under_it`
 `verified-by: bravebot_lsp::server::the_cache_is_never_read_by_the_driver`
 `verified-by: bravebot_lsp::server::a_server_whose_index_directory_cannot_be_made_private_does_not_start`
+`verified-by: bravebot_lsp::server::starting_a_server_on_an_index_keeps_it_from_being_removed`
 
 <a id="LSP-11"></a>
 ### LSP-11: a person may declare a server, in their own directory and nowhere else
@@ -770,10 +776,12 @@ only through a processor.
   it means stopping every server after each run that writes in the workspace, at the cost of a fresh
   index after every `cargo test` or `npm ci`.
 
-- **An index survives between sessions, and nothing prunes it.** [LSP-10](#LSP-10) keeps a cache per
+- **An index survives between sessions, and only age prunes it.** [LSP-10](#LSP-10) keeps a cache per
   workspace under `~/.bravebot`, which is what makes the second session fast. It is not small: this
   workspace's is a few hundred megabytes, since what rust-analyzer keeps there is a build directory. A
-  machine that has been in many workspaces holds one for each, and nothing removes them.
+  machine that has been in many workspaces holds one for each until no server has started on it for the
+  retention period ([state-directory.md](../state-directory.md#STATE-4)), so a person who works in
+  many workspaces within that period holds all of them.
 
 - **The one a session keeps nothing of is removed as the session ends, and only then.** Removal is a
   destructor, so a session that does not unwind (a panic in a release build, where the profile
@@ -782,7 +790,8 @@ only through a processor.
   a live one from a dead one by the name, and the platform's own sweep of that directory is what
   eventually takes it. The same is true of the session's scratch directory
   ([incognito.md](../incognito.md#INCOG-8)), which is why this is stated rather than fixed here;
-  what differs is the size, and that is the eviction rule the open question below asks for.
+  what differs is the size. The retention sweep reaches `~/.bravebot` and not the system temporary
+  directory.
 
 - **A server's own fault at a position reads as nothing found.** [LSP-2](#LSP-2) takes a rejection
   of a position request as an empty answer, and a server numbers a fault of its own the same way
@@ -813,8 +822,9 @@ only through a processor.
   of `hover` in a vouched-for tree, at the cost of a second request per question and of a label
   that depends on two answers agreeing about one symbol.
 
-- Whether the cache needs an eviction rule, and what it should be keyed on. [LSP-10](#LSP-10)
-  accumulates one directory per workspace and nothing removes them.
+- Whether the cache needs a bound on size as well as on age. [LSP-10](#LSP-10) keeps one directory per
+  workspace, and the retention sweep removes one by when a server last started on it, so a machine
+  holds every index it used within the period however large they are.
 
 - Whether a location should carry the symbol's *name* as well as its position. A name is a token
   the file chose, so it is content by [LSP-3](#LSP-3) and quarantined; but a list of positions with

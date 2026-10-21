@@ -209,6 +209,29 @@ fn ignored<'a>(paths: impl IntoIterator<Item = &'a Path>, say: impl Fn(String) -
     });
 }
 
+/// What `doctor` says about the retention period: a line for each file that named `retentionDays`
+/// and was not obeyed, and one while the period cannot be determined and the sweep is paused
+/// (STATE-4). Nothing while the sweep runs, which is the ordinary case.
+fn retention_facts(settings: &bravebot_config::Settings) -> Vec<(String, String)> {
+    let not_obeyed = settings.retention_ignored().map(|path| {
+        (
+            t!(doctor_settings_ignored).to_string(),
+            t!(
+                doctor_settings_retention_ignored,
+                path = path.display().to_string()
+            )
+            .to_string(),
+        )
+    });
+    let paused = settings.retention_unreadable().map(|path| {
+        (
+            t!(doctor_retention).to_string(),
+            t!(doctor_retention_paused, path = path.display().to_string()).to_string(),
+        )
+    });
+    not_obeyed.chain(paused).collect()
+}
+
 /// The `doctor` facts for `sandbox.filesystem`: each entry of the four lists with the file or flag
 /// that wrote it, and the ones that are not in force with why.
 ///
@@ -483,6 +506,9 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     ignored(settings.attribution_ignored(), |path| {
         t!(doctor_settings_attribution_ignored, path = path).to_string()
     });
+    for (label, line) in retention_facts(settings) {
+        fact(label, line);
+    }
 
     each(
         t!(doctor_settings_ignored),
@@ -1989,6 +2015,55 @@ mod tests {
         assert!(!report.contains("alice"), "{report}");
         assert!(
             report.contains("http://proxy.corp.example:8080"),
+            "{report}"
+        );
+    }
+
+    /// STATE-4: a sweep that is waiting is the one thing about retention a person cannot see from the
+    /// directory, because nothing is removed and nothing says why. A file that named a period it was
+    /// not allowed to is named as well, and a machine where the sweep runs says nothing.
+    #[test]
+    fn the_retention_section_names_a_paused_sweep_and_a_file_that_was_not_obeyed() {
+        let root = scratch("retention-facts");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = bravebot_config::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        let own = bravebot_config::user_settings_file(&home);
+
+        let quiet = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+        assert!(retention_facts(&quiet).is_empty());
+
+        std::fs::write(&own, r#"{"retentionDays": 7}"#).expect("user file");
+        std::fs::write(&project_file, r#"{"retentionDays": 1}"#).expect("project file");
+        let ignored = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+        let report = retention_facts(&ignored)
+            .into_iter()
+            .map(|(label, line)| format!("{label} {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            report.contains(&format!(
+                "retentionDays in {} is not obeyed",
+                project_file.display()
+            )),
+            "{report}"
+        );
+        assert!(!report.contains("nothing is removed"), "{report}");
+
+        std::fs::write(&own, r#"{"retentionDays": "a week"}"#).expect("user file");
+        let paused = bravebot_config::Settings::layered(Some(home), None, None);
+        let report = retention_facts(&paused)
+            .into_iter()
+            .map(|(label, line)| format!("{label} {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            report.contains(&format!(
+                "nothing is removed for age until {} is readable",
+                own.display()
+            )),
             "{report}"
         );
     }

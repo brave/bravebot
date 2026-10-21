@@ -173,6 +173,62 @@ pub fn key_for(project: &Path) -> String {
     mangled
 }
 
+/// Whether `path` is a directory by its own name, which a link to one is not.
+fn is_real_directory(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|found| found.is_dir())
+}
+
+/// The plain files directly inside `directory` that were last written before `cutoff`.
+///
+/// What a sweep of the state directory chooses from, so the rules it keeps are written once. A link
+/// standing as `directory`, or as an entry of it, is stepped over rather than followed: a sweep is
+/// bounded by a comparison of names, which says where a name sits and nothing about where it leads.
+/// A file whose time cannot be read, or is not before `cutoff`, stays, and a time later than now,
+/// from a clock that was wrong when the file was written, is not old. Empty where `directory`
+/// cannot be read.
+///
+/// Read-only: the caller removes what it takes from the answer, and so decides what removing one
+/// means.
+pub fn files_unwritten_since(
+    directory: &Path,
+    cutoff: std::time::SystemTime,
+) -> Vec<std::fs::DirEntry> {
+    if !is_real_directory(directory) {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter(|entry| {
+            entry
+                .metadata()
+                .and_then(|found| found.modified())
+                .is_ok_and(|written| written < cutoff)
+        })
+        .collect()
+}
+
+/// The directories directly inside `directory`, by their own names: a link to one is not listed.
+///
+/// For the same reason [`files_unwritten_since`] steps over links. Empty where `directory` is not a
+/// directory of its own or cannot be read.
+pub fn directories_in(directory: &Path) -> Vec<PathBuf> {
+    if !is_real_directory(directory) {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .collect()
+}
+
 /// Create `path` and everything between it and the state directory, reachable only by this user.
 ///
 /// Every writer under `~/.bravebot` goes through this rather than `create_dir_all`, because a
@@ -500,5 +556,68 @@ mod tests {
         opened.write_all(b"one\n").expect("written");
 
         assert_eq!(mode_of(&file), 0o600);
+    }
+    /// STATE-4: a sweep chooses from plain files by their own names and times. A file written inside
+    /// the period, a directory as old as the file and a link all stay out of the answer, so a caller
+    /// that removes what it is given cannot remove any of them.
+    #[test]
+    fn only_old_plain_files_are_named_as_unwritten() {
+        let scratch = Scratch::new("home-unwritten");
+        let old = scratch.path.join("old");
+        let new = scratch.path.join("new");
+        std::fs::write(&old, "old").expect("write");
+        std::fs::write(&new, "new").expect("write");
+        let then = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 86_400);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&old)
+            .expect("open")
+            .set_modified(then)
+            .expect("age the file");
+        let directory = scratch.path.join("directory");
+        std::fs::create_dir(&directory).expect("a directory");
+        std::fs::File::open(&directory)
+            .expect("open the directory")
+            .set_modified(then)
+            .expect("age the directory");
+        std::os::unix::fs::symlink(&old, scratch.path.join("linked")).expect("link");
+
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86_400);
+        let named: Vec<_> = files_unwritten_since(&scratch.path, cutoff)
+            .into_iter()
+            .map(|entry| entry.path())
+            .collect();
+
+        assert_eq!(named, [old]);
+    }
+
+    /// STATE-1: a link standing as the directory itself leads outside what a sweep was given.
+    #[test]
+    fn a_link_standing_as_the_directory_names_nothing() {
+        let scratch = Scratch::new("home-linked-directory");
+        let elsewhere = scratch.path.join("elsewhere");
+        std::fs::create_dir_all(elsewhere.join("inside")).expect("create");
+        let old = elsewhere.join("old");
+        std::fs::write(&old, "old").expect("write");
+        let linked = scratch.path.join("linked");
+        std::os::unix::fs::symlink(&elsewhere, &linked).expect("link");
+
+        let cutoff = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        assert!(files_unwritten_since(&linked, cutoff).is_empty());
+        assert!(directories_in(&linked).is_empty());
+        assert_eq!(directories_in(&elsewhere), [elsewhere.join("inside")]);
+    }
+
+    /// STATE-1: a link standing as an entry is not a directory of its own.
+    #[test]
+    fn a_link_standing_as_an_entry_is_not_listed_as_a_directory() {
+        let scratch = Scratch::new("home-linked-entry");
+        let elsewhere = scratch.path.join("elsewhere");
+        let held = scratch.path.join("held");
+        std::fs::create_dir_all(&elsewhere).expect("create");
+        std::fs::create_dir_all(&held).expect("create");
+        std::os::unix::fs::symlink(&elsewhere, held.join("linked")).expect("link");
+
+        assert!(directories_in(&held).is_empty());
     }
 }
