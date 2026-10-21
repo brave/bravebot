@@ -233,6 +233,7 @@ would reach a hook as another directory through a line of JSON.
 `verified-by: bravebot_agent::hooks::a_hook_is_given_no_environment_of_its_own`
 `verified-by: bravebot_agent::hooks::a_checkout_hook_is_handed_the_checkout_and_the_working_directory_it_was_made_from`
 `verified-by: bravebot_agent::hooks::a_checkout_hook_is_handed_a_directory_whose_name_is_not_text_as_it_is`
+`verified-by: bravebot_agent::hooks::a_checkout_hook_runs_in_a_checkout_whose_name_is_not_text_and_is_told_it_as_it_is`
 `verified-by: bravebot_agent::hooks::a_hook_for_any_other_moment_is_given_neither_directory`
 `verified-by: bravebot_agent::turn::a_hook_runs_in_the_checkout_made_for_a_delegate_before_its_first_round`
 

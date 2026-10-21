@@ -210,11 +210,14 @@ fn a_checkout_hook_is_handed_the_checkout_and_the_working_directory_it_was_made_
     );
 }
 
-/// HOOK-5: a directory reaches the hook as the bytes the file system holds. A name that is not text
-/// is passed on as it is, where a lossy spelling would name a directory that is not there.
+/// HOOK-5, PATH-003: a directory reaches the hook as the bytes the file system holds. A working
+/// directory whose name is not text is passed on as it is, and the name its replacement-character
+/// rendering spells is passed on as that, so a lossy spelling would hand the hook the second for
+/// the first.
 #[cfg(unix)]
 #[test]
 fn a_checkout_hook_is_handed_a_directory_whose_name_is_not_text_as_it_is() {
+    use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
     let scratch = Scratch::new("checkout-bytes");
     let program = script(
@@ -223,20 +226,68 @@ fn a_checkout_hook_is_handed_a_directory_whose_name_is_not_text_as_it_is() {
         "#!/bin/sh\nprintf '%s' \"$BRAVEBOT_WORKING_DIRECTORY\" > working.bin\n",
     );
     let hooks = declaring("checkout-made", &[program.to_str().expect("a path")]);
-    let not_text = Path::new(std::ffi::OsStr::from_bytes(b"/people/caf\xe9/project"));
+    let not_text = Path::new(OsStr::from_bytes(b"/people/caf\xe9/project"));
+    let lookalike = Path::new("/people/caf\u{FFFD}/project");
 
-    fire_checkout_made(
-        &hooks,
-        hooks::Made {
-            checkout: &scratch.path,
-            working_directory: not_text,
-        },
-    );
+    for working_directory in [not_text, lookalike] {
+        let _ = std::fs::remove_file(scratch.path.join("working.bin"));
 
-    assert_eq!(
-        std::fs::read(scratch.path.join("working.bin")).expect("the hook ran"),
-        b"/people/caf\xe9/project"
+        fire_checkout_made(
+            &hooks,
+            hooks::Made {
+                checkout: &scratch.path,
+                working_directory,
+            },
+        );
+
+        assert_eq!(
+            std::fs::read(scratch.path.join("working.bin")).expect("the hook ran"),
+            working_directory.as_os_str().as_bytes(),
+            "the hook was told another directory than {working_directory:?}"
+        );
+    }
+}
+
+/// HOOK-4, HOOK-5, PATH-003: a hook runs in a checkout whose name is not text and is told that
+/// name as the bytes the file system holds. The directory its replacement-character rendering
+/// spells exists beside it, so a lossy spelling would run the hook in the wrong one or tell it the
+/// wrong one. Linux only: other hosts' file systems cannot hold the name.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_checkout_hook_runs_in_a_checkout_whose_name_is_not_text_and_is_told_it_as_it_is() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let scratch = Scratch::new("checkout-named-bytes");
+    let program = script(
+        &scratch.path,
+        "keep-checkout",
+        "#!/bin/sh\nprintf '%s' \"$BRAVEBOT_CHECKOUT\" > checkout.bin\n",
     );
+    let hooks = declaring("checkout-made", &[program.to_str().expect("a path")]);
+    let not_text = scratch.path.join(OsStr::from_bytes(b"checkout-\xe9"));
+    let lookalike = scratch.path.join("checkout-\u{FFFD}");
+    std::fs::create_dir(&not_text).expect("a checkout whose name is not text");
+    std::fs::create_dir(&lookalike).expect("its lossy lookalike");
+
+    for checkout in [&not_text, &lookalike] {
+        let fired = fire_checkout_made(
+            &hooks,
+            hooks::Made {
+                checkout,
+                working_directory: Path::new("/people/their/project"),
+            },
+        );
+
+        assert_eq!(
+            fired[0].trouble, None,
+            "the hook did not run in {checkout:?}"
+        );
+        assert_eq!(
+            std::fs::read(checkout.join("checkout.bin")).expect("the hook ran in the checkout"),
+            checkout.as_os_str().as_bytes(),
+            "the hook was told another directory than the one it ran in"
+        );
+    }
 }
 
 /// HOOK-5: only the hook for a checkout is given the directories. The hook for any other moment is
