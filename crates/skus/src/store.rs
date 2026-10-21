@@ -2368,6 +2368,28 @@ mod tests {
         );
     }
 
+    /// STATE-2: a directory a person names holds the credentials file byte for byte, and one whose
+    /// name is not UTF-8 is not the directory its U+FFFD rendering spells. A resolver that went
+    /// through text would put the bearer token in the second, or pass the first over and put it under
+    /// `HOME`, and a second account's session would not find the first one's.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_is_not_text_holds_the_credentials_and_not_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = OsStr::from_bytes(b"/srv/state-\xff");
+        let lookalike = OsStr::new("/srv/state-\u{FFFD}");
+        let answer = |stated: &OsStr| {
+            path_stated(Some(stated.to_os_string()), [named("/somebody")])
+                .expect("a state directory")
+        };
+
+        assert_eq!(answer(invalid), PathBuf::from(invalid).join(FILE));
+        assert_eq!(answer(lookalike), PathBuf::from(lookalike).join(FILE));
+        assert_ne!(answer(invalid), answer(lookalike));
+    }
+
     /// STATE-2: a value that is empty or not an absolute path names nothing and is passed over, so
     /// the profile directory answers as it would have, and where nothing else is named the import is
     /// reported rather than put under wherever the process started.

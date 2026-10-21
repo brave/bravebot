@@ -4148,6 +4148,26 @@ mod tests {
         );
     }
 
+    /// STATE-2: a directory a person names is the one settings are read from byte for byte, and one
+    /// whose name is not UTF-8 is not the directory its U+FFFD rendering spells. A resolver that went
+    /// through text would read the settings of the second, or pass the first over and read `HOME`'s,
+    /// and settings decide which model answers and which commands run without being asked about.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_is_not_text_is_the_one_settings_are_read_from_and_not_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = OsStr::from_bytes(b"/srv/state-\xff");
+        let lookalike = OsStr::new("/srv/state-\u{FFFD}");
+        let answer =
+            |stated: &OsStr| state_named(Some(stated.to_os_string()), [named("/somebody")]);
+
+        assert_eq!(answer(invalid), Some(PathBuf::from(invalid)));
+        assert_eq!(answer(lookalike), Some(PathBuf::from(lookalike)));
+        assert_ne!(answer(invalid), answer(lookalike));
+    }
+
     /// STATE-2: a value that is empty or not an absolute path names nothing and is passed over, so
     /// `HOME` answers as it would have, and a machine that names nothing else has no directory. A
     /// relative value would otherwise read settings from under wherever the process started, which

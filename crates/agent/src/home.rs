@@ -513,6 +513,54 @@ mod resolution {
         );
     }
 
+    /// STATE-2: a directory a person names is the state directory byte for byte, and one whose name is
+    /// not UTF-8 is not the directory its U+FFFD rendering spells. A resolver that went through text
+    /// would answer with the second, or pass the first over as naming nothing and let `HOME` answer,
+    /// and either way the history of a job given its own state would land in a directory it was not
+    /// given.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_is_not_text_is_the_state_directory_and_not_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = OsStr::from_bytes(b"/srv/state-\xff");
+        let lookalike = OsStr::new("/srv/state-\u{FFFD}");
+        let answer = |stated: &OsStr| {
+            resolve_stated(Some(stated.to_os_string()), [named("HOME", "/somebody")])
+        };
+
+        assert_eq!(
+            answer(invalid),
+            Some((STATE_VARIABLE, PathBuf::from(invalid)))
+        );
+        assert_eq!(
+            answer(lookalike),
+            Some((STATE_VARIABLE, PathBuf::from(lookalike)))
+        );
+        assert_ne!(answer(invalid), answer(lookalike));
+    }
+
+    /// `doctor` blames a value that was passed over, so a directory the resolver takes is never
+    /// blamed. One whose name is not UTF-8 is such a directory, and a report that read the value as
+    /// text would call it not a directory and send its owner looking for a mistake they did not make.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_is_not_text_is_not_reported_as_passed_over() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        for value in [
+            OsStr::from_bytes(b"/srv/state-\xff"),
+            OsStr::new("/srv/state-\u{FFFD}"),
+        ] {
+            assert!(
+                !holds_a_value_passed_over(Some(value)),
+                "{value:?} was reported as naming no directory"
+            );
+        }
+    }
+
     /// STATE-2: passing a value over leaves the machine as it was, and a machine that names nothing
     /// else has no state directory. The refusal of a guessed location is the clause's reason for
     /// existing, and a working-directory or temporary fallback behind a bad value would be the case
