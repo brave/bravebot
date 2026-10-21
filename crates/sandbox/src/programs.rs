@@ -695,6 +695,20 @@ mod tests {
         );
     }
 
+    /// A held variable is a name a start was given only where the two are the same name. The
+    /// regression it rejects: a comparison through `to_string_lossy`, which reads `NAME-\xff` as
+    /// `NAME-\u{FFFD}` and so keeps a variable that was never asked for.
+    #[cfg(unix)]
+    #[test]
+    fn a_variable_name_that_is_not_text_is_not_its_lossy_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let not_text = OsStr::from_bytes(b"NAME-\xff");
+        let lookalike = "NAME-\u{FFFD}";
+
+        assert!(!is_variable(not_text, lookalike));
+        assert!(is_variable(OsStr::new(lookalike), lookalike));
+    }
+
     /// A start given only some names reports the removal of every other variable the process holds
     /// through `get_envs`. The regression it rejects: clearing the environment with `env_clear`,
     /// which `get_envs` does not report, so code that builds a confined program's environment from
