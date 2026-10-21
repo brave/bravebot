@@ -64,7 +64,8 @@ const { Ledger, rowsOf, mayAnswer, leftWords, NOT_MEASURED } = await load('src/r
 const ENTRY = {
   confirm: t.asked, run: t.askedRun, output: t.askedOutput, vet: t.askedVet, vouch: t.askedVouch, fetch: t.askedFetch,
   server: t.askedServer, manifest: t.askedManifest, exposure: t.askedExposure, 'mcp-server': t.askedMcpServer,
-  'mcp-tools': t.askedMcpTools, 'mcp-call': t.askedMcpCall, 'mcp-move': t.askedMcpMove, host: t.askedHost, ask: t.askedQuestions,
+  'mcp-tools': t.askedMcpTools, 'mcp-resources': t.askedMcpResources, 'mcp-resource-read': t.askedMcpResourceRead,
+  'mcp-call': t.askedMcpCall, 'mcp-move': t.askedMcpMove, host: t.askedHost, ask: t.askedQuestions,
 }
 
 const draw = (entry) =>

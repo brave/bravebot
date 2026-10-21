@@ -580,6 +580,73 @@ pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
     lines
 }
 
+/// One resource an MCP server lists.
+pub struct Resource<'a> {
+    /// The resource's URI.
+    pub uri: &'a str,
+    /// The resource's name.
+    pub name: &'a str,
+    /// What the server says the resource is.
+    pub description: Option<&'a str>,
+    /// The MIME type of the resource, if declared.
+    pub mime_type: Option<&'a str>,
+}
+
+/// The resources an MCP server lists, as the lines a person reads before they are offered to a model.
+pub struct Resources<'a> {
+    /// The server's alias.
+    pub alias: &'a str,
+    /// Every resource the client would draw.
+    pub resources: &'a [Resource<'a>],
+    /// How many the client would not draw.
+    pub refused: usize,
+    /// What the check made of the list.
+    pub check: Check,
+}
+
+/// The whole resource list, each description behind the margin and none of it cut.
+pub fn resources_lines(list: &Resources<'_>) -> Vec<String> {
+    let mut lines = vec![match list.resources.is_empty() {
+        true => format!("MCP server '{}' offers no resources", printable(list.alias)),
+        false => format!(
+            "MCP server '{}' offers {} resource(s):",
+            printable(list.alias),
+            list.resources.len()
+        ),
+    }];
+    lines.push(checked(list.check));
+    for resource in list.resources {
+        lines.push(format!("  {} ({})", printable(resource.name), printable(resource.uri)));
+        if let Some(description) = resource.description {
+            lines.extend(
+                description
+                    .lines()
+                    .map(|line| format!("{QUARANTINE_BAR} {}", printable(line))),
+            );
+        }
+    }
+    if list.refused > 0 {
+        lines.push(format!("  ({} resources refused)", list.refused));
+    }
+    lines
+}
+
+/// One request to read an MCP server's resource.
+pub struct ResourceRead<'a> {
+    /// The server's alias.
+    pub alias: &'a str,
+    /// The URI to be read.
+    pub uri: &'a str,
+}
+
+/// The lines a resource read request is read before approving.
+pub fn resource_read_lines(read: &ResourceRead<'_>) -> Vec<String> {
+    vec![
+        format!("read resource from MCP server '{}':", printable(read.alias)),
+        format!("  {}", printable(read.uri)),
+    ]
+}
+
 /// One call to an MCP server's tool.
 pub struct Call<'a> {
     /// `alias:tool`, the name a person reads and a rule matches.
@@ -996,5 +1063,36 @@ mod tests {
         });
         assert!(lines.contains(&t!(mcp_tools_not_listed, count = 1).to_string()));
         assert!(lines.contains(&t!(mcp_tools_withheld, count = 2).to_string()));
+    }
+
+    #[test]
+    fn a_resource_list_shows_resources_check_and_refused() {
+        let res = Resource {
+            uri: "memo://weather/today",
+            name: "Today's Weather",
+            description: Some("Current forecast"),
+            mime_type: Some("text/plain"),
+        };
+        let lines = resources_lines(&Resources {
+            alias: "weather",
+            resources: &[res],
+            refused: 1,
+            check: Check::Safe,
+        });
+        assert_eq!(lines[0], "MCP server 'weather' offers 1 resource(s):");
+        assert_eq!(lines[1], t!(check_safe).to_string());
+        assert!(lines.contains(&"  Today's Weather (memo://weather/today)".to_string()));
+        assert!(lines.contains(&format!("{QUARANTINE_BAR} Current forecast")));
+        assert!(lines.contains(&"  (1 resources refused)".to_string()));
+    }
+
+    #[test]
+    fn a_resource_read_shows_server_and_uri() {
+        let lines = resource_read_lines(&ResourceRead {
+            alias: "weather",
+            uri: "memo://weather/today",
+        });
+        assert_eq!(lines[0], "read resource from MCP server 'weather':");
+        assert_eq!(lines[1], "  memo://weather/today");
     }
 }

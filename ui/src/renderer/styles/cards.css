@@ -104,6 +104,7 @@
    was approved, gets the warning border: what a yes approves is not fixed by what it shows. */
 .confirm.mcp-server.fetches,
 .confirm.mcp-tools.unsafe,
+.confirm.mcp-resources.unsafe,
 .confirm.mcp-move { border-color: var(--warn); border-width: 2px; }
 .confirm[class*="mcp-"] .confirm-head .path,
 .confirm[class*="mcp-"] .permission-scope code { overflow-wrap: anywhere; }
@@ -112,8 +113,13 @@
 .mcp-tool-name { font: var(--type-code); font-weight: 600; overflow-wrap: anywhere; }
 .mcp-tool-arguments { margin: var(--leo-spacing-xs) 0 0; padding-left: var(--leo-spacing-2xl); }
 .mcp-tool-arguments code { font: var(--type-code); overflow-wrap: anywhere; }
+.mcp-resources-list { display: flex; flex-direction: column; gap: var(--leo-spacing-m); margin: 0; padding: 0; list-style: none; }
+.mcp-resource-name { font: var(--type-code); font-weight: 600; overflow-wrap: anywhere; }
+.mcp-resource-uri { margin-left: var(--leo-spacing-s); font: var(--type-code); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.mcp-resource-mime { margin-left: var(--leo-spacing-s); font-size: var(--type-scale-s); color: var(--ink-tertiary); }
 /* A server's own words, set apart so they never read as the app's. */
-.mcp-tool-description {
+.mcp-tool-description,
+.mcp-resource-description {
   margin: var(--leo-spacing-xs) 0 0;
   padding: var(--leo-spacing-s) var(--leo-spacing-l);
   border-left: 3px solid var(--confine);

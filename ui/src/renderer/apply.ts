@@ -85,6 +85,10 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedMcpServer(message.data)] }
       case 'mcp-tools.request':
         return { ...old, entries: [...old.entries, t.askedMcpTools(message.data)] }
+      case 'mcp-resources.request':
+        return { ...old, entries: [...old.entries, t.askedMcpResources(message.data)] }
+      case 'mcp-resource-read.request':
+        return { ...old, entries: [...old.entries, t.askedMcpResourceRead(message.data)] }
       case 'mcp-call.request':
         return { ...old, entries: [...old.entries, t.askedMcpCall(message.data)] }
       case 'mcp-move.request':

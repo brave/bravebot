@@ -9,9 +9,10 @@
 
 use crate::input;
 use bravebot_agent::confirm::{
-    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, ManifestRequest,
-    McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision, RunRequest,
-    ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest,
+    ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest,
+    ResourceListRequest, ResourceReadRequest, RunDecision, RunRequest, ServerRequest,
+    ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_core::ask::{Answer as UserAnswer, Asking};
 use ratatui::Terminal;
@@ -36,11 +37,14 @@ use grants::{
     draw_exposure, draw_fetch, draw_host, draw_manifest, draw_path, draw_remove_checkout,
     manifest_answer_for,
 };
-pub use mcp::{CallAnswer, ask_mcp_call, ask_move, ask_server, ask_to_start, ask_tool_list};
+pub use mcp::{
+    CallAnswer, ask_mcp_call, ask_move, ask_resource_list, ask_resource_read, ask_server,
+    ask_to_start, ask_tool_list,
+};
 #[cfg(test)]
 use mcp::{
-    CallResponse, call_answer_for, draw_mcp_call, draw_move, draw_server, draw_tool_list,
-    start_answer_for, tool_list_answer_for,
+    CallResponse, call_answer_for, draw_mcp_call, draw_move, draw_resource_list,
+    draw_resource_read, draw_server, draw_tool_list, start_answer_for, tool_list_answer_for,
 };
 pub use note::Noted;
 use pinned::{Drawn, Seen};
@@ -107,6 +111,14 @@ impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
 
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         ask_tool_list(self.terminal, request).decision()
+    }
+
+    fn confirm_resource_list(&mut self, request: &ResourceListRequest) -> Decision {
+        ask_resource_list(self.terminal, request).decision()
+    }
+
+    fn confirm_resource_read(&mut self, request: &ResourceReadRequest) -> Decision {
+        ask_resource_read(self.terminal, request).decision()
     }
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
@@ -5655,8 +5667,8 @@ mod tests {
     }
 
     kinds!(
-        Write, Run, ReadOutput, Vet, Fetch, Vouch, Exposure, Server, Manifest, ToolList, McpCall,
-        Move, Path, Host, Ask,
+        Write, Run, ReadOutput, Vet, Fetch, Vouch, Exposure, Server, Manifest, ToolList,
+        ResourceList, ResourceRead, McpCall, Move, Path, Host, Ask,
     );
 
     /// What a question remembers between its draws: the rows of each kind that have been shown.
@@ -5999,6 +6011,60 @@ mod tests {
                     refusing: '2',
                     grants: Vec::new(),
                     deciding,
+                })
+            }
+            Kind::ResourceList => {
+                let uris = numbered('u', 60);
+                let descriptions = numbered('d', 60);
+                let request = ResourceListRequest {
+                    alias: "weather".into(),
+                    resources: uris
+                        .iter()
+                        .zip(&descriptions)
+                        .map(|(uri, desc)| bravebot_agent::confirm::ListedResource {
+                            uri: format!("memo://weather/{uri}"),
+                            name: format!("Item {uri}"),
+                            description: Some(format!("Resource details. {desc}")),
+                            mime_type: Some("text/plain".into()),
+                        })
+                        .collect(),
+                    refused: 0,
+                    verdict: bravebot_core::vetting::Verdict::Inconclusive("not checked"),
+                    reason: None,
+                };
+                let mut deciding = uris;
+                deciding.extend(descriptions);
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_resource_list(frame, &request, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| {
+                        approves(tool_list_answer_for(key, looked.pinned()))
+                    }),
+                    approving: vec!['1', 'y'],
+                    refusing: '2',
+                    grants: Vec::new(),
+                    deciding,
+                })
+            }
+            Kind::ResourceRead => {
+                let words = numbered('w', 260);
+                let request = ResourceReadRequest {
+                    alias: "weather".into(),
+                    uri: format!("memo://weather/{}", words.join("/")),
+                };
+                let drawn = request.clone();
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_resource_read(frame, &drawn, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| {
+                        approves(tool_list_answer_for(key, looked.pinned()))
+                    }),
+                    approving: vec!['1', 'y'],
+                    refusing: '2',
+                    grants: Vec::new(),
+                    deciding: words,
                 })
             }
             Kind::McpCall => {

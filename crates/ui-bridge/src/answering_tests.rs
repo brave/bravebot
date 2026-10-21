@@ -20,7 +20,7 @@ const PATIENCE: Duration = Duration::from_secs(5);
 
 /// Every kind of question. A kind added to `Kind` must be added here, or the loss of a controller
 /// is not tested for it.
-const KINDS: [Kind; 15] = [
+const KINDS: [Kind; 17] = [
     Kind::Write,
     Kind::Run,
     Kind::Output,
@@ -32,6 +32,8 @@ const KINDS: [Kind; 15] = [
     Kind::Exposure,
     Kind::McpServer,
     Kind::McpTools,
+    Kind::McpResources,
+    Kind::McpResourceRead,
     Kind::McpCall,
     Kind::McpMove,
     Kind::Host,
