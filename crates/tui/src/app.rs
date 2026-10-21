@@ -11618,10 +11618,18 @@ mod tests {
 
         const REPLY: &str = "the quick brown fox jumps over the lazy dog and then keeps on running \
                              through the field until it reaches the far fence";
+        // The first row ends in the last column, so its blank is dropped and the next row starts
+        // with a word as one cut inside a word would.
+        const FLUSH: &str = "aaaaaaaaa bbbbbbbbb ccccccccc dddddddd next words follow after it";
         const TURN_MARKER: &str = "\u{23fa}";
-        for scrolling in [false, true] {
+        for (scrolling, reply, from, to) in [
+            (false, REPLY, "the quick", "far fence"),
+            (true, REPLY, "the quick", "far fence"),
+            (false, FLUSH, "aaaaaaaaa", "after it"),
+            (true, FLUSH, "aaaaaaaaa", "after it"),
+        ] {
             let mut session = Session::new("none");
-            session.complete(REPLY.to_string(), Vec::new(), 0);
+            session.complete(reply.to_string(), Vec::new(), 0);
             if scrolling {
                 session.open_scroller();
             }
@@ -11632,15 +11640,15 @@ mod tests {
                 .expect("draw");
             session.note_layout(laid);
             let buffer = terminal.backend().buffer().clone();
-            let (first, _) = find_on(&buffer, "the quick");
-            let (last, _) = find_on(&buffer, "far fence");
+            let (first, _) = find_on(&buffer, from);
+            let (last, _) = find_on(&buffer, to);
             assert!(last > first, "the reply was not wrapped");
             swept(&mut session, (first, 0), (last, 39));
             let selection = session.selection.expect("selection");
             let copied = super::selected_text(&session, &buffer, &selection);
             assert_eq!(
                 copied,
-                format!("{TURN_MARKER} {REPLY}"),
+                format!("{TURN_MARKER} {reply}"),
                 "scrolling: {scrolling}"
             );
         }

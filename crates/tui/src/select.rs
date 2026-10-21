@@ -345,8 +345,9 @@ pub fn text_joining(buffer: &Buffer, selection: &Selection, joined: &[u16]) -> S
 /// paragraph does: its words wrapped by the width of the screen and not by anything its author
 /// wrote.
 ///
-/// Such a row ends where the next word did not fit, so the blank the wrap stood on is put back as
-/// one space. A row the text fills to the last column was cut inside a word and gets none.
+/// Each row comes with whether the wrap broke the line at a blank, which is put back as one space,
+/// or inside a word, which gets none. The screen cannot tell the two apart, since a word ending in
+/// the last column loses its blank, so the layout records which it was.
 ///
 /// `wrapped` holds screen rows of the transcript, and another pane drawn beside it shares their
 /// numbers, so it is read only for a selection that began in the transcript, or on a screen that
@@ -355,7 +356,7 @@ pub fn text_wrapping(
     buffer: &Buffer,
     selection: &Selection,
     joined: &[u16],
-    wrapped: &[u16],
+    wrapped: &[(u16, bool)],
 ) -> String {
     let selection = &selection.resolved(buffer);
     let wrapped = if matches!(selection.pane, Pane::Transcript | Pane::Screen) {
@@ -380,14 +381,11 @@ pub fn text_wrapping(
 
         let above = row.checked_sub(1).filter(|_| row > area.top());
         let continues = above.is_some_and(|above| joined.contains(&above));
-        let soft = above.is_some() && wrapped.contains(&row);
-        if !out.is_empty() && !continues && !soft {
+        let soft = above.and_then(|_| wrapped.iter().find(|(r, _)| *r == row));
+        if !out.is_empty() && !continues && soft.is_none() {
             out.push('\n');
         }
-        if soft
-            && !out.is_empty()
-            && above.is_some_and(|above| text_end(buffer, above, area) < area.right())
-        {
+        if soft.is_some_and(|(_, at_blank)| *at_blank) && !out.is_empty() {
             out.push(' ');
         }
         out.push_str(line.trim_end());
@@ -441,13 +439,30 @@ mod tests {
         let mut selection = Selection::in_pane(0, 0, Pane::Transcript, Rect::new(0, 0, 20, 4));
         selection.extend_to(3, 19);
         assert_eq!(
-            text_wrapping(&buffer, &selection, &[], &[1, 3]),
+            text_wrapping(&buffer, &selection, &[], &[(1, true), (3, false)]),
             "one two three\nabcdefghijklmnopqrstuvw",
         );
         // The same rows with no wrap recorded stay as the lines they were drawn as.
         assert_eq!(
             text_wrapping(&buffer, &selection, &[], &[]),
             "one two\nthree\nabcdefghijklmnopqrst\nuvw",
+        );
+    }
+
+    /// A word that ends in the last column loses its blank, so the row below looks like one cut
+    /// inside a word. What the layout recorded decides, not where the text ends.
+    #[test]
+    fn a_blank_dropped_at_the_last_column_is_still_a_space() {
+        let buffer = screen(&["aaaa bbbbb ccccccccc", "eeee"]);
+        let mut selection = Selection::in_pane(0, 0, Pane::Transcript, Rect::new(0, 0, 20, 2));
+        selection.extend_to(1, 19);
+        assert_eq!(
+            text_wrapping(&buffer, &selection, &[], &[(1, true)]),
+            "aaaa bbbbb ccccccccc eeee",
+        );
+        assert_eq!(
+            text_wrapping(&buffer, &selection, &[], &[(1, false)]),
+            "aaaa bbbbb ccccccccceeee",
         );
     }
 
@@ -458,7 +473,10 @@ mod tests {
         let buffer = screen(&["one two", "three"]);
         let mut selection = Selection::in_pane(1, 0, Pane::Transcript, Rect::new(0, 0, 20, 2));
         selection.extend_to(1, 19);
-        assert_eq!(text_wrapping(&buffer, &selection, &[], &[1]), "three");
+        assert_eq!(
+            text_wrapping(&buffer, &selection, &[], &[(1, true)]),
+            "three"
+        );
     }
 
     /// The rows are screen rows, and the panel beside the transcript is drawn on the same ones.
@@ -468,7 +486,7 @@ mod tests {
         let mut selection = Selection::in_pane(0, 0, Pane::Hint, Rect::new(0, 0, 20, 2));
         selection.extend_to(1, 19);
         assert_eq!(
-            text_wrapping(&buffer, &selection, &[], &[1]),
+            text_wrapping(&buffer, &selection, &[], &[(1, true)]),
             "panel one\npanel two",
         );
     }
