@@ -3280,6 +3280,7 @@ session-sandbox-kept = Le mode du bac à sable reste { $mode }.
 session-sandbox-set = Le mode du bac à sable est { $mode } dès le prochain tour, pour le reste de cette session.
 session-sandbox-turn-keeps-its-mode = Le tour en cours, et chaque programme qu'il lance, garde le mode avec lequel il a commencé.
 session-sandbox-set-off = Le mode du bac à sable est off dès le prochain tour, pour le reste de cette session : les programmes que `run` lance n'ont aucun profil.
+session-sandbox-jobs-keep-their-mode = Les tâches d'arrière-plan encore en cours gardent le mode avec lequel elles ont démarré et peuvent encore écrire dans le projet : { $jobs }. /jobs stop <nom> en termine une.
 session-sandbox-refused-mode =
     /sandbox { $asked } est refusé : { $pinned_in } fixe sandbox.mode à { $pinned }, et une session ne peut
     lire ni écrire davantage. { $looser }
