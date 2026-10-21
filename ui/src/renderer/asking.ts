@@ -10,7 +10,6 @@ export interface Step {
   settled: AskAnswer[]
 }
 
-/** The first question of a series, with nothing settled. */
 export const first: Step = { at: 0, settled: [] }
 
 /** What a person has settled and entered so far in a series that is still being put. */
@@ -29,7 +28,6 @@ export interface Held {
  */
 const held = new Map<string, Held>()
 
-/** The progress kept for an entry's series, or the start of one. */
 export function recall(id: string): Held {
   return held.get(id) ?? { step: first, chosen: [], typed: '' }
 }

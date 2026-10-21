@@ -121,9 +121,11 @@ Skipping moves to the next question rather than abandoning the rest, and the pla
 question by question, what was answered and what was passed over.
 
 The position is worded once, in `bravebot-i18n`, and the end of the series is decided once, by
-`Asking::ends_at` in `bravebot-core`. The picker and the line-by-line interface call both. The
-desktop bridge sends each prompt's position (`place`) and whether settling it ends the series
-(`last`), so the window keeps only which question it is on, its drafts and its focus.
+`Asking::ends_at` in `bravebot-core`. The picker, the line-by-line interface and the desktop bridge
+call the first. The picker and the bridge call the second; the line-by-line interface puts every
+question not already answered in turn and has no step to end. The desktop bridge sends each
+prompt's position (`place`) and whether settling it ends the series (`last`), so the window keeps
+only which question it is on, its drafts and its focus.
 
 `verified-by: bravebot_tui::ask::the_position_in_the_series_is_shown`
 `verified-by: bravebot_tui::ask::a_lone_question_is_not_labelled_one_of_one`
