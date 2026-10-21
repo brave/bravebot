@@ -24,7 +24,7 @@ use bravebot_core::policy::{Denial, Policy};
 use bravebot_core::spelling::to_key;
 use bravebot_core::trust::is_absolute_key;
 use bravebot_core::value::Labelled;
-use bravebot_filetype::{SNIFF_BYTES, looks_binary};
+use bravebot_filetype::{Decoded, Decoding, SNIFF_BYTES, decode_text, looks_binary};
 #[cfg(unix)]
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -153,6 +153,10 @@ pub enum WorkspaceError {
     Contended { path: String },
     /// The file is not text, so there is nothing useful to return.
     Binary { path: String },
+    /// The file is text in an encoding other than UTF-8. [`Workspace::read_page`] shows it
+    /// decoded; a read whose text is written back or handed on as the file's own, an edit's or a
+    /// slot's, refuses it.
+    NotUtf8 { path: String },
     /// The attachment is larger than a request should carry.
     TooLarge { path: String, limit: usize },
     /// The search pattern is not a regular expression this engine can match.
@@ -302,6 +306,11 @@ impl WorkspaceError {
             Self::Binary { .. } => {
                 format!("'{named}' is a binary file, so it cannot be read as text")
             }
+            Self::NotUtf8 { .. } => format!(
+                "'{named}' is text in an encoding other than UTF-8, which this call does not \
+                 handle: writing it back would change the file's encoding. read_file shows such \
+                 a file decoded"
+            ),
             Self::TooLarge { limit, .. } => format!(
                 "'{named}' is larger than the {} MiB an attachment may be",
                 limit / (1024 * 1024)
@@ -355,6 +364,7 @@ impl WorkspaceError {
             | Self::Stale { path }
             | Self::Contended { path }
             | Self::Binary { path }
+            | Self::NotUtf8 { path }
             | Self::TooLarge { path, .. }
             | Self::Git { path, .. }
             | Self::Checkout { path, .. } => path,
@@ -1742,6 +1752,9 @@ impl Workspace {
     /// replaces text in the whole file and compares against it to detect a concurrent
     /// change, so a truncated read here would write back a shortened file. The tool the
     /// model calls uses [`Workspace::read_page`] instead.
+    ///
+    /// Only text that is UTF-8 as it stands, for the same reason: the text is written back. A
+    /// file in another encoding is refused as [`WorkspaceError::NotUtf8`].
     pub fn read<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -1816,17 +1829,7 @@ impl Workspace {
             detail: io_detail(&e, &relative, &self.root),
         })?;
 
-        // Named as binary rather than surfacing a decoding error. "stream did not contain
-        // valid UTF-8" is an implementation detail that leaves a reader unable to tell a
-        // binary file from a corrupt one.
-        if looks_binary(&raw) {
-            return Err(WorkspaceError::Binary { path: relative });
-        }
-        let contents = String::from_utf8(raw).map_err(|_| WorkspaceError::Binary {
-            path: relative.clone(),
-        })?;
-
-        Ok(Labelled::new(contents, label))
+        Ok(Labelled::new(exact_text(raw, &relative)?, label))
     }
 
     /// Read a file as a `data:` URI, confined to the workspace like every other read.
@@ -1962,6 +1965,11 @@ impl Workspace {
     ///
     /// `offset` is 1-based to match how the lines are reported back, so a model can ask
     /// for the next page using the number it was just shown.
+    ///
+    /// Only a file that is UTF-8 as it stands, because a plan puts these lines in a slot that a
+    /// later step writes to a file or hands to a program. A file in another encoding is read
+    /// decoded by [`Workspace::read_page_unless_unchanged`], which is the read the planner is
+    /// shown.
     pub fn read_page<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -1971,7 +1979,7 @@ impl Workspace {
     ) -> Result<Labelled<Page>, WorkspaceError> {
         self.gated_read(policy, path, |relative, label, skills| {
             Ok(self
-                .labelled_page(relative, label, offset, limit, skills)?
+                .labelled_page(relative, label, offset, limit, skills, Decode::Exact)?
                 .0)
         })
     }
@@ -1987,8 +1995,9 @@ impl Workspace {
         offset: usize,
         limit: usize,
         skills: &[PathBuf],
+        decode: Decode,
     ) -> Result<(Labelled<Page>, String), WorkspaceError> {
-        let page = self.page_reaching(relative, offset, limit, skills)?;
+        let page = self.page_reaching(relative, offset, limit, skills, decode)?;
         let token = page.change_token.clone();
         Ok((Labelled::new(page, label), token))
     }
@@ -2019,7 +2028,8 @@ impl Workspace {
     }
 
     /// [`Workspace::read_page`], answering `Unchanged` where the file is the one a window was
-    /// already shown from.
+    /// already shown from, and reading a file in another encoding decoded (READ-3). The planner is
+    /// shown what this returns and nothing writes it back.
     ///
     /// Every gate runs exactly as it does for a read that returns lines, so a repeat is held to the
     /// same capability, routing and path checks as the first look. Only what comes back differs.
@@ -2046,7 +2056,8 @@ impl Workspace {
                     return Ok(Reading::Unchanged);
                 }
             }
-            let (page, token) = self.labelled_page(relative, label, offset, limit, skills)?;
+            let (page, token) =
+                self.labelled_page(relative, label, offset, limit, skills, Decode::Allowed)?;
             Ok(Reading::Page { page, token })
         })
     }
@@ -2058,22 +2069,28 @@ impl Workspace {
     /// [`bravebot_core::policy::Policy::materialise`], which observes the path again itself. What
     /// comes back is therefore unlabelled, and the kernel labels it: this returns the shape of a
     /// file and never decides what it means.
+    ///
+    /// Only a file that is UTF-8 as it stands: what a deferred read fills a slot with is written
+    /// back to a file or handed to a program as the file, so a decoding of another encoding is
+    /// refused here and shown only by [`Workspace::read_page`].
     pub fn page(
         &self,
         relative: &str,
         offset: usize,
         limit: usize,
     ) -> Result<Page, WorkspaceError> {
-        self.page_reaching(relative, offset, limit, &[])
+        self.page_reaching(relative, offset, limit, &[], Decode::Exact)
     }
 
-    /// [`Workspace::page`] that may also land in the directory of a skill loaded this turn.
+    /// [`Workspace::page`] that may also land in the directory of a skill loaded this turn, and
+    /// that reads a file in another encoding decoded where `decode` allows it.
     fn page_reaching(
         &self,
         relative: &str,
         offset: usize,
         limit: usize,
         skills: &[PathBuf],
+        decode: Decode,
     ) -> Result<Page, WorkspaceError> {
         let resolved = self
             .resolve_for_reading(relative, skills)
@@ -2092,15 +2109,16 @@ impl Workspace {
 
         let raw = std::fs::read(&resolved).map_err(io)?;
 
-        if looks_binary(&raw) {
-            return Err(WorkspaceError::Binary {
-                path: relative.to_string(),
-            });
-        }
-
-        let contents = String::from_utf8(raw).map_err(|_| WorkspaceError::Binary {
-            path: relative.to_string(),
-        })?;
+        let (contents, decoding) = match decode {
+            Decode::Exact => (exact_text(raw, relative)?, Decoding::Utf8),
+            Decode::Allowed => {
+                let Decoded { text, decoding } =
+                    decode_text(raw).ok_or_else(|| WorkspaceError::Binary {
+                        path: relative.to_string(),
+                    })?;
+                (text, decoding)
+            }
+        };
 
         let (first, limit) = window_of(offset, limit);
         let start = first - 1;
@@ -2134,6 +2152,7 @@ impl Workspace {
             long_lines,
             ends_with_newline: contents.ends_with('\n'),
             change_token,
+            decoding,
         })
     }
 
@@ -2148,6 +2167,10 @@ impl Workspace {
     /// The sniff reads the same prefix [`looks_binary`] would have seen, so it reaches the same
     /// verdict on the same file. A file that turns to rubbish after that prefix is caught when
     /// the bytes are actually read, which is where an eager read would have caught it too.
+    ///
+    /// A byte order mark is not honoured here. The slot this answer reserves is filled as
+    /// [`Workspace::page`] reads, which refuses a UTF-16 file, so honouring the mark would report
+    /// the file as text now and refuse it when something needs its bytes.
     pub fn survey(&self, relative: &str) -> Result<usize, WorkspaceError> {
         let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
         let io = |e: std::io::Error| WorkspaceError::Io {
@@ -3077,6 +3100,40 @@ pub(crate) fn window_of(offset: usize, limit: usize) -> (usize, usize) {
     (offset.max(1), limit.clamp(1, MAX_PAGE_LINES))
 }
 
+/// Whether a page of a file in another encoding is read decoded.
+#[derive(Clone, Copy)]
+enum Decode {
+    /// Only text that is UTF-8 as it stands. A slot is read this way, because what it holds is
+    /// written back to a file or handed to a program as the file's own text.
+    Exact,
+    /// UTF-16 and UTF-32 with a byte order mark, and UTF-8 with a few invalid bytes, read as the
+    /// text they decode to. The planner is shown a page this way.
+    Allowed,
+}
+
+/// A file's bytes as the UTF-8 text they are, and the refusal where they are not.
+///
+/// Named as binary, or as another encoding, rather than surfacing a decoding error. "stream did
+/// not contain valid UTF-8" is an implementation detail that leaves a reader unable to tell a
+/// binary file from a corrupt one.
+fn exact_text(raw: Vec<u8>, relative: &str) -> Result<String, WorkspaceError> {
+    let refused = |is_text| {
+        let path = relative.to_string();
+        if is_text {
+            WorkspaceError::NotUtf8 { path }
+        } else {
+            WorkspaceError::Binary { path }
+        }
+    };
+    match String::from_utf8(raw) {
+        Ok(text) if looks_binary(text.as_bytes()) => Err(refused(false)),
+        Ok(text) => Ok(text),
+        // Not UTF-8: text in another encoding, or binary. Only here is the file decoded, to say
+        // which, and the decoding is thrown away.
+        Err(invalid) => Err(refused(decode_text(invalid.into_bytes()).is_some())),
+    }
+}
+
 /// A bounded window of a file's lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
@@ -3102,6 +3159,9 @@ pub struct Page {
     /// whole one describe the same file the same way: what is being watched is the file, and a
     /// window of it changing is not a different question.
     pub change_token: String,
+    /// How the file's bytes became these lines. Anything but [`Decoding::Utf8`] means the lines are
+    /// a reading of the file and not its bytes.
+    pub decoding: Decoding,
 }
 
 impl Page {

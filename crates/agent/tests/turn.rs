@@ -10627,6 +10627,172 @@ fn a_binary_read_tells_the_model_it_is_binary() {
     );
 }
 
+/// A turn in which the planner reads `read` and then asks for `edit`, over a workspace the map
+/// vouches for. Returns the final request, which carries both results, and what the file holds
+/// afterwards.
+fn read_then_edit(name: &str, contents: &[u8], read: &str, edit: &str) -> (String, Vec<u8>) {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("a.txt"), contents).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", read),
+        tool_request_2("edit_file", edit),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read a.txt and change it"),
+    )
+    .expect("turn runs");
+
+    let last = received.try_iter().last().expect("a final request");
+    (last, std::fs::read(scratch.path.join("a.txt")).unwrap())
+}
+
+/// A UTF-16 source file from a Windows tool is text. The planner is shown it, told that it is a
+/// decoding, and refused an edit of it with a reason that agrees with what it was just shown: an
+/// edit writes the file back, and would write it back as UTF-8.
+#[test]
+fn a_utf16_file_is_read_as_text_and_an_edit_of_it_is_refused() {
+    let bytes: Vec<u8> = [0xFFu8, 0xFE]
+        .into_iter()
+        .chain(
+            "alpha beta\r\ngamma\r\n"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes),
+        )
+        .collect();
+    let (last, after) = read_then_edit(
+        "read-utf16-turn",
+        &bytes,
+        r#"{"path":"a.txt"}"#,
+        r#"{"path":"a.txt","old_text":"gamma","new_text":"delta"}"#,
+    );
+
+    let (_, read) = last
+        .split_once("Result of read_file")
+        .expect("the read's result was sent");
+    assert!(
+        read.contains("alpha beta"),
+        "the planner was not shown the text: {read}"
+    );
+    assert!(
+        read.contains("decoded from UTF-16 little-endian, so edit_file cannot change this file"),
+        "the planner was not told the page is a decoding: {read}"
+    );
+    let (_, edit) = last
+        .split_once("Result of edit_file")
+        .expect("the edit's result was sent");
+    assert!(
+        edit.contains("encoding other than UTF-8"),
+        "the edit was not refused as another encoding: {edit}"
+    );
+    assert_eq!(after, bytes, "the refused edit changed the file");
+}
+
+/// Latin-1 text with one accented character is shown with U+FFFD in the byte's place, and an edit
+/// that would write that replacement back over the byte is refused.
+#[test]
+fn a_file_with_a_stray_invalid_byte_is_read_with_a_replacement_character_and_an_edit_is_refused() {
+    let bytes = b"caf\xe9 au lait\nsecond line\n".to_vec();
+    let (last, after) = read_then_edit(
+        "read-latin1-turn",
+        &bytes,
+        r#"{"path":"a.txt"}"#,
+        r#"{"path":"a.txt","old_text":"second","new_text":"third"}"#,
+    );
+
+    let (_, read) = last
+        .split_once("Result of read_file")
+        .expect("the read's result was sent");
+    assert!(
+        read.contains("caf\u{FFFD} au lait"),
+        "the invalid byte was not shown as a replacement character: {read}"
+    );
+    assert!(
+        read.contains("bytes that are not valid UTF-8 are shown as U+FFFD"),
+        "the planner was not told the page is a decoding: {read}"
+    );
+    let (_, edit) = last
+        .split_once("Result of edit_file")
+        .expect("the edit's result was sent");
+    assert!(
+        edit.contains("encoding other than UTF-8"),
+        "the edit was not refused as another encoding: {edit}"
+    );
+    assert_eq!(after, bytes, "the refused edit changed the file");
+}
+
+/// A file in a directory nobody vouched for is handed to the planner as a reference, and a
+/// reference can become the body of another file. Copying Latin-1 text that way would write the
+/// decoder's U+FFFD over the byte it replaced, and a copy of a UTF-16 file would be a different
+/// file, so neither is read into the slot. The planner is told at the read, in the same words as
+/// for any other file the slot could not hold: UTF-16 is binary, and the refusal of the Latin-1
+/// copy says its encoding.
+#[test]
+fn a_copy_through_a_reference_never_carries_a_decoding_of_another_encoding() {
+    let scratch = Scratch::new("copy-not-utf8-turn");
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    std::fs::write(scratch.path.join("vendor/latin1.txt"), b"caf\xe9 au lait\n").unwrap();
+    let wide: Vec<u8> = [0xFFu8, 0xFE]
+        .into_iter()
+        .chain("alpha\n".encode_utf16().flat_map(u16::to_le_bytes))
+        .collect();
+    std::fs::write(scratch.path.join("vendor/wide.txt"), &wide).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"vendor/latin1.txt"}"#),
+        tool_request_2("read_file", r#"{"path":"vendor/wide.txt"}"#),
+        tool_request_2(
+            "write_file",
+            r#"{"path":"copy.txt","contents_ref":"ref:1"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    trust.distrust("vendor");
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trust,
+        Task::new("copy vendor/latin1.txt to copy.txt"),
+    )
+    .expect("turn runs");
+
+    let last = received.try_iter().last().expect("a final request");
+    let (_, wide_read) = last
+        .split_once("Result of read_file")
+        .and_then(|(_, rest)| rest.split_once("Result of read_file"))
+        .expect("both reads' results were sent");
+    assert!(
+        wide_read.contains("binary file"),
+        "the UTF-16 file was not reported as binary: {wide_read}"
+    );
+    let (_, write) = last
+        .split_once("Result of write_file")
+        .expect("the write's result was sent");
+    assert!(
+        write.contains("encoding other than UTF-8"),
+        "the copy was not refused as another encoding: {write}"
+    );
+    assert!(
+        !scratch.path.join("copy.txt").exists(),
+        "a decoding was written as the file: {:?}",
+        std::fs::read(scratch.path.join("copy.txt"))
+    );
+}
+
 /// A binary file in the tree must not break search: the file is skipped, not fatal.
 #[test]
 fn a_binary_file_does_not_break_search() {
