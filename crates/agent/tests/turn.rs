@@ -16240,7 +16240,7 @@ fn a_program_a_delegate_ran_in_a_checkout_holding_the_changes_counts_as_the_turn
     );
 }
 
-/// CHECKOUT-22, TURN-4. A checkout the carry put nothing into holds the commit, so a program a
+/// CHECKOUT-23, TURN-4. A checkout the carry put nothing into holds the commit, so a program a
 /// delegate runs there leaves the turn's change reported as never built, as one in a checkout made
 /// without changes does.
 ///
