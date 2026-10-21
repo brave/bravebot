@@ -1851,6 +1851,7 @@ fn write<S: Sink, C: Confirmer>(
                 .then(|| mode.name()),
         );
         if !answer.approved() {
+            policy.refuse_unapproved_write(&format!("step {}: write_file", index + 1));
             return Err(format!("the user did not approve writing {path}"));
         }
         standing.keep(policy, answer);

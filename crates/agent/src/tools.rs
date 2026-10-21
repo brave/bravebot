@@ -516,7 +516,12 @@ impl<'a> Tools<'a> {
     }
 
     /// What this call's programs are confined to, or `None` where they are not.
-    fn confinement(&self) -> Option<crate::confine::Confinement> {
+    ///
+    /// `workspace_trusted` is [`workspace_is_trusted`], which the tools cannot ask themselves since
+    /// the trust map is the policy's. It decides whether bypass gives the stages what a
+    /// `request_path` for writing would be granted: only where a request is accepted
+    /// ([`requests_are_accepted`]), so a session that refuses every request is given no row for one.
+    fn confinement(&self, workspace_trusted: bool) -> Option<crate::confine::Confinement> {
         if !self.confines_programs() {
             return None;
         }
@@ -537,7 +542,13 @@ impl<'a> Tools<'a> {
                 .with_filesystem(&bravebot_config::sandbox_filesystem())
                 .with_path_reach(&self.workspace.path_reach())
                 .with_unasked_writes(
-                    !self.delegated && self.permission_mode.get() == crate::PermissionMode::Bypass,
+                    !self.delegated
+                        && self.permission_mode.get() == crate::PermissionMode::Bypass
+                        && requests_are_accepted(
+                            self.confine_runs,
+                            self.sandbox,
+                            workspace_trusted,
+                        ),
                 )
                 .with_host_grants(&self.workspace.granted_hosts())
                 .with_identities(bravebot_config::git_identities::settled());
@@ -2800,6 +2811,36 @@ fn wait_from(arguments: &Value) -> Result<Option<std::time::Duration>, &'static 
     }
 }
 
+/// Whether a `job_output` call asked for a wait that output does not end.
+///
+/// Refused where the flag is not a boolean, is `true` with no `wait_seconds` to bound it, or is
+/// `true` beside `kill`. A flag taken as `false` hands back a wait that output ends, which is what
+/// the caller asked not to have, and one that chose a bound of its own would hand back a window
+/// nobody asked about, which is what [`wait_from`] refuses to do to a value outside its range. A
+/// `kill` is carried out after the wait, so beside this flag it would be held back by the whole
+/// bound on any job that is still running.
+fn until_exit_from(
+    arguments: &Value,
+    wait: Option<std::time::Duration>,
+    kill: bool,
+) -> Result<bool, &'static str> {
+    match arguments.get("until_exit") {
+        Some(value) if !value.is_null() => match value.as_bool() {
+            Some(true) if wait.is_none() => Err(
+                "error: 'until_exit' needs 'wait_seconds' beside it, which is the longest the \
+                 call waits for the job to end",
+            ),
+            Some(true) if kill => Err(
+                "error: 'until_exit' waits for the job to end and 'kill' ends it after the wait, \
+                 so a call gives one of them",
+            ),
+            Some(until_exit) => Ok(until_exit),
+            None => Err("error: 'until_exit' must be true or false"),
+        },
+        _ => Ok(false),
+    }
+}
+
 fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -4388,6 +4429,7 @@ fn write_file<S: Sink, C: Confirmer>(
         policy,
         tools,
         confirmer,
+        "write_file",
         Landing {
             path,
             destination,
@@ -4439,11 +4481,13 @@ struct Body {
 /// are the same whatever the body came from.
 ///
 /// `always_ask` puts the write to a person even where the trust map's table would ask nothing
-/// (CHECKOUT-14).
+/// (CHECKOUT-14). `call` is the tool the write is made for, which names it where the person does
+/// not approve it (TRACE-1).
 fn put_in_the_workspace<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
     confirmer: &mut C,
+    call: &str,
     landing: Landing,
     given: Body,
     always_ask: bool,
@@ -4613,6 +4657,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         );
         keep_the_note(policy, "write_file", answer.approved(), answer.note());
         if !answer.approved() {
+            policy.refuse_unapproved_write(call);
             return credential_aware_rejection(&shown_path, &scanned, answer.note().is_some());
         }
         standing.keep(policy, answer);
@@ -5021,6 +5066,7 @@ fn bring_back<S: Sink, C: Confirmer>(
                 policy,
                 tools,
                 confirmer,
+                "apply_checkout",
                 Landing {
                     path: found.path,
                     destination: found.destination,
@@ -5336,6 +5382,7 @@ fn edit_file<S: Sink, C: Confirmer>(
         if answer.approved() {
             standing.keep(policy, answer);
         } else {
+            policy.refuse_unapproved_write("edit_file");
             let told = answer.note().is_some();
             if !scanned.to_approve().is_empty() {
                 return credential_aware_rejection(&shown_path, &scanned, told);
@@ -7014,7 +7061,7 @@ fn request_path<S: Sink, C: Confirmer>(
     if write && tools.sandbox == bravebot_sandbox::SandboxMode::ReadOnly {
         return Produced::problem(NOT_ACCEPTING_WRITES);
     }
-    let Some(confinement) = tools.confinement() else {
+    let Some(confinement) = tools.confinement(workspace_is_trusted(policy, tools.workspace)) else {
         return Produced::problem(NOT_ACCEPTING_PATHS);
     };
 
@@ -8018,7 +8065,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // they do under the mode `off`, for this line only, and the next line is built from the
     // session's mode again.
     let mut confinement = tools
-        .confinement()
+        .confinement(workspace_is_trusted(policy, tools.workspace))
         .filter(|_| !unconfined)
         .map(|confinement| {
             confinement
@@ -8697,11 +8744,12 @@ fn fetch_rules_refusal<S: Sink>(policy: &mut Policy<'_, S>, url: &str) -> Option
 }
 
 /// Puts a host that needs approval to the person (FETCH-2, FETCH-4) and returns the refusal when
-/// they reject it, shared by `fetch_url` and `download_url`. The answer is the person's, so no
-/// labelled content is read here.
+/// they reject it, shared by `fetch_url` and `download_url`, which `call` names for the trail
+/// (TRACE-1). The answer is the person's, so no labelled content is read here.
 fn fetch_not_approved<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     confirmer: &mut C,
+    call: &str,
     url: &str,
     host: &str,
 ) -> Option<Produced> {
@@ -8712,13 +8760,15 @@ fn fetch_not_approved<S: Sink, C: Confirmer>(
         url: url.to_string(),
         host: host.to_string(),
     };
-    (confirmer.confirm_fetch(&request) == Decision::Reject).then(|| {
-        Produced::problem(
-            "refused: the user did not approve fetching this. Do not retry the same URL; \
-             ask what they would prefer."
-                .to_string(),
-        )
-    })
+    if confirmer.confirm_fetch(&request) != Decision::Reject {
+        return None;
+    }
+    policy.refuse_unapproved_fetch(call);
+    Some(Produced::problem(
+        "refused: the user did not approve fetching this. Do not retry the same URL; \
+         ask what they would prefer."
+            .to_string(),
+    ))
 }
 
 fn fetch_url<S: Sink, C: Confirmer>(
@@ -8753,7 +8803,7 @@ fn fetch_url<S: Sink, C: Confirmer>(
     if let Some(refusal) = fetch_rules_refusal(policy, &url) {
         return refusal;
     }
-    if let Some(refusal) = fetch_not_approved(policy, confirmer, &url, &host) {
+    if let Some(refusal) = fetch_not_approved(policy, confirmer, "fetch_url", &url, &host) {
         return refusal;
     }
 
@@ -8912,7 +8962,7 @@ fn download_url<S: Sink, C: Confirmer>(
 
     // After the destination is known to be admissible, so the person is not asked about a host
     // for a path that would have been refused.
-    if let Some(refusal) = fetch_not_approved(policy, confirmer, &url, &host) {
+    if let Some(refusal) = fetch_not_approved(policy, confirmer, "download_url", &url, &host) {
         return refusal;
     }
 
@@ -8955,6 +9005,7 @@ fn download_url<S: Sink, C: Confirmer>(
     );
     keep_the_note(policy, "download_url", answer.approved(), answer.note());
     if !answer.approved() {
+        policy.refuse_unapproved_write("download_url");
         return Produced::problem(format!(
             "refused: the user did not approve saving this there. Do not retry the same \
              download{}",
@@ -9131,8 +9182,10 @@ fn job_output<S: Sink, R: Reporter>(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let wait = match wait_from(arguments) {
-        Ok(wait) => wait,
+    let (wait, until_exit) = match wait_from(arguments).and_then(|wait| {
+        until_exit_from(arguments, wait, kill).map(|until_exit| (wait, until_exit))
+    }) {
+        Ok(asked) => asked,
         Err(refusal) => return Produced::problem(refusal),
     };
 
@@ -9166,16 +9219,21 @@ fn job_output<S: Sink, R: Reporter>(
 
     // None where there was nothing to wait for: a caller with unseen output already waiting for it
     // asked to be told about output, and it is here. Whether there is any is byte counts the driver
-    // kept per pipe, never a comparison of what was printed.
+    // kept per pipe, never a comparison of what was printed. A caller that asked for the exit is
+    // not waiting to be told about output, so unseen output is no reason not to wait for the exit.
     let waited = wait
-        .filter(|_| !job.running.has_more(&job.seen))
+        .filter(|_| until_exit || !job.running.has_more(&job.seen))
         .map(|bound| {
             // Timed, so the answer can say which window it watched. A wait that ends early because the
             // job printed or exited is otherwise indistinguishable from one that sat out its whole
             // bound, and the difference is the whole of what a caller learns from silence.
             let began = std::time::Instant::now();
-            job.running
-                .wait_for_more(&job.seen, bound, tools.cancel, &stops);
+            if until_exit {
+                job.running.wait_for_exit(bound, tools.cancel, &stops);
+            } else {
+                job.running
+                    .wait_for_more(&job.seen, bound, tools.cancel, &stops);
+            }
             began.elapsed()
         });
 
@@ -13530,6 +13588,112 @@ mod tests {
             tool.function.description.contains("wait_seconds"),
             "job_output's description never names the argument: {}",
             tool.function.description
+        );
+    }
+
+    /// `until_exit` turns a wait that output ends into one that only the exit, the bound, the token
+    /// or a stop ends. A flag taken for `false` where it was not understood hands back a wait that
+    /// output ends, one given with no `wait_seconds` has no bound to wait to, and one given with
+    /// `kill` holds the kill back by the whole bound, so a value the call cannot honour is refused
+    /// instead of read generously.
+    #[test]
+    fn until_exit_is_a_boolean_that_needs_a_wait_and_no_kill_beside_it() {
+        use std::time::Duration;
+
+        let thirty = Some(Duration::from_secs(30));
+
+        // Left out, null and false are the wait every call made before the flag existed, with or
+        // without a bound and with or without a kill.
+        for arguments in [
+            json!({}),
+            json!({"until_exit": null}),
+            json!({"until_exit": false}),
+        ] {
+            for kill in [false, true] {
+                assert_eq!(until_exit_from(&arguments, thirty, kill), Ok(false));
+                assert_eq!(until_exit_from(&arguments, None, kill), Ok(false));
+            }
+        }
+
+        assert_eq!(
+            until_exit_from(&json!({"until_exit": true}), thirty, false),
+            Ok(true)
+        );
+
+        let refusal = until_exit_from(&json!({"until_exit": true}), None, false)
+            .expect_err("a wait for the exit with no bound is refused");
+        assert!(
+            refusal.contains("'wait_seconds'"),
+            "the refusal does not name what to add: {refusal}"
+        );
+
+        let refusal = until_exit_from(&json!({"until_exit": true}), thirty, true)
+            .expect_err("a wait for the exit beside a kill is refused");
+        assert!(
+            refusal.contains("'kill'"),
+            "the refusal does not name the argument it cannot be given with: {refusal}"
+        );
+
+        // Neither a string nor a number is a boolean, whatever the bound beside it.
+        for not_a_boolean in [json!("true"), json!(1), json!(0), json!([true])] {
+            let refusal = until_exit_from(&json!({"until_exit": not_a_boolean}), thirty, false)
+                .expect_err("a value that is not a boolean is refused");
+            assert!(
+                refusal.contains("true or false"),
+                "the refusal does not say what is allowed: {refusal}"
+            );
+        }
+    }
+
+    /// The flag is how a planner gets one call to cover a job that prints often, so it has to be in
+    /// the schema the planner reads, typed as a boolean, and the descriptions have to say what it
+    /// changes: output stops ending the wait, and a bound is still needed.
+    #[test]
+    fn job_output_offers_a_wait_that_output_does_not_end() {
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "job_output")
+        .expect("job_output is offered");
+
+        let until_exit = &tool.function.parameters["properties"]["until_exit"];
+        assert_eq!(until_exit["type"], "boolean", "until_exit is not offered");
+        let said = until_exit["description"].as_str().expect("it is described");
+        for stated in [
+            "does not end the wait",
+            "Needs wait_seconds",
+            "cannot be given with kill",
+        ] {
+            assert!(
+                said.contains(stated),
+                "until_exit no longer says '{stated}': {said}"
+            );
+        }
+        // Not required, or every look at a job would have to choose.
+        let required = tool.function.parameters["required"]
+            .as_array()
+            .expect("job_output names what it requires");
+        assert!(
+            !required.iter().any(|name| name == "until_exit"),
+            "until_exit is required of every look: {required:?}"
+        );
+        // The planner reads the tool's description before it reads a parameter's, and the case the
+        // flag is for is one it has to recognise there.
+        assert!(
+            tool.function.description.contains("until_exit"),
+            "job_output's description never names the flag: {}",
+            tool.function.description
+        );
+        let wait = tool.function.parameters["properties"]["wait_seconds"]["description"]
+            .as_str()
+            .expect("wait_seconds is described");
+        assert!(
+            wait.contains("until_exit"),
+            "wait_seconds says output ends it and not that until_exit changes that: {wait}"
         );
     }
 
@@ -19408,9 +19572,9 @@ mod tests {
             };
 
             let (off, on) = with_tools(&workspace, |tools| {
-                let off = tools.confinement().is_some();
+                let off = tools.confinement(true).is_some();
                 tools.confine_runs = true;
-                (off, tools.confinement())
+                (off, tools.confinement(true))
             });
 
             assert!(!off);
@@ -19424,9 +19588,11 @@ mod tests {
             }
         }
 
-        /// SANDBOX-22: a stage writes what a request would be granted only on the lead session, in
-        /// bypass. The regressions it rejects are a delegate given it because the permission mode
-        /// it was lent is bypass, and a session outside bypass given it.
+        /// SANDBOX-22, SANDBOX-28: a stage writes what a request would be granted only on the lead
+        /// session, in bypass, in a workspace where a request is accepted. The regressions it
+        /// rejects are a delegate given it because the permission mode it was lent is bypass, a
+        /// session outside bypass given it, and a bypass session given it in a workspace that is
+        /// not trusted, where every request is refused.
         #[cfg(unix)]
         #[test]
         fn only_the_lead_session_in_bypass_is_given_what_a_request_would_be() {
@@ -19436,11 +19602,12 @@ mod tests {
             let profile: &'static std::path::Path =
                 Box::leak(scratch.path.clone().into_boxed_path());
 
-            for (mode, delegated, given) in [
-                (Bypass, false, true),
-                (Bypass, true, false),
-                (Ask, false, false),
-                (AcceptEdits, false, false),
+            for (mode, delegated, trusted, given) in [
+                (Bypass, false, true, true),
+                (Bypass, false, false, false),
+                (Bypass, true, true, false),
+                (Ask, false, true, false),
+                (AcceptEdits, false, true, false),
             ] {
                 let said = with_tools(&workspace, |tools| {
                     tools.confine_runs = true;
@@ -19448,11 +19615,14 @@ mod tests {
                     tools.delegated = delegated;
                     tools.permission_mode = crate::LiveMode::new(mode);
                     tools
-                        .confinement()
+                        .confinement(trusted)
                         .expect("a platform with a base")
                         .writes_without_a_request()
                 });
-                assert_eq!(said, given, "{mode:?}, delegated {delegated}");
+                assert_eq!(
+                    said, given,
+                    "{mode:?}, delegated {delegated}, trusted {trusted}"
+                );
             }
         }
 
@@ -19480,7 +19650,7 @@ mod tests {
             let confinement = |workspace: &Workspace| {
                 with_tools(workspace, |tools| {
                     tools.confine_runs = true;
-                    tools.confinement().expect("a platform with a base")
+                    tools.confinement(true).expect("a platform with a base")
                 })
             };
             let granted = |workspace: &Workspace| {
@@ -19578,7 +19748,7 @@ mod tests {
                     tools.home = home;
                     tools.profile = Some(profile);
                     tools.remembering = session;
-                    let confinement = tools.confinement().expect("a platform with a base");
+                    let confinement = tools.confinement(true).expect("a platform with a base");
                     confinement.describe(&[&step]).sentences().len()
                 })
             };
@@ -19598,7 +19768,7 @@ mod tests {
                 tools.home = Some(state_path);
                 tools.profile = Some(profile);
                 tools.remembering = Some("mine");
-                let confinement = tools.confinement().expect("a platform with a base");
+                let confinement = tools.confinement(true).expect("a platform with a base");
                 confinement.describe(&[&step]).sentences().len()
             });
             assert_eq!(carried_in_other, 0);

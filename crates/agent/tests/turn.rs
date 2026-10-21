@@ -5847,6 +5847,306 @@ fn a_write_refused_by_plan_mode_is_recorded_as_a_refusal() {
     );
 }
 
+/// What a call that put a question to the person and was not approved left under `approval`, in
+/// the order it was written (TRACE-1).
+fn refused_under_approval(sink: &RecordingSink) -> Vec<String> {
+    sink.blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "approval",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// One turn making `call`, put to `person`, in a vouched workspace. The rules ask about `notes.md`
+/// by name and allow everything under `config/`, so a write there is asked about only for the
+/// scan's doubt about its body. Returns the trail and whether the turn ended as clean.
+fn a_turn_asked_about_a_file<C: bravebot_agent::confirm::Confirmer + Send>(
+    scratch: &Scratch,
+    person: &mut C,
+    call: String,
+) -> (RecordingSink, bool) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![call, reply_with("understood")]);
+    let mut sink = RecordingSink::new();
+    let outcome = turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("change the file").with_permissions(rules(
+            &[],
+            &["Edit(notes.md)"],
+            &["Edit(config/**)"],
+        )),
+        person,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    (sink, outcome.clean)
+}
+
+/// TRACE-1: a write or an edit put to the person and not approved is a refusal in the trail, under
+/// the tool, and the turn does not end as clean. A no, a no with words beside it, and a question
+/// nobody could be asked are one answer to the policy, so each leaves the same entry. A body the
+/// scan has doubts about is declined by its own road, which tells the planner something else, and
+/// the entry is the same there.
+///
+/// Without the record the trail holds the question and the mode that answered it and nothing about
+/// the answer, which reads the same as a write that went ahead. The control is the same call
+/// approved, which records no refusal, so an entry written for every question put would fail it.
+#[test]
+fn a_write_or_an_edit_the_person_does_not_approve_is_recorded_as_a_refusal() {
+    use bravebot_agent::WriteDecision;
+    let secret = format!("{GENERATED_SECRET}\n");
+    let editing_the_key = tool_request_2(
+        "edit_file",
+        &format!(
+            r#"{{"path":"config/master.key","old_text":"placeholder","new_text":{}}}"#,
+            serde_json::Value::String(secret.clone())
+        ),
+    );
+    // The tool, its call, the file it is about, what the workspace holds first, and whether the
+    // question the call raises carries the scan's doubt about the body.
+    let cases = [
+        (
+            "write_file",
+            tool_request_2("write_file", r#"{"path":"notes.md","contents":"replaced"}"#),
+            "notes.md",
+            vec![("notes.md", "original")],
+            false,
+        ),
+        (
+            "write_file",
+            writing("config/master.key", &secret),
+            "config/master.key",
+            Vec::new(),
+            true,
+        ),
+        (
+            "edit_file",
+            tool_request_2(
+                "edit_file",
+                r#"{"path":"notes.md","old_text":"original","new_text":"edited"}"#,
+            ),
+            "notes.md",
+            vec![("notes.md", "original")],
+            false,
+        ),
+        (
+            "edit_file",
+            editing_the_key,
+            "config/master.key",
+            vec![("config/master.key", "placeholder")],
+            true,
+        ),
+    ];
+    for (tool, call, file, before, doubted) in cases {
+        let sentence = format!("{tool}: the write was not approved, so nothing was written");
+        let seeded = || {
+            let scratch = Scratch::new("unapproved-write-recorded");
+            std::fs::create_dir(scratch.path.join("config")).unwrap();
+            for (path, contents) in &before {
+                std::fs::write(scratch.path.join(path), contents).unwrap();
+            }
+            scratch
+        };
+        let holds = |scratch: &Scratch| std::fs::read_to_string(scratch.path.join(file)).ok();
+        let held_before = before
+            .iter()
+            .find(|(path, _)| *path == file)
+            .map(|(_, contents)| contents.to_string());
+        let refused = |scratch: &Scratch, sink: &RecordingSink, clean: bool, case: &str| {
+            assert_eq!(
+                refused_under_approval(sink),
+                std::slice::from_ref(&sentence),
+                "{case}: the refusal was not recorded once, under the tool"
+            );
+            assert!(
+                !clean,
+                "{case}: a turn whose write was refused read as clean"
+            );
+            assert_eq!(
+                holds(scratch),
+                held_before,
+                "{case}: the file changed without approval"
+            );
+        };
+
+        for answer in [
+            WriteDecision::reject(),
+            WriteDecision::reject().with_note("not now"),
+        ] {
+            let case = format!("{tool} on {file}, answered {answer:?}");
+            let scratch = seeded();
+            let mut person = RecordingConfirmer {
+                decision: answer,
+                ..RecordingConfirmer::approving()
+            };
+            let (sink, clean) = a_turn_asked_about_a_file(&scratch, &mut person, call.clone());
+            assert_eq!(person.seen.len(), 1, "{case}: the question was not put");
+            assert_eq!(
+                !person.seen[0].credentials.is_empty(),
+                doubted,
+                "{case}: the question did not carry the doubt this case is for"
+            );
+            refused(&scratch, &sink, clean, &case);
+        }
+
+        let case = format!("{tool} on {file}, nobody to ask");
+        let scratch = seeded();
+        let (sink, clean) =
+            a_turn_asked_about_a_file(&scratch, &mut bravebot_agent::Unattended, call.clone());
+        refused(&scratch, &sink, clean, &case);
+
+        let case = format!("{tool} on {file}, approved");
+        let scratch = seeded();
+        let mut person = RecordingConfirmer::approving();
+        let (sink, clean) = a_turn_asked_about_a_file(&scratch, &mut person, call);
+        assert_eq!(person.seen.len(), 1, "{case}: the question was not put");
+        assert!(
+            refused_under_approval(&sink).is_empty(),
+            "{case}: an approval was recorded as a refusal: {:?}",
+            sink.events()
+        );
+        assert!(
+            clean,
+            "{case}: a turn whose write was approved did not read as clean"
+        );
+        assert_ne!(
+            holds(&scratch),
+            held_before,
+            "{case}: the write did not land"
+        );
+    }
+}
+
+/// TRACE-1: a fetch put to the person and not approved is a refusal in the trail, under the tool
+/// that asked, and a save is one of its own. `download_url` asks twice, about the host and then
+/// about the file the bytes would land in, and each answer is recorded as what it was: a host
+/// declined is a fetch that was not made and a destination declined is a write that was not made,
+/// each once, with the question that was not reached left out.
+///
+/// The control approves both questions and records no refusal, so an entry written for every
+/// question put would fail it.
+#[test]
+fn a_fetch_or_a_save_the_person_does_not_approve_is_recorded_as_a_refusal() {
+    let fetched = "fetch_url: the fetch was not approved, so nothing was fetched";
+    let not_fetched = "download_url: the fetch was not approved, so nothing was fetched";
+    let not_saved = "download_url: the write was not approved, so nothing was written";
+
+    let refused_by = |tool: &str, arguments: &dyn Fn(&str) -> String| {
+        let scratch = Scratch::new("unapproved-fetch-recorded");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (site, requests) = serve_raw(raw_reply("text/plain", b"fetched"));
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2(tool, &arguments(&site)),
+            reply_with("understood"),
+        ]);
+        let mut person = RecordingConfirmer::rejecting();
+        let mut sink = RecordingSink::new();
+        let outcome = turns::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("get it"),
+            &mut person,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            0,
+            "{tool}: a fetch that was not approved reached the site"
+        );
+        assert!(
+            !scratch.path.join("saved.txt").exists(),
+            "{tool}: a download that was not approved left a file"
+        );
+        assert!(
+            person.seen.is_empty(),
+            "{tool}: a destination was put to the person after the host was declined"
+        );
+        (refused_under_approval(&sink), outcome.clean)
+    };
+
+    let (refused, clean) = refused_by("fetch_url", &|site| format!(r#"{{"url":"{site}/page"}}"#));
+    assert_eq!(refused, [fetched]);
+    assert!(!clean, "a turn whose fetch was refused read as clean");
+
+    let (refused, clean) = refused_by("download_url", &|site| {
+        format!(r#"{{"url":"{site}/page","path":"saved.txt"}}"#)
+    });
+    assert_eq!(refused, [not_fetched]);
+    assert!(!clean, "a turn whose download was refused read as clean");
+
+    // The host is approved and the destination is not.
+    let downloading = |person: &mut ApprovesFetchesAndWrites| {
+        let scratch = Scratch::new("unapproved-save-recorded");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (site, requests) = serve_raw(raw_reply("text/plain", b"fetched"));
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2(
+                "download_url",
+                &format!(r#"{{"url":"{site}/page","path":"saved.txt"}}"#),
+            ),
+            reply_with("understood"),
+        ]);
+        let mut sink = RecordingSink::new();
+        let outcome = turns::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("save it"),
+            person,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+        let reached = requests.load(Ordering::SeqCst) > 0;
+        let saved = scratch.path.join("saved.txt").exists();
+        (refused_under_approval(&sink), outcome.clean, reached, saved)
+    };
+    let mut person = ApprovesFetchesAndWrites {
+        declines_writes: true,
+        ..ApprovesFetchesAndWrites::default()
+    };
+    let (refused, clean, reached, saved) = downloading(&mut person);
+    assert_eq!(person.asked.len(), 1, "the host was not put to the person");
+    assert_eq!(
+        person.writes.len(),
+        1,
+        "the destination was not put to the person"
+    );
+    assert_eq!(refused, [not_saved]);
+    assert!(!clean, "a turn whose save was refused read as clean");
+    assert!(!reached, "a save that was not approved reached the site");
+    assert!(!saved, "a save that was not approved left a file");
+
+    let mut person = ApprovesFetchesAndWrites::default();
+    let (refused, clean, reached, saved) = downloading(&mut person);
+    assert_eq!(person.asked.len(), 1, "the host was not put to the person");
+    assert_eq!(
+        person.writes.len(),
+        1,
+        "the destination was not put to the person"
+    );
+    assert!(
+        refused.is_empty(),
+        "an approval was recorded as a refusal: {refused:?}"
+    );
+    assert!(
+        clean,
+        "a turn whose download was approved did not read as clean"
+    );
+    assert!(reached && saved, "the approved download did not land");
+}
+
 /// The other half: an allow rule stops the prompt, so a write that would have been refused for
 /// want of anyone to ask goes through.
 ///
@@ -40453,6 +40753,33 @@ fn a_note_typed_at_one_file_of_an_apply_is_told_beside_that_file() {
     assert!(first < second, "the notes are out of order: {told}");
 }
 
+/// TRACE-1, CHECKOUT-14: each file of an apply the person does not approve is a refusal in the
+/// trail, under `apply_checkout`, the tool that asked, and not under the `write_file` whose
+/// question each file shares. A trail that named the shared path would tell a reader of a turn that
+/// never called `write_file` that one was refused.
+#[test]
+fn a_file_of_an_apply_the_person_does_not_approve_is_recorded_under_the_apply() {
+    let (_asked, confirmer, scratch, sink) = apply_after_a_worker_wrote_files(
+        "checkout-apply-refused-recorded",
+        &[("a.txt", "one"), ("b.txt", "two")],
+        vec![],
+        vec![],
+        vec![r#"{"checkout":"c1"}"#],
+        RecordingConfirmer::rejecting(),
+    );
+    assert_eq!(confirmer.seen.len(), 2, "{:#?}", confirmer.seen);
+    assert_eq!(
+        refused_under_approval(&sink),
+        [
+            "apply_checkout: the write was not approved, so nothing was written",
+            "apply_checkout: the write was not approved, so nothing was written",
+        ],
+        "each refused file was not recorded once, under the apply"
+    );
+    assert!(!scratch.path.join("a.txt").exists());
+    assert!(!scratch.path.join("b.txt").exists());
+}
+
 /// CHECKOUT-14. The question says so where the session wrote the same path in the working
 /// directory after the checkout was made, and does not where it wrote another path, or the same one
 /// before the checkout existed.
@@ -46111,6 +46438,255 @@ fn a_job_output_call_reports_the_code_a_finished_job_exited_with() {
     assert!(
         !after.contains("It exited 0"),
         "a job that failed was reported to the planner as having exited 0: {after}"
+    );
+}
+
+/// What the flag is for, through the whole path rather than at the unit that parses it. A job that
+/// prints a line every half second is waited for in one call: the answer holds the first line and
+/// the last, and says the job exited. The job has already printed by the time the call is made, so
+/// the call also has to wait with output unseen, which a call that only wants the next output
+/// never does. Without the flag the same call comes back with the first lines and a job still
+/// running, and learning that it ended costs another round for each line it prints.
+#[test]
+fn one_job_output_call_that_waits_for_the_exit_is_handed_all_that_a_chatty_job_printed() {
+    let scratch = Scratch::new("background-until-exit");
+
+    // Eight lines half a second apart, the first at once and the last just before it exits. It
+    // writes a file once the first line is out, so the foreground run below can tell that it is.
+    let chatty = scratch.path.join("chatty");
+    std::fs::write(
+        &chatty,
+        "#!/bin/sh\necho FIRST-MARKER-ZORBLE\n: > printed-first\ni=1\nwhile [ $i -lt 7 ]; do sleep 0.5; \
+         echo \"middle $i\"; i=$((i + 1)); done\nsleep 0.5\necho LAST-MARKER-ZORBLE\n",
+    )
+    .unwrap();
+    // A second, foreground, that returns once the first has printed and the driver has had a moment
+    // to read it, so output is unseen and no look has been taken by the time the call is made, which
+    // is the state in which a wait for output returns at once. A fixed sleep would leave that to how
+    // soon the host starts the first.
+    let pause = scratch.path.join("pause");
+    std::fs::write(
+        &pause,
+        "#!/bin/sh\ni=0\nwhile [ ! -e printed-first ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done\n\
+         [ -e printed-first ] && echo PAUSE-SAW-THE-FIRST-LINE\nsleep 0.3\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for script in [&chatty, &pause] {
+            std::fs::set_permissions(script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./chatty","background":true}"#),
+        tool_request("run", r#"{"command":"./pause"}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":60,"until_exit":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Vouched for, so what the job printed comes back as text: a reference would say nothing about
+    // whether the wait had waited for it.
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and tell me when it has ended"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let after = bodies
+        .last()
+        .expect("the planner was asked nothing after the wait");
+    assert!(
+        after.contains("PAUSE-SAW-THE-FIRST-LINE"),
+        "the job had not printed when the call was made, so nothing below is a test of a wait that \
+         output does not end: {after}"
+    );
+    assert!(
+        after.contains("LAST-MARKER-ZORBLE"),
+        "a wait for the exit came back before the job had printed its last line: {after}"
+    );
+    assert!(
+        after.contains("FIRST-MARKER-ZORBLE"),
+        "what the job printed before the call was made was not handed over with the rest: {after}"
+    );
+    assert!(
+        after.contains("It exited 0"),
+        "the answer does not say the job exited: {after}"
+    );
+    assert!(
+        !after.contains("This look waited"),
+        "a wait for the exit reported a job that had ended as still running: {after}"
+    );
+}
+
+/// The bound of a wait for the exit, through the whole path. A job that is still printing when the
+/// bound runs out is reported as running, with the window the call watched, so a planner that
+/// asked for two seconds can tell a job that was watched for two seconds from one that was
+/// looked at once. A wait that output ended would report a window well short of the bound.
+#[test]
+fn a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_printing() {
+    let scratch = Scratch::new("background-until-exit-bound");
+
+    // A line every fifth of a second for half a minute: output throughout the wait, and no exit.
+    let endless = scratch.path.join("endless");
+    std::fs::write(
+        &endless,
+        "#!/bin/sh\ni=0\nwhile [ $i -lt 150 ]; do echo tick-$i; i=$((i + 1)); sleep 0.2; done\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&endless, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./endless","background":true}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":2,"until_exit":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and wait two seconds for it to end"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let after = bodies
+        .last()
+        .expect("the planner was asked nothing after the wait");
+    assert!(
+        after.contains("It is still running"),
+        "a job with half a minute left was not reported as running at the bound: {after}"
+    );
+    // Read out of the sentence rather than matched whole, so a host that overshoots the bound by a
+    // fraction of a second does not fail a test about whether the bound was waited at all.
+    let window: u64 = after
+        .split("This look waited ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|figure| figure.parse().ok())
+        .unwrap_or_else(|| panic!("the answer does not say which window it watched: {after}"));
+    assert!(
+        window >= 2,
+        "a wait for the exit came back after {window} seconds, short of the bound it was given: \
+         {after}"
+    );
+    assert!(
+        after.contains("tick-"),
+        "what the job printed during the wait was not handed over: {after}"
+    );
+}
+
+/// A flag the call cannot honour is refused to the planner, and nothing is waited for. Through the
+/// turn, because what a planner is told by a refusal is what it changes its next call by, and a
+/// refusal the tool never reached it with changes nothing. A wait for the exit with no bound has no
+/// time to wait to, and one beside `kill` holds the kill back until the bound, because the job is
+/// killed after the wait.
+#[test]
+fn a_job_output_call_asking_for_the_exit_in_a_way_it_cannot_honour_is_refused_without_waiting() {
+    let scratch = Scratch::new("background-until-exit-refused");
+
+    let script = scratch.path.join("quiet");
+    std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./quiet","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","until_exit":true}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","kill":true,"wait_seconds":60,"until_exit":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    let began = std::time::Instant::now();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and wait for it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    let took = began.elapsed();
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let after = bodies
+        .last()
+        .expect("the planner was asked nothing after the call");
+    assert!(
+        after.contains("'until_exit' needs 'wait_seconds'"),
+        "the planner was not told what to add to the call: {after}"
+    );
+    assert!(
+        after.contains("so a call gives one of them"),
+        "the planner was not told that a wait for the exit and a kill are not asked together: {after}"
+    );
+    // The job sleeps for half a minute: a call that was not refused waits for it, or kills it only
+    // after waiting out a bound of sixty seconds.
+    assert!(
+        took < std::time::Duration::from_secs(20),
+        "a call that was refused waited for the job: {took:?}"
     );
 }
 
@@ -61899,6 +62475,41 @@ fn a_request_for_a_path_that_names_none_or_a_flag_that_is_no_boolean_asks_nobody
     );
 }
 
+/// The trail's words when a run's stages were given what a request for writing would be granted.
+const UNASKED_WRITES_SAID: &str =
+    "the programs were given every path a request_path with write set would be granted";
+
+/// Whether the trail of `turn` says its stages were given what a request would be granted.
+fn trail_says_unasked_writes(turn: &PathTurn) -> bool {
+    turn.events.iter().any(|event| {
+        matches!(event, Event::GatePassed { gate, detail }
+            if *gate == "sandbox" && detail.contains(UNASKED_WRITES_SAID))
+    })
+}
+
+/// A turn that runs the line writing beside the session once, and whether the file landed.
+fn turn_writing_beside(
+    places: &PathPlaces,
+    name: &str,
+    mode: bravebot_sandbox::SandboxMode,
+    permission: bravebot_agent::PermissionMode,
+    trust: bravebot_core::trust::TrustStore,
+) -> (PathTurn, bool) {
+    let _ = std::fs::remove_file(places.lands());
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let turn = path_turn(
+        name,
+        places,
+        &[running(&places.writing_line())],
+        mode,
+        permission,
+        trust,
+        None,
+        &mut asked,
+    );
+    (turn, places.lands().exists())
+}
+
 /// SANDBOX-22, SANDBOX-28, MODE-4: under bypass a `workspace-write` stage writes beside the session with no
 /// request, and the trail says it was given what a request would be granted. The regression it
 /// rejects is a run that fails before the planner asks. The same line under `strict`, and under the
@@ -61909,36 +62520,15 @@ fn a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_s
         return;
     }
     let places = PathPlaces::new("unasked");
-    let turn_in = |name: &str, mode, permission| {
-        let _ = std::fs::remove_file(places.lands());
-        let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
-        let turn = path_turn(
-            name,
-            &places,
-            &[running(&places.writing_line())],
-            mode,
-            permission,
-            trusting_the_workspace(),
-            None,
-            &mut asked,
-        );
-        (turn, places.lands().exists())
-    };
-    let said = "the programs were given every path a request_path with write set would be granted";
-    let recorded = |turn: &PathTurn| {
-        turn.events.iter().any(|event| {
-            matches!(event, Event::GatePassed { gate, detail }
-                if *gate == "sandbox" && detail.contains(said))
-        })
-    };
-
-    let (turn, landed) = turn_in(
+    let (turn, landed) = turn_writing_beside(
+        &places,
         "path-unasked-bypass",
         bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
     );
     assert!(landed, "the line did not write beside the session");
-    assert!(recorded(&turn), "{:?}", turn.events);
+    assert!(trail_says_unasked_writes(&turn), "{:?}", turn.events);
 
     for (name, mode, permission) in [
         (
@@ -61952,10 +62542,91 @@ fn a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_s
             bravebot_agent::PermissionMode::Bypass,
         ),
     ] {
-        let (turn, landed) = turn_in(name, mode, permission);
+        let (turn, landed) =
+            turn_writing_beside(&places, name, mode, permission, trusting_the_workspace());
         assert!(!landed, "{name}: the line wrote with no request");
-        assert!(!recorded(&turn), "{name}: {:?}", turn.events);
+        assert!(
+            !trail_says_unasked_writes(&turn),
+            "{name}: {:?}",
+            turn.events
+        );
     }
+}
+
+/// SANDBOX-28, PATHREQ-5: a workspace the person has not trusted accepts no `request_path`, so
+/// bypass gives its stages no write a request would have added. A write beside the session fails
+/// with the operating system's refusal, the trail says nothing of one, and the sentence after the
+/// failed step claims no reach through `request_path`. The regressions it rejects are rows given in
+/// an untrusted workspace, a trail or a sentence that still says they were, and a trust condition
+/// that also takes the reach away from a trusted bypass session, which the controls run for the
+/// file written and for the sentence.
+#[test]
+fn in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("unasked-untrusted");
+    let bypass = bravebot_agent::PermissionMode::Bypass;
+    let workspace_write = bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let reach = "request_path with write set would be granted";
+    let sentence_after_a_failed_step = |turn: &PathTurn| {
+        let result = message_from(&turn.results[0], "Result of run").to_string();
+        let at = result.find("Confinement:").expect("a confinement sentence");
+        result[at..].to_string()
+    };
+
+    let (turn, landed) = turn_writing_beside(
+        &places,
+        "path-unasked-trusted-control",
+        workspace_write,
+        bypass,
+        trusting_the_workspace(),
+    );
+    assert!(landed, "the control: a trusted bypass run writes beside");
+    assert!(trail_says_unasked_writes(&turn), "{:?}", turn.events);
+
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let failing = path_turn(
+        "path-unasked-trusted-sentence",
+        &places,
+        &[running("sh -c 'exit 1'")],
+        workspace_write,
+        bypass,
+        trusting_the_workspace(),
+        None,
+        &mut asked,
+    );
+    let trusted_sentence = sentence_after_a_failed_step(&failing);
+    assert!(
+        trusted_sentence.contains(reach),
+        "the control: a trusted bypass sentence names the reach: {trusted_sentence}"
+    );
+
+    let (turn, landed) = turn_writing_beside(
+        &places,
+        "path-unasked-untrusted",
+        workspace_write,
+        bypass,
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    assert!(
+        !landed,
+        "the line wrote beside the session in a workspace that accepts no request"
+    );
+    assert!(
+        !trail_says_unasked_writes(&turn),
+        "the trail says the programs were given a reach: {:?}",
+        turn.events
+    );
+    let untrusted_sentence = sentence_after_a_failed_step(&turn);
+    assert!(
+        !untrusted_sentence.contains(reach),
+        "the sentence names a reach no request can add: {untrusted_sentence}"
+    );
+    assert!(
+        untrusted_sentence.contains("the temporary directory and the toolchain caches"),
+        "the sentence does not say what the stage does write: {untrusted_sentence}"
+    );
 }
 
 /// SANDBOX-28, TRUST-9: a yes is reach and not trust. The trust map comes back as it went in, and

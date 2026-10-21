@@ -2503,6 +2503,146 @@ fn a_wait_for_more_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn()
     );
 }
 
+/// A job that prints more often than a round takes ends every wait that output ends at its next
+/// line, so waiting for it to finish costs a look per line. A wait for the exit is not told about
+/// output at all: it lasts as long as the job does, however much the job prints on the way and
+/// however much of it the caller has not been handed when the wait begins.
+#[test]
+fn waiting_for_exit_is_not_ended_by_the_output_of_a_job_that_keeps_printing() {
+    let scratch = Scratch::new("wait-for-exit-chatty");
+    // Six lines half a second apart, so the job runs for at least three seconds and has something
+    // unseen to say at every moment of them.
+    let resolved = script(
+        &scratch.path,
+        "chatty",
+        "#!/bin/sh\ni=0\nwhile [ $i -lt 6 ]; do echo \"line $i\"; i=$((i + 1)); sleep 0.5; done\n",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("chatty", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !job.printed().contains("line 0") && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Asserted rather than assumed: the caller has been handed nothing, so output it has not seen
+    // is already there when the wait begins, and that is half of what the wait must ignore.
+    let mut seen = exec::Seen::default();
+    assert!(
+        job.has_more(&seen),
+        "the job had printed nothing unseen by the time the wait began, so nothing below is a test \
+         of a wait that output does not end"
+    );
+
+    let began = std::time::Instant::now();
+    job.wait_for_exit(std::time::Duration::from_secs(60), &Cancel::new(), &[]);
+    let waited = began.elapsed();
+
+    // Whether the job had exited when the wait returned, which no host's load changes: a wait
+    // ended by output returns while the loop above still has lines to print.
+    assert!(
+        job.ended(),
+        "a wait for the exit came back while the job was still printing: {waited:?}"
+    );
+    assert!(
+        waited < std::time::Duration::from_secs(30),
+        "a wait for the exit ran to its bound though the job ended after a few seconds: {waited:?}"
+    );
+    let whole = job.since(&mut seen);
+    assert!(
+        whole.contains("line 0") && whole.contains("line 5"),
+        "what the job printed while it was waited for was not all handed over: {whole:?}"
+    );
+}
+
+/// The bound is the wait's own, and it ends a wait for the exit as it ends any other. A job still
+/// running and still printing when it runs out is reported as running rather than waited on
+/// further, which is what makes the longest a caller can be held the number it asked for.
+#[test]
+fn waiting_for_exit_lasts_its_bound_where_the_job_keeps_running_and_printing() {
+    let scratch = Scratch::new("wait-for-exit-bound");
+    // Thirty seconds of a line every fifth of a second: long enough that a wait ignoring its bound
+    // comes back far past it, and noisy enough that a wait ended by output comes back at once.
+    let resolved = script(
+        &scratch.path,
+        "endless",
+        "#!/bin/sh\ni=0\nwhile [ $i -lt 150 ]; do echo tick; i=$((i + 1)); sleep 0.2; done\n",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("endless", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let bound = std::time::Duration::from_secs(2);
+    let began = std::time::Instant::now();
+    job.wait_for_exit(bound, &Cancel::new(), &[]);
+    let waited = began.elapsed();
+
+    assert!(
+        waited >= bound,
+        "a wait for the exit came back before its bound on a job that had not ended: {waited:?}"
+    );
+    assert!(
+        waited < std::time::Duration::from_secs(15),
+        "a wait for the exit went on past its bound: {waited:?}"
+    );
+    assert!(
+        !job.ended(),
+        "a job with half a minute left to run was reported ended"
+    );
+}
+
+/// The token is checked every pass of a wait for the exit as it is of one for output: a person who
+/// has changed their mind should not sit through up to ten minutes of somebody else's build.
+#[test]
+fn a_cancelled_wait_for_exit_comes_back_without_waiting_out_its_bound() {
+    let scratch = Scratch::new("wait-for-exit-cancelled");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let cancel = Cancel::new();
+    cancel.cancel();
+    let began = std::time::Instant::now();
+    job.wait_for_exit(std::time::Duration::from_secs(600), &cancel, &[]);
+    let waited = began.elapsed();
+
+    assert!(
+        waited < std::time::Duration::from_secs(5),
+        "a cancelled wait for the exit went on waiting: {waited:?}"
+    );
+}
+
+/// A stop the person asks for on any job of the turn is carried out at the turn's next step, which
+/// a wait for the exit holds back for as long as the job runs. So it ends that wait too.
+#[test]
+fn a_wait_for_exit_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn() {
+    let scratch = Scratch::new("wait-for-exit-job-stopped");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let stop = JobStop::new();
+    let asking = stop.clone();
+    let asker = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        asking.request();
+    });
+    let began = std::time::Instant::now();
+    job.wait_for_exit(
+        std::time::Duration::from_secs(600),
+        &Cancel::new(),
+        &[JobStop::new(), stop],
+    );
+    let waited = began.elapsed();
+    asker.join().expect("the request was made");
+
+    assert!(
+        waited < std::time::Duration::from_secs(5),
+        "a wait for the exit went on after the person asked to stop a job: {waited:?}"
+    );
+}
+
 /// RUN-23: figures nobody named are the ones compiled in, so a checkout with no settings file runs
 /// exactly as it did before either key existed.
 #[test]

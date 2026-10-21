@@ -1255,6 +1255,54 @@ mod tests {
         assert!(expected.contains("\u{241b}[2J") && !expected.contains('\u{1b}'));
     }
 
+    /// PROMPT-1: the editor reads a file the line writes and a directory it is confined to as the
+    /// terminal draws them, so a name that would draw as nothing, or as another name, is quoted
+    /// and spelled and `note.md ` is not read as `note.md`.
+    #[test]
+    fn a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another() {
+        use bravebot_agent::confirm::RunRequest;
+        use bravebot_core::command::{Pipeline, Stage};
+        let drawn = |written: &str, directory: &str| {
+            let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+            let mut run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w");
+            run.plan.writes = vec![written.into()];
+            run.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                directories: vec![directory.into()],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: Vec::new(),
+                writes_git_directories: false,
+            });
+            run_text(&crate::wire::run_request(1, &run)).expect("text")
+        };
+        let drawn_lines = |written: &str, directory: &str| -> Vec<String> {
+            drawn(written, directory)
+                .lines()
+                .map(str::to_string)
+                .collect()
+        };
+        let plain = drawn_lines("note.md", "/work");
+        assert!(plain.contains(&"  note.md".to_string()), "{plain:?}");
+        assert!(plain.contains(&"  /work".to_string()), "{plain:?}");
+        for (name, spelled) in [
+            (" ", "\"\u{2423}\""),
+            ("note.md ", "\"note.md\u{2423}\""),
+            ("a\u{202e}b", "\"a\\u{202e}b\""),
+            ("a\u{200b}b", "\"a\\u{200b}b\""),
+        ] {
+            for lines in [drawn_lines(name, "/work"), drawn_lines("note.md", name)] {
+                assert!(
+                    lines.contains(&format!("  {spelled}")),
+                    "{name:?}: {lines:?}"
+                );
+                assert!(!lines.contains(&format!("  {name}")), "{name:?}: {lines:?}");
+            }
+        }
+    }
+
     /// Run, fetch, server, call and move read to the editor as `bravebot_approval` words them from
     /// the same typed requests the terminal holds, so a field the wire drops shows as a difference.
     #[test]

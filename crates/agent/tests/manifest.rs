@@ -2164,6 +2164,72 @@ fn approving_a_plan_is_not_approving_its_writes() {
     );
 }
 
+/// TRACE-1: a planned write the person does not approve is a refusal in the trail, under the step
+/// and its tool, and the error the run stops on is not the only record of it. The first step's
+/// write is let through unasked by the vouched tree and leaves no refusal, and the second is named
+/// as the second, which is how the plan numbers it.
+#[test]
+fn a_planned_write_the_person_does_not_approve_is_recorded_as_a_refusal() {
+    let scratch = Scratch::new("planned-write-refused-recorded");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": "plain\n"}},
+            {"capability": "FILE_WRITE", "args": {"path": "master.key", "contents": format!("{GENERATED_SECRET}\n")}},
+        ])),
+    ]);
+    let mut trust = TrustStore::new("/work");
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+
+    let failure = manifest::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("write both files"),
+        &mut ApprovesThePlanOnly,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("a write nobody approved must stop the run");
+
+    assert!(
+        failure
+            .to_string()
+            .contains("did not approve writing master.key"),
+        "got: {failure}"
+    );
+    let refused: Vec<String> = sink
+        .blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "approval",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        refused,
+        ["step 2: write_file: the write was not approved, so nothing was written"],
+        "the refused write was not recorded once, under its step: {:?}",
+        sink.events()
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).ok(),
+        Some("plain\n".to_string()),
+        "the vouched write did not land, so the second was not the second step"
+    );
+    assert!(
+        !scratch.path.join("master.key").exists(),
+        "a planned run created a credential nobody approved"
+    );
+}
+
 /// Forty hex characters and nothing else, which the scan infers is a secret rather than
 /// recognising one: the value a person is asked about rather than one refused outright.
 const GENERATED_SECRET: &str = "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7";

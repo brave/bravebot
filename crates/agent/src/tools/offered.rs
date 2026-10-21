@@ -1080,7 +1080,11 @@ fn table(
              \
              Use wait_seconds to wait for the job rather than asking it again and again. Without \
              it a wait costs a whole turn per look: you call, are told nothing has happened, and \
-             answer only to be asked the same question. It is still a wait inside this turn, so it \
+             answer only to be asked the same question. A wait ends at the job's next output, so a \
+             job that prints a line every second ends it every second. When what you need is the \
+             end of the job and not its output as it arrives, add until_exit: true, which waits for \
+             the job to end or for wait_seconds to run out and returns what it printed since \
+             your last look in one answer. It is still a wait inside this turn, so it \
              cannot tell you about anything that happens after the turn ends, and the account of the \
              job's start says whether it is killed then or kept.",
             json!({
@@ -1105,7 +1109,21 @@ fn table(
                                         thing you are waiting for happens early. Between 1 and \
                                         600. A value outside that is refused rather than \
                                         adjusted, so the wait you get is the wait you asked for. \
-                                        Omit it to look and answer straight away."
+                                        Omit it to look and answer straight away. With \
+                                        until_exit it returns only when the job ends or at the \
+                                        bound."
+                    },
+                    "until_exit": {
+                        "type": "boolean",
+                        "description": "Wait for the job to end rather than for its output. \
+                                        Needs wait_seconds, which is then the longest to wait, \
+                                        and cannot be given with kill. \
+                                        The job printing does not end the wait, so one call \
+                                        covers a build that prints a line per step, and what \
+                                        comes back is what it printed since your last look, in \
+                                        one answer. If the job is still running at the bound, \
+                                        you are told so. Defaults to false, which returns at \
+                                        the job's next output."
                     }
                 },
                 "required": ["job"]

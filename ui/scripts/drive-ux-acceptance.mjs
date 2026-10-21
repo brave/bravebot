@@ -65,7 +65,7 @@ try {
   await emit('tool.finished',{...activity,note:'Updated sample.txt',changes});await page.locator('.files .applied').waitFor();assert.equal(await page.getByRole('tab',{name:'Overview',exact:true}).count(),1);await snap('31-applied-write');await done()
   const executionPlan='/usr/bin/printf hello > /tmp/result.txt && /usr/bin/true';
   const lineSent='printf hello > /tmp/result.txt && true';
-  await emit('run.request',{request:3,directory,stages:[{program:'printf',resolved:'/usr/bin/printf',args:['hello'],display:'printf hello > /tmp/result.txt'},{program:'true',resolved:'/usr/bin/true',args:[],display:'true'}],line:lineSent,plan:executionPlan,stdin:'ref:3',writes:['/tmp/result.txt'],releasesPrivate:false,vouches:[],summary:'run two steps'});
+  await emit('run.request',{request:3,directory,stages:[{program:'printf',resolved:'/usr/bin/printf',args:['hello'],display:'printf hello > /tmp/result.txt'},{program:'true',resolved:'/usr/bin/true',args:[],display:'true'}],line:lineSent,plan:executionPlan,stdin:'ref:3',writes:['/tmp/result.txt'],shownWrites:['/tmp/result.txt'],releasesPrivate:false,vouches:[],summary:'run two steps'});
   // Both, and not one of the two: the plan is what an approval binds to, and the line is what a
   // reader compares it against.
   await page.getByText(lineSent,{exact:true}).waitFor();
