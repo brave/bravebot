@@ -490,6 +490,9 @@ impl Session {
         // typed find a run already open and share a step this press already closed.
         self.ordinary_run_open = false;
         self.abandon_the_selection();
+        // The list stands over a line that arrived under it as it does over a paste or a recalled
+        // one (INPUT-13).
+        self.shortcuts = false;
         self.input.insert_str(self.caret, &yanked.text);
         self.caret += yanked.text.len();
     }
