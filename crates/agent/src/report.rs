@@ -203,7 +203,7 @@ pub struct Written {
     /// The file the write landed on, as the workspace resolved it. Two calls that landed on one
     /// file carry the same value, whatever each was called by. Where it came from a reference it
     /// is a name out of a directory nobody vouched for, so it is a key and is never drawn.
-    pub landed: String,
+    pub landed: std::path::PathBuf,
     /// Lines the write added.
     pub added: usize,
     /// Lines the write removed.

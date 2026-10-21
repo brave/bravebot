@@ -13,6 +13,7 @@ use bravebot_i18n::t;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 /// The fewest columns the state is drawn in, border included.
 const NARROWEST_STATE: u16 = 60;
@@ -88,7 +89,7 @@ fn calls<'a>(
 /// (FILES-1).
 pub fn collect<'a>(transcript: impl IntoIterator<Item = &'a Entry>) -> Vec<File> {
     let mut files: Vec<File> = Vec::new();
-    let mut at: HashMap<&str, usize> = HashMap::new();
+    let mut at: HashMap<&Path, usize> = HashMap::new();
     for (turn, activity, written) in calls(transcript) {
         let edit = Edit {
             turn,
@@ -98,7 +99,7 @@ pub fn collect<'a>(transcript: impl IntoIterator<Item = &'a Entry>) -> Vec<File>
             numbers: written.numbers.clone(),
             untrusted: activity.untrusted,
         };
-        match at.get(written.landed.as_str()) {
+        match at.get(written.landed.as_path()) {
             Some(&index) => files[index].edits.push(edit),
             None => {
                 at.insert(&written.landed, files.len());
@@ -116,7 +117,7 @@ pub fn collect<'a>(transcript: impl IntoIterator<Item = &'a Entry>) -> Vec<File>
 /// from the counts the calls carry. The Files section of the ordinary panel draws this on every
 /// frame, so it copies none of the changes [`collect`] does.
 pub fn totals<'a>(transcript: impl IntoIterator<Item = &'a Entry>) -> (usize, usize, usize) {
-    let mut paths: HashSet<&str> = HashSet::new();
+    let mut paths: HashSet<&Path> = HashSet::new();
     let (mut added, mut removed) = (0, 0);
     for (_, _, written) in calls(transcript) {
         paths.insert(&written.landed);
@@ -470,7 +471,7 @@ mod tests {
             .of_tool("edit_file")
             .with_changes(diff.condensed(3))
             .with_written(Some(Written {
-                landed: path.to_string(),
+                landed: path.into(),
                 added: diff.added(),
                 removed: diff.removed(),
                 numbers: diff.condensed_numbers(3),
@@ -609,7 +610,7 @@ mod tests {
     fn rows_are_keyed_on_the_file_a_call_landed_on() {
         let landing = |mut call: Activity, landed: &str| {
             let written = call.written.as_mut().expect("a write carries counts");
-            written.landed = landed.to_string();
+            written.landed = landed.into();
             call
         };
         let mut session = Session::new("none");
@@ -630,6 +631,34 @@ mod tests {
         assert_eq!(files.len(), 2, "{files:#?}");
         assert_eq!(files[0].edits.len(), 2);
         assert_eq!(files[1].edits.len(), 1);
+        assert_eq!(session.written_totals().0, 2);
+    }
+
+    /// FILES-1: the key is the file's own bytes, so two names that differ only in bytes a lossy
+    /// conversion folds together stay two rows.
+    #[cfg(unix)]
+    #[test]
+    fn rows_keyed_on_a_name_that_is_not_utf8_stay_apart_from_its_lossy_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let landing = |mut call: Activity, landed: &OsStr| {
+            call.written
+                .as_mut()
+                .expect("a write carries counts")
+                .landed = landed.into();
+            call
+        };
+        let mut session = Session::new("none");
+        prompt(&mut session, "go");
+        wrote(
+            &mut session,
+            landing(write("a", "x\n", "y\n"), OsStr::from_bytes(b"/w/a-\xff")),
+        );
+        wrote(
+            &mut session,
+            landing(write("a", "x\n", "y\n"), OsStr::new("/w/a-\u{FFFD}")),
+        );
+        assert_eq!(session.written_files().len(), 2);
         assert_eq!(session.written_totals().0, 2);
     }
 

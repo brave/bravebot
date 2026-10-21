@@ -1901,7 +1901,7 @@ pub(crate) fn review_a_write<S: Sink>(
     existing: &Labelled<String>,
     body: &Labelled<String>,
     replaced_age: Option<std::time::Duration>,
-    landed: &str,
+    landed: &std::path::Path,
 ) -> Reviewed {
     let reviewed = policy.render_pair_in_place(tool, existing, body, |existing, written| {
         let diff = Diff::compute(&existing, &written);
@@ -1910,7 +1910,7 @@ pub(crate) fn review_a_write<S: Sink>(
         // had is not, so its call carries no counts and nothing lists it (FILES-1).
         let written =
             (intent == Intent::Create || !diff.is_empty()).then(|| crate::report::Written {
-                landed: landed.to_string(),
+                landed: landed.to_path_buf(),
                 added: diff.added(),
                 removed: diff.removed(),
                 numbers: diff.condensed_numbers(DIFF_CONTEXT),
@@ -1929,11 +1929,10 @@ pub(crate) fn review_a_write<S: Sink>(
 /// The file a write lands on, as the workspace resolves it, for the key a screen lists written
 /// files under (FILES-1). The name as given where it cannot be resolved, which a write refuses
 /// before it reaches here. Routing only: it is carried beside the display text and drawn nowhere.
-pub(crate) fn landing_of(workspace: &Workspace, proposed_path: &str) -> String {
-    workspace.resolve(proposed_path).map_or_else(
-        |_| proposed_path.to_string(),
-        |landed| landed.to_string_lossy().into_owned(),
-    )
+pub(crate) fn landing_of(workspace: &Workspace, proposed_path: &str) -> std::path::PathBuf {
+    workspace
+        .resolve(proposed_path)
+        .unwrap_or_else(|_| std::path::PathBuf::from(proposed_path))
 }
 
 /// What a write did, for the person watching: a line saying how much changed, and the hunks

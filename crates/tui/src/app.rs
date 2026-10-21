@@ -29967,7 +29967,7 @@ mod tests {
                     .of_tool("edit_file")
                     .with_changes(diff.condensed(3))
                     .with_written(Some(bravebot_agent::report::Written {
-                        landed: path.to_string(),
+                        landed: path.into(),
                         added: diff.added(),
                         removed: diff.removed(),
                         numbers: diff.condensed_numbers(3),
@@ -33015,7 +33015,7 @@ mod tests {
                 .of_tool("edit_file")
                 .with_changes(diff.condensed(3))
                 .with_written(Some(bravebot_agent::report::Written {
-                    landed: "src/a.rs".to_string(),
+                    landed: "src/a.rs".into(),
                     added: diff.added(),
                     removed: diff.removed(),
                     numbers: diff.condensed_numbers(3),
