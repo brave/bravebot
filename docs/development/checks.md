@@ -20,12 +20,17 @@ but files under `docs/` or `agents/`, Markdown, `LICENSE` or `CODEOWNERS`, which
 reads; a commit that stages anything else, or nothing, runs both.
 
 Clippy also refuses every call the tree starts a program with (`clippy.toml`,
-[SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A start that stays has
-`#[allow(clippy::disallowed_methods, reason = "...")]` beside it, and the reason says who chose the
-program. A reviewer reads that line in the diff, and `make check-security` fails one with no reason.
-A program is started with `bravebot_sandbox::programs::start`, which takes a `Resolved`: the lookup or
-one of its named constructors (`own_executable`, `written_in_source`, `named_by_person`,
-`found_earlier`, `to_confine`) builds one, so the constructor is what a reviewer reads.
+[SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A program is started
+with `bravebot_sandbox::programs::start`, which takes a `Resolved`, the variables the program
+inherits (`Inherits`) and the `PATH` it is given (`SearchPath`). The lookup or one of the named
+constructors of `Resolved` (`own_executable`, `written_in_source`, `named_by_person`,
+`found_earlier`, `to_confine`) builds the first, and the other two have no default, so the diff that
+starts a program shows who chose it, what it inherits and where the names it starts are looked up.
+`#[allow(clippy::disallowed_methods, reason = "...")]` is for the few files that cannot call `start`:
+`start` itself, `CreateProcessW` and a build script. `make check-security` fails a mark with no
+reason, a mark that covers more than one start, and a mark in a production file, or a second one in
+a file, that `START_MARKS_ALLOWED` in `agents/skills/security-audit/security-audit.py` does not
+list.
 
 Then run the tests the diff is under, scoped as tightly as the diff is: `cargo test -p bravebot-tui
 --lib` for the interface, `cargo test -p bravebot-agent --test workspace` for one test binary. A

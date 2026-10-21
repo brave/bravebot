@@ -299,6 +299,8 @@ fn ensure_supervisor(roster: &Roster, program: &std::path::Path) {
 fn supervisor_command(program: &std::path::Path) -> std::process::Command {
     let mut command = bravebot_sandbox::programs::start(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
     );
     command.arg("__bg-supervisor").current_dir("/");
     command
@@ -314,6 +316,8 @@ pub(crate) fn host_command(
 ) -> std::process::Command {
     let mut command = bravebot_sandbox::programs::start(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
     );
     command.arg("__bg-host").arg(id).arg(mode.word());
     if let Some(directory) = directory {

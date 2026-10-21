@@ -5,7 +5,6 @@ status: normative
 governs:
   - crates/agent/src/exec.rs
   - crates/agent/src/remembered.rs
-  - crates/agent/src/scrub.rs
   - crates/config/build.rs
   - crates/config/src/scrub.rs
   - crates/core/src/command.rs
@@ -675,7 +674,9 @@ The environment a stage receives is the one this process holds, less the credent
 authenticates to its backend with and with the session's own directory named in it
 ([TRUST-17](../trust-map.md#TRUST-17)). Every stage, not only the first. Removed rather than
 emptied, so a program that distinguishes an unset variable from a blank one sees what a machine that
-never held the credential sees.
+never held the credential sees. A `NAME=value` the line writes in front of a program does not bring
+one of them back: the removal is applied again after the line's own assignments, since the line is
+the planner's and not the person's own.
 
 Those credentials are the signing key and its key id, and every variable the `env` of a gateway in
 force names as a place its bearer token may live. The gateways in force are the managed layer's where
@@ -755,6 +756,9 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_config::lib::google_api_key_is_a_gateway_token_only_while_vertex_is_configured`
 `verified-by: bravebot_agent::exec::a_gateways_environment_token_does_not_reach_a_program_it_runs`
 `verified-by: bravebot_agent::exec::no_stage_of_a_pipeline_sees_a_gateways_environment_token`
+`verified-by: bravebot_agent::exec::a_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step`
+`verified-by: bravebot_agent::exec::a_background_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step`
+`verified-by: bravebot_lsp::server::a_server_is_not_handed_the_names_it_is_told_to_withhold`
 `verified-by: bravebot_agent::exec::a_background_job_is_not_handed_a_gateways_environment_token`
 `verified-by: bravebot_agent::exec::a_variable_no_provider_block_names_still_reaches_a_program`
 `verified-by: bravebot_agent::exec::switching_the_filtering_off_restores_a_gateways_environment_token`

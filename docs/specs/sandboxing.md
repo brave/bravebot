@@ -3233,20 +3233,22 @@ absolute entries of `PATH` that lie outside every directory a confined stage may
 
 `clippy.toml` refuses every call the tree starts a program with, `std::process::Command::new` and
 `CreateProcessW`, whatever names the program: a string literal, a variable, an alias, or a helper
-that passes it on. A program is started with `bravebot_sandbox::programs::start`, which takes a
-`Resolved` and not a path or a string. Only the lookup (`Resolved::find`, `Resolved::find_on`) and a
-named constructor build one, and each constructor says who chose the program:
-`own_executable`, `written_in_source`, `named_by_person`, `found_earlier` and `to_confine`. `start`
-holds the one `Command::new` the tree has outside a build script and a test, so a new spawn picks a
-constructor in the diff and does not compile until it has. `make check` fails any other start that
-has no `#[allow(clippy::disallowed_methods, reason = "...")]` beside it. `make check-security` fails a mark
-whose reason is empty, a mark that covers more than one start, and a second clippy configuration
-that hides the refusal from a crate. The reason says who chose the program, and a start outside the
-list above says why it needs no lookup of this kind: it is this program's own executable, a path
-written in the source or given by the person, the program of a `run` line found when the line was
-planned, or a program a confined stage is asked to run. Tests are allowed at the root of their
-crate or file. A new spawn that looks a name up through `PATH` is added to the list above, in the
-same change, or resolved first, and its mark is what a reviewer reads.
+that passes it on. A program is started with `bravebot_sandbox::programs::start(program, inherits,
+path)`. `program` is a `Resolved` and not a path or a string. Only the lookup (`Resolved::find`,
+`Resolved::find_on`) and a named constructor build one, and each constructor says who chose the
+program: `own_executable`, `written_in_source`, `named_by_person`, `found_earlier` and `to_confine`.
+`inherits` is `Inherits::All`, `Inherits::Without` the names
+[CRED-14](credential-protection.md#CRED-14) removes, or `Inherits::Only` the names it passes on, and
+`path` is `SearchPath::Reduced` or `SearchPath::Inherited`. Neither has a default and `start`
+applies both, so a new spawn picks a constructor, what the program inherits and which `PATH` it is
+given in the diff, and does not compile until it has. `start` holds the one `Command::new` the tree
+has outside a build script and a test. `make check-security` fails a
+`#[allow(clippy::disallowed_methods, reason = "...")]` mark in a production file other than the three
+it lists (`start`, the one `CreateProcessW` and a build script) or a second mark in one of those, a
+mark whose reason is empty, a mark that covers more than one start, and a second clippy
+configuration that hides the refusal from a crate. Tests are allowed at the root of their crate or
+file. A new spawn that looks a name up through
+`PATH` is added to the list above, in the same change, or resolved first.
 
 - **Those directories are the session's.** Each directory the session was opened on, added, or
   moved to, its scratch directory, the system temporary directory, and every row a stage's policy
@@ -3316,6 +3318,26 @@ same change, or resolved first, and its mark is what a reviewer reads.
   that way ([CMD-12](commands.md#CMD-12)). Where `cat` is found only in such a directory the
   inhibitor is not started, and `/caffeinate` reports it as it does an inhibitor that is not
   installed.
+- **`start` settles the environment, and a caller that then sets variables from input it does not
+  control withholds again.** It removes the names it is given, or clears the environment and passes
+  the listed names back, and then reduces `PATH`. A variable the caller sets on the command
+  afterwards replaces what `start` removed, so the `run` tool calls `Inherits::withhold` again after
+  a line's own assignments, and a `NAME=value` in front of a program does not bring a withheld
+  `NAME` back ([RUN-12](tools/run.md#RUN-12)). `start` cannot tell which argument of a program names
+  a program for it to start, so that argument is still passed as an absolute path by the caller, as
+  the inhibitor's `cat` is, and PATH-005 has a reviewer read it.
+- **What each start inherits is stated here.** The programs a `run` stage, a background job, a hook, a
+  language server, the AWS CLI, `doctor --push-identity` and `doctor --sandbox-check` start get this
+  process's environment without this agent's own credentials
+  ([CRED-14](credential-protection.md#CRED-14)). Those of a `run` stage, a background job, a hook, a
+  language server and `doctor --sandbox-check` are also given none of the names a person's
+  `run.scrubEnv` lists. The credential authority gets the names
+  [CONNECTOR-2](connectors.md#CONNECTOR-2) lists and nothing else. The editor, the clipboard tools,
+  `osascript`, the inhibitor, a line typed at the `!` prompt, the client the host starts, and this
+  program started again (the background supervisor and host, `doctor` for a bug report) get all of
+  it: each is the person's own program or holds no credential to hand on. `xcode-select`,
+  `sandbox-exec` and the program a sandbox backend starts confined are started with all of it, and
+  the environment a confined program has is the one its caller asks the backend for.
 - **Each start's `PATH` is stated here.** A program that starts others by name through the `PATH` it
   inherits is given one of three, and a start added to the list at the head of this clause is added
   to this list with its answer in the same change:
@@ -3331,11 +3353,13 @@ same change, or resolved first, and its mark is what a reviewer reads.
   | A language server | bravebot's own, accepted: it runs code the project carries, and pyright is meant to use the virtualenv's `python3` ([LSP-5](tools/lsp.md#LSP-5), [Known costs](tools/lsp.md#known-costs)) |
   | The clipboard tools and `osascript` | reduced to the entries the lookup searches, on every platform: a tool that is a script or a launcher starts its interpreter by name |
   | The inhibitor `/caffeinate` starts | reduced to the entries the lookup searches, on every platform. On Linux the one name it is given, `cat`, is resolved first, and the other name `systemd-inhibit` can start is the program a `unixexec:` address in `DBUS_SYSTEM_BUS_ADDRESS` names. |
+  | A `run` stage or background job, a line typed at the `!` prompt and the client the host starts | not applicable: the program is the one the planner or the person named, and what it starts is theirs. A stage under the sandbox is given the `PATH` a session's stage is given. |
+  | `xcode-select` and `sandbox-exec` | not applicable: each is an absolute path written in the source that starts no other program by name |
   | The background supervisor, the host and a bug report | not applicable: each starts this program's own executable or a path stored by it |
 
   A row that says unreduced is a known gap, not a decision, and it comes out of the table when the
-  start goes through `bravebot_sandbox::programs::restrict_path` and a test plants an interpreter in a
-  directory left out and checks it is not run.
+  start is given `SearchPath::Reduced` and a test plants an interpreter in a directory left out and
+  checks it is not run.
 - **The stage's grants are not narrowed.** Withholding `PATH` directories from the write grants
   would stop `pip install` in an activated environment, which is what the grants are for.
 
@@ -3374,6 +3398,12 @@ another spelling of it is compared by name only until it exists.
 `verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_leaves_out_a_row_held_where_the_account_can_write`
 `verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_still_finds_a_program_in_a_held_row_the_account_cannot_write`
 `verified-by: bravebot_sandbox::programs::an_absolute_path_is_the_callers_own_choice`
+`verified-by: bravebot_sandbox::programs::start_removes_the_names_it_is_given_and_no_others`
+`verified-by: bravebot_sandbox::programs::start_hands_a_program_only_the_names_it_is_given`
+`verified-by: bravebot_sandbox::programs::a_start_given_only_some_names_still_reduces_its_path`
+`verified-by: bravebot_sandbox::programs::a_start_given_only_some_names_reports_the_removal_of_the_rest_through_get_envs`
+`verified-by: bravebot_sandbox::programs::withhold_takes_a_name_set_after_start_off_again`
+`verified-by: bravebot_sandbox::programs::start_gives_a_reduced_path_only_where_it_is_asked_for`
 `verified-by: bravebot_sandbox::programs::a_started_programs_path_holds_exactly_the_entries_the_lookup_searches`
 `verified-by: bravebot_sandbox::programs::a_started_program_with_no_searched_entry_is_given_no_path_at_all`
 `verified-by: bravebot_sandbox::programs::a_started_programs_path_carries_an_entry_that_is_not_utf8_as_its_bytes`

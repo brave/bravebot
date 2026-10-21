@@ -80,11 +80,15 @@ fn report(
 fn doctor() -> Said {
     // The report is of this same program; nothing is trusted from where it says it is.
     let me = bravebot_sandbox::programs::Resolved::own_executable().ok()?;
-    let output = bravebot_sandbox::programs::start(&me)
-        .arg("doctor")
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+    let output = bravebot_sandbox::programs::start(
+        &me,
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+    )
+    .arg("doctor")
+    .stdin(Stdio::null())
+    .output()
+    .ok()?;
     Some((
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),

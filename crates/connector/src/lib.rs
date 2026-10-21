@@ -400,25 +400,20 @@ impl Authority {
     /// Start the authority, write `line` to it, and read its whole reply, stopping it if the run
     /// is cancelled or it outlasts the bound. The child is killed and reaped on either.
     fn exchange(&self, line: Vec<u8>) -> Result<Vec<u8>, ConnectorError> {
+        // The names the authority starts itself (an `env` shebang, a launcher) search only the
+        // entries a lookup by bravebot searches, not a directory a confined stage may write
+        // (SANDBOX-30).
         let mut command = bravebot_sandbox::programs::start(
             &bravebot_sandbox::programs::Resolved::named_by_person(&self.program),
+            bravebot_sandbox::programs::Inherits::Only(&PASSED),
+            bravebot_sandbox::programs::SearchPath::Reduced,
         );
         command
             .arg("connector")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .current_dir("/")
-            .env_clear();
-        for name in PASSED {
-            if let Some(value) = std::env::var_os(name) {
-                command.env(name, value);
-            }
-        }
-        // The names the authority starts itself (an `env` shebang, a launcher) search only the
-        // entries a lookup by bravebot searches, not a directory a confined stage may write
-        // (SANDBOX-30).
-        bravebot_sandbox::programs::restrict_path(&mut command);
+            .current_dir("/");
         // A run already stopped starts nothing, so a stop that came first is never an act sent.
         if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
             return Err(ConnectorError::Stopped);
@@ -700,13 +695,17 @@ mod tests {
         .unwrap();
 
         let own = bravebot_sandbox::programs::Resolved::own_executable().unwrap();
-        let child = bravebot_sandbox::programs::start(&own)
-            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
-            .env(SESSION, &session)
-            .env(INSTALLED, program.0.join("authority"))
-            .env("PATH", &path)
-            .output()
-            .unwrap();
+        let child = bravebot_sandbox::programs::start(
+            &own,
+            bravebot_sandbox::programs::Inherits::All,
+            bravebot_sandbox::programs::SearchPath::Inherited,
+        )
+        .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+        .env(SESSION, &session)
+        .env(INSTALLED, program.0.join("authority"))
+        .env("PATH", &path)
+        .output()
+        .unwrap();
 
         let ran = session.join("ran").exists();
         let report = String::from_utf8_lossy(&child.stderr).into_owned();

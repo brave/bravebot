@@ -348,8 +348,9 @@ fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failur
 
     let mut command = bravebot_sandbox::programs::start(
         &bravebot_sandbox::programs::Resolved::named_by_person(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Reduced,
     );
-    bravebot_sandbox::programs::restrict_path(&mut command);
     match command.args(arguments).arg(path).status() {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(Failure::Editor(match status.code() {

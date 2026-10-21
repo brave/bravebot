@@ -91,8 +91,9 @@ pub fn keep_out_where_writable(directory: &Path) {
 /// Neither a path nor a string is accepted, and the field cannot be written to by a caller:
 ///
 /// ```compile_fail
+/// use bravebot_sandbox::programs::{Inherits, SearchPath};
 /// let path = std::path::PathBuf::from("/usr/bin/git");
-/// let _ = bravebot_sandbox::programs::start(&path);
+/// let _ = bravebot_sandbox::programs::start(&path, Inherits::All, SearchPath::Inherited);
 /// ```
 ///
 /// ```compile_fail
@@ -149,18 +150,100 @@ impl Resolved {
     }
 }
 
+/// What of this process's environment a started program inherits.
+///
+/// There is no default: a start says which, so a new one cannot leave out the removal
+/// [CRED-14](../../../docs/specs/credential-protection.md#CRED-14) asks of a program bravebot
+/// starts on its own account. `bravebot-sandbox` depends on no crate, so the names a caller
+/// withholds are its argument. The configuration owns which they are.
+#[derive(Clone, Copy, Debug)]
+pub enum Inherits<'a> {
+    /// All of it. For a program that is run with the person's own environment, or holds nothing
+    /// this agent authenticates with to hand on: a line typed at the `!` prompt, the editor
+    /// Ctrl-G opens, a clipboard tool, the inhibitor, a system helper, and this program started
+    /// again (the background host, `doctor` for a bug report). A program that runs what the
+    /// planner chose or what a project carries is given [`Inherits::Without`]
+    /// ([RUN-12](../../../docs/specs/tools/run.md#RUN-12)).
+    All,
+    /// All of it except these names, which are removed rather than emptied: a program that checks
+    /// whether a variable is set would read an empty string as configured but blank.
+    Without(&'a [String]),
+    /// Only these names, each where this process holds it, and the `PATH` a [`SearchPath::Reduced`]
+    /// start is given. Every other variable this process holds is removed by name, so the removals
+    /// show in `Command::get_envs` for code that builds a confined program's environment from it.
+    Only(&'a [&'a str]),
+}
+
+impl Inherits<'_> {
+    /// Remove the names [`Inherits::Without`] holds from `command`, and do nothing for the others.
+    ///
+    /// [`start`] does this. A caller that then sets variables from input it does not control,
+    /// such as the assignments a `run` line writes in front of a program, calls it again, so a
+    /// withheld name stays withheld whatever the line assigned.
+    pub fn withhold(&self, command: &mut Command) {
+        if let Inherits::Without(names) = self {
+            for name in *names {
+                command.env_remove(name);
+            }
+        }
+    }
+}
+
+/// The `PATH` a started program is given, which is where the names it starts itself are looked up.
+///
+/// [`find`] chooses the file that is started, and a started program goes on to look names up
+/// through the `PATH` it inherits: an `env` shebang, a wrapper script, the `vim` in an `$EDITOR`
+/// of `env vim`. Every start says which of these it gets
+/// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchPath {
+    /// This process's own `PATH`, unchanged. For a program that starts no other by name, or one
+    /// meant to find what the project carries: a language server runs the project's interpreter.
+    Inherited,
+    /// Only the entries [`find`] searches, in the order they were written. Where none remains the
+    /// program is given no `PATH` variable, since an empty one is read as the current directory.
+    Reduced,
+}
+
+/// Whether `held`, the name of a variable this process holds, is `kept`. Windows reads a variable's
+/// name without regard to case, so `Path` is `PATH` there.
+fn is_variable(held: &OsStr, kept: &str) -> bool {
+    if cfg!(windows) {
+        held.eq_ignore_ascii_case(kept)
+    } else {
+        held == OsStr::new(kept)
+    }
+}
+
 /// The one place a program is started.
 ///
 /// `clippy.toml` refuses `Command::new` everywhere else, so every start reaches here with a
 /// [`Resolved`] and a program named by a variable or a helper no longer slips past a check that
-/// reads literals.
-pub fn start(program: &Resolved) -> Command {
+/// reads literals. It also reaches here with an [`Inherits`] and a [`SearchPath`], which have
+/// no default, so what the program is handed shows in the diff that starts it.
+///
+/// The environment is settled before this returns: the `inherits` rule first, then the `path`. A
+/// variable the caller sets on the command afterwards replaces what was removed here, so a caller
+/// that sets variables from input it does not control calls [`Inherits::withhold`] again.
+pub fn start(program: &Resolved, inherits: Inherits<'_>, path: SearchPath) -> Command {
     #[allow(
         clippy::disallowed_methods,
         reason = "the one start: its argument is a `Resolved`, which only the lookup and the \
                   named constructors build (SANDBOX-30)"
     )]
-    Command::new(&program.0)
+    let mut command = Command::new(&program.0);
+    inherits.withhold(&mut command);
+    if let Inherits::Only(names) = inherits {
+        for (held, _) in std::env::vars_os() {
+            if !names.iter().any(|kept| is_variable(&held, kept)) {
+                command.env_remove(held);
+            }
+        }
+    }
+    if path == SearchPath::Reduced {
+        restrict_path(&mut command);
+    }
+    command
 }
 
 /// The program as an absolute path, or `None` when the only one `PATH` offers is in a directory
@@ -219,7 +302,10 @@ fn held_where_the_account_can() -> Vec<PathBuf> {
 ///
 /// Where no entry remains the command gets no `PATH` variable at all. `execvp` reads an empty
 /// `PATH` as the current directory, which is the directory a session writes in.
-pub fn restrict_path(command: &mut Command) -> &mut Command {
+///
+/// Only [`start`] calls this, for [`SearchPath::Reduced`], so no start reduces the `PATH` a second
+/// way or forgets to.
+fn restrict_path(command: &mut Command) -> &mut Command {
     restrict_path_with(
         command,
         &std::env::var_os("PATH").unwrap_or_default(),
@@ -538,8 +624,13 @@ fn usable(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Resolved, start};
+    use super::{Inherits, Resolved, SearchPath, start};
     use std::ffi::OsStr;
+
+    /// [`start`] with the environment and `PATH` left as they are.
+    fn started(program: &Resolved) -> std::process::Command {
+        start(program, Inherits::All, SearchPath::Inherited)
+    }
 
     /// `start` runs the program its argument names. The regression it rejects: a start that
     /// ignores the `Resolved` it is given, which would make every caller's lookup decorative.
@@ -552,12 +643,171 @@ mod tests {
             Resolved::to_confine("/bin/cat"),
         ] {
             assert_eq!(
-                start(&resolved).get_program(),
+                started(&resolved).get_program(),
                 resolved.as_path().as_os_str()
             );
         }
         let own = Resolved::own_executable().expect("a test has an executable");
-        assert_eq!(start(&own).get_program(), own.as_path().as_os_str());
+        assert_eq!(started(&own).get_program(), own.as_path().as_os_str());
+    }
+
+    /// CRED-14: every name a start is told to withhold is removed, and no other variable is touched.
+    /// The regressions it rejects: a start that ignores the names, one that removes only the first,
+    /// and one that removes something of its own when it is given none.
+    #[test]
+    fn start_removes_the_names_it_is_given_and_no_others() {
+        let program = Resolved::named_by_person("true");
+        let removed = |inherits| {
+            let mut removed: Vec<_> = start(&program, inherits, SearchPath::Inherited)
+                .get_envs()
+                .map(|(name, value)| (name.to_os_string(), value.is_none()))
+                .collect();
+            removed.sort();
+            removed
+        };
+        let names = [
+            "BRAVEBOT_PROBE_KEY".to_string(),
+            "BRAVEBOT_PROBE_ID".to_string(),
+        ];
+
+        assert_eq!(
+            removed(Inherits::Without(&names)),
+            [
+                (OsString::from("BRAVEBOT_PROBE_ID"), true),
+                (OsString::from("BRAVEBOT_PROBE_KEY"), true),
+            ]
+        );
+        assert_eq!(removed(Inherits::Without(&[])), []);
+        assert_eq!(removed(Inherits::All), []);
+    }
+
+    /// A start told to hand a program only some names hands it those, where this process holds them,
+    /// and nothing else. The regressions it rejects: a start that does not clear the environment,
+    /// which leaves the rest of it in place, and one that clears it and passes nothing back.
+    #[cfg(unix)]
+    #[test]
+    fn start_hands_a_program_only_the_names_it_is_given() {
+        let names = ["PATH", "BRAVEBOT_PROBE_NOT_HELD"];
+
+        assert_eq!(
+            handed(Inherits::Only(&names), SearchPath::Inherited),
+            ["PATH"]
+        );
+    }
+
+    /// A held variable is a name a start was given only where the two are the same name. The
+    /// regression it rejects: a comparison through `to_string_lossy`, which reads `NAME-\xff` as
+    /// `NAME-\u{FFFD}` and so keeps a variable that was never asked for.
+    #[cfg(unix)]
+    #[test]
+    fn a_variable_name_that_is_not_text_is_not_its_lossy_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let not_text = OsStr::from_bytes(b"NAME-\xff");
+        let lookalike = "NAME-\u{FFFD}";
+
+        assert!(!is_variable(not_text, lookalike));
+        assert!(is_variable(OsStr::new(lookalike), lookalike));
+    }
+
+    /// A start given only some names reports the removal of every other variable the process holds
+    /// through `get_envs`. The regression it rejects: clearing the environment with `env_clear`,
+    /// which `get_envs` does not report, so code that builds a confined program's environment from
+    /// this process's own and the command's `get_envs` hands the program all of it.
+    #[test]
+    fn a_start_given_only_some_names_reports_the_removal_of_the_rest_through_get_envs() {
+        let kept = ["PATH"];
+        let command = start(
+            &Resolved::named_by_person("true"),
+            Inherits::Only(&kept),
+            SearchPath::Inherited,
+        );
+
+        let mut removed: Vec<OsString> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_os_string())
+            .collect();
+        let mut expected: Vec<OsString> = std::env::vars_os()
+            .map(|(name, _)| name)
+            .filter(|name| name != "PATH")
+            .collect();
+        removed.sort();
+        expected.sort();
+        assert_eq!(removed, expected);
+    }
+
+    /// A start given only some names still reduces the `PATH` it is asked to reduce, though `PATH`
+    /// is not among them, and gives no other name. The regression it rejects: reducing the `PATH`
+    /// before the environment is cleared, which leaves the program none.
+    #[cfg(unix)]
+    #[test]
+    fn a_start_given_only_some_names_still_reduces_its_path() {
+        let names = ["BRAVEBOT_PROBE_NOT_HELD"];
+
+        assert_eq!(
+            handed(Inherits::Only(&names), SearchPath::Reduced),
+            ["PATH"]
+        );
+    }
+
+    /// The names `env` printed for a program started with these rules, which is what it was handed.
+    #[cfg(unix)]
+    fn handed(inherits: Inherits<'_>, path: SearchPath) -> Vec<String> {
+        let printed = start(&Resolved::written_in_source("/usr/bin/env"), inherits, path)
+            .output()
+            .expect("env runs");
+        String::from_utf8_lossy(&printed.stdout)
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(name, _)| name.to_string()))
+            .collect()
+    }
+
+    /// A caller that sets a withheld name after `start` takes it off again, and the other rules
+    /// take nothing off. The regressions it rejects: a `withhold` that does nothing, which lets an
+    /// assignment bring a withheld name back, and one that removes names under a rule that names none.
+    #[test]
+    fn withhold_takes_a_name_set_after_start_off_again() {
+        let names = ["BRAVEBOT_PROBE_KEY".to_string()];
+        let set = |inherits: Inherits<'_>| {
+            let mut command = start(
+                &Resolved::named_by_person("true"),
+                inherits,
+                SearchPath::Inherited,
+            );
+            command.env("BRAVEBOT_PROBE_KEY", "the-lines-own");
+            inherits.withhold(&mut command);
+            command
+                .get_envs()
+                .find(|(name, _)| *name == OsStr::new("BRAVEBOT_PROBE_KEY"))
+                .map(|(_, value)| value.map(OsStr::to_os_string))
+        };
+
+        assert_eq!(set(Inherits::Without(&names)), Some(None));
+        assert_eq!(
+            set(Inherits::All),
+            Some(Some(OsString::from("the-lines-own")))
+        );
+        assert_eq!(
+            set(Inherits::Only(&[])),
+            Some(Some(OsString::from("the-lines-own")))
+        );
+    }
+
+    /// Only a start asked for the reduced `PATH` is given one. What the reduction holds is pinned
+    /// by the tests below. The regressions it rejects: a start that never reduces, which leaves an
+    /// `env` shebang to find a file a stage wrote, and one that always does, which breaks a language
+    /// server that is meant to find the project's interpreter.
+    #[test]
+    fn start_gives_a_reduced_path_only_where_it_is_asked_for() {
+        let program = Resolved::named_by_person("true");
+        let sets_path = |path| {
+            start(&program, Inherits::All, path)
+                .get_envs()
+                .any(|(name, _)| name == OsStr::new("PATH"))
+        };
+
+        assert!(sets_path(SearchPath::Reduced));
+        assert!(!sets_path(SearchPath::Inherited));
     }
 
     /// The lookup constructors apply the lookup: a name nothing on `PATH` holds is not a program,

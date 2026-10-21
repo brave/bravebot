@@ -121,9 +121,10 @@ as the program, the test that shows the same for a name the program itself start
 program is given, and whether `own_credentials()` is removed from its environment
 ([CRED-14](../specs/credential-protection.md#CRED-14)).** `clippy.toml` refuses every call the
 tree starts a program with, and a start goes through `bravebot_sandbox::programs::start`, which takes
-a `Resolved`. A reviewer reads what neither can decide: that the constructor in the diff
-(`own_executable`, `written_in_source`, `named_by_person`, `found_earlier`, `to_confine`) names who
-chose the program truthfully, and what the program itself starts by name (SANDBOX-30).
+a `Resolved`, what the program inherits and the `PATH` it is given. A reviewer reads what neither
+can decide: that the constructor in the diff (`own_executable`, `written_in_source`,
+`named_by_person`, `found_earlier`, `to_confine`) names who chose the program truthfully, and what
+the program itself starts by name (SANDBOX-30).
 
 The second test puts a directory SANDBOX-30 leaves out first on the `PATH` bravebot inherits and
 plants an executable file in it under a name the program itself starts, such as the interpreter an
@@ -131,11 +132,11 @@ plants an executable file in it under a name the program itself starts, such as 
 installed later on that `PATH`. The test starts the program through the function production uses,
 and asserts both that the planted file did not run and that the program ran to its end. The first
 test passes for a program whose own file is found safely and whose interpreter is not, so it is no
-substitute for the second. The program is given a `PATH` reduced with
-`bravebot_sandbox::programs::restrict_path`, or the names it starts are passed as absolute paths,
-as the `/caffeinate` inhibitor's `cat` is. Where it is given neither, such as a language server that
-runs the project's own interpreter on purpose, the description cites the issue or Known costs entry
-that records it, as [GAP-001](gaps.md#GAP-001) says.
+substitute for the second. The program is started with `SearchPath::Reduced`, or the names it starts
+are passed as absolute paths, as the `/caffeinate` inhibitor's `cat` is. A start that is given
+`SearchPath::Inherited`, such as a language server that runs the project's own interpreter on
+purpose, has its description cite the issue or Known costs entry that records it, as
+[GAP-001](gaps.md#GAP-001) says.
 
 **Why:** the lint sees every start and no reason for it. A reason that says a program was resolved
 when it was found by a walk of the caller's own, and a program started by another program, each

@@ -55,11 +55,11 @@ const COPY_TOOLS: &[(&str, &[&str])] = &[
 /// A tool that is a script or a launcher starts programs by name too, so it is given only the
 /// `PATH` entries the lookup searched (SANDBOX-30).
 fn start_tool(program: PathBuf) -> Command {
-    let mut command = bravebot_sandbox::programs::start(
+    bravebot_sandbox::programs::start(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
-    );
-    bravebot_sandbox::programs::restrict_path(&mut command);
-    command
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Reduced,
+    )
 }
 
 /// Run a tool and write the text to it, reporting whether it took it.

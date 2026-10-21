@@ -232,14 +232,11 @@ pub(crate) fn keep_out_where_this_ran() {
 ///
 /// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
 fn started(program: &Path) -> std::process::Command {
-    let mut command = bravebot_sandbox::programs::start(
+    bravebot_sandbox::programs::start(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
-    );
-    for name in bravebot_config::scrub::own_credentials() {
-        command.env_remove(name);
-    }
-    bravebot_sandbox::programs::restrict_path(&mut command);
-    command
+        bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
+        bravebot_sandbox::programs::SearchPath::Reduced,
+    )
 }
 
 /// Standard output and standard error of `program`, run to completion within [`WAIT`].
@@ -664,18 +661,18 @@ mod tests {
         ])
         .unwrap();
 
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "this test binary, run again for the one test"
-        )]
-        // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
-            .env(SESSION, &session.path)
-            .env(INSTALLED, &installed.path)
-            .env("PATH", &path)
-            .output()
-            .unwrap();
+        let own = bravebot_sandbox::programs::Resolved::own_executable().unwrap();
+        let child = bravebot_sandbox::programs::start(
+            &own,
+            bravebot_sandbox::programs::Inherits::All,
+            bravebot_sandbox::programs::SearchPath::Inherited,
+        )
+        .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+        .env(SESSION, &session.path)
+        .env(INSTALLED, &installed.path)
+        .env("PATH", &path)
+        .output()
+        .unwrap();
 
         let ran = session.path.join("ran").exists();
         let report = String::from_utf8_lossy(&child.stderr).into_owned();
