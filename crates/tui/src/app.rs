@@ -4834,7 +4834,7 @@ fn commit_message_animated(
         session.keep_awake();
         redraw(terminal, session)?;
         pump_terminal(terminal, session, |session, key| {
-            one_request_key(session, key, &cancel);
+            one_request_key(session, key, &cancel)
         })?;
         let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
             aside_reported(session, message);
