@@ -1116,6 +1116,7 @@ and the one place it is released is a surface the person edits and a key the per
 credential in a diff is refused where the planner's own read would ask, because nobody is at a
 prompt to agree.
 
+`verified-by: bravebot_agent::commit_message::a_range_is_two_written_out_revisions`
 `verified-by: bravebot_tui::app::the_commit_message_command_carries_its_source_and_is_not_sent_as_a_prompt`
 `verified-by: bravebot_tui::app::the_commit_message_command_starts_no_request_for_a_range_it_cannot_use`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_commit_message_command_or_a_longer_word_is_still_a_prompt`

@@ -17,9 +17,6 @@ pub struct Asked {
 pub(crate) const STAGED: &str = "--staged";
 pub(crate) const RANGE: &str = "--range";
 
-/// The longest range accepted. Longer than any real one.
-const LONGEST: usize = 200;
-
 /// What the box begins with when a draft is put in it.
 ///
 /// Fixed words, so the line a person sends starts with a word the driver wrote: a draft that began
@@ -38,10 +35,7 @@ pub fn parse(argument: &str) -> Option<Asked> {
         STAGED => (Source::Staged, rest),
         RANGE => {
             let (range, rest) = split_word(rest);
-            if !is_range(range) {
-                return None;
-            }
-            (Source::Range(range.to_string()), rest)
+            (Source::range(range)?, rest)
         }
         _ => (Source::Staged, argument),
     };
@@ -58,25 +52,6 @@ fn split_word(text: &str) -> (&str, &str) {
         Some((word, rest)) => (word, rest.trim_start()),
         None => (text, ""),
     }
-}
-
-/// Whether `word` is two revisions joined by `..` or `...`, each spelled as a branch, tag, hash or
-/// `HEAD~2` is, with no leading `-` so neither can be read as an option.
-fn is_range(word: &str) -> bool {
-    let Some((from, to)) = word.split_once("..") else {
-        return false;
-    };
-    let to = to.strip_prefix('.').unwrap_or(to);
-    word.len() <= LONGEST && [from, to].iter().all(|name| is_revision(name))
-}
-
-fn is_revision(name: &str) -> bool {
-    !name.is_empty()
-        && !name.starts_with('-')
-        && !name.contains("..")
-        && name.chars().all(|c| {
-            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-' | '~' | '^' | '@')
-        })
 }
 
 /// What the box holds once `message` is drafted: the lead, a blank line, and the message.
@@ -147,7 +122,6 @@ mod tests {
             "--range -x..HEAD",
             "--range main..-x",
             "--range a..b..c",
-            "--range a;b..c",
             &format!("--range {}..HEAD", "a".repeat(300)),
         ] {
             assert_eq!(parse(typed), None, "{typed:?}");

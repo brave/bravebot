@@ -34,6 +34,17 @@ pub enum Source {
     Range(String),
 }
 
+impl Source {
+    /// The changes between two commits, or `None` where `text` is not one word naming two of them
+    /// as `a..b` or `a...b`. What a revision may be written as is [`crate::git::is_range`]'s, the
+    /// same reading `read_git` gives a diff's revision.
+    pub fn range(text: &str) -> Option<Self> {
+        /// Longer than any real range.
+        const LONGEST: usize = 200;
+        (text.len() <= LONGEST && crate::git::is_range(text)).then(|| Self::Range(text.to_string()))
+    }
+}
+
 /// What the processor is asked, in the driver's own words.
 ///
 /// The document it is given is the diff. The format a person named after the command is added
@@ -156,13 +167,32 @@ pub fn draft<S: Sink>(
         }
     }
 
-    let (nothing, partial) = {
+    // `scan_a_read` does not read a diff nobody vouched for, so that one is scanned here, with the
+    // counts. It reaches the processor where the planner's read would keep it back, and all that is
+    // taken from the scan is a yes or no that stops the draft, said to the person.
+    let trusted = answer.label().is_trusted();
+    let (nothing, partial, untrusted_credential) = {
         let counts = policy.render_in_place("commit_message", &answer, |a| {
-            (a.shown.is_empty(), a.cut || a.timed_out)
+            (
+                a.shown.is_empty(),
+                a.cut || a.timed_out,
+                !trusted
+                    && !bravebot_core::credentials::scan(
+                        ".git",
+                        &a.text,
+                        bravebot_core::credentials::run_salt(),
+                    )
+                    .is_empty(),
+            )
         });
-        let proof = policy.authorise_display_release("whether the diff was empty or cut short");
+        let proof = policy.authorise_display_release(
+            "whether the diff was empty, cut short or held a credential",
+        );
         counts.declassify(&proof)
     };
+    if untrusted_credential {
+        return Err(DraftError::Credential);
+    }
     if nothing {
         return Err(DraftError::Nothing);
     }

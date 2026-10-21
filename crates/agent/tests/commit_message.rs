@@ -259,6 +259,68 @@ fn a_diff_holding_a_credential_is_not_sent() {
     );
 }
 
+/// A diff of a file nobody vouched for is scanned too: it reaches the processor, where the planner's
+/// read would have kept it back, so a key in it stops the draft the same way.
+#[test]
+fn an_untrusted_diff_holding_a_credential_is_not_sent() {
+    let scratch = Scratch::new("commit-message-untrusted-credential");
+    let key = format!("AKIA{}", "QWERTYUIOPASDFGH");
+    repository::commit_files(&scratch.path, &[("notes.txt", "one\n")], "first");
+    repository::commit_files(
+        &scratch.path,
+        &[("notes.txt", &format!("one\nkey = {key}\n"))],
+        "second",
+    );
+    let (done, received) = draft(
+        &scratch,
+        |w| {
+            let mut trust = trust_of(w, false);
+            trust.distrust("notes.txt");
+            trust
+        },
+        &Source::Range("HEAD~1..HEAD".to_string()),
+        None,
+        vec![the_model_says("unused")],
+    );
+
+    assert!(
+        matches!(done, Err(DraftError::Credential)),
+        "{:?}",
+        done.as_ref().err()
+    );
+    assert!(
+        received.try_recv().is_err(),
+        "a credential was sent to a model"
+    );
+}
+
+/// `Source::range` reads a range the way `read_git` reads a diff's revision, so a name git could
+/// take as an option, a second operator or a missing side is no range.
+#[test]
+fn a_range_is_two_written_out_revisions() {
+    for good in ["main..HEAD", "v1.0...HEAD~2", "a..b"] {
+        assert_eq!(
+            Source::range(good),
+            Some(Source::Range(good.to_string())),
+            "{good:?}"
+        );
+    }
+    for bad in [
+        "",
+        "main",
+        "..HEAD",
+        "main..",
+        "...HEAD",
+        "-x..HEAD",
+        "main..-x",
+        "a..b..c",
+        "a b",
+        &format!("{}..HEAD", "a".repeat(300)),
+    ] {
+        assert_eq!(Source::range(bad), None, "{bad:?}");
+    }
+}
+
 /// An answer that never marks where the message begins gives no draft, however much it said: the
 /// driver does not pick a message out of prose it may not read.
 #[test]

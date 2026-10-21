@@ -300,14 +300,15 @@ What differs from a call a planner makes is where the output goes. The document 
 display gate to the person's input box, and the remark is never released. The driver reads two
 counts of the reader's own answer, whether it showed no file and whether it stopped at a cap, and
 nothing of the diff or the draft. A diff that holds what looks like a credential is not given to the
-processor, since nobody is at a prompt to agree to it as for a planner's read
-([CRED-15](credential-protection.md#CRED-15)).
+processor, whether or not its files are vouched for, since nobody is at a prompt to agree to it as
+for a planner's read ([CRED-15](credential-protection.md#CRED-15)).
 
 **Why.** The diff and the draft stay out of both contexts, as they do for a processor a planner
 starts, and the person is the only reader of the draft before they decide what to send.
 
 `verified-by: bravebot_agent::commit_message::a_range_is_drafted_from_its_diff_and_the_request_holds_no_tool`
 `verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
+`verified-by: bravebot_agent::commit_message::an_untrusted_diff_holding_a_credential_is_not_sent`
 `verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
 `verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
 

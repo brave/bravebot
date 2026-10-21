@@ -39,7 +39,7 @@ mod tags;
 pub use dates::parse_day;
 pub use declined::Declined;
 pub use out::Printed;
-pub use revision::{path_in, plausible_ref};
+pub use revision::{is_range, path_in, plausible_ref};
 pub use survey::{survey, survey_linked};
 
 use config::check_config;
