@@ -2803,7 +2803,7 @@ fn off_schema_message(broke: &bravebot_agent::output_schema::Mismatch) -> String
 /// Whether a result object was asked for, read straight off the command line.
 ///
 /// Only for the case where the parse failed, which is the one moment the parsed invocation cannot
-/// answer. `--input-format lines` is a `--json-stream` run (CLI-34), so it asks for one too.
+/// answer. `--input-format lines` is a `--json-stream` run (CLI-35), so it asks for one too.
 fn wants_json(args: &[String]) -> bool {
     args.iter()
         .any(|arg| arg == "--json" || arg == "--json-stream")
