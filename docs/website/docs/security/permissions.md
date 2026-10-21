@@ -108,7 +108,7 @@ The agent is told your words after the result of an approved call, or in place o
 would otherwise end on when you declined. A decline with no note ends on asking what you would prefer,
 which costs another round and another interruption. The note is one line, cut at a fixed length, and
 it belongs to the one answer it was typed at. It is recorded in the audit trail as yours. The keys that
-stand for a lasting answer (`a`, `r`, `f`, `m`, `e` and a number) open no field. A Tab or an Enter that
+stand for a lasting answer (`a`, `r`, `s`, `m`, `e` and a number) open no field. A Tab or an Enter that
 arrived together with other keys, as a paste does, opens or sends nothing. The trust question, the
 desktop window, a session in lines and a one-shot run offer no field.
 
@@ -132,10 +132,10 @@ The run prompt is the one place a standing permission is offered, and it offers 
 different lifetimes:
 
 ```
-  y run it    a always this session    r remember it    f any number    n don't    ctrl-c stop the turn
+  y run it    a always this session    r remember it    s read pull requests and issues in brave/bravebot    n don't    ctrl-c stop the turn
 ```
 
-`f` is offered only for the lines described under [a number that changes](#when-a-lines-arguments-change-every-time). The keys are labelled that way so both lifetimes can be read off the screen. `a` is a **vouch** and
+`s` is offered only for the lines described under [a number that changes](#when-a-lines-arguments-change-every-time). The keys are labelled that way so both lifetimes can be read off the screen. `a` is a **vouch** and
 lasts the session. `r` [remembers the line past the session](#remembering-a-line-past-the-session) and
 grants strictly less. Enter reaches neither, and declining or Ctrl-C records nothing.
 
@@ -248,7 +248,7 @@ it prints stays untrusted and private, exactly as it would without the record. `
 decides a label; `r` is the key that decides a lifetime. If you want a command's output readable, press
 `a`.
 
-**It covers one line, not a family**, apart from the `f` answer described [below](#when-a-lines-arguments-change-every-time). A later line is covered when the program's name, the binary that
+**It covers one line, not a family**, apart from the `s` answer described [below](#when-a-lines-arguments-change-every-time). A later line is covered when the program's name, the binary that
 name resolved to, every argument, every variable the line set, and where its output went are all the
 same. Sending the errors somewhere else makes a different line. A pipeline is covered only where every
 stage is.
@@ -304,13 +304,15 @@ your judgment to make. What a pattern costs is stated with it: it covers lines n
 stops the asking, and it makes nothing readable. See
 [Configuration](../customize/configuration.md#permissions).
 
-**The exception: a pull request or issue number.** For `gh pr view`, `gh pr diff`, `gh pr checks` and
-`gh issue view`, written as `gh pr view 1081 --repo brave/bravebot`, the prompt also offers `f`. It
-records the line with the number free: `gh pr view <number> --repo brave/bravebot` is then not asked
-about again for any whole number, in that directory. These four were checked by hand against what `gh`
-does, and they are listed in the source; nothing is worked out from your answers. Another repository,
-a number that is not digits, and any other flag (`--web`, `--json`) are still asked about, as is a
-line that is not in the list. `f` stops the asking and nothing else, as `r` does.
+**The exception: reading pull requests and issues.** For `gh pr view`, `gh pr diff`, `gh pr checks` and
+`gh issue view`, written as `gh pr view 1081 --repo brave/bravebot`, the prompt also offers `s`. It asks
+in words, "Read pull requests and issues in brave/bravebot", and saves one entry holding all four
+sub-commands on that repository with the number free: none of them is then asked about again for any
+whole number, in that directory. These four were checked by hand against what `gh` does, and they are
+listed in the source; nothing is worked out from your answers. Another repository, a number that is not
+digits, any other flag (`--web`, `--json`) and any sub-command that writes are still asked about, as is
+a line that is not in the list. `s` stops the asking and nothing else, as `r` does, and deleting the
+entry's line from the file takes all four back.
 
 ## A fetch is approved one URL at a time
 

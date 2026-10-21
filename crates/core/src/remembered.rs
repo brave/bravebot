@@ -16,13 +16,15 @@
 //! matched against one string in a language where a character means anything, and which is the way
 //! to cover a family of lines on purpose.
 //!
-//! # The one exception: a family with its number free
+//! # The one exception: a scope
 //!
-//! A second answer, for a line the table in [`families`] lists, records the line with one argument
-//! left as a number slot: `gh pr view 1081 --repo brave/bravebot` becomes `gh pr view <number>
-//! --repo brave/bravebot`. The slot admits a decimal integer and nothing else, every other field is
-//! compared as before, and a line the table does not list can only be recorded exact. The table is
-//! written by hand and never built from anything a run printed ([RUN-20]).
+//! A second answer, for a line the table in [`scopes`] lists, records a named group of lines: the
+//! sub-commands the table puts in the group, each with one argument left as a number slot, on the
+//! one repository the line named. `gh pr view 1081 --repo brave/bravebot` becomes `gh pr view
+//! <number> --repo brave/bravebot` and the same for `gh pr diff`, `gh pr checks` and `gh issue
+//! view`. The slot admits a decimal integer and nothing else, every other field is compared as
+//! before, and a line the table does not list can only be recorded exact. The table is written by
+//! hand and never built from anything a run printed ([RUN-20]).
 //!
 //! [RUN-20]: ../../../docs/specs/tools/run.md
 //!
@@ -193,17 +195,6 @@ impl RememberedStep {
                 .all(|(held, seen)| held.admits(seen))
     }
 
-    /// This step with its number left free, where the table in [`families`] lists it.
-    ///
-    /// `None` for a step that has an assignment or a route, or whose arguments are not exactly the
-    /// shape an entry of the table has.
-    pub fn with_number_free(step: &Step) -> Option<Self> {
-        let slot = families::number_slot(step)?;
-        let mut held = Self::of(step);
-        held.args[slot] = RememberedArg::Number;
-        Some(held)
-    }
-
     /// The step as it was drawn at the prompt.
     ///
     /// The same rendering the prompt used, produced by the same code, because a reading back that
@@ -352,28 +343,6 @@ impl RememberedLine {
         self.steps.matches(&plan.steps)
     }
 
-    /// The line a plan would be recorded as with its number free, where it is a lone step the
-    /// table in [`families`] lists. `None` for anything else, which can only be recorded exact.
-    pub fn family_of(plan: &Plan) -> Option<Self> {
-        let Steps::Pipeline(list) = &plan.steps else {
-            return None;
-        };
-        let [step] = list.as_slice() else {
-            return None;
-        };
-        Some(Self {
-            steps: Shape::Pipeline(vec![RememberedStep::with_number_free(step)?]),
-        })
-    }
-
-    /// Whether this line has a number slot, which is to say it is a family.
-    pub fn is_family(&self) -> bool {
-        self.steps
-            .steps()
-            .iter()
-            .any(|step| step.args.contains(&RememberedArg::Number))
-    }
-
     /// The line as it was drawn at the prompt.
     pub fn display(&self) -> String {
         self.steps.display()
@@ -388,6 +357,42 @@ impl RememberedLine {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub line: RememberedLine,
+    /// The session the key was pressed in.
+    pub answered_in: String,
+}
+
+/// A named group of lines a person answered for with one key ([RUN-20]).
+///
+/// What the table in [`scopes`] made of the line on the screen: each sub-command the table puts in
+/// the group, as an ordinary line with its number free. Held as those lines and nothing smaller, so
+/// what a later line is covered by is exactly what the record spells out, and a table that grows
+/// later does not widen an answer already given.
+///
+/// [RUN-20]: ../../../docs/specs/tools/run.md
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scope {
+    /// Which group of the table this is.
+    pub kind: scopes::Kind,
+    /// The repository every line names, as the prompt wrote it. Said where the scope is read back
+    /// and decides nothing: what covers a line is the lines.
+    pub repository: String,
+    /// The lines the scope covers.
+    pub lines: Vec<RememberedLine>,
+}
+
+impl Scope {
+    /// Whether a plan about to run is one of the lines this scope holds.
+    pub fn covers(&self, plan: &Plan) -> bool {
+        self.lines.iter().any(|line| line.covers(plan))
+    }
+}
+
+/// One scope, and the session whose answer put it there.
+///
+/// The session decides nothing, as [`Entry::answered_in`] does not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeEntry {
+    pub scope: Scope,
     /// The session the key was pressed in.
     pub answered_in: String,
 }
@@ -415,6 +420,7 @@ pub struct FileEntry {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Remembered {
     entries: Vec<Entry>,
+    scopes: Vec<ScopeEntry>,
     files: Vec<FileEntry>,
 }
 
@@ -432,28 +438,44 @@ impl Remembered {
         });
     }
 
-    /// Whether some entry is this exact plan.
+    /// Add a scope, as reading one more record of the file does.
+    pub fn record_scope(&mut self, scope: Scope, answered_in: impl Into<String>) {
+        self.scopes.push(ScopeEntry {
+            scope,
+            answered_in: answered_in.into(),
+        });
+    }
+
+    /// Whether some entry is this exact plan, or some scope holds a line that is.
     ///
     /// Answers whether to ask and nothing else. A caller that has not already refused a line
     /// releasing private data, naming a file to write, or running outside the root must not reach
     /// this: those are asked about whatever is recorded, and an entry cannot speak for them.
     pub fn covers(&self, plan: &Plan) -> bool {
         self.entries.iter().any(|entry| entry.line.covers(plan))
+            || self.scopes.iter().any(|entry| entry.scope.covers(plan))
     }
 
-    /// Every entry, in the order they were recorded.
+    /// Every entry, in the order they were recorded. A line a scope holds is not one of them: it
+    /// is read back through [`Self::scopes`], as the one item it was answered as.
     pub fn iter(&self) -> impl Iterator<Item = &Entry> {
         self.entries.iter()
     }
 
-    /// The lines, which is what the run prompt's record is counted in.
-    pub fn len(&self) -> usize {
-        self.entries.len()
+    /// Every scope, in the order they were recorded.
+    pub fn scopes(&self) -> impl Iterator<Item = &ScopeEntry> {
+        self.scopes.iter()
     }
 
-    /// Whether no line is remembered. Says nothing of the files.
+    /// The answers, which is what the run prompt's record is counted in: one for a line and one for
+    /// a scope, however many lines the scope holds.
+    pub fn len(&self) -> usize {
+        self.entries.len() + self.scopes.len()
+    }
+
+    /// Whether no line or scope is remembered. Says nothing of the files.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.scopes.is_empty()
     }
 
     /// Add a file, as reading one more line of the record does.
@@ -482,45 +504,92 @@ impl FromIterator<Entry> for Remembered {
     fn from_iter<I: IntoIterator<Item = Entry>>(entries: I) -> Self {
         Self {
             entries: entries.into_iter().collect(),
+            scopes: Vec::new(),
             files: Vec::new(),
         }
     }
 }
 
-/// The sub-commands whose number a person may leave free when they ask for a line to be remembered
-/// ([RUN-20]).
+/// The groups of sub-commands a person may answer for with one key ([RUN-20]).
 ///
 /// Written by hand, one entry at a time, as the `git` options in [CMDLINE-8] are, and never built
-/// from anything a run printed. An entry says: this program, these two words, then one decimal
-/// integer, then `--repo OWNER/REPO`, and nothing else. The number is the only thing left free,
-/// and the repository stays a literal in the entry. Any flag the entry does not name makes the
-/// line one the table does not list, and it can only be recorded exact.
+/// from anything a run printed. An entry says: this group, this program, these two words, then one
+/// decimal integer, then `--repo OWNER/REPO`, and nothing else. The number is the only thing left
+/// free, and the repository stays a literal in each line the scope expands to. Any flag the entry
+/// does not name makes the line one the table does not list, and it can only be recorded exact.
 ///
 /// Each entry was checked against the program's own `--help` to be a read of one object that takes
 /// no path to write to and reads no file named on the line.
 ///
+/// The sentences the prompt puts to the person for a group (`run-remember-scope-*` in the message
+/// catalog) say which sub-commands it holds, so a change to a group changes them too.
+///
 /// [RUN-20]: ../../../docs/specs/tools/run.md
 /// [CMDLINE-8]: ../../../docs/specs/tools/command-line.md
-pub mod families {
-    use crate::command::Step;
+pub mod scopes {
+    use super::{RememberedArg, RememberedLine, RememberedStep, Scope, Shape, is_number};
+    use crate::command::{Plan, Step, Steps};
 
-    /// The program name and the two words after it.
-    const TABLE: &[(&str, [&str; 2])] = &[
-        ("gh", ["pr", "view"]),
-        ("gh", ["pr", "diff"]),
-        ("gh", ["pr", "checks"]),
-        ("gh", ["issue", "view"]),
+    /// A group of the table.
+    ///
+    /// A name for the words the prompt and the reading back put to it, which live with the
+    /// interface that draws them and not here.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Kind {
+        /// Viewing a pull request or an issue, and reading a pull request's diff and checks, on one
+        /// repository.
+        ReadPullRequestsAndIssues,
+    }
+
+    /// One sub-command of a group.
+    struct Member {
+        kind: Kind,
+        /// The program name and the two words after it.
+        program: &'static str,
+        words: [&'static str; 2],
+    }
+
+    const TABLE: &[Member] = &[
+        Member {
+            kind: Kind::ReadPullRequestsAndIssues,
+            program: "gh",
+            words: ["pr", "view"],
+        },
+        Member {
+            kind: Kind::ReadPullRequestsAndIssues,
+            program: "gh",
+            words: ["pr", "diff"],
+        },
+        Member {
+            kind: Kind::ReadPullRequestsAndIssues,
+            program: "gh",
+            words: ["pr", "checks"],
+        },
+        Member {
+            kind: Kind::ReadPullRequestsAndIssues,
+            program: "gh",
+            words: ["issue", "view"],
+        },
     ];
 
-    /// Where the number sits in the argument list of every entry.
-    const SLOT: usize = 2;
-
-    /// The index of the argument that may be left free, where `step` is a line the table lists.
-    pub fn number_slot(step: &Step) -> Option<usize> {
+    /// The scope a plan is in, with every line it expands to, where the plan is a line the table
+    /// lists.
+    ///
+    /// `None` for a plan that is not one lone step, for a step that has an assignment or a route,
+    /// and for one whose arguments are not exactly the shape of a member of the table. The binary
+    /// every expanded line names is the one the line on the screen resolved to: the person read
+    /// `gh`, and the group is the other sub-commands of that `gh`.
+    pub fn offered_for(plan: &Plan) -> Option<Scope> {
+        let Steps::Pipeline(list) = &plan.steps else {
+            return None;
+        };
+        let [step] = list.as_slice() else {
+            return None;
+        };
         let Step {
             program,
-            resolved: _,
-            started_as: _,
+            resolved,
+            started_as,
             args,
             environment,
             routes,
@@ -528,14 +597,92 @@ pub mod families {
         if !environment.is_empty() || !routes.is_empty() {
             return None;
         }
-        let [first, second, number, flag, repo] = args.as_slice() else {
+        let [first, second, number, flag, repository] = args.as_slice() else {
             return None;
         };
         let listed = TABLE
             .iter()
-            .any(|(name, words)| name == program && words[0] == first && words[1] == second);
-        (listed && super::is_number(number) && flag == "--repo" && is_repository(repo))
-            .then_some(SLOT)
+            .find(|member| {
+                member.program == program && member.words[0] == first && member.words[1] == second
+            })?
+            .kind;
+        if !(is_number(number) && flag == "--repo" && is_repository(repository)) {
+            return None;
+        }
+        let lines = TABLE
+            .iter()
+            .filter(|member| member.kind == listed && member.program == program)
+            .map(|member| RememberedLine {
+                steps: Shape::Pipeline(vec![RememberedStep {
+                    program: program.clone(),
+                    resolved: resolved.clone(),
+                    started_as: started_as.clone(),
+                    args: vec![
+                        RememberedArg::Literal(member.words[0].to_string()),
+                        RememberedArg::Literal(member.words[1].to_string()),
+                        RememberedArg::Number,
+                        RememberedArg::Literal(flag.clone()),
+                        RememberedArg::Literal(repository.clone()),
+                    ],
+                    environment: Vec::new(),
+                    routes: Vec::new(),
+                }]),
+            })
+            .collect();
+        Some(Scope {
+            kind: listed,
+            repository: repository.clone(),
+            lines,
+        })
+    }
+
+    /// Whether a scope read back from the record is what its name says: at least one line, and every
+    /// line a sub-command the table puts in its group, with its number free, on its repository and
+    /// nothing else.
+    ///
+    /// The lines are what covers, and the name and the repository are what the reading back says
+    /// about them, so an entry whose lines are something else is read back as a grant it is not.
+    /// It covers nothing instead. A group holding fewer sub-commands than the table lists now is
+    /// whole: it is what the person answered for when a build with the smaller table asked.
+    pub fn holds_only_its_group(scope: &Scope) -> bool {
+        is_repository(&scope.repository)
+            && !scope.lines.is_empty()
+            && scope.lines.iter().all(|line| {
+                let Shape::Pipeline(steps) = &line.steps else {
+                    return false;
+                };
+                let [step] = steps.as_slice() else {
+                    return false;
+                };
+                let RememberedStep {
+                    program,
+                    resolved: _,
+                    started_as: _,
+                    args,
+                    environment,
+                    routes,
+                } = step;
+                let [
+                    RememberedArg::Literal(first),
+                    RememberedArg::Literal(second),
+                    RememberedArg::Number,
+                    RememberedArg::Literal(flag),
+                    RememberedArg::Literal(repository),
+                ] = args.as_slice()
+                else {
+                    return false;
+                };
+                environment.is_empty()
+                    && routes.is_empty()
+                    && flag == "--repo"
+                    && *repository == scope.repository
+                    && TABLE.iter().any(|member| {
+                        member.kind == scope.kind
+                            && member.program == program
+                            && member.words[0] == first
+                            && member.words[1] == second
+                    })
+            })
     }
 
     /// `OWNER/REPO` and no other spelling: no host, no leading dash or dot, nothing a shell or a flag
@@ -828,51 +975,91 @@ mod tests {
         gh(&["pr", "view", number, "--repo", "brave/bravebot"])
     }
 
-    fn family(plan: &Plan) -> Remembered {
+    /// The four lines the table lists, with `number` in the slot, on `repository`.
+    fn listed(number: &str, repository: &str) -> [Plan; 4] {
+        [
+            gh(&["pr", "view", number, "--repo", repository]),
+            gh(&["pr", "diff", number, "--repo", repository]),
+            gh(&["pr", "checks", number, "--repo", repository]),
+            gh(&["issue", "view", number, "--repo", repository]),
+        ]
+    }
+
+    fn scope(plan: &Plan) -> Remembered {
         let mut record = Remembered::new();
-        record.record(
-            RememberedLine::family_of(plan).expect("the table lists this line"),
+        record.record_scope(
+            scopes::offered_for(plan).expect("the table lists this line"),
             "session-1",
         );
         record
     }
 
-    /// RUN-20: the exception. A family recorded from one number covers the same sub-command on the
-    /// same repository with any other.
+    /// RUN-20: the exception. A scope recorded from one line covers each sub-command of its group on
+    /// the same repository with any number, which is more than the sub-command that was on the
+    /// screen.
     #[test]
-    fn a_family_covers_the_same_sub_command_with_another_number() {
-        let record = family(&view("1081"));
-        assert!(record.covers(&view("1081")));
-        assert!(record.covers(&view("1082")));
-        assert!(record.covers(&view("7")));
+    fn a_scope_covers_every_sub_command_of_its_group_with_any_number() {
+        let record = scope(&view("1081"));
+        for number in ["1081", "1082", "7"] {
+            for plan in listed(number, "brave/bravebot") {
+                assert!(record.covers(&plan), "{} was asked about", plan.line);
+            }
+        }
     }
 
-    /// RUN-20: the number is the only thing free. Another repository, another sub-command, another
-    /// program, an extra flag and a missing repository are each a line the person has not answered.
+    /// RUN-20: the same group whichever of its sub-commands was on the screen, so the answer does
+    /// not depend on which one the model happened to ask for first.
     #[test]
-    fn a_family_frees_the_number_and_nothing_else() {
-        let record = family(&view("1081"));
+    fn the_scope_is_the_same_whichever_sub_command_was_asked_about() {
+        let from_view = scopes::offered_for(&view("1081")).expect("listed");
+        assert_eq!(from_view.lines.len(), 4);
+        for plan in listed("1", "brave/bravebot") {
+            assert_eq!(scopes::offered_for(&plan).as_ref(), Some(&from_view));
+        }
+    }
+
+    /// RUN-20: the number is the only thing free. Another repository, a sub-command that writes, a
+    /// sub-command that lists, another program, an extra flag and a missing repository are each a
+    /// line the person has not answered.
+    #[test]
+    fn a_scope_frees_the_number_and_nothing_else() {
+        let record = scope(&view("1081"));
         for other in [
             gh(&["pr", "view", "1082", "--repo", "other/repo"]),
-            gh(&["pr", "diff", "1082", "--repo", "brave/bravebot"]),
-            gh(&["issue", "view", "1082", "--repo", "brave/bravebot"]),
+            gh(&["issue", "view", "1082", "--repo", "other/repo"]),
+            gh(&["pr", "merge", "1082", "--repo", "brave/bravebot"]),
+            gh(&["pr", "close", "1082", "--repo", "brave/bravebot"]),
+            gh(&["pr", "comment", "1082", "--repo", "brave/bravebot"]),
+            gh(&["issue", "close", "1082", "--repo", "brave/bravebot"]),
+            gh(&["issue", "list", "--repo", "brave/bravebot"]),
+            gh(&["pr", "list", "--repo", "brave/bravebot"]),
             gh(&["pr", "view", "1082", "--repo", "brave/bravebot", "--web"]),
             gh(&["pr", "view", "1082", "--web", "--repo", "brave/bravebot"]),
             gh(&["pr", "view", "--repo", "brave/bravebot", "1082"]),
             gh(&["pr", "view", "1082"]),
             gh(&["pr", "view", "--repo", "brave/bravebot"]),
             gh(&["pr", "view", "1082", "1083", "--repo", "brave/bravebot"]),
+            gh(&[
+                "issue",
+                "view",
+                "1082",
+                "--repo",
+                "brave/bravebot",
+                "--json",
+                "body",
+            ]),
             one("hub", &["pr", "view", "1082", "--repo", "brave/bravebot"]),
         ] {
             assert!(!record.covers(&other), "{} was covered", other.line);
         }
     }
 
-    /// RUN-20: what fills the slot is a decimal integer. Text, a signed number, a number with
-    /// something after it, an empty argument and a number too large for either are asked about.
+    /// RUN-20: what fills the slot is a decimal integer, in every sub-command of the group. Text, a
+    /// signed number, a number with something after it, an empty argument and a number too large for
+    /// either are asked about.
     #[test]
     fn the_slot_admits_a_decimal_integer_and_no_other_argument() {
-        let record = family(&view("1081"));
+        let record = scope(&view("1081"));
         for other in [
             "abc",
             "",
@@ -889,22 +1076,30 @@ mod tests {
             "feature/branch",
             "https://github.com/brave/bravebot/pull/1",
         ] {
-            assert!(!record.covers(&view(other)), "{other:?} filled the slot");
+            for plan in listed(other, "brave/bravebot") {
+                assert!(
+                    !record.covers(&plan),
+                    "{:?} filled the slot: {}",
+                    other,
+                    plan.line
+                );
+            }
         }
     }
 
     /// RUN-20: an exact entry is still exact. Recording `gh pr view 1081 ...` with `r` does not
-    /// cover another number.
+    /// cover another number, or another sub-command.
     #[test]
     fn an_exact_entry_for_a_listed_line_does_not_free_its_number() {
         let record = remembering(&view("1081"));
         assert!(record.covers(&view("1081")));
         assert!(!record.covers(&view("1082")));
+        assert!(!record.covers(&listed("1081", "brave/bravebot")[1]));
     }
 
-    /// RUN-20: a line the table does not list has no family, however much it looks like one.
+    /// RUN-20: a line the table does not list is in no scope, however much it looks like one.
     #[test]
-    fn a_line_the_table_does_not_list_has_no_family() {
+    fn a_line_the_table_does_not_list_is_in_no_scope() {
         let mut with_assignment = step("gh", &["pr", "view", "1", "--repo", "brave/bravebot"]);
         with_assignment.environment = vec![("GH_HOST".to_string(), "example.com".to_string())];
         let mut with_route = step("gh", &["pr", "view", "1", "--repo", "brave/bravebot"]);
@@ -939,35 +1134,80 @@ mod tests {
             gh(&["pr", "view", "x", "--repo", "brave/bravebot"]),
             gh(&["pr", "merge", "1", "--repo", "brave/bravebot"]),
             gh(&["pr", "close", "1", "--repo", "brave/bravebot"]),
+            gh(&["issue", "list", "--repo", "brave/bravebot"]),
             one("make", &["check"]),
         ] {
             assert!(
-                RememberedLine::family_of(&plan).is_none(),
-                "{} has a family",
+                scopes::offered_for(&plan).is_none(),
+                "{} is in a scope",
                 plan.line
             );
         }
     }
 
-    /// RUN-20: the name still has to resolve to the binary the person answered for.
+    /// RUN-20: every sub-command of the group still has to resolve to the binary the person
+    /// answered for, so a `gh` found elsewhere asks.
     #[test]
-    fn a_family_is_bound_to_the_binary_it_was_recorded_for() {
-        let record = family(&view("1081"));
-        let mut elsewhere = step("gh", &["pr", "view", "1082", "--repo", "brave/bravebot"]);
-        elsewhere.resolved = PathBuf::from("/tmp/gh");
-        assert!(!record.covers(&plan_of(Steps::Pipeline(vec![elsewhere]))));
+    fn a_scope_is_bound_to_the_binary_it_was_recorded_for() {
+        let record = scope(&view("1081"));
+        for sub_command in [
+            ["pr", "view"],
+            ["pr", "diff"],
+            ["pr", "checks"],
+            ["issue", "view"],
+        ] {
+            let [first, second] = sub_command;
+            let mut elsewhere = step("gh", &[first, second, "1082", "--repo", "brave/bravebot"]);
+            elsewhere.resolved = PathBuf::from("/tmp/gh");
+            assert!(
+                !record.covers(&plan_of(Steps::Pipeline(vec![elsewhere]))),
+                "{first} {second} followed the name onto another binary"
+            );
+        }
     }
 
-    /// RUN-20: the reading back draws the slot, so a family is not mistaken for the line.
+    /// RUN-20: a scope is one answer however many lines it holds, so the reading back lists it as
+    /// one item and the lines it holds are not also listed as lines of their own.
     #[test]
-    fn a_family_is_drawn_with_its_number_free() {
-        let line = RememberedLine::family_of(&view("1081")).unwrap();
-        assert!(line.is_family());
+    fn a_scope_is_one_answer_however_many_lines_it_holds() {
+        let record = scope(&view("1081"));
+        assert_eq!(record.len(), 1);
+        assert!(!record.is_empty());
         assert_eq!(
-            line.display(),
-            "/usr/bin/gh pr view <number> --repo brave/bravebot"
+            record.iter().count(),
+            0,
+            "a scope's lines were listed alone"
         );
-        assert!(!RememberedLine::of(&view("1081")).is_family());
+        let [held] = record.scopes().collect::<Vec<_>>()[..] else {
+            panic!(
+                "the record holds {} scopes, not one",
+                record.scopes().count()
+            );
+        };
+        assert_eq!(held.answered_in, "session-1");
+        assert_eq!(held.scope.repository, "brave/bravebot");
+        assert_eq!(held.scope.lines.len(), 4);
+    }
+
+    /// RUN-20: the reading back draws the slot, so a line of a scope is not mistaken for the line
+    /// that was answered.
+    #[test]
+    fn a_scope_draws_each_line_with_its_number_free() {
+        let held = scopes::offered_for(&view("1081")).unwrap();
+        let drawn: Vec<String> = held.lines.iter().map(RememberedLine::display).collect();
+        assert_eq!(
+            drawn,
+            [
+                "/usr/bin/gh pr view <number> --repo brave/bravebot",
+                "/usr/bin/gh pr diff <number> --repo brave/bravebot",
+                "/usr/bin/gh pr checks <number> --repo brave/bravebot",
+                "/usr/bin/gh issue view <number> --repo brave/bravebot",
+            ]
+        );
+        assert_eq!(
+            RememberedLine::of(&view("1081")).display(),
+            "/usr/bin/gh pr view 1081 --repo brave/bravebot"
+        );
     }
 
     /// RUN-2: the reading back is drawn by the code that draws the plan, so a line started through

@@ -22,6 +22,7 @@ fr:cli-usage-sessions-list
 fr:cli-usage-sessions-purge
 fr:colour-codes-not-drawn
 fr:command-hunks
+fr:count-remembered
 fr:diff-no-final-newline
 fr:home-rules-reached-through-the-workspace
 fr:leave-word-sent
@@ -29,6 +30,12 @@ fr:rule-frontmatter-unreadable
 fr:rule-loaded
 fr:rule-names-not-text
 fr:rules-directory-not-trusted
+fr:run-remember-scope-explained
+fr:run-remember-scope-one-entry
+fr:run-remember-scope-read-covers
+fr:run-remember-scope-read-fixed
+fr:run-remember-scope-read-pull-requests-and-issues
+fr:scope-read-pull-requests-and-issues
 fr:session-hunk-added
 fr:session-hunk-changed
 fr:session-hunk-failed
