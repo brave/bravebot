@@ -451,6 +451,82 @@ fn a_name_with_a_space_completes_to_a_reference_that_names_it() {
     );
 }
 
+/// A file whose name is another's with a no-break space at its end is not offered, since a line
+/// is trimmed when it is sent and would name the other file. Only the file that can be named is
+/// listed, so a pick names the file it shows.
+#[test]
+fn a_name_ending_in_a_no_break_space_is_not_offered_beside_the_name_it_looks_like() {
+    let scratch = Scratch::new("no-break-space-trailing");
+    std::fs::write(scratch.path.join("a.md"), "x").expect("write");
+    std::fs::write(scratch.path.join("a.md\u{a0}"), "x").expect("write");
+    let mut session = session(&scratch);
+    typing(&mut session, "read @a.md");
+    assert_eq!(offered_paths(&session), vec!["a.md"]);
+
+    handle_key(&mut session, key(KeyCode::Tab));
+    assert_eq!(session.input(), "read @a.md ");
+    let sent = match handle_key(&mut session, key(KeyCode::Enter)) {
+        Action::Submit(sent) => sent,
+        other => panic!("the line was not sent: {other:?}"),
+    };
+    assert_eq!(
+        bravebot_mentions::referenced(&sent),
+        vec!["a.md".to_string()]
+    );
+}
+
+/// A name holding a no-break space beside the same name with a space completes to the escaped
+/// form, and the line that is sent names the file picked. Without the escape the line ends the
+/// reference at the no-break space and names a different path.
+#[test]
+fn a_name_with_a_no_break_space_completes_to_a_reference_that_names_it() {
+    let scratch = Scratch::new("no-break-space-inside");
+    std::fs::write(scratch.path.join("a b.md"), "x").expect("write");
+    std::fs::write(scratch.path.join("a\u{a0}b.md"), "x").expect("write");
+    let mut session = session(&scratch);
+    typing(&mut session, "read @a");
+    assert_eq!(offered_paths(&session), vec!["a b.md", "a\u{a0}b.md"]);
+
+    handle_key(&mut session, key(KeyCode::Down));
+    handle_key(&mut session, key(KeyCode::Tab));
+    assert_eq!(session.input(), "read @a\\\u{a0}b.md ");
+
+    let sent = match handle_key(&mut session, key(KeyCode::Enter)) {
+        Action::Submit(sent) => sent,
+        other => panic!("the line was not sent: {other:?}"),
+    };
+    assert_eq!(
+        bravebot_mentions::referenced(&sent),
+        vec!["a\u{a0}b.md".to_string()]
+    );
+}
+
+/// A name ending in a backslash is written with two, so the space the completion adds does not
+/// join it as an escaped space and the line that is sent names the file picked.
+#[cfg(unix)]
+#[test]
+fn a_name_ending_in_a_backslash_completes_to_a_reference_that_names_it() {
+    let scratch = Scratch::new("trailing-backslash");
+    std::fs::write(scratch.path.join("a.md"), "x").expect("write");
+    std::fs::write(scratch.path.join("a.md\\"), "x").expect("write");
+    let mut session = session(&scratch);
+    typing(&mut session, "read @a.md");
+    assert_eq!(offered_paths(&session), vec!["a.md", "a.md\\"]);
+
+    handle_key(&mut session, key(KeyCode::Down));
+    handle_key(&mut session, key(KeyCode::Tab));
+    assert_eq!(session.input(), "read @a.md\\\\ ");
+
+    let sent = match handle_key(&mut session, key(KeyCode::Enter)) {
+        Action::Submit(sent) => sent,
+        other => panic!("the line was not sent: {other:?}"),
+    };
+    assert_eq!(
+        bravebot_mentions::referenced(&sent),
+        vec!["a.md\\".to_string()]
+    );
+}
+
 /// Enter completes a half-typed reference that already holds an escaped space, rather than sending
 /// the fragment.
 #[test]

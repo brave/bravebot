@@ -173,6 +173,43 @@ fn a_prompt_names_only_text_files_inside_the_project() {
     }
 }
 
+/// NAME-8, NAME-9: the window splices what the bridge writes for an entry, so a name holding a
+/// no-break space or ending in a backslash arrives escaped and the prompt that results names the
+/// file picked and not the one beside it. A name that ends in a no-break space is left out of the
+/// list, since the window trims the prompt it sends.
+#[cfg(unix)]
+#[test]
+fn an_entry_holding_a_no_break_space_is_written_so_the_prompt_names_it() {
+    let (mut bridge, _) = harness();
+    let project = project(&mut bridge);
+    for name in ["a b.md", "a.md", "a.md\u{a0}", "a.md\\", "a\u{a0}b.md"] {
+        std::fs::write(project.root.join(name), "text\n").expect("write");
+    }
+
+    let offer = call(
+        &mut bridge,
+        "mentions.offer",
+        json!({ "session": &project.session, "line": "read @a" }),
+    )
+    .expect("answered");
+    assert_eq!(
+        offered(&offer),
+        vec!["a b.md", "a.md", "a.md\\", "a\u{a0}b.md"]
+    );
+    assert_eq!(offer["entries"][2]["written"], json!("a.md\\\\"));
+    assert_eq!(offer["entries"][3]["written"], json!("a\\\u{a0}b.md"));
+    for (row, file) in [(2, "a.md\\"), (3, "a\u{a0}b.md")] {
+        let written = offer["entries"][row]["written"].as_str().expect("written");
+        let named = call(
+            &mut bridge,
+            "mentions.named",
+            json!({ "session": &project.session, "prompt": format!("read @{written} now") }),
+        )
+        .expect("named");
+        assert_eq!(named["files"], json!([file]));
+    }
+}
+
 /// NAME-9: `turn.send` reads the names out of the prompt itself and refuses one that cannot go,
 /// before a turn starts, and a prompt the app composed names nothing.
 #[test]

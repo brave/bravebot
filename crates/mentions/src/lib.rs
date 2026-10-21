@@ -197,6 +197,9 @@ fn listing(canonical: &Path) -> Option<Listing> {
 /// A fragment with no slash is also looked for in every directory below the root, and so is one
 /// with a slash where its directory offers nothing (NAME-11). Up to [`MOST_FOUND`] of those names
 /// follow, best match first, in whatever room the list has after what the directory offered.
+///
+/// A name no line can carry to the turn is not offered: a file or directory whose name holds a line
+/// break, and a file whose name ends in whitespace (NAME-8).
 pub fn matching(root: &Path, typed: &str, sources: &Sources) -> Vec<Entry> {
     // Refused rather than resolved: `..` would walk out of the workspace, and an absolute path
     // names something the reference syntax has no business reaching.
@@ -265,6 +268,10 @@ fn in_one_directory(
             // is a regular file holding a pointer to the real one, and a `node_modules` a person
             // symlinked elsewhere is a symlink, so a type test would offer both of them back.
             if bravebot_filetype::is_ignored_directory(name) {
+                return None;
+            }
+            // Left out rather than offered as text that names something else (NAME-8).
+            if !is_writable(name, named.is_directory) {
                 return None;
             }
             let path = if directory.is_empty() {
@@ -375,6 +382,10 @@ fn found_beneath(root: &Path, typed: &str, offered: &[Entry], most_read: usize) 
             if !named.is_text || bravebot_filetype::is_ignored_in(&directory, &named.name) {
                 continue;
             }
+            // Left out rather than offered as text that names something else (NAME-8).
+            if !is_writable(&named.name, named.is_directory) {
+                continue;
+            }
 
             let slash = (!relative.is_empty()).then_some('/');
             let end = named.is_directory.then_some('/');
@@ -473,11 +484,40 @@ pub fn typed_reference(line: &str) -> Option<String> {
     line[start..end].strip_prefix('@').map(unescape)
 }
 
+/// Whether `c` ends a line of text.
+///
+/// A reference lives on one line, so a backslash before one is an ordinary character: a prompt
+/// whose line ends in a backslash does not take the first word of the next line into a name.
+fn is_line_break(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+}
+
+/// Whether a backslash in front of `c` is an escape, which keeps `c` in the word as itself.
+///
+/// A backslash before anything else is an ordinary character, which keeps a sentence containing
+/// one from naming a path. [`word_spans`], [`unescape`] and [`escape`] all ask this, so the three
+/// cannot disagree about where a name ends or what it holds.
+fn is_escapable(c: char) -> bool {
+    c == '\\' || (c.is_whitespace() && !is_line_break(c))
+}
+
+/// Whether a line can carry `name` to the turn, so that the file is the one the line names.
+///
+/// A line is one line, so a name holding a line break (U+000A, U+000D, U+2028 or U+2029) cannot be
+/// written in it. A line is also trimmed when it is sent, in the terminal and in the
+/// window, so a file whose name ends in whitespace would be sent without the end of its name. U+FEFF
+/// is trimmed by the window and not by Rust's `trim`, so it counts as whitespace here. A directory
+/// name is followed by a slash and loses nothing.
+fn is_writable(name: &str, is_directory: bool) -> bool {
+    !name.chars().any(is_line_break)
+        && (is_directory || !name.ends_with(|c: char| c.is_whitespace() || c == '\u{feff}'))
+}
+
 /// Where each word of a line begins and ends.
 ///
-/// Words end at whitespace, except that a space written after a backslash belongs to the word, so
-/// `@My\ Documents/a.md` is one. A backslash anywhere else is an ordinary character, which keeps a
-/// sentence containing one from naming a path.
+/// Words end at whitespace, except that a whitespace character written after a backslash belongs to
+/// the word, so `@My\ Documents/a.md` is one. A backslash written after a backslash belongs to it
+/// as well, so a name ending in a backslash can end a word. A line break always ends one.
 fn word_spans(line: &str) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
     let mut start = None;
@@ -490,7 +530,7 @@ fn word_spans(line: &str) -> Vec<(usize, usize)> {
             continue;
         }
         start.get_or_insert(at);
-        if c == '\\' && chars.next_if(|&(_, next)| next == ' ').is_some() {
+        if c == '\\' && chars.next_if(|&(_, next)| is_escapable(next)).is_some() {
             continue;
         }
     }
@@ -507,13 +547,32 @@ pub fn last_word_starts_at(line: &str) -> usize {
         .map_or(line.len(), |(start, _)| start)
 }
 
-/// A path as it is written in a line: each space behind a backslash, so it stays in the word.
+/// A path as it is written in a line: each whitespace character and each backslash behind a
+/// backslash, so the name stays in the word and ends where it ends ([`unescape`] reads it back).
+///
+/// A line break has no written form, so a name holding one is not offered ([`matching`]).
 pub fn escape(path: &str) -> String {
-    path.replace(' ', "\\ ")
+    let mut written = String::with_capacity(path.len());
+    for c in path.chars() {
+        if is_escapable(c) {
+            written.push('\\');
+        }
+        written.push(c);
+    }
+    written
 }
 
+/// The name a written reference stands for: each escape dropped and the character behind it kept.
 fn unescape(written: &str) -> String {
-    written.replace("\\ ", " ")
+    let mut name = String::with_capacity(written.len());
+    let mut chars = written.chars().peekable();
+    while let Some(c) = chars.next() {
+        match chars.next_if(|&next| c == '\\' && is_escapable(next)) {
+            Some(escaped) => name.push(escaped),
+            None => name.push(c),
+        }
+    }
+    name
 }
 
 /// Whether what has been typed already names a file in the workspace.
@@ -976,28 +1035,208 @@ mod tests {
         }
     }
 
-    /// Names whose completion does not read back as the file, each with the issue that tracks it.
-    /// A backslash is written before a space and before nothing else, so a reference ends at the
-    /// first other whitespace character and names the file without it, or none, and a name ending in
-    /// a backslash takes the space after it into the name. The test below fails for a name listed
-    /// here that reads back, so the list is revised with the fix.
-    const NOT_READ_BACK: &[(&str, &str)] = &[
-        ("a.md\t", "#2863"),
-        ("a.md\n", "#2863"),
-        ("a.md\u{a0}", "#2863"),
-        ("a.md\u{3000}", "#2863"),
-        ("a\u{a0}b.md", "#2863"),
-        ("a\u{3000}b.md", "#2863"),
-        ("a.md\\", "#2863"),
-        ("\t", "#2863"),
-        ("\u{a0}", "#2863"),
-        ("\u{3000}", "#2863"),
+    /// A backslash keeps the character behind it in the name when that character is whitespace or
+    /// another backslash, and is an ordinary character before anything else (NAME-8). The name a
+    /// completion writes is read back whole, and a line that ends in a backslash does not reach
+    /// into the next one.
+    #[test]
+    fn a_backslash_before_whitespace_or_a_backslash_keeps_it_in_the_name() {
+        assert_eq!(escape("a\tb.md"), "a\\\tb.md");
+        assert_eq!(escape("a\u{a0}b.md"), "a\\\u{a0}b.md");
+        assert_eq!(escape("a.md\\"), "a.md\\\\");
+        assert_eq!(escape("a\\b.md"), "a\\\\b.md");
+
+        for name in [
+            "a\tb.md",
+            "a\u{a0}b.md",
+            "a\u{202f}b.md",
+            "a\u{3000}b.md",
+            "a\u{b}b.md",
+            "a\u{c}b.md",
+            "a\u{85}b.md",
+            "\ta.md",
+            " a.md",
+            "a.md\\",
+            "a.md\\\\",
+            "a\\ b.md",
+            "a\\\tb.md",
+            "\\",
+            "\\\\ b",
+        ] {
+            let written = escape(name);
+            assert_eq!(
+                referenced(&format!("see @{written} now")),
+                vec![name.to_string()],
+                "{name:?} written as {written:?}"
+            );
+            assert_eq!(
+                typed_reference(&format!("see @{written}")).as_deref(),
+                Some(name),
+                "{name:?} written as {written:?} while it is typed"
+            );
+            assert_eq!(
+                last_word_starts_at(&format!("see @{written}")),
+                4,
+                "{name:?} written as {written:?} is not one word"
+            );
+        }
+
+        // What a person wrote before whitespace and backslashes were written behind one: a
+        // backslash before an ordinary character, and an escaped space, read as they did.
+        assert_eq!(referenced(r"see @a\b.md now"), vec![r"a\b.md".to_string()]);
+        assert_eq!(referenced(r"see @a.md\ now"), vec!["a.md now".to_string()]);
+        // Two backslashes are one now, which ends a name in a backslash instead of continuing it.
+        assert_eq!(referenced(r"see @a.md\\ now"), vec![r"a.md\".to_string()]);
+        assert_eq!(typed_reference(r"see @a.md\\").as_deref(), Some(r"a.md\"));
+
+        for other in ["\t", "\n", "\u{a0}", "\u{3000}"] {
+            assert_eq!(
+                referenced(&format!("see @a.md{other}b now")),
+                vec!["a.md".to_string()],
+                "{other:?} not written behind a backslash ends the reference"
+            );
+        }
+        // A line break is never kept: a line ending in a backslash, as a shell command or a path
+        // does, leaves the next line's reference alone.
+        for line_break in ["\n", "\r\n", "\u{2028}"] {
+            assert_eq!(
+                referenced(&format!("run C:\\dir\\{line_break}@notes.md summarise")),
+                vec!["notes.md".to_string()],
+                "{line_break:?} after a backslash"
+            );
+            assert_eq!(
+                referenced(&format!("see @a.md\\{line_break}and @b.md")),
+                vec![r"a.md\".to_string(), "b.md".to_string()],
+                "{line_break:?} after a name ending in a backslash"
+            );
+        }
+    }
+
+    /// Names that differ only by the kind of whitespace inside them look alike in the list. The
+    /// line a pick writes names that row's file and no other, so the file a rule is recorded for is
+    /// the one chosen (NAME-2, TRUST-2).
+    #[test]
+    fn a_pick_among_names_that_look_alike_names_the_one_picked() {
+        let scratch = Scratch::new("pick-look-alike");
+        let names = [
+            "a b.md",
+            "a\u{a0}b.md",
+            "a\u{202f}b.md",
+            "a\u{3000}b.md",
+            "a\tb.md",
+            "a\\b.md",
+            "a\\ b.md",
+            "a.md\\",
+        ];
+        for name in names {
+            let _ = std::fs::write(scratch.path.join(name), "");
+        }
+        let held = std::fs::read_dir(&scratch.path)
+            .expect("read")
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with('a'))
+            .count();
+        assert!(held >= 5, "only {held} of the names could be made here");
+
+        let offered = matching(&scratch.path, "a", &[]);
+        assert_eq!(offered.len(), held, "{:?}", paths(&offered));
+        let mut lines = Vec::new();
+        for entry in &offered {
+            let line = format!("see @{} now", escape(&entry.path));
+            assert_eq!(
+                referenced(&line),
+                vec![entry.path.clone()],
+                "picking {:?} writes {line:?}",
+                entry.path
+            );
+            lines.push(line);
+        }
+        lines.sort();
+        lines.dedup();
+        assert_eq!(lines.len(), offered.len(), "two rows wrote the same line");
+    }
+
+    /// A name no line can carry to the turn is left out of the list, since offering it would write
+    /// text that names another file or none: one holding a line break, and a file whose name ends
+    /// in whitespace, which the trim made of a line when it is sent takes with it (NAME-8). A
+    /// directory is followed by a slash and loses nothing at its end.
+    #[test]
+    fn a_name_a_line_cannot_carry_is_not_offered() {
+        let scratch = Scratch::new("not-offered");
+        let hidden = [
+            "a.md ",
+            "a.md\t",
+            "a.md\n",
+            "a.md\u{a0}",
+            "a.md\u{3000}",
+            "a.md\u{feff}",
+            "a\nb.md",
+            "a\rb.md",
+            "a\u{2028}b.md",
+            "a\u{2029}b.md",
+        ];
+        let offered_names = ["a.md", "a\u{a0}b.md", "a\tb.md", "a\u{b}b.md"];
+        for name in hidden.iter().chain(&offered_names) {
+            let _ = std::fs::write(scratch.path.join(name), "");
+        }
+        let present: Vec<String> = std::fs::read_dir(&scratch.path)
+            .expect("read")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.starts_with('a'))
+            .collect();
+        let held_back = hidden
+            .iter()
+            .filter(|name| present.iter().any(|held| held == *name));
+        assert!(
+            held_back.count() >= 8,
+            "only {present:?} could be made here"
+        );
+
+        let offered = matching(&scratch.path, "a", &[]);
+        for name in hidden {
+            assert!(
+                !paths(&offered).contains(&name),
+                "{name:?} was offered, and no line can carry it"
+            );
+        }
+        for name in offered_names {
+            assert!(
+                present.iter().any(|held| held == name) == paths(&offered).contains(&name),
+                "{name:?} is held and not offered, or offered and not held"
+            );
+        }
+
+        if std::fs::create_dir_all(scratch.path.join("x\t")).is_ok() {
+            assert_eq!(paths(&matching(&scratch.path, "x", &[])), vec!["x\t/"]);
+        }
+        if std::fs::create_dir_all(scratch.path.join("y\nz")).is_ok() {
+            assert!(
+                matching(&scratch.path, "y", &[]).is_empty(),
+                "a directory holding a line break was offered"
+            );
+        }
+    }
+
+    /// Names the list leaves out because no line can carry them to the turn, each with why
+    /// (NAME-8). The test below asks every other name to be offered and read back, and these to be
+    /// absent, so a name moves between the two with the rule and not by accident.
+    const NOT_OFFERED: &[(&str, &str)] = &[
+        ("a.md ", "ends in a space"),
+        ("a.md\t", "ends in a tab"),
+        ("a.md\n", "ends in a line break"),
+        ("a.md\u{a0}", "ends in a no-break space"),
+        ("a.md\u{3000}", "ends in an ideographic space"),
+        (" ", "is a space"),
+        ("\t", "is a tab"),
+        ("\u{a0}", "is a no-break space"),
+        ("\u{3000}", "is an ideographic space"),
     ];
 
     /// What a person picks from the list is the file the sent line names, whatever the name holds
     /// (NAME-8, TRUST-2). The reference a naming records a rule for is read out of the line, so a
     /// step there that ends a name early names the file without the rest of it, which is another
-    /// file where the volume holds both.
+    /// file where the volume holds both. A name the line cannot carry is not offered at all.
     #[test]
     fn every_awkward_name_is_offered_and_read_back_as_the_file_it_is() {
         let names = aliases::held_names();
@@ -1013,27 +1252,39 @@ mod tests {
             asked += 1;
 
             assert!(
-                paths(&matching(&scratch.path, name, &[])).contains(name),
-                "{name:?} is not offered under its own name"
-            );
-            assert!(
                 names_a_file(&scratch.path, name, &[]),
                 "{name:?} is not found as a finished name"
             );
-            let written = escape(name);
-            let reads_back = referenced(&format!("see @{written} now")) == [name.to_string()]
-                && typed_reference(&format!("see @{written}")).as_deref() == Some(*name);
-            match NOT_READ_BACK.iter().find(|(listed, _)| listed == name) {
-                None => assert!(
-                    reads_back,
-                    "the line a completion writes for {name:?} does not name that file"
-                ),
-                Some((_, issue)) => assert!(
-                    !reads_back,
-                    "the line a completion writes for {name:?} now names that file: remove it from \
-                     NOT_READ_BACK; {issue} tracked it"
-                ),
+            let offered = paths(&matching(&scratch.path, name, &[])).contains(name);
+            if let Some((_, why)) = NOT_OFFERED.iter().find(|(listed, _)| listed == name) {
+                assert!(!offered, "{name:?} was offered, and it {why}");
+                continue;
             }
+            assert!(offered, "{name:?} is not offered under its own name");
+            let written = escape(name);
+            assert_eq!(
+                referenced(&format!("see @{written} now")),
+                [name.to_string()],
+                "the line a completion writes for {name:?} does not name that file"
+            );
+            assert_eq!(
+                typed_reference(&format!("see @{written}")).as_deref(),
+                Some(*name),
+                "the line a completion writes for {name:?} is not read back while it is typed"
+            );
+            // What the completion leaves behind it: the space after a file closes the list, and the
+            // name before it ends where it ends.
+            assert_eq!(
+                typed_reference(&format!("see @{written} ")),
+                None,
+                "the list stays open on {name:?} after it is completed"
+            );
+            // Sent, the line is trimmed, and the name is whole when it ends the line.
+            assert_eq!(
+                referenced(format!("  see @{written} \n").trim()),
+                [name.to_string()],
+                "{name:?} does not survive being the end of a sent line"
+            );
         }
         assert!(asked > 20, "only {asked} names were made");
     }

@@ -203,8 +203,10 @@ nothing, and compares the two keys. The vouch prompt is asked about four of the 
 
 A turn that names each of the names with `@` is asked which files the rule it leaves covers, and
 `crates/mentions` is asked whether the line a completion writes for each name names that file
-([NAME-8](naming-files.md#NAME-8)). A reference cannot hold a whitespace character other than a
-space, so the names that do are listed in that test against #2863, and it fails once one reads back.
+([NAME-8](naming-files.md#NAME-8)). A name no line can carry, one holding a line break or ending
+in whitespace, is not offered, and the test lists those names and fails when one is offered. A
+directory holding names that differ only by the kind of whitespace inside them is asked which file
+each row's line names.
 
 A rule written about one of the names is asked in the deny, ask and allow lists and for `Read` and
 `Edit`, since a rule is matched under a key built apart from the map's. A deny or ask rule reaches

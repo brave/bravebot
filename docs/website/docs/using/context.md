@@ -42,8 +42,10 @@ reference, and a bare `@` names nothing.
 
 Sending a prompt that ends in a half-typed reference completes it rather than sending the fragment.
 
-A name containing a space is written with a backslash before the space, as in
-`@My\ Documents/notes.md`. Completing it from the picker writes that form for you.
+A name containing whitespace is written with a backslash before each whitespace character, as in
+`@My\ Documents/notes.md`, and a backslash in a name is written as two. Completing it from the picker
+writes that form for you. The picker leaves out a file or folder whose name holds a line break, and a file whose
+name ends in whitespace, because the line is trimmed when it is sent. Name such a file with `--file`.
 
 ## Naming an earlier session: `@session:<id>`
 
