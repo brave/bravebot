@@ -1626,7 +1626,10 @@ fn take_interjections<S: Sink, C: Confirmer, R: Reporter>(
         // the routing this turn precommitted is untouched, so a line typed mid-turn reaches the
         // planner as words and every effect it asks for is gated exactly as one asked for by the
         // opening prompt would be.
-        policy.admit_interjection(said.chars().count());
+        match task.vouched_channel {
+            true => policy.admit_vouched_line(said.chars().count()),
+            false => policy.admit_interjection(said.chars().count()),
+        }
         reporter.interjected(said.clone());
         conversation.push_from(Message::user(said), Provenance::Typed);
     }

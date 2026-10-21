@@ -15,6 +15,7 @@ mod goal_run;
 mod host;
 mod import;
 mod json;
+mod lines;
 mod mcp;
 mod model;
 mod one_shot;
@@ -1261,6 +1262,12 @@ struct Invocation {
     output_schema: Option<String>,
     /// The condition the run works towards until a judge says it holds (CLI-35).
     goal: Option<String>,
+    /// Whether stdin carries lines that start turns, steer them and answer their questions
+    /// (CLI-34).
+    input_lines: bool,
+    /// Whether the person typed `--trust-input-lines`, which makes those lines their own words
+    /// where otherwise they are a program's (CLI-34).
+    trust_input_lines: bool,
 }
 
 /// The name after `--model`, for a one-shot run and for the session `-i` opens.
@@ -1314,6 +1321,8 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut resume = None;
     let mut output_schema = None;
     let mut goal = None;
+    let mut input_lines = false;
+    let mut trust_input_lines = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -1433,6 +1442,19 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 stream = true;
                 index += 1;
             }
+            // `lines` is the one format, and the word is checked rather than assumed so a second
+            // format can be added without changing what a script that names this one does.
+            "--input-format" => match args.get(index + 1).map(String::as_str) {
+                Some("lines") => {
+                    input_lines = true;
+                    index += 2;
+                }
+                _ => return Err(t!(cli_input_format_unknown).to_string()),
+            },
+            "--trust-input-lines" => {
+                trust_input_lines = true;
+                index += 1;
+            }
             "-p" | "--print" => {
                 print = true;
                 index += 1;
@@ -1466,6 +1488,8 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         resume,
         output_schema,
         goal,
+        input_lines,
+        trust_input_lines,
     })
 }
 
@@ -1525,6 +1549,31 @@ fn manifest_conflict(
     })
 }
 
+/// Why `--input-format lines` or `--trust-input-lines` cannot go with the rest of the command line,
+/// as the sentence that refuses it, or `None` where nothing is wrong (CLI-34).
+///
+/// The stream flag comes first because the lines are answered on it: a run with nowhere to write a
+/// question or a result would take lines it could not reply to. `--incognito` is refused because
+/// each turn is carried on from the record the one before wrote, and an incognito run writes none.
+fn input_lines_conflict(
+    input_lines: bool,
+    trust_input_lines: bool,
+    streams: bool,
+    mode: Mode,
+    incognito: bool,
+) -> Option<String> {
+    if !input_lines {
+        return trust_input_lines.then(|| t!(cli_trust_input_lines_needs_lines).to_string());
+    }
+    if !streams {
+        return Some(t!(cli_input_lines_needs_a_stream).to_string());
+    }
+    if mode == Mode::Manifest {
+        return Some(t!(cli_input_lines_not_with_a_manifest).to_string());
+    }
+    incognito.then(|| t!(cli_input_lines_not_with_incognito).to_string())
+}
+
 /// Whether a one-shot puts its plan to somebody: only where both ends of the conversation are a
 /// terminal, since either one piped or redirected is nobody (CLI-8).
 fn a_plan_is_put(stdin_is_terminal: bool, stderr_is_terminal: bool) -> bool {
@@ -1539,15 +1588,22 @@ fn run_task(
     prompts: SystemPrompts,
 ) -> ExitCode {
     match prepare_the_run(args, skip_permissions, accept_edits, agent, prompts) {
-        Ok(prepared) => run_and_report(prepared),
+        Ok(prepared) if prepared.input_lines => run_the_lines(prepared),
+        Ok(mut prepared) => {
+            let continued = prepared.continued.take();
+            let (code, ..) =
+                run_and_report(&prepared, &prepared.task, continued, None, &Cancel::new());
+            prepared.dismantle();
+            code
+        }
         Err(stopped) => stopped,
     }
 }
 
 /// What the second half of a one-shot run reads, and the two guards that only have to live as long
 /// as the run does. The fields are declared in the order the run used to declare the locals they
-/// replace, and `run_and_report` binds them in that order, so they are dropped in the order they
-/// always were.
+/// replace, and [`Prepared::dismantle`] drops them in the reverse of that order, as those locals
+/// were dropped.
 struct Prepared {
     workspace: bravebot_agent::Workspace,
     continued: Option<bravebot_session::sessions::Record>,
@@ -1569,6 +1625,38 @@ struct Prepared {
     named_on_the_command_line: bool,
     permission_mode: bravebot_agent::PermissionMode,
     goal: Option<String>,
+    /// Whether stdin carries the lines of CLI-34 and not a task.
+    input_lines: bool,
+    /// Whether the person vouched for those lines.
+    trust_input_lines: bool,
+}
+
+impl Prepared {
+    /// Drop what the run holds in the order it has always been dropped in: the servers the task
+    /// reaches stop first, and the scratch directory goes before the workspace it was made in.
+    /// Fields of a struct drop in the order they are declared, which is the other way about, so a
+    /// run that ended by dropping this one would stop its servers last.
+    fn dismantle(self) {
+        let Self {
+            workspace,
+            continued,
+            agent,
+            _scratch,
+            egress,
+            task,
+            _reached,
+            config,
+            ..
+        } = self;
+        drop(config);
+        drop(_reached);
+        drop(task);
+        drop(egress);
+        drop(_scratch);
+        drop(agent);
+        drop(continued);
+        drop(workspace);
+    }
 }
 
 /// Everything a one-shot run settles before the turn: the arguments, the configuration, the
@@ -1612,11 +1700,24 @@ fn prepare_the_run(
         resume,
         output_schema,
         goal,
+        input_lines,
+        trust_input_lines,
     } = invocation;
+
+    // Refused before stdin is read, since a run that reads lines owns the rest of the stream.
+    if let Some(conflict) = input_lines_conflict(
+        input_lines,
+        trust_input_lines,
+        as_stream,
+        mode,
+        bravebot_core::incognito::engaged(),
+    ) {
+        return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
+    }
 
     // Read before the emptiness check below, since `cat notes.md | bravebot -p` is a complete
     // invocation: the pipe is the input and the prompt may be left off.
-    let piped = if print {
+    let piped = if print && !input_lines {
         let stdin = std::io::stdin();
         let is_tty = stdin.is_terminal();
         match piped_input(stdin.lock(), is_tty) {
@@ -1627,7 +1728,8 @@ fn prepare_the_run(
         None
     };
 
-    if prompt.is_empty() && piped.is_none() {
+    // A run reading lines may be given its first prompt on stdin, so none here is not yet none.
+    if prompt.is_empty() && piped.is_none() && !input_lines {
         return Err(stopped_before_the_turn(
             as_json,
             Ending::Argument,
@@ -1915,6 +2017,9 @@ fn prepare_the_run(
     if let Some(text) = piped {
         task = task.with_piped_input(text);
     }
+    if input_lines && trust_input_lines {
+        task = task.with_vouched_channel();
+    }
 
     // Nobody is asked here, so a server no answer of the person's covers is absent and the reason
     // goes to stderr beside the rest of what this run says about itself (SERVERS-4). Held until the
@@ -1986,6 +2091,8 @@ fn prepare_the_run(
         named_on_the_command_line,
         permission_mode,
         goal,
+        input_lines,
+        trust_input_lines,
     })
 }
 
@@ -2058,16 +2165,24 @@ fn check_the_model_can_serve_the_run(
     Ok(model)
 }
 
-/// The turn or the manifest, and what is reported of how it ended.
-fn run_and_report(prepared: Prepared) -> ExitCode {
+/// The turn or the manifest, and what is reported of how it ended, with the id of the session
+/// record the turn wrote where it wrote one, and whether the turn ended with an answer, which is
+/// what a turn that wrote no record has to be told apart from a turn that failed by.
+///
+/// `task` is the prompt to run, which is the one in `prepared` for a run of one turn and the
+/// words of a line for each turn of a run reading lines. `continued` is the record to carry on,
+/// and `lines` is where such a run's questions go and its steers come from (CLI-34).
+fn run_and_report(
+    prepared: &Prepared,
+    task: &Task,
+    continued: Option<bravebot_session::sessions::Record>,
+    lines: Option<&lines::Channel>,
+    cancel: &Cancel,
+) -> (ExitCode, Option<String>, bool) {
     let Prepared {
         workspace,
-        continued,
         agent,
-        _scratch,
         egress,
-        task,
-        _reached,
         config,
         under,
         model,
@@ -2079,7 +2194,17 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
         named_on_the_command_line,
         permission_mode,
         goal,
+        ..
     } = prepared;
+    let (mode, trace, as_json, as_stream, trust_workspace, named_on_the_command_line) = (
+        *mode,
+        *trace,
+        *as_json,
+        *as_stream,
+        *trust_workspace,
+        *named_on_the_command_line,
+    );
+    let permission_mode = *permission_mode;
     let mut sink = json::Streaming::new(as_stream.then(|| json::Stream::new(std::io::stdout())));
     // The trail goes to stderr as each gate decides, so a run that never finishes still shows
     // what it decided (TRACE-5).
@@ -2096,11 +2221,18 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
     // Unless the flag was given, which is the one way a run nobody is watching may write: the
     // person accepted that when they typed it, and this is the only path where the refusal above
     // is what stands between the flag and an effect.
-    let attended = a_plan_is_put(
-        std::io::stdin().is_terminal(),
-        std::io::stderr().is_terminal(),
-    );
+    //
+    // Not where lines are being read: stdin then belongs to the thread reading them, and the plan is
+    // refused as it is for any pipe.
+    let attended = lines.is_none()
+        && a_plan_is_put(
+            std::io::stdin().is_terminal(),
+            std::io::stderr().is_terminal(),
+        );
     let mut one_shot = OneShot::new(std::io::stdin(), std::io::stderr(), attended);
+    if let Some(lines) = lines {
+        one_shot = one_shot.with_lines(lines.clone());
+    }
     // Screening off the task, so the answer the tools fill a verdict in under and the answer that
     // decides whether a verdict which objects can refuse are the one value resolved above.
     let mut confirmer =
@@ -2122,14 +2254,15 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
         Mode::Turn => {
             let (outcome, kept, why) = run_turn(
                 TurnRun {
-                    config: &config,
-                    egress: &egress,
-                    workspace: &workspace,
-                    task: &task,
+                    config,
+                    egress,
+                    workspace,
+                    task,
                     trust_workspace,
                     agent: agent.as_deref(),
                     goal: goal.as_deref(),
-                    model: &model,
+                    model,
+                    cancel,
                 },
                 continued,
                 &mut confirmer,
@@ -2143,10 +2276,10 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
             outcome
         }
         Mode::Manifest => bravebot_agent::manifest::run(
-            &config,
-            &egress,
-            &workspace,
-            &task,
+            config,
+            egress,
+            workspace,
+            task,
             &mut confirmer,
             &mut reporter,
             &mut sink,
@@ -2174,7 +2307,8 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
     // Read once the turn is over, which is when the confirmer's borrow ends.
     let declined = one_shot.declined().to_vec();
 
-    match outcome {
+    let answered = outcome.is_ok();
+    let code = match outcome {
         Ok(outcome) => {
             // The reply is untrusted model output. Printing it is safe, since the
             // terminal is not a decision, so it is released explicitly for display.
@@ -2199,10 +2333,9 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
             // settings file is the one a repository commits beside its scripts, so a substitution
             // of that is the case the reporting is for, and a session is told about it whatever
             // named the model.
-            let asked = bravebot_agent::backend::Backend::name_as_asked(&config, &model);
-            let comparable = bravebot_agent::backend::Backend::reports_the_model_it_was_asked_for(
-                &config, &model,
-            );
+            let asked = bravebot_agent::backend::Backend::name_as_asked(config, model);
+            let comparable =
+                bravebot_agent::backend::Backend::reports_the_model_it_was_asked_for(config, model);
             // Skipped where the definition's model was asked for, because the turn compared that
             // model itself and reported the substitution in the definition's words. The same for a
             // turn a skill moved onto its own model (SKILL-15): the command line did not name that
@@ -2301,7 +2434,98 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
             report_a_failed_turn(&cause, Some(&attempt), as_json, &reporter, &sink, &declined)
         }
         Err(err) => report_a_failed_turn(&err, None, as_json, &reporter, &sink, &declined),
+    };
+    (code, session, answered)
+}
+
+/// A run reading lines from stdin: one turn for each `prompt`, each carried on from the record the
+/// turn before wrote, until the input has ended and nothing is left waiting (CLI-34).
+///
+/// The words on the command line, where there are any, are the first turn and are the person's own.
+/// A line's words are the person's only where they vouched for the channel; otherwise they are
+/// piped input to a turn with no prompt of its own, and the planner is given a reference to them.
+/// The process exits with the status of the last turn it ran, and each turn wrote its own result
+/// object.
+fn run_the_lines(mut prepared: Prepared) -> ExitCode {
+    // The cap piped input is held to, for a line and for what waits, so a file piped in whole fills
+    // no more memory than one piped to `-p` does (CLI-4).
+    let channel = lines::Channel::new(
+        prepared.trust_input_lines,
+        json::Stream::new(std::io::stdout()),
+        PIPE_CAP,
+    );
+    // Buffered here for the reason `OneShot` buffers its input: the reader runs on a thread of its
+    // own, and a held lock on stdin cannot go there.
+    channel.read(std::io::BufReader::new(std::io::stdin()));
+
+    let mut command_line =
+        Some(std::mem::take(&mut prepared.task.prompt)).filter(|words| !words.is_empty());
+    let mut continued = prepared.continued.take();
+    // The record the next turn carries on: the one a resumed run started from, then the one each
+    // turn that wrote one left behind. A turn that failed wrote none and leaves the last one
+    // standing. A turn that answered and wrote none leaves nothing to carry on from.
+    let mut kept = continued.as_ref().map(|record| record.id.clone());
+    let mut unsaved = false;
+    let mut turns = 0usize;
+    let mut exit = None;
+    loop {
+        let mut task = prepared.task.clone();
+        let cancel = match command_line.take() {
+            Some(words) => {
+                task.prompt = words;
+                channel.start()
+            }
+            None => {
+                let Some((words, cancel)) = channel.next_prompt() else {
+                    break;
+                };
+                match channel.vouched() {
+                    true => task.prompt = words,
+                    false => task.piped = Some(words),
+                }
+                cancel
+            }
+        };
+        // What the command line attached belongs to the first turn: the next one is carried on
+        // from a conversation that already holds it.
+        if turns > 0 {
+            task.files.clear();
+            task.session_excerpts.clear();
+        }
+        let record = match (turns, kept.as_deref()) {
+            (0, _) => Ok(continued.take()),
+            (_, _) if unsaved => Err(t!(cli_input_lines_session_unsaved).to_string()),
+            (_, None) => Ok(None),
+            (_, Some(id)) => continued::find(
+                prepared.workspace.root(),
+                &continued::Resume::Id(id.to_string()),
+            )
+            .map(Some)
+            .map_err(|problem| t!(cli_input_lines_session_lost, problem = problem).to_string()),
+        };
+        turns += 1;
+        let record = match record {
+            Ok(record) => record,
+            Err(message) => {
+                channel.idle();
+                exit = Some(stopped_before_the_turn(true, Ending::Failed, message));
+                continue;
+            }
+        };
+        let (code, wrote, answered) =
+            run_and_report(&prepared, &task, record, Some(&channel), &cancel);
+        channel.idle();
+        exit = Some(code);
+        match wrote {
+            Some(id) => kept = Some(id),
+            None => unsaved |= answered,
+        }
     }
+    let code = exit.unwrap_or_else(|| {
+        stopped_before_the_turn(true, Ending::Argument, t!(cli_input_lines_no_prompt))
+    });
+    prepared.dismantle();
+    code
 }
 
 /// What `run_turn` reads of the run around it, and none of what it changes.
@@ -2316,6 +2540,8 @@ struct TurnRun<'a> {
     /// the judge is asked too unless `summaryModel` names another.
     goal: Option<&'a str>,
     model: &'a str,
+    /// The token a stop reaches this turn by.
+    cancel: &'a Cancel,
 }
 
 /// The `Mode::Turn` arm of a one-shot run: the turn, continued from `continued` where there is one,
@@ -2341,6 +2567,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         agent,
         goal,
         model,
+        cancel,
     } = run;
     let mut session: Option<String> = None;
     // What a continued session vouched for comes back with it, as it does in a session
@@ -2379,7 +2606,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         trust,
         bravebot_core::programs::TrustedPrograms::new(),
         None,
-        &Cancel::new(),
+        cancel,
     );
     // Where the person's prompt entered the conversation, read before a later round moves it: a
     // run that works towards a goal is one turn of the record, and the prompt is the first one.
@@ -2394,6 +2621,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
                     workspace,
                     task,
                     model,
+                    cancel,
                 },
                 completed,
                 &mut conversation,
@@ -2408,8 +2636,12 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
     if let (Some(earlier), Ok(last)) = (earlier, &mut completed.outcome) {
         earlier.fold_into(last, reporter.earlier());
     }
+    // Taken whether or not the turn has points to keep them on, so the next turn of a run that has
+    // several starts with none of this one's: a backup is kept for the first write to a path, and a
+    // later turn writing the same path would otherwise be put back to where this one found it.
+    let backups = workspace.take_backups();
     if let Some(points) = rewind.as_mut() {
-        points.keep_backups(workspace.take_backups());
+        points.keep_backups(backups);
     }
     let turn::Decisions {
         trust,

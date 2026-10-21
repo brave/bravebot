@@ -10,6 +10,7 @@
 //! serialisation dependency to spend on one flat object.
 
 use crate::exit::Ending;
+use bravebot_core::ask::Asking;
 use bravebot_core::delegate::DelegateId;
 use bravebot_core::event::{Event, RecordingSink, Sink};
 use std::io::Write;
@@ -226,6 +227,45 @@ pub fn refusal_event(refusal: &Refusal) -> String {
 /// The run's cumulative token usage changed.
 pub fn usage_event(tokens: &Tokens) -> String {
     event("usage", vec![("tokens", token_fields(tokens))])
+}
+
+/// A question the planner asked, put to whatever sends the input lines (CLI-34).
+///
+/// The one event that carries words the result object does not hold: the header, the question and
+/// the choices as the kernel released them to be put to somebody, which are the words a session
+/// draws. `id` is what an `answer` line names, and a choice is answered by its position in
+/// `choices`.
+pub fn question_event(id: u64, asking: &Asking) -> String {
+    let questions = object_list(asking.prompts.iter().map(|prompt| {
+        let choices = object_list(prompt.rows.iter().map(|row| {
+            object(&[
+                ("label", quoted(&row.label)),
+                ("detail", maybe(row.detail.as_deref())),
+            ])
+        }));
+        object(&[
+            ("header", quoted(&prompt.header)),
+            ("question", quoted(&prompt.question)),
+            ("choices", choices),
+            ("multiple", prompt.multiple.to_string()),
+        ])
+    }));
+    event(
+        "question",
+        vec![("id", id.to_string()), ("questions", questions)],
+    )
+}
+
+/// A line of the input stream was not taken (CLI-34).
+///
+/// Names the line by its number and the cause by a fixed word, and nothing of what the line said:
+/// the line is the launching program's, so it is not echoed back into a stream another program
+/// reads.
+pub fn input_refused_event(line: usize, reason: &str) -> String {
+    event(
+        "input_refused",
+        vec![("line", line.to_string()), ("reason", quoted(reason))],
+    )
 }
 
 /// Somewhere a stream's lines go. A failed write is dropped, as it is for the reply: a closed
@@ -694,5 +734,63 @@ mod tests {
             principle: bravebot_core::event::Principle::IntegrityGate,
         });
         assert_eq!(sink.recorded().blocked().count(), 1);
+    }
+
+    /// What a program answers a question by: the id, and the position of each choice in the order
+    /// listed. The shape is published, so it is pinned whole, and the words in it are escaped as
+    /// every other string of the stream is, since the planner wrote them.
+    #[test]
+    fn a_question_is_an_event_a_program_can_answer_by_position() {
+        let asking = Asking {
+            prompts: vec![
+                bravebot_core::ask::Prompt {
+                    header: "Cache".to_string(),
+                    question: "Which \"layer\"?\n(one)".to_string(),
+                    rows: vec![
+                        bravebot_core::ask::Row {
+                            index: 0,
+                            label: "HTTP".to_string(),
+                            detail: Some("in front".to_string()),
+                        },
+                        bravebot_core::ask::Row {
+                            index: 1,
+                            label: "Query".to_string(),
+                            detail: None,
+                        },
+                    ],
+                    multiple: false,
+                    key: "k".to_string(),
+                },
+                bravebot_core::ask::Prompt {
+                    header: "Scope".to_string(),
+                    question: "Which?".to_string(),
+                    rows: Vec::new(),
+                    multiple: true,
+                    key: "k2".to_string(),
+                },
+            ],
+            closes_when_idle: false,
+        };
+
+        assert_eq!(
+            question_event(7, &asking),
+            concat!(
+                r#"{"schema":1,"event":"question","id":7,"questions":["#,
+                r#"{"header":"Cache","question":"Which \"layer\"?\n(one)","choices":["#,
+                r#"{"label":"HTTP","detail":"in front"},{"label":"Query","detail":null}],"#,
+                r#""multiple":false},"#,
+                r#"{"header":"Scope","question":"Which?","choices":[],"multiple":true}]}"#,
+            )
+        );
+    }
+
+    /// A line that was not taken is named by its number and a fixed cause. The cause is passed in
+    /// as a word and is the only text, so a caller cannot build the event out of the line.
+    #[test]
+    fn a_line_that_was_not_taken_is_named_by_number_and_cause() {
+        assert_eq!(
+            input_refused_event(12, "not_json"),
+            r#"{"schema":1,"event":"input_refused","line":12,"reason":"not_json"}"#
+        );
     }
 }

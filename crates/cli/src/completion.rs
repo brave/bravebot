@@ -53,7 +53,7 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 48] = [
+const FLAGS: [Flag; 50] = [
     flag("interactive", Some('i'), true),
     flag("plain", None, false),
     flag("bg", None, false),
@@ -89,6 +89,8 @@ const FLAGS: [Flag; 48] = [
     flag("trace", None, false),
     flag("json", None, false),
     flag("json-stream", None, false),
+    flag("input-format", None, true),
+    flag("trust-input-lines", None, false),
     flag("output-schema", None, true),
     flag("goal", None, true),
     flag("incognito", None, false),

@@ -143,6 +143,22 @@ refusal and change in token usage, then the same object as the last line, so a s
 progress or tell a hung run from a slow one. [The reference](../reference/cli.md#--json-stream)
 lists the events.
 
+## Sending several turns to one process
+
+```sh
+bravebot --json-stream --input-format lines --trust-input-lines <<'EOF'
+{"type":"prompt","text":"review the diff"}
+{"type":"prompt","text":"now fix what you found"}
+EOF
+```
+
+`--input-format lines` reads JSON lines on stdin for as many turns as it is sent. A `prompt` starts a
+turn over the conversation the last one left, a `steer` reaches the turn that is running, an `answer`
+replies to a question the agent asked, and a `stop` ends the turn in flight. Each turn ends with its
+own result object. Where nobody typed `--trust-input-lines`, the text of a line is a program's words
+and the agent is given a reference to it, never the words. [The reference](../reference/cli.md#--input-format-lines)
+has the lines and the events.
+
 ## Sending a follow-up to an earlier run
 
 ```sh
@@ -324,6 +340,8 @@ the wrong thing to search for.
 | `--processor-model <name>` | the model processors run on, in place of the `processorModel` setting |
 | `--json` | one result object on stdout, in the reply's place |
 | `--json-stream` | one event per line on stdout as the run goes, then the result object |
+| `--input-format lines` | read turns, steers, answers and stops from stdin, a JSON object to a line; needs `--json-stream` |
+| `--trust-input-lines` | treat those lines as your own words and not a program's |
 | `--output-schema <path>` | hold the reply to a JSON Schema; a reply off it ends on status 6, one that conforms is also `structured` under `--json` |
 | `--goal <condition>` | keep working until a judge says the condition holds; a condition that never does ends on status 7 |
 | `--settings <path>` | read a settings file above the ones found, for this run |

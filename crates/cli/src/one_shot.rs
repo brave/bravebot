@@ -48,6 +48,12 @@ pub(crate) struct OneShot<R: Read, W: Write> {
     /// server's tool is told to the policy, so it is kept for the status alone
     /// (`Declined::in_the_trail`).
     declined: Vec<Declined>,
+    /// The input lines a run given `--input-format lines` reads (CLI-34), where it was.
+    ///
+    /// The planner's questions are put to the program on the other end of it and a steer line is
+    /// what an interjection takes. Nothing else changes: a write, a run, a fetch and every other
+    /// question is still refused here, because a line sent on a pipe approves none of them.
+    lines: Option<crate::lines::Channel>,
 }
 
 /// One question a one-shot run could not put to anybody, and so answered no.
@@ -73,7 +79,14 @@ impl<R: Read, W: Write> OneShot<R, W> {
             refusing: bravebot_agent::Unattended,
             alert: None,
             declined: Vec::new(),
+            lines: None,
         }
+    }
+
+    /// Put the planner's questions to the program sending these lines, and take its steers.
+    pub(crate) fn with_lines(mut self, lines: crate::lines::Channel) -> Self {
+        self.lines = Some(lines);
+        self
     }
 
     /// What was refused for want of anybody to ask, in the order it was asked.
@@ -255,14 +268,22 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
     }
 
     /// Declined rather than answered, as everywhere nobody can be asked: a reply invented here would
-    /// be reported to the planner as the person's own words.
+    /// be reported to the planner as the person's own words. Where lines are being read the question
+    /// is put to the program sending them, and what comes back is a pick among the choices the
+    /// planner offered (CLI-34).
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
-        self.refusing.ask_user(asking)
+        match &self.lines {
+            Some(lines) => lines.ask(asking),
+            None => self.refusing.ask_user(asking),
+        }
     }
 
-    /// Nothing. Nobody is typing between steps: the only line this reads is an answer to a question
-    /// it just asked.
+    /// Nothing, except a steer line from a channel a person vouched for. Nobody is typing between
+    /// steps: the only line otherwise read is an answer to a question it just asked.
     fn interjection(&mut self) -> Option<String> {
-        self.refusing.interjection()
+        match &self.lines {
+            Some(lines) => lines.steer(),
+            None => self.refusing.interjection(),
+        }
     }
 }
