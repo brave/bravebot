@@ -408,10 +408,10 @@ inside a credential location is left out.
 `osascript` and the inhibitor `/caffeinate` start outside the sandbox, so each is looked up only in
 absolute `PATH` entries that lie outside every directory a stage may write. Someone whose only `aws`
 is in an activated virtualenv, or in the session's own directory, is told it is not installed until
-it is installed elsewhere. In bypass mode a stage may write every path your account can write, so an
-`aws` in a directory your account owns (a Homebrew prefix, say) is found until the first stage runs
-and reads as not installed after that, until Brave Bot exits. [Hooks](../customize/hooks.md),
-language servers and the editor that Ctrl-G opens are looked up the same way when named without a path.
+it is installed elsewhere. In bypass mode in a trusted directory, a stage may write every path your
+account can write, so an `aws` in a directory your account owns (a Homebrew prefix, say) is found
+until the first stage runs and reads as not installed after that, until Brave Bot exits.
+[Hooks](../customize/hooks.md), language servers and the editor that Ctrl-G opens are looked up the same way when named without a path.
 The editor, a hook, the AWS CLI, the clipboard tools and `osascript` are also started with a `PATH` of
 those same entries only, in the order written, so a program any of them starts by name (an `env`
 shebang, an `$EDITOR` of `env vim`, or a bare `credential_process` command) is not found in a

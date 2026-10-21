@@ -62226,6 +62226,41 @@ fn a_request_for_a_path_that_names_none_or_a_flag_that_is_no_boolean_asks_nobody
     );
 }
 
+/// The trail's words when a run's stages were given what a request for writing would be granted.
+const UNASKED_WRITES_SAID: &str =
+    "the programs were given every path a request_path with write set would be granted";
+
+/// Whether the trail of `turn` says its stages were given what a request would be granted.
+fn trail_says_unasked_writes(turn: &PathTurn) -> bool {
+    turn.events.iter().any(|event| {
+        matches!(event, Event::GatePassed { gate, detail }
+            if *gate == "sandbox" && detail.contains(UNASKED_WRITES_SAID))
+    })
+}
+
+/// A turn that runs the line writing beside the session once, and whether the file landed.
+fn turn_writing_beside(
+    places: &PathPlaces,
+    name: &str,
+    mode: bravebot_sandbox::SandboxMode,
+    permission: bravebot_agent::PermissionMode,
+    trust: bravebot_core::trust::TrustStore,
+) -> (PathTurn, bool) {
+    let _ = std::fs::remove_file(places.lands());
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let turn = path_turn(
+        name,
+        places,
+        &[running(&places.writing_line())],
+        mode,
+        permission,
+        trust,
+        None,
+        &mut asked,
+    );
+    (turn, places.lands().exists())
+}
+
 /// SANDBOX-22, SANDBOX-28, MODE-4: under bypass a `workspace-write` stage writes beside the session with no
 /// request, and the trail says it was given what a request would be granted. The regression it
 /// rejects is a run that fails before the planner asks. The same line under `strict`, and under the
@@ -62236,36 +62271,15 @@ fn a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_s
         return;
     }
     let places = PathPlaces::new("unasked");
-    let turn_in = |name: &str, mode, permission| {
-        let _ = std::fs::remove_file(places.lands());
-        let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
-        let turn = path_turn(
-            name,
-            &places,
-            &[running(&places.writing_line())],
-            mode,
-            permission,
-            trusting_the_workspace(),
-            None,
-            &mut asked,
-        );
-        (turn, places.lands().exists())
-    };
-    let said = "the programs were given every path a request_path with write set would be granted";
-    let recorded = |turn: &PathTurn| {
-        turn.events.iter().any(|event| {
-            matches!(event, Event::GatePassed { gate, detail }
-                if *gate == "sandbox" && detail.contains(said))
-        })
-    };
-
-    let (turn, landed) = turn_in(
+    let (turn, landed) = turn_writing_beside(
+        &places,
         "path-unasked-bypass",
         bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
     );
     assert!(landed, "the line did not write beside the session");
-    assert!(recorded(&turn), "{:?}", turn.events);
+    assert!(trail_says_unasked_writes(&turn), "{:?}", turn.events);
 
     for (name, mode, permission) in [
         (
@@ -62279,10 +62293,91 @@ fn a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_s
             bravebot_agent::PermissionMode::Bypass,
         ),
     ] {
-        let (turn, landed) = turn_in(name, mode, permission);
+        let (turn, landed) =
+            turn_writing_beside(&places, name, mode, permission, trusting_the_workspace());
         assert!(!landed, "{name}: the line wrote with no request");
-        assert!(!recorded(&turn), "{name}: {:?}", turn.events);
+        assert!(
+            !trail_says_unasked_writes(&turn),
+            "{name}: {:?}",
+            turn.events
+        );
     }
+}
+
+/// SANDBOX-28, PATHREQ-5: a workspace the person has not trusted accepts no `request_path`, so
+/// bypass gives its stages no write a request would have added. A write beside the session fails
+/// with the operating system's refusal, the trail says nothing of one, and the sentence after the
+/// failed step claims no reach through `request_path`. The regressions it rejects are rows given in
+/// an untrusted workspace, a trail or a sentence that still says they were, and a trust condition
+/// that also takes the reach away from a trusted bypass session, which the controls run for the
+/// file written and for the sentence.
+#[test]
+fn in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("unasked-untrusted");
+    let bypass = bravebot_agent::PermissionMode::Bypass;
+    let workspace_write = bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let reach = "request_path with write set would be granted";
+    let sentence_after_a_failed_step = |turn: &PathTurn| {
+        let result = message_from(&turn.results[0], "Result of run").to_string();
+        let at = result.find("Confinement:").expect("a confinement sentence");
+        result[at..].to_string()
+    };
+
+    let (turn, landed) = turn_writing_beside(
+        &places,
+        "path-unasked-trusted-control",
+        workspace_write,
+        bypass,
+        trusting_the_workspace(),
+    );
+    assert!(landed, "the control: a trusted bypass run writes beside");
+    assert!(trail_says_unasked_writes(&turn), "{:?}", turn.events);
+
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let failing = path_turn(
+        "path-unasked-trusted-sentence",
+        &places,
+        &[running("sh -c 'exit 1'")],
+        workspace_write,
+        bypass,
+        trusting_the_workspace(),
+        None,
+        &mut asked,
+    );
+    let trusted_sentence = sentence_after_a_failed_step(&failing);
+    assert!(
+        trusted_sentence.contains(reach),
+        "the control: a trusted bypass sentence names the reach: {trusted_sentence}"
+    );
+
+    let (turn, landed) = turn_writing_beside(
+        &places,
+        "path-unasked-untrusted",
+        workspace_write,
+        bypass,
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    assert!(
+        !landed,
+        "the line wrote beside the session in a workspace that accepts no request"
+    );
+    assert!(
+        !trail_says_unasked_writes(&turn),
+        "the trail says the programs were given a reach: {:?}",
+        turn.events
+    );
+    let untrusted_sentence = sentence_after_a_failed_step(&turn);
+    assert!(
+        !untrusted_sentence.contains(reach),
+        "the sentence names a reach no request can add: {untrusted_sentence}"
+    );
+    assert!(
+        untrusted_sentence.contains("the temporary directory and the toolchain caches"),
+        "the sentence does not say what the stage does write: {untrusted_sentence}"
+    );
 }
 
 /// SANDBOX-28, TRUST-9: a yes is reach and not trust. The trust map comes back as it went in, and
