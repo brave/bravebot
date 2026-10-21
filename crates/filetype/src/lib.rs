@@ -66,6 +66,17 @@ pub fn is_ignored_directory(name: &str) -> bool {
     IGNORED_DIRECTORIES.contains(&name)
 }
 
+/// Whether the directory `name`, found inside `parent`, is one a walk from above steps over.
+///
+/// A name on its own, or a two-segment name: `.claude/worktrees` holds linked worktrees, each a
+/// full copy of the tree, so a walk that entered it would report every match twice. Decided from
+/// the two names alone, as the single names are. A walk that starts below the skipped name still
+/// reaches what is in it.
+pub fn is_ignored_in(parent: &std::path::Path, name: &str) -> bool {
+    is_ignored_directory(name)
+        || (name == "worktrees" && parent.file_name().is_some_and(|p| p == ".claude"))
+}
+
 /// The names `is_ignored_directory` matches, so a description of what a walk skips is written from
 /// the list the walk uses and cannot drift from it.
 pub fn ignored_directories() -> &'static [&'static str] {
@@ -170,5 +181,16 @@ mod tests {
         for name in ["src", "out", "bin", "crates", "git", "Target"] {
             assert!(!is_ignored_directory(name), "{name} was skipped");
         }
+    }
+
+    /// `worktrees` is skipped inside `.claude` and nowhere else, since a directory of that name in
+    /// a project's own sources is the project's.
+    #[test]
+    fn claude_worktrees_is_skipped_as_a_two_segment_name() {
+        use std::path::Path;
+        assert!(is_ignored_in(Path::new("/repo/.claude"), "worktrees"));
+        assert!(!is_ignored_in(Path::new("/repo/ci"), "worktrees"));
+        assert!(!is_ignored_in(Path::new("/repo/.claude"), "agents"));
+        assert!(is_ignored_in(Path::new("/repo/ci"), "node_modules"));
     }
 }

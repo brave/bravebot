@@ -2965,17 +2965,6 @@ const MAX_PAGE_CHARS: usize = 100_000;
 // A shortened line and its notice always fit, so a page is never empty because of the budget.
 const _: () = assert!(MAX_LINE + 64 < MAX_PAGE_CHARS);
 
-/// Whether the directory `name`, found inside `parent`, is one a walk from above steps over.
-///
-/// A name on its own, or a two-segment name: `.claude/worktrees` holds linked worktrees, each a
-/// full copy of the tree, so a walk that entered it would report every match twice. Decided from
-/// the two names alone, as the single names are. A search that names a directory inside it still
-/// reaches it, because the walk then starts below the skipped name.
-fn is_ignored_in(parent: &Path, name: &str) -> bool {
-    bravebot_filetype::is_ignored_directory(name)
-        || (name == "worktrees" && parent.file_name().is_some_and(|p| p == ".claude"))
-}
-
 /// A path inside the repository the planner called `named`, spelled the way it spelled the
 /// repository, so the trust map is asked about the name it would be asked about for a read.
 pub(crate) fn in_repository(named: &str, inside: &str) -> String {
@@ -5026,7 +5015,7 @@ impl Workspace {
                 // Version control, build output and vendored dependencies would dominate a
                 // listing without adding anything a task needs.
                 let name = entry.file_name();
-                if is_ignored_in(directory, name.to_string_lossy().as_ref()) {
+                if bravebot_filetype::is_ignored_in(directory, name.to_string_lossy().as_ref()) {
                     continue;
                 }
                 directories.push(entry.path());
@@ -5119,8 +5108,10 @@ impl Workspace {
             if kind.is_symlink() {
                 false
             } else if kind.is_dir() {
-                !is_ignored_in(directory, entry.file_name().to_string_lossy().as_ref())
-                    && self.selects_beneath(&entry.path(), wanted)
+                !bravebot_filetype::is_ignored_in(
+                    directory,
+                    entry.file_name().to_string_lossy().as_ref(),
+                ) && self.selects_beneath(&entry.path(), wanted)
             } else {
                 kind.is_file() && wanted.admits(&self.relative_display(&entry.path()))
             }

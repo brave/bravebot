@@ -24,6 +24,7 @@
 //! `bravebot-core` nor `bravebot-agent`, so none of it runs inside the driver.
 #![forbid(unsafe_code)]
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 /// How many entries are offered at once.
@@ -98,11 +99,43 @@ fn anchored<'a>(
 const SETTLED: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The most directories kept, so a session that walks a large tree holds a bounded amount.
-const MOST_LISTINGS: usize = 32;
+///
+/// Every directory a walk of the workspace reads holds at least one of the names it is bounded by,
+/// so this keeps them all, with room for the few a person types into. A walk that filled the cache
+/// would clear it and read the disk again on every key.
+const MOST_LISTINGS: usize = MOST_WALKED + 32;
 
-type Listing = std::sync::Arc<Vec<(String, bool)>>;
+/// One name in a directory.
+struct Named {
+    name: String,
+    is_directory: bool,
+    /// Whether the directory held the name as text. A name that is not UTF-8 is held as a
+    /// rendering of it that every name differing only in those bytes shares, so it stands for no
+    /// one file and a line written from it names none.
+    is_text: bool,
+}
 
-/// The names in a directory and whether each is a directory, read again only when it has changed.
+impl Named {
+    fn new(name: std::ffi::OsString, is_directory: bool) -> Self {
+        match name.into_string() {
+            Ok(name) => Self {
+                name,
+                is_directory,
+                is_text: true,
+            },
+            Err(name) => Self {
+                name: name.to_string_lossy().to_string(),
+                is_directory,
+                is_text: false,
+            },
+        }
+    }
+}
+
+type Listing = std::sync::Arc<Vec<Named>>;
+
+/// The names in a directory, sorted, and whether each is a directory, read again only when it has
+/// changed.
 ///
 /// Typing towards a path asks about the same directory on every key, and a directory of many files
 /// makes each of those a full read. One `stat` answers whether the read is still good.
@@ -129,19 +162,18 @@ fn listing(canonical: &Path) -> Option<Listing> {
         }
     }
 
-    let names: Listing = std::sync::Arc::new(
-        std::fs::read_dir(canonical)
-            .ok()?
-            .flatten()
-            .map(|entry| {
-                let is_directory = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                (
-                    entry.file_name().to_string_lossy().to_string(),
-                    is_directory,
-                )
-            })
-            .collect(),
-    );
+    let mut read: Vec<Named> = std::fs::read_dir(canonical)
+        .ok()?
+        .flatten()
+        .map(|entry| {
+            let is_directory = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            Named::new(entry.file_name(), is_directory)
+        })
+        .collect();
+    // Sorted so that where the walk stops at its bound does not depend on the order the
+    // filesystem hands names over.
+    read.sort_by(|a, b| a.name.cmp(&b.name));
+    let names: Listing = std::sync::Arc::new(read);
     if let (true, Some(at)) = (settled, modified) {
         let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let kept = kept.get_or_insert_with(HashMap::new);
@@ -153,13 +185,18 @@ fn listing(canonical: &Path) -> Option<Listing> {
     Some(names)
 }
 
-/// Entries matching a half-typed reference, directories first and then files, each alphabetical.
+/// Entries matching a half-typed reference: what one directory holds, then what is found by
+/// looking further.
 ///
 /// `typed` is what follows the `@`. An empty one lists the workspace root. Anything with a slash in
 /// it lists the directory named up to the last slash, so `crates/t` offers what is in `crates`.
+/// Directories come first and then files, each alphabetical, because a reference is usually typed
+/// by walking into one, and being able to go deeper matters more than the file that happens to sort
+/// first.
 ///
-/// Directories come first because a reference is usually typed by walking into one, and being able
-/// to go deeper matters more than the file that happens to sort first.
+/// A fragment with no slash is also looked for in every directory below the root, and so is one
+/// with a slash where its directory offers nothing (NAME-11). Up to [`MOST_FOUND`] of those names
+/// follow, best match first, in whatever room the list has after what the directory offered.
 pub fn matching(root: &Path, typed: &str, sources: &Sources) -> Vec<Entry> {
     // Refused rather than resolved: `..` would walk out of the workspace, and an absolute path
     // names something the reference syntax has no business reaching.
@@ -167,7 +204,23 @@ pub fn matching(root: &Path, typed: &str, sources: &Sources) -> Vec<Entry> {
         return Vec::new();
     }
 
-    let (root, typed_here, tag) = anchored(root, typed, sources);
+    let anchor = anchored(root, typed, sources);
+    // A name under an alias is the alias directory's to answer, which the walk does not cover.
+    let under_an_alias = !anchor.2.is_empty();
+    let mut entries = in_one_directory(typed, sources, anchor);
+    if !typed.is_empty() && !under_an_alias && (!typed.contains('/') || entries.is_empty()) {
+        let found = found_beneath(root, typed, &entries, MOST_WALKED);
+        entries.extend(found);
+    }
+    entries
+}
+
+/// What the directory `typed` is being typed in holds that begins as it does.
+fn in_one_directory(
+    typed: &str,
+    sources: &Sources,
+    (root, typed_here, tag): (&Path, &str, String),
+) -> Vec<Entry> {
     let (directory, prefix) = match typed_here.rsplit_once('/') {
         Some((directory, prefix)) => (directory, prefix),
         None => ("", typed_here),
@@ -192,8 +245,15 @@ pub fn matching(root: &Path, typed: &str, sources: &Sources) -> Vec<Entry> {
 
     let mut entries: Vec<Entry> = listing
         .iter()
-        .filter_map(|(name, is_directory)| {
+        .filter_map(|named| {
+            let name = &named.name;
             if !name.starts_with(prefix) {
+                return None;
+            }
+            // Not offered: a name that is not text has no spelling a line can carry. The one it is
+            // held under is shared by every name that differs only in those bytes, so a line
+            // written from it names another file, or none.
+            if !named.is_text {
                 return None;
             }
             // Skipped rather than offered: a reference into `.git` is never what was meant, and
@@ -213,12 +273,12 @@ pub fn matching(root: &Path, typed: &str, sources: &Sources) -> Vec<Entry> {
                 format!("{tag}{directory}/{name}")
             };
             Some(Entry {
-                path: if *is_directory {
+                path: if named.is_directory {
                     format!("{path}/")
                 } else {
                     path
                 },
-                is_directory: *is_directory,
+                is_directory: named.is_directory,
                 note: None,
                 title: None,
             })
@@ -249,6 +309,152 @@ pub fn matching(root: &Path, typed: &str, sources: &Sources) -> Vec<Entry> {
     });
     entries.truncate(MAX_ENTRIES);
     entries
+}
+
+/// How many names found by the walk are offered at most.
+///
+/// A short fragment holds its characters in the path of most of a large tree, and the terminal
+/// draws every row under the box, so forty of them would fill the screen at the first letter and
+/// push the conversation out of it. The best ten are what a person chooses from, and typing more
+/// narrows them.
+const MOST_FOUND: usize = 10;
+
+/// The most names the walk of the workspace reads before it stops.
+///
+/// A fragment is looked for in every directory, so a tree of a million files would make each key a
+/// walk of all of them. The walk goes one level at a time from the root, so the names a stop leaves
+/// out are the deepest ones, and a path typed to its end is still answered by its own directory.
+const MOST_WALKED: usize = 10_000;
+
+/// A name the walk found, and how well it matches.
+struct Found {
+    /// Whether the name or only its path matched, and then how closely: see [`closeness`].
+    rank: (u8, u8),
+    path: String,
+    is_directory: bool,
+}
+
+/// The names below the workspace root that `typed` runs through, best match first, as many as the
+/// list has room for after `offered`, which they do not repeat, and at most [`MOST_FOUND`]. At most
+/// `most_read` names are read.
+///
+/// Case is not compared. A name holding the characters of `typed` in order ranks before one whose
+/// path holds them, and within each, a match that starts the text ranks before one inside it, and
+/// that before one with other characters between. Then the shorter path, then the alphabetical
+/// one, so the order is the same on every platform.
+///
+/// Nothing is followed. A link is a name like any other, whatever it points at, so a link out of
+/// the workspace leads nowhere here and a link back into it does not offer the same files twice.
+/// The names skipped are the ones the directory listing skips (`is_ignored_directory`), and a name
+/// that is not text is left out as it is there.
+fn found_beneath(root: &Path, typed: &str, offered: &[Entry], most_read: usize) -> Vec<Entry> {
+    let room = MAX_ENTRIES.saturating_sub(offered.len()).min(MOST_FOUND);
+    let Ok(root) = root.canonicalize() else {
+        return Vec::new();
+    };
+    if room == 0 {
+        return Vec::new();
+    }
+
+    // Folded a character at a time, as the names are, since `str::to_lowercase` reads the word-final
+    // sigma of `ΟΔΟΣ` as `ς` and the name is folded to `σ`.
+    let wanted: String = typed.chars().flat_map(char::to_lowercase).collect();
+    let mut found: Vec<Found> = Vec::new();
+    let mut read = 0;
+    // Each directory still to read, with the path from the root that names it.
+    let mut pending = VecDeque::from([(root, String::new())]);
+    'walk: while let Some((directory, relative)) = pending.pop_front() {
+        let Some(names) = listing(&directory) else {
+            continue;
+        };
+        for named in names.iter() {
+            if read == most_read {
+                break 'walk;
+            }
+            read += 1;
+            if !named.is_text || bravebot_filetype::is_ignored_in(&directory, &named.name) {
+                continue;
+            }
+
+            let slash = (!relative.is_empty()).then_some('/');
+            let end = named.is_directory.then_some('/');
+            let rank = closeness(&wanted, named.name.chars().chain(end))
+                .map(|close| (0, close))
+                .or_else(|| {
+                    let path = relative.chars().chain(slash).chain(named.name.chars());
+                    closeness(&wanted, path.chain(end)).map(|close| (1, close))
+                });
+            if rank.is_none() && !named.is_directory {
+                continue;
+            }
+
+            let here = if relative.is_empty() {
+                named.name.clone()
+            } else {
+                format!("{relative}/{}", named.name)
+            };
+            if named.is_directory {
+                pending.push_back((directory.join(&named.name), here.clone()));
+            }
+            if let Some(rank) = rank {
+                found.push(Found {
+                    rank,
+                    path: if named.is_directory {
+                        format!("{here}/")
+                    } else {
+                        here
+                    },
+                    is_directory: named.is_directory,
+                });
+            }
+        }
+    }
+
+    found.sort_by(|a, b| {
+        a.rank
+            .cmp(&b.rank)
+            .then_with(|| a.path.len().cmp(&b.path.len()))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    found
+        .into_iter()
+        // A row that is what was typed completes to nothing, and `offered` has the ones the
+        // directory held.
+        .filter(|found| {
+            found.path != typed && !offered.iter().any(|entry| entry.path == found.path)
+        })
+        .take(room)
+        .map(|found| Entry {
+            path: found.path,
+            is_directory: found.is_directory,
+            note: None,
+            title: None,
+        })
+        .collect()
+}
+
+/// How closely `wanted`, which is lowercase, matches `text` without regard to case: `Some(0)` where
+/// `text` starts with it, `Some(1)` where it is inside `text`, `Some(2)` where its characters are
+/// in `text` in order with others between them, and `None` where they are not.
+fn closeness(wanted: &str, text: impl Iterator<Item = char> + Clone) -> Option<u8> {
+    let folded = || text.clone().flat_map(char::to_lowercase);
+    let mut left = wanted.chars().peekable();
+    for c in folded() {
+        if left.peek() == Some(&c) {
+            left.next();
+        }
+    }
+    if left.peek().is_some() {
+        return None;
+    }
+    let folded: String = folded().collect();
+    Some(if folded.starts_with(wanted) {
+        0
+    } else if folded.contains(wanted) {
+        1
+    } else {
+        2
+    })
 }
 
 /// What follows an `@` at the end of the line, if the line is being typed towards a reference.
@@ -906,6 +1112,389 @@ mod tests {
         assert!(enter_completes(&scratch.path, "session:a", &[row], 0, &[]));
     }
 
+    /// Writes `path` under `scratch`, with the directories above it.
+    fn put(scratch: &Scratch, path: &str) {
+        let file = scratch.path.join(path);
+        std::fs::create_dir_all(file.parent().expect("a name is in a directory")).expect("dir");
+        std::fs::write(file, "").expect("write");
+    }
+
+    /// NAME-11: a fragment with no slash finds a name in a directory below the root, by its
+    /// characters in order and without regard to case, so a person who remembers part of a name
+    /// does not have to walk to it.
+    #[test]
+    fn a_bare_fragment_finds_a_name_in_a_directory_below() {
+        let scratch = Scratch::new("found-below");
+        for typed in ["lib", "lbrs", "LIB", "Lb.R"] {
+            assert_eq!(
+                paths(&matching(&scratch.path, typed, &[])),
+                vec!["crates/tui/lib.rs"],
+                "{typed}"
+            );
+        }
+        assert!(
+            matching(&scratch.path, "libx", &[]).is_empty(),
+            "a name that lacks a character of the fragment was offered"
+        );
+    }
+
+    /// NAME-11: case is ignored in every script, whatever follows a letter. The fragment and the
+    /// names are folded the same way, so the capital sigma that ends `ΟΔΟΣ` matches the name it was
+    /// typed from.
+    #[test]
+    fn a_fragment_matches_a_name_in_every_script_without_regard_to_case() {
+        let scratch = Scratch::new("found-case");
+        put(&scratch, "docs/ΟΔΟΣ.md");
+        put(&scratch, "docs/Straße.md");
+        for typed in ["ΟΔΟΣ", "οδοσ", "Οδοσ"] {
+            assert_eq!(
+                paths(&matching(&scratch.path, typed, &[])),
+                vec!["docs/ΟΔΟΣ.md"],
+                "{typed}"
+            );
+        }
+        assert_eq!(
+            paths(&matching(&scratch.path, "STRASSE", &[])),
+            Vec::<&str>::new(),
+            "a letter is folded to one letter, as the names are"
+        );
+    }
+
+    /// NAME-11: every directory a walk reads is kept for the next key, so typing a fragment does not
+    /// read the disk again for each letter, however many directories the tree has. The directories
+    /// are changed behind the cache's back with their times put back, so the new name can only be
+    /// missed if the walk's reading was kept, and more directories than the cache once held are
+    /// read.
+    #[test]
+    fn the_directories_a_walk_read_are_kept_for_the_next_key() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let root = scratch.path();
+        for n in 0..100 {
+            std::fs::create_dir_all(root.join(format!("d{n:03}"))).expect("create");
+            std::fs::write(root.join(format!("d{n:03}/f.txt")), "").expect("write");
+        }
+        let settle = |path: &std::path::Path| settled_at(path, 5);
+        for n in 0..100 {
+            settle(&root.join(format!("d{n:03}")));
+        }
+        settle(root);
+        assert!(matching(root, "zzz", &[]).is_empty());
+
+        std::fs::write(root.join("d000/needle.txt"), "").expect("write");
+        settle(&root.join("d000"));
+        assert!(
+            matching(root, "needle", &[]).is_empty(),
+            "a directory of the walk was read again on the next key"
+        );
+    }
+
+    /// NAME-11: a directory is found as well as a file, and completes so typing can go on into it.
+    #[test]
+    fn a_bare_fragment_finds_a_directory_below_and_offers_it_as_one() {
+        let scratch = Scratch::new("found-directory");
+        let offered = matching(&scratch.path, "tui", &[]);
+        assert_eq!(paths(&offered), vec!["crates/tui/", "crates/tui/lib.rs"]);
+        assert!(offered[0].is_directory);
+        assert!(!offered[1].is_directory);
+    }
+
+    /// NAME-11: a fragment with a slash is still answered by its own directory where that offers
+    /// something, and looked for below only where it offers nothing. `crates/t` is a prefix in
+    /// `crates`, so a walk beside it would add every name whose path holds those letters.
+    #[test]
+    fn a_fragment_with_a_slash_is_looked_for_below_only_where_its_directory_offers_nothing() {
+        let scratch = Scratch::new("found-slash");
+        assert_eq!(
+            paths(&matching(&scratch.path, "crates/t", &[])),
+            vec!["crates/tui/"]
+        );
+        assert_eq!(
+            paths(&matching(&scratch.path, "tui/lib", &[])),
+            vec!["crates/tui/lib.rs"],
+            "no `tui` in the root, so the path was looked for below"
+        );
+        assert_eq!(
+            paths(&matching(&scratch.path, "crates/lib", &[])),
+            vec!["crates/tui/lib.rs"],
+            "`crates` holds no name starting `lib`, so the path was looked for below"
+        );
+        assert!(matching(&scratch.path, "crates/zzz", &[]).is_empty());
+
+        std::fs::create_dir_all(scratch.path.join("empty")).expect("create");
+        assert!(
+            matching(&scratch.path, "empty/", &[]).is_empty(),
+            "a directory with nothing in it offered itself, which completes to what was typed"
+        );
+    }
+
+    /// NAME-11: a name that matches ranks before one whose path matches, however closely the path
+    /// matches, and a match that starts the text before one inside it before one with other
+    /// characters between, whatever the paths' lengths and alphabetical order. Each fixture puts
+    /// the worse match first by length or by alphabet, so an order that only sorted paths, or only
+    /// weighed closeness, would reverse them.
+    #[test]
+    fn a_name_ranks_before_a_path_and_a_closer_match_before_a_looser_one() {
+        let scratch = Scratch::new("found-ranked");
+        put(&scratch, "a/notes/x.md");
+        put(&scratch, "z/n-o-t-e-s.md");
+        assert_eq!(
+            paths(&matching(&scratch.path, "notes", &[])),
+            vec!["a/notes/", "z/n-o-t-e-s.md", "a/notes/x.md"],
+            "the directory called `notes`, the name spread through, then the path that holds it"
+        );
+
+        let scratch = Scratch::new("found-closer");
+        put(&scratch, "a/m_a_i_n");
+        put(&scratch, "b/xxxmain");
+        put(&scratch, "c/mainxxx");
+        assert_eq!(
+            paths(&matching(&scratch.path, "main", &[])),
+            vec!["c/mainxxx", "b/xxxmain", "a/m_a_i_n"],
+            "starts the name, then inside it, then spread through it"
+        );
+    }
+
+    /// NAME-11: what the directory offers keeps its rows and its order, and what is found follows
+    /// without repeating it, so the prefix a person has always typed still comes first.
+    #[test]
+    fn what_a_directory_offers_comes_first_and_is_not_repeated_below() {
+        let scratch = Scratch::new("found-after");
+        put(&scratch, "lib.rs");
+        put(&scratch, "crates/tui/lib.rs");
+        put(&scratch, "docs/liberty.md");
+        assert_eq!(
+            paths(&matching(&scratch.path, "lib", &[])),
+            vec!["lib.rs", "docs/liberty.md", "crates/tui/lib.rs"],
+            "`lib.rs` once, from the root, then the two below by the length of their paths"
+        );
+    }
+
+    /// NAME-11: no more than ten names found below are offered, however many match, and they follow
+    /// what the directory offers. The terminal draws every row under the box, so more would fill
+    /// the screen at the first letter.
+    #[test]
+    fn no_more_than_ten_names_found_below_follow_what_the_directory_offers() {
+        let scratch = Scratch::new("found-ten");
+        std::fs::create_dir_all(scratch.path.join("fa")).expect("create");
+        for n in 0..MAX_ENTRIES + 10 {
+            put(&scratch, &format!("x/file{n:02}.rs"));
+        }
+        let offered = matching(&scratch.path, "f", &[]);
+        assert_eq!(offered.len(), 1 + MOST_FOUND);
+        assert_eq!(offered[0].path, "fa/", "the directory's row, first");
+        assert!(
+            offered[1..]
+                .iter()
+                .all(|entry| entry.path.starts_with("x/file"))
+        );
+    }
+
+    /// NAME-11: the list never holds more than forty rows, so names found below take only the room
+    /// what the directory offers leaves, and none where it fills the list.
+    #[test]
+    fn the_list_never_holds_more_than_forty_rows() {
+        let scratch = Scratch::new("found-room");
+        for n in 0..MAX_ENTRIES - 5 {
+            put(&scratch, &format!("g{n:02}"));
+        }
+        for letter in 'a'..='z' {
+            put(&scratch, &format!("deep/g_{letter}"));
+        }
+        let offered = matching(&scratch.path, "g", &[]);
+        assert_eq!(offered.len(), MAX_ENTRIES);
+        assert_eq!(
+            offered
+                .iter()
+                .filter(|e| e.path.starts_with("deep/"))
+                .count(),
+            5,
+            "the room that was left"
+        );
+
+        let scratch = Scratch::new("found-full");
+        for n in 0..MAX_ENTRIES {
+            put(&scratch, &format!("g{n:02}"));
+        }
+        put(&scratch, "deep/g_extra");
+        let offered = matching(&scratch.path, "g", &[]);
+        assert_eq!(offered.len(), MAX_ENTRIES);
+        assert!(
+            offered.iter().all(|entry| !entry.path.starts_with("deep/")),
+            "a name found below was offered past the cap"
+        );
+    }
+
+    /// NAME-11: the names the directory listing leaves out are left out of the walk at every depth,
+    /// and `.claude/worktrees` with them, while a `worktrees` anywhere else is the project's own.
+    #[test]
+    fn the_names_every_walk_skips_are_skipped_at_every_depth() {
+        let scratch = Scratch::new("found-ignored");
+        for skipped in [
+            "target/needle.rs",
+            ".git/needle.rs",
+            "node_modules/needle.rs",
+            ".hg/needle.rs",
+            "dist/needle.rs",
+            ".worktrees/feature/needle.rs",
+            "crates/tui/node_modules/pkg/needle.rs",
+            "crates/tui/vendor/needle.rs",
+            ".claude/worktrees/pr-fix/needle.rs",
+        ] {
+            put(&scratch, skipped);
+        }
+        put(&scratch, "ci/worktrees/needle.rs");
+        put(&scratch, ".claude/agents/needle.rs");
+        assert_eq!(
+            paths(&matching(&scratch.path, "needle", &[])),
+            vec!["ci/worktrees/needle.rs", ".claude/agents/needle.rs"]
+        );
+    }
+
+    /// NAME-5, NAME-11: the walk follows no link. A link out of the workspace leads nowhere, a link
+    /// back into it does not offer the same files twice, and a link to the directory it sits in
+    /// does not make the walk go round.
+    #[cfg(unix)]
+    #[test]
+    fn the_walk_follows_no_link_out_of_the_workspace_or_back_into_it() {
+        let scratch = Scratch::new("found-links");
+        let outside = Scratch::new("found-links-outside");
+        put(&outside, "needle.txt");
+        std::os::unix::fs::symlink(&outside.path, scratch.path.join("link")).expect("link");
+        std::os::unix::fs::symlink("crates", scratch.path.join("alias")).expect("link");
+        std::os::unix::fs::symlink(".", scratch.path.join("round")).expect("link");
+
+        assert!(
+            matching(&scratch.path, "needle", &[]).is_empty(),
+            "a name behind a link out of the workspace was offered"
+        );
+        assert!(matching(&scratch.path, "link/needle", &[]).is_empty());
+        assert_eq!(
+            paths(&matching(&scratch.path, "lib", &[])),
+            vec!["crates/tui/lib.rs"],
+            "the files were offered again under a link"
+        );
+    }
+
+    /// PATH-002: a name the directory did not hold as text is held as a rendering that every name
+    /// differing in those bytes shares, so it is told apart from the name that really is that text.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_that_is_not_text_is_told_apart_from_its_lookalike() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let invalid = Named::new(OsString::from_vec(b"needle-\xff".to_vec()), false);
+        let lookalike = Named::new(OsString::from("needle-\u{FFFD}"), false);
+        assert!(!invalid.is_text);
+        assert!(lookalike.is_text);
+        assert_eq!(invalid.name, lookalike.name, "the rendering they share");
+    }
+
+    /// PATH-002, NAME-4, NAME-11: a file whose name is not text is offered by neither the directory
+    /// nor the walk, since the line a pick writes would name its lookalike, and the lookalike is
+    /// offered once. Linux only: macOS cannot hold the name.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_name_that_is_not_text_is_not_offered_under_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let scratch = Scratch::new("not-text");
+        std::fs::create_dir_all(scratch.path.join("sub")).expect("create");
+        for directory in [&scratch.path, &scratch.path.join("sub")] {
+            std::fs::write(directory.join(OsStr::from_bytes(b"needle-\xff.rs")), "")
+                .expect("write");
+            std::fs::write(directory.join("needle-\u{FFFD}.rs"), "").expect("write");
+        }
+        assert_eq!(
+            paths(&matching(&scratch.path, "needle", &[])),
+            vec!["needle-\u{FFFD}.rs", "sub/needle-\u{FFFD}.rs"],
+            "the directory's row, then the one found below"
+        );
+    }
+
+    /// NAME-11: the walk reads at most its bound and goes one level at a time, so the names a stop
+    /// leaves out are the deepest. A walk that went deep first would read down the `z` chain and
+    /// never reach `a`, which is a level from the root.
+    #[test]
+    fn the_walk_stops_at_its_bound_having_read_the_shallow_names_first() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let root = scratch.path();
+        std::fs::create_dir_all(root.join("a")).expect("create");
+        std::fs::create_dir_all(root.join("z/y/x")).expect("create");
+        std::fs::write(root.join("a/needle_a.rs"), "").expect("write");
+        std::fs::write(root.join("z/y/x/needle_deep.rs"), "").expect("write");
+        std::fs::write(root.join("needle_root.rs"), "").expect("write");
+
+        let names = |read: usize| -> Vec<String> {
+            found_beneath(root, "needle", &[], read)
+                .into_iter()
+                .map(|entry| entry.path)
+                .collect()
+        };
+        assert_eq!(
+            names(5),
+            vec!["a/needle_a.rs", "needle_root.rs"],
+            "read past its bound, or went deep before it went wide"
+        );
+        assert_eq!(
+            names(100),
+            vec!["a/needle_a.rs", "needle_root.rs", "z/y/x/needle_deep.rs"],
+            "the deep file is there to be found"
+        );
+    }
+
+    /// NAME-11: a name made after the last walk is found by the next, because each directory is
+    /// asked whether it has changed rather than the walk being kept.
+    #[test]
+    fn a_name_made_after_a_walk_is_found_by_the_next() {
+        let scratch = Scratch::new("found-fresh");
+        assert!(matching(&scratch.path, "newcomer", &[]).is_empty());
+        put(&scratch, "crates/tui/newcomer.rs");
+        assert_eq!(
+            paths(&matching(&scratch.path, "newcomer", &[])),
+            vec!["crates/tui/newcomer.rs"]
+        );
+    }
+
+    /// NAME-8, NAME-11: a name found below that holds a space is written escaped and read back as
+    /// the file it is, as one the directory offers is.
+    #[test]
+    fn a_name_with_a_space_found_below_reads_back_as_that_file() {
+        let scratch = Scratch::new("found-space");
+        put(&scratch, "My Documents/my notes.md");
+        let offered = matching(&scratch.path, "notes", &[]);
+        assert_eq!(paths(&offered), vec!["My Documents/my notes.md"]);
+        let line = format!("read @{} now", escape(&offered[0].path));
+        assert_eq!(referenced(&line), vec!["My Documents/my notes.md"]);
+    }
+
+    /// NAME-7, NAME-11: Enter still decides a finished name from the workspace and not from the
+    /// rows offered. `lib.rs` is a file of the root and is sent, though another `lib.rs` is offered
+    /// below it; a fragment completes to the row at the cursor, a found row included.
+    #[test]
+    fn enter_sends_a_finished_name_and_completes_a_fragment_to_a_found_row() {
+        let scratch = Scratch::new("found-enter");
+        put(&scratch, "lib.rs");
+        put(&scratch, "crates/tui/lib.rs");
+
+        let finished = matching(&scratch.path, "lib.rs", &[]);
+        assert_eq!(paths(&finished), vec!["lib.rs", "crates/tui/lib.rs"]);
+        assert!(
+            !enter_completes(&scratch.path, "lib.rs", &finished, 0, &[]),
+            "a finished name was completed away into a name found below it"
+        );
+        assert!(
+            enter_completes(&scratch.path, "lib.rs", &finished, 1, &[]),
+            "the arrows chose the found row"
+        );
+
+        let half = matching(&scratch.path, "lbrs", &[]);
+        assert_eq!(paths(&half), vec!["lib.rs", "crates/tui/lib.rs"]);
+        assert!(enter_completes(&scratch.path, "lbrs", &half, 0, &[]));
+        assert!(!names_a_file(&scratch.path, "lbrs", &[]));
+    }
+
     /// A scratch workspace with a reference directory beside it, and the alias list naming it.
     fn with_a_reference(name: &str) -> (Scratch, Scratch, Vec<(String, PathBuf)>) {
         let workspace = Scratch::new(name);
@@ -954,8 +1543,8 @@ mod tests {
         std::fs::write(workspace.path.join("parser/own.rs"), "x").expect("file");
         assert_eq!(
             paths(&matching(&workspace.path, "par", &sources)),
-            vec!["parser/"],
-            "one row, the workspace's"
+            vec!["parser/", "parser/own.rs"],
+            "one `parser/` row, the workspace's, then the file found inside it"
         );
         assert_eq!(
             paths(&matching(&workspace.path, "parser/", &sources)),
@@ -964,6 +1553,21 @@ mod tests {
         assert_eq!(
             resolved(&workspace.path, "parser/own.rs", &sources).as_deref(),
             Ok("parser/own.rs")
+        );
+    }
+
+    /// REFER-6, NAME-11: a name under an alias is answered by the alias's directory alone. The walk
+    /// covers the workspace, so `parser/l` is not looked for there, where `pars/er/lib.rs` holds
+    /// its characters in order.
+    #[test]
+    fn a_name_under_an_alias_is_not_looked_for_in_the_workspace() {
+        let (workspace, _library, sources) = with_a_reference("alias-not-walked");
+        put(&workspace, "pars/er/lib.rs");
+        assert!(matching(&workspace.path, "parser/l", &sources).is_empty());
+        assert_eq!(
+            paths(&matching(&workspace.path, "lib", &sources)),
+            vec!["pars/er/lib.rs", "crates/tui/lib.rs"],
+            "the workspace is still walked for a name with no alias in it"
         );
     }
 
