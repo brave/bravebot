@@ -2085,7 +2085,9 @@ mod tests {
         scripted_responses(statuses.into_iter().map(refused_with).collect())
     }
 
-    /// Answer each request with the next of `responses`, and hand on the body each one carried.
+    /// Answer each request with the next of `responses`, and hand on the body each one carried. A
+    /// body is on the channel before its response is written, so every request the client has an
+    /// answer to can be read with `try_iter` once the client returns.
     fn scripted_responses(
         responses: Vec<Vec<u8>>,
     ) -> (Request, std::sync::mpsc::Receiver<Vec<u8>>) {
@@ -2105,8 +2107,11 @@ mod tests {
             for (response, silent) in responses {
                 let (mut stream, _) = listener.accept().unwrap();
                 let body = read_request(&mut stream);
+                // Handed on before the response is written, so a client that has its answer
+                // returns after the body is on the channel and a test reading it then misses none.
+                // A test that has dropped the receiver is still answered.
+                let _ = sent.send(body);
                 stream.write_all(&response).unwrap();
-                sent.send(body).unwrap();
                 if silent {
                     let _ = stream.read(&mut [0; 1]);
                 }
