@@ -113,6 +113,8 @@ mod tests {
                 "tool-finished": 30,
                 "turn-finished": 30,
                 "prompt-shown": 30,
+                "checkout-made": 30,
+                "compacted": 30,
                 "session-started": 30,
                 "session-ended": 5,
             })
