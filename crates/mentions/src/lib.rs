@@ -1138,7 +1138,12 @@ mod tests {
             .count();
         assert!(held >= 5, "only {held} of the names could be made here");
 
-        let offered = matching(&scratch.path, "a", &[]);
+        // The rows the directory holds for the prefix. Names found below it or by a fragment
+        // follow them and are not what this asks about.
+        let offered: Vec<Entry> = matching(&scratch.path, "a", &[])
+            .into_iter()
+            .filter(|entry| entry.path.starts_with('a'))
+            .collect();
         assert_eq!(offered.len(), held, "{:?}", paths(&offered));
         let mut lines = Vec::new();
         for entry in &offered {

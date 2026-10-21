@@ -192,10 +192,13 @@ fn an_entry_holding_a_no_break_space_is_written_so_the_prompt_names_it() {
         json!({ "session": &project.session, "line": "read @a" }),
     )
     .expect("answered");
-    assert_eq!(
-        offered(&offer),
-        vec!["a b.md", "a.md", "a.md\\", "a\u{a0}b.md"]
-    );
+    // The rows for the prefix come first, and names a fragment finds below the root follow them.
+    let listed: Vec<&str> = offered(&offer)
+        .into_iter()
+        .filter(|path| path.starts_with('a'))
+        .collect();
+    assert_eq!(listed, vec!["a b.md", "a.md", "a.md\\", "a\u{a0}b.md"]);
+    assert_eq!(offered(&offer)[..4], listed[..]);
     assert_eq!(offer["entries"][2]["written"], json!("a.md\\\\"));
     assert_eq!(offer["entries"][3]["written"], json!("a\\\u{a0}b.md"));
     for (row, file) in [(2, "a.md\\"), (3, "a\u{a0}b.md")] {

@@ -461,7 +461,7 @@ fn a_name_ending_in_a_no_break_space_is_not_offered_beside_the_name_it_looks_lik
     std::fs::write(scratch.path.join("a.md\u{a0}"), "x").expect("write");
     let mut session = session(&scratch);
     typing(&mut session, "read @a.md");
-    assert_eq!(offered_paths(&session), vec!["a.md"]);
+    assert_eq!(offered_starting(&session, "a.md"), vec!["a.md"]);
 
     handle_key(&mut session, key(KeyCode::Tab));
     assert_eq!(session.input(), "read @a.md ");
@@ -485,7 +485,10 @@ fn a_name_with_a_no_break_space_completes_to_a_reference_that_names_it() {
     std::fs::write(scratch.path.join("a\u{a0}b.md"), "x").expect("write");
     let mut session = session(&scratch);
     typing(&mut session, "read @a");
-    assert_eq!(offered_paths(&session), vec!["a b.md", "a\u{a0}b.md"]);
+    assert_eq!(
+        offered_starting(&session, "a"),
+        vec!["a b.md", "a\u{a0}b.md"]
+    );
 
     handle_key(&mut session, key(KeyCode::Down));
     handle_key(&mut session, key(KeyCode::Tab));
@@ -511,7 +514,7 @@ fn a_name_ending_in_a_backslash_completes_to_a_reference_that_names_it() {
     std::fs::write(scratch.path.join("a.md\\"), "x").expect("write");
     let mut session = session(&scratch);
     typing(&mut session, "read @a.md");
-    assert_eq!(offered_paths(&session), vec!["a.md", "a.md\\"]);
+    assert_eq!(offered_starting(&session, "a.md"), vec!["a.md", "a.md\\"]);
 
     handle_key(&mut session, key(KeyCode::Down));
     handle_key(&mut session, key(KeyCode::Tab));
@@ -557,6 +560,14 @@ fn offered_paths(session: &Session) -> Vec<String> {
         }
         other => panic!("files were not offered: {other:?}"),
     }
+}
+
+/// The offered files that begin with `prefix`, which come before the names a fragment finds below
+/// the root (NAME-11).
+fn offered_starting(session: &Session, prefix: &str) -> Vec<String> {
+    let mut paths = offered_paths(session);
+    paths.retain(|path| path.starts_with(prefix));
+    paths
 }
 
 /// NAME-10: an `@` offers the past sessions after the files, and a title or an id narrows them.
