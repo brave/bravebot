@@ -257,6 +257,22 @@ person's file alone as well.
 `verified-by: bravebot_agent::spend_limit::the_spend_limit_question_is_never_closed_when_nobody_answers`
 `verified-by: bravebot_agent::repeated_call::the_repeated_call_question_is_never_closed_when_nobody_answers`
 
+<a id="ASK-10"></a>
+### ASK-10: the line under the call counts the questions asked
+
+The line a front end draws under the call says how many questions were asked, as `3 questions asked`
+or `1 question asked`, whatever the person did with them. It does not count answers.
+
+**Why.** The line is read by a person returning to the session. A count of answers tells them their
+questions were settled when they were skipped. The kernel puts the replies into words for the planner,
+and the line does not read them a second time to count them.
+
+`verified-by: bravebot_agent::tools::the_line_counts_a_skipped_question_as_asked_and_not_as_answered`
+`verified-by: bravebot_agent::tools::the_line_counts_the_questions_asked_where_no_reply_came_back`
+`verified-by: bravebot_agent::tools::the_line_counts_every_question_asked_where_each_was_answered`
+`verified-by: bravebot_agent::tools::the_line_counts_one_question_in_the_singular`
+`verified-by: bravebot_agent::turn::the_line_under_a_skipped_question_does_not_call_it_an_answer`
+
 ## Known costs
 
 - The setting applies to the terminal interface's picker alone. A session in lines (`--plain`) reads

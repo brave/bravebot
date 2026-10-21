@@ -10641,9 +10641,15 @@ fn ask_user<S: Sink, C: Confirmer>(
     let answers = confirmer.ask_user(&asking);
 
     // The kernel puts the replies into words and lines them up against the questions, so nothing
-    // here branches on what the person said or counts what they answered.
+    // here branches on what the person said or counts what they answered. The line a person
+    // reads counts the questions asked for the same reason: a count of replies would be a second
+    // reading of them, and a skipped question has no reply to count.
     match policy.record_answers("ask_user", &series, &answers) {
-        Ok(text) => Produced::new(text, "", tally(entries.len(), "answer", "answers")),
+        Ok(text) => Produced::new(
+            text,
+            "",
+            format!("{} asked", tally(entries.len(), "question", "questions")),
+        ),
         Err(denial) => Produced::problem(format!("refused: {denial}")),
     }
 }
@@ -15472,7 +15478,7 @@ mod tests {
         }
 
         /// Run the tool against a fresh policy in a workspace the user vouched for.
-        fn call<C: Confirmer>(confirmer: &mut C, arguments: Value) -> Labelled<String> {
+        fn produced_by<C: Confirmer>(confirmer: &mut C, arguments: Value) -> Produced {
             let mut sink = RecordingSink::new();
             let mut trust = TrustStore::new("/work");
             trust.trust(".");
@@ -15492,7 +15498,16 @@ mod tests {
                 "a question named an origin: {}",
                 produced.origin
             );
-            produced.text
+            produced
+        }
+
+        fn call<C: Confirmer>(confirmer: &mut C, arguments: Value) -> Labelled<String> {
+            produced_by(confirmer, arguments).text
+        }
+
+        /// The line the person reads under the call.
+        fn line_under<C: Confirmer>(confirmer: &mut C, arguments: Value) -> String {
+            produced_by(confirmer, arguments).note
         }
 
         fn released(text: &Labelled<String>) -> String {
@@ -15620,6 +15635,53 @@ mod tests {
         fn approving_writes_does_not_answer_a_question() {
             let mut confirmer = ApproveWrites;
             assert!(released(&call(&mut confirmer, one_question())).contains("declined"));
+        }
+
+        /// A person coming back to the session reads this line first. Three questions were asked
+        /// and the interface returned two replies, one of them a skip, so the questions asked,
+        /// the replies returned and the replies that chose something are three different numbers.
+        /// A count taken from the replies reads as one or two questions, and a count of answers
+        /// tells the person every question was settled.
+        #[test]
+        fn the_line_counts_a_skipped_question_as_asked_and_not_as_answered() {
+            let mut confirmer = Watching {
+                reply: vec![Answer::Declined, Answer::Chosen(vec![0])],
+                ..Default::default()
+            };
+            assert_eq!(
+                line_under(&mut confirmer, three_questions()),
+                "3 questions asked"
+            );
+        }
+
+        /// An interface that cannot ask returns no replies at all, and every question is read as
+        /// declined. The count is of what the planner asked, so it does not follow how many replies
+        /// came back.
+        #[test]
+        fn the_line_counts_the_questions_asked_where_no_reply_came_back() {
+            let mut confirmer = Unattended;
+            assert_eq!(
+                line_under(&mut confirmer, three_questions()),
+                "3 questions asked"
+            );
+        }
+
+        #[test]
+        fn the_line_counts_every_question_asked_where_each_was_answered() {
+            let mut confirmer = ChoosesFirst;
+            assert_eq!(
+                line_under(&mut confirmer, three_questions()),
+                "3 questions asked"
+            );
+        }
+
+        #[test]
+        fn the_line_counts_one_question_in_the_singular() {
+            let mut confirmer = Unattended;
+            assert_eq!(
+                line_under(&mut confirmer, one_question()),
+                "1 question asked"
+            );
         }
 
         /// The property the whole tool rests on. Once the context has met untrusted content the
