@@ -3245,6 +3245,28 @@ mod tests {
         assert_eq!(ids, vec!["approved"]);
     }
 
+    /// A gateway the machine-level layer approves is held to the retry count and the quiet gap that
+    /// layer states, and a person's own entry for the same id does not lend it more.
+    #[test]
+    fn a_managed_gateway_states_its_own_retry_count_and_idle_gap() {
+        let managed = managed::scratch(
+            "resolve-gateways-patience",
+            r#"{"provider": {"approved": {"options": {
+                "baseURL": "https://approved.example/v1",
+                "maxRetries": 1, "idleTimeoutMs": 30000}}}}"#,
+        );
+        let settings = Settings::parse(
+            r#"{"provider": {"approved": {"options": {
+                "baseURL": "https://approved.example/v1",
+                "maxRetries": 7, "idleTimeoutMs": 600000}}}}"#,
+        );
+        let config =
+            resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
+        let patience = config.providers[0].patience;
+        assert_eq!(patience.max_retries, Some(1));
+        assert_eq!(patience.idle_timeout, Some(Duration::from_secs(30)));
+    }
+
     /// The token each gateway resolves to, by id, from the sources named.
     fn tokens_with_stored(
         managed: &Managed,

@@ -112,6 +112,12 @@ the moment it begins, and waits to begin no longer than any other reply. The gap
 two pieces of a reply is the same however long the request says its reply may take. A stream from
 this machine that asks is the one exception ([NET-10](#NET-10)).
 
+A request may state a gap of its own where the person it is made for chose one
+([BACKEND-55](backends.md#BACKEND-55)). That gap replaces the default, longer or shorter, and moves
+no other bound: the wait for a reply to begin and the time the whole of it may take stay as the
+request and this clause set them, so a gap longer than those leaves the reply to be ended by them.
+A stream waited on through any silence ([NET-10](#NET-10)) is held to no gap, stated or not.
+
 A reply cut at the end of its time is reported as out of time, apart from one that stopped arriving,
 and is not worth another attempt. It was still being written when it was cut, and asked for again it
 is written as long again and billed again. A reply asked for whole within a time its request stated
@@ -135,6 +141,9 @@ however long its reply was going to be.
 `verified-by: bravebot_net::egress::a_reply_written_before_any_of_it_is_sent_is_out_of_time_when_it_outlasts_its_stated_bound`
 `verified-by: bravebot_net::egress::a_stream_is_waited_on_to_begin_no_longer_whatever_its_request_said`
 `verified-by: bravebot_net::egress::a_reply_that_stops_arriving_is_given_up_on_however_long_its_request_said_it_may_take`
+`verified-by: bravebot_net::egress::a_request_stating_a_longer_gap_between_pieces_is_waited_on_that_long`
+`verified-by: bravebot_net::egress::a_request_stating_a_shorter_gap_gives_up_on_a_quiet_reply_sooner`
+`verified-by: bravebot_net::egress::a_stated_gap_does_not_end_a_stream_from_this_machine_that_asks_to_be_waited_on`
 
 <a id="NET-6"></a>
 ### NET-6: a failure that means "not now" may be retried, and nothing else may
