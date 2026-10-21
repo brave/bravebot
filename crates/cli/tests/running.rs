@@ -1604,7 +1604,12 @@ fn a_traced_run_writes_its_decisions_to_stderr_while_it_is_still_going() {
 
     release.send(()).expect("release");
     let output = child.wait_with_output().expect("the run ends");
-    let rest: Vec<String> = read.try_iter().collect();
+    // The run ending is not the reader thread having forwarded its last line: read until the
+    // thread drops its sender at end of file, which a `try_iter` would race.
+    let mut rest: Vec<String> = Vec::new();
+    while let Ok(line) = read.recv_timeout(Duration::from_secs(30)) {
+        rest.push(line);
+    }
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("all done"),
         "{rest:?}"
