@@ -699,8 +699,9 @@ the context its arguments were written in has met untrusted content.
 The arguments are drawn as the planner wrote them, one per row as a JSON value. The description is
 the one on the list the person vouched for, behind the margin and cut to two rows until `e`
 expands it. `1` or `y` is answer 1. `2` is answer 2. `3`, `n` or Esc is answer 3. Enter answers
-nothing, so a key pressed for the last question does not answer this one. Answer 3 sends nothing
-and tells the planner the person declined.
+nothing, so a key pressed for the last question does not answer this one. Answer 3 sends nothing,
+tells the planner the person declined, and is recorded in the trail as a refusal, as a call nobody
+could be asked about is ([TRACE-1](trace.md#TRACE-1)).
 
 A call that is not asked about, under an allow rule, answer 2 or bypassing, has no prompt to show
 its arguments, so the transcript row names the call by `alias:tool` and its arguments, asked or
@@ -728,6 +729,7 @@ the content out ends it. A workspace file the planner reads does not reach it.
 
 `verified-by: bravebot_agent::mcp::a_vouched_list_offers_its_tool_and_a_call_answers_quarantined`
 `verified-by: bravebot_agent::mcp::a_refused_call_reaches_no_server`
+`verified-by: bravebot_agent::mcp::a_call_the_person_does_not_approve_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::mcp::answer_two_stops_asking_for_the_one_tool_in_the_one_project`
 `verified-by: bravebot_agent::mcp::answer_two_follows_the_session_to_another_project`
 `verified-by: bravebot_agent::mcp::a_rule_decides_a_call_before_the_prompt`

@@ -74,6 +74,12 @@ way when it is not approved. A `download_url` asks about its host and then about
 records the question that was answered no: a host that is refused as a fetch, and a file that is
 refused as a write, with the second question not put once the first is refused.
 
+A call to a server's tool ([SERVERS-7](mcp-servers.md#SERVERS-7)) that is put to a person who does
+not approve it is recorded the same way, as a refusal under `approval`. The entry names the call as
+`alias:tool`, the alias the person gave the server and the word on the list they vouched for, and
+says the call was not approved and the server was not called. A call a `deny` rule refuses was never
+put to a person and is recorded under `mcp_call` alone.
+
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
 
@@ -120,6 +126,9 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::a_fetch_or_a_save_the_person_does_not_approve_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::turn::a_file_of_an_apply_the_person_does_not_approve_is_recorded_under_the_apply`
 `verified-by: bravebot_agent::manifest::a_planned_write_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_core::policy::an_mcp_call_the_person_did_not_approve_is_a_refusal_under_approval`
+`verified-by: bravebot_agent::mcp::a_call_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::mcp::a_call_a_rule_refuses_is_not_recorded_as_one_the_person_did_not_approve`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content

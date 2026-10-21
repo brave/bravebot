@@ -44,8 +44,9 @@ pub(crate) struct OneShot<R: Read, W: Write> {
     /// Kept here, at the one place that knows the answer was a refusal for want of anybody to ask,
     /// so the run can end on the status that says a gate refused something (CLI-6). A question the
     /// tool answers with a problem for the planner without telling the policy leaves the run's own
-    /// clean flag true, and this is then the only record of it. A write or a fetch is told to the
-    /// policy, so it is kept for the status alone (`Declined::in_the_trail`).
+    /// clean flag true, and this is then the only record of it. A write, a fetch or a call to a
+    /// server's tool is told to the policy, so it is kept for the status alone
+    /// (`Declined::in_the_trail`).
     declined: Vec<Declined>,
 }
 
@@ -223,7 +224,15 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
         &mut self,
         request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
-        self.refusing.confirm_mcp_call(request)
+        let decision = self.refusing.confirm_mcp_call(request);
+        if decision.decision == Decision::Reject {
+            self.declined.push(Declined {
+                gate: "mcp_call",
+                reason: "the call was not approved, and nobody was there to approve it",
+                in_the_trail: true,
+            });
+        }
+        decision
     }
 
     fn confirm_path(&mut self, request: &bravebot_agent::confirm::PathRequest) -> Decision {

@@ -7416,22 +7416,35 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// the write was not approved. `call` is the tool, or a plan's step and its tool. The sentence
     /// is fixed text and names nothing the call carried (TRACE-2).
     pub fn refuse_unapproved_write(&mut self, call: &str) {
-        self.refuse_unapproved(call, "write", "written");
+        self.refuse_unapproved(call, "write", "nothing was written");
     }
 
     /// Record that a fetch was put to the person and not approved, so nothing was fetched
     /// (TRACE-1). The arguments and the reasons are those of [`Policy::refuse_unapproved_write`].
     pub fn refuse_unapproved_fetch(&mut self, call: &str) {
-        self.refuse_unapproved(call, "fetch", "fetched");
+        self.refuse_unapproved(call, "fetch", "nothing was fetched");
     }
 
-    /// The one sentence either of the two says, from words of this file's own, so no caller can put
+    /// Record that a call to `tool` of the server declared as `alias` was put to the person and not
+    /// approved, so the server was not called (TRACE-1). The reasons are those of
+    /// [`Policy::refuse_unapproved_write`]. The call is named as the gates name it, by the alias
+    /// the person gave the server and the word on the list they vouched for, never by anything the
+    /// server answered or the planner wrote beside it (TRACE-2).
+    pub fn refuse_unapproved_call(&mut self, alias: &str, tool: &str) {
+        self.refuse_unapproved(
+            &format!("{alias}:{tool}"),
+            "call",
+            "the server was not called",
+        );
+    }
+
+    /// The one sentence each of the three says, from words of this file's own, so no caller can put
     /// anything a call carried into the trail (TRACE-2).
     fn refuse_unapproved(&mut self, call: &str, asked: &'static str, undone: &'static str) {
         let _ = self.deny(
             "approval",
             Principle::Capability,
-            format!("{call}: the {asked} was not approved, so nothing was {undone}"),
+            format!("{call}: the {asked} was not approved, so {undone}"),
         );
     }
 
@@ -18095,6 +18108,49 @@ five
                         "approval",
                         Principle::Capability,
                         "step 2: write_file: the write was not approved, so nothing was written"
+                    ),
+                ]
+            );
+        }
+
+        /// TRACE-1: a call to a server's tool put to the person and not approved is a refusal under
+        /// `approval`, naming the tool as the alias the person gave the server and the word on its
+        /// list, in fixed words that carry nothing the call or the server held (TRACE-2), and the
+        /// turn does not end as clean. The regression it rejects is a no that leaves the question
+        /// in the trail and nothing about its answer. The two calls name different servers and
+        /// tools, so an entry that names one fixed tool or leaves the alias out fails it.
+        #[test]
+        fn an_mcp_call_the_person_did_not_approve_is_a_refusal_under_approval() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_unapproved_call("weather", "get_forecast");
+            turn.refuse_unapproved_call("notes", "append");
+            assert!(!turn.finish(), "a turn with an unapproved call ended clean");
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                refused,
+                [
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "weather:get_forecast: the call was not approved, so the server was not called"
+                    ),
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "notes:append: the call was not approved, so the server was not called"
                     ),
                 ]
             );
