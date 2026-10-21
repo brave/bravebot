@@ -2537,7 +2537,10 @@ every round, in place of the session's own, including one the person picked with
 that begins in any other mode is sent to the session's model, so the next acting turn is on the
 model the plan turn was not. The mode read is the one the turn began in: a mode chosen while the
 turn runs ([MODE-8](permission-modes.md#MODE-8)) does not change the model, so a turn moved out of
-plan mode finishes on the plan model and a turn moved into it finishes on the session's.
+plan mode finishes on the plan model and a turn moved into it finishes on the session's. A front
+end that sizes anything from the mode before the turn starts reads it once and gives the turn that
+reading, so a mode pressed as the turn opens cannot give the turn one model and the front end
+another.
 
 The setting yields to a model named more specifically: a model a definition names for the turn
 ([DELEGATE-22](delegation.md#DELEGATE-22)), and `--model` on a one-shot run ([CLI-9](cli.md#CLI-9)).
@@ -2550,7 +2553,9 @@ The turn runs on the session's model and the person is told which name was set a
 from `summaryModel`, which refuses the request: that key caps a cost, and this one asks for a
 stronger model where one is available, so refusing the turn would remove the planning it was set
 for. The context budget of an interactive turn on the plan model is measured against that model's
-window ([BACKEND-7](#BACKEND-7)).
+window ([BACKEND-7](#BACKEND-7)). The order above is settled by one function in the agent, which
+the turn asks for its model and the terminal asks for the window, so the window is the one of the
+model the turn is sent to.
 
 **Why.** A person who wants a stronger model to plan and a cheaper one to act has to switch with
 `/model` by hand at every change of mode. The mode is a person's own answer and the name is their
@@ -2564,7 +2569,11 @@ the service that serves it, as the `model` key is.
 `verified-by: bravebot_agent::turn::a_delegate_in_plan_mode_keeps_the_model_it_was_given`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_plan_model`
 `verified-by: bravebot_config::lib::the_plan_setting_resolves_a_tier_word_and_is_absent_when_unset`
+`verified-by: bravebot_agent::turn::a_turn_begins_in_the_mode_it_was_told_and_not_the_one_held_when_it_opens`
+`verified-by: bravebot_agent::turn::the_model_answering_is_the_model_the_turn_is_sent_to`
+`verified-by: bravebot_agent::turn::a_more_specific_model_outranks_the_plan_model_in_every_mode`
 `verified-by: bravebot_tui::app::a_plan_turn_takes_the_plan_models_window_and_no_other_turn_does`
+`verified-by: bravebot_tui::app::the_model_a_window_is_read_for_follows_the_order_the_agent_settles`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_plan_model_is_not_obeyed`
 
 ## Known costs

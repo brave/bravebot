@@ -544,6 +544,54 @@ pub fn plan_model(config: &Config, egress: &Egress) -> Result<Option<String>, St
     }
 }
 
+/// Which model answers a turn in place of the one its task names.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Answering {
+    /// The model the addressed definition wrote (DELEGATE-22).
+    Definition,
+    /// The model `planModel` names, for a turn that began in plan mode.
+    Plan(String),
+    /// `planModel` names a model this machine cannot use. The turn stays on the task's own, and
+    /// the name is the one it says it set aside.
+    PlanSetAside(String),
+    /// Nothing names another model, so the task's own answers.
+    Task,
+}
+
+/// The order in which a turn's model is settled (BACKEND-56), written once for every caller that
+/// needs it.
+///
+/// A model a definition names for the turn outranks `planModel`, and so do the command line's
+/// `--model` and a delegate's own model, which is its definition's boundary. Otherwise a turn that
+/// began in plan mode takes `planModel`.
+///
+/// The turn asks it as it settles its model, and a front end asks it before the turn starts to
+/// size the context budget against the model that will answer, so the window follows the model the
+/// turn runs on. Both pass the mode the turn began in, read once: a mode chosen between two
+/// readings would give each of them a different answer.
+pub fn answering(
+    config: &Config,
+    egress: &Egress,
+    started_in: crate::PermissionMode,
+    task: &crate::Task,
+    definition_names_a_model: bool,
+) -> Answering {
+    if definition_names_a_model && !task.model_outranks_a_definition {
+        return Answering::Definition;
+    }
+    if started_in != crate::PermissionMode::Plan
+        || task.delegate.is_some()
+        || task.model_outranks_a_definition
+    {
+        return Answering::Task;
+    }
+    match plan_model(config, egress) {
+        Ok(Some(named)) => Answering::Plan(named),
+        Ok(None) => Answering::Task,
+        Err(named) => Answering::PlanSetAside(named),
+    }
+}
+
 /// What the machine-level layer's refusal of a model says, naming the file that refused it.
 ///
 /// Here rather than in each interface because three of them say it: a run that settles on the model,

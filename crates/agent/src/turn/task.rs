@@ -294,6 +294,14 @@ pub struct Task {
     /// The confirmer enforces it. This is the half the model is told, and the two are set from the
     /// same value by the caller.
     pub permission_mode: crate::LiveMode,
+    /// The mode this turn began in, where the caller read it before the turn started.
+    ///
+    /// `None` for a caller that sized nothing from the mode, and the turn then reads
+    /// [`Task::permission_mode`] as it opens. A caller that did, as the terminal does with the
+    /// window of a turn on the plan model (BACKEND-56), reads it once and says so here. The key
+    /// that sets the mode can be pressed between two readings, and a turn that took the other one
+    /// would run on a model the caller did not size anything for.
+    pub began_in: Option<crate::PermissionMode>,
     /// Which tick of a loop this turn is, where a caller is running one.
     ///
     /// `None` for an ordinary turn, and for a prompt the person typed in the middle of a loop.
@@ -506,6 +514,7 @@ impl Task {
             permissions: Permissions::new(),
             // Asking, which is what a turn has always done.
             permission_mode: crate::LiveMode::default(),
+            began_in: None,
             // Asking too: nobody has said a check's word may stand in for an answer.
             auto_vetting: false,
             // Nothing said about either destination, which is a caller that read no settings
@@ -853,6 +862,15 @@ impl Task {
     /// person changes while the turn runs is the one the rest of the turn follows (MODE-8).
     pub fn with_permission_mode(mut self, mode: impl Into<crate::LiveMode>) -> Self {
         self.permission_mode = mode.into();
+        self
+    }
+
+    /// Say which mode the turn began in, from a reading the caller has already taken.
+    ///
+    /// The turn takes it as the mode it started in, and reads [`Task::permission_mode`] only for
+    /// what it decides after that, so a mode chosen as the turn opens changes none of it (MODE-8).
+    pub fn beginning_in(mut self, mode: crate::PermissionMode) -> Self {
+        self.began_in = Some(mode);
         self
     }
 
