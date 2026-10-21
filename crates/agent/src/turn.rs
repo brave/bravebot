@@ -1387,6 +1387,12 @@ impl Worked {
     fn adopt(&mut self, round: usize, delegate: Worked) {
         self.count(round, delegate.changed_at.is_some(), delegate.ran_a_program);
     }
+
+    /// Count a program a delegate ran in a checkout holding this run's changes as this run's own,
+    /// and nothing it changed there.
+    fn adopt_run(&mut self, delegate: Worked) {
+        self.ran_a_program |= delegate.ran_a_program;
+    }
 }
 
 /// Show the person what the planner said on the way to its calls: released to a screen and nowhere
@@ -1682,10 +1688,22 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 notices.extend(ended.notices);
                 // On both of the ways a run can end too, since a stopped delegate leaves the files
                 // it changed and has run what it ran. Only from one that shares this turn's
-                // workspace: a delegate in a checkout of its own built the commit the checkout
-                // holds, which has none of this turn's changes in it (TURN-4).
-                if working.checkout.is_none() {
-                    worked.adopt(round, ended.worked);
+                // workspace, or from one in a checkout given its changes: a delegate in a checkout
+                // of its own built the commit the checkout holds, which has none of this turn's
+                // changes in it (TURN-4).
+                match working.checkout.as_deref() {
+                    None => worked.adopt(round, ended.worked),
+                    // A checkout given the working directory's changes was built and tested with
+                    // them, so a program run there counts as run against this turn's change, and
+                    // what it wrote there is not this turn's (CHECKOUT-23).
+                    Some(checkout)
+                        if checkout
+                            .carried()
+                            .is_some_and(|carried| carried.changed_anything()) =>
+                    {
+                        worked.adopt_run(ended.worked)
+                    }
+                    Some(_) => {}
                 }
                 let ran = Some((ended.took, ended.rounds));
                 (ended.delegated, ran, partial, requests)

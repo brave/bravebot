@@ -263,6 +263,12 @@ Any other value loads the definition working in your working tree, and the turn 
 .bravebot/agents/migrator.md is loaded without a checkout: its isolation line says none, and only checkout and worktree ask for one
 ```
 
+The planner can also ask for the changes in your working tree to be carried in, with
+`isolation: checkout_with_changes` on the call, so a `checker` builds and tests what the planner
+just wrote and not the last commit. A definition cannot ask for that: the call is what knows which
+tree the session has. The delegate is told which files were carried, and the planner is told in the
+answer to the call, along with any file that was left and why.
+
 A `reader` is never given one, since it writes nothing, and the turn says that too. Where a
 checkout cannot be made, as when the delegate starting it already works in one, the session keeps
 no state directory or the working directory is not in a git repository, the delegate does not

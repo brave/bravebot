@@ -15,10 +15,11 @@ are content. The call answers as soon as the kernel has approved it, and the rep
 What a delegate is, what it may do and how long it may live is [delegation.md](../delegation.md);
 this spec is the call surface.
 
-[CHECKOUT-1](../checkouts.md#CHECKOUT-1) adds a routing field, `isolation`, whose one value,
-`checkout`, asks for a checkout of the delegate's own. A definition `kind` names may ask for one
-itself ([CHECKOUT-2](../checkouts.md#CHECKOUT-2)), and its delegate then has one whether or not the
-call asks.
+[CHECKOUT-1](../checkouts.md#CHECKOUT-1) adds a routing field, `isolation`, whose value `checkout`
+asks for a checkout of the delegate's own and whose value `checkout_with_changes` also carries the
+working directory's uncommitted changes into it ([CHECKOUT-23](../checkouts.md#CHECKOUT-23)). A
+definition `kind` names may ask for a checkout itself ([CHECKOUT-2](../checkouts.md#CHECKOUT-2)), and
+its delegate then has one whether or not the call asks.
 
 ## Clauses
 

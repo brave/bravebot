@@ -9742,7 +9742,11 @@ fn spawn_agent<S: Sink, R: Reporter>(
         String::new(),
     );
     let mut started = Vec::new();
-    let mut commits: Vec<String> = Vec::new();
+    // Each checkout's number, the commit it holds and what was carried into it, in the order they
+    // were made.
+    let mut checkouts: Vec<(String, String, Option<crate::workspace::Carried>)> = Vec::new();
+    // Read once for the call and put into each checkout it makes (CHECKOUT-23).
+    let mut plan: Option<crate::workspace::CarryPlan> = None;
     let mut kind_name = String::new();
     let mut rest_refused: Option<String> = None;
 
@@ -9782,8 +9786,8 @@ fn spawn_agent<S: Sink, R: Reporter>(
 
         // Compared only once the gate above has passed, which is when this run has met nothing a
         // name could be steered by (CHECKOUT-1).
-        let place = match wants_checkout(arguments, &spec, tools) {
-            Ok(state) => state,
+        let wanted = match wants_checkout(arguments, &spec, tools) {
+            Ok(wanted) => wanted,
             // Approved by the gate and refused here, so it starts nothing and takes no place
             // under the turn's ceiling (DELEGATE-7).
             Err((cause, refusal)) => {
@@ -9795,7 +9799,8 @@ fn spawn_agent<S: Sink, R: Reporter>(
                 break;
             }
         };
-        let made = match place {
+        let with_changes = wanted.as_ref().is_some_and(|wanted| wanted.with_changes);
+        let made = match wanted.map(|wanted| wanted.place) {
             None => None,
             Some(place) => match match place {
                 CheckoutPlace::State(state) => {
@@ -9811,6 +9816,15 @@ fn spawn_agent<S: Sink, R: Reporter>(
                             policy.sink(),
                             crate::workspace::Happened::Made,
                             checkout.path(),
+                        );
+                    }
+                    if with_changes {
+                        let plan = plan.get_or_insert_with(|| tools.workspace.plan_carry(policy));
+                        tools.workspace.carry_into(
+                            policy,
+                            plan,
+                            &made,
+                            crate::workspace::CarryBound::FIXED,
                         );
                     }
                     Some(made)
@@ -9872,7 +9886,11 @@ fn spawn_agent<S: Sink, R: Reporter>(
                     &tools.workspace.root().to_string_lossy(),
                     &made.root().to_string_lossy(),
                 );
-                commits.push(checkout.commit().to_string());
+                checkouts.push((
+                    checkout.id().to_string(),
+                    checkout.commit().to_string(),
+                    checkout.carried().cloned(),
+                ));
             }
             seeded.workspace = Some(made);
         }
@@ -9899,17 +9917,33 @@ fn spawn_agent<S: Sink, R: Reporter>(
             started.len()
         )
     };
-    let body = match commits.first() {
-        Some(commit) if started.len() == 1 => format!(
+    let body = match checkouts.first() {
+        Some((_, commit, None)) if started.len() == 1 => format!(
             "{body} It works in a checkout of commit {commit}, which has no changes that are not \
              committed and is not your working directory. It keeps no memory between \
              conversations and is not offered lsp. {}",
             checkouts_share_refs(tools.running)
         ),
-        Some(commit) => format!(
+        Some((_, commit, None)) => format!(
             "{body} Each works in a checkout of its own of commit {commit}, which has no changes \
              that are not committed and is not your working directory. None keeps memory between \
              conversations or is offered lsp. {}",
+            checkouts_share_refs(tools.running)
+        ),
+        Some((_, commit, Some(_))) if started.len() == 1 => format!(
+            "{body} It works in a checkout of commit {commit}, which is not your working \
+             directory. The driver tried to carry your working directory's uncommitted changes \
+             into it as they were when it was made. {} It keeps no memory between conversations \
+             and is not offered lsp. {}",
+            carried_summaries(&checkouts),
+            checkouts_share_refs(tools.running)
+        ),
+        Some((_, commit, Some(_))) => format!(
+            "{body} Each works in a checkout of its own of commit {commit}, none of which is your \
+             working directory. The driver tried to carry your working directory's uncommitted \
+             changes into each as they were when it was made. {} None keeps memory between \
+             conversations or is offered lsp. {}",
+            carried_summaries(&checkouts),
             checkouts_share_refs(tools.running)
         ),
         None => body,
@@ -9933,8 +9967,31 @@ fn spawn_agent<S: Sink, R: Reporter>(
     produced
 }
 
+/// What the planner is told was carried into the checkouts a call made (CHECKOUT-23): one account
+/// where every checkout was given the same, and each checkout's own where they differ.
+fn carried_summaries(checkouts: &[(String, String, Option<crate::workspace::Carried>)]) -> String {
+    let all: Vec<&crate::workspace::Carried> = checkouts
+        .iter()
+        .filter_map(|(_, _, carried)| carried.as_ref())
+        .collect();
+    match all.split_first() {
+        Some((first, rest)) if rest.iter().all(|carried| carried == first) => {
+            crate::delegate::carried_summary(first)
+        }
+        _ => checkouts
+            .iter()
+            .filter_map(|(id, _, carried)| {
+                carried
+                    .as_ref()
+                    .map(|carried| format!("{id}: {}", crate::delegate::carried_summary(carried)))
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
 /// Whether a delegate is given a checkout, because the call or its definition asks, or why it may
-/// not have one (CHECKOUT-1, CHECKOUT-2, CHECKOUT-3, CHECKOUT-6).
+/// not have one (CHECKOUT-1, CHECKOUT-2, CHECKOUT-3, CHECKOUT-6, CHECKOUT-23).
 ///
 /// A definition's request is refused where the call's would be, rather than dropped, so the
 /// planner cannot start that definition's delegate in the working directory.
@@ -9942,15 +9999,17 @@ fn wants_checkout<'a>(
     arguments: &Value,
     spec: &bravebot_core::delegate::DelegateSpec,
     tools: &Tools<'a>,
-) -> Result<Option<CheckoutPlace<'a>>, (CheckoutRefusal, String)> {
-    let called = match arguments.get("isolation") {
-        None | Some(Value::Null) => false,
-        Some(Value::String(value)) if value == "checkout" => true,
+) -> Result<Option<Wanted<'a>>, (CheckoutRefusal, String)> {
+    let (called, with_changes) = match arguments.get("isolation") {
+        None | Some(Value::Null) => (false, false),
+        Some(Value::String(value)) if value == "checkout" => (true, false),
+        Some(Value::String(value)) if value == "checkout_with_changes" => (true, true),
         Some(_) => {
             return Err((
                 CheckoutRefusal::UnknownIsolation,
-                "error: 'isolation' may only be \"checkout\"; leave it out for a delegate that \
-                 works in your working directory, unless its definition asks for one"
+                "error: 'isolation' may only be \"checkout\" or \"checkout_with_changes\"; leave \
+                 it out for a delegate that works in your working directory, unless its \
+                 definition asks for one"
                     .to_string(),
             ));
         }
@@ -9961,8 +10020,8 @@ fn wants_checkout<'a>(
     if spec.kind() == bravebot_core::delegate::Kind::Reader {
         return Err((
             CheckoutRefusal::Reader,
-            "refused: a reader writes nothing, so a checkout separates it from nobody and would \
-             show it the last commit in place of your working tree"
+            "refused: a reader writes nothing, so a checkout separates it from nobody, and a \
+             reader started without one reads your working tree as it is"
                 .to_string(),
         ));
     }
@@ -9996,10 +10055,21 @@ fn wants_checkout<'a>(
             ),
         ));
     }
-    Ok(Some(match tools.home {
+    let place = match tools.home {
         Some(state) if !bravebot_core::incognito::engaged() => CheckoutPlace::State(state),
         _ => CheckoutPlace::Temporary,
+    };
+    Ok(Some(Wanted {
+        place,
+        with_changes,
     }))
+}
+
+/// A checkout a delegate is to be given.
+struct Wanted<'a> {
+    place: CheckoutPlace<'a>,
+    /// Whether the working directory's uncommitted changes are carried into it (CHECKOUT-23).
+    with_changes: bool,
 }
 
 /// Where a checkout is made (CHECKOUT-6).
@@ -12914,10 +12984,39 @@ mod tests {
         assert_eq!(
             line("migrator"),
             "- migrator: Does it. Its delegates work in a checkout of the last commit, which \
-             holds no change not yet committed."
+             holds no change not yet committed unless the call sets isolation to \
+             \"checkout_with_changes\"."
         );
         assert_eq!(line("reviewer"), "- reviewer: Does it.");
         assert_eq!(line("tester"), "- tester: Does it.");
+    }
+
+    /// CHECKOUT-1, CHECKOUT-23: the planner is offered two values for `isolation`, and told that the
+    /// second also carries the working directory's changes and what for.
+    #[test]
+    fn the_isolation_field_offers_a_checkout_with_the_working_directorys_changes() {
+        let tools = for_planner(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+            &bravebot_core::delegate::Definitions::default(),
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let spawn = tools
+            .iter()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .expect("a planner is offered a way to delegate");
+        let isolation = &spawn.function.parameters["properties"]["isolation"];
+        assert_eq!(
+            isolation["enum"],
+            serde_json::json!(["checkout", "checkout_with_changes"])
+        );
+        let described = isolation["description"].as_str().expect("a description");
+        assert!(
+            described.contains("\"checkout_with_changes\" is the same, and also copies into it")
+                && described.contains("the files you wrote and the ones git status lists"),
+            "{described}"
+        );
     }
 
     /// CHECKOUT-7: the planner reads this before it fans out, and a fetch in each checkout moves
