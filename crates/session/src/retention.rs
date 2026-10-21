@@ -561,8 +561,18 @@ mod tests {
         assert_eq!(files_of(&state, "one", "0b0b0b0b-1111"), [true; 4]);
         assert_eq!(files_of(&state, "one", "another-session"), [false; 4]);
 
+        // A lock is released when the last copy of its file closes, and a process another test is
+        // starting holds a copy until it execs, so the release is waited for rather than assumed.
         drop(lease);
-        sweep(&state.path, days(30), SystemTime::now(), InUse::default());
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            sweep(&state.path, days(30), SystemTime::now(), InUse::default());
+            let gone = files_of(&state, "one", "0b0b0b0b-1111") == [false; 4];
+            if gone || std::time::Instant::now() >= until {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert_eq!(files_of(&state, "one", "0b0b0b0b-1111"), [false; 4]);
     }
 
