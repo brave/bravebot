@@ -36,6 +36,14 @@ The margin is on every drawn **row**, not every line of the content. A line wide
 broken to the width by the same step that draws the margin, and each row it breaks into carries a bar
 of its own.
 
+**Colour codes in output are counted and not drawn.** A program that colours its output, such as a CI
+log, writes a code before and after each coloured word. Drawn as pictures, those buried the words.
+In the output of a [shell mode](shell-mode.md) command, in a quarantined block's preview, and in the
+lines under a call the model read, the codes are left out and a row under the text says how many,
+for example `14 colour codes not drawn`. Every other control character and escape sequence, such as
+one that moves the cursor or erases a line, is still replaced by a visible picture. A prompt asking
+you to approve text, a block's heading, and a file name draw every byte, colour codes included.
+
 **What the session says in its own voice is drawn in an ink of its own**: the trust question, a
 confinement that is unavailable, a status report. It is never the ink that marks untrusted content.
 

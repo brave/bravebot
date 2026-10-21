@@ -134,6 +134,76 @@ fn a_tab_in_the_content_or_the_origin_is_drawn_as_a_glyph() {
     assert!(drawn.contains("dir\u{2409}name.md"), "{drawn}");
 }
 
+/// A program that colours its output writes a code before and after each coloured word. Drawn as
+/// pictures they bury the words, so the preview shows the words and says how many codes it left
+/// out, behind the same margin as the rest of the block (VIEW-30).
+#[test]
+fn colour_codes_in_a_preview_are_counted_and_not_drawn() {
+    let session = quarantining(vec![
+        "\u{1b}[0m\u{1b}[36m\u{251c}\u{1b}[0m Announcement: a link".to_string(),
+    ]);
+
+    let drawn = rows(&session, 80, 24);
+    let screen = drawn.join("\n");
+    assert!(screen.contains("\u{251c} Announcement: a link"), "{screen}");
+    assert!(
+        !screen.contains("[36m") && !screen.contains("[0m") && !screen.contains('\u{241b}'),
+        "a colour code was drawn as text:\n{screen}"
+    );
+    let note = drawn
+        .iter()
+        .find(|row| row.contains("3 colour codes not drawn"))
+        .unwrap_or_else(|| panic!("the count was not drawn:\n{screen}"));
+    assert_eq!(
+        note.chars().position(|c| !c.is_whitespace()),
+        note.chars().position(|c| c == BAR),
+        "the count begins with content rather than the margin: {note:?}"
+    );
+}
+
+/// Only a colour code is left out. A cursor movement beside one is the kind of sequence a person
+/// has to be shown, and is not counted as a colour.
+#[test]
+fn only_colour_codes_are_left_out_of_a_preview() {
+    let session = quarantining(vec!["\u{1b}[31mred\u{1b}[2Jcleared".to_string()]);
+
+    let drawn = screen(&session);
+    assert!(drawn.contains("red\u{241b}[2Jcleared"), "{drawn}");
+    assert!(drawn.contains("1 colour code not drawn"), "{drawn}");
+    assert!(!drawn.contains('\u{1b}'), "{drawn}");
+}
+
+/// Taking a code out from between the two halves of another leaves them side by side, and they
+/// read as a code. Their escape is still replaced, so the terminal is sent no escape at all.
+#[test]
+fn a_code_joined_by_taking_another_out_is_still_drawn_as_pictures() {
+    let session = quarantining(vec!["a\u{1b}[3\u{1b}[0m1mb".to_string()]);
+
+    let drawn = screen(&session);
+    assert!(drawn.contains("a\u{241b}[31mb"), "{drawn}");
+    assert!(!drawn.contains('\u{1b}'), "{drawn}");
+}
+
+/// The heading names where the content came from, which can be a filename out of a listing, and a
+/// person is shown every byte of one. A colour code in it is drawn in full and is not counted.
+#[test]
+fn a_colour_code_in_the_origin_is_drawn_in_full() {
+    let mut session = quarantining(vec!["plain".to_string()]);
+    session.transcript[0].shown.as_mut().expect("shown").origin = "a\u{1b}[8mb.md".to_string();
+
+    let drawn = screen(&session);
+    assert!(drawn.contains("a\u{241b}[8mb.md"), "{drawn}");
+    assert!(!drawn.contains("colour code"), "{drawn}");
+}
+
+/// Text with no colour code says nothing about them.
+#[test]
+fn a_preview_without_colour_codes_says_nothing_about_them() {
+    let session = quarantining(vec!["fn main() {}".to_string()]);
+
+    assert!(!screen(&session).contains("colour code"));
+}
+
 /// The defect this file exists to prevent, reached by width rather than by an escape. A preview
 /// line wider than the terminal used to continue at column 0 with no margin at all, so untrusted
 /// bytes were drawn outside the block on a row the marking never reached.

@@ -318,7 +318,15 @@ impl<W: Write> Progress<W> {
             label = &shown.label
         )];
         block.extend(shown.reach.note().map(|note| format!("  {note}")));
-        block.extend(shown.preview.iter().cloned());
+
+        // The preview's colour codes are taken out and counted (VIEW-30). The heading is not
+        // touched, since its origin can be a filename and a person is shown every byte of one.
+        let mut dropped = 0;
+        block.extend(shown.preview.iter().map(|line| {
+            let (plain, taken) = bravebot_tui::colour_codes::without(line);
+            dropped += taken;
+            plain
+        }));
 
         // Said rather than silently dropped: a preview that stops without saying so reads as the
         // whole of what was there.
@@ -328,6 +336,7 @@ impl<W: Write> Progress<W> {
                 count = shown.lines - shown.preview.len()
             ));
         }
+        block.extend(bravebot_tui::colour_codes::note(dropped));
 
         self.say("");
         for line in &block {
@@ -624,6 +633,68 @@ mod tests {
             written.contains('\u{241b}'),
             "the escape was not neutralised: {written:?}"
         );
+    }
+
+    /// A program that colours its output writes a code around each coloured word, and drawn as
+    /// pictures they bury the words. The block shows the words and says how many codes it left
+    /// out, behind the same margin as every other row (VIEW-30).
+    #[test]
+    fn colour_codes_in_a_block_are_counted_and_not_drawn() {
+        let written = log(|p| {
+            p.quarantined(quarantining(
+                vec!["\u{1b}[0m\u{1b}[36m\u{251c}\u{1b}[0m Announcement: a link".to_string()],
+                1,
+            ))
+        });
+
+        assert!(
+            written.contains("\u{251c} Announcement: a link"),
+            "got: {written:?}"
+        );
+        assert!(
+            !written.contains("[36m") && !written.contains("[0m") && !written.contains('\u{241b}'),
+            "a colour code was drawn as text: {written:?}"
+        );
+        let note = written
+            .lines()
+            .find(|row| row.contains("3 colour codes not drawn"))
+            .unwrap_or_else(|| panic!("the count was not written: {written:?}"));
+        assert_eq!(
+            note.chars().position(|c| !c.is_whitespace()),
+            note.chars().position(|c| c == BAR),
+            "the count begins with content rather than the margin: {note:?}"
+        );
+    }
+
+    /// Only a colour code is left out. An erase beside one is written as pictures and not counted
+    /// as a colour, and the heading's origin is a filename a person is shown every byte of.
+    #[test]
+    fn only_colour_codes_are_left_out_of_a_block() {
+        let mut shown = quarantining(vec!["\u{1b}[31mred\u{1b}[2Jcleared".to_string()], 1);
+        shown.origin = "a\u{1b}[8mb.md".to_string();
+        let written = log(|p| p.quarantined(shown));
+
+        assert!(
+            written.contains("red\u{241b}[2Jcleared"),
+            "got: {written:?}"
+        );
+        assert!(
+            written.contains("a\u{241b}[8mb.md"),
+            "the origin was changed: {written:?}"
+        );
+        assert!(
+            written.contains("1 colour code not drawn"),
+            "got: {written:?}"
+        );
+        assert!(!written.contains('\u{1b}'), "got: {written:?}");
+    }
+
+    /// A block with no colour code says nothing about them.
+    #[test]
+    fn a_block_without_colour_codes_says_nothing_about_them() {
+        let written = log(|p| p.quarantined(quarantining(vec!["plain".to_string()], 1)));
+
+        assert!(!written.contains("colour code"), "got: {written:?}");
     }
 
     /// The sentence about a dropped rule is the catalog's, and the rule and the file are a

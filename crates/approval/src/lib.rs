@@ -737,6 +737,23 @@ mod tests {
         }
     }
 
+    /// A yes releases every byte of a command's output to the model, so a colour code in it is
+    /// written in full and not counted: where nobody is deciding about the bytes colour codes are
+    /// left out of the drawing (VIEW-30), and here somebody is.
+    #[test]
+    fn a_colour_code_in_output_awaiting_a_yes_is_written_in_full() {
+        let lines = output_lines("read it", Check::Safe, "\u{1b}[31mred\u{1b}[0m", 0);
+
+        assert!(
+            lines.contains(&format!("{QUARANTINE_BAR} \u{241b}[31mred\u{241b}[0m")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().all(|line| !line.contains("colour code")),
+            "{lines:?}"
+        );
+    }
+
     /// MSG-3: a message is shown whole behind the margin, however long, with its control characters
     /// pictured. A yes sends every byte of it into another planner's context, so a row counted and
     /// left out would be approved unread.
