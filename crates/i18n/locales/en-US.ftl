@@ -1349,6 +1349,11 @@ servers-paths-left-out =
     is not on disk: { $paths }
 servers-no-handshake = { $alias } was started and did not complete its handshake: { $reason }
 servers-too-slow = { $alias } did not complete its handshake within { $seconds } seconds
+servers-prompts-not-listed = { $alias } offers no prompt in this session: { $reason }
+servers-prompts-refused = { $count ->
+    [one] { $alias } listed { $count } prompt it cannot offer: a name is letters, digits, - and _, listed once, and so is the name of each argument
+   *[other] { $alias } listed { $count } prompts it cannot offer: a name is letters, digits, - and _, listed once, and so is the name of each argument
+    }
 
 ## A model this machine's administrator does not let it ask for
 
@@ -1467,6 +1472,16 @@ mcp-move-not-recorded =
     recorded: { $error }
 mcp-move-no-handshake = { $alias } did not complete its handshake where its reply pointed: { $reason }
 mcp-move-again = { $alias } was redirected again, off where it was just moved, so that was refused
+
+## An MCP server's prompt a person ran by typing its name
+
+mcp-prompt-failed = the prompt { $name } of { $alias } could not be fetched: { $reason }
+mcp-prompt-not-a-pair = { $word } is not name=value, so the line was not sent. A prompt of a server takes its arguments as name=value, with a value that holds spaces in double quotes
+mcp-prompt-bad-name = { $word } does not start with a name an argument may have, so the line was not sent. A name is letters, digits, _, - and .
+mcp-prompt-ambiguous = { $word } begins the alias of more than one server, so it names none of them and the line was not sent
+mcp-prompt-sent-as-text = that line names a prompt it cannot run, so it went to the model as it is and the prompt was not fetched
+mcp-prompt-twice = { $name } is given more than once, so the line was not sent
+mcp-prompt-quote = the value of { $name } has a double quote that does not close, or text straight after it, so the line was not sent
 
 ## Programs asking for one more path for the session
 
@@ -2779,6 +2794,7 @@ command-waits-to-ask = { $command } waits for the turn to end: moving to off ask
 skill-from-project = (project)
 skill-from-user = (user)
 skill-from-built-in = (built-in)
+skill-from-mcp-server = (MCP { $alias })
 
 
 ## What the session says back

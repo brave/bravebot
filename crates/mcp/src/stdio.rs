@@ -10,8 +10,8 @@
 //! would draw over a screen.
 
 use crate::protocol::{
-    Listing, RpcNotification, RpcRequest, RpcResponse, ToolResult, call_params, initialize_params,
-    paged,
+    Listing, PromptListing, PromptResult, RpcNotification, RpcRequest, RpcResponse, ToolResult,
+    call_params, declares_prompts, get_prompt_params, initialize_params, paged, paged_prompts,
 };
 use crate::{McpError, McpResult, log_step, malformed, named};
 use bravebot_core::event::Sink;
@@ -42,6 +42,9 @@ pub struct StdioServer {
     bound: Duration,
     /// Set when a request ran out of time and the process was stopped.
     stopped: bool,
+    /// Whether the handshake said the server has prompts, which is what a request for them waits
+    /// on (MCP-10).
+    prompts: bool,
 }
 
 /// How many lines the reader holds ahead of a request that is waiting for one.
@@ -170,6 +173,7 @@ impl StdioServer {
             name: name.into(),
             bound: Duration::from_secs(bravebot_config::mcp::TOOL_SECS),
             stopped: false,
+            prompts: false,
         })
     }
 
@@ -285,7 +289,10 @@ impl StdioServer {
                 "initialize",
                 Some(initialize_params(client_name, client_version)),
             )
-            .and_then(|_| self.notify("notifications/initialized"));
+            .and_then(|initialized| {
+                self.prompts = declares_prompts(&initialized);
+                self.notify("notifications/initialized")
+            });
         log_step("mcp.initialize", &done);
         done
     }
@@ -296,6 +303,48 @@ impl StdioServer {
         let listed = paged(|params| self.send_request("tools/list", params));
         log_step("mcp.list_tools", &listed);
         Ok(listed?.listing(&self.name))
+    }
+
+    /// List the prompts this server offers, as the text a person is shown in a menu. None where the
+    /// handshake did not say the server has any, and nothing is asked of it then. MCP-10.
+    pub fn list_prompts(&mut self) -> McpResult<PromptListing> {
+        if !self.prompts {
+            return Ok(PromptListing::none(&self.name));
+        }
+        let listed = paged_prompts(|params| self.send_request("prompts/list", params));
+        log_step("mcp.list_prompts", &listed);
+        Ok(listed?.listing(&self.name))
+    }
+
+    /// Get a prompt's text, given the arguments a person typed for it.
+    ///
+    /// The text is labelled untrusted-private exactly as a tool's result is (MCP-11), and it is
+    /// asked for only of a server that said it has prompts, since a server that does not may never
+    /// answer a method it does not have and a request that is not answered stops the process.
+    pub fn get_prompt<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        name: &str,
+        arguments: &[(String, String)],
+    ) -> McpResult<Labelled<String>> {
+        policy
+            .before_capability(self.capability())
+            .map_err(McpError::Denied)?;
+        if !self.prompts {
+            return Err(McpError::Transport("the server offers no prompts".into()));
+        }
+
+        let result = self.send_request("prompts/get", Some(get_prompt_params(name, arguments)))?;
+        let parsed: PromptResult =
+            serde_json::from_value(result).map_err(|e| malformed("prompt result", &e))?;
+        if !parsed.carries_text() {
+            return Err(McpError::Transport("the prompt returned no text".into()));
+        }
+
+        let label = policy
+            .observe(self.capability())
+            .map_err(McpError::Denied)?;
+        Ok(Labelled::new(parsed.text(), label))
     }
 
     /// Call a tool.

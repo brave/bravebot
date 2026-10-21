@@ -7,9 +7,11 @@ use ratatui::text::{Line, Span};
 
 use crate::command_table::{held_back_by, named, runs_while_working};
 use crate::keybindings::Keybindings;
+use crate::skills::Origin;
 use crate::state::{Bound, Session, Status};
 use crate::theme;
 use crate::wrap;
+use bravebot_agent::skills::Source;
 
 use super::{dim, head_of, printable, tail_of};
 
@@ -306,10 +308,11 @@ fn slash_lines(
         let chosen = highlighted.as_ref() == Some(skill);
         let word = skill_word(skill);
         let padding = column.saturating_sub(word.chars().count()) + 2;
-        let from = match skill.source {
-            bravebot_agent::skills::Source::Workspace => t!(skill_from_project),
-            bravebot_agent::skills::Source::Home => t!(skill_from_user),
-            bravebot_agent::skills::Source::BuiltIn => t!(skill_from_built_in),
+        let from = match &skill.source {
+            Origin::Skill(Source::Workspace) => t!(skill_from_project).to_string(),
+            Origin::Skill(Source::Home) => t!(skill_from_user).to_string(),
+            Origin::Skill(Source::BuiltIn) => t!(skill_from_built_in).to_string(),
+            Origin::Server(alias) => t!(skill_from_mcp_server, alias = alias.as_str()).to_string(),
         };
         // Cut rather than wrapped, since nothing below the box wraps, and cut short of the width so
         // where the skill came from is still on the row.

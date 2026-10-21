@@ -1125,6 +1125,9 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // replaces the line and waits in the box (CMD-17). After every command, so a file cannot
         // shadow one, and before completion, so `/review the diff` is not read as a half-typed word.
         KeyCode::Enter if session.expand_prompt_file() => Action::Redraw,
+        // A line that runs a prompt of an MCP server with words that are not its arguments is said
+        // so and not sent (CMD-26).
+        KeyCode::Enter if session.refuse_unparsable_server_prompt() => Action::Redraw,
         // A half-typed command, after every arm that recognises a whole one. Enter takes the
         // highlighted row rather than sending "/mod" to the planner, which is never what was meant.
         //
@@ -1499,6 +1502,14 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // is queued with the Enter that follows (CMD-17). Nothing is sent by this press.
     if key.code == KeyCode::Enter
         && session.answer_while_working(|session| session.expand_prompt_file())
+    {
+        return Action::Redraw;
+    }
+
+    // And a line running a prompt of a server that could not be sent is refused as it is at rest,
+    // since queueing it would send the sentence it is not (CMD-26).
+    if key.code == KeyCode::Enter
+        && session.answer_while_working(|session| session.refuse_unparsable_server_prompt())
     {
         return Action::Redraw;
     }

@@ -179,9 +179,9 @@ impl Session {
             return Offered::Nothing;
         }
         let commands = crate::command_table::completions(&self.input);
-        let skills = match (crate::skills::typed(&self.input), &self.skills) {
-            (Some(typed), Some(held)) => crate::skills::matching(held, typed),
-            _ => Vec::new(),
+        let skills = match &self.skills {
+            Some(held) => crate::skills::offered_for(held, &self.input),
+            None => Vec::new(),
         };
         if !commands.is_empty() || !skills.is_empty() {
             return Offered::Slash { commands, skills };

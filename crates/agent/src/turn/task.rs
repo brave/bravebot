@@ -85,6 +85,12 @@ pub struct Task {
     /// says only that some bytes arrived, and `gh pr diff` carries whatever the author of the
     /// pull request wrote. So the planner is shown a reference, never the bytes.
     pub piped: Option<String>,
+    /// A prompt of an MCP server the person ran by typing its name at the start of the line.
+    ///
+    /// The words are the person's own, so they are carried as they are. What the server returns is
+    /// not: the turn fetches it and holds it as a reference, untrusted and private, so the planner
+    /// is shown a handle and never the text (MCP-11).
+    pub mcp_prompt: Option<crate::mcp::PromptRequest>,
     /// Images the user pasted, carried with the prompt they were pasted into.
     ///
     /// Trusted for the reason [`Task::prompt`] is, and by the same act: the user copied something
@@ -469,6 +475,7 @@ impl Task {
             session_excerpts: Vec::new(),
             images: Vec::new(),
             piped: None,
+            mcp_prompt: None,
             home: None,
             profile: None,
             cache: None,
@@ -595,6 +602,12 @@ impl Task {
 
     pub fn with_piped_input(mut self, text: impl Into<String>) -> Self {
         self.piped = Some(text.into());
+        self
+    }
+
+    /// Run a prompt of an MCP server the session reached, which the turn fetches before it plans.
+    pub fn with_mcp_prompt(mut self, request: Option<crate::mcp::PromptRequest>) -> Self {
+        self.mcp_prompt = request;
         self
     }
 

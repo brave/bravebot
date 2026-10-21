@@ -3115,6 +3115,51 @@ where
         );
     }
 
+    // A prompt of an MCP server the person ran by typing its name (CMD-26). Fetched here, where the
+    // turn's policy holds the grant naming the server, and presented as piped input is: the text
+    // is a server's output, so it is labelled from the capability that produced it and the planner
+    // is given what the kernel says about that label, which is a reference.
+    if let (None, Some(request), Some(session)) = (&task.delegate, &task.mcp_prompt, &task.mcp) {
+        let said = format!("{}:{}", request.alias, request.name);
+        match crate::mcp::fetch_prompt(policy, session, egress, confirmer, reporter, request) {
+            crate::mcp::Fetched::Text(text) => {
+                conversation.observed(policy.context_label());
+
+                let slot = conversation.next_reference();
+                let origin = format!("what the prompt {said} returned");
+                let presented = policy
+                    .present("chat", slot, &origin, &text, conversation.quarantine())
+                    .map_err(|d| TurnError::Precommit(d.to_string()))?;
+
+                conversation.push_composed_from(
+                    Message::user(match &presented {
+                        Presentation::Visible(body) => {
+                            format!("The user ran the MCP prompt {said}:\n\n{body}")
+                        }
+                        Presentation::Quarantined(reference) => format!(
+                            "The user ran the MCP prompt {said}. What it returned could not be \
+                             shown to you.\n\n{}",
+                            reference.describe()
+                        ),
+                    }),
+                    Composed::Written,
+                    provenance_of(&presented, "mcp prompt"),
+                );
+            }
+            crate::mcp::Fetched::Problem(sentence) => {
+                reporter.notice(sentence.clone());
+                conversation.push_composed_from(
+                    Message::user(format!(
+                        "The user ran the MCP prompt {said} and it could not be fetched. \
+                         Say so rather than guessing what it held."
+                    )),
+                    Composed::Written,
+                    Provenance::Trusted("mcp prompt"),
+                );
+            }
+        }
+    }
+
     // The prompt and what came with it are one message, because that is what the user did: they
     // typed a line and dropped a file on it, or pasted a picture into it. Two messages would put
     // the picture somewhere other than the sentence asking about it.

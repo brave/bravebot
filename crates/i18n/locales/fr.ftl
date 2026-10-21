@@ -1160,6 +1160,11 @@ servers-paths-left-out =
     nommant aucun chemin absent du disque : { $paths }
 servers-no-handshake = { $alias } a été démarré et n'a pas terminé sa poignée de main : { $reason }
 servers-too-slow = { $alias } n'a pas terminé sa poignée de main en { $seconds } secondes
+servers-prompts-not-listed = { $alias } ne propose aucune invite dans cette session : { $reason }
+servers-prompts-refused = { $count ->
+    [one] { $alias } a listé { $count } invite qu'il ne peut pas proposer : un nom est fait de lettres, de chiffres, de - et de _, listé une seule fois, et il en va de même du nom de chaque argument
+   *[other] { $alias } a listé { $count } invites qu'il ne peut pas proposer : un nom est fait de lettres, de chiffres, de - et de _, listé une seule fois, et il en va de même du nom de chaque argument
+    }
 
 ## A model this machine's administrator does not let it ask for
 
@@ -1273,6 +1278,16 @@ mcp-move-no-handshake =
 mcp-move-again =
     { $alias } a été redirigé de nouveau, hors de là où il venait d'être déplacé, cela a donc été
     refusé
+
+## Une invite d'un serveur MCP qu'une personne a lancée en tapant son nom
+
+mcp-prompt-failed = l'invite { $name } de { $alias } n'a pas pu être récupérée : { $reason }
+mcp-prompt-not-a-pair = { $word } n'est pas de la forme nom=valeur, donc la ligne n'a pas été envoyée. Une invite d'un serveur prend ses arguments sous la forme nom=valeur, avec une valeur qui contient des espaces entre guillemets
+mcp-prompt-bad-name = { $word } ne commence pas par un nom qu'un argument peut avoir, donc la ligne n'a pas été envoyée. Un nom est fait de lettres, de chiffres, de _, de - et de .
+mcp-prompt-ambiguous = { $word } commence l'alias de plusieurs serveurs, donc il n'en désigne aucun et la ligne n'a pas été envoyée
+mcp-prompt-sent-as-text = cette ligne désigne une invite qu'elle ne peut pas lancer, donc elle est allée au modèle telle quelle et l'invite n'a pas été récupérée
+mcp-prompt-twice = { $name } est donné plusieurs fois, donc la ligne n'a pas été envoyée
+mcp-prompt-quote = la valeur de { $name } a un guillemet qui ne se ferme pas, ou du texte juste après, donc la ligne n'a pas été envoyée
 
 ## Des programmes qui demandent un chemin de plus pour la session
 
@@ -2363,6 +2378,7 @@ command-waits-to-ask = La commande { $command } attend la fin du tour : passer �
 skill-from-project = (projet)
 skill-from-user = (utilisateur)
 skill-from-built-in = (intégré)
+skill-from-mcp-server = (MCP { $alias })
 skill-effort-not-a-level = { $skill } demande l'effort { $effort }, qui n'est aucun de { $levels }, donc ses tours gardent celui de cette session
 skill-asks-a-model = { $skill } demande { $model } pour le reste de ce tour
 skill-asks-an-effort = { $skill } demande l'effort { $effort } pour le reste de ce tour

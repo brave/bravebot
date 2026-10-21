@@ -441,13 +441,21 @@ pub(crate) mod tests {
                 let result = match request.get("method").and_then(serde_json::Value::as_str) {
                     Some("initialize") => serde_json::json!({
                         "protocolVersion": "2025-06-18",
-                        "capabilities": {},
+                        "capabilities": {"prompts": {}},
                         "serverInfo": {"name": alias, "version": "1"},
                     }),
                     Some("tools/list") => serde_json::json!({"tools": [{
                         "name": "lookup",
                         "description": "Look something up.",
                         "inputSchema": {"type": "object", "properties": {}},
+                    }]}),
+                    Some("prompts/list") => serde_json::json!({"prompts": [{
+                        "name": "summarise_diff",
+                        "description": "Summarise the staged diff.",
+                        "arguments": [
+                            {"name": "file", "required": true},
+                            {"name": "depth"},
+                        ],
                     }]}),
                     _ => serde_json::json!({}),
                 };
@@ -489,12 +497,26 @@ pub(crate) mod tests {
             .initialize(&mut policy, &egress, "bravebot", "0")
             .expect("handshake");
         let listing = server.list_tools(&mut policy, &egress).expect("listed");
+        let prompts = server
+            .list_prompts(&mut policy, &egress)
+            .expect("prompts listed");
         let digest = bravebot_config::mcp::Digest::parse(&"d".repeat(64)).expect("a digest");
         bravebot_agent::mcp::Reached::new(
             bravebot_agent::mcp::Connection::Http(server),
             listing,
             digest,
         )
+        .with_prompts(prompts)
+    }
+
+    /// A session holding `weather` as running, which offers the prompt `summarise_diff`.
+    pub(crate) fn holding_a_server_with_prompts() -> Session {
+        holding(&["weather"])
+    }
+
+    /// A session holding each of `aliases` as running, each offering the prompt `summarise_diff`.
+    pub(crate) fn holding_servers(aliases: &[&'static str]) -> Session {
+        holding(aliases)
     }
 
     /// A session holding each of `aliases` as running, with `servers` reading it.

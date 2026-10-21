@@ -156,11 +156,15 @@ fn named_words(session: &Session) -> Vec<(usize, usize)> {
         return vec![(start, start + name.len())];
     }
     let held = session.held_skills();
+    // A prompt of a server runs only from the first word, so it is recognised nowhere else (CMD-26).
+    let first = line.len() - line.trim_start().len();
     let mut words = Vec::new();
     let mut offset = 0;
     for piece in line.split_inclusive(char::is_whitespace) {
         let word = piece.trim_end_matches(char::is_whitespace);
-        if crate::skills::named(held, word).is_some() {
+        if crate::skills::named(held, word)
+            .is_some_and(|row| offset == first || !row.is_a_server_prompt())
+        {
             words.push((offset, offset + word.len()));
         }
         offset += piece.len();

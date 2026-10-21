@@ -2563,12 +2563,17 @@ fn event_loop(
         session.keep_awake();
         // Before the frame and before the next key, so what a slash offers is on the screen as the
         // slash is, and Tab never reaches a list the frame did not show.
+        let reached = session.servers.session.clone();
         session.settle_skills(|| {
-            crate::skills::resolved(
+            let mut offered = crate::skills::resolved(
                 &workspace,
                 answers.trust.clone(),
                 answers.rules.permissions.clone(),
-            )
+            );
+            // Beside the skills and sorted among them by name. A prompt's word starts `mcp__` and
+            // an alias, so it never claims a word a command holds.
+            offered.extend(crate::skills::from_servers(reached.as_ref()));
+            offered
         });
         // The project's styles a `/style` could name, read where the trust map is in hand.
         session.settle_styles(|| {
@@ -5652,6 +5657,7 @@ fn run_turn_animated(
         task = task.keeping_jobs(kept);
     }
     task = with_named_sessions(task, session, workspace.root(), prompt, wrote);
+    task = with_mcp_prompt(task, session, prompt, wrote);
     task = with_submitted_attachments(task, session);
     task = with_session_advisor(task, session);
     task = with_session_style(task, session);
@@ -6477,6 +6483,34 @@ fn past_sessions_offered(root: &Path, current: &str) -> Vec<bravebot_mentions::E
             )
         })
         .collect()
+}
+
+/// Carry the prompt of an MCP server a line runs, which the turn fetches (CMD-26).
+///
+/// From a line the person wrote and from no other, for the reason [`files_named_in`] is: the
+/// keystroke is what runs it, and a line this program composed to carry a goal on is no keystroke.
+/// A line typed at the box whose arguments do not parse was refused where Enter was pressed. One
+/// that reaches here without parsing, a loop's prompt, goes on as the sentence it is and the person
+/// is told so.
+fn with_mcp_prompt(task: Task, session: &mut Session, prompt: &str, wrote: Wrote) -> Task {
+    if wrote == Wrote::TheDriver {
+        return task;
+    }
+    let Some(asked) = session
+        .servers
+        .session
+        .as_ref()
+        .and_then(|servers| servers.prompt_request(prompt))
+    else {
+        return task;
+    };
+    match asked {
+        Ok(request) => task.with_mcp_prompt(Some(request)),
+        Err(_) => {
+            session.note(t!(mcp_prompt_sent_as_text));
+            task
+        }
+    }
 }
 
 /// Add what each past session a prompt names with `@session:<id>` said, and tell the person what
@@ -19597,7 +19631,7 @@ mod tests {
             name: name.to_string(),
             description: format!("what {name} is for"),
             argument_hint: None,
-            source,
+            source: source.into(),
         })
         .collect()
     }
@@ -19645,7 +19679,7 @@ mod tests {
                 name: "pr-fix".to_string(),
                 description: "what pr-fix is for".to_string(),
                 argument_hint: None,
-                source: bravebot_agent::skills::Source::Home,
+                source: bravebot_agent::skills::Source::Home.into(),
             }]
         };
         let mut session = Session::new("none");
@@ -19688,7 +19722,7 @@ mod tests {
                 name: "pr-fix".to_string(),
                 description: "what pr-fix is for".to_string(),
                 argument_hint: None,
-                source: bravebot_agent::skills::Source::Home,
+                source: bravebot_agent::skills::Source::Home.into(),
             }]
         };
         let mut session = Session::new("none");
@@ -19802,6 +19836,251 @@ mod tests {
             skills()
         });
         assert_eq!(resolved, 2, "a slash on a line that had none reads again");
+    }
+
+    /// The prompt a server offers, as rows of the box, from a session that really started one.
+    fn prompt_rows() -> Vec<crate::skills::Skill> {
+        let held = crate::mcp_command::tests::holding_a_server_with_prompts();
+        crate::skills::from_servers(held.servers.session.as_ref())
+    }
+
+    /// A line typed the way the loop takes it, with the skills and the prompts of a server settled
+    /// before the next key.
+    fn type_with_prompts(session: &mut Session, line: &str) {
+        let rows = prompt_rows();
+        for c in line.chars() {
+            handle_key(session, key(KeyCode::Char(c)));
+            session.settle_skills(|| {
+                let mut held = skills();
+                held.extend(rows.clone());
+                held
+            });
+        }
+    }
+
+    /// A prompt of a server is a row beside the skills, named by its alias and its word, saying
+    /// which server it came from and what it takes (CMD-26).
+    #[test]
+    fn a_servers_prompt_is_offered_at_the_start_of_a_line() {
+        let mut session = Session::new("none");
+        type_with_prompts(&mut session, "/mcp__");
+
+        let crate::state::Offered::Slash { skills, .. } = session.offered() else {
+            panic!("nothing was offered");
+        };
+        assert_eq!(skill_names(&skills), ["mcp__weather__summarise_diff"]);
+        let [row] = skills.as_slice() else {
+            panic!("{skills:?}");
+        };
+        assert_eq!(
+            row.source,
+            crate::skills::Origin::Server("weather".to_string())
+        );
+        assert_eq!(row.description, "Summarise the staged diff.");
+        assert_eq!(
+            row.argument_hint.as_deref(),
+            Some("file=<value> [depth=<value>]")
+        );
+    }
+
+    /// A line runs a prompt only from its first word, so a row that would write the word after
+    /// other words is not offered there, while a skill is.
+    #[test]
+    fn a_servers_prompt_is_not_offered_after_other_words() {
+        let mut session = Session::new("none");
+        type_with_prompts(&mut session, "use /mcp__");
+        assert!(!session.is_completing(), "{:?}", session.offered());
+
+        let mut session = Session::new("none");
+        type_with_prompts(&mut session, "use /rev");
+        let crate::state::Offered::Slash { skills, .. } = session.offered() else {
+            panic!("a skill was not offered mid-sentence, so the control proves nothing");
+        };
+        assert_eq!(skill_names(&skills), ["review-pr"]);
+    }
+
+    /// Taking a row writes the word and a space and sends nothing, as a skill's does, and Enter on
+    /// the whole word sends the line as it is typed.
+    #[test]
+    fn taking_a_prompt_row_writes_its_word_and_sends_nothing() {
+        let mut session = Session::new("none");
+        type_with_prompts(&mut session, "/mcp__weather__su");
+        assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::Redraw);
+        assert_eq!(session.input(), "/mcp__weather__summarise_diff ");
+
+        let mut session = Session::new("none");
+        type_with_prompts(&mut session, "/mcp__weather__su");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw,
+            "Enter on half a word completes it"
+        );
+        assert_eq!(session.input(), "/mcp__weather__summarise_diff ");
+
+        let mut session = Session::new("none");
+        type_with_prompts(&mut session, "/mcp__weather__summarise_diff");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/mcp__weather__summarise_diff".to_string())
+        );
+    }
+
+    /// A session holding the server `weather`, which is what a line naming one of its prompts is
+    /// read against.
+    fn holding_the_weather_server() -> Session {
+        crate::mcp_command::tests::holding_a_server_with_prompts()
+    }
+
+    /// Words after a prompt's name that are not `name=value` are said and not sent, and the line
+    /// stays as typed so it can be corrected. A line whose arguments are pairs is sent, and so is
+    /// one that names no server this session holds.
+    #[test]
+    fn a_line_running_a_prompt_with_words_that_are_not_arguments_is_said_and_not_sent() {
+        let mut session = holding_the_weather_server();
+        assert_eq!(
+            enter_line(&mut session, "/mcp__weather__summarise_diff Paris"),
+            Action::Redraw
+        );
+        assert_eq!(session.input(), "/mcp__weather__summarise_diff Paris");
+        assert!(
+            last_note(&session).contains("Paris is not name=value"),
+            "{}",
+            last_note(&session)
+        );
+
+        for line in [
+            "/mcp__weather__summarise_diff file=a.rs",
+            "/mcp__other__summarise_diff Paris",
+            "/mcp__weather__bad.word Paris",
+        ] {
+            let mut session = holding_the_weather_server();
+            assert_eq!(
+                enter_line(&mut session, line),
+                Action::Submit(line.to_string())
+            );
+        }
+    }
+
+    /// A word two servers' aliases both begin names neither, so the arguments typed for it go
+    /// nowhere, and a first word that does not start with a name an argument may have says which
+    /// word it means.
+    #[test]
+    fn a_line_naming_two_servers_or_no_argument_name_is_said_and_not_sent() {
+        let mut session = crate::mcp_command::tests::holding_servers(&["a", "a__b"]);
+        assert_eq!(
+            enter_line(&mut session, "/mcp__a__b__summarise_diff file=x"),
+            Action::Redraw
+        );
+        assert!(
+            last_note(&session)
+                .contains("/mcp__a__b__summarise_diff begins the alias of more than one"),
+            "{}",
+            last_note(&session)
+        );
+
+        let mut session = holding_the_weather_server();
+        assert_eq!(
+            enter_line(&mut session, "/mcp__weather__summarise_diff =x"),
+            Action::Redraw
+        );
+        assert!(
+            last_note(&session).contains("=x does not start with a name"),
+            "{}",
+            last_note(&session)
+        );
+    }
+
+    /// CMD-26: a prompt file whose text would run a prompt of a server once sent is refused as one
+    /// opening with a command is, and one naming no server this session holds is put in the box.
+    #[test]
+    fn a_prompt_file_whose_text_would_run_a_servers_prompt_is_refused() {
+        let mut session = with_prompt_files(
+            "prompt-files-server-prompt",
+            &[
+                ("runs.md", "/mcp__weather__summarise_diff file=a.rs\n"),
+                ("other.md", "/mcp__other__summarise_diff file=a.rs\n"),
+            ],
+        );
+        session.servers = holding_the_weather_server().servers;
+
+        assert_eq!(enter_line(&mut session, "/runs"), Action::Redraw);
+        assert_eq!(session.input(), "/runs");
+        assert!(
+            last_note(&session).contains("begins with a command"),
+            "{}",
+            last_note(&session)
+        );
+
+        let mut session = with_prompt_files(
+            "prompt-files-server-prompt-none",
+            &[("other.md", "/mcp__other__summarise_diff file=a.rs\n")],
+        );
+        session.servers = holding_the_weather_server().servers;
+        assert_eq!(enter_line(&mut session, "/other"), Action::Redraw);
+        assert_eq!(session.input(), "/mcp__other__summarise_diff file=a.rs");
+    }
+
+    /// Queued behind a running turn, the same refusal holds, since what waits is sent later as the
+    /// sentence it is.
+    #[test]
+    fn a_line_running_a_prompt_with_words_that_are_not_arguments_is_not_queued() {
+        let mut session = holding_the_weather_server();
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.status, Status::Working);
+
+        for c in "/mcp__weather__summarise_diff Paris".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+
+        assert_eq!(session.input(), "/mcp__weather__summarise_diff Paris");
+        assert!(
+            waiting_prompts(&session).is_empty(),
+            "the sentence was queued: {:?}",
+            waiting_prompts(&session)
+        );
+    }
+
+    /// A line a person wrote carries the prompt it runs to the turn, with the arguments they typed.
+    /// A line this program composed carries none, and neither does a sentence that only mentions a
+    /// prompt, a server this session does not hold, or arguments that are not pairs (CMD-26).
+    #[test]
+    fn a_line_the_person_wrote_carries_its_prompt_to_the_turn() {
+        let mut session = holding_the_weather_server();
+        let mut carried = |line: &str, wrote: Wrote| {
+            with_mcp_prompt(Task::new(line), &mut session, line, wrote).mcp_prompt
+        };
+
+        let line = r#"/mcp__weather__summarise_diff file="a b.rs" style=terse"#;
+        assert_eq!(
+            carried(line, Wrote::ThePerson),
+            Some(bravebot_agent::mcp::PromptRequest {
+                alias: "weather".to_string(),
+                name: "summarise_diff".to_string(),
+                arguments: vec![
+                    ("file".to_string(), "a b.rs".to_string()),
+                    ("style".to_string(), "terse".to_string()),
+                ],
+            })
+        );
+        assert_eq!(carried(line, Wrote::TheDriver), None, "a driver's line");
+        for sentence in [
+            "run /mcp__weather__summarise_diff file=a.rs",
+            "/mcp__other__summarise_diff file=a.rs",
+            "/mcp__weather__summarise_diff Paris",
+        ] {
+            assert_eq!(carried(sentence, Wrote::ThePerson), None, "{sentence:?}");
+        }
+        drop(carried);
+        assert!(
+            last_note(&session).contains("went to the model as it is"),
+            "a line whose arguments do not parse was sent without a word: {}",
+            last_note(&session)
+        );
     }
 
     /// With the `!` mode armed a slash begins a path, so no skill is read or offered, and inside a
