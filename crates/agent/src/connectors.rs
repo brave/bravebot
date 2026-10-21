@@ -2119,4 +2119,20 @@ mod tests {
             );
         }
     }
+
+    /// A step gives `with` only to a resource that takes it, and is refused for that field by name
+    /// rather than for whichever value it happened to give.
+    #[test]
+    fn a_with_given_to_a_resource_that_takes_none_is_refused_by_name() {
+        let refused = checked(vec![
+            fetch("issue", "i")
+                .with_text("item", "1")
+                .with_text("with", "start:2026-10-09T10:00:00Z"),
+        ])
+        .unwrap_err();
+        assert!(
+            refused.contains("'issue' does not take 'with'"),
+            "{refused}"
+        );
+    }
 }

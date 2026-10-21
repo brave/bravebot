@@ -297,6 +297,7 @@ one of the act's terms, and by the stricter ones an option asks for.
 fail at its step, after earlier steps had run. Here it fails before anything has.
 
 `verified-by: bravebot_agent::connectors::a_step_is_held_to_its_resource_fields_values_and_selector_terms`
+`verified-by: bravebot_agent::connectors::a_with_given_to_a_resource_that_takes_none_is_refused_by_name`
 `verified-by: bravebot_core::selector::a_malformed_term_is_refused`
 `verified-by: bravebot_core::selector::a_pattern_matches_its_key_and_its_value_or_the_rest_of_it`
 `verified-by: bravebot_agent::connectors::a_fetch_names_a_place_only_when_its_resource_uses_one`
