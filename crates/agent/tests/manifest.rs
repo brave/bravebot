@@ -4246,3 +4246,50 @@ fn an_act_takes_a_recorded_field_as_the_fetch_s_receipt() {
     assert_eq!(act["release"]["from"], json!(["github brave/bravebot"]));
     assert!(act.get("text").is_none(), "nothing read is carried");
 }
+
+/// The item an act lands on is the one its fetch's receipt names. A fetch the authority accepted
+/// without a receipt chose no item, so the act fails its step and is never sent, rather than going
+/// out with nothing to land on.
+#[cfg(unix)]
+#[test]
+fn an_act_on_a_fetch_that_returned_no_receipt_is_never_sent() {
+    let scratch = Scratch::new("connector-no-receipt");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(
+        &scratch,
+        &[r#"{"protocol":1,"outcome":"accepted","payload":"AN ISSUE, with no receipt"}"#],
+    );
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "CONNECTOR_FETCH", "args": {"connector": "github", "resource": "find_issue",
+                "place": "brave/bravebot", "select": "state:open", "out_slot": "issue"}},
+            {"capability": "CONNECTOR_ACT", "args": {"connector": "github", "resource": "comment",
+                "place": "brave/bravebot", "on": "issue", "contents": "seen"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+
+    let failure = run_with_connectors(
+        &workspace,
+        &config,
+        &authority.home,
+        "comment on the oldest open issue",
+        &mut asked,
+        &mut sink,
+    )
+    .expect_err("no item to act on");
+    assert!(
+        failure
+            .to_string()
+            .contains("'issue' returned no item to act on"),
+        "got: {failure}"
+    );
+    assert_eq!(
+        authority.requests(),
+        1,
+        "only the fetch reached the authority"
+    );
+}
