@@ -418,11 +418,40 @@ fn is_searched(entry: &Path, out: &Rows, where_the_account_can: &Rows) -> bool {
 }
 
 /// Whether `candidate` lies within a row a stage holds where the account can write, and the account
-/// can write it or the directory holding it.
+/// owns or can write it or a directory from it up to the row.
+///
+/// A stage creates files as the account and can set their modes, so a program it wrote and then made
+/// read-only is still one the account owns. A directory the account owns can have its entries
+/// replaced whatever its mode, and one it can write can too.
 fn planted(candidate: &Path, where_the_account_can: &Rows) -> bool {
-    within_any(candidate, where_the_account_can)
-        && (the_account_can_write(candidate)
-            || candidate.parent().is_some_and(the_account_can_write))
+    candidate
+        .ancestors()
+        .take_while(|above| within_any(above, where_the_account_can))
+        .any(the_account_owns_or_can_write)
+}
+
+/// Whether the account this process runs as owns `path` or can write it.
+///
+/// Ownership counts as well as the write permission, since the account can set the mode of what it
+/// owns. A path that does not exist is neither.
+#[cfg(unix)]
+fn the_account_owns_or_can_write(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    the_account_can_write(path)
+        || std::fs::metadata(path).is_ok_and(|metadata| metadata.uid() == the_effective_user())
+}
+
+#[cfg(not(unix))]
+fn the_account_owns_or_can_write(_path: &Path) -> bool {
+    true
+}
+
+/// The user id this process runs as.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn the_effective_user() -> u32 {
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    unsafe { libc::geteuid() }
 }
 
 /// Whether the account this process runs as can write `path`.
@@ -438,11 +467,6 @@ fn the_account_can_write(path: &Path) -> bool {
     };
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     unsafe { libc::access(name.as_ptr(), libc::W_OK) == 0 }
-}
-
-#[cfg(not(unix))]
-fn the_account_can_write(_path: &Path) -> bool {
-    true
 }
 
 /// The path, and its resolved form where that differs and can be had.
@@ -877,6 +901,8 @@ mod tests {
     /// A directory with nothing in it, so a file left by an earlier run is not found.
     fn scratch_dir(name: &str) -> PathBuf {
         let directory = crate::testutil::scratch_dir(name);
+        #[cfg(unix)]
+        reopen(&directory);
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
         directory
@@ -1149,45 +1175,147 @@ mod tests {
         );
     }
 
-    /// SANDBOX-28: a program under a row a stage holds is still found where the account cannot
-    /// write it, its directory, or the directory holding that. The regression it rejects is every
-    /// program under such a row left out, which drops `/usr/bin` from the lookup.
+    /// Sets the mode of each path read-only and restores it when dropped, so a failed assertion
+    /// leaves a scratch directory that can still be removed.
+    #[cfg(unix)]
+    struct ReadOnly(Vec<PathBuf>);
+
+    #[cfg(unix)]
+    impl ReadOnly {
+        fn new(paths: &[&Path]) -> Self {
+            for path in paths {
+                set_mode(path, 0o555);
+            }
+            Self(paths.iter().map(|path| path.to_path_buf()).collect())
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ReadOnly {
+        fn drop(&mut self) {
+            for path in &self.0 {
+                set_mode(path, 0o755);
+            }
+        }
+    }
+
+    /// Makes every directory under `directory` writable again, so a run that was killed while a
+    /// tree was read-only does not leave one the next run cannot remove.
+    #[cfg(unix)]
+    fn reopen(directory: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755));
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                reopen(&entry.path());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn set_mode(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// SANDBOX-28: a program under a row a stage holds is still found where the account neither
+    /// owns nor can write it, nor any directory from it up to the row. The regression it rejects is
+    /// every program under such a row left out, which drops `/usr/bin` from the lookup. `/bin/sh`
+    /// under a row of `/` is a program that is the system's, whichever user runs the test.
     #[cfg(unix)]
     #[test]
-    fn a_program_in_a_row_the_account_cannot_write_is_still_found() {
-        use std::os::unix::fs::PermissionsExt;
-        let set = |path: &Path, mode| {
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
-        };
-        let row = crate::testutil::scratch_dir("programs-where-it-cannot");
-        let held = row.join("held");
-        let bin = held.join("bin");
-        // A run that stopped before restoring these would leave the scratch directory unremovable.
-        set(&held, 0o755);
-        set(&bin, 0o755);
-        let row = scratch_dir("programs-where-it-cannot");
-        let tool = executable(&bin, "tool");
-        for path in [&tool, &bin, &held] {
-            set(path, 0o555);
-        }
-        let read_only = [&tool, &bin, &held]
-            .iter()
-            .all(|path| !the_account_can_write(path));
-
-        let found = find_in_with(
-            OsStr::new("tool"),
-            &path_of(&[&bin]),
-            &[],
-            std::slice::from_ref(&row),
-        );
-        set(&bin, 0o755);
-        set(&held, 0o755);
-
-        // Root writes a directory whatever its mode, so there is no directory to test with.
-        if !read_only {
+    fn a_program_in_a_row_the_account_neither_owns_nor_can_write_is_still_found() {
+        let shell = Path::new("/bin/sh").canonicalize().unwrap();
+        // A system where the account owns part of this tree has no program to test with.
+        if shell.ancestors().any(the_account_owns_or_can_write)
+            || the_account_owns_or_can_write(Path::new("/bin"))
+        {
             return;
         }
-        assert_eq!(found, Some(tool));
+        let everything = [PathBuf::from("/")];
+        let path = path_of(&[Path::new("/bin")]);
+
+        assert_eq!(
+            find_in_with(OsStr::new("sh"), &path, &[], &everything),
+            Some(PathBuf::from("/bin/sh"))
+        );
+        assert_eq!(
+            searched_path(&path, &[], &everything).as_deref(),
+            Some(OsStr::new("/bin"))
+        );
+        assert!(outside_stage_writable_with(
+            Path::new("/bin/sh"),
+            &[],
+            &everything
+        ));
+    }
+
+    /// SANDBOX-30: a program the account wrote and then made read-only, with `bin` and the directory
+    /// holding that, is not found under a row a stage holds. The account owns what a stage creates
+    /// and can set its mode back, so `access` saying no is not a program the account did not write.
+    /// The installed program behind it is the one found, which tells this apart from a lookup that
+    /// finds nothing, and the `PATH` a started program inherits drops the same entry.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_the_account_made_read_only_in_a_held_row_is_not_found() {
+        let row = scratch_dir("programs-made-read-only");
+        let held = row.join("held");
+        let bin = held.join("bin");
+        let tool = executable(&bin, "aws");
+        let installed = executable(&scratch_dir("programs-made-read-only-behind"), "aws");
+        let _restore = ReadOnly::new(&[&tool, &bin, &held]);
+        let safe = installed.parent().unwrap();
+        let path = path_of(&[&bin, safe]);
+        let rows = std::slice::from_ref(&row);
+
+        // Root writes a file whatever its mode, so there is no read-only program to test with.
+        if the_account_can_write(&tool) {
+            return;
+        }
+        assert_eq!(
+            find_in_with(OsStr::new("aws"), &path, &[], rows),
+            Some(installed.clone())
+        );
+        assert_eq!(
+            searched_path(&path, &[], rows).as_deref(),
+            Some(safe.as_os_str())
+        );
+        assert!(!outside_stage_writable_with(&tool, &[], rows));
+    }
+
+    /// SANDBOX-30: an entry reached through a directory the account owns is one a stage can point
+    /// somewhere else, whatever the mode of the entry and the directory holding it. The link here
+    /// leads to `/`, so `access` on the entry and on its parent both say no, and only the owned
+    /// directory above them shows that a stage could have made it. The same `PATH` with no row
+    /// finds `sh`, so the refusal is the row's.
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_reached_through_a_directory_the_account_owns_is_not_searched() {
+        let row = scratch_dir("programs-through-owned");
+        let owned = row.join("owned");
+        std::fs::create_dir_all(&owned).unwrap();
+        let link = owned.join("system");
+        std::os::unix::fs::symlink("/", &link).unwrap();
+        let _restore = ReadOnly::new(&[&owned]);
+        let entry = link.join("bin");
+        let path = path_of(&[&entry]);
+        // Root writes a file whatever its mode, so there is no read-only entry to test with.
+        if the_account_can_write(&entry) || the_account_can_write(&link) {
+            return;
+        }
+
+        assert_eq!(
+            find_in_with(OsStr::new("sh"), &path, &[], &[]),
+            Some(entry.join("sh"))
+        );
+        assert_eq!(
+            find_in_with(OsStr::new("sh"), &path, &[], std::slice::from_ref(&row)),
+            None
+        );
+        assert_eq!(searched_path(&path, &[], std::slice::from_ref(&row)), None);
     }
 
     /// SANDBOX-30: a caller searching a `PATH` of its own gets the rows a stage given the whole
@@ -1212,44 +1340,30 @@ mod tests {
         );
     }
 
-    /// SANDBOX-28: a row a stage given the whole machine holds stays searched where the account
-    /// cannot write it, through a caller's own `PATH` as through the process's. Counting such a row
-    /// as written outright would leave `/usr/bin` out, and the `aws` installed there with it.
+    /// SANDBOX-30: a caller's own `PATH` is searched with the same rule as the process's, so a
+    /// program the account made read-only under a row a stage holds is left out of it too, and the
+    /// program behind it is found.
     #[cfg(unix)]
     #[test]
-    fn a_search_of_a_given_path_still_finds_a_program_in_a_held_row_the_account_cannot_write() {
-        use std::os::unix::fs::PermissionsExt;
-        let set = |path: &Path, mode| {
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
-        };
-        let row = crate::testutil::scratch_dir("programs-on-path-cannot");
+    fn a_search_of_a_given_path_leaves_out_a_read_only_program_the_account_owns_in_a_held_row() {
+        let row = scratch_dir("programs-on-path-read-only");
         let held = row.join("held");
         let bin = held.join("bin");
-        // A run that stopped before restoring these would leave the scratch directory unremovable.
-        set(&held, 0o755);
-        set(&bin, 0o755);
-        let row = scratch_dir("programs-on-path-cannot");
         let tool = executable(&bin, "bravebot-held-read-only-probe");
-        for path in [&tool, &bin, &held] {
-            set(path, 0o555);
-        }
-        let read_only = [&tool, &bin, &held]
-            .iter()
-            .all(|path| !the_account_can_write(path));
+        let installed = executable(
+            &scratch_dir("programs-on-path-read-only-behind"),
+            "bravebot-held-read-only-probe",
+        );
+        let _restore = ReadOnly::new(&[&tool, &bin, &held]);
         keep_out_where_writable(&row);
 
-        let found = find_on(
-            OsStr::new("bravebot-held-read-only-probe"),
-            &path_of(&[&bin]),
+        assert_eq!(
+            find_on(
+                OsStr::new("bravebot-held-read-only-probe"),
+                &path_of(&[&bin, installed.parent().unwrap()])
+            ),
+            Some(installed)
         );
-        set(&bin, 0o755);
-        set(&held, 0o755);
-
-        // Root writes a directory whatever its mode, so there is no directory to test with.
-        if !read_only {
-            return;
-        }
-        assert_eq!(found, Some(tool));
     }
 
     /// SANDBOX-30: the `PATH` a started program looks its own names up in holds the entries the
