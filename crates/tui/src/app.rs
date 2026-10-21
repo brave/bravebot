@@ -21928,7 +21928,9 @@ mod tests {
         assert!(
             said_under_the_turn(&session)
                 .iter()
-                .any(|said| said.contains("behind the lines typed before it"))
+                .any(|said| said.contains("behind /clear")),
+            "{:?}",
+            said_under_the_turn(&session)
         );
     }
 
@@ -21996,22 +21998,24 @@ mod tests {
         );
     }
 
-    /// A command that changes something waits behind whatever was typed before it, so it lands
-    /// where it was typed: `/rename` ahead of a waiting `/clear` would name the session `/clear`
-    /// leaves, `/forget-trust` ahead of a waiting `/cd` would forget the directory `/cd` leaves, and
-    /// `/effort` ahead of a waiting prompt would change the level that prompt was typed under.
+    /// A command that changes something waits behind a line typed before it that could change what
+    /// it acts on, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name
+    /// the session `/clear` leaves, `/forget-trust` ahead of a waiting `/cd` would forget the
+    /// directory `/cd` leaves, and `/effort` ahead of a waiting prompt would change the level that
+    /// prompt was typed under. It says which line it waits behind, so the person can find that line
+    /// under the box.
     #[test]
     fn a_command_that_changes_something_waits_behind_what_was_typed_first() {
-        for (first, then) in [
-            (CLEAR_COMMAND, "/rename deploy watch"),
-            ("/cd crates/tui", FORGET_TRUST_COMMAND),
-            ("second", "/effort high"),
-            ("second", "/advisor some-model"),
-            ("second", EFFORT_COMMAND),
-            ("second", MODEL_COMMAND),
-            ("second", THEME_COMMAND),
-            ("second", CONFIG_COMMAND),
-            (COMPACT_COMMAND, "/theme no-such-theme"),
+        let prompt = t!(queued_a_prompt);
+        for (first, then, behind) in [
+            (CLEAR_COMMAND, "/rename deploy watch", CLEAR_COMMAND),
+            (CLEAR_COMMAND, "/note the wrong file", CLEAR_COMMAND),
+            ("/cd crates/tui", FORGET_TRUST_COMMAND, "/cd crates/tui"),
+            ("second", "/effort high", prompt),
+            ("second", "/advisor some-model", prompt),
+            ("second", EFFORT_COMMAND, prompt),
+            ("second", MODEL_COMMAND, prompt),
+            (COMPACT_COMMAND, "/rename deploy watch", COMPACT_COMMAND),
         ] {
             let mut session = a_turn_running_on("first");
             type_while_working(&mut session, first);
@@ -22023,8 +22027,7 @@ mod tests {
 
             let said = said_under_the_turn(&session);
             assert!(
-                said.len() == before + 1
-                    && said[before].contains("behind the lines typed before it"),
+                said.len() == before + 1 && said[before].ends_with(&format!("behind {behind}.")),
                 "{then} was carried out ahead of a waiting {first}: {said:?}"
             );
             assert_eq!(session.effort(), None, "{then} set a level");
@@ -22033,6 +22036,187 @@ mod tests {
                 "{then} opened a picker ahead of a waiting {first}"
             );
             assert_eq!(waiting_prompts(&session), vec![first, then]);
+        }
+    }
+
+    /// The line named is the first one waiting that could change what the command acts on. A waiting
+    /// `/sandbox off` ahead of it is not that line, and a later one is not the first.
+    #[test]
+    fn a_command_names_the_first_waiting_line_that_holds_it_back() {
+        let mut session = a_turn_running_on("first");
+        for line in ["/sandbox off", CLEAR_COMMAND, "/cd crates/tui"] {
+            type_while_working(&mut session, line);
+        }
+        let before = said_under_the_turn(&session).len();
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/note a thought", key(KeyCode::Enter), beside)
+        });
+
+        let said = said_under_the_turn(&session);
+        assert!(
+            said.len() == before + 1 && said[before].ends_with("behind /clear."),
+            "{said:?}"
+        );
+    }
+
+    /// A waiting `/sandbox off` moves the mode the next turn is built with and writes nothing else,
+    /// so a command that changes something else gives the same result before it as after it, and is
+    /// carried out as it is typed. The regression it rejects is every command waiting behind it,
+    /// which leaves a note typed behind `/sandbox off` unwritten for as long as the turn runs.
+    #[test]
+    fn a_note_typed_behind_a_waiting_sandbox_off_is_carried_out_when_typed() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_running_on("first");
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/sandbox off", key(KeyCode::Enter), beside)
+        });
+        let before = said_under_the_turn(&session).len();
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+
+        typed_during_a_turn(
+            &mut session,
+            "/note remember the deploy",
+            key(KeyCode::Enter),
+            &mut Beside {
+                managed: &bravebot_config::Managed::default(),
+                stored: &mut stored,
+                root,
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut a_config_needing_no_sign_in(),
+            },
+        );
+
+        let notes = stored.notes();
+        assert_eq!(notes.len(), 1, "the note waited behind /sandbox off");
+        assert_eq!(notes[0].text, "remember the deploy");
+        assert_eq!(waiting_prompts(&session), vec!["/sandbox off"]);
+        assert_eq!(
+            said_under_the_turn(&session)[before..],
+            [t!(session_note_added, turn = 1)]
+        );
+        assert_eq!(
+            session.sandbox_mode(),
+            bravebot_sandbox::SandboxMode::WorkspaceWrite
+        );
+    }
+
+    /// Every command that changes something but `/sandbox` leaves a waiting `/sandbox off` alone, so
+    /// none of them waits behind it. The fixture gives each a result that tells carrying it out from
+    /// waiting: a level set, a name given, a link set, a refusal said.
+    #[test]
+    fn every_settings_command_but_sandbox_is_carried_out_behind_a_waiting_sandbox_off() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for line in [
+            "/effort high",
+            "/rename deploy watch",
+            "/advisor off",
+            "/style off",
+            "/issue https://github.com/brave/bravebot/issues/1",
+            "/pr https://github.com/brave/bravebot/pull/2",
+            FORGET_TRUST_COMMAND,
+        ] {
+            let mut session = a_turn_running_on("first");
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, "/sandbox off", key(KeyCode::Enter), beside)
+            });
+            let before = said_under_the_turn(&session).len();
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
+
+            let said = said_under_the_turn(&session);
+            assert_eq!(said.len(), before + 1, "{line} said nothing: {said:?}");
+            assert!(
+                !said[before].contains("waits for the turn to end"),
+                "{line} waited behind /sandbox off: {said:?}"
+            );
+            assert_eq!(waiting_prompts(&session), vec!["/sandbox off"], "{line}");
+        }
+    }
+
+    /// `/sandbox` is the one command a waiting `/sandbox off` holds back: the mode typed after it is
+    /// the one the person means to end up in, so it lands after `off` and names it. Carried out
+    /// first, `off` would be the mode the next turn is built with.
+    #[test]
+    fn a_sandbox_mode_typed_behind_a_waiting_sandbox_off_waits_behind_it() {
+        let mut session = a_turn_running_on("first");
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/sandbox off", key(KeyCode::Enter), beside)
+        });
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/sandbox strict", key(KeyCode::Enter), beside)
+        });
+
+        assert_eq!(
+            waiting_prompts(&session),
+            vec!["/sandbox off", "/sandbox strict"]
+        );
+        assert_eq!(
+            session.sandbox_mode(),
+            bravebot_sandbox::SandboxMode::WorkspaceWrite
+        );
+        let said = said_under_the_turn(&session);
+        assert!(
+            said.last()
+                .is_some_and(|said| said.ends_with("behind /sandbox off.")),
+            "{said:?}"
+        );
+    }
+
+    /// `/theme` and `/config` change only how the screen is drawn and what the box edits in, which
+    /// no waiting line reads or changes, so neither waits behind any of them. The regression it
+    /// rejects is either waiting for a turn to end behind a line it has nothing to do with, with the
+    /// picker a bare word opens not drawn until then.
+    #[test]
+    fn a_theme_or_config_typed_behind_a_waiting_line_is_carried_out_when_typed() {
+        use crate::picking::Picking;
+        let _held = crate::theme::exclusive();
+        crate::theme::apply_brave();
+        for first in [CLEAR_COMMAND, "second", "/sandbox off", "/cd crates/tui"] {
+            let mut session = a_turn_running_on("first");
+            type_while_working(&mut session, first);
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(
+                    &mut session,
+                    "/theme no-such-theme",
+                    key(KeyCode::Enter),
+                    beside,
+                )
+            });
+
+            assert_eq!(
+                said_under_the_turn(&session).last().copied(),
+                Some(t!(session_no_such_theme, theme = "no-such-theme").as_str()),
+                "/theme waited behind {first}"
+            );
+            assert_eq!(waiting_prompts(&session), vec![first]);
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, CONFIG_COMMAND, key(KeyCode::Enter), beside)
+            });
+
+            assert!(
+                session
+                    .picking()
+                    .is_some_and(|picking| matches!(picking, Picking::Editing(_))),
+                "/config waited behind {first}"
+            );
+            assert_eq!(waiting_prompts(&session), vec![first]);
         }
     }
 

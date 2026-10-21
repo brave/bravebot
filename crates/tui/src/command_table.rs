@@ -3,7 +3,7 @@
 
 use bravebot_i18n::t;
 
-use crate::state::Session;
+use crate::state::{Bound, Session};
 
 /// The line that opens the model picker instead of starting a turn.
 pub(crate) const MODEL_COMMAND: &str = "/model";
@@ -275,16 +275,22 @@ impl Command {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MidTurn {
     /// Carried out as it is typed. It reads what the session keeps, ends something it has standing,
-    /// sets a token the turn reads at its own next step, or adds a file under the working directory,
-    /// none of which changes what the turn is running under.
+    /// sets a token the turn reads at its own next step, adds a file under the working directory, or
+    /// changes only how the screen is drawn or what the box edits in, none of which changes what
+    /// the turn is running under, and no line waiting ahead of it changes either.
+    ///
+    /// Where the bare word opens a picker, the picker is held as a mode of the session while the
+    /// turn runs, so the turn's own questions are still drawn over it.
     Runs,
     /// Carried out as it is typed where it reads or ends what is standing, and waiting where it
     /// would start something: a loop or a goal armed mid-turn needs a look of its own.
     RunsUnlessItStarts,
-    /// Carried out as it is typed when nothing typed before it is waiting. It changes only what the
-    /// session keeps for itself or keeps for a later session, which the turn does not hold, but a
-    /// line waiting ahead of it may replace that: `/clear` begins another session and `/cd` moves to
-    /// another directory, and a change made first would land on the one being left.
+    /// Carried out as it is typed when no line waiting ahead of it could change what it acts on. It
+    /// changes only what the session keeps for itself or keeps for a later session, which the turn
+    /// does not hold, but a line waiting ahead of it may replace that: `/clear` begins another
+    /// session, `/cd` moves to another directory and a prompt starts a turn built with what it
+    /// finds, and a change made first would land on the one being left or the turn begun under it.
+    /// A waiting `/sandbox` line changes the mode and nothing else, so it holds none of them back.
     ///
     /// Where the bare word opens a picker, the picker is held as a mode of the session while the
     /// turn runs, so the turn's own questions are still drawn over it.
@@ -336,7 +342,7 @@ pub fn commands() -> [Command; 48] {
             name: THEME_COMMAND,
             argument: "[name]",
             description: t!(command_theme),
-            mid_turn: MidTurn::Changes,
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: EFFORT_COMMAND,
@@ -348,7 +354,7 @@ pub fn commands() -> [Command; 48] {
             name: CONFIG_COMMAND,
             argument: "",
             description: t!(command_config),
-            mid_turn: MidTurn::Changes,
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: ADD_DIR_COMMAND,
@@ -729,36 +735,79 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
     }
 }
 
-/// Whether a line that would be carried out mid-turn waits anyway, for what is queued ahead of it.
+/// Whether a waiting line is a `/sandbox` one, which moves the mode the next turn is built with and
+/// writes nothing else (SANDBOX-22). The mode is read where a turn is built, by `/resume` and
+/// `/status`, and when the transcript is drawn, and by no command that changes something, so
+/// each of those gives the same result before it as after it. `/sandbox` itself is held back by
+/// the rule for a line of the same command.
+fn only_moves_the_sandbox(waiting: &str) -> bool {
+    command_typed(waiting) == Some(SANDBOX_COMMAND)
+}
+
+/// The line, among those waiting ahead of position `at` in the queue, that a command carried out
+/// mid-turn has to wait behind, with where that line is going. `at` is the command's own position
+/// where it is already queued, and the length of the queue where it is about to join it.
 ///
 /// Behind a waiting line of the same command: `/loop stop` typed after a waiting
 /// `/loop 5m check the deploy` would find no loop to stop, and the loop would start after it. And a
-/// command that changes something waits behind any line at all, so it lands where it was typed:
-/// `/rename` ahead of a waiting `/clear` would name the session being left.
+/// command that changes something waits behind a line that could change what it acts on, so it
+/// lands where it was typed: `/rename` ahead of a waiting `/clear` would name the session being
+/// left, and `/effort` ahead of a waiting prompt would change the level that prompt was typed
+/// under. Every line could, but a waiting `/sandbox` ([`only_moves_the_sandbox`]).
+pub(crate) fn held_back_by<'a>(
+    session: &'a Session,
+    at: usize,
+    line: &str,
+) -> Option<(Bound, &'a str)> {
+    let command = row_typed(line)?;
+    let changes = matches!(
+        command.mid_turn,
+        MidTurn::Changes | MidTurn::ChangesUnlessItAsks
+    );
+    session.queued_ahead(at).find(|(goes, waiting)| match goes {
+        Bound::CarriedOut => {
+            command_typed(waiting) == Some(command.name)
+                || (changes && !only_moves_the_sandbox(waiting))
+        }
+        Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn | Bound::Run => changes,
+    })
+}
+
+/// Whether a line that would be carried out mid-turn waits anyway, for what is queued ahead of it.
 pub(crate) fn waits_behind_the_queue(session: &Session, line: &str) -> bool {
-    let changes = row_typed(line).is_some_and(|command| {
-        matches!(
-            command.mid_turn,
-            MidTurn::Changes | MidTurn::ChangesUnlessItAsks
-        )
-    });
-    (changes && !session.queued.is_empty())
-        || session
-            .commands_waiting()
-            .any(|waiting| command_typed(waiting) == command_typed(line))
+    held_back_by(session, session.queued.len(), line).is_some()
+}
+
+/// A waiting line as the words that say a command waits behind it name it.
+///
+/// A command by the line that was typed, so a person can find it in the queue. A prompt and a shell
+/// line by what they are, since either may run to a paragraph and neither is the reason.
+pub(crate) fn named(goes: Bound, line: &str) -> String {
+    /// The columns of a command line the words are given room for.
+    const ROOM: usize = 40;
+    match goes {
+        Bound::CarriedOut => crate::render::printable(&crate::render::head_of(line, ROOM)),
+        Bound::Run => t!(queued_a_shell_line).to_string(),
+        Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn => {
+            t!(queued_a_prompt).to_string()
+        }
+    }
 }
 
 /// What is said under the turn when a command typed while it runs is queued, so the line does not
 /// wait without a reason (CMD-8). Read before the line is taken off the box, and from the same
-/// facts [`runs_while_working`] and [`waits_behind_the_queue`] decided it with.
+/// facts [`runs_while_working`] and [`held_back_by`] decided it with.
 pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
     let command = row_typed(line)?;
     let word = command.name;
     Some(if runs_while_working(line) {
-        if !waits_behind_the_queue(session, line) {
-            return None;
-        }
-        t!(command_waits_behind_the_queue, command = word).to_string()
+        let (goes, ahead) = held_back_by(session, session.queued.len(), line)?;
+        t!(
+            command_waits_behind,
+            command = word,
+            line = named(goes, ahead)
+        )
+        .to_string()
     } else if command.mid_turn == MidTurn::ChangesUnlessItAsks {
         t!(command_waits_to_ask, command = word).to_string()
     } else {

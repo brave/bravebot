@@ -180,8 +180,8 @@ every turn uses that model, so `/model` opens no picker and says so.
 ## `/theme [name]`
 
 Opens a picker on the palette in force. With a name, `/theme nord` applies it without opening the
-panel, and typed while a turn runs with nothing waiting it is applied at once. The bare `/theme` waits
-for the turn to end.
+panel. Typed while a turn runs it is applied at once, ahead of anything waiting, and the bare `/theme`
+opens its picker over the turn.
 
 Up and Down move the cursor, and the theme under it is put in force while it is selected, so you are
 comparing themes against your own transcript rather than against a sample. Enter keeps the one on the
@@ -1267,10 +1267,13 @@ it and the picture or file goes with it.
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so
-`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/note`, `/issue`, `/pr`,
-`/forget-trust`, `/model`, `/theme`, `/effort`, `/config`, `/advisor`, `/style` and `/sandbox` (except `/sandbox off`, which waits) change only what the session keeps, and are carried out as you
-type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
-waiting `/clear` names the new session. What they say goes into the history as you type them,
+`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/theme` and `/config` change only how the screen
+is drawn and what the box edits in, so they are carried out as you type them whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
+`/forget-trust`, `/model`, `/effort`, `/advisor`, `/style` and `/sandbox` (except `/sandbox off`, which waits) change what the session keeps, and are carried out as you
+type them unless a line waiting ahead of them could change what they act on. Behind such a line they wait too, so `/rename` typed after a
+waiting `/clear` names the new session, and the line they wait behind is named under the turn and on their mark under the box (`after /clear`).
+A waiting `/sandbox` line changes the sandbox mode and nothing else, so it holds back none of them but another `/sandbox`: a `/note` typed
+behind a waiting `/sandbox off` is written at once. What they say goes into the history as you type them,
 so it scrolls with the rest, and stays there when the turn ends. `/model`, `/theme`, `/effort` and `/config` alone open their list
 over the turn, which keeps running behind it: Escape closes the list without stopping the turn, and
 a question the turn asks takes the screen until you have answered it. A list still open when the turn

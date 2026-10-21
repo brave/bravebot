@@ -2723,8 +2723,8 @@ command-when-either = now/queued
 
 # Said under the turn when a command joins the queue. The turn holds the conversation, the workspace, the terminal and the network.
 command-waits-for-the-turn = { $command } waits for the turn to end: it acts on what the turn holds or starts a turn.
-# A command that is carried out as typed when nothing is waiting ahead of it.
-command-waits-behind-the-queue = { $command } waits for the turn to end, behind the lines typed before it.
+# A command that is carried out as typed unless a line waiting ahead of it could change what it acts on. $line is that line: a command as it was typed, or what the line is where it is not a command.
+command-waits-behind = { $command } waits for the turn to end, behind { $line }.
 # `/sandbox off`, which asks before it changes anything.
 command-waits-to-ask = { $command } waits for the turn to end: moving to off asks first, and the turn has the screen.
 
@@ -3299,6 +3299,13 @@ queued-into-the-next-turn = into the next turn
 queued-carried-out = carried out after this
 # A command line: run by the person's own shell, whose output then reaches the model.
 queued-run = run in your shell
+# A command that would have been carried out as typed, but for a line waiting ahead of it. $line is
+# that line, from the two messages below where it is not a command. Same width limit as above.
+queued-carried-out-after = after { $line }
+# What a waiting prompt is called where a command is said to wait behind it.
+queued-a-prompt = the prompt before it
+# What a waiting command line is called where a command is said to wait behind it.
+queued-a-shell-line = the shell line before it
 
 ## Pasting, dropping and attaching
 

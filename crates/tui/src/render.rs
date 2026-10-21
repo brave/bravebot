@@ -840,7 +840,7 @@ fn draw_history_search(frame: &mut Frame, session: &Session) -> Laid {
 /// The opposite end from [`tail_of`], and for the opposite reason: a path is identified by its
 /// end and a sentence by its beginning. A queued prompt runs to one row, and the words that say
 /// which prompt it is are the first ones.
-fn head_of(line: &str, room: usize) -> String {
+pub(crate) fn head_of(line: &str, room: usize) -> String {
     // A prompt may be a paragraph; it is one row here, so the rest is not shown at all.
     let first = line.lines().next().unwrap_or("");
     let characters: Vec<char> = first.chars().collect();
@@ -3823,6 +3823,124 @@ mod tests {
             assert!(!output.contains("into"), "{output}");
         }
 
+        /// The row of the line that follows `line` in `rows`, which is its mark.
+        fn mark_under<'a>(rows: &'a [String], line: &str) -> &'a str {
+            let at = rows
+                .iter()
+                .position(|row| row.trim() == line)
+                .unwrap_or_else(|| panic!("{line:?} is not drawn: {rows:#?}"));
+            &rows[at + 1]
+        }
+
+        /// A command that would have been carried out as it was typed, but waits behind a line ahead
+        /// of it, says which line, so "after this" is not the whole of why it is still there. A
+        /// prompt and a shell line are named by what they are. The regression it rejects is every
+        /// waiting command marked the same, which leaves a person looking at `/rename` under the box
+        /// and unable to tell what holds it.
+        #[test]
+        fn a_command_waiting_behind_a_line_names_that_line_on_its_mark() {
+            let queue_command = |session: &mut Session, line: &str| {
+                for c in line.chars() {
+                    session.type_char(c);
+                }
+                assert!(session.queue_command());
+            };
+            let mut after_a_command = working();
+            queue_command(&mut after_a_command, "/clear");
+            queue_command(&mut after_a_command, "/rename deploy watch");
+            queue_command(&mut after_a_command, "/note a thought");
+            let mut after_a_prompt = queued_behind(working(), "look at b.txt");
+            queue_command(&mut after_a_prompt, "/effort high");
+            let mut after_a_shell_line = working();
+            after_a_shell_line.shell = true;
+            for c in "ls -la".chars() {
+                after_a_shell_line.type_char(c);
+            }
+            assert!(after_a_shell_line.queue_shell());
+            queue_command(&mut after_a_shell_line, "/effort high");
+
+            let rows = rows_at(&after_a_command, 100, 30);
+            assert!(
+                mark_under(&rows, "/rename deploy watch").contains("after /clear"),
+                "{rows:#?}"
+            );
+            assert!(
+                mark_under(&rows, "/note a thought").contains("after /clear"),
+                "{rows:#?}"
+            );
+            let rows = rows_at(&after_a_prompt, 100, 30);
+            assert!(
+                mark_under(&rows, "/effort high").contains("after the prompt before it"),
+                "{rows:#?}"
+            );
+            let rows = rows_at(&after_a_shell_line, 100, 30);
+            assert!(
+                mark_under(&rows, "/effort high").contains("after the shell line before it"),
+                "{rows:#?}"
+            );
+        }
+
+        /// A command that waits for the turn on its own account is not held by the lines ahead of
+        /// it: `/clear` waits whatever is typed before it, so its mark does not name a prompt it
+        /// would have waited behind in any case.
+        #[test]
+        fn a_command_that_waits_for_the_turn_does_not_name_the_line_ahead_of_it() {
+            let mut session = queued_behind(working(), "look at b.txt");
+            for c in "/clear".chars() {
+                session.type_char(c);
+            }
+            assert!(session.queue_command());
+
+            let rows = rows_at(&session, 100, 24);
+
+            let mark = mark_under(&rows, "/clear");
+            assert!(mark.contains(CARRIED_OUT), "{rows:#?}");
+            assert!(!mark.contains("after the prompt"), "{rows:#?}");
+        }
+
+        /// During an aside every command queues, so a command can sit ahead of the line that would
+        /// have held it back had it been typed after. Its mark names only what is ahead of it.
+        #[test]
+        fn a_command_does_not_name_a_line_typed_after_it() {
+            let mut session = Session::new("kernel-enforced");
+            session.begin_aside();
+            for line in ["/note a thought", "/clear"] {
+                for c in line.chars() {
+                    session.type_char(c);
+                }
+                assert!(session.queue_command());
+            }
+
+            let rows = rows_at(&session, 100, 24);
+
+            let mark = mark_under(&rows, "/note a thought");
+            assert!(mark.contains(CARRIED_OUT), "{rows:#?}");
+            assert!(!mark.contains("after /clear"), "{rows:#?}");
+        }
+
+        /// Where the mark has no room for the line a command waits behind, as with a line typed in
+        /// wide characters, it says where the line goes in the plain words. The regression it rejects
+        /// is a mark dropped whole, which leaves a waiting command with no mark at all.
+        #[test]
+        fn a_mark_with_no_room_for_the_line_it_waits_behind_says_where_the_line_goes() {
+            let mut session = working();
+            for line in ["/cd 日本語日本語日本語日本語", "/rename deploy watch"] {
+                for c in line.chars() {
+                    session.type_char(c);
+                }
+                assert!(session.queue_command());
+            }
+
+            let rows = rows_at(&session, 40, 24);
+
+            let at = rows
+                .iter()
+                .position(|row| row.contains("/rename deploy watch"))
+                .unwrap_or_else(|| panic!("/rename is not drawn: {rows:#?}"));
+            assert!(rows[at + 1].contains(CARRIED_OUT), "{rows:#?}");
+            assert!(!rows[at + 1].contains("after /cd"), "{rows:#?}");
+        }
+
         /// The last row carries both where its line is going and the key that sends the queue now,
         /// and on an 80-column terminal it holds both whatever that line is. The offer is only made
         /// while a turn runs and has not been asked to stop, so those three are every line it can
@@ -5730,10 +5848,7 @@ mod tests {
         assert!(labelled(&row_for(&output, 120, "/cost"), "now"));
         assert!(labelled(&row_for(&output, 120, "/compact"), "queued"));
         assert!(labelled(&row_for(&output, 120, "/model"), "now/queued"));
-        assert!(labelled(
-            &row_for(&output, 120, "/theme [name]"),
-            "now/queued"
-        ));
+        assert!(labelled(&row_for(&output, 120, "/theme [name]"), "now"));
     }
 
     /// Rejects: a `now` label on a command that Enter would queue, because a line of the same
