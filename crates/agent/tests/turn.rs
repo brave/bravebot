@@ -20982,6 +20982,50 @@ fn a_question_closed_on_the_clock_comes_back_as_no_answer_beside_the_rest() {
     assert!(!second.contains("declined"), "{second}");
 }
 
+/// ASK-10: the line a front end draws under the call is read by a person returning to the session,
+/// so a question they skipped must not read as an answer there while the planner is told it was
+/// declined.
+#[test]
+fn the_line_under_a_skipped_question_does_not_call_it_an_answer() {
+    let scratch = Scratch::new("ask-skip-line");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "ask_user",
+            r#"{"questions":[{"header":"Cache","question":"Which cache layer?","options":[{"label":"HTTP"}]}]}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let mut confirmer = AnswersWith::new(vec![bravebot_core::ask::Answer::Declined]);
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("push the change"),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(second.contains("declined to answer"), "{second}");
+
+    let finished = reporter.finished.first().expect("the call was summarised");
+    assert_eq!(finished.tool, "ask_user");
+    assert_eq!(finished.note.as_deref(), Some("1 question asked"));
+    assert!(!finished.failed);
+}
+
 /// Where nobody can be asked, every question is declined rather than answered on their behalf.
 /// The model is told the reply came from a person, so inventing one is worse than not asking.
 #[test]

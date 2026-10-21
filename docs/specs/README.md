@@ -105,7 +105,7 @@ the routing-versus-content split they share.
 | [tools/todo-write.md](tools/todo-write.md) | `TODO` | 3 | `todo_write` |
 | [tools/schedule-next.md](tools/schedule-next.md) | `SCHED` | 5 | `schedule_next` |
 | [tools/watch-file.md](tools/watch-file.md) | `ARM` | 6 | `watch_file` |
-| [tools/ask-user.md](tools/ask-user.md) | `ASK` | 9 | `ask_user` |
+| [tools/ask-user.md](tools/ask-user.md) | `ASK` | 10 | `ask_user` |
 | [tools/request-path.md](tools/request-path.md) | `PATHREQ` | 7 | `request_path` |
 | [tools/advisor.md](tools/advisor.md) | `ADVISOR` | 9 | `advisor` |
 
