@@ -923,6 +923,107 @@ fn a_reply_that_stops_arriving_is_given_up_on_however_long_its_request_said_it_m
     }
 }
 
+/// Read the whole body at `base` through an egress whose gap bound is `default_gap`, with the request
+/// as `shape` makes it, and say how many bytes arrived.
+fn bytes_read(
+    base: &str,
+    default_gap: Duration,
+    shape: impl FnOnce(Request) -> Request,
+) -> Result<usize, EgressError> {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+    let egress = Egress::with_timeouts(Timeouts {
+        idle: default_gap,
+        reply: Duration::from_secs(30),
+        ..Timeouts::default()
+    });
+    let mut stream = egress.fetch_streaming(
+        &mut policy,
+        shape(Request::get(base)),
+        Label::untrusted_public(),
+        None,
+    )?;
+    while stream.next_chunk()?.is_some() {}
+    Ok(stream.handed_back())
+}
+
+/// A person who stated a longer gap than the default is waited for through it, whatever else the
+/// request says about its reply. The pieces come further apart than the gap the egress layer
+/// allows, so only a gap the request itself carried gets the body to the end.
+#[test]
+fn a_request_stating_a_longer_gap_between_pieces_is_waited_on_that_long() {
+    let pieces = || vec!["one ", "two ", "three"];
+    let default_gap = Duration::from_millis(300);
+    let apart = Duration::from_millis(700);
+
+    let base = serve_trickled(pieces(), apart);
+    let unstated = bytes_read(&base, default_gap, |request| request);
+    assert!(
+        matches!(unstated, Err(EgressError::Transport { .. })),
+        "pieces further apart than the default gap were waited for: {unstated:?}"
+    );
+
+    for (name, shape) in [
+        (
+            "alone",
+            Box::new(|request: Request| request.idle_within(Duration::from_secs(3)))
+                as Box<dyn FnOnce(Request) -> Request>,
+        ),
+        (
+            "with a whole reply bound",
+            Box::new(|request: Request| {
+                request
+                    .idle_within(Duration::from_secs(3))
+                    .reply_within(Duration::from_secs(20))
+            }),
+        ),
+        (
+            "with a stream's reply bound",
+            Box::new(|request: Request| {
+                request
+                    .stream_within(Duration::from_secs(20))
+                    .idle_within(Duration::from_secs(3))
+            }),
+        ),
+    ] {
+        let base = serve_trickled(pieces(), apart);
+        let stated = bytes_read(&base, default_gap, shape);
+        assert_eq!(
+            stated.as_ref().ok(),
+            Some(&"one two three".len()),
+            "a gap of three seconds {name} did not carry the body: {stated:?}"
+        );
+    }
+}
+
+/// The stated gap is the one in force in either direction. A person on a link that dies quietly may
+/// want a connection that has gone silent given up on sooner than the default allows, and an
+/// implementation that only ever lengthened the gap would make them wait the default out.
+#[test]
+fn a_request_stating_a_shorter_gap_gives_up_on_a_quiet_reply_sooner() {
+    let base = serve_stalled_body();
+    let started = std::time::Instant::now();
+    let stated = bytes_read(&base, Duration::from_secs(8), |request| {
+        request.idle_within(Duration::from_millis(300))
+    });
+
+    assert!(
+        matches!(stated, Err(EgressError::Transport { .. })),
+        "a body that stopped was read as {stated:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "a gap of 300 ms was waited on for {:?}, which is the default gap's order",
+        started.elapsed()
+    );
+}
+
 /// A local model writing a tool call, as Ollama sends one: nothing at all while the model thinks,
 /// not even the headers, then a first piece, then nothing again while the call is written, then
 /// the rest.
@@ -1017,6 +1118,57 @@ fn a_stream_from_this_machine_that_asks_is_waited_on_through_any_silence() {
                     "{host}: without the ask the silence is still cut: {read:?}"
                 );
             }
+        }
+    }
+}
+
+/// A stated gap is a bound like the default one, and a stream from this machine that asks to be
+/// waited on through any silence is held to none of them: a person who stated 200 ms for a link
+/// that dies quietly has not asked for a model on their own machine to be cut off while it writes.
+#[test]
+fn a_stated_gap_does_not_end_a_stream_from_this_machine_that_asks_to_be_waited_on() {
+    let stop = Cancel::new();
+    for patient in [true, false] {
+        let base = serve_like_a_local_model("127.0.0.1", Duration::from_millis(800));
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy begins");
+        // Only the stated gap is shorter than the silence, so nothing else can be what cuts it.
+        let egress = Egress::with_timeouts(Timeouts {
+            reply: Duration::from_secs(30),
+            idle: Duration::from_secs(30),
+            ..Timeouts::default()
+        });
+        let request = Request::post(&base, b"{}".to_vec()).idle_within(Duration::from_millis(200));
+        let request = if patient {
+            request.patient_on_this_machine()
+        } else {
+            request
+        };
+
+        let read = egress
+            .fetch_streaming(&mut policy, request, Label::untrusted_public(), Some(&stop))
+            .and_then(|mut stream| {
+                let mut pieces = 0;
+                while stream.next_chunk()?.is_some() {
+                    pieces += 1;
+                }
+                Ok(pieces)
+            });
+
+        if patient {
+            let pieces = read.unwrap_or_else(|error| panic!("a stated gap cut it: {error:?}"));
+            assert!(pieces >= 2, "both halves arrive, got {pieces}");
+        } else {
+            assert!(
+                matches!(read, Err(EgressError::Transport { .. })),
+                "without the ask a stated gap still cuts the silence: {read:?}"
+            );
         }
     }
 }

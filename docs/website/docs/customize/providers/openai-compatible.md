@@ -35,6 +35,8 @@ was, and the conversation budget stays where it was too.
 | | `models` | the models to offer, keyed by the name the gateway knows each by |
 | `options` | `baseURL` | where requests go |
 | | `contextWindow` | the context window of every model that states none, in prompt tokens (bravebot's own field) |
+| | `maxRetries` | how many times a request is sent again after a failure worth another attempt, 2 where unstated (bravebot's own field) |
+| | `idleTimeoutMs` | how long a reply may go quiet before it is given up on, in milliseconds, 120000 where unstated (bravebot's own field) |
 | | `apiKey` | a token written into the file directly |
 | a model | `limit.context` | that model's context window, in prompt tokens |
 | | `options` | anything extra to put in the request body |
@@ -244,3 +246,44 @@ worse one it silently routes somewhere you did not intend.
 
 It cannot replace what the turn itself built. The settings file names a destination, not what was
 asked.
+
+### Retries and a reply gone quiet
+
+A request that fails because the connection gave out, or because the service said it was busy, is
+sent again twice, after a pause of one second and then two. A reply that is still arriving is given
+up on when nothing has come for two minutes. Both are figures you can change for one gateway in its
+`options`:
+
+```json
+{
+  "provider": {
+    "my-gateway": {
+      "options": {
+        "baseURL": "https://gateway.example/v1",
+        "maxRetries": 4,
+        "idleTimeoutMs": 300000
+      }
+    }
+  }
+}
+```
+
+`maxRetries` is how many times a request is sent *again*, so `4` is five requests in all and `0`
+sends each one once. It is at most 7. `idleTimeoutMs` is for a model that thinks for longer than two
+minutes before it writes; it is at most 600000, ten minutes. Both are written as numbers: `"0"` in
+quotes, a fraction, a negative figure and a gap of `0` leave the figure at what it was, and a figure
+above its limit is the limit.
+
+Only the count and the wait change. Which failures are sent again does not: a refused credential or
+a model the service does not have is refused the same way each time, whatever count you gave. A wait
+the service asked for with a `Retry-After`, up to two minutes, is taken before each retry in place of
+the pause, so a large count against a service that keeps asking for it is a long wait.
+
+A gateway on this machine, such as a local Ollama, is waited on through any silence while you can
+stop the turn, so `idleTimeoutMs` does not reach it. `maxRetries` does.
+
+These two are read from your own `settings.json`, from a file `--settings` names, and from the
+machine-level file an administrator keeps. A `.bravebot/settings.json` in a checkout cannot set them,
+as it cannot name a gateway: `bravebot doctor` says so when one tries. Brave's own endpoint and the
+models you reach through the Bedrock tier variables alone have no entry to put them in and keep the
+defaults. An [AWS Bedrock entry](bedrock.md#naming-more-than-three-models) takes the same two.

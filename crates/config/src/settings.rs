@@ -5580,6 +5580,37 @@ mod tests {
         assert_eq!(settings.providers_ignored().count(), 1);
     }
 
+    /// A checkout that stretches a timeout or multiplies attempts would spend the person's account
+    /// and time on its own say-so, so a project or local layer's `provider` block is ignored
+    /// whole, retry count and quiet gap with it, and the home layer's figures stay in force.
+    #[test]
+    fn a_project_layer_cannot_change_a_gateways_retry_count_or_idle_gap() {
+        let settings = Layers::new("provider-patience")
+            .global(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "maxRetries": 1, "idleTimeoutMs": 30000}}}}"#,
+            )
+            .project(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "maxRetries": 7, "idleTimeoutMs": 600000}}}}"#,
+            )
+            .local(
+                r#"{"provider": {"other": {"options": {
+                    "baseURL": "https://other.invalid/v1", "maxRetries": 7}}}}"#,
+            )
+            .read();
+        assert_eq!(settings.providers().len(), 1);
+        let patience = settings.providers()[0].patience;
+        assert_eq!(patience.max_retries, Some(1));
+        assert_eq!(
+            patience.idle_timeout,
+            Some(std::time::Duration::from_secs(30))
+        );
+        assert_eq!(settings.providers_ignored().count(), 2);
+    }
+
     /// A file the command line named beats every file that was found (BACKEND-24), and naming it
     /// is the person's own act, so it picks a backend the way the home layer's own file does.
     #[test]

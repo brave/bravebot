@@ -475,6 +475,9 @@ pub struct Request {
     pub body: Option<Vec<u8>>,
     /// How long the reply may take, where the request says. Otherwise [`Timeouts::reply`].
     pub reply: Option<ReplyBound>,
+    /// The longest gap between two pieces of the reply, where the request says. Otherwise
+    /// [`Timeouts::idle`].
+    pub idle: Option<Duration>,
     /// Whether a reply from this machine is waited on for as long as it takes. See
     /// [`Request::patient_on_this_machine`].
     pub patient_on_this_machine: bool,
@@ -507,6 +510,7 @@ impl Request {
             socket_headers: Vec::new(),
             body: None,
             reply: None,
+            idle: None,
             patient_on_this_machine: false,
         }
     }
@@ -519,6 +523,7 @@ impl Request {
             socket_headers: Vec::new(),
             body: Some(body),
             reply: None,
+            idle: None,
             patient_on_this_machine: false,
         }
     }
@@ -550,6 +555,18 @@ impl Request {
     /// As [`Request::reply_within`], for a reply that begins at once and may then run for `bound`.
     pub fn stream_within(mut self, bound: Duration) -> Self {
         self.reply = Some(ReplyBound::Begun(bound));
+        self
+    }
+
+    /// Allow `gap` between two pieces of the reply rather than [`Timeouts::idle`], in either
+    /// direction.
+    ///
+    /// For a caller whose person stated how long a quiet reply is waited on. The gap is the only
+    /// bound this moves: the wait for the reply to begin and the time the whole of it may take stay
+    /// whatever [`Request::reply_within`], [`Request::stream_within`] or [`Timeouts::reply`] say, so a
+    /// gap longer than those leaves the reply to be ended by them.
+    pub fn idle_within(mut self, gap: Duration) -> Self {
+        self.idle = Some(gap);
         self
     }
 
@@ -956,14 +973,14 @@ fn send(
             for (name, value) in headers {
                 builder = builder.header(name, value);
             }
-            within(builder, timeouts, request.reply, patient).call()
+            within(builder, timeouts, request, patient).call()
         }
         Method::Post => {
             let mut builder = agent.post(url);
             for (name, value) in headers {
                 builder = builder.header(name, value);
             }
-            let builder = within(builder, timeouts, request.reply, patient);
+            let builder = within(builder, timeouts, request, patient);
             match &request.body {
                 Some(bytes) => builder.send(&bytes[..]),
                 None => builder.send_empty(),
@@ -1021,7 +1038,7 @@ fn send(
     ))
 }
 
-/// `builder` with the bound the request states on its reply, where it states one.
+/// `builder` with the bounds the request states on its reply, where it states any.
 ///
 /// A whole reply sets the same three phases [`Egress::with_transport`] sets from
 /// [`Timeouts::reply`], for the reason given there: each bounds the phases after it, so leaving one
@@ -1031,12 +1048,15 @@ fn send(
 /// sets only the last, which ureq counts from the headers arriving, and the two before it keep the
 /// wait for them at the agent's.
 ///
+/// A request that states its own gap between two pieces of the reply sets the body's bound alone,
+/// which ureq counts afresh on every read and carries into no other phase.
+///
 /// A patient one lifts every bound from the request going out onwards, since each carries into the
 /// phases after it. Connecting keeps its bound, which carries only into sending the headers.
 fn within<B>(
     builder: ureq::RequestBuilder<B>,
     timeouts: Timeouts,
-    reply: Option<ReplyBound>,
+    request: &Request,
     patient: bool,
 ) -> ureq::RequestBuilder<B> {
     if patient {
@@ -1048,7 +1068,11 @@ fn within<B>(
             .timeout_recv_body(None)
             .build();
     }
-    match reply {
+    let builder = match request.idle {
+        Some(gap) => builder.config().timeout_recv_body(Some(gap)).build(),
+        None => builder,
+    };
+    match request.reply {
         None => builder,
         Some(ReplyBound::Whole(bound)) => builder
             .config()

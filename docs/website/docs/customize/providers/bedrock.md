@@ -89,6 +89,10 @@ fails somewhere far from the mistake. An entry without one, or with one spelled 
 `AWS_REGION` is, configures no service at all.
 `options.profile` picks which credentials sign, exactly as `AWS_PROFILE` does, and is optional on the
 same terms.
+`options.maxRetries` and `options.idleTimeoutMs` state how many times a request is sent again and how
+long a reply may go quiet, as they do for a
+[gateway](openai-compatible.md#retries-and-a-reply-gone-quiet). The tier variables have no block to
+state them in, so models they alone name keep two retries and two minutes.
 
 **There is no credential to name here.** Bedrock takes a signature over the request rather than a
 bearer token, so this entry reads neither `env` nor `options.apiKey`. Which AWS credentials sign

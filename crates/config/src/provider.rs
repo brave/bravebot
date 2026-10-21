@@ -12,6 +12,7 @@
 
 use crate::Secret;
 use std::fmt;
+use std::time::Duration;
 
 /// `url` as a report may print it: the userinfo of its authority dropped.
 ///
@@ -144,6 +145,61 @@ pub struct Model {
     pub options: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
+/// The most times a request is sent again that a block may state.
+///
+/// The pauses the doubling from one second gives total 127 seconds at the cap, and none is longer
+/// than 64, which stays inside the two minutes after which a service's own request to wait is
+/// refused rather than waited out. A wait a service asks for is taken in place of the pause, so the
+/// whole wait is bounded by this count and by that figure per retry.
+pub const MAX_RETRIES: u32 = 7;
+
+/// The longest gap between two pieces of a reply that a block may state, in milliseconds.
+///
+/// The bound on the whole of a reply of unstated length is ten minutes, so a longer gap could never
+/// be the one that ended it.
+pub const MAX_IDLE_TIMEOUT_MS: u64 = 600_000;
+
+/// What a block states about repeating a request and about waiting on a reply gone quiet.
+///
+/// Both are plain numbers a person chose, and only ever set a count or a timer: the decision to send
+/// a request again is still taken from the status or the failure that came back, never from this.
+/// `None` is nothing stated, which the clients read as the figures they have always used. Read out of
+/// the block's `options` for a gateway and for an AWS account alike, and so only from the layers a
+/// `provider` block is read from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Patience {
+    /// `options.maxRetries`: how many times a request is sent again, at most [`MAX_RETRIES`].
+    ///
+    /// Zero is a statement, not an absence: it sends each request once.
+    pub max_retries: Option<u32>,
+    /// `options.idleTimeoutMs`: how long a reply may go quiet before it is given up on, at most
+    /// [`MAX_IDLE_TIMEOUT_MS`].
+    pub idle_timeout: Option<Duration>,
+}
+
+impl Patience {
+    /// What a block's `options` state. A figure above its cap is the cap, as Codex reads its own;
+    /// anything that is not a whole number, and a zero gap, states nothing.
+    pub(crate) fn from_options(
+        options: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> Self {
+        let stated = |key: &str| options.and_then(|options| options.get(key));
+        Self {
+            max_retries: stated("maxRetries")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|retries| u32::try_from(retries.min(u64::from(MAX_RETRIES))).ok()),
+            idle_timeout: positive(stated("idleTimeoutMs"))
+                .map(|gap| Duration::from_millis(gap.min(MAX_IDLE_TIMEOUT_MS))),
+        }
+    }
+
+    /// How many requests are sent before a failure is the caller's: `default` where no retry count
+    /// was stated, and one more than the count where one was.
+    pub fn attempts(&self, default: u32) -> u32 {
+        self.max_retries.map_or(default, |retries| retries + 1)
+    }
+}
+
 /// One gateway, and the models it was configured to offer.
 ///
 /// Not comparable, because one field is a credential and `Secret` refuses equality: an operator
@@ -190,6 +246,12 @@ pub struct Provider {
     /// only place to keep a figure where the block lists no models, since a block that lists models
     /// turns off the roster. A model's own `limit.context` outranks it.
     pub context_window: Option<u64>,
+    /// How often a request to this gateway is sent again, and how long a reply that has gone quiet
+    /// is waited on, where `options` states either.
+    ///
+    /// Nothing for an AWS entry: its account is what a client reaches and carries its own
+    /// ([`crate::bedrock::Bedrock::patience`]), so the figures have one home.
+    pub patience: Patience,
     /// The AWS account this entry reaches, where it names Bedrock rather than a gateway.
     ///
     /// Resolved here rather than by the caller because a request to Bedrock needs a region to sign
@@ -257,6 +319,7 @@ impl Provider {
             stored_key: None,
             models: models(entry.get("models")),
             context_window: options.and_then(|options| positive(options.get("contextWindow"))),
+            patience: Patience::from_options(options),
             bedrock: None,
         })
     }
@@ -286,6 +349,7 @@ impl Provider {
             stored_key: None,
             models: Vec::new(),
             context_window: None,
+            patience: Patience::default(),
             bedrock: None,
         })
     }
@@ -305,7 +369,8 @@ impl Provider {
         let profile = string(options.and_then(|options| options.get("profile")));
         let models = models(entry.get("models"));
         let entries = bedrock_entries(entry.get("models"));
-        let bedrock = crate::bedrock::Bedrock::from_provider(region, profile, entries)?;
+        let bedrock = crate::bedrock::Bedrock::from_provider(region, profile, entries)?
+            .with_patience(Patience::from_options(options));
 
         Some(Self {
             id: id.to_string(),
@@ -316,6 +381,7 @@ impl Provider {
             stored_key: None,
             models,
             context_window: None,
+            patience: Patience::default(),
             bedrock: Some(bedrock),
         })
     }
@@ -1113,6 +1179,123 @@ mod tests {
             }}}"#);
         let model = provider.model("some/model").expect("offered");
         assert_eq!(model.context_window, Some(131_072));
+    }
+
+    /// The two figures a person states are what the clients read, and nothing stated reads as the
+    /// figures they have always used, which is how a block written before they existed is read.
+    #[test]
+    fn a_block_states_how_often_a_request_is_sent_again_and_how_long_a_quiet_reply_is_waited_on() {
+        let stated = one(r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://example.invalid/v1",
+                            "maxRetries": 5, "idleTimeoutMs": 300000}
+            }}}"#);
+        assert_eq!(stated.patience.max_retries, Some(5));
+        assert_eq!(
+            stated.patience.idle_timeout,
+            Some(Duration::from_millis(300_000))
+        );
+        assert_eq!(stated.patience.attempts(3), 6);
+
+        let silent =
+            one(r#"{"provider": {"gw": {"options": {"baseURL": "https://example.invalid/v1"}}}}"#);
+        assert_eq!(silent.patience, Patience::default());
+        assert_eq!(
+            silent.patience.attempts(3),
+            3,
+            "nothing stated took a figure"
+        );
+    }
+
+    /// Zero retries sends each request once. Reading it as "nothing stated" would hand a person who
+    /// asked for no repeats the default two, and they would find out from a bill.
+    #[test]
+    fn zero_retries_is_a_statement_and_zero_milliseconds_is_not() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://example.invalid/v1",
+                            "maxRetries": 0, "idleTimeoutMs": 0}
+            }}}"#);
+        assert_eq!(provider.patience.max_retries, Some(0));
+        assert_eq!(provider.patience.attempts(3), 1);
+        assert_eq!(
+            provider.patience.idle_timeout, None,
+            "a gap of nothing would end every reply the moment it began"
+        );
+    }
+
+    /// A figure above the cap is the cap, as Codex reads its own. Left as written, seven doublings
+    /// of a one second pause is the most that stays inside the two minutes a service's own request
+    /// to wait is held to, and a hundred is a turn that sits unattended for longer than a person
+    /// would wait.
+    #[test]
+    fn a_figure_above_the_cap_is_the_cap() {
+        let provider = one(
+            r#"{"provider": {"gw": {"options": {"baseURL": "https://example.invalid/v1",
+                "maxRetries": 100, "idleTimeoutMs": 86400000}}}}"#,
+        );
+        assert_eq!(provider.patience.max_retries, Some(MAX_RETRIES));
+        assert_eq!(
+            provider.patience.idle_timeout,
+            Some(Duration::from_millis(MAX_IDLE_TIMEOUT_MS))
+        );
+
+        let at_the_cap = one(&format!(
+            r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://example.invalid/v1",
+                "maxRetries": {MAX_RETRIES}, "idleTimeoutMs": {MAX_IDLE_TIMEOUT_MS}}}}}}}}}"#
+        ));
+        assert_eq!(at_the_cap.patience, provider.patience);
+
+        let below = one(&format!(
+            r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://example.invalid/v1",
+                "maxRetries": {}, "idleTimeoutMs": {}}}}}}}}}"#,
+            MAX_RETRIES - 1,
+            MAX_IDLE_TIMEOUT_MS - 1
+        ));
+        assert_eq!(below.patience.max_retries, Some(MAX_RETRIES - 1));
+        assert_eq!(
+            below.patience.idle_timeout,
+            Some(Duration::from_millis(MAX_IDLE_TIMEOUT_MS - 1))
+        );
+    }
+
+    /// A value that is not a whole number states nothing, on the footing `contextWindow` is read:
+    /// a mistyped figure costs the setting and leaves the entry reachable.
+    #[test]
+    fn a_figure_that_is_not_a_whole_number_states_nothing() {
+        for spelling in [r#""3""#, "-1", "1.5", "true", "null", "[]", r#"{"n": 2}"#] {
+            let provider = one(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://example.invalid/v1",
+                    "maxRetries": {spelling}, "idleTimeoutMs": {spelling}}}}}}}}}"#
+            ));
+            assert_eq!(
+                provider.patience,
+                Patience::default(),
+                "{spelling} stated something"
+            );
+            assert_eq!(provider.base_url, "https://example.invalid/v1");
+        }
+    }
+
+    /// An AWS account is stated the same two keys, read from the block's `options` beside the
+    /// region, and the entry keeps them where a client reaching the account can read them.
+    #[test]
+    fn an_aws_entry_states_the_same_two_figures() {
+        let provider = one(r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2", "maxRetries": 4, "idleTimeoutMs": 240000},
+                "models": {"arn:aws:bedrock:us-west-2:111122223333:inference-profile/x": {}}
+            }}}"#);
+        let account = provider.bedrock.expect("an account");
+        assert_eq!(account.patience().max_retries, Some(4));
+        assert_eq!(
+            account.patience().idle_timeout,
+            Some(Duration::from_millis(240_000))
+        );
+
+        let silent =
+            one(r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2"}}}}"#);
+        assert_eq!(
+            silent.bedrock.expect("an account").patience(),
+            Patience::default()
+        );
     }
 
     /// `options` reaches the request body whole and is never parsed. A gateway's routing controls

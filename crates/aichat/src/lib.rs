@@ -325,6 +325,14 @@ impl<'a> AichatClient<'a> {
         self
     }
 
+    /// How many requests are sent for one call before its failure is the caller's: the retry count
+    /// the gateway's block stated, plus the first request, and [`ATTEMPTS`] where it stated none.
+    fn attempts_allowed(&self) -> u32 {
+        self.gateway.as_ref().map_or(ATTEMPTS, |gateway| {
+            gateway.provider.patience.attempts(ATTEMPTS)
+        })
+    }
+
     /// Wait this long before the first retry instead of the default one-second wait. Later
     /// retries still double it.
     ///
@@ -509,6 +517,9 @@ impl<'a> AichatClient<'a> {
             }
             let mut http = Request::post(gateway.provider.chat_completions_url(), encode(&body)?)
                 .header("content-type", "application/json");
+            if let Some(gap) = gateway.provider.patience.idle_timeout {
+                http = http.idle_within(gap);
+            }
             if let Some(token) = gateway.token.as_ref().map(Secret::expose) {
                 let (name, value) = gateway.provider.credential_header(token);
                 http = http.header(name, value);
@@ -569,7 +580,7 @@ impl<'a> AichatClient<'a> {
                     self.effort = false;
                     probed = true;
                 }
-                Err(error) if worth_another_attempt(attempt, &error) => {
+                Err(error) if worth_another_attempt(self.attempts_allowed(), attempt, &error) => {
                     let pause = pause_before_retry(self.backoff, attempt, &error);
                     log_retry(attempt + 1, pause);
                     if !self.wait(pause) {
@@ -687,7 +698,7 @@ impl<'a> AichatClient<'a> {
                     self.effort = false;
                     probed = true;
                 }
-                Err(error) if worth_another_attempt(attempt, &error) => {
+                Err(error) if worth_another_attempt(self.attempts_allowed(), attempt, &error) => {
                     attempt += 1;
                     let pause = pause_before_retry(self.backoff, attempt - 1, &error);
                     log_retry(attempt, pause);
@@ -990,7 +1001,8 @@ pub struct Progress<'a> {
     pub attempt: u32,
 }
 
-/// How many times one request is sent before its failure is the caller's.
+/// How many times one request is sent before its failure is the caller's, where the provider's block
+/// states no retry count.
 ///
 /// Three because the failure this exists for is a connection that died while nobody was
 /// looking, and a machine coming back from sleep needs a moment before its network works.
@@ -1019,13 +1031,13 @@ const WAKE: Duration = Duration::from_millis(50);
 /// because the decoder has never been the slow end.
 const CHUNKS_AHEAD: usize = 16;
 
-/// Whether a failed attempt should be repeated.
+/// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
 ///
 /// Only transport failures qualify, and only from the layer that knows what happened to the
 /// connection. A reply that arrived and would not decode is not a connection problem, and
 /// asking for it again would produce the same thing.
-fn worth_another_attempt(attempt: u32, error: &ChatError) -> bool {
-    if attempt >= ATTEMPTS {
+fn worth_another_attempt(allowed: u32, attempt: u32, error: &ChatError) -> bool {
+    if attempt >= allowed {
         return false;
     }
     match error {

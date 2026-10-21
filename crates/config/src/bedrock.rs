@@ -9,6 +9,7 @@
 //! them rather than read once at startup.
 
 use crate::env_var;
+use crate::provider::Patience;
 
 /// Which tier a model name is for.
 ///
@@ -179,6 +180,11 @@ pub struct Bedrock {
     /// The cache lifetime the settings chose, set by [`crate::Config`] for the reason
     /// `output_budget` is.
     cache_ttl: Option<crate::CacheTtl>,
+    /// What the `provider` block stated about repeating a request and a reply gone quiet.
+    ///
+    /// Nothing stated for an account reached through the tier variables, which have no block to
+    /// state it in.
+    patience: Patience,
 }
 
 /// The context window a Bedrock model is assumed to have, in prompt tokens.
@@ -249,6 +255,7 @@ impl Bedrock {
             models,
             output_budget: None,
             cache_ttl: None,
+            patience: Patience::default(),
         })
     }
 
@@ -298,6 +305,7 @@ impl Bedrock {
             models,
             output_budget: None,
             cache_ttl: None,
+            patience: Patience::default(),
         })
     }
 
@@ -316,6 +324,18 @@ impl Bedrock {
     /// The cache lifetime a request to this account asks for, where somebody chose one.
     pub fn cache_ttl(&self) -> Option<crate::CacheTtl> {
         self.cache_ttl
+    }
+
+    /// The same account with the retry count and the idle gap its `provider` block stated.
+    pub fn with_patience(mut self, patience: Patience) -> Self {
+        self.patience = patience;
+        self
+    }
+
+    /// How often a request to this account is sent again, and how long a quiet reply is waited on,
+    /// where its block stated either.
+    pub fn patience(&self) -> Patience {
+        self.patience
     }
 
     /// How long a reply from `model` may run before the service cuts it off.
