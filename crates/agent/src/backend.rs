@@ -523,6 +523,75 @@ pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
     }
 }
 
+/// The model `planModel` names, where a turn that begins in plan mode may be sent to it
+/// (BACKEND-56).
+///
+/// `Ok(None)` where the settings name none, and `Err` with the resolved name where one is named and
+/// is not usable: the machine-level layer refuses it, no configured service answers for it, or it
+/// needs a sign-in this machine has not made. The same three questions a name written for
+/// `summaryModel` is put ([`crate::compact::named_model_or_session`]), answered differently: a
+/// summary is refused, since that key caps a cost, and a plan turn runs on the session's own model,
+/// since this one asks for a stronger model where there is one and refusing the turn would take away
+/// the planning it was for. The name is the person's own setting, and both questions are asked of this
+/// machine, so nothing untrusted decides either.
+pub fn plan_model(config: &Config, egress: &Egress) -> Result<Option<String>, String> {
+    let Some(named) = config.plan() else {
+        return Ok(None);
+    };
+    match crate::compact::named_model_or_session(config, egress, Some(named.clone()), None) {
+        Ok(_) => Ok(Some(named)),
+        Err(_) => Err(named),
+    }
+}
+
+/// Which model answers a turn in place of the one its task names.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Answering {
+    /// The model the addressed definition wrote (DELEGATE-22).
+    Definition,
+    /// The model `planModel` names, for a turn that began in plan mode.
+    Plan(String),
+    /// `planModel` names a model this machine cannot use. The turn stays on the task's own, and
+    /// the name is the one it says it set aside.
+    PlanSetAside(String),
+    /// Nothing names another model, so the task's own answers.
+    Task,
+}
+
+/// The order in which a turn's model is settled (BACKEND-56), written once for every caller that
+/// needs it.
+///
+/// A model a definition names for the turn outranks `planModel`, and so do the command line's
+/// `--model` and a delegate's own model, which is its definition's boundary. Otherwise a turn that
+/// began in plan mode takes `planModel`.
+///
+/// The turn asks it as it settles its model, and a front end asks it before the turn starts to
+/// size the context budget against the model that will answer, so the window follows the model the
+/// turn runs on. Both pass the mode the turn began in, read once: a mode chosen between two
+/// readings would give each of them a different answer.
+pub fn answering(
+    config: &Config,
+    egress: &Egress,
+    started_in: crate::PermissionMode,
+    task: &crate::Task,
+    definition_names_a_model: bool,
+) -> Answering {
+    if definition_names_a_model && !task.model_outranks_a_definition {
+        return Answering::Definition;
+    }
+    if started_in != crate::PermissionMode::Plan
+        || task.delegate.is_some()
+        || task.model_outranks_a_definition
+    {
+        return Answering::Task;
+    }
+    match plan_model(config, egress) {
+        Ok(Some(named)) => Answering::Plan(named),
+        Ok(None) => Answering::Task,
+        Err(named) => Answering::PlanSetAside(named),
+    }
+}
+
 /// What the machine-level layer's refusal of a model says, naming the file that refused it.
 ///
 /// Here rather than in each interface because three of them say it: a run that settles on the model,

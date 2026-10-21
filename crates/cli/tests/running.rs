@@ -5199,6 +5199,31 @@ fn doctor_says_a_checkouts_fallback_model_is_not_obeyed() {
     );
 }
 
+/// A checkout's `planModel` is dropped and `doctor` says so, for the reason its `fallbackModel` is
+/// (BACKEND-56).
+#[test]
+fn doctor_says_a_checkouts_plan_model_is_not_obeyed() {
+    let scratch = Scratch::new("cli-running-doctor-plan-checkout");
+    let cwd = a_checkout_saying(&scratch, r#"{"planModel": "attacker-chosen-model"}"#);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains("planModel in") && stdout.contains("is not obeyed"),
+        "{stdout}{stderr}"
+    );
+}
+
 /// A checkout's `summaryModel` is dropped and `doctor` names the checkout's file, so whoever wrote
 /// it is told which file to change rather than left to conclude the conversation is being sent to
 /// the model it names (COMPACT-15).

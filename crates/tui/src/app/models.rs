@@ -305,6 +305,48 @@ pub fn adopt_listing_for_model(config: &mut Config, model: &str) -> bool {
     reads_effort(&models, model)
 }
 
+/// The model other than the session's that answers a turn, whose window is the budget it compacts
+/// against (BACKEND-7): the one a `/agent` line's definition names, and otherwise `planModel` for a
+/// turn that begins in plan mode (BACKEND-56).
+///
+/// Settled by the agent's [`answering`](bravebot_agent::backend::answering), the function the turn
+/// settles its own model with, so the window is read for the model the turn runs on. A plan model
+/// the turn will set aside leaves the session's window with the session's model.
+pub(super) fn model_answering_the_turn(
+    config: &Config,
+    egress: &bravebot_net::Egress,
+    started_in: bravebot_agent::PermissionMode,
+    task: &Task,
+    addressed_model: Option<&str>,
+) -> Option<String> {
+    use bravebot_agent::backend::{Answering, answering};
+    match answering(config, egress, started_in, task, addressed_model.is_some()) {
+        Answering::Definition => addressed_model.map(str::to_string),
+        Answering::Plan(model) => Some(model),
+        Answering::PlanSetAside(_) | Answering::Task => None,
+    }
+}
+
+/// What a turn is run with: the task told the mode the turn began in, and the configuration whose
+/// window is that of the model that answers it (BACKEND-7, BACKEND-56).
+///
+/// The mode is read here, once. The window is sized from that reading and the task carries it, so
+/// the turn begins in the mode its window was sized for even where the key that sets the mode is
+/// pressed as the turn opens (MODE-8).
+pub(super) fn settle_the_turn(
+    config: &Config,
+    egress: &bravebot_net::Egress,
+    task: Task,
+    mode: &bravebot_agent::LiveMode,
+    addressed_model: Option<&str>,
+) -> (Task, Config) {
+    let started_in = mode.get();
+    let task = task.beginning_in(started_in);
+    let answering = model_answering_the_turn(config, egress, started_in, &task, addressed_model);
+    let turn = config_for_turn(config, answering.as_deref());
+    (task, turn)
+}
+
 /// The configuration a turn is run on: the session's, with the window of the model that answers it
 /// where a `/agent` line's definition names one other than the session's (BACKEND-7).
 ///

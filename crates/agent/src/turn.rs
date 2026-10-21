@@ -2667,7 +2667,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // the turn's own and the kernel gives it to no run that is a delegate (DELEGATE-7).
     policy = policy.with_delegate_bound(inputs.config.max_running_delegates);
 
-    let started_in = task.permission_mode.get();
+    let started_in = task.began_in.unwrap_or_else(|| task.permission_mode.get());
     policy.record_permission_mode(started_in.name());
     // The opening a style takes the place of is the one a person's own turn gets, and
     // `--system-prompt` outranks it, so only a style that reaches the prompt is recorded.
@@ -2981,7 +2981,16 @@ where
         pinned_by,
         turn_model,
         definition_model,
-    } = setup::model_for_the_turn(config, task, addressed.as_ref(), reporter, &mut notices)?;
+        on_the_plan_model,
+    } = setup::model_for_the_turn(
+        config,
+        egress,
+        started_in,
+        task,
+        addressed.as_ref(),
+        reporter,
+        &mut notices,
+    )?;
     // Beside the model and mutable for the same reason. The session's own until a skill names
     // one, and absence is every service keeping its own default.
     let effort = task.effort;
@@ -3618,6 +3627,7 @@ where
         attempt: None,
         addressed: plan.addressed,
         compared_the_model_itself: definition_model.is_some()
+            || on_the_plan_model
             || state.switched_by.is_some()
             || state.retries.fell_back,
     })
@@ -6134,7 +6144,7 @@ mod tests {
             )
         }
 
-        fn configured(fallback: Option<&str>) -> Config {
+        pub(super) fn configured(fallback: Option<&str>) -> Config {
             let mut config = Config::from_lookup(|key| match key {
                 "SERVICES_KEY_AICHAT" => Some("test-key".into()),
                 "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
@@ -6146,28 +6156,47 @@ mod tests {
             config
         }
 
-        struct Taken {
-            outcome: Result<Outcome, TurnError>,
-            reporter: crate::report::RecordingReporter,
+        pub(super) struct Taken {
+            pub(super) outcome: Result<Outcome, TurnError>,
+            pub(super) reporter: crate::report::RecordingReporter,
             /// The body of each request that was sent, in order.
-            sent: Vec<String>,
+            pub(super) sent: Vec<String>,
             /// Every line the trail recorded about a move to the fallback.
-            moves: Vec<String>,
+            pub(super) moves: Vec<String>,
         }
 
-        fn take(
+        pub(super) fn take(
             name: &str,
             config: &Config,
             task: Task,
             replies: Vec<Result<Completion, BackendError>>,
         ) -> Taken {
+            let mut reporter = crate::report::RecordingReporter::default();
+            let (outcome, sent, moves) =
+                take_reporting_to(name, config, task, replies, &mut reporter);
+            Taken {
+                outcome,
+                reporter,
+                sent,
+                moves,
+            }
+        }
+
+        /// What [`take`] runs, with a reporter of the test's own: the outcome, the body of each
+        /// request sent, and every line the trail recorded about a move to the fallback.
+        pub(super) fn take_reporting_to<R: crate::report::Reporter + Send>(
+            name: &str,
+            config: &Config,
+            task: Task,
+            replies: Vec<Result<Completion, BackendError>>,
+            reporter: &mut R,
+        ) -> (Result<Outcome, TurnError>, Vec<String>, Vec<String>) {
             let scratch = crate::testutil::scratch_dir(name);
             let _ = std::fs::remove_dir_all(&scratch);
             std::fs::create_dir_all(&scratch).unwrap();
             let workspace = Workspace::new(&scratch).unwrap();
             let mut trust = TrustStore::new("/work");
             trust.trust(".");
-            let mut reporter = crate::report::RecordingReporter::default();
             let mut sink = bravebot_core::event::RecordingSink::new();
             scripted::script(replies);
             let outcome = resume(
@@ -6177,7 +6206,7 @@ mod tests {
                 &task,
                 &mut Conversation::new(),
                 &mut crate::confirm::ApproveWrites,
-                &mut reporter,
+                reporter,
                 &mut sink,
                 trust,
                 TrustedPrograms::new(),
@@ -6199,19 +6228,14 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            Taken {
-                outcome,
-                reporter,
-                sent,
-                moves,
-            }
+            (outcome, sent, moves)
         }
 
         fn on_primary() -> Task {
             Task::new("look it up").with_model(Some(PRIMARY.into()))
         }
 
-        fn named_in(body: &str) -> serde_json::Value {
+        pub(super) fn named_in(body: &str) -> serde_json::Value {
             serde_json::from_str::<serde_json::Value>(body).unwrap()["model"].clone()
         }
 
@@ -6350,6 +6374,323 @@ mod tests {
                 .expect_err("a delegate refuses rather than falls back");
             assert_eq!(taken.sent.len(), 1);
             assert!(taken.moves.is_empty());
+        }
+    }
+
+    /// BACKEND-56: a turn that begins in plan mode runs on the model `planModel` names.
+    mod plan_model {
+        use super::ceiling::said;
+        use super::fallback::{configured, named_in, take, take_reporting_to};
+        use super::*;
+
+        const SESSION: &str = "session-model";
+        const PLAN: &str = "plan-model";
+
+        fn planning(plan: Option<&str>) -> Config {
+            let mut config = configured(None);
+            config.plan_model = plan.map(str::to_string);
+            config
+        }
+
+        fn in_mode(mode: crate::PermissionMode) -> Task {
+            Task::new("look it up")
+                .with_model(Some(SESSION.into()))
+                .with_permission_mode(mode)
+        }
+
+        /// Two rounds, so a model chosen once and dropped after the first request shows.
+        fn two_rounds() -> Vec<Result<bravebot_aichat::Completion, crate::backend::BackendError>> {
+            vec![
+                said("", &[("read_file", r#"{"path":"absent.txt"}"#)], None),
+                said("done", &[], None),
+            ]
+        }
+
+        fn sent_to(taken: &fallback::Taken) -> Vec<serde_json::Value> {
+            taken.sent.iter().map(|body| named_in(body)).collect()
+        }
+
+        /// The fault it rejects: the setting read and ignored, or applied to every mode.
+        #[test]
+        fn a_plan_mode_turn_is_sent_to_the_plan_model_and_an_acting_turn_to_the_sessions() {
+            let config = planning(Some(PLAN));
+            let plan = take(
+                "plan-model-plan",
+                &config,
+                in_mode(crate::PermissionMode::Plan),
+                two_rounds(),
+            );
+            assert_eq!(sent_to(&plan), [PLAN, PLAN], "every round of a plan turn");
+            let outcome = plan.outcome.as_ref().expect("the plan turn ended");
+            assert!(
+                !outcome.ran_on_the_sessions_model(),
+                "a front end would report the plan model's answer as a substitution"
+            );
+            assert!(
+                plan.reporter.notices.is_empty(),
+                "{:?}",
+                plan.reporter.notices
+            );
+
+            for mode in [
+                crate::PermissionMode::Ask,
+                crate::PermissionMode::AcceptEdits,
+            ] {
+                let acting = take("plan-model-acting", &config, in_mode(mode), two_rounds());
+                assert_eq!(sent_to(&acting), [SESSION, SESSION], "{mode:?}");
+                assert!(
+                    acting.outcome.as_ref().unwrap().ran_on_the_sessions_model(),
+                    "{mode:?}"
+                );
+            }
+        }
+
+        /// The fault it rejects: a plan turn moved off the session's model with nothing set.
+        #[test]
+        fn a_plan_turn_with_no_plan_model_named_stays_on_the_sessions() {
+            let taken = take(
+                "plan-model-unset",
+                &planning(None),
+                in_mode(crate::PermissionMode::Plan),
+                two_rounds(),
+            );
+            assert_eq!(sent_to(&taken), [SESSION, SESSION]);
+        }
+
+        /// The fault it rejects: the managed layer's refusal bypassed by naming the model here, or a
+        /// refused plan model failing the turn or falling back without a word.
+        #[test]
+        fn a_plan_model_the_machine_refuses_falls_back_to_the_sessions_and_says_so() {
+            let scratch = crate::testutil::scratch_dir("plan-model-refused-file");
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let managed = scratch.join("managed.json");
+            std::fs::write(&managed, format!(r#"{{"models": {{"deny": ["{PLAN}"]}}}}"#)).unwrap();
+            let mut config = planning(Some(PLAN));
+            config.models = bravebot_config::Managed::at(&managed).models().clone();
+
+            let taken = take(
+                "plan-model-refused",
+                &config,
+                in_mode(crate::PermissionMode::Plan),
+                two_rounds(),
+            );
+            assert_eq!(sent_to(&taken), [SESSION, SESSION]);
+            let told = taken.reporter.notices.join("\n");
+            assert!(
+                told.contains(PLAN),
+                "the notice did not name the model: {told:?}"
+            );
+            assert!(
+                taken.outcome.as_ref().unwrap().ran_on_the_sessions_model(),
+                "the turn stayed on the session's model"
+            );
+        }
+
+        /// The fault it rejects: the setting outranking a model the person named for this run.
+        #[test]
+        fn a_model_named_on_the_command_line_outranks_the_plan_model() {
+            let taken = take(
+                "plan-model-flag",
+                &planning(Some(PLAN)),
+                in_mode(crate::PermissionMode::Plan).model_outranks_a_definition(true),
+                two_rounds(),
+            );
+            assert_eq!(sent_to(&taken), [SESSION, SESSION]);
+        }
+
+        /// The fault it rejects: a delegate in plan mode moved onto the plan model, past the model
+        /// it would have had (DELEGATE-22).
+        #[test]
+        fn a_delegate_in_plan_mode_keeps_the_model_it_was_given() {
+            let spec = a_delegate_spec("worker", held(&Task::new("")));
+            let taken = take(
+                "plan-model-delegate",
+                &planning(Some(PLAN)),
+                Task::delegated(spec)
+                    .with_model(Some(SESSION.into()))
+                    .with_permission_mode(crate::PermissionMode::Plan),
+                two_rounds(),
+            );
+            assert_eq!(sent_to(&taken), [SESSION, SESSION]);
+        }
+
+        /// The fault it rejects: the turn reading the live mode again when the caller has already
+        /// read it, so a key pressed between the two readings sends the turn to a model the caller
+        /// sized nothing for.
+        #[test]
+        fn a_turn_begins_in_the_mode_it_was_told_and_not_the_one_held_when_it_opens() {
+            let config = planning(Some(PLAN));
+            let handle = crate::LiveMode::new;
+
+            let moved_out_of_plan = take(
+                "plan-model-told-plan",
+                &config,
+                Task::new("look it up")
+                    .with_model(Some(SESSION.into()))
+                    .with_permission_mode(handle(crate::PermissionMode::Ask))
+                    .beginning_in(crate::PermissionMode::Plan),
+                two_rounds(),
+            );
+            assert_eq!(sent_to(&moved_out_of_plan), [PLAN, PLAN]);
+
+            let moved_into_plan = take(
+                "plan-model-told-acting",
+                &config,
+                Task::new("look it up")
+                    .with_model(Some(SESSION.into()))
+                    .with_permission_mode(handle(crate::PermissionMode::Plan))
+                    .beginning_in(crate::PermissionMode::AcceptEdits),
+                two_rounds(),
+            );
+            assert_eq!(sent_to(&moved_into_plan), [SESSION, SESSION]);
+        }
+
+        /// Presses the key that sets the mode as the turn's first tool starts, which is between its
+        /// first request and its second.
+        struct PressesTheKey {
+            mode: crate::LiveMode,
+            to: crate::PermissionMode,
+        }
+
+        impl crate::report::Reporter for PressesTheKey {
+            fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+            fn tool_started(&mut self, _activity: crate::report::Activity) {
+                self.mode.set(self.to);
+            }
+        }
+
+        /// BACKEND-56, MODE-8: a mode chosen while the turn runs changes nothing about its model.
+        /// The fault it rejects: the mode read again for each request, so a key pressed in the
+        /// middle of a plan turn sends the rest of it to the session's model and the reverse.
+        #[test]
+        fn a_mode_chosen_while_the_turn_runs_does_not_change_its_model() {
+            use crate::PermissionMode::{AcceptEdits, Plan};
+            let config = planning(Some(PLAN));
+            for (began, pressed, answers) in
+                [(Plan, AcceptEdits, PLAN), (AcceptEdits, Plan, SESSION)]
+            {
+                let mode = crate::LiveMode::new(began);
+                let task = Task::new("look it up")
+                    .with_model(Some(SESSION.into()))
+                    .with_permission_mode(mode.clone());
+                let mut key = PressesTheKey {
+                    mode: mode.clone(),
+                    to: pressed,
+                };
+                let (outcome, sent, _) =
+                    take_reporting_to("plan-model-pressed", &config, task, two_rounds(), &mut key);
+                assert_eq!(
+                    mode.get(),
+                    pressed,
+                    "the key was pressed while the turn ran"
+                );
+                assert!(outcome.is_ok(), "{outcome:?}");
+                let sent: Vec<_> = sent.iter().map(|body| named_in(body)).collect();
+                assert_eq!(sent, [answers, answers], "a turn that began in {began:?}");
+            }
+        }
+
+        /// What a front end sizes the context budget for is what the turn is sent to. The fault it
+        /// rejects: the order written a second time, in a caller or in the turn, and the two
+        /// drifting apart for one of the cases below.
+        #[test]
+        fn the_model_answering_is_the_model_the_turn_is_sent_to() {
+            use crate::backend::{Answering, answering};
+            let scratch = crate::testutil::scratch_dir("plan-model-answering-refused");
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let managed = scratch.join("managed.json");
+            std::fs::write(&managed, format!(r#"{{"models": {{"deny": ["{PLAN}"]}}}}"#)).unwrap();
+            let mut refused = planning(Some(PLAN));
+            refused.models = bravebot_config::Managed::at(&managed).models().clone();
+            let egress = bravebot_net::Egress::new();
+
+            let delegate = || {
+                Task::delegated(a_delegate_spec("worker", held(&Task::new(""))))
+                    .with_model(Some(SESSION.into()))
+                    .with_permission_mode(crate::PermissionMode::Plan)
+            };
+            let cases: Vec<(&str, Config, Task)> = vec![
+                (
+                    "plan",
+                    planning(Some(PLAN)),
+                    in_mode(crate::PermissionMode::Plan),
+                ),
+                (
+                    "acting",
+                    planning(Some(PLAN)),
+                    in_mode(crate::PermissionMode::Ask),
+                ),
+                (
+                    "unset",
+                    planning(None),
+                    in_mode(crate::PermissionMode::Plan),
+                ),
+                ("refused", refused, in_mode(crate::PermissionMode::Plan)),
+                (
+                    "flag",
+                    planning(Some(PLAN)),
+                    in_mode(crate::PermissionMode::Plan).model_outranks_a_definition(true),
+                ),
+                ("delegate", planning(Some(PLAN)), delegate()),
+            ];
+            let mut sized_for_the_plan_model = 0;
+            for (name, config, task) in cases {
+                let expected =
+                    match answering(&config, &egress, task.permission_mode.get(), &task, false) {
+                        Answering::Plan(model) => {
+                            sized_for_the_plan_model += 1;
+                            model
+                        }
+                        Answering::PlanSetAside(_) | Answering::Task => SESSION.to_string(),
+                        Answering::Definition => unreachable!("{name} names no definition"),
+                    };
+                let taken = take(name, &config, task, two_rounds());
+                assert_eq!(
+                    sent_to(&taken),
+                    [expected.as_str(), expected.as_str()],
+                    "{name}"
+                );
+            }
+            assert_eq!(
+                sized_for_the_plan_model, 1,
+                "only the plan turn names the plan model"
+            );
+        }
+
+        /// The fault it rejects: a definition's model, the command line's or a delegate's yielding
+        /// to the plan model, or the plan model reached for by a turn in any other mode.
+        #[test]
+        fn a_more_specific_model_outranks_the_plan_model_in_every_mode() {
+            use crate::PermissionMode::{AcceptEdits, Ask, Bypass, Plan};
+            use crate::backend::{Answering, answering};
+            let config = planning(Some(PLAN));
+            let egress = bravebot_net::Egress::new();
+            let task = Task::new("look it up");
+
+            for mode in [Ask, AcceptEdits, Bypass, Plan] {
+                assert_eq!(
+                    answering(&config, &egress, mode, &task, true),
+                    Answering::Definition,
+                    "a definition's model, {mode:?}"
+                );
+                assert_eq!(
+                    answering(&config, &egress, mode, &task, false),
+                    match mode {
+                        Plan => Answering::Plan(PLAN.into()),
+                        _ => Answering::Task,
+                    },
+                    "{mode:?}"
+                );
+            }
+            let flagged = Task::new("look it up").model_outranks_a_definition(true);
+            assert_eq!(
+                answering(&config, &egress, Plan, &flagged, true),
+                Answering::Task,
+                "the command line outranks a definition's model, and so the plan model"
+            );
         }
     }
 

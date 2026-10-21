@@ -226,10 +226,16 @@ pub(super) struct ModelForTheTurn {
     /// The model the definition wrote and the one it resolved to, where the definition's model is
     /// the one this turn asked for.
     pub(super) definition_model: Option<(String, String)>,
+    /// Whether the turn runs on the model `planModel` named (BACKEND-56), so the answering model
+    /// is not compared with the session's own.
+    pub(super) on_the_plan_model: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
     config: &Config,
+    egress: &bravebot_net::Egress,
+    started_in: crate::permission_mode::PermissionMode,
     task: &Task,
     addressed: Option<&Addressed>,
     reporter: &mut R,
@@ -292,14 +298,30 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
         (None, Some(spec)) => spec.model().map(|_| spec.definition().to_string()),
         (None, None) => None,
     };
+    // The plan model, where the order BACKEND-56 gives puts it first. A name that cannot be used is
+    // said and set aside, leaving the turn on the session's own model.
+    let plan_model =
+        match crate::backend::answering(config, egress, started_in, task, named.is_some()) {
+            crate::backend::Answering::Plan(model) => Some(model),
+            crate::backend::Answering::PlanSetAside(named) => {
+                let said = t!(plan_model_unavailable, model = named);
+                reporter.notice(said.clone());
+                notices.push(crate::skills::Notice::from_message(said));
+                None
+            }
+            crate::backend::Answering::Definition | crate::backend::Answering::Task => None,
+        };
+    let on_the_plan_model = plan_model.is_some();
     let turn_model = definition_model
         .as_ref()
         .map(|(_, resolved)| resolved.clone())
+        .or(plan_model)
         .or_else(|| task.model.clone());
     Ok(ModelForTheTurn {
         pinned_by,
         turn_model,
         definition_model,
+        on_the_plan_model,
     })
 }
 

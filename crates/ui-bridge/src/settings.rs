@@ -93,6 +93,7 @@ fn ignored(settings: &Settings) -> Vec<Value> {
         settings.fallback_ignored().collect(),
     ));
     ignored.extend(named("summaryModel", settings.summary_ignored().collect()));
+    ignored.extend(named("planModel", settings.plan_ignored().collect()));
     ignored.extend(named(
         "processorModel",
         settings.processor_ignored().collect(),

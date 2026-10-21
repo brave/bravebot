@@ -441,6 +441,9 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     ignored(settings.summary_ignored(), |path| {
         t!(doctor_settings_summary_ignored, path = path).to_string()
     });
+    ignored(settings.plan_ignored(), |path| {
+        t!(doctor_settings_plan_ignored, path = path).to_string()
+    });
     ignored(settings.processor_ignored(), |path| {
         t!(doctor_settings_processor_ignored, path = path).to_string()
     });

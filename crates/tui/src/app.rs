@@ -5612,6 +5612,17 @@ fn run_turn_animated(
         // writes and waits, the other reports progress and moves on.
         let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main.clone());
         let mut asking = crate::remote_confirm::RemoteConfirmer::new(to_main, answer_rx, typed);
+        // The mode the turn begins in is read here, once, and the window it is sized against and the
+        // turn itself both follow that reading (BACKEND-56). Before the confirmer below, which takes
+        // the session's handle on the mode.
+        let egress = Egress::new();
+        let (task, worker_config) = settle_the_turn(
+            &worker_config,
+            &egress,
+            task,
+            &permission_mode,
+            addressed_model.as_deref(),
+        );
         // Wrapped rather than replaced, because two of the confirmer's questions still cross back to
         // the terminal: a question the planner posed asks for information rather than consent, and an
         // interjection is the person typing unprompted.
@@ -5626,8 +5637,6 @@ fn run_turn_animated(
         // screens nothing while believing it does.
         let mut confirmer =
             bravebot_agent::Confining::new(&mut asking, permission_mode, task.auto_vetting);
-        let egress = Egress::new();
-        let worker_config = config_for_turn(&worker_config, addressed_model.as_deref());
         // Owned by the worker for the duration and handed back afterwards, whether the turn
         // succeeded or not. A failed turn is still part of the conversation, and the next one
         // is usually about it.
@@ -7831,6 +7840,144 @@ mod tests {
             config_for_turn(&config, None).context_budget,
             config.context_budget,
             "a definition naming no model leaves the session's budget"
+        );
+    }
+
+    /// The plan model's window, which a settings file states for it, so that no request is made and
+    /// the window is told apart from the default budget a session holds until it adopts one.
+    const A_PLAN_MODELS_WINDOW: u64 = 65_536;
+    const A_PLAN_MODEL: &str = "ollama/tiny";
+
+    /// A configuration whose plan model is served by a gateway its settings file states a window for.
+    fn a_config_naming_a_plan_model_with_a_window() -> Config {
+        let mut config = a_config_with_a_named_roster();
+        config.providers = bravebot_config::Settings::parse(&format!(
+            r#"{{"provider": {{"ollama": {{
+                "options": {{"baseURL": "http://localhost:11434/v1", "contextWindow": {A_PLAN_MODELS_WINDOW}}},
+                "models": {{"tiny": {{}}}}}}}}}}"#
+        ))
+        .providers()
+        .to_vec();
+        config.plan_model = Some(A_PLAN_MODEL.into());
+        config
+    }
+
+    /// BACKEND-56, BACKEND-7: a turn that begins in plan mode answers on the plan model, so its
+    /// window is the budget; a turn that begins anywhere else, and a turn whose plan model the
+    /// agent sets aside, keep the session's. The fault it rejects: the window read for the plan
+    /// model in every mode, or for a name the turn then does not use.
+    #[test]
+    fn a_plan_turn_takes_the_plan_models_window_and_no_other_turn_does() {
+        use bravebot_agent::{LiveMode, PermissionMode};
+
+        let config = a_config_naming_a_plan_model_with_a_window();
+        let egress = bravebot_net::Egress::new();
+        let settled = |config: &Config, mode| {
+            let mode = LiveMode::new(mode);
+            settle_the_turn(config, &egress, Task::new("it"), &mode, None)
+        };
+
+        let (task, turn) = settled(&config, PermissionMode::Plan);
+        assert_eq!(task.began_in, Some(PermissionMode::Plan));
+        assert_eq!(
+            turn.context_budget, A_PLAN_MODELS_WINDOW,
+            "a turn that begins in plan mode"
+        );
+        for mode in [PermissionMode::Ask, PermissionMode::AcceptEdits] {
+            let (task, turn) = settled(&config, mode);
+            assert_eq!(task.began_in, Some(mode));
+            assert_eq!(
+                turn.context_budget, config.context_budget,
+                "a turn that begins in {mode:?}"
+            );
+        }
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::DEFAULT_CONTEXT_BUDGET,
+            "the session's own budget moved"
+        );
+
+        let mut unset = config.clone();
+        unset.plan_model = None;
+        assert_eq!(
+            settled(&unset, PermissionMode::Plan).1.context_budget,
+            config.context_budget,
+            "no plan model is named"
+        );
+
+        let refused =
+            std::env::temp_dir().join(format!("bravebot-plan-window-{}.json", std::process::id()));
+        std::fs::write(&refused, r#"{"models": {"deny": ["ollama/tiny"]}}"#)
+            .expect("a managed file");
+        let mut setting_it_aside = config.clone();
+        setting_it_aside.models = bravebot_config::Managed::at(&refused).models().clone();
+        let _ = std::fs::remove_file(&refused);
+        assert_eq!(
+            settled(&setting_it_aside, PermissionMode::Plan)
+                .1
+                .context_budget,
+            config.context_budget,
+            "a plan model the turn sets aside is not the one whose window is read"
+        );
+    }
+
+    /// BACKEND-56, MODE-8: the mode is read once, when the turn is settled, and the task carries
+    /// that reading while its handle stays live for the rest of the turn. The fault it rejects: the
+    /// window sized for one reading and the turn begun on another, where the key that sets the mode
+    /// is pressed between them.
+    #[test]
+    fn a_mode_pressed_after_a_turn_is_settled_leaves_it_in_the_mode_its_window_was_sized_for() {
+        use bravebot_agent::{LiveMode, PermissionMode};
+
+        let config = a_config_naming_a_plan_model_with_a_window();
+        let egress = bravebot_net::Egress::new();
+        let mode = LiveMode::new(PermissionMode::Plan);
+        let task = Task::new("it").with_permission_mode(mode.clone());
+
+        let (task, turn) = settle_the_turn(&config, &egress, task, &mode, None);
+        mode.set(PermissionMode::AcceptEdits);
+
+        assert_eq!(task.began_in, Some(PermissionMode::Plan));
+        assert_eq!(
+            task.permission_mode.get(),
+            PermissionMode::AcceptEdits,
+            "what the turn decides after it opens follows the key (MODE-8)"
+        );
+        assert_eq!(turn.context_budget, A_PLAN_MODELS_WINDOW);
+    }
+
+    /// BACKEND-56, DELEGATE-22: the model the window is read for is the one the agent settles on,
+    /// so a definition's model outranks the plan model and a turn in any other mode does not reach
+    /// for it. The fault it rejects: this crate deciding the order itself and differing from the
+    /// turn.
+    #[test]
+    fn the_model_a_window_is_read_for_follows_the_order_the_agent_settles() {
+        use bravebot_agent::PermissionMode::{AcceptEdits, Ask, Plan};
+
+        let mut config = a_config_naming_a_plan_model_with_a_window();
+        config.plan_model = None;
+        let egress = bravebot_net::Egress::new();
+        let task = Task::new("it");
+        let named = |config: &Config, mode, definition| {
+            model_answering_the_turn(config, &egress, mode, &task, definition)
+        };
+
+        assert_eq!(named(&config, Plan, None), None, "no plan model is named");
+        config.plan_model = Some(A_PLAN_MODEL.into());
+        assert_eq!(named(&config, Plan, None).as_deref(), Some(A_PLAN_MODEL));
+        for mode in [Ask, AcceptEdits] {
+            assert_eq!(named(&config, mode, None), None, "{mode:?}");
+        }
+        assert_eq!(
+            named(&config, Plan, Some("a-definition-model")).as_deref(),
+            Some("a-definition-model"),
+            "a definition's model outranks the plan model"
+        );
+        let flagged = Task::new("it").model_outranks_a_definition(true);
+        assert_eq!(
+            model_answering_the_turn(&config, &egress, Plan, &flagged, Some("a-definition-model")),
+            None,
+            "the command line's model outranks both, and is the session's"
         );
     }
 
