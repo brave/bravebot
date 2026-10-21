@@ -342,7 +342,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 49] {
+pub fn commands() -> [Command; 50] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -975,6 +975,7 @@ mod tests {
             (MEMORY_COMMAND, false, false),
             (INIT_COMMAND, false, true),
             (REVIEW_COMMAND, false, true),
+            (COMMIT_MESSAGE_COMMAND, false, true),
             (UNDO_COMMAND, false, false),
             (REWIND_COMMAND, false, false),
             (HUNKS_COMMAND, false, false),

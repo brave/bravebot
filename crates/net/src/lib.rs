@@ -1665,13 +1665,13 @@ mod tests {
         for kind in [NetworkUnreachable, HostUnreachable, NetworkDown] {
             let call = ureq::Error::Io(std::io::Error::from(kind));
             assert!(is_transient_call(&call), "{kind:?} was sent once");
-            let body = body_failure(url, std::io::Error::from(kind));
+            let body = body_failure(url, &std::io::Error::from(kind));
             assert!(body.is_transient(), "{kind:?} on a body was sent once");
         }
         for kind in [PermissionDenied, InvalidData, Other] {
             let call = ureq::Error::Io(std::io::Error::from(kind));
             assert!(!is_transient_call(&call), "{kind:?} was asked again");
-            let body = body_failure(url, std::io::Error::from(kind));
+            let body = body_failure(url, &std::io::Error::from(kind));
             assert!(!body.is_transient(), "{kind:?} on a body was asked again");
         }
     }
