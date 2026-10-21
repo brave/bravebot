@@ -613,6 +613,10 @@ doctor-settings-agent-ignored =
     agent in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-style-ignored =
     style in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-language-ignored =
+    language in { $path } is not obeyed: it is read from ~/.bravebot/settings.json only
+doctor-settings-language-unmatched =
+    language { $language } in ~/.bravebot/settings.json names no catalog, so it chooses { $reference }; the catalogs are { $available }
 doctor-settings-references-ignored =
     references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-attribution-ignored =
@@ -2677,6 +2681,7 @@ command-effort = Choose how hard to think before answering
 command-advisor = Name the model the planner may consult, say which it may, or drop the choice
 command-style = Choose how the planner answers: list the styles, pick one, or clear the pick
 command-config = Choose how the input box edits text
+command-language = Choose the interface language for the next start, or drop the choice
 command-add-dir = Open another directory and trust it for this session, or close one
 command-reach = Remember a directory or credential for a command, or list and remove them
 command-sandbox = Show the sandbox mode, or change it from the next turn
@@ -2958,6 +2963,12 @@ session-effort-set = thinking at { $effort }
 session-effort-unset = thinking as the service decides
 session-no-such-effort = no effort level named { $effort }; try /effort for the list
 session-effort-not-read = this model reads no effort level, so requests carry none
+session-language-in-use = the interface is in { $language }; catalogs: { $available }; /language <tag> saves a choice for the next start and /language auto drops it
+session-language-saved = saved choice: { $language }
+session-language-set = the interface will be in { $language } from the next start, unless BRAVEBOT_LOCALE is set, which answers first
+session-language-auto = the interface will follow the settings file and the environment from the next start
+session-language-not-saved = this session cannot keep a choice, so the language is unchanged
+session-no-such-language = no catalog for { $language }; the catalogs are { $available }
 session-advisor-set = the planner may consult { $model } from the next turn, which spends that model's tokens
 session-advisor-in-force = the planner may consult { $model }
 session-advisor-none = no advisor; try /advisor followed by a model name

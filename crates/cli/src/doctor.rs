@@ -450,6 +450,27 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     ignored(settings.style_ignored(), |path| {
         t!(doctor_settings_style_ignored, path = path).to_string()
     });
+    ignored(settings.language_ignored(), |path| {
+        t!(doctor_settings_language_ignored, path = path).to_string()
+    });
+    // A tag no catalog answers is read as the reference, as it is from the environment, so a typo
+    // would otherwise show English and say nothing.
+    each(
+        t!(doctor_settings_ignored),
+        settings.language().filter(|language| {
+            !language.eq_ignore_ascii_case(bravebot_i18n::AUTO)
+                && bravebot_i18n::find(language).is_none()
+        }),
+        |language| {
+            t!(
+                doctor_settings_language_unmatched,
+                language = progress::printable(language),
+                reference = bravebot_i18n::DEFAULT.tag(),
+                available = bravebot_i18n::tags().join(", ")
+            )
+            .to_string()
+        },
+    );
     ignored(settings.references_ignored(), |path| {
         t!(doctor_settings_references_ignored, path = path).to_string()
     });

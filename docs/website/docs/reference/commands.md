@@ -18,6 +18,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/theme` | `[name]` | Choose which theme paints the interface |
 | `/effort` | `[level]` | Choose how hard to think before answering |
 | `/config` | | Choose how the input box edits text |
+| `/language` | `[tag \| auto]` | Choose the interface language for the next start, or drop the choice |
 | `/add-dir` | `<path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
@@ -293,6 +294,21 @@ gone somewhere unexpected. Whichever style you choose, the box comes back taking
 The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory.
 See [`editorMode`](../customize/configuration.md#editormode) for the settings key that answers for
 somebody who has never used this panel.
+
+## `/language [tag | auto]`
+
+Says which language the interface is in and which catalogs there are, and names the choice saved with
+this command where there is one. With a tag, `/language fr` saves it for the next start. The interface
+is in one language for a whole session, so nothing on the screen changes until then. The tag saved is
+the one of the catalog that answered, so `fr_FR.UTF-8` is saved as `fr`. A tag that no catalog answers
+changes nothing and says so, with the catalogs there are. `/language auto` removes the saved choice, so
+the `language` key of your settings file and then your shell answer again. Typed while a turn runs, it is
+carried out at once.
+
+The choice is written to `~/.bravebot/language`, so it applies in every directory. A session that records
+nothing, an incognito one for example, says the choice was not saved and keeps none. See
+[Choosing a language](../customize/configuration.md#choosing-a-language) for the order the sources are
+read in, and for `BRAVEBOT_LOCALE`, which answers over this choice.
 
 ## `/add-dir <path>`
 

@@ -113,6 +113,48 @@ pub(super) fn set_effort(session: &mut Session, word: &str) {
     }
 }
 
+/// Say which language the interface is in, choose one for the next start, or give the choice back
+/// to the settings file and the environment (LOCALE-8).
+///
+/// A tag that names no catalog changes nothing and says so, with the catalogs there are: the
+/// environment's own answer for one is the reference, which is right for a shell that was set up
+/// for something else and wrong for somebody who has just typed a language, who would be told they
+/// were reading it while they read English. What is saved is the tag of the catalog that answered,
+/// so the word on disk is one the build knows, whatever spelling was typed.
+pub(super) fn set_language(session: &mut Session, word: &str) {
+    let word = word.trim();
+    let available = bravebot_i18n::tags().join(", ");
+    let kept = |session: &mut Session, tag: Option<&str>| match tag {
+        Some(tag) if session.choose_language(Some(tag)) => {
+            t!(session_language_set, language = tag).to_string()
+        }
+        None if session.choose_language(None) => t!(session_language_auto).to_string(),
+        _ => t!(session_language_not_saved).to_string(),
+    };
+    if word.is_empty() {
+        session.note(t!(
+            session_language_in_use,
+            language = bravebot_i18n::locale().tag(),
+            available = available
+        ));
+        if let Some(saved) = session.saved_language() {
+            session.note(t!(session_language_saved, language = saved));
+        }
+    } else if word.eq_ignore_ascii_case(bravebot_i18n::AUTO) {
+        let said = kept(session, None);
+        session.note(said);
+    } else if let Some(locale) = bravebot_i18n::find(word) {
+        let said = kept(session, Some(locale.tag()));
+        session.note(said);
+    } else {
+        session.note(t!(
+            session_no_such_language,
+            language = word,
+            available = available
+        ));
+    }
+}
+
 /// Name the model the planner may consult, say which it may, or drop the choice.
 ///
 /// The name is held to what `--advisor` holds it to: resolved as every route to a model resolves,

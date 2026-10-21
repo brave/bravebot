@@ -35,6 +35,10 @@ pub(crate) const LIMIT_OFF: &str = "off";
 /// The line that opens the panel of preferences about the interface itself.
 pub(crate) const CONFIG_COMMAND: &str = "/config";
 
+/// The line that says which language the interface is in, saves a choice for the next start, or
+/// gives the choice back to the settings file and the environment (LOCALE-8).
+pub(crate) const LANGUAGE_COMMAND: &str = "/language";
+
 /// The line that opens another directory, taking the path to open as its argument.
 pub(crate) const ADD_DIR_COMMAND: &str = "/add-dir";
 
@@ -421,6 +425,12 @@ pub fn commands() -> [Command; 49] {
             argument: "[name | off]",
             description: t!(command_style),
             mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: LANGUAGE_COMMAND,
+            argument: "[tag | auto]",
+            description: t!(command_language),
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: COMPACT_COMMAND,

@@ -1000,6 +1000,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/theme [name]` | Choose which theme paints the interface |
 | `/effort [low \| medium \| high \| xhigh \| max]` | Choose how hard to think before answering |
 | `/config` | Choose how the input box edits text |
+| `/language [tag \| auto]` | Choose the interface language for the next start, or drop the choice |
 | `/add-dir <path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd <path>` | Work in another directory from now on, and trust it for this session |
 | `/rename <name>` | Call this conversation something else |

@@ -37,6 +37,10 @@
 //!   that a person asking for none of it says so once in a file rather than in prose an agent
 //!   has to be reading at the moment it writes one. Its text is stated to the planner, so it is read
 //!   from the person's own files alone, as `references` is.
+//! - `language`, this program's own: the catalog the interface is read in, as a locale tag such as
+//!   `fr` or `fr-CA`, or `auto` for what the environment says. It is read from the person's own
+//!   file alone and before the command line is read, so a file the command line names cannot carry
+//!   it: see [`Settings::language`].
 //! - `vetting`, this program's own, since nothing else has the idea. It is the one block read from
 //!   the **home layer alone**: see [`Settings::auto_vetting`].
 //!
@@ -149,6 +153,7 @@ const READ_KEYS: &[&str] = &[
     "fallbackModel",
     crate::git_identities::BLOCK,
     "keybindings",
+    "language",
     "limit",
     "maxRunningDelegates",
     "mcp",
@@ -429,6 +434,14 @@ pub struct Settings {
     /// Kept because a style's words open the system prompt, so which one a session starts in is the
     /// person's to say and not a checkout's.
     style_ignored: Vec<PathBuf>,
+    /// The catalog the person's own file asked the interface to be read in, as the file spelled it.
+    language: Option<String>,
+    /// The layers that named `language` and were not obeyed, weakest first.
+    ///
+    /// Kept because the interface is in one language for the whole process and is chosen before
+    /// the command line is read, so the one file that can say which is the person's own: a
+    /// checkout's file would be choosing the language for whoever opened the checkout.
+    language_ignored: Vec<PathBuf>,
     /// The layers that named `references` and were not obeyed, weakest first.
     ///
     /// Kept because an entry makes a directory reachable and puts its description in front of the
@@ -809,6 +822,27 @@ impl Settings {
         self
     }
 
+    /// The language the person's own settings file asks the interface to be read in, and nothing
+    /// else the files say.
+    ///
+    /// Read ahead of the command line, because every sentence the program says after that is in the
+    /// catalog this chooses and the first of them can be a refusal of a flag. Only the home layer
+    /// exists for it: no checkout is read and no file the command line names is known yet, which is
+    /// also why neither of them may carry the key (LOCALE-8).
+    pub fn written_language() -> Option<String> {
+        Self::language_in(home())
+    }
+
+    /// As [`Settings::written_language`], for a named home, so a test needs no ambient one.
+    ///
+    /// The one key out of the one file, through the reader every layer goes through, so the file is
+    /// held to the same bound and the document clears itself when this returns. Nothing else the
+    /// file says is built: this runs for every command, before the ones that need the rest.
+    fn language_in(home: Option<PathBuf>) -> Option<String> {
+        let document = read(&user_settings_file(&home?))?;
+        word(&document.root, "language")
+    }
+
     /// As [`Settings::load`], for a named home, working directory and command line, so a test needs
     /// no ambient ones.
     ///
@@ -908,6 +942,7 @@ impl Settings {
         let mut processor_ignored = Vec::new();
         let mut agent_ignored = Vec::new();
         let mut style_ignored = Vec::new();
+        let mut language_ignored = Vec::new();
         let mut references_ignored = Vec::new();
         let mut attribution_ignored = Vec::new();
         let mut misshapen = Vec::new();
@@ -992,6 +1027,11 @@ impl Settings {
                 if root.remove("style") {
                     style_ignored.push(path.clone());
                 }
+            }
+            // Read before the command line is, so the file a flag names is not yet known to the
+            // reader that answers for the interface: the home layer alone says which language.
+            if !own && root.remove("language") {
+                language_ignored.push(path.clone());
             }
             // Entitled the way an allow rule is rather than the way `model` is: a named file that
             // resolves inside the workspace is a checkout's file, and a reference makes a
@@ -1248,6 +1288,7 @@ impl Settings {
         settings.processor_ignored = processor_ignored;
         settings.agent_ignored = agent_ignored;
         settings.style_ignored = style_ignored;
+        settings.language_ignored = language_ignored;
         settings.references_ignored = references_ignored;
         settings.attribution_ignored = attribution_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
@@ -1438,6 +1479,8 @@ impl Settings {
             agent_ignored: Vec::new(),
             style: word(root, "style"),
             style_ignored: Vec::new(),
+            language: word(root, "language"),
+            language_ignored: Vec::new(),
         }
     }
 
@@ -2080,6 +2123,8 @@ impl Settings {
             && self.agent_ignored.is_empty()
             && self.style_ignored.is_empty()
             && self.style.is_none()
+            && self.language_ignored.is_empty()
+            && self.language.is_none()
             && self.references_ignored.is_empty()
             && self.attribution_ignored.is_empty()
     }
@@ -2135,6 +2180,20 @@ impl Settings {
     /// The files that named `style` from a layer not entitled to, weakest first.
     pub fn style_ignored(&self) -> impl Iterator<Item = &Path> {
         self.style_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The language the person's own file asked the interface to be read in, as the file spelled it
+    /// (LOCALE-8).
+    ///
+    /// A locale tag or `auto`, neither of which is matched to a catalog here: `bravebot-i18n` owns
+    /// which catalogs shipped.
+    pub fn language(&self) -> Option<&str> {
+        self.language.as_deref()
+    }
+
+    /// The files that named `language` from a layer other than the person's own, weakest first.
+    pub fn language_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.language_ignored.iter().map(PathBuf::as_path)
     }
 
     /// The files that named `agent` from a layer not entitled to, weakest first.
@@ -2233,6 +2292,7 @@ impl Settings {
             .chain(self.agent.is_some().then_some("agent"))
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.style.is_some().then_some("style"))
+            .chain(self.language.is_some().then_some("language"))
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
             .chain(self.limit.is_some().then_some("limit"))
@@ -7624,6 +7684,74 @@ mod tests {
             .read();
         assert_eq!(named.style(), Some("terse"));
         assert_eq!(named.style_ignored().count(), 0);
+    }
+
+    /// LOCALE-8: the catalog is chosen once for the process and before the command line is read, so
+    /// the person's own file is the only one that can name it, and every other layer that does is
+    /// reported.
+    #[test]
+    fn only_the_persons_own_file_can_name_the_language() {
+        let settings = Layers::new("language-layers")
+            .global(r#"{"language": " fr "}"#)
+            .project(r#"{"language": "ja"}"#)
+            .local(r#"{"language": "en-US"}"#)
+            .named(r#"{"language": "ja"}"#)
+            .read();
+        assert_eq!(settings.language(), Some("fr"));
+        assert_eq!(settings.language_ignored().count(), 3);
+
+        let only_project = Layers::new("language-only-project")
+            .project(r#"{"language": "ja"}"#)
+            .read();
+        assert_eq!(only_project.language(), None);
+        assert_eq!(only_project.language_ignored().count(), 1);
+
+        let named = Layers::new("language-named")
+            .named(r#"{"language": "ja"}"#)
+            .read();
+        assert_eq!(named.language(), None);
+        assert_eq!(named.language_ignored().count(), 1);
+    }
+
+    /// LOCALE-8: the reader that answers before the command line is read sees the home layer and
+    /// nothing else, so a checkout the process happens to start in cannot choose the language.
+    #[test]
+    fn the_language_read_ahead_of_the_command_line_is_the_home_layers() {
+        let layers = Layers::new("language-ahead")
+            .global(r#"{"language": "fr"}"#)
+            .project(r#"{"language": "ja"}"#);
+        assert_eq!(
+            Settings::language_in(Some(layers.home.clone())).as_deref(),
+            Some("fr")
+        );
+
+        let only_project =
+            Layers::new("language-ahead-project-only").project(r#"{"language": "ja"}"#);
+        assert_eq!(Settings::language_in(Some(only_project.home.clone())), None);
+        assert_eq!(Settings::language_in(None), None);
+    }
+
+    /// LOCALE-8: a blank or non-string `language` names nothing, so the environment answers.
+    #[test]
+    fn a_language_that_is_blank_or_not_a_string_names_nothing() {
+        for text in [
+            r#"{"language": ""}"#,
+            r#"{"language": "  "}"#,
+            r#"{"language": 1}"#,
+            r#"{"language": ["fr"]}"#,
+        ] {
+            assert_eq!(
+                Settings::parse(text).language(),
+                None,
+                "{text} named a language"
+            );
+        }
+        assert_eq!(
+            Settings::parse(r#"{"language": "fr"}"#)
+                .names()
+                .collect::<Vec<_>>(),
+            ["language"]
+        );
     }
 
     /// INSTR-12: a blank or non-string `style` names nothing.

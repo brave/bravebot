@@ -1383,6 +1383,180 @@ fn a_failure_says_a_stable_identifier_whatever_language_it_explains_itself_in() 
     );
 }
 
+/// A run that fails over its configuration, which says so in the language the interface is in and
+/// names the same identifier whatever that is. Complete but for the endpoint, which names no scheme,
+/// so what is read off the run is the language of one sentence.
+const FAILS_OVER_ITS_ENDPOINT: [(&str, &str); 3] = [
+    ("SERVICES_KEY_AICHAT", "a-services-key"),
+    ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+    ("BRAVE_AI_CHAT_ENDPOINT", "ai-chat.example.invalid"),
+];
+
+/// Which language the sentence a failed run says is in, with the environment this test gives it on
+/// top of what [`FAILS_OVER_ITS_ENDPOINT`] holds.
+///
+/// `BRAVEBOT_LOCALE` is blanked first, since [`prepared`] pins English with it, so what a test adds
+/// after it is what is in force.
+fn language_a_run_says_its_failure_in(
+    scratch: &Scratch,
+    cwd: Option<&Path>,
+    environment: &[(&str, &str)],
+) -> &'static str {
+    let mut held = FAILS_OVER_ITS_ENDPOINT.to_vec();
+    held.push(("BRAVEBOT_LOCALE", ""));
+    held.extend_from_slice(environment);
+    let (_, stderr) = said(&run(&scratch.path, cwd, &held, &["-p", "say something"]));
+    match (
+        stderr.contains("erreur de configuration"),
+        stderr.contains("configuration error"),
+    ) {
+        (true, false) => "fr",
+        (false, true) => "en-US",
+        _ => panic!("the run said its failure in neither language, or in both: {stderr}"),
+    }
+}
+
+/// LOCALE-8. A person whose shell says English and who reads French writes `language` once in their
+/// own settings file. A settings key that lost to `LANG` would leave a launcher or a desktop front
+/// end, which have no shell profile, with nothing to set.
+#[test]
+fn a_language_in_the_settings_file_outranks_what_the_shell_says() {
+    let scratch = Scratch::new("cli-running-language-key").with_settings(r#"{"language": "fr"}"#);
+
+    assert_eq!(
+        language_a_run_says_its_failure_in(&scratch, None, &[("LANG", "en_US.UTF-8")]),
+        "fr"
+    );
+}
+
+/// LOCALE-8. With no key the shell still chooses, so a machine already set up for French has
+/// nothing to do after the key exists.
+#[test]
+fn without_the_key_the_shell_still_chooses_the_language() {
+    let scratch = Scratch::new("cli-running-language-shell");
+
+    assert_eq!(
+        language_a_run_says_its_failure_in(&scratch, None, &[("LANG", "fr_FR.UTF-8")]),
+        "fr"
+    );
+}
+
+/// LOCALE-8. What `/language` saved answers over what the file says, since it is the later and the
+/// narrower act. A file that won would undo the choice at the next start.
+#[test]
+fn a_language_saved_by_the_command_outranks_the_settings_file() {
+    let scratch = Scratch::new("cli-running-language-pick")
+        .with_settings(r#"{"language": "fr"}"#)
+        .with_state("language", "en-US\n");
+
+    assert_eq!(
+        language_a_run_says_its_failure_in(&scratch, None, &[("LANG", "fr_FR.UTF-8")]),
+        "en-US"
+    );
+}
+
+/// LOCALE-8. `BRAVEBOT_LOCALE` answers over what the person said, because a launch can name it for
+/// itself and the tests that run this binary pin their catalog with it under whatever home they
+/// were handed.
+#[test]
+fn the_variable_made_for_this_program_outranks_the_settings_file_and_the_saved_choice() {
+    let scratch = Scratch::new("cli-running-language-variable")
+        .with_settings(r#"{"language": "fr"}"#)
+        .with_state("language", "fr\n");
+
+    assert_eq!(
+        language_a_run_says_its_failure_in(&scratch, None, &[("BRAVEBOT_LOCALE", "en-US")]),
+        "en-US"
+    );
+}
+
+/// LOCALE-8. A checkout's own settings files cannot choose the language of whoever opened it, so a
+/// run started inside one reads the shell. The interface is in one language for the whole process,
+/// and the file that chooses it is read before the command line says whether the checkout may be.
+#[test]
+fn a_checkouts_settings_files_cannot_choose_the_language() {
+    let scratch = Scratch::new("cli-running-language-checkout");
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    for file in ["settings.json", "settings.local.json"] {
+        std::fs::write(
+            checkout.join(".bravebot").join(file),
+            r#"{"language": "fr"}"#,
+        )
+        .expect("the checkout's settings");
+    }
+
+    assert_eq!(
+        language_a_run_says_its_failure_in(&scratch, Some(&checkout), &[("LANG", "en_US.UTF-8")]),
+        "en-US"
+    );
+}
+
+/// LOCALE-8. `doctor` says a checkout's `language` is not obeyed and names the file, since the key
+/// looks like configuration and a person who wrote it into a project file has no other sign that it
+/// does nothing.
+#[test]
+fn doctor_names_a_language_a_checkout_wrote() {
+    let scratch = Scratch::new("cli-running-doctor-language");
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    std::fs::write(
+        checkout.join(".bravebot").join("settings.json"),
+        r#"{"language": "fr"}"#,
+    )
+    .expect("the checkout's settings");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("language in"))
+        .unwrap_or_else(|| panic!("the report did not name the key: {stdout}{stderr}"));
+    assert!(
+        line.contains("not obeyed")
+            && line.contains(&checkout.join(".bravebot").display().to_string()),
+        "a checkout's language went unreported: {stdout}"
+    );
+}
+
+/// LOCALE-8. A `language` no catalog answers is read as the reference, as an unshipped language is
+/// from the shell, so a typo would show English and say nothing. `doctor` names it, and says nothing
+/// about a tag a catalog answers or about `auto`.
+#[test]
+fn doctor_names_a_language_no_catalog_answers_and_only_that() {
+    for (value, named) in [
+        ("zz-ZZ", true),
+        ("fr", false),
+        ("fr_FR.UTF-8", false),
+        ("AUTO", false),
+    ] {
+        let scratch = Scratch::new("cli-running-doctor-language-unmatched")
+            .with_settings(&format!(r#"{{"language": "{value}"}}"#));
+
+        let output = bravebot(&scratch.path, BRAVES_HOSTS_AND_A_GATEWAY_TOKEN, &["doctor"]);
+
+        let (stdout, stderr) = said(&output);
+        let line = stdout
+            .lines()
+            .find(|line| line.contains("names no catalog"));
+        match (named, line) {
+            (true, Some(line)) => assert!(
+                line.contains("zz-ZZ") && line.contains("en-US, fr"),
+                "the line did not say which tag and which catalogs: {line}"
+            ),
+            (true, None) => panic!("{value} went unreported: {stdout}{stderr}"),
+            (false, Some(line)) => panic!("{value} was reported: {line}"),
+            (false, None) => {}
+        }
+    }
+}
+
 /// CLI-6 over the command that reports rather than runs. `doctor` used to end every failure it
 /// found on `ExitCode::FAILURE` and say the configuration problem with nothing in front of it, so
 /// a CI job running it to check a machine could not tell "the configuration is wrong, fail the

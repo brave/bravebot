@@ -51,6 +51,9 @@ pub enum Action {
     Advisor(String),
     /// Say which output style is in force, take one by name, or clear the pick. Empty says.
     Style(String),
+    /// Say which language the interface is in, choose one for the next start, or give the choice
+    /// back. Empty says.
+    Language(String),
     /// Ask how the box should edit. Needs the terminal, so the loop runs it.
     ChooseEditing,
     /// Open another directory. Needs the workspace and the trust map, which the loop owns.

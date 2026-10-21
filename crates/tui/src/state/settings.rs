@@ -288,6 +288,26 @@ impl Session {
         self.effort = effort;
     }
 
+    /// The language `/language` last saved, for saying so.
+    ///
+    /// Read only for a session that persists, which is the rule every read of a saved pick here
+    /// follows: a test must not be handed the developer's own preference.
+    pub fn saved_language(&self) -> Option<String> {
+        self.persist
+            .then(bravebot_session::store::load_language)
+            .flatten()
+    }
+
+    /// Keep the language the person chose for the next start, or forget the choice where `None`,
+    /// and say whether that was done.
+    ///
+    /// Nothing in this session changes with it, since the interface is in one language for the
+    /// whole process: a session that persists nothing has nowhere to keep the choice, and answers
+    /// that it kept none.
+    pub fn choose_language(&mut self, tag: Option<&str>) -> bool {
+        self.persist && bravebot_session::store::save_language(tag)
+    }
+
     /// Put `effort` in force for this session over every saved pick and file, and record nothing,
     /// for the reason [`Session::name_model`] records no model.
     pub fn name_effort(&mut self, effort: Effort) {

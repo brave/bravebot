@@ -284,6 +284,9 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         Action::Style(word) => {
             session.answer_while_working(|session| set_style(session, beside.workspace, &word));
         }
+        Action::Language(word) => {
+            session.answer_while_working(|session| set_language(session, &word));
+        }
         Action::CopyReply(text) => session.answer_while_working(|session| {
             copy_reply(session, &text, crate::clipboard::copy);
         }),
@@ -431,6 +434,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if let Some(word) = argument_to(line, STYLE_COMMAND) {
         return Action::Style(word.to_string());
+    }
+    if let Some(word) = argument_to(line, LANGUAGE_COMMAND) {
+        return Action::Language(word.to_string());
     }
     if line.trim() == CONFIG_COMMAND {
         return Action::ChooseEditing;
@@ -2712,6 +2718,7 @@ fn event_loop(
             Action::SetEffort(level) => set_effort(held.session, &level),
             Action::Advisor(word) => set_advisor(held.session, config, &word),
             Action::Style(word) => set_style(held.session, held.workspace, &word),
+            Action::Language(word) => set_language(held.session, &word),
             Action::ChooseEditing => choose_editing(terminal, held.session),
             Action::AddDirectory(directory) => held.add_directory_command(&directory),
             Action::CloseDirectory(directory) => held.close_directory_command(&directory),
@@ -18797,6 +18804,14 @@ mod tests {
             .map_or("", |entry| entry.text.as_str())
     }
 
+    fn notes_of(session: &Session) -> Vec<&str> {
+        session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect()
+    }
+
     /// CHECKOUT-15. Removing one something was done in asks first, and only a yes removes it.
     #[test]
     fn a_checkout_worked_in_is_removed_only_when_the_person_says_so() {
@@ -20815,6 +20830,7 @@ mod tests {
                 GOAL_COMMAND,
                 ISSUE_COMMAND,
                 JOBS_COMMAND,
+                LANGUAGE_COMMAND,
                 LIMIT_COMMAND,
                 LOOP_COMMAND,
                 MODEL_COMMAND,
@@ -22072,6 +22088,181 @@ mod tests {
         }
     }
 
+    /// A session that persists, with a turn in flight on `prompt`. For a test that is about what a
+    /// command keeps, so it runs in `in_isolated_profile`.
+    fn a_persisting_turn_running_on(prompt: &str) -> Session {
+        let mut session = Session::new("none").with_stored_history();
+        type_line(&mut session, prompt);
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert!(session.a_turn_is_running());
+        session
+    }
+
+    /// The word after `/language` reaches the action whole, and the bare word asks for the report.
+    #[test]
+    fn the_language_command_carries_its_word() {
+        for (line, word) in [
+            ("/language fr", "fr"),
+            ("/language fr_FR.UTF-8", "fr_FR.UTF-8"),
+            ("/language auto", "auto"),
+            ("/language", ""),
+        ] {
+            let mut session = Session::new("none");
+            assert_eq!(
+                dispatch_command(&mut session, commanded(line)),
+                Action::Language(word.to_string()),
+                "{line}"
+            );
+        }
+    }
+
+    /// LOCALE-8. A tag that names a catalog is saved as the tag of the catalog that answered it, so
+    /// the file holds a word the build knows whatever spelling was typed. Saving what was typed
+    /// puts `fr_FR.UTF-8` on disk and says nothing about which catalog it chose.
+    #[test]
+    fn a_language_a_catalog_answers_is_saved_under_the_catalogs_own_tag() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = Session::new("none").with_stored_history();
+
+        set_language(&mut session, "fr_FR.UTF-8");
+
+        assert_eq!(
+            bravebot_session::store::load_language().as_deref(),
+            Some("fr")
+        );
+        assert_eq!(
+            last_note(&session),
+            t!(session_language_set, language = "fr")
+        );
+    }
+
+    /// LOCALE-8. A language nobody translated is refused with the catalogs there are, and nothing
+    /// is saved: resolving it as the environment does would save a choice that shows English and
+    /// tell the person they were reading it.
+    #[test]
+    fn a_language_no_catalog_answers_is_refused_and_not_saved() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = Session::new("none").with_stored_history();
+        set_language(&mut session, "fr");
+
+        set_language(&mut session, "zz-ZZ");
+
+        assert_eq!(
+            last_note(&session),
+            t!(
+                session_no_such_language,
+                language = "zz-ZZ",
+                available = bravebot_i18n::tags().join(", ")
+            )
+        );
+        assert_eq!(
+            bravebot_session::store::load_language().as_deref(),
+            Some("fr"),
+            "a refused language replaced the saved choice"
+        );
+    }
+
+    /// LOCALE-8. `auto` gives the choice back to the settings file and the environment, in any
+    /// case, and leaves nothing for the next start to read. A save of the word `auto` would be read
+    /// back as a language called auto.
+    #[test]
+    fn auto_gives_the_choice_back_and_leaves_no_file() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = Session::new("none").with_stored_history();
+        set_language(&mut session, "fr");
+        assert_eq!(
+            bravebot_session::store::load_language().as_deref(),
+            Some("fr")
+        );
+
+        set_language(&mut session, "AUTO");
+
+        assert_eq!(bravebot_session::store::load_language(), None);
+        assert_eq!(last_note(&session), t!(session_language_auto));
+    }
+
+    /// LOCALE-8. A session that keeps nothing says its choice was not kept. The language applies
+    /// from the next start, so a note that said it was set would be the only sign of a choice that
+    /// was never made.
+    #[test]
+    fn a_session_that_keeps_nothing_says_the_language_was_not_saved() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = Session::new("none");
+
+        set_language(&mut session, "fr");
+        assert_eq!(last_note(&session), t!(session_language_not_saved));
+        set_language(&mut session, "auto");
+        assert_eq!(last_note(&session), t!(session_language_not_saved));
+
+        assert_eq!(
+            bravebot_session::store::load_language(),
+            None,
+            "a session that persists nothing wrote the choice"
+        );
+    }
+
+    /// LOCALE-8. The bare word says which language is in use and which catalogs there are, and
+    /// names the saved choice only where there is one.
+    #[test]
+    fn the_bare_language_command_says_what_is_in_use_and_what_was_saved() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let in_use = t!(
+            session_language_in_use,
+            language = bravebot_i18n::locale().tag(),
+            available = bravebot_i18n::tags().join(", ")
+        );
+        let mut session = Session::new("none").with_stored_history();
+
+        set_language(&mut session, "");
+        let notes = notes_of(&session);
+        assert_eq!(notes, [in_use.as_str()]);
+
+        set_language(&mut session, "fr");
+        set_language(&mut session, "");
+        let notes = notes_of(&session);
+        assert_eq!(
+            &notes[notes.len() - 2..],
+            [
+                in_use.as_str(),
+                t!(session_language_saved, language = "fr").as_str()
+            ]
+        );
+    }
+
+    /// CMD-8. `/language fr` typed while a turn runs is saved as it is typed and does not wait: it
+    /// touches nothing the turn holds, and the choice is read at the next start.
+    #[test]
+    fn a_language_named_mid_turn_is_saved_as_it_is_typed() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_persisting_turn_running_on("first");
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/language fr", key(KeyCode::Enter), beside)
+        });
+
+        assert_eq!(
+            bravebot_session::store::load_language().as_deref(),
+            Some("fr")
+        );
+        assert_eq!(
+            said_under_the_turn(&session).first().copied(),
+            Some(t!(session_language_set, language = "fr").as_str())
+        );
+        assert!(session.queued.is_empty(), "/language fr waited");
+    }
+
     /// The bare word of a command that opens a picker opens it as it is typed (CMD-8). The picker is
     /// a mode of the session, so the turn goes on being drawn behind it. The regression it rejects
     /// is the word waiting for the turn to end, which leaves a person looking at a line under the
@@ -23023,6 +23214,40 @@ mod tests {
                     .picking()
                     .is_some_and(|picking| matches!(picking, Picking::Editing(_))),
                 "/config waited behind {first}"
+            );
+            assert_eq!(waiting_prompts(&session), vec![first]);
+        }
+    }
+
+    /// `/language` saves a choice the next start reads, which no waiting line reads or changes, so
+    /// it does not wait behind any of them. The regression it rejects is the word taking the place
+    /// of `/rename` in the queue, behind a `/clear` or a prompt it has nothing to do with.
+    #[test]
+    fn a_language_typed_behind_a_waiting_line_is_carried_out_when_typed() {
+        for first in [CLEAR_COMMAND, "second", "/sandbox off", "/cd crates/tui"] {
+            let mut session = a_turn_running_on("first");
+            type_while_working(&mut session, first);
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(
+                    &mut session,
+                    "/language no-such-language",
+                    key(KeyCode::Enter),
+                    beside,
+                )
+            });
+
+            assert_eq!(
+                said_under_the_turn(&session).last().copied(),
+                Some(
+                    t!(
+                        session_no_such_language,
+                        language = "no-such-language",
+                        available = bravebot_i18n::tags().join(", ")
+                    )
+                    .as_str()
+                ),
+                "/language waited behind {first}"
             );
             assert_eq!(waiting_prompts(&session), vec![first]);
         }
