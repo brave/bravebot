@@ -129,7 +129,7 @@ const MAX_DIFF_LINES: usize = 12;
 ///
 /// One glyph, on every line of the block, so the mark cannot be ended by anything written inside
 /// it. A caption could be imitated; a margin cannot.
-const QUARANTINE_BAR: &str = "\u{2503}";
+pub(crate) const QUARANTINE_BAR: &str = "\u{2503}";
 
 /// What the box says when there is nothing in it.
 ///
@@ -4897,6 +4897,49 @@ mod tests {
             invited,
             "the caret is not where the invitation begins"
         );
+    }
+
+    /// FILES-9: the files state owns every key, so the box keeps its text and is drawn without a
+    /// caret, whether the line is empty or holds a prompt.
+    #[test]
+    fn the_box_is_drawn_without_its_caret_while_the_state_is_open() {
+        for typed in ["", "half a prompt"] {
+            let mut session = Session::new("none");
+            session.note_layout(crate::state::Laid {
+                columns: 120,
+                ..crate::state::Laid::default()
+            });
+            for c in typed.chars() {
+                session.type_char(c);
+            }
+            let diff = bravebot_agent::diff::Diff::compute("old\n", "new\n");
+            session.transcript.push(crate::state::Entry::tool(
+                bravebot_agent::report::Activity::running("Update", "a.rs")
+                    .of_tool("edit_file")
+                    .with_changes(diff.condensed(3))
+                    .with_written(Some(bravebot_agent::report::Written {
+                        landed: "a.rs".into(),
+                        added: diff.added(),
+                        removed: diff.removed(),
+                        numbers: diff.condensed_numbers(3),
+                    }))
+                    .done("done"),
+            ));
+            assert!(
+                caret_cell(&session, 120, 24).is_some(),
+                "the box had no caret before the state opened: {typed:?}"
+            );
+            session.toggle_files();
+            assert!(session.files_open());
+            assert_eq!(
+                caret_cell(&session, 120, 24),
+                None,
+                "the box drew a caret while the state was open: {typed:?}"
+            );
+            if !typed.is_empty() {
+                assert!(rendered_at(&session, 120, 24).contains(typed));
+            }
+        }
     }
 
     /// It stands in for the line rather than being part of it, so the first character typed takes

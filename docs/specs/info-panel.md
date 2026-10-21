@@ -218,7 +218,11 @@ narrow for it.
    they complete, and left out until a token has been spent.
 6. **Language servers.** PANEL-13.
 7. **MCP servers.** PANEL-14.
-8. **Plan.** PANEL-10.
+8. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote,
+   and a row naming `/files`, the command that opens the files state ([FILES-3](files-mode.md#FILES-3)).
+   It is left out until a file has been written. The Plan takes the rows it leaves, as PANEL-13
+   says of the server sections.
+9. **Plan.** PANEL-10.
 
 A section with nothing to show has no heading. Control characters in any row are drawn as visible
 characters, as they are wherever the interface draws text, since a directory or a branch is called
@@ -243,6 +247,7 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::the_token_total_is_a_context_row_that_sums_the_session`
 `verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
+`verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_the_command_and_leaves_the_plan_its_rows`
 
 <a id="PANEL-10"></a>
 ### PANEL-10: the plan stays after the turn that wrote it
@@ -285,9 +290,15 @@ with `/issue` and `/pr`, or `--issue` and `--pr`), the planner's own `todo_write
 reading, the cache figures and the token total), the chord in force, the directory and branch the
 session runs in, the session's id (made by the driver from the operating system's random source, so
 no reply, tool result or file supplies it), the programs of the language servers it started (PANEL-13), the aliases of its MCP
-servers (PANEL-14), or the model the person chose and the effort level in force. No row comes from a
+servers (PANEL-14), the model the person chose and the effort level in force, or the paths of the files
+the session wrote with the counts the kernel made ([FILES-2](files-mode.md#FILES-2)). No row comes from a
 reply, a tool result, a file's contents, a language server's reply, an issue or
 pull request body, or anything a job printed.
+
+The files state, and no other state of the panel, also draws the changes of a write, under
+[FILES-6](files-mode.md#FILES-6) and [FILES-7](files-mode.md#FILES-7). Those rows are in a region of
+their own, under a header, with a gutter and sign that no section of the panel has, and the ordinary
+sections are not drawn beside them, so the reason for the rule still holds.
 
 **Why.** The panel is the interface speaking in its own voice, like the scroller's footer
 ([SCROLL-5](scroller.md#SCROLL-5)). Text from any of those drawn in it would read as the interface's

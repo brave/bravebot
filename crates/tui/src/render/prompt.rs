@@ -344,6 +344,9 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
     let selection = session.vi_selection();
     let words = named_words(session);
     let hint = argument_hint(session);
+    // The files state owns every key, so the box has no caret to draw and no selection to show
+    // (FILES-9). The line keeps its text.
+    let held = session.files_open();
 
     // Shell mode is coloured throughout rather than only in the marker, because the whole line
     // means something different: it goes to a shell instead of the model, and that is worth more
@@ -375,6 +378,10 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
                 .iter()
                 .filter_map(|&word| covered(row, wrapped.starts[index], word))
                 .collect();
+            if held {
+                spans.extend(text_spans(row, 0, row.len(), &named));
+                return Line::from(spans);
+            }
             if let Some((at, through)) =
                 selection.and_then(|span| covered(row, wrapped.starts[index], span))
             {
@@ -418,11 +425,19 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
             Style::default().fg(colour),
         )];
         // A suggestion takes the invitation's place, drawn the same way: dimmed, with the caret on
-        // its first character, since that is where the first character typed would land.
-        spans.extend(placeholder_spans(
-            colour,
-            session.suggestion().unwrap_or(placeholder()),
-        ));
+        // its first character, since that is where the first character typed would land. Dimmed
+        // alone where the box holds no caret.
+        if held {
+            spans.push(Span::styled(
+                session.suggestion().unwrap_or(placeholder()).to_string(),
+                dim(),
+            ));
+        } else {
+            spans.extend(placeholder_spans(
+                colour,
+                session.suggestion().unwrap_or(placeholder()),
+            ));
+        }
         vec![Line::from(spans)]
     } else {
         lines

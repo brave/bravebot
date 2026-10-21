@@ -706,6 +706,10 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         session.toggle_panel();
         return Action::Redraw;
     }
+    if line.trim() == FILES_COMMAND {
+        session.toggle_files();
+        return Action::Redraw;
+    }
     if line.trim() == CAFFEINATE_COMMAND {
         session.toggle_caffeinate();
         return Action::Redraw;
@@ -1112,6 +1116,7 @@ fn paste_into_box(session: &mut Session, text: &str) -> Action {
         || session.watching().is_some()
         || session.picking().is_some()
         || session.searching_history()
+        || session.files_open()
     {
         return Action::None;
     }
@@ -1906,6 +1911,7 @@ fn rewind(
     *programs = snapshot.programs;
 
     session.transcript.truncate(snapshot.transcript_len);
+    session.end_files_if_nothing_written();
     session.rewind_history();
     stored.truncate_audit(session.turns + 1);
     // The prompt that was undone goes back into the box, so the next thing the person does is
@@ -21736,6 +21742,7 @@ mod tests {
                 COST_COMMAND,
                 EFFORT_COMMAND,
                 EXPORT_COMMAND,
+                FILES_COMMAND,
                 FORGET_TRUST_COMMAND,
                 GOAL_COMMAND,
                 ISSUE_COMMAND,
@@ -29938,6 +29945,100 @@ mod tests {
         );
     }
 
+    /// FILES-10: `/rewind` removes the edits of the turns it undoes, and the state ends once none is
+    /// left, since the list is read from the transcript the rewind cut.
+    #[test]
+    fn undoing_a_turn_removes_its_edits_from_the_list() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-rewind-files");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let mut trust = TrustStore::new(&root);
+        let mut programs = TrustedPrograms::new();
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut session = Session::new("none");
+        session.note_layout(crate::state::Laid {
+            columns: 120,
+            ..crate::state::Laid::default()
+        });
+        let mut conversation = Conversation::new();
+
+        for (prompt, path) in [("first change", "a.rs"), ("second change", "b.rs")] {
+            let start = conversation.recounted().len();
+            type_line(&mut session, prompt);
+            session.submit().expect("the prompt is sent");
+            let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
+            session.rewind.open(point, prompt.to_string());
+            session.prompt_recorded(conversation.recounted().len());
+            let diff = bravebot_agent::diff::Diff::compute("old\n", "new\n");
+            session.transcript.push(crate::state::Entry::tool(
+                bravebot_agent::report::Activity::running("Update", path)
+                    .of_tool("edit_file")
+                    .with_changes(diff.condensed(3))
+                    .with_written(Some(bravebot_agent::report::Written {
+                        landed: path.into(),
+                        added: diff.added(),
+                        removed: diff.removed(),
+                        numbers: diff.condensed_numbers(3),
+                    }))
+                    .done("done"),
+            ));
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant("done"));
+            session.complete("done", vec![], 10);
+            session.record_turn(start, &conversation);
+        }
+        session.toggle_files();
+        let paths = |session: &Session| -> Vec<String> {
+            session
+                .written_files()
+                .into_iter()
+                .map(|file| file.path)
+                .collect()
+        };
+        assert_eq!(paths(&session), ["a.rs", "b.rs"]);
+        assert!(session.files_open());
+
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            1,
+        );
+        assert_eq!(
+            paths(&session),
+            ["a.rs"],
+            "the undone turn's edit is still listed"
+        );
+        assert!(session.files_open(), "the state ended with an edit left");
+
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            1,
+        );
+        assert!(paths(&session).is_empty());
+        assert!(
+            !session.files_open(),
+            "the state stayed open with nothing to list"
+        );
+    }
+
     /// `/rewind` goes back the number of turns typed after it. Anything that is not a whole number
     /// above zero goes nowhere and says what the command wants, and the bare word lists the points
     /// without moving.
@@ -32911,6 +33012,200 @@ mod tests {
             )),
         );
         assert!(suggest_next(&failed, &config, &conversation, &trust).is_none());
+    }
+
+    /// A session wide enough for the panel with `src/a.rs` written once.
+    fn session_that_wrote() -> Session {
+        let mut session = Session::new("none");
+        session.note_layout(crate::state::Laid {
+            columns: 120,
+            ..crate::state::Laid::default()
+        });
+        session
+            .transcript
+            .push(crate::state::Entry::user("edit it"));
+        let diff = bravebot_agent::diff::Diff::compute("old\n", "new\n");
+        session.transcript.push(crate::state::Entry::tool(
+            bravebot_agent::report::Activity::running("Update", "src/a.rs")
+                .of_tool("edit_file")
+                .with_changes(diff.condensed(3))
+                .with_written(Some(bravebot_agent::report::Written {
+                    landed: "src/a.rs".into(),
+                    added: diff.added(),
+                    removed: diff.removed(),
+                    numbers: diff.condensed_numbers(3),
+                }))
+                .done("added 1 line, removed 1 line"),
+        ));
+        session
+    }
+
+    /// FILES-3: `/files` draws the panel in its files state, opening it where it was closed, and `q`
+    /// puts it back as it was: a panel that was open is open and ordinary again.
+    #[test]
+    fn files_opens_the_panel_in_its_files_state_and_q_puts_it_back() {
+        let mut session = session_that_wrote();
+        session.toggle_panel();
+        assert!(session.panel_open() && !session.files_open());
+        assert_eq!(
+            dispatch_command(&mut session, commanded(FILES_COMMAND)),
+            Action::Redraw
+        );
+        assert!(session.files_open(), "/files did not open the state");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Char('q'))),
+            Action::Redraw
+        );
+        assert!(!session.files_open(), "q did not end the state");
+        assert!(session.panel_open(), "the panel that was open was closed");
+    }
+
+    /// FILES-3: a panel `/files` opened is closed again when the state ends, whichever key ends it,
+    /// and `/files` again ends it too.
+    #[test]
+    fn leaving_the_state_closes_a_panel_it_opened() {
+        for ending in [KeyCode::Char('q'), KeyCode::Esc] {
+            let mut session = session_that_wrote();
+            dispatch_command(&mut session, commanded(FILES_COMMAND));
+            assert!(session.panel_open());
+            handle_key(&mut session, key(ending));
+            assert!(!session.panel_open(), "{ending:?} left the panel open");
+        }
+        let mut session = session_that_wrote();
+        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        assert!(!session.files_open() && !session.panel_open());
+    }
+
+    /// FILES-3: the panel chord hides the panel from the state and ends the state with it.
+    #[test]
+    fn the_panel_chord_ends_the_state_with_the_panel() {
+        let mut session = session_that_wrote();
+        session.toggle_panel();
+        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        handle_key(&mut session, ctrl('x'));
+        assert!(!session.files_open(), "the chord left the state open");
+        assert!(!session.panel_open(), "the chord left the panel open");
+    }
+
+    /// FILES-3: with no file written `/files` answers with a note and changes nothing, and on a
+    /// terminal too narrow it says how wide the terminal has to be.
+    #[test]
+    fn files_with_nothing_written_answers_with_a_note() {
+        let mut session = Session::new("none");
+        session.note_layout(crate::state::Laid {
+            columns: 120,
+            ..crate::state::Laid::default()
+        });
+        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        assert!(!session.files_open() && !session.panel_open());
+        let said = session.transcript.last().map(|entry| entry.text.clone());
+        assert_eq!(said, Some(t!(files_nothing_written).to_string()));
+
+        let mut narrow = session_that_wrote();
+        narrow.note_layout(crate::state::Laid {
+            columns: 80,
+            ..crate::state::Laid::default()
+        });
+        dispatch_command(&mut narrow, commanded(FILES_COMMAND));
+        assert!(!narrow.files_open());
+        let said = narrow.transcript.last().map(|entry| entry.text.clone());
+        assert_eq!(
+            said,
+            Some(t!(files_too_narrow, columns = crate::panel::NARROWEST).to_string())
+        );
+    }
+
+    /// FILES-9: a character does not reach the box, Enter sends nothing and a paste does not reach
+    /// the line.
+    #[test]
+    fn a_typed_character_does_not_reach_the_box_while_the_files_state_is_open() {
+        let mut session = session_that_wrote();
+        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        for c in ['x', 'a', 'z', ' '] {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(session.input(), "");
+        assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::None);
+        assert_eq!(handle_paste(&mut session, "pasted"), Action::None);
+        assert_eq!(session.input(), "");
+        assert!(session.files_open());
+    }
+
+    /// FILES-9: a key the state does not name does nothing, and leaves the state where it was.
+    #[test]
+    fn a_key_the_state_does_not_name_does_nothing() {
+        let mut session = session_that_wrote();
+        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        let before = session.files_state().cloned();
+        for code in [
+            KeyCode::Tab,
+            KeyCode::Char('?'),
+            KeyCode::Left,
+            KeyCode::Backspace,
+            KeyCode::F(5),
+        ] {
+            assert_eq!(
+                handle_key(&mut session, key(code)),
+                Action::None,
+                "{code:?}"
+            );
+        }
+        assert_eq!(handle_key(&mut session, ctrl('a')), Action::None);
+        assert_eq!(session.files_state().cloned(), before);
+        assert!(session.files_open());
+    }
+
+    /// FILES-9: the line keeps its text and caret while the state is open and has both when it ends.
+    #[test]
+    fn the_line_comes_back_untouched_when_the_state_ends() {
+        let mut session = session_that_wrote();
+        for c in "half a prompt".chars() {
+            session.type_char(c);
+        }
+        handle_key(&mut session, key(KeyCode::Left));
+        let caret = session.caret();
+        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        handle_key(&mut session, key(KeyCode::Char('x')));
+        handle_key(&mut session, key(KeyCode::Down));
+        handle_key(&mut session, key(KeyCode::Char('q')));
+        assert_eq!(session.input(), "half a prompt");
+        assert_eq!(session.caret(), caret);
+    }
+
+    /// FILES-9: Ctrl-C ends the state and does nothing else, so a turn in flight goes on.
+    #[test]
+    fn ctrl_c_ends_the_state_and_leaves_the_turn_running() {
+        let mut session = session_that_wrote();
+        session.status = Status::Working;
+        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        assert!(
+            !stops_the_turn(&session, ctrl('c')),
+            "Ctrl-C reaches the turn while the state is open"
+        );
+        let action = handle_key_while_working(&mut session, ctrl('c'));
+        assert_ne!(action, Action::Cancel, "Ctrl-C reached the turn");
+        assert!(!session.files_open(), "Ctrl-C did not end the state");
+        assert_eq!(session.status, Status::Working);
+        // The next press is the one that reaches the turn.
+        assert!(stops_the_turn(&session, ctrl('c')));
+    }
+
+    /// FILES-3: entering and leaving the state writes nothing to the file that keeps the panel's
+    /// choice, so a panel left closed stays closed for the next session.
+    #[test]
+    fn entering_and_leaving_the_state_writes_no_panel_choice() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = session_that_wrote().with_stored_history();
+        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        handle_key(&mut session, key(KeyCode::Char('q')));
+        assert_eq!(bravebot_session::store::load_panel(), None);
+        bravebot_session::store::save_panel(true);
+        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert_eq!(bravebot_session::store::load_panel(), Some(true));
     }
 }
 

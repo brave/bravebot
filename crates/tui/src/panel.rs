@@ -86,7 +86,7 @@ fn wrapped(text: &str, width: usize) -> Vec<String> {
 
 /// `text` in one row of at most `width` columns, cut from the left with an ellipsis where it is
 /// longer: the end of a directory and of a branch is the part that tells two of them apart.
-fn ending(text: &str, width: usize) -> String {
+pub(crate) fn ending(text: &str, width: usize) -> String {
     use unicode_width::UnicodeWidthChar;
     if crate::wrap::display_width(text) <= width {
         return text.to_string();
@@ -245,6 +245,18 @@ fn laid_out(
     if height == 0 {
         return (Vec::new(), Vec::new(), Vec::new());
     }
+    // None of the ordinary sections is drawn beside the files state (FILES-4).
+    if let Some(state) = session.files_state() {
+        let files = session.written_files();
+        let rows = crate::files_mode::rows(
+            &files,
+            state,
+            session.has_earlier_calls(),
+            width,
+            height as u16,
+        );
+        return (rows, Vec::new(), Vec::new());
+    }
     let text = text_width(width);
     let (mut body, mut links, mut continued) = head(session, text);
 
@@ -269,6 +281,29 @@ fn laid_out(
             })
             .collect();
         section(&mut body, t!(panel_mcp_servers).to_string(), rows);
+    }
+
+    // Left out until a file has been written, and ahead of the plan so that the plan takes the rows
+    // it leaves (FILES-1).
+    let (count, added, removed) = session.written_totals();
+    if count > 0 {
+        let mut total = vec![Span::raw(format!(
+            " {}",
+            t!(panel_files_total, count = count)
+        ))];
+        for (sign, count, colour) in [("+", added, theme::ok()), ("-", removed, theme::fail())] {
+            if count > 0 {
+                total.push(Span::styled(
+                    format!(" {sign}{count}"),
+                    Style::default().fg(colour),
+                ));
+            }
+        }
+        let rows = vec![
+            Line::from(total),
+            row(crate::command_table::FILES_COMMAND.to_string(), dim()),
+        ];
+        section(&mut body, t!(panel_files).to_string(), rows);
     }
 
     let plan = session.plan();
@@ -299,8 +334,10 @@ fn laid_out(
 /// too short for the sections above it, the panel cuts the Context section, and the line keeps
 /// both rather than leave the reading on neither.
 pub fn shows_context(session: &Session, columns: u16, rows: u16) -> bool {
-    // The hint line takes one row and the key that hides the panel another.
+    // The hint line takes one row and the key that hides the panel another. The files state has no
+    // Context section, so the line keeps both figures there (FILES-4).
     drawn(session, columns)
+        && !session.files_open()
         && head(session, text_width(session.panel_columns(columns)))
             .0
             .len()
@@ -1808,6 +1845,58 @@ mod tests {
                     .as_str()
             ),
             "the last row is not the key that hides the panel"
+        );
+    }
+
+    /// FILES-1: the Files section is left out until a file has been written, and then has the totals
+    /// and the command that opens the state. It comes out of the plan's room, as a server section
+    /// does.
+    #[test]
+    fn the_files_section_has_the_totals_and_the_command_and_leaves_the_plan_its_rows() {
+        let tasks: Vec<(String, Status)> = (0..20)
+            .map(|n| (format!("task {n}"), Status::Pending))
+            .collect();
+        let rows: Vec<(&str, Status)> = tasks.iter().map(|(t, s)| (t.as_str(), *s)).collect();
+        let mut session = working_on(plan(&rows));
+        let without = texts(&lines(&session, WIDTH, 20));
+        assert!(
+            !without.iter().any(|row| *row == *t!(panel_files)),
+            "a Files section was drawn before anything was written: {without:#?}"
+        );
+
+        for (path, before, after) in [("a.rs", "x\n", "x\ny\nz\n"), ("b.rs", "p\nq\n", "p\n")] {
+            let diff = bravebot_agent::diff::Diff::compute(before, after);
+            session.transcript.push(crate::state::Entry::tool(
+                bravebot_agent::report::Activity::running("Update", path)
+                    .of_tool("edit_file")
+                    .with_changes(diff.condensed(3))
+                    .with_written(Some(bravebot_agent::report::Written {
+                        landed: path.into(),
+                        added: diff.added(),
+                        removed: diff.removed(),
+                        numbers: diff.condensed_numbers(3),
+                    }))
+                    .done("done"),
+            ));
+        }
+        let with = texts(&lines(&session, WIDTH, 20));
+        let heading = with
+            .iter()
+            .position(|row| *row == *t!(panel_files))
+            .unwrap_or_else(|| panic!("no Files heading: {with:#?}"));
+        assert_eq!(with[heading + 1].trim(), "2 files +2 -1", "{with:#?}");
+        assert_eq!(with[heading + 2].trim(), "/files", "{with:#?}");
+        let plan_heading = with
+            .iter()
+            .position(|row| *row == *t!(panel_plan))
+            .unwrap_or_else(|| panic!("the plan was dropped: {with:#?}"));
+        assert!(heading < plan_heading, "the section is not before the plan");
+        let shown = |drawn: &[String]| drawn.iter().filter(|row| row.contains("task ")).count();
+        assert_eq!(with.len(), 20, "the panel is not the height it was given");
+        assert_eq!(
+            shown(&without) - shown(&with),
+            4,
+            "a blank row, a heading and two rows came out of the plan's room: {with:#?}"
         );
     }
 

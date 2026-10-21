@@ -1229,7 +1229,12 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                     answer = Some(answered.value);
                 }
                 attempt.stepped(index, step, &done.note);
-                reporter.tool_finished(activity.with_changes(done.changes).done(done.note));
+                reporter.tool_finished(
+                    activity
+                        .with_changes(done.changes)
+                        .with_written(done.written)
+                        .done(done.note),
+                );
             }
             Err(failure) => {
                 // A step that fails ends the run. There is no next step to try instead: the
@@ -1301,6 +1306,8 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
 struct Done {
     note: String,
     changes: Vec<crate::diff::Change>,
+    /// What the kernel counted for the diff behind `changes`, where the step wrote a file.
+    written: Option<crate::report::Written>,
     /// What this step answered the user with, where it was the one that answered.
     answer: Option<Answered>,
 }
@@ -1811,8 +1818,16 @@ fn write<S: Sink, C: Confirmer>(
     );
     // What the step would change, compared inside the kernel and released once, exactly as a
     // turn's write does it.
-    let reviewed =
-        crate::tools::review_a_write(policy, "write_file", intent, &replaced, &body, replaced_age);
+    let landed = crate::tools::landing_of(workspace, &path);
+    let reviewed = crate::tools::review_a_write(
+        policy,
+        "write_file",
+        intent,
+        &replaced,
+        &body,
+        replaced_age,
+        &landed,
+    );
 
     if crate::tools::write_needs_approval(policy, workspace, &path, body_label, Destination::Named)
         || !to_approve.is_empty()
@@ -1868,10 +1883,16 @@ fn write<S: Sink, C: Confirmer>(
         )
         .map_err(|e| e.to_string())?;
 
-    let crate::tools::Reviewed { note, changes, .. } = reviewed;
+    let crate::tools::Reviewed {
+        note,
+        changes,
+        written,
+        ..
+    } = reviewed;
     Ok(Done {
         note: crate::tools::carried_note(note, &scanned),
         changes,
+        written,
         ..Done::default()
     })
 }

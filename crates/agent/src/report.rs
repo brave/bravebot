@@ -91,6 +91,10 @@ pub struct Activity {
     pub failed: bool,
     /// The change a write made, for showing beneath the line. Empty for everything else.
     pub changes: Vec<Change>,
+    /// The counts and line numbers the kernel made with the diff behind `changes`, for a write
+    /// that changed a file. `None` for everything else, and for a write that was refused, failed or
+    /// changed nothing, so a screen listing what was written needs no reading of `changes`.
+    pub written: Option<Written>,
     /// Whether those lines are content nobody vouched for.
     ///
     /// Drawn with the same mark the transcript puts on everything the model was not allowed to
@@ -120,6 +124,7 @@ impl Activity {
             note: None,
             failed: false,
             changes: Vec::new(),
+            written: None,
             untrusted: false,
             waited: None,
         }
@@ -156,6 +161,12 @@ impl Activity {
         self
     }
 
+    /// Attach the counts and line numbers the write's diff was made with.
+    pub fn with_written(mut self, written: Option<Written>) -> Self {
+        self.written = written;
+        self
+    }
+
     /// Say that the lines beneath this call are content nobody vouched for.
     pub fn marked_untrusted(mut self, untrusted: bool) -> Self {
         self.untrusted = untrusted;
@@ -181,6 +192,24 @@ impl Activity {
             format!("{}({})", self.verb, self.target)
         }
     }
+}
+
+/// What the kernel counted when it made the diff behind a write's [`Activity::changes`].
+///
+/// Counted over the two texts before anything was released for a screen, so no interface counts
+/// the rows it was given or counts them to find a line number ([FILES-2](../../../docs/specs/files-mode.md#FILES-2)).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Written {
+    /// The file the write landed on, as the workspace resolved it. Two calls that landed on one
+    /// file carry the same value, whatever each was called by. Where it came from a reference it
+    /// is a name out of a directory nobody vouched for, so it is a key and is never drawn.
+    pub landed: std::path::PathBuf,
+    /// Lines the write added.
+    pub added: usize,
+    /// Lines the write removed.
+    pub removed: usize,
+    /// The line numbers of each row of [`Activity::changes`], in the same order.
+    pub numbers: Vec<crate::diff::Numbered>,
 }
 
 /// What the turn is waiting on.

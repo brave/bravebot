@@ -339,6 +339,7 @@ pub(super) fn stops_a_command(session: &Session, key: KeyEvent) -> bool {
     !session.scrolling()
         && session.watching().is_none()
         && !session.searching_history()
+        && !session.files_open()
         && session.picking().is_none()
         && (is_ctrl_c(key) || is_escape(session, key))
 }
@@ -849,6 +850,41 @@ fn suggestion_key(session: &mut Session, key: KeyEvent) -> Option<Action> {
     None
 }
 
+/// Interpret a key press while the info panel is in its files state (FILES-9).
+///
+/// Every key is the state's and a key it does not name does nothing, so no character reaches the box
+/// and Enter sends nothing. Ctrl-C ends the state and does nothing else, so a turn in flight goes on.
+/// The panel chord hides the panel and the state with it, as it does from the ordinary state.
+fn files_key(session: &mut Session, key: KeyEvent) -> Action {
+    if is_ctrl_c(key) {
+        session.close_files();
+        return Action::Redraw;
+    }
+    if session.bindings().is_panel(&key) {
+        session.toggle_panel();
+        return Action::Redraw;
+    }
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return Action::None;
+    }
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => session.close_files(),
+        KeyCode::Up | KeyCode::Char('k') => session.files_move(-1),
+        KeyCode::Down | KeyCode::Char('j') => session.files_move(1),
+        KeyCode::Home | KeyCode::Char('g') => session.files_to_end(false),
+        KeyCode::End | KeyCode::Char('G') => session.files_to_end(true),
+        KeyCode::PageUp => session.files_scroll(-session.files_page()),
+        KeyCode::PageDown => session.files_scroll(session.files_page()),
+        KeyCode::Char('[') => session.files_to_edit(false),
+        KeyCode::Char(']') => session.files_to_edit(true),
+        _ => return Action::None,
+    }
+    Action::Redraw
+}
+
 /// The answer to a key that a mode standing over the session takes, and `None` where no mode is
 /// open.
 ///
@@ -859,6 +895,9 @@ fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<Action> {
     if session.picking().is_some() {
         session.press_in_picking(key.code, key.modifiers);
         return Some(Action::Redraw);
+    }
+    if session.files_open() {
+        return Some(files_key(session, key));
     }
     if session.watching().is_some() {
         return Some(watching_key(session, key));

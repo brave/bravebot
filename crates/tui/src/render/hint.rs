@@ -381,6 +381,23 @@ pub(super) fn hint_spans(
 
 /// The shortcut line. Keeps the bindings discoverable without a help command.
 pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
+    // The files state names its own keys and keeps the figures the panel has no section for
+    // (FILES-4, FILES-9). Every other key does nothing there, so nothing else on the line applies.
+    if session.files_open() {
+        let parts = [
+            t!(files_hint).to_string(),
+            context_reading(session),
+            cache_hit_rate(session).unwrap_or_default(),
+        ];
+        let said: Vec<&str> = parts
+            .iter()
+            .map(String::as_str)
+            .filter(|part| !part.is_empty())
+            .collect();
+        let line = crate::status::cut(&said.join("  ·  "), usize::from(area.width));
+        frame.render_widget(Paragraph::new(Span::styled(line, dim())), area);
+        return;
+    }
     let facts = hint_facts(session);
 
     // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a
