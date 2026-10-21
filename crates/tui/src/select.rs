@@ -384,7 +384,10 @@ pub fn text_wrapping(
         if !out.is_empty() && !continues && !soft {
             out.push('\n');
         }
-        if soft && above.is_some_and(|above| text_end(buffer, above, area) < area.right()) {
+        if soft
+            && !out.is_empty()
+            && above.is_some_and(|above| text_end(buffer, above, area) < area.right())
+        {
             out.push(' ');
         }
         out.push_str(line.trim_end());
@@ -446,6 +449,16 @@ mod tests {
             text_wrapping(&buffer, &selection, &[], &[]),
             "one two\nthree\nabcdefghijklmnopqrst\nuvw",
         );
+    }
+
+    /// The row above a selection's first row is not part of it, so the blank it ends on is not
+    /// either.
+    #[test]
+    fn a_selection_starting_on_a_wrapped_row_has_no_leading_blank() {
+        let buffer = screen(&["one two", "three"]);
+        let mut selection = Selection::in_pane(1, 0, Pane::Transcript, Rect::new(0, 0, 20, 2));
+        selection.extend_to(1, 19);
+        assert_eq!(text_wrapping(&buffer, &selection, &[], &[1]), "three");
     }
 
     /// The rows are screen rows, and the panel beside the transcript is drawn on the same ones.
