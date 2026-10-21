@@ -60,6 +60,10 @@ fn main() {
         std::env::current_dir().ok().as_deref(),
         settings.as_deref(),
     );
+    bravebot_ui_bridge::settings::start_the_sweep_for_process(
+        std::env::current_dir().ok().as_deref(),
+        settings.as_deref(),
+    );
 
     // One writer behind a lock, so a line from an event and a line from a response cannot
     // interleave. Shared with the bridge, which emits events from whichever thread a turn

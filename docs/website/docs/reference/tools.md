@@ -546,9 +546,10 @@ A server keeps its index under `~/.bravebot/lsp/`, keyed by the workspace and ne
 which is what makes the second session in a workspace fast. A question about a symbol should not
 change the tree you are working in.
 
-**Nothing prunes it.** A Rust workspace's index runs to a few hundred megabytes, and a machine that
-has been in many workspaces holds one for each. Deleting the directory costs the next session its
-indexing time and nothing else.
+**Only age prunes it.** A Rust workspace's index runs to a few hundred megabytes, and a machine that
+has been in many workspaces holds one for each until no server has started on it for
+[`retentionDays`](../customize/configuration.md#retentiondays) days, 30 where you state none.
+Deleting the directory at any time costs the next session its indexing time and nothing else.
 
 Nothing in that cache is read as trusted, whatever else `~/.bravebot` is trusted for. The bytes
 derive from workspace files, so they carry those files' labels, and the only thing that reads them is

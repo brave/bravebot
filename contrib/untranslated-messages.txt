@@ -24,6 +24,9 @@ fr:colour-codes-not-drawn
 fr:command-hunks
 fr:count-remembered
 fr:diff-no-final-newline
+fr:doctor-retention
+fr:doctor-retention-paused
+fr:doctor-settings-retention-ignored
 fr:home-rules-reached-through-the-workspace
 fr:leave-word-sent
 fr:rule-frontmatter-unreadable

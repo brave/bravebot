@@ -12,6 +12,8 @@ governs:
   - crates/session/src/store.rs
   - crates/tui/src/update.rs
   - crates/session/src/sessions.rs
+  - crates/session/src/retention.rs
+  - crates/agent/src/findings.rs
   - crates/skus/src/store.rs
   - crates/diag/src/lib.rs
   - crates/lsp/src/server.rs
@@ -56,6 +58,10 @@ itself.
 The programs a `run` starts are refused the whole directory except `sessions/`, which they read and
 never write ([SANDBOX-12](sandboxing.md#SANDBOX-12)). A file added to the directory later is refused
 without a change to any list.
+
+Three of those kinds of file are bounded by age: session records, a language server's indexes and the
+files of what a scan found. [STATE-4](#STATE-4) says which are removed, when, and which are left
+whatever their age.
 
 ## Clauses
 
@@ -200,8 +206,142 @@ about a directory the other surfaces share.
 
 `verified-by: bravebot_ui_bridge::layering::the_state_directory_is_written_only_through_the_crate_that_owns_it`
 
+<a id="STATE-4"></a>
+### STATE-4: a record, an index and a findings file that nothing has written for the retention period are removed when a session starts
+
+Once per process, as a session starts, three kinds of file are removed from the state directory when
+nothing has written them for the retention period: a session record, with the trail, the search index
+and the temporary file beside it ([sessions.md](sessions.md)); the index a language server keeps of a
+workspace ([tools/lsp.md](tools/lsp.md)); and the file recording what a scan found in a workspace
+([credential-protection.md](credential-protection.md)).
+
+The period is `retentionDays` in the person's own `settings.json`: a whole number of days, one or
+more, and 30 where none is stated. One day is the least it can be, so nothing written in the last day
+is removed whatever the setting says. A project or local settings file, and a file the command line
+named, cannot state it: the line is read as no statement and `doctor` names the file
+([cli.md](cli.md)).
+
+A file's age is its modification time, and no byte it holds decides whether it is kept. A modification
+time later than now is not old. A language server's index is aged by a file inside it that each start
+of a server on it touches, because the directory's own time does not move while a server writes
+deeper inside. An index with no such file was written before it existed: it is given one when first
+seen and removed once a whole period has passed from then. A trail or a temporary file whose record
+is gone goes by its own age.
+
+The record of the session that is starting, new or resumed, the record of any session a background
+process is running, and the index of the workspace the starting session is in are kept at any age.
+
+Nothing is removed when the period cannot be determined: the person's own settings file is there and
+cannot be read as a settings document, which an empty file is not, or `retentionDays` in it is not
+a whole number above zero. `doctor` names the file. The built-in period is not put in place of one that cannot be read.
+
+Left where they are at any age: the rules a person granted, the answers to the startup question kept
+past a session, the memories left untrusted, the acceptances of findings, the prompt history, the
+settings, standing instructions, skills and an imported subscription, which a person asked to keep or
+wrote themselves. The diagnostic logs are bounded by their own rule
+([diagnostic-log.md](diagnostic-log.md)).
+
+Removal stops at the state directory, and the sessions it looks in are the state directory's own: a
+root a process was told to keep its records in was named by whoever started it, and is left alone. A
+link standing as the directory of sessions, of indexes or of findings, or as one project's
+directory, one index or one record, is stepped over and what it leads to is not touched. A project's
+directory that the removal leaves empty is removed with its last record, unless a session is
+starting in that project. A file that cannot be removed is left, and costs that file only. A file in a
+project's directory whose name is not text is not a session's file and is left. An
+incognito session removes nothing, and neither does a machine with no state directory.
+
+**Why.** A record holds a whole conversation and the previous contents of files a turn overwrote
+inside a directory somebody vouched for, so it holds those for as long as it exists. An index holds
+bytes derived from every file in a workspace. Nothing else bounded either, so both lasted as long as
+the machine did. A period of 30 days is what Claude Code and Gemini CLI remove a transcript after by
+default.
+
+Age is the modification time because the other source is the content, and a record can carry words
+from a file or a page. A rule that read a date out of one would let that text keep a file or lose
+it. The period is read from the person's own file alone because a project's settings arrive with a
+clone: a checkout that stated one day would remove the records of whoever opened it. A period that
+cannot be read pauses the sweep rather than falling back to the built-in one, because a removal
+cannot be undone and a fallback removes on a figure the person did not choose, where waiting costs
+disk. One day is the floor because a period of zero would remove the record of the session somebody
+has just left, which is a different request from keeping less. The running session is exempt because
+a rewind reads its record, and the next save would write it back, and its workspace's index because a
+server is about to start on it. A session a background process is running is left, as removing every
+record of a project leaves the one a process is running. A chosen root is not swept because deleting
+files by their names and ages is only safe in a directory this program made for them.
+
+The acceptances of findings carry an expiry of their own, and one removed before it reports as open a
+finding a person accepted. The trust answers are decisions a person asked to keep past a session, so
+age does not end them.
+
+`verified-by: bravebot_config::settings::with_no_retention_stated_the_built_in_period_applies`
+`verified-by: bravebot_config::settings::the_home_layer_names_the_period_in_whole_days`
+`verified-by: bravebot_config::settings::a_checkout_cannot_choose_when_the_persons_records_are_deleted`
+`verified-by: bravebot_config::settings::a_period_that_cannot_be_read_pauses_the_sweep`
+`verified-by: bravebot_config::settings::a_home_file_that_cannot_be_read_pauses_the_sweep`
+`verified-by: bravebot_config::settings::a_broken_checkout_file_does_not_pause_the_sweep`
+`verified-by: bravebot_config::settings::a_link_to_a_settings_file_that_is_not_there_states_no_period`
+`verified-by: bravebot_session::retention::a_record_older_than_the_period_is_removed_with_what_is_beside_it_and_a_newer_one_is_kept`
+`verified-by: bravebot_session::retention::the_running_sessions_record_is_kept_at_any_age`
+`verified-by: bravebot_session::retention::a_records_age_is_when_it_was_written_and_not_what_it_says`
+`verified-by: bravebot_session::retention::the_shortest_period_still_keeps_what_was_written_today`
+`verified-by: bravebot_session::retention::a_file_stamped_in_the_future_is_kept`
+`verified-by: bravebot_session::retention::a_trail_or_temporary_file_with_no_record_goes_by_its_own_age`
+`verified-by: bravebot_session::retention::a_name_that_is_not_text_is_left_and_the_file_its_lossy_rendering_names_is_not_removed`
+`verified-by: bravebot_session::retention::the_sweep_does_not_follow_a_link_out_of_the_state_directory`
+`verified-by: bravebot_session::retention::what_a_person_asked_to_keep_is_left_whatever_its_age`
+`verified-by: bravebot_session::retention::a_paused_sweep_removes_nothing`
+`verified-by: bravebot_session::retention::a_started_sweep_removes_what_is_old_and_keeps_the_running_session`
+`verified-by: bravebot_session::retention::a_session_a_background_process_is_running_is_kept_at_any_age`
+`verified-by: bravebot_session::retention::the_directory_of_the_workspace_being_opened_is_not_removed`
+`verified-by: bravebot_session::sweeping_a_chosen_root::a_root_the_process_was_told_to_keep_its_records_in_is_not_swept`
+`verified-by: bravebot_session::retention::the_index_of_the_workspace_being_opened_is_kept_at_any_age`
+`verified-by: bravebot_session::retention::a_project_directory_the_sweep_emptied_is_removed_and_one_holding_anything_is_not`
+`verified-by: bravebot_agent::home::only_old_plain_files_are_named_as_unwritten`
+`verified-by: bravebot_agent::home::a_link_standing_as_the_directory_names_nothing`
+`verified-by: bravebot_agent::home::a_link_standing_as_an_entry_is_not_listed_as_a_directory`
+`verified-by: bravebot_lsp::server::an_index_no_server_started_on_for_the_period_is_removed_and_a_newer_one_is_kept`
+`verified-by: bravebot_lsp::server::starting_a_server_on_an_index_keeps_it_from_being_removed`
+`verified-by: bravebot_lsp::server::an_index_with_no_recorded_use_is_kept_and_removed_a_period_later`
+`verified-by: bravebot_lsp::server::the_sweep_does_not_follow_a_link_out_of_the_state_directory`
+`verified-by: bravebot_lsp::server::a_file_among_the_indexes_is_left_where_it_is`
+`verified-by: bravebot_lsp::server::the_index_of_the_workspace_being_opened_is_kept_at_any_age`
+`verified-by: bravebot_agent::findings::a_record_older_than_the_period_is_removed_and_a_newer_one_is_kept`
+`verified-by: bravebot_agent::findings::an_acceptance_is_left_where_it_is_whatever_its_age`
+`verified-by: bravebot_agent::findings::the_sweep_does_not_follow_a_link_out_of_the_state_directory`
+`verified-by: bravebot_agent::findings::a_directory_among_the_records_is_left_where_it_is`
+`verified-by: bravebot_cli::doctor::the_retention_section_names_a_paused_sweep_and_a_file_that_was_not_obeyed`
+`verified-by: bravebot_cli::running::a_one_shot_run_removes_old_records_and_keeps_the_one_it_continues`
+`verified-by: bravebot_cli::running::the_period_in_settings_decides_what_a_one_shot_run_removes`
+`verified-by: bravebot_ui_bridge::old_records::a_desktop_front_end_removes_old_records_as_it_starts_and_nothing_a_person_kept`
+`verified-by: bravebot_ui_bridge::old_records::a_desktop_front_end_with_an_unreadable_period_removes_nothing`
+`verified-by: bravebot_ui_bridge::old_records::an_editor_front_end_removes_old_records_as_it_starts`
+`verified-by: bravebot_ui_bridge::host_process::a_host_sweeps_the_state_directory_and_leaves_the_root_it_was_given`
+
 ## Known costs
 
+- **A removal cannot be undone, and the built-in period applies to a person who never chose one.** A
+  record older than 30 days cannot be resumed, forked or searched, and nothing archives it first. A
+  person who wants one kept runs `/export` before it ages out
+  ([SESSION-17](sessions.md#SESSION-17)), or states a larger `retentionDays`.
+- **A session left open past the period is swept by another process.** The exemption names the
+  session and workspace of the process that sweeps and the sessions a background process is running,
+  so a session open in a second terminal for longer than the period has its record removed by the
+  first, and its next save writes the record back. A record that process saves between the sweep
+  reading its age and removing it goes with the rest. A language server running when its index goes
+  writes it again, at the cost of the indexing.
+- **A desktop or editor front end exempts no session.** It sweeps before any session is open, so a
+  record it is asked to load afterwards has been judged by its age alone.
+- **Records in a root a process was told to keep them in are never swept.** A host started with a
+  root of its own keeps them there until somebody removes them.
+- **The sweep runs once per process.** A host kept running for months sweeps when it starts and not
+  again, so what ages out after that stays until the next start.
+- **The kept answers accumulate.** `granted/`, `trusted/`, `untrusted/` and `findings/accepted/` hold
+  what a person asked to keep, so age does not end one, and an acceptance past its expiry is ignored
+  and not removed. A machine that has been in many directories holds a file for each.
+- **A sweep that is stopped part way is finished by the next one.** The process can end while the sweep
+  thread is running, which leaves a record whose trail went first, and still opens, or an index whose
+  directory is partly removed, which a server starts on and fills again. A client that loads a record
+  as the sweep removes it reads it without its trail.
 - **Where the platform is given no mode to create with, the files carry whatever the profile
   directory grants them.** STATE-1 is a Unix rule, and the helpers it names compile to a plain
   directory creation and a plain file open elsewhere: on Windows the prompt history, the session

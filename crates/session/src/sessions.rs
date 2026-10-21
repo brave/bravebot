@@ -2502,6 +2502,12 @@ pub fn delete(project: &Path, id: &str) -> Result<(), Deletion> {
         return Err(Deletion::Invalid);
     }
     let directory = project_directory(project).ok_or(Deletion::NotFound)?;
+    delete_in(&directory, id)
+}
+
+/// [`delete`] for the directory a project's records are in, which the caller has found. `id` is a
+/// session's name, which [`is_a_session_name`] settles before it is joined onto a path.
+pub(crate) fn delete_in(directory: &Path, id: &str) -> Result<(), Deletion> {
     let record = directory.join(format!("{id}.json"));
     if std::fs::symlink_metadata(&record).is_err() {
         return Err(Deletion::NotFound);
@@ -2518,6 +2524,92 @@ pub fn delete(project: &Path, id: &str) -> Result<(), Deletion> {
         }
     }
     std::fs::remove_file(&record).map_err(Deletion::Failed)
+}
+
+/// Remove the records under `root` that have not been written since `cutoff`, with the trail and the
+/// search index beside each, returning how many records went (STATE-4).
+///
+/// `root` is the directory holding one directory per project. A record's age is the modification
+/// time of its file and nothing it says, so no byte of a conversation decides whether it is kept,
+/// and a time later than the cutoff, a future one included, keeps it. `kept` names the sessions
+/// whose files stay at any age: the one this process is in, whose record a rewind reads while the
+/// session is live, and any a background process is running ([SESSION-19], [BG-9]).
+///
+/// A trail or a temporary file with no record beside it is what an interrupted save leaves, and it
+/// holds the conversation as the record would, so it goes by its own age. An index with no record
+/// is removed by the next search ([SESSION-33]).
+///
+/// A project's directory is removed once the removal leaves nothing in it, except `kept_directory`,
+/// which a session starting in it may be about to write into. A link standing as a project's
+/// directory or as a record is stepped over rather than followed, because where it leads is outside
+/// what `root` was given. A removal that fails costs that record and nothing more.
+///
+/// [SESSION-19]: ../../../docs/specs/sessions.md
+/// [BG-9]: ../../../docs/specs/background-sessions.md
+/// [SESSION-33]: ../../../docs/specs/sessions.md
+pub(crate) fn remove_unwritten_since(
+    root: &Path,
+    cutoff: std::time::SystemTime,
+    kept: &dyn Fn(&str) -> bool,
+    kept_directory: Option<&Path>,
+) -> usize {
+    bravebot_agent::home::directories_in(root)
+        .iter()
+        .map(|project| {
+            remove_project_records_unwritten_since(
+                project,
+                cutoff,
+                kept,
+                kept_directory != Some(project.as_path()),
+            )
+        })
+        .sum()
+}
+
+/// [`remove_unwritten_since`] for one project's directory, which goes too where `may_remove_it` and
+/// the removal leaves nothing in it. A directory that still holds anything is not removed, which
+/// `remove_dir` guarantees.
+fn remove_project_records_unwritten_since(
+    directory: &Path,
+    cutoff: std::time::SystemTime,
+    kept: &dyn Fn(&str) -> bool,
+    may_remove_it: bool,
+) -> usize {
+    let mut removed = 0;
+    let mut removed_any = false;
+    for entry in bravebot_agent::home::files_unwritten_since(directory, cutoff) {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if let Some(id) = name.strip_suffix(".json") {
+            if is_a_session_name(id) && !kept(id) && delete_in(directory, id).is_ok() {
+                removed += 1;
+                removed_any = true;
+            }
+        } else if let Some(id) = name
+            .strip_suffix(".audit.jsonl")
+            .or_else(|| name.strip_suffix(".tmp"))
+        {
+            let no_record = std::fs::symlink_metadata(directory.join(format!("{id}.json")))
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+            if is_a_session_name(id) && !kept(id) && no_record {
+                removed_any |= std::fs::remove_file(entry.path()).is_ok();
+            }
+        }
+    }
+    if removed_any && may_remove_it {
+        let _ = std::fs::remove_dir(directory);
+    }
+    removed
+}
+
+/// The directory holding every project's records under `state`, which is where a sweep looks.
+///
+/// Not the root a process was told to keep its records in ([`keep_in`]): that directory was named by
+/// whoever started the process, may hold anything, and belongs to the process that was given it.
+pub(crate) fn state_sessions(state: &Path) -> PathBuf {
+    state.join(SESSIONS)
 }
 
 /// What `purge` would remove from a project, and what it leaves for being held.

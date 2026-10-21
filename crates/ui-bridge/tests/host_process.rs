@@ -1436,3 +1436,57 @@ fn a_workspace_whose_name_is_not_text_is_refused_not_opened_under_a_lookalike() 
     assert_eq!(answered["error"]["code"], "not_allowed", "{answered}");
     client.leave();
 }
+
+/// A file written `days` ago, with the directories above it made.
+fn written_days_ago(path: &Path, days: u64) {
+    std::fs::create_dir_all(path.parent().expect("a directory")).unwrap();
+    std::fs::write(path, "{}").unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(days * 86_400))
+        .unwrap();
+}
+
+/// STATE-4: a host removes the records in the state directory that nothing has written for the
+/// period, as it starts, and leaves those in the root it was told to keep its own in: that root was
+/// named by whoever started the host and may hold anything. The record in the root is as old as the
+/// one removed, so only where it is kept it.
+#[test]
+fn a_host_sweeps_the_state_directory_and_leaves_the_root_it_was_given() {
+    let scratch = Scratch::new();
+    let old = scratch
+        .home()
+        .join(".bravebot/sessions/project/old-session.json");
+    let recent = scratch
+        .home()
+        .join(".bravebot/sessions/project/recent-session.json");
+    let theirs = scratch.root().join("project/old-session.json");
+    written_days_ago(&old, 400);
+    written_days_ago(&recent, 3);
+    written_days_ago(&theirs, 400);
+    let endpoint = a_model_service(ends_the_turn, || {});
+
+    let _host = Host::start(&scratch, &endpoint);
+    let until = Instant::now() + PATIENCE;
+    while old.exists() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // A sweep that looked in the given root as well would be seen a moment after the record it was
+    // meant to remove, so the record it must leave is watched a little longer.
+    let grace = Instant::now() + Duration::from_millis(750);
+    while theirs.exists() && Instant::now() < grace {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    assert!(!old.exists(), "the record 400 days old was still there");
+    assert!(
+        recent.exists(),
+        "a record written three days ago was removed"
+    );
+    assert!(
+        theirs.exists(),
+        "a record in the root the host was given was removed"
+    );
+}

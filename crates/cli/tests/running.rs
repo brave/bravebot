@@ -10054,6 +10054,209 @@ fn a_one_shot_run_records_its_timing_and_when_it_began() {
     assert_eq!(continued["started"], record["started"]);
 }
 
+/// Set the modification time of every file in `directory` named `<stem>.<anything>` to `days` ago.
+fn written_days_ago(directory: &Path, stem: &str, days: u64) {
+    let then = std::time::SystemTime::now() - Duration::from_secs(days * 86_400);
+    for entry in std::fs::read_dir(directory).expect("a directory of records") {
+        let path = entry.expect("an entry").path();
+        let named = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(&format!("{stem}.")));
+        if named {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .expect("open the file")
+                .set_modified(then)
+                .expect("age the file");
+        }
+    }
+}
+
+/// A record that nothing reads, last written `days` ago, in a project directory of its own.
+fn an_old_record(home: &Path, project: &str, id: &str, days: u64) -> PathBuf {
+    let directory = home.join(".bravebot/sessions").join(project);
+    std::fs::create_dir_all(&directory).expect("a project directory");
+    let record = directory.join(format!("{id}.json"));
+    std::fs::write(&record, "{}").expect("a record");
+    written_days_ago(&directory, id, days);
+    record
+}
+
+/// What the gateway saw of the files a sweep is expected to have decided about by the time the run
+/// asks it a question.
+#[derive(Clone, Default)]
+struct SweepSeen {
+    /// Whether the file the gateway waited on had gone.
+    removed: bool,
+    /// Whether each of the other files was still there once the wait ended.
+    others_remaining: Vec<bool>,
+}
+
+/// A gateway that does not answer until the sweep at the start of the run has removed `waits_for`,
+/// or until thirty seconds have gone, and then looks at `others` before it answers.
+///
+/// The sweep runs on a thread beside the run, and a run that ended first would end it too, so what
+/// is asserted would depend on which was quicker. Holding the answer makes the order the test's.
+/// `grace` is how much longer the gateway waits for one of `others` to go, so that a sweep removing
+/// a file it was expected to leave is seen a moment later rather than missed. A run whose sweep is
+/// expected to remove nothing passes no `waits_for`.
+fn a_gateway_waiting_for_the_sweep(
+    waits_for: Option<PathBuf>,
+    others: Vec<PathBuf>,
+    grace: Duration,
+) -> (Gateway, Arc<std::sync::Mutex<Option<SweepSeen>>>) {
+    let seen = Arc::new(std::sync::Mutex::new(None));
+    let recorded = Arc::clone(&seen);
+    let gateway = a_gateway("[]", move |_| {
+        let mut held = recorded.lock().expect("the record of what was seen");
+        if held.is_none() {
+            let until = std::time::Instant::now() + Duration::from_secs(30);
+            while waits_for.as_ref().is_some_and(|path| path.exists())
+                && std::time::Instant::now() < until
+            {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let removed = waits_for.as_ref().is_some_and(|path| !path.exists());
+            let until = std::time::Instant::now() + grace;
+            while others.iter().all(|other| other.exists()) && std::time::Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            *held = Some(SweepSeen {
+                removed,
+                others_remaining: others.iter().map(|other| other.exists()).collect(),
+            });
+        }
+        usage_reply(None, "done", 12, 5)
+    });
+    (gateway, seen)
+}
+
+/// STATE-4: a one-shot run removes the records nothing has written for the retention period, and the
+/// record it was told to continue stays however old it is. The gateway looks at the continued record
+/// before it answers, because the run writes that record again when it ends, and an end state alone
+/// could not tell a record that was kept from one that was removed and rewritten.
+#[test]
+fn a_one_shot_run_removes_old_records_and_keeps_the_one_it_continues() {
+    let first_gateway = a_gateway("[]", |_| usage_reply(None, "done", 12, 5));
+    let scratch =
+        Scratch::new("one-shot-retention-resume").with_settings(&settings_for(&first_gateway));
+    let first = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--json", "-p", "first"],
+    );
+    let (stdout, stderr) = said(&first);
+    assert!(first.status.success(), "{stderr}");
+    let id = session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"));
+    let directory = std::fs::read_dir(scratch.path.join(".bravebot/sessions"))
+        .expect("the sessions directory")
+        .flatten()
+        .map(|entry| entry.path())
+        .next()
+        .expect("a project directory");
+    let continued = directory.join(format!("{id}.json"));
+    written_days_ago(&directory, &id, 400);
+    let forgotten = an_old_record(&scratch.path, "another-project", "forgotten", 400);
+    let recent = an_old_record(&scratch.path, "another-project", "recent", 3);
+
+    let (gateway, seen) = a_gateway_waiting_for_the_sweep(
+        Some(forgotten.clone()),
+        vec![continued.clone(), recent.clone()],
+        Duration::from_millis(750),
+    );
+    std::fs::write(scratch.settings(), settings_for(&gateway)).expect("point at the new gateway");
+    let second = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--resume", &id, "-p", "again"],
+    );
+    let (_, stderr) = said(&second);
+    assert!(second.status.success(), "{stderr}");
+
+    let seen = seen.lock().expect("what was seen").clone().expect("asked");
+    assert!(seen.removed, "the record 400 days old was still there");
+    assert_eq!(
+        seen.others_remaining,
+        [true, true],
+        "the continued record, then the one written three days ago"
+    );
+    assert!(!forgotten.exists());
+}
+
+/// STATE-4: the period is the one in the person's own settings file, so a longer one keeps what the
+/// built-in period would have removed, one that cannot be read removes nothing at all, and neither
+/// does an incognito run. Each case has a record forty days old and one four hundred days old: a
+/// period of thirty days removes both, one of a year removes the second only, and the other two
+/// remove neither.
+#[test]
+fn the_period_in_settings_decides_what_a_one_shot_run_removes() {
+    for (case, written, flags, forty_days_survives, four_hundred_days_survives) in [
+        ("default", None, &[][..], false, false),
+        (
+            "a-year",
+            Some(r#""retentionDays": 365,"#),
+            &[][..],
+            true,
+            false,
+        ),
+        (
+            "unreadable",
+            Some(r#""retentionDays": "soon","#),
+            &[][..],
+            true,
+            true,
+        ),
+        ("incognito", None, &["--incognito"][..], true, true),
+    ] {
+        let scratch = Scratch::new(&format!("one-shot-retention-{case}"));
+        let middle = an_old_record(&scratch.path, "one", "forty", 40);
+        let ancient = an_old_record(&scratch.path, "one", "ancient", 400);
+        let (waits_for, others) = match four_hundred_days_survives {
+            false => (Some(ancient.clone()), vec![middle.clone()]),
+            true => (None, vec![middle.clone(), ancient.clone()]),
+        };
+        let (gateway, seen) =
+            a_gateway_waiting_for_the_sweep(waits_for, others, Duration::from_millis(750));
+        let provider = settings_for(&gateway);
+        std::fs::create_dir_all(scratch.path.join(".bravebot")).expect("state directory");
+        std::fs::write(
+            scratch.settings(),
+            format!(
+                "{{{}{}",
+                written.unwrap_or(""),
+                provider.trim_start().trim_start_matches('{')
+            ),
+        )
+        .expect("settings");
+        let mut arguments = flags.to_vec();
+        arguments.extend(["-p", "go"]);
+
+        let run = bravebot_started_in(&scratch.path, &scratch.path, AT_A_GATEWAY, &arguments);
+        let (_, stderr) = said(&run);
+        assert!(run.status.success(), "{case}: {stderr}");
+
+        let seen = seen.lock().expect("what was seen").clone().expect("asked");
+        assert_eq!(
+            middle.exists(),
+            forty_days_survives,
+            "{case}: the record forty days old"
+        );
+        assert_eq!(
+            ancient.exists(),
+            four_hundred_days_survives,
+            "{case}: the record four hundred days old"
+        );
+        assert_eq!(
+            seen.removed, !four_hundred_days_survives,
+            "{case}: the sweep had not run when the gateway looked"
+        );
+    }
+}
+
 /// Success replaces progress, unusable completed replies still cost tokens, and zero stays zero.
 #[test]
 fn json_usage_controls_do_not_double_charge_or_guess() {

@@ -78,6 +78,10 @@
 //! - `model` picks which of those providers answers, so a line in a checkout's file could direct
 //!   the person's traffic through a backend they never chose. It is read from the home layer
 //!   alone, for the same reason.
+//! - `retentionDays` says how long session records, language server indexes and findings are kept
+//!   before startup removes them, so a line in a checkout's file could have the person's own
+//!   records deleted by opening it. It is read from the home layer alone, and every other layer
+//!   naming it is reported rather than obeyed. See [`Retention`] and `docs/specs/state-directory.md`.
 //!
 //! Two more names in that block are read from every layer and merged unlike anything else here.
 //! `permissions.readsStayInWorkspace` and `permissions.bypassUnreachable` only ever refuse, so a
@@ -93,6 +97,7 @@
 use crate::sandbox::{SANDBOX_BLOCK, Stated};
 use bravebot_sandbox::SandboxMode;
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -127,6 +132,19 @@ const PROVIDER_BLOCK: &str = "provider";
 /// Named as a constant because the per-layer look that removes it from a checkout's file and the
 /// parse of the merged root both spell it here.
 const REFERENCES_BLOCK: &str = "references";
+
+/// The key naming how many days the state directory keeps a record, which the home layer alone may
+/// state.
+///
+/// Named as a constant because the per-layer look that removes it from a checkout's file, the read
+/// of the home layer's value and the list of keys this build reads all spell it here.
+const RETENTION_KEY: &str = "retentionDays";
+
+/// The number of days a record is kept when no `retentionDays` is stated.
+///
+/// Thirty, which is what Claude Code and Gemini CLI keep a transcript for. The floor is one day,
+/// since [`Retention::Days`] cannot hold zero.
+pub const DEFAULT_RETENTION_DAYS: NonZeroU32 = NonZeroU32::new(30).unwrap();
 
 /// The block holding the rules and the two keys that refuse without naming what they refuse.
 ///
@@ -168,6 +186,7 @@ const READ_KEYS: &[&str] = &[
     "promptCacheTtl",
     PROVIDER_BLOCK,
     REFERENCES_BLOCK,
+    RETENTION_KEY,
     "run",
     SANDBOX_BLOCK,
     "search",
@@ -346,6 +365,26 @@ pub struct Settings {
     /// What the top-level `notificationCondition` key named, if it named anything, kept as
     /// [`Settings::notification_method`] keeps its word.
     notification_condition: Option<String>,
+    /// What the home layer's `retentionDays` said, if it said a whole number of days above zero.
+    ///
+    /// `None` is the built-in period, which [`Settings::retention`] supplies, and it is also what a
+    /// value the key held in a shape this cannot read leaves: that case is reported in
+    /// [`Settings::retention_unreadable`] and pauses the sweep rather than falling back to the
+    /// built-in period. Read from the home layer alone, so [`Settings::layered`] removes the key
+    /// from every other layer before the merge.
+    retention_days: Option<NonZeroU32>,
+    /// The layers that named `retentionDays` and were not obeyed, weakest first.
+    ///
+    /// Kept because a checkout's file choosing when the person's own records are deleted is the
+    /// case this key is read from the home layer alone to prevent.
+    retention_ignored: Vec<PathBuf>,
+    /// The home layer's file, when the period it states cannot be determined.
+    ///
+    /// Either the file is there and could not be read as a settings document, or its
+    /// `retentionDays` is not a whole number of days above zero. A sweep that guessed the period
+    /// would delete on a figure the person did not choose, so [`Settings::retention`] answers
+    /// [`Retention::Paused`] while this is not empty.
+    retention_unreadable: Vec<PathBuf>,
     /// What `vetting.auto` said, where the layer that said it was entitled to.
     ///
     /// Read from the **home** layer and no other, which is why [`Settings::layered`] settles this
@@ -605,6 +644,19 @@ pub struct Settings {
     providers: Vec<crate::provider::Provider>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
+}
+
+/// How long the state directory keeps a session record, a language server index and a findings file.
+///
+/// The age of a file is its modification time and nothing else, so no byte a file holds decides
+/// whether it is kept. One day is the least a period can be, which is what protects whatever was
+/// written recently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retention {
+    /// Remove what has not been written for this many days.
+    Days(NonZeroU32),
+    /// The period cannot be determined, so nothing is removed.
+    Paused,
 }
 
 /// The `attribution` block: what a commit message or a pull request this program writes may carry.
@@ -978,6 +1030,10 @@ impl Settings {
         let mut style_ignored = Vec::new();
         let mut language_ignored = Vec::new();
         let mut ask_idle_ignored = Vec::new();
+        // Settled per layer for the reason `model` is: how long the person's own records are kept is
+        // theirs to state, and the merge keeps whichever file spoke last.
+        let mut retention_ignored = Vec::new();
+        let mut retention_unreadable = Vec::new();
         let mut references_ignored = Vec::new();
         let mut attribution_ignored = Vec::new();
         let mut misshapen = Vec::new();
@@ -1029,11 +1085,30 @@ impl Settings {
             if found.contains(&path) {
                 continue;
             }
+            let own = Some(&path) == home_layer.as_ref();
             let Some(mut root) = read(&path) else {
+                // A person's own file that is there and cannot be read may state a period this
+                // run would otherwise replace with the built-in one, so the sweep waits. A name
+                // that leads nowhere, as a link to a file that is not there does, states none.
+                if own
+                    && !std::fs::metadata(&path)
+                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                {
+                    retention_unreadable.push(path.clone());
+                }
                 continue;
             };
-            let own = Some(&path) == home_layer.as_ref();
             let named_here = Some(&path) == named_path.as_ref();
+            if !own && root.remove(RETENTION_KEY) {
+                retention_ignored.push(path.clone());
+            }
+            if own
+                && root
+                    .get(RETENTION_KEY)
+                    .is_some_and(|stated| retention_days(stated).is_none())
+            {
+                retention_unreadable.push(path.clone());
+            }
             if !own && !named_here {
                 // The keys that pick a backend are the person's to pick, not a checkout's: removed
                 // here rather than read and dropped later, because the merge unions every name a
@@ -1334,6 +1409,8 @@ impl Settings {
         settings.style_ignored = style_ignored;
         settings.language_ignored = language_ignored;
         settings.ask_idle_ignored = ask_idle_ignored;
+        settings.retention_ignored = retention_ignored;
+        settings.retention_unreadable = retention_unreadable;
         settings.references_ignored = references_ignored;
         settings.attribution_ignored = attribution_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
@@ -1452,6 +1529,9 @@ impl Settings {
                 .map(|count| u32::try_from(count).unwrap_or(u32::MAX)),
             notification_method: word(root, "notificationMethod"),
             notification_condition: word(root, "notificationCondition"),
+            retention_days: root.get(RETENTION_KEY).and_then(retention_days),
+            retention_ignored: Vec::new(),
+            retention_unreadable: Vec::new(),
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
             // from and so the only one entitled to answer.
@@ -1745,6 +1825,29 @@ impl Settings {
     /// file spelled.
     pub fn notification_condition(&self) -> Option<&str> {
         self.notification_condition.as_deref()
+    }
+
+    /// How long the state directory keeps a session record, a language server index and a findings
+    /// file before startup removes it.
+    ///
+    /// The home layer's `retentionDays`, or [`DEFAULT_RETENTION_DAYS`] where it states none. A home
+    /// file that cannot be read, or a value in it that is not a whole number of days above zero,
+    /// answers [`Retention::Paused`]: the period cannot be determined, so nothing is removed.
+    pub fn retention(&self) -> Retention {
+        if !self.retention_unreadable.is_empty() {
+            return Retention::Paused;
+        }
+        Retention::Days(self.retention_days.unwrap_or(DEFAULT_RETENTION_DAYS))
+    }
+
+    /// The files that named `retentionDays` from a layer not entitled to, weakest first.
+    pub fn retention_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.retention_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The home layer's file when [`Settings::retention`] is paused for want of a readable period.
+    pub fn retention_unreadable(&self) -> impl Iterator<Item = &Path> {
+        self.retention_unreadable.iter().map(PathBuf::as_path)
     }
 
     /// What `vetting.auto` said in the home layer, if it said anything.
@@ -2144,6 +2247,9 @@ impl Settings {
             && self.max_running_delegates.is_none()
             && self.notification_method.is_none()
             && self.notification_condition.is_none()
+            && self.retention_days.is_none()
+            && self.retention_ignored.is_empty()
+            && self.retention_unreadable.is_empty()
             && self.vetting.is_none()
             && self.narrowing.is_empty()
             // A key named as something other than a boolean said something too, and `doctor` names
@@ -2436,6 +2542,7 @@ impl Settings {
                     .is_some()
                     .then_some("notificationCondition"),
             )
+            .chain(self.retention_days.is_some().then_some(RETENTION_KEY))
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain(self.narrowing.named())
             .chain(
@@ -2581,6 +2688,17 @@ pub enum NotADocument {
 pub fn check_document(path: &Path) -> Result<(), NotADocument> {
     let mut text = std::fs::read_to_string(path).map_err(|_| NotADocument::Unreadable)?;
     Document::parse(&mut text).map(|_| ())
+}
+
+/// How many days a stored record is kept, as `retentionDays` states it.
+///
+/// A whole number above zero. Zero would keep nothing, which is a different request from keeping
+/// what was written today, and every shape that is not a count (a string, a fraction, a negative
+/// number, `null`) is refused rather than coerced. A count past what a `u32` holds is read as the
+/// largest one, which is longer than a machine is used.
+fn retention_days(stated: &serde_json::Value) -> Option<NonZeroU32> {
+    let days = stated.as_u64()?;
+    NonZeroU32::new(u32::try_from(days).unwrap_or(u32::MAX))
 }
 
 impl Document {
@@ -8021,6 +8139,171 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["style"]
         );
+    }
+
+    /// The period as the setting reports it, for comparing against what a file said.
+    fn kept_for(days: u32) -> Retention {
+        Retention::Days(NonZeroU32::new(days).expect("a period above zero"))
+    }
+
+    /// STATE-4: with nothing stated, a record is kept for the built-in period, so a person who never
+    /// opened a settings file is swept on the same terms as one who did.
+    #[test]
+    fn with_no_retention_stated_the_built_in_period_applies() {
+        let none = Layers::new("retention-none").read();
+        assert_eq!(none.retention(), Retention::Days(DEFAULT_RETENTION_DAYS));
+        assert_eq!(none.retention_unreadable().count(), 0);
+
+        let elsewhere = Layers::new("retention-elsewhere")
+            .global(r#"{"model": "personal-choice"}"#)
+            .read();
+        assert_eq!(
+            elsewhere.retention(),
+            Retention::Days(DEFAULT_RETENTION_DAYS)
+        );
+    }
+
+    /// STATE-4: the home layer's count of days is the period, from one day up to a count too large
+    /// to be a period at all, which is read as the longest there is rather than dropped.
+    #[test]
+    fn the_home_layer_names_the_period_in_whole_days() {
+        for (written, expected) in [
+            (r#"{"retentionDays": 1}"#, 1),
+            (r#"{"retentionDays": 7}"#, 7),
+            (r#"{"retentionDays": 365}"#, 365),
+            (r#"{"retentionDays": 99999999999}"#, u32::MAX),
+        ] {
+            let settings = Layers::new("retention-home").global(written).read();
+            assert_eq!(settings.retention(), kept_for(expected), "{written}");
+            assert_eq!(
+                Settings::parse(written).names().collect::<Vec<_>>(),
+                ["retentionDays"],
+                "{written}"
+            );
+        }
+    }
+
+    /// STATE-4: a checkout's files arrive with the clone, so one that named a period of a day would
+    /// delete the records of whoever opened it. Only the home layer is read, and the files that
+    /// named it are reported; the file the command line named is not the person's own file either.
+    #[test]
+    fn a_checkout_cannot_choose_when_the_persons_records_are_deleted() {
+        let settings = Layers::new("retention-layers")
+            .global(r#"{"retentionDays": 90}"#)
+            .project(r#"{"retentionDays": 1}"#)
+            .local(r#"{"retentionDays": 1}"#)
+            .read();
+        assert_eq!(settings.retention(), kept_for(90));
+        assert_eq!(settings.retention_ignored().count(), 2);
+
+        let only_project = Layers::new("retention-only-project")
+            .project(r#"{"retentionDays": 1}"#)
+            .read();
+        assert_eq!(
+            only_project.retention(),
+            Retention::Days(DEFAULT_RETENTION_DAYS)
+        );
+        assert_eq!(only_project.retention_ignored().count(), 1);
+
+        let named = Layers::new("retention-named")
+            .global(r#"{"retentionDays": 90}"#)
+            .named(r#"{"retentionDays": 1}"#)
+            .read();
+        assert_eq!(named.retention(), kept_for(90));
+        assert_eq!(named.retention_ignored().count(), 1);
+
+        let named_home = Layers::new("retention-named-home")
+            .global(r#"{"retentionDays": 90}"#)
+            .naming_the_home_layer()
+            .read();
+        assert_eq!(named_home.retention(), kept_for(90));
+        assert_eq!(named_home.retention_ignored().count(), 0);
+    }
+
+    /// STATE-4: a value that is not a whole number of days above zero cannot be turned into a period
+    /// without guessing, and a guess would delete on a figure the person never chose. The sweep waits
+    /// and the file is named, where reading the value as absent would apply the built-in period over
+    /// what they meant.
+    #[test]
+    fn a_period_that_cannot_be_read_pauses_the_sweep() {
+        for written in [
+            r#"{"retentionDays": 0}"#,
+            r#"{"retentionDays": -5}"#,
+            r#"{"retentionDays": 1.5}"#,
+            r#"{"retentionDays": 30.0}"#,
+            r#"{"retentionDays": "30"}"#,
+            r#"{"retentionDays": true}"#,
+            r#"{"retentionDays": null}"#,
+            r#"{"retentionDays": [30]}"#,
+            r#"{"retentionDays": {"days": 30}}"#,
+        ] {
+            let settings = Layers::new("retention-unreadable").global(written).read();
+            assert_eq!(settings.retention(), Retention::Paused, "{written}");
+            assert_eq!(settings.retention_unreadable().count(), 1, "{written}");
+        }
+    }
+
+    /// STATE-4: a home settings file that is there and cannot be read as a document may state any
+    /// period, so it pauses the sweep as an unreadable value does. A file that is not there states
+    /// none, and the built-in period applies.
+    #[test]
+    fn a_home_file_that_cannot_be_read_pauses_the_sweep() {
+        let not_json = Layers::new("retention-not-json")
+            .global(r#"{"retentionDays": 7"#)
+            .read();
+        assert_eq!(not_json.retention(), Retention::Paused);
+
+        let empty = Layers::new("retention-empty").global("").read();
+        assert_eq!(empty.retention(), Retention::Paused);
+
+        let not_an_object = Layers::new("retention-not-object")
+            .global(r#"[{"retentionDays": 7}]"#)
+            .read();
+        assert_eq!(not_an_object.retention(), Retention::Paused);
+
+        let too_large = Layers::new("retention-too-large")
+            .global(&format!(
+                r#"{{"retentionDays": 7, "model": "{}"}}"#,
+                "x".repeat(MAX_BYTES as usize)
+            ))
+            .read();
+        assert_eq!(too_large.retention(), Retention::Paused);
+
+        let layers = Layers::new("retention-a-directory");
+        std::fs::create_dir(layers.home.join(SETTINGS_FILE)).expect("a directory by that name");
+        assert_eq!(layers.read().retention(), Retention::Paused);
+    }
+
+    /// STATE-4: a link to a settings file that is not there states no period, as no file does, so the
+    /// built-in one applies. Dotfile managers leave such links, and pausing on one would stop the
+    /// sweep for good with nothing the person ever wrote to put right.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_settings_file_that_is_not_there_states_no_period() {
+        let layers = Layers::new("retention-dangling");
+        std::os::unix::fs::symlink(
+            layers.home.join("moved-away.json"),
+            layers.home.join(SETTINGS_FILE),
+        )
+        .expect("a link to nothing");
+
+        assert_eq!(
+            layers.read().retention(),
+            Retention::Days(DEFAULT_RETENTION_DAYS)
+        );
+    }
+
+    /// STATE-4: only the person's own file decides whether the sweep waits. A checkout's file that
+    /// is half typed leaves the home layer's period in force, as it leaves every other key.
+    #[test]
+    fn a_broken_checkout_file_does_not_pause_the_sweep() {
+        let settings = Layers::new("retention-broken-project")
+            .global(r#"{"retentionDays": 7}"#)
+            .project(r#"{"retentionDays": "#)
+            .local(r#"{"retentionDays": "soon"}"#)
+            .read();
+        assert_eq!(settings.retention(), kept_for(7));
+        assert_eq!(settings.retention_unreadable().count(), 0);
     }
 
     /// REFER-1: an entry is a path or an object, and one that cannot be used is named and leaves

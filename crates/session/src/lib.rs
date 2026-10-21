@@ -22,6 +22,7 @@ pub mod audit;
 pub mod excerpt;
 pub mod import;
 pub mod jobs;
+pub mod retention;
 pub mod rewind;
 pub mod search;
 pub mod sessions;
