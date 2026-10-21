@@ -783,7 +783,6 @@ pub(crate) fn waits_behind_the_queue(session: &Session, line: &str) -> bool {
 /// A command by the line that was typed, so a person can find it in the queue. A prompt and a shell
 /// line by what they are, since either may run to a paragraph and neither is the reason.
 pub(crate) fn named(goes: Bound, line: &str) -> String {
-    /// The columns of a command line the words are given room for.
     const ROOM: usize = 40;
     match goes {
         Bound::CarriedOut => crate::render::printable(&crate::render::head_of(line, ROOM)),
