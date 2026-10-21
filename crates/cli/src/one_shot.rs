@@ -41,10 +41,11 @@ pub(crate) struct OneShot<R: Read, W: Write> {
     alert: Option<bravebot_agent::PromptAlert>,
     /// The effects that went unapproved because nobody was there to approve them, in order.
     ///
-    /// A refusal the policy never saw: the tool answers a declined question with a problem for the
-    /// planner and never calls the gate, so the run's own clean flag stays true. Kept here, at the
-    /// one place that knows the answer was a refusal for want of anybody to ask, so the run can end
-    /// on the status that says a gate refused something (CLI-6).
+    /// Kept here, at the one place that knows the answer was a refusal for want of anybody to ask,
+    /// so the run can end on the status that says a gate refused something (CLI-6). A question the
+    /// tool answers with a problem for the planner without telling the policy leaves the run's own
+    /// clean flag true, and this is then the only record of it. A write or a fetch is told to the
+    /// policy, so it is kept for the status alone (`Declined::in_the_trail`).
     declined: Vec<Declined>,
 }
 
@@ -55,6 +56,11 @@ pub(crate) struct Declined {
     pub(crate) gate: &'static str,
     /// Why, as a sentence a script can print.
     pub(crate) reason: &'static str,
+    /// Whether the audit trail already holds this refusal, which the policy recorded when the tool
+    /// answered the planner. It still ends the run on the refused status, since a delegate's
+    /// policy keeps its own refusals and this confirmer is shared, and a result object lists it
+    /// once, from the trail.
+    pub(crate) in_the_trail: bool,
 }
 
 impl<R: Read, W: Write> OneShot<R, W> {
@@ -141,6 +147,7 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
             self.declined.push(Declined {
                 gate: "manifest_plan",
                 reason: "the plan was not approved",
+                in_the_trail: false,
             });
         }
         decision
@@ -152,6 +159,7 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
             self.declined.push(Declined {
                 gate: "file_write",
                 reason: "the write was not approved, and nobody was there to approve it",
+                in_the_trail: true,
             });
         }
         decision
@@ -163,6 +171,7 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
             self.declined.push(Declined {
                 gate: "run",
                 reason: "the program was not approved, and nobody was there to approve it",
+                in_the_trail: false,
             });
         }
         decision
@@ -182,6 +191,7 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
             self.declined.push(Declined {
                 gate: "web_fetch",
                 reason: "the fetch was not approved, and nobody was there to approve it",
+                in_the_trail: true,
             });
         }
         decision

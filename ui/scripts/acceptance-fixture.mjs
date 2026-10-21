@@ -69,8 +69,8 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
     choose: directory,
     grants: {
       paths: [
-        { path: '', integrity: 'trusted' },
-        { path: 'private', integrity: 'untrusted' },
+        { path: '', shownPath: '""', integrity: 'trusted' },
+        { path: 'private', shownPath: 'private', integrity: 'untrusted' },
       ],
       commands: [{ program: '/usr/bin/git', args: ['status'], display: 'git status' }],
     },

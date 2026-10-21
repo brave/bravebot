@@ -59,6 +59,26 @@ impl SessionScratch {
         &self.path
     }
 
+    /// The directory as this session made it, for whatever has to ask later whether the name still
+    /// leads to it. The identity is read from the descriptor the lock is held on, which stays on
+    /// the directory made however the name is changed afterwards.
+    ///
+    /// None where the descriptor cannot be asked, and then the session has no scratch directory
+    /// to grant: a directory that cannot be told from what replaces it is not given a row.
+    pub fn directory(&self) -> Option<ScratchDirectory> {
+        #[cfg(unix)]
+        let identity = {
+            use std::os::unix::fs::MetadataExt;
+            let held = self.claim.metadata().ok()?;
+            (held.dev(), held.ino())
+        };
+        Some(ScratchDirectory {
+            path: self.path.clone(),
+            #[cfg(unix)]
+            identity,
+        })
+    }
+
     /// One of `kind`, and then whatever killed sessions left beside it taken away.
     ///
     /// The sweep runs once this one exists, since its owner is the account the others are
@@ -145,6 +165,83 @@ impl Drop for SessionScratch {
     /// leaves behind too, and the next session to open takes it.
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// A session's scratch directory as the session made it: where it is, and which directory that is.
+///
+/// A stage may write the temporary directory the scratch directory is made in, so the name can be
+/// made to lead somewhere the session never made. What a stage is granted is decided from the
+/// directory the session made, and the name is only where it was.
+#[derive(Debug, Clone)]
+pub struct ScratchDirectory {
+    path: PathBuf,
+    /// The device and inode of the directory the session's lock is held on. Where the standard
+    /// library reports none, as on Windows, the name is held to being a directory and not a link,
+    /// which is less.
+    #[cfg(unix)]
+    identity: (u64, u64),
+}
+
+impl ScratchDirectory {
+    /// Where the session made it.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Whether the name still leads to the directory the session made: a directory and not a link,
+    /// and the one its lock is held on.
+    ///
+    /// The name is not followed, so a link at it is judged as a link and not as the directory it
+    /// leads to. A name that is gone is not that directory either.
+    pub fn stands_as_made(&self) -> bool {
+        self.stands_as_made_at(&self.path)
+    }
+
+    /// [`ScratchDirectory::stands_as_made`] for `path`, which a caller resolved first so that the
+    /// answer is about the path it goes on to use.
+    pub fn stands_as_made_at(&self, path: &Path) -> bool {
+        let Ok(found) = std::fs::symlink_metadata(path) else {
+            return false;
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if (found.dev(), found.ino()) != self.identity {
+                return false;
+            }
+        }
+        found.is_dir()
+    }
+
+    /// Whether the name now leads to a link or to a file, which is something no stage has a reason
+    /// to put there, and which leads wherever it points.
+    ///
+    /// A name that is gone, or that leads to another directory, is not this: it is given no row,
+    /// so nothing is reached through it.
+    pub fn leads_elsewhere(&self) -> bool {
+        std::fs::symlink_metadata(&self.path).is_ok_and(|found| !found.is_dir())
+    }
+
+    /// The directory at `path` as it stands now, for a caller that did not make it through
+    /// [`SessionScratch`], such as a test handed a directory. None where `path` is not a directory.
+    ///
+    /// A session that made the directory asks [`SessionScratch::directory`] instead: a name that
+    /// has been changed gives the identity of what it was changed to.
+    #[doc(hidden)]
+    pub fn observed(path: PathBuf) -> Option<Self> {
+        let found = std::fs::symlink_metadata(&path).ok()?;
+        if !found.is_dir() {
+            return None;
+        }
+        Some(Self {
+            #[cfg(unix)]
+            identity: {
+                use std::os::unix::fs::MetadataExt;
+                (found.dev(), found.ino())
+            },
+            path,
+        })
     }
 }
 
@@ -713,6 +810,88 @@ mod tests {
             std::fs::read_to_string(live.path().join("workings.txt")).expect("still there"),
             "in use"
         );
+    }
+
+    /// SANDBOX-18: the name of the scratch directory stands for the directory the session made
+    /// only until a stage changes it, and whatever it is changed to, the session's own claim
+    /// still says which directory was made. A link or a file at the name is what the refusal of a
+    /// stage is for, and another directory or nothing is only no longer the directory made. The
+    /// regressions it rejects: a check that follows a link and finds a directory, one that stops at
+    /// "a directory, not a link" and so accepts the empty directory a stage made in its place, an
+    /// identity read from the name when it is asked for, which is the identity of whatever the name
+    /// was changed to, and a refusal for a name that is merely gone.
+    #[test]
+    #[cfg(unix)]
+    fn a_name_that_leads_anywhere_but_to_the_directory_made_is_not_that_directory() {
+        use crate::testutil::{PutThere, moved_aside_and_replaced};
+        let outside = SessionScratch::create().expect("a directory for a link to lead to");
+        let outside_file = outside.path().join("a-file");
+        std::fs::write(&outside_file, "x").expect("a file");
+        let changes: [(&str, PutThere, bool); 5] = [
+            (
+                "a link to another directory",
+                Box::new(|name| std::os::unix::fs::symlink(outside.path(), name).expect("link")),
+                true,
+            ),
+            (
+                "a link to a file",
+                Box::new(|name| std::os::unix::fs::symlink(&outside_file, name).expect("link")),
+                true,
+            ),
+            (
+                "a file",
+                Box::new(|name| std::fs::write(name, "x").expect("a file")),
+                true,
+            ),
+            (
+                "an empty directory of the same name",
+                Box::new(|name| std::fs::create_dir(name).expect("a directory")),
+                false,
+            ),
+            ("nothing", Box::new(|_| {}), false),
+        ];
+
+        for (change, put_there, elsewhere) in changes {
+            let session = SessionScratch::create().expect("a scratch directory");
+            let made = session.directory().expect("the directory as made");
+            assert!(made.stands_as_made(), "{change}: before anything changed");
+            assert!(!made.leads_elsewhere(), "{change}: before anything changed");
+
+            let aside = moved_aside_and_replaced(session.path(), put_there);
+
+            assert!(!made.stands_as_made(), "{change}: taken before the change");
+            assert!(
+                !session
+                    .directory()
+                    .expect("the directory as made")
+                    .stands_as_made(),
+                "{change}: taken after the change"
+            );
+            assert_eq!(made.leads_elsewhere(), elsewhere, "{change}");
+            let _ = std::fs::remove_file(session.path());
+            let _ = std::fs::remove_dir_all(session.path());
+            let _ = std::fs::remove_dir_all(&aside);
+        }
+    }
+
+    /// A caller that did not make the directory is given what stands at the name, and a name that
+    /// is not a directory is given nothing.
+    #[test]
+    #[cfg(unix)]
+    fn a_directory_is_observed_only_where_the_name_leads_to_one() {
+        let session = SessionScratch::create().expect("a scratch directory");
+        let file = session.path().join("a-file");
+        std::fs::write(&file, "x").expect("a file");
+        let link = session.path().join("a-link");
+        std::os::unix::fs::symlink(session.path(), &link).expect("link");
+
+        assert!(
+            ScratchDirectory::observed(session.path().to_path_buf())
+                .is_some_and(|seen| seen.stands_as_made())
+        );
+        assert!(ScratchDirectory::observed(file).is_none());
+        assert!(ScratchDirectory::observed(link).is_none());
+        assert!(ScratchDirectory::observed(session.path().join("absent")).is_none());
     }
 
     /// A directory made and not yet locked is one a session is still opening, and a sweep that

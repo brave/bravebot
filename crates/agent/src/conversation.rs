@@ -28,6 +28,7 @@ use bravebot_aichat::protocol::{Content, Message, Role};
 use bravebot_aichat::protocol::{ToolCallRequest, ToolCallRequestFunction};
 use bravebot_core::label::{Confidentiality, Integrity, Label};
 use bravebot_core::slot::{SlotId, SlotStore};
+use bravebot_core::value::Labelled;
 use serde::{Deserialize, Serialize};
 
 /// Why a user message was composed rather than typed, for the surfaces that draw one.
@@ -317,6 +318,15 @@ pub struct Conversation {
     /// `todo_write` was accepted at this message and never looks inside it to decide anything.
     /// Not part of a [`Snapshot`], for the reason `reads` is not.
     task_list: Option<usize>,
+    /// How many tasks the planner's latest accepted list leaves open, while the planner has not been
+    /// asked about them (TURN-12).
+    ///
+    /// Counted by the kernel and labelled as the list is, so the driver holds a number it cannot
+    /// read: [`Conversation::take_open_tasks`] hands it over for `Policy::read_trusted_content`,
+    /// which refuses it where the list is not trusted. Replaced with the list, so a list the
+    /// planner has since written is asked about afresh. Not part of a [`Snapshot`], for the reason
+    /// `task_list` is not.
+    open_tasks: Option<Labelled<usize>>,
     /// The latest task list, once a compaction took the message holding it out of the request.
     ///
     /// Carried word for word and put back after the summary (COMPACT-16). Model output the
@@ -415,6 +425,7 @@ impl Conversation {
             asked_to_write: false,
             reads: ShownReads::default(),
             task_list: None,
+            open_tasks: None,
             carried_task_list: None,
             opening_end: None,
             masked_before: 0,
@@ -609,6 +620,24 @@ impl Conversation {
             self.task_list = Some(last);
             self.carried_task_list = None;
         }
+    }
+
+    /// Record how many tasks the planner's latest list leaves open, as the kernel counted them
+    /// (TURN-12). Called for every accepted list, and with `None` where the planner was not shown
+    /// that list, so that the count of an earlier list is not taken for the panel's.
+    ///
+    /// A list written after the turn put the question was written in answer to it, and nothing more
+    /// is asked about it, whether or not it still has tasks open.
+    pub fn open_tasks_counted(&mut self, open: Option<Labelled<usize>>, asked_this_turn: bool) {
+        self.open_tasks = open.filter(|_| !asked_this_turn);
+    }
+
+    /// Take the count of open tasks the planner has not been asked about, which is then not asked
+    /// about again until it writes another list.
+    ///
+    /// Labelled as the list is: the caller reads it with `Policy::read_trusted_content`.
+    pub fn take_open_tasks(&mut self) -> Option<Labelled<usize>> {
+        self.open_tasks.take()
     }
 
     /// Record what the last request built from this conversation came to.
@@ -1295,6 +1324,7 @@ impl Conversation {
             asked_to_write: snapshot.asked_to_write,
             reads: ShownReads::default(),
             task_list: None,
+            open_tasks: None,
             carried_task_list: None,
             opening_end: None,
             masked_before: 0,

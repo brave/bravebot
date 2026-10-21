@@ -5847,6 +5847,306 @@ fn a_write_refused_by_plan_mode_is_recorded_as_a_refusal() {
     );
 }
 
+/// What a call that put a question to the person and was not approved left under `approval`, in
+/// the order it was written (TRACE-1).
+fn refused_under_approval(sink: &RecordingSink) -> Vec<String> {
+    sink.blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "approval",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// One turn making `call`, put to `person`, in a vouched workspace. The rules ask about `notes.md`
+/// by name and allow everything under `config/`, so a write there is asked about only for the
+/// scan's doubt about its body. Returns the trail and whether the turn ended as clean.
+fn a_turn_asked_about_a_file<C: bravebot_agent::confirm::Confirmer + Send>(
+    scratch: &Scratch,
+    person: &mut C,
+    call: String,
+) -> (RecordingSink, bool) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![call, reply_with("understood")]);
+    let mut sink = RecordingSink::new();
+    let outcome = turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("change the file").with_permissions(rules(
+            &[],
+            &["Edit(notes.md)"],
+            &["Edit(config/**)"],
+        )),
+        person,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    (sink, outcome.clean)
+}
+
+/// TRACE-1: a write or an edit put to the person and not approved is a refusal in the trail, under
+/// the tool, and the turn does not end as clean. A no, a no with words beside it, and a question
+/// nobody could be asked are one answer to the policy, so each leaves the same entry. A body the
+/// scan has doubts about is declined by its own road, which tells the planner something else, and
+/// the entry is the same there.
+///
+/// Without the record the trail holds the question and the mode that answered it and nothing about
+/// the answer, which reads the same as a write that went ahead. The control is the same call
+/// approved, which records no refusal, so an entry written for every question put would fail it.
+#[test]
+fn a_write_or_an_edit_the_person_does_not_approve_is_recorded_as_a_refusal() {
+    use bravebot_agent::WriteDecision;
+    let secret = format!("{GENERATED_SECRET}\n");
+    let editing_the_key = tool_request_2(
+        "edit_file",
+        &format!(
+            r#"{{"path":"config/master.key","old_text":"placeholder","new_text":{}}}"#,
+            serde_json::Value::String(secret.clone())
+        ),
+    );
+    // The tool, its call, the file it is about, what the workspace holds first, and whether the
+    // question the call raises carries the scan's doubt about the body.
+    let cases = [
+        (
+            "write_file",
+            tool_request_2("write_file", r#"{"path":"notes.md","contents":"replaced"}"#),
+            "notes.md",
+            vec![("notes.md", "original")],
+            false,
+        ),
+        (
+            "write_file",
+            writing("config/master.key", &secret),
+            "config/master.key",
+            Vec::new(),
+            true,
+        ),
+        (
+            "edit_file",
+            tool_request_2(
+                "edit_file",
+                r#"{"path":"notes.md","old_text":"original","new_text":"edited"}"#,
+            ),
+            "notes.md",
+            vec![("notes.md", "original")],
+            false,
+        ),
+        (
+            "edit_file",
+            editing_the_key,
+            "config/master.key",
+            vec![("config/master.key", "placeholder")],
+            true,
+        ),
+    ];
+    for (tool, call, file, before, doubted) in cases {
+        let sentence = format!("{tool}: the write was not approved, so nothing was written");
+        let seeded = || {
+            let scratch = Scratch::new("unapproved-write-recorded");
+            std::fs::create_dir(scratch.path.join("config")).unwrap();
+            for (path, contents) in &before {
+                std::fs::write(scratch.path.join(path), contents).unwrap();
+            }
+            scratch
+        };
+        let holds = |scratch: &Scratch| std::fs::read_to_string(scratch.path.join(file)).ok();
+        let held_before = before
+            .iter()
+            .find(|(path, _)| *path == file)
+            .map(|(_, contents)| contents.to_string());
+        let refused = |scratch: &Scratch, sink: &RecordingSink, clean: bool, case: &str| {
+            assert_eq!(
+                refused_under_approval(sink),
+                std::slice::from_ref(&sentence),
+                "{case}: the refusal was not recorded once, under the tool"
+            );
+            assert!(
+                !clean,
+                "{case}: a turn whose write was refused read as clean"
+            );
+            assert_eq!(
+                holds(scratch),
+                held_before,
+                "{case}: the file changed without approval"
+            );
+        };
+
+        for answer in [
+            WriteDecision::reject(),
+            WriteDecision::reject().with_note("not now"),
+        ] {
+            let case = format!("{tool} on {file}, answered {answer:?}");
+            let scratch = seeded();
+            let mut person = RecordingConfirmer {
+                decision: answer,
+                ..RecordingConfirmer::approving()
+            };
+            let (sink, clean) = a_turn_asked_about_a_file(&scratch, &mut person, call.clone());
+            assert_eq!(person.seen.len(), 1, "{case}: the question was not put");
+            assert_eq!(
+                !person.seen[0].credentials.is_empty(),
+                doubted,
+                "{case}: the question did not carry the doubt this case is for"
+            );
+            refused(&scratch, &sink, clean, &case);
+        }
+
+        let case = format!("{tool} on {file}, nobody to ask");
+        let scratch = seeded();
+        let (sink, clean) =
+            a_turn_asked_about_a_file(&scratch, &mut bravebot_agent::Unattended, call.clone());
+        refused(&scratch, &sink, clean, &case);
+
+        let case = format!("{tool} on {file}, approved");
+        let scratch = seeded();
+        let mut person = RecordingConfirmer::approving();
+        let (sink, clean) = a_turn_asked_about_a_file(&scratch, &mut person, call);
+        assert_eq!(person.seen.len(), 1, "{case}: the question was not put");
+        assert!(
+            refused_under_approval(&sink).is_empty(),
+            "{case}: an approval was recorded as a refusal: {:?}",
+            sink.events()
+        );
+        assert!(
+            clean,
+            "{case}: a turn whose write was approved did not read as clean"
+        );
+        assert_ne!(
+            holds(&scratch),
+            held_before,
+            "{case}: the write did not land"
+        );
+    }
+}
+
+/// TRACE-1: a fetch put to the person and not approved is a refusal in the trail, under the tool
+/// that asked, and a save is one of its own. `download_url` asks twice, about the host and then
+/// about the file the bytes would land in, and each answer is recorded as what it was: a host
+/// declined is a fetch that was not made and a destination declined is a write that was not made,
+/// each once, with the question that was not reached left out.
+///
+/// The control approves both questions and records no refusal, so an entry written for every
+/// question put would fail it.
+#[test]
+fn a_fetch_or_a_save_the_person_does_not_approve_is_recorded_as_a_refusal() {
+    let fetched = "fetch_url: the fetch was not approved, so nothing was fetched";
+    let not_fetched = "download_url: the fetch was not approved, so nothing was fetched";
+    let not_saved = "download_url: the write was not approved, so nothing was written";
+
+    let refused_by = |tool: &str, arguments: &dyn Fn(&str) -> String| {
+        let scratch = Scratch::new("unapproved-fetch-recorded");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (site, requests) = serve_raw(raw_reply("text/plain", b"fetched"));
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2(tool, &arguments(&site)),
+            reply_with("understood"),
+        ]);
+        let mut person = RecordingConfirmer::rejecting();
+        let mut sink = RecordingSink::new();
+        let outcome = turns::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("get it"),
+            &mut person,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            0,
+            "{tool}: a fetch that was not approved reached the site"
+        );
+        assert!(
+            !scratch.path.join("saved.txt").exists(),
+            "{tool}: a download that was not approved left a file"
+        );
+        assert!(
+            person.seen.is_empty(),
+            "{tool}: a destination was put to the person after the host was declined"
+        );
+        (refused_under_approval(&sink), outcome.clean)
+    };
+
+    let (refused, clean) = refused_by("fetch_url", &|site| format!(r#"{{"url":"{site}/page"}}"#));
+    assert_eq!(refused, [fetched]);
+    assert!(!clean, "a turn whose fetch was refused read as clean");
+
+    let (refused, clean) = refused_by("download_url", &|site| {
+        format!(r#"{{"url":"{site}/page","path":"saved.txt"}}"#)
+    });
+    assert_eq!(refused, [not_fetched]);
+    assert!(!clean, "a turn whose download was refused read as clean");
+
+    // The host is approved and the destination is not.
+    let downloading = |person: &mut ApprovesFetchesAndWrites| {
+        let scratch = Scratch::new("unapproved-save-recorded");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (site, requests) = serve_raw(raw_reply("text/plain", b"fetched"));
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2(
+                "download_url",
+                &format!(r#"{{"url":"{site}/page","path":"saved.txt"}}"#),
+            ),
+            reply_with("understood"),
+        ]);
+        let mut sink = RecordingSink::new();
+        let outcome = turns::run_with_trust(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("save it"),
+            person,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+        let reached = requests.load(Ordering::SeqCst) > 0;
+        let saved = scratch.path.join("saved.txt").exists();
+        (refused_under_approval(&sink), outcome.clean, reached, saved)
+    };
+    let mut person = ApprovesFetchesAndWrites {
+        declines_writes: true,
+        ..ApprovesFetchesAndWrites::default()
+    };
+    let (refused, clean, reached, saved) = downloading(&mut person);
+    assert_eq!(person.asked.len(), 1, "the host was not put to the person");
+    assert_eq!(
+        person.writes.len(),
+        1,
+        "the destination was not put to the person"
+    );
+    assert_eq!(refused, [not_saved]);
+    assert!(!clean, "a turn whose save was refused read as clean");
+    assert!(!reached, "a save that was not approved reached the site");
+    assert!(!saved, "a save that was not approved left a file");
+
+    let mut person = ApprovesFetchesAndWrites::default();
+    let (refused, clean, reached, saved) = downloading(&mut person);
+    assert_eq!(person.asked.len(), 1, "the host was not put to the person");
+    assert_eq!(
+        person.writes.len(),
+        1,
+        "the destination was not put to the person"
+    );
+    assert!(
+        refused.is_empty(),
+        "an approval was recorded as a refusal: {refused:?}"
+    );
+    assert!(
+        clean,
+        "a turn whose download was approved did not read as clean"
+    );
+    assert!(reached && saved, "the approved download did not land");
+}
+
 /// The other half: an allow rule stops the prompt, so a write that would have been refused for
 /// want of anyone to ask goes through.
 ///
@@ -16291,6 +16591,630 @@ fn a_turn_that_has_written_is_not_told_to_write() {
     );
 }
 
+/// The sentence the driver puts to the planner when it answers with tasks still open, up to the
+/// count that follows it.
+const OPEN_TASKS_NOTICE: &str = "Your task list still has";
+
+/// A list written with `statuses`, one task each, as a `todo_write` call.
+fn writing_a_task_list(statuses: &[&str]) -> String {
+    let todos: Vec<_> = statuses
+        .iter()
+        .enumerate()
+        .map(|(n, status)| json!({"content": format!("step {}", n + 1), "status": status}))
+        .collect();
+    tool_request("todo_write", &json!({ "todos": todos }).to_string())
+}
+
+/// A list written by a call that carries no id, so the round's results go back as prose.
+fn writing_a_task_list_without_an_id(statuses: &[&str]) -> String {
+    writing_a_task_list(statuses).replace(r#""id":"c1","#, "")
+}
+
+/// TURN-12: the planner answers that the work is done while its list still has a task in progress
+/// and one pending, and the panel keeps the list beside the answer. The driver asks for the list
+/// to be brought up to date before the turn ends, and the turn ends on the answer that follows.
+#[test]
+fn a_turn_that_answers_with_tasks_still_open_is_asked_to_bring_the_list_up_to_date() {
+    let scratch = Scratch::new("open-tasks-at-the-answer");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "in_progress", "pending"]),
+        reply_with("all the work is done"),
+        writing_a_task_list(&["completed", "completed", "completed"]),
+        reply_with("done, and the list says so"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("build it, check the build, record the baseline"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        bodies.len(),
+        4,
+        "the answer with open tasks ended the turn, or the turn went on past the list: {bodies:#?}"
+    );
+    assert!(
+        !bodies[1].contains(OPEN_TASKS_NOTICE),
+        "the planner was told about open tasks before it had answered: {}",
+        bodies[1]
+    );
+    assert!(
+        bodies[2].contains(&format!("{OPEN_TASKS_NOTICE} 2 tasks")),
+        "the request after the answer did not say two tasks were open: {}",
+        bodies[2]
+    );
+    let answered = bodies[2]
+        .find("all the work is done")
+        .expect("the answer that was held back is not in the request that asks about the list");
+    let asked = bodies[2].find(OPEN_TASKS_NOTICE).expect("asked above");
+    assert!(
+        answered < asked,
+        "the question came before the answer it is about: {}",
+        bodies[2]
+    );
+    assert_eq!(outcome.reply_for_display(), "done, and the list says so");
+    let last = reporter.updates.last().expect("the list was reported");
+    assert!(
+        last.iter()
+            .all(|row| row.status == bravebot_core::todo::Status::Done),
+        "the list the panel keeps still has an open row: {last:?}"
+    );
+}
+
+/// TURN-12: asked once, so a planner that answers again with the same list open is not asked a
+/// second time. The list may be open for a reason the driver cannot read, and a line repeated
+/// until the planner gave in would spend a request each time to say what the conversation holds.
+#[test]
+fn a_turn_asks_about_open_tasks_once_however_the_planner_answers() {
+    let scratch = Scratch::new("open-tasks-asked-once");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        reply_with("the rest waits for your answer"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("do the first part, then ask me about the rest"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 3, "{bodies:#?}");
+    assert_eq!(
+        bodies[2].matches(OPEN_TASKS_NOTICE).count(),
+        1,
+        "the planner was asked about the list more than once: {}",
+        bodies[2]
+    );
+    assert_eq!(
+        outcome.reply_for_display(),
+        "the rest waits for your answer"
+    );
+}
+
+/// TURN-12: the question is put once a turn even where the planner answers it with a list of its
+/// own that still has tasks open. That list is a new one, so only the turn's own limit stops the
+/// question being put again, and a planner that rewrote its list at every answer would otherwise
+/// be asked for as long as it kept doing so.
+#[test]
+fn a_planner_that_answers_the_question_with_another_open_list_is_not_asked_again() {
+    let scratch = Scratch::new("open-tasks-asked-once-per-turn");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        writing_a_task_list(&["completed", "completed", "pending"]),
+        reply_with("the second part is done"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("do the first part, then the second"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 4, "{bodies:#?}");
+    assert_eq!(
+        bodies[3].matches(OPEN_TASKS_NOTICE).count(),
+        1,
+        "the planner was asked about its second list in the turn that asked about its first: {}",
+        bodies[3]
+    );
+    assert_eq!(outcome.reply_for_display(), "the second part is done");
+}
+
+/// TURN-12: the planner answers the question by sending its list again with the tasks still open.
+/// That list is its answer to the question and is not asked about, in that turn or in the next, so
+/// a planner that leaves a task open on purpose is asked about it once.
+#[test]
+fn a_list_the_planner_sends_again_when_asked_is_not_asked_about_by_the_next_turn() {
+    let scratch = Scratch::new("open-tasks-resent-when-asked");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the rest waits for your answer"),
+        reply_with("a question answered"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut ask = |prompt: &str| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            Task::new(prompt),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    ask("do the first part, then ask me about the rest");
+    let outcome = ask("what does the first step touch?");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 5, "{bodies:#?}");
+    assert_eq!(
+        bodies[4].matches(OPEN_TASKS_NOTICE).count(),
+        1,
+        "the later turn asked about the list the planner sent when it was asked: {}",
+        bodies[4]
+    );
+    assert_eq!(outcome.reply_for_display(), "a question answered");
+}
+
+/// TURN-12: a list the planner was not shown is still the one the panel keeps, so the count of the
+/// list before it is not what the turn asks about. Here the conversation meets something untrusted
+/// between two turns, and the second turn's list is written and held back from the planner.
+#[test]
+fn a_list_the_planner_was_not_shown_ends_the_question_about_the_list_before_it() {
+    let scratch = Scratch::new("open-tasks-newer-list-not-shown");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("the plan is written"),
+        writing_a_task_list(&["completed", "completed"]),
+        reply_with("the work is done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let take_a_turn = |task: Task, conversation: &mut bravebot_agent::Conversation| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            conversation,
+            task,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    take_a_turn(
+        Task::new("plan the work").with_rounds(Some(1)),
+        &mut conversation,
+    );
+    conversation.observed(bravebot_core::label::Label::untrusted_public());
+    let outcome = take_a_turn(Task::new("do the work"), &mut conversation);
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        bodies.len(),
+        4,
+        "the planner was asked about a list that is no longer the panel's: {bodies:#?}"
+    );
+    assert_eq!(outcome.reply_for_display(), "the work is done");
+}
+
+/// TURN-12: a round whose calls carry no id sends their results back as prose, and the list is
+/// counted all the same.
+#[test]
+fn a_list_written_in_a_round_with_no_call_ids_is_asked_about() {
+    let scratch = Scratch::new("open-tasks-without-call-ids");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list_without_an_id(&["completed", "in_progress"]),
+        reply_with("all the work is done"),
+        reply_with("the last step is still in progress"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("do the steps"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 3, "{bodies:#?}");
+    assert!(
+        bodies[2].contains(&format!("{OPEN_TASKS_NOTICE} 1 task ")),
+        "a list written without call ids was not asked about: {}",
+        bodies[2]
+    );
+    assert_eq!(
+        outcome.reply_for_display(),
+        "the last step is still in progress"
+    );
+}
+
+/// TURN-12: a line the person typed as the answer arrived is in front of the planner with the
+/// question, as it is in front of the round after a delegate's report. Left waiting, the planner
+/// would send its list and answer again without having seen it.
+#[test]
+fn a_line_typed_as_the_planner_answers_reaches_it_with_the_question_about_the_list() {
+    let scratch = Scratch::new("open-tasks-interjection");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        reply_with("stopping there, as you asked"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("do the first part, then the rest"),
+        &mut SaysOnce::said_after_one_asking("actually, stop after the first part"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 3, "{bodies:#?}");
+    assert!(
+        bodies[2].contains("actually, stop after the first part"),
+        "the line typed as the answer arrived did not reach the planner with the question: {}",
+        bodies[2]
+    );
+    assert_eq!(outcome.reply_for_display(), "stopping there, as you asked");
+}
+
+/// TURN-12: a finished task and a dropped one are not open. Only pending and in progress count, so
+/// a list the planner closed out, some of it by cancelling, is not asked about.
+#[test]
+fn a_list_with_every_task_completed_or_cancelled_is_not_asked_about() {
+    let scratch = Scratch::new("closed-tasks-at-the-answer");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "cancelled", "completed"]),
+        reply_with("done, and one step was dropped"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("do the steps"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+    assert!(
+        bodies.iter().all(|body| !body.contains(OPEN_TASKS_NOTICE)),
+        "a list with nothing open was asked about: {bodies:#?}"
+    );
+    assert_eq!(
+        outcome.reply_for_display(),
+        "done, and one step was dropped"
+    );
+}
+
+/// TURN-12: the list asked about is the one the panel keeps, so a turn that never wrote one is
+/// asked about the list an earlier turn left. The earlier turn here had no tools left to write it
+/// with, so the list reached the later turn unasked about.
+#[test]
+fn a_list_left_open_by_an_earlier_turn_is_asked_about_when_a_later_turn_answers() {
+    let scratch = Scratch::new("open-tasks-from-an-earlier-turn");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("the plan is written"),
+        reply_with("a question answered"),
+        reply_with("the list is left as it was"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut ask = |task: Task| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            task,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    ask(Task::new("plan the work").with_rounds(Some(1)));
+    ask(Task::new("what does the first step touch?"));
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 4, "{bodies:#?}");
+    assert!(
+        !bodies[1].contains(OPEN_TASKS_NOTICE),
+        "a turn with no tools left was asked to write a list: {}",
+        bodies[1]
+    );
+    assert!(
+        bodies[3].contains(&format!("{OPEN_TASKS_NOTICE} 2 tasks")),
+        "the later turn was not asked about the list the panel still shows: {}",
+        bodies[3]
+    );
+}
+
+/// TURN-12: a list the planner was asked about and answered with open is not asked about again by
+/// the turns after it. What the panel shows is the planner's decision by then, and a line in every
+/// later turn would spend a request each time on a list nothing in that turn touched.
+#[test]
+fn a_list_the_planner_was_asked_about_is_not_asked_about_by_the_next_turn() {
+    let scratch = Scratch::new("open-tasks-asked-in-an-earlier-turn");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        reply_with("the rest waits for your answer"),
+        reply_with("a question answered"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut ask = |prompt: &str| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            Task::new(prompt),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    ask("do the first part, then ask me about the rest");
+    let outcome = ask("what does the first step touch?");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 4, "{bodies:#?}");
+    assert_eq!(
+        bodies[3].matches(OPEN_TASKS_NOTICE).count(),
+        1,
+        "the later turn asked about the same list again: {}",
+        bodies[3]
+    );
+    assert_eq!(outcome.reply_for_display(), "a question answered");
+}
+
+/// TURN-12: a list the planner writes after it was asked about the one before is a new list, and
+/// the planner is asked about it by the turn it ends open in.
+#[test]
+fn a_list_written_after_the_planner_was_asked_is_asked_about_afresh() {
+    let scratch = Scratch::new("open-tasks-asked-afresh");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        reply_with("the rest waits for your answer"),
+        writing_a_task_list(&["completed", "completed", "in_progress", "pending"]),
+        reply_with("the second part is done"),
+        reply_with("the rest waits for your answer again"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut ask = |prompt: &str| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            Task::new(prompt),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    ask("do the first part, then ask me about the rest");
+    let outcome = ask("go on with the second part");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        bodies.len(),
+        6,
+        "the second list was not asked about: {bodies:#?}"
+    );
+    assert!(
+        bodies[5].contains(&format!("{OPEN_TASKS_NOTICE} 2 tasks")),
+        "the second list was not counted: {}",
+        bodies[5]
+    );
+    assert_eq!(
+        outcome.reply_for_display(),
+        "the rest waits for your answer again"
+    );
+}
+
+/// TURN-12: Escape pressed as the answer arrives ends the turn on that answer. Asking about the
+/// list would send one more request that the stop then ends, and the turn would come back stopped
+/// with the answer it had already been given left out of the result.
+#[test]
+fn a_turn_stopped_as_it_answers_is_not_asked_about_open_tasks() {
+    struct StopsAsTheAnswerArrives {
+        cancel: bravebot_core::cancel::Cancel,
+    }
+
+    impl bravebot_agent::report::Reporter for StopsAsTheAnswerArrives {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn streaming(&mut self, written: String) {
+            if written.contains("all the work is done") {
+                self.cancel.cancel();
+            }
+        }
+    }
+
+    let scratch = Scratch::new("open-tasks-stopped-at-the-answer");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("all the work is done"),
+    ]);
+    let config = config_for(&endpoint);
+    let cancel = bravebot_core::cancel::Cancel::new();
+
+    let outcome = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("do the steps"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut StopsAsTheAnswerArrives {
+            cancel: cancel.clone(),
+        },
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .expect("the turn ends on the answer it was given");
+
+    assert_eq!(outcome.reply_for_display(), "all the work is done");
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+}
+
+/// TURN-12: a turn that is not offered `todo_write` cannot send a list, so it is not asked to. A
+/// definition a person addresses a turn to can leave the tool out, and the list an earlier turn
+/// wrote is still the one the panel shows.
+#[test]
+fn a_turn_not_offered_the_task_list_tool_is_not_asked_about_the_list() {
+    let scratch = Scratch::new("open-tasks-not-offered");
+    let home = Scratch::new("open-tasks-not-offered-home");
+    define(
+        &home,
+        "reader-only",
+        "kind: reader\ntools: read_file\n",
+        "REVIEW",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("the plan is written"),
+        reply_with("reviewed"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut ask = |task: Task| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            task,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    ask(Task::new("plan the work").with_rounds(Some(1)));
+    let outcome = ask(addressed("review the plan", &home, "reader-only"));
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 3, "{bodies:#?}");
+    assert!(
+        !bodies[2].contains(OPEN_TASKS_NOTICE),
+        "a turn that cannot send a list was asked to bring it up to date: {}",
+        bodies[2]
+    );
+    assert_eq!(outcome.reply_for_display(), "reviewed");
+}
+
+/// TURN-12: a conversation that has met something untrusted writes every list at that label, so
+/// the planner is not shown the list it wrote and no count of its open tasks is kept. The turn ends
+/// on the answer exactly as it would without the question.
+#[test]
+fn a_session_that_has_met_something_untrusted_is_not_asked_about_the_list() {
+    let scratch = Scratch::new("open-tasks-untrusted");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("all the work is done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.observed(bravebot_core::label::Label::untrusted_public());
+
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("do the steps"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+    assert!(
+        bodies.iter().all(|body| !body.contains(OPEN_TASKS_NOTICE)),
+        "the driver asked about a list it was not shown: {bodies:#?}"
+    );
+}
+
 /// Moves the session to another mode when the planner's `at`th call finishes, standing in for the
 /// person pressing the mode key while that round runs.
 struct ChangesTheModeAfterACall {
@@ -19469,11 +20393,15 @@ struct AskedAboutRuns {
     /// gave a yes.
     path_answer: bravebot_agent::confirm::Decision,
     paths: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::confirm::PathRequest>>>,
+    /// A directory removed while the first run is being asked about, as happens when an approval
+    /// waits for hours.
+    removing: Option<std::path::PathBuf>,
 }
 
 impl AskedAboutRuns {
     fn answering(answer: bravebot_agent::RunDecision) -> Self {
         Self {
+            removing: None,
             answer,
             answers: std::collections::VecDeque::new(),
             writes: bravebot_agent::WriteDecision::reject(),
@@ -19481,6 +20409,12 @@ impl AskedAboutRuns {
             path_answer: bravebot_agent::confirm::Decision::Reject,
             paths: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    /// Removes `directory` while the first run is being asked about.
+    fn removing_while_asked(mut self, directory: std::path::PathBuf) -> Self {
+        self.removing = Some(directory);
+        self
     }
 
     /// Also lets programs reach the path a request names, for a test whose subject is what a yes
@@ -19527,6 +20461,9 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
 
     fn confirm_run(&mut self, request: &bravebot_agent::RunRequest) -> bravebot_agent::RunDecision {
         self.seen.lock().unwrap().push(request.clone());
+        if let Some(directory) = self.removing.take() {
+            std::fs::remove_dir_all(directory).unwrap();
+        }
         self.answers.pop_front().unwrap_or(self.answer.clone())
     }
 
@@ -23988,6 +24925,73 @@ fn an_approved_unconfined_line_runs_with_no_profile_and_the_next_line_is_confine
         result
             .trail
             .contains("the programs ran in workspace-write mode"),
+        "{}",
+        result.trail
+    );
+}
+
+/// TRACE-1: a line the person does not approve is not recorded as having run in a sandbox mode,
+/// and the trail says it was not approved, as a refusal.
+#[test]
+fn a_run_line_the_person_does_not_approve_is_recorded_as_not_run() {
+    let name = "unapproved-line-trail";
+    let result = runs(
+        name,
+        vec![serde_json::json!({ "command": "touch ran.txt" })],
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::reject()),
+    );
+    assert!(
+        !result.trail.contains("the programs ran in"),
+        "{}",
+        result.trail
+    );
+    assert!(
+        result
+            .trail
+            .contains("GateBlocked { gate: \"approval\", detail: \"\", reason: \"run: the line was not approved and did not run\""),
+        "{}",
+        result.trail
+    );
+}
+
+/// SANDBOX-29, TRACE-1: a line that asked to start with no sandbox and was not approved is not
+/// recorded as having run unconfined.
+#[test]
+fn an_unconfined_line_the_person_does_not_approve_is_not_recorded_as_unconfined() {
+    if cannot_confine_here() {
+        return;
+    }
+    let name = "unapproved-unconfined-trail";
+    let result = two_runs_after_a_failed_line(
+        name,
+        serde_json::json!({ "command": writing_the_marker(name, "first"), "unconfined": true }),
+        serde_json::json!({ "command": writing_the_marker(name, "second") }),
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        no_programs,
+        &mut AskedAboutRuns::answering_in_turn(vec![
+            bravebot_agent::RunDecision::approve(),
+            bravebot_agent::RunDecision::reject(),
+            bravebot_agent::RunDecision::approve(),
+        ]),
+    );
+    let first_wrote = result.first_wrote;
+    clear_the_markers(name);
+    assert!(!first_wrote, "the line ran without being approved");
+    assert!(
+        !result.trail.contains("the programs ran in unconfined mode"),
+        "{}",
+        result.trail
+    );
+    assert!(
+        result
+            .trail
+            .contains("run: the line was not approved and did not run"),
         "{}",
         result.trail
     );
@@ -30786,6 +31790,66 @@ fn a_vouch_for_a_file_with_an_awkward_name_is_a_rule_about_that_file_alone() {
     }
 }
 
+/// Naming a file, as `@` and `--file` do, is a rule about that file and no other, whatever the file
+/// is called (NAME-2, TRUST-2). The directory holds every awkward name, each is named in a turn of
+/// its own, and the rule that turn leaves has to cover that file and none of the others in the
+/// directory. Reading the name out of an `@` line is `bravebot-mentions`' to test.
+#[cfg(unix)]
+#[test]
+fn a_file_named_with_an_at_sign_is_vouched_for_alone_whatever_its_name() {
+    use std::os::unix::fs::MetadataExt;
+
+    let scratch = Scratch::new("named-awkward");
+    std::fs::write(scratch.path.join("sibling.md"), "AWKWARD_NAMED\n").unwrap();
+    let mut files = Vec::new();
+    for (name, _) in aliases::AWKWARD_NAMES {
+        let path = scratch.path.join(name);
+        std::fs::create_dir_all(path.parent().expect("a name is in a directory")).unwrap();
+        std::fs::write(&path, "AWKWARD_NAMED\n")
+            .unwrap_or_else(|error| panic!("the volume does not hold {name:?}: {error}"));
+        let meta = std::fs::metadata(&path).unwrap();
+        files.push((*name, (meta.dev(), meta.ino())));
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    for (name, identity) in &files {
+        let (endpoint, _received) = serve_sequence(vec![reply_with("done")]);
+        let outcome = turn::resume(
+            &config_for(&endpoint),
+            &egress,
+            &workspace,
+            &Task::new("summarise it").with_file(name.to_string()),
+            &mut bravebot_agent::Conversation::new(),
+            &mut bravebot_agent::Unattended,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new("/work"),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .unwrap_or_else(|error| panic!("the turn naming {name:?} failed: {error:?}"));
+        assert!(
+            outcome.trust.is_trusted(name),
+            "naming {name:?} did not record a rule about it"
+        );
+        for (other, other_identity) in &files {
+            if other_identity != identity {
+                assert!(
+                    !outcome.trust.is_trusted(other),
+                    "naming {name:?} vouched for {other:?}"
+                );
+            }
+        }
+        assert!(
+            !outcome.trust.is_trusted("sibling.md"),
+            "naming {name:?} vouched for a file beside it"
+        );
+    }
+}
+
 /// A file already vouched for is not asked about, or every read of a trusted workspace would
 /// interrupt the user.
 #[test]
@@ -31673,7 +32737,8 @@ fn a_conversation_past_the_budget_is_summarised_before_the_next_request() {
 
 /// COMPACT-16: the planner's list is written in one turn and the compaction that cuts it out of the
 /// request comes in a later one. The refused call between the two proves a list that was not
-/// accepted does not stand in for the one that was.
+/// accepted does not stand in for the one that was. The row left pending draws the planner's one
+/// question about it (TURN-12), which it answers with the list as it was.
 #[test]
 fn a_task_list_the_summary_replaced_is_sent_again_after_the_cut() {
     let scratch = Scratch::new("compact-keeps-the-task-list");
@@ -31686,6 +32751,7 @@ fn a_task_list_the_summary_replaced_is_sent_again_after_the_cut() {
         ),
         tool_request("todo_write", r#"{}"#),
         reply_with("planned"),
+        reply_with("the parser is next"),
         reply_with("they planned a lexer and a parser"),
         reply_with("done"),
     ]);
@@ -31721,8 +32787,8 @@ fn a_task_list_the_summary_replaced_is_sent_again_after_the_cut() {
     .expect("the compacting turn runs");
 
     let bodies: Vec<String> = received.try_iter().collect();
-    assert_eq!(bodies.len(), 5, "{bodies:#?}");
-    let planning = &bodies[4];
+    assert_eq!(bodies.len(), 6, "{bodies:#?}");
+    let planning = &bodies[5];
     assert!(
         planning.contains("they planned a lexer and a parser"),
         "the summary did not reach the next request: {planning}"
@@ -39687,6 +40753,33 @@ fn a_note_typed_at_one_file_of_an_apply_is_told_beside_that_file() {
     assert!(first < second, "the notes are out of order: {told}");
 }
 
+/// TRACE-1, CHECKOUT-14: each file of an apply the person does not approve is a refusal in the
+/// trail, under `apply_checkout`, the tool that asked, and not under the `write_file` whose
+/// question each file shares. A trail that named the shared path would tell a reader of a turn that
+/// never called `write_file` that one was refused.
+#[test]
+fn a_file_of_an_apply_the_person_does_not_approve_is_recorded_under_the_apply() {
+    let (_asked, confirmer, scratch, sink) = apply_after_a_worker_wrote_files(
+        "checkout-apply-refused-recorded",
+        &[("a.txt", "one"), ("b.txt", "two")],
+        vec![],
+        vec![],
+        vec![r#"{"checkout":"c1"}"#],
+        RecordingConfirmer::rejecting(),
+    );
+    assert_eq!(confirmer.seen.len(), 2, "{:#?}", confirmer.seen);
+    assert_eq!(
+        refused_under_approval(&sink),
+        [
+            "apply_checkout: the write was not approved, so nothing was written",
+            "apply_checkout: the write was not approved, so nothing was written",
+        ],
+        "each refused file was not recorded once, under the apply"
+    );
+    assert!(!scratch.path.join("a.txt").exists());
+    assert!(!scratch.path.join("b.txt").exists());
+}
+
 /// CHECKOUT-14. The question says so where the session wrote the same path in the working
 /// directory after the checkout was made, and does not where it wrote another path, or the same one
 /// before the checkout existed.
@@ -45023,7 +46116,7 @@ fn a_program_a_turn_runs_is_told_where_the_sessions_directory_is() {
         .canonicalize()
         .expect("the session's own directory");
     let mut workspace = Workspace::new(&scratch.path).expect("workspace");
-    workspace.open_scratch(Some(given.clone()));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
 
     // A script rather than a line naming the variable: a `$` in a line is refused, so what reads
     // the environment is the program the line named.
@@ -47824,6 +48917,113 @@ fn a_nonexistent_directory_is_an_error_and_does_not_mutate() {
     assert!(
         second.contains("is not a directory"),
         "reported not a directory: {second}"
+    );
+}
+
+/// CMDLINE-12: A carried directory that has been removed is refused before any prompt, and the
+/// next call runs at the workspace root.
+#[test]
+fn a_carried_directory_that_was_removed_is_refused_before_asking() {
+    let scratch = Scratch::new("cmdline-12-carried-removed");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+
+    let (endpoint, received) = serve_sequence(vec![
+        // Runs in `sub` and removes it, so `sub` is the directory the next call carries.
+        tool_request("run", r#"{"command":"rmdir ../sub","directory":"sub"}"#),
+        tool_request("run", r#"{"command":"cargo --version"}"#),
+        tool_request("run", r#"{"command":"cargo --version"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("carry a removed directory"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+
+    assert!(
+        !scratch.path.join("sub").exists(),
+        "the first call removed sub"
+    );
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+    assert!(
+        third.contains("no longer exists") && !third.contains("could not be started"),
+        "the removed directory was not named as removed: {third}"
+    );
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        2,
+        "the call with a removed directory was put to the person"
+    );
+    assert_eq!(
+        asked[1].plan.directory.canonicalize().unwrap(),
+        scratch.path.canonicalize().unwrap(),
+        "the call after the refusal runs at the workspace root"
+    );
+}
+
+/// CMDLINE-12: A directory removed while the person is being asked is reported as removed, not as a
+/// program that could not be started.
+#[test]
+fn a_directory_removed_during_the_approval_is_reported_as_removed() {
+    let scratch = Scratch::new("cmdline-12-removed-while-asked");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve())
+        .removing_while_asked(scratch.path.join("sub"));
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cargo --version","directory":"sub"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("remove the directory during the approval"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("no longer exists")
+            && !second.contains("could not be started")
+            && !second.contains("may have run in part"),
+        "the removed directory was reported as something else: {second}"
     );
 }
 
@@ -53643,6 +54843,147 @@ fn a_credential_outside_the_lines_an_edit_shows_is_not_asked_about() {
     assert!(
         !answered.contains(DECLARED_KEY),
         "the excerpt reached further than its context: {answered}"
+    );
+}
+
+/// `.env` lines `FILLER_nn=x` from `from` to `to`.
+fn env_filler(from: usize, to: usize) -> String {
+    (from..=to).map(|n| format!("FILLER_{n:02}=x\n")).collect()
+}
+
+/// One `edit_file` call with a pair for each of `FIRST`, `MIDDLE` and `LAST`, each changed from
+/// `=1` to `=2`.
+const EDITS_TO_THREE_KEYS: &str = concat!(
+    r#"{"path":".env","edits":["#,
+    r#"{"old_text":"FIRST=1","new_text":"FIRST=2"},"#,
+    r#"{"old_text":"MIDDLE=1","new_text":"MIDDLE=2"},"#,
+    r#"{"old_text":"LAST=1","new_text":"LAST=2"}]}"#
+);
+
+/// CRED-15 for several passages. The result shows the lines around every passage, so a credential
+/// beside one in the middle is shown, and it is put to the person like one beside the first. An
+/// excerpt that spanned the first change to the last and cut the middle never showed it, and the
+/// scan, which covers what is shown, never asked.
+#[test]
+fn a_credential_beside_a_middle_passage_of_several_is_asked_about() {
+    let scratch = Scratch::new("credential-edit-excerpt-middle-passage");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!(
+            "FIRST=1\n{}MIDDLE=1\nAWS_ACCESS_KEY_ID={DECLARED_KEY}\n{}LAST=1\n",
+            env_filler(1, 30),
+            env_filler(31, 60)
+        ),
+    )
+    .unwrap();
+
+    let mut confirmer = RemembersExposures::default();
+    let asked = confirmer.asked.clone();
+    let (answered, _told) = edits_to_env(
+        &scratch,
+        &[EDITS_TO_THREE_KEYS],
+        &mut confirmer,
+        Task::new("move all three to 2"),
+    );
+
+    let asked = asked.lock().unwrap();
+    let request = asked
+        .first()
+        .expect("the person was not asked about a credential the result would show");
+    assert_eq!(asked.len(), 1);
+    let said = request.credentials.join("; ");
+    assert!(
+        said.contains("an AWS access key id") && said.contains(".env:33"),
+        "the question did not say what was found or where: {said}"
+    );
+    assert!(
+        !answered.contains(DECLARED_KEY),
+        "a credential the person declined reached the planner: {answered}"
+    );
+    assert!(
+        answered.contains("edited .env: 3 replacement(s)"),
+        "the planner was not told its edit landed: {answered}"
+    );
+}
+
+/// The other direction, and the reason the scan has to follow the excerpt: once the person agrees,
+/// the planner is shown each passage with the line that was asked about, at its own number.
+#[test]
+fn an_agreed_result_shows_every_passage_and_the_credential_beside_the_middle_one() {
+    let scratch = Scratch::new("credential-edit-excerpt-middle-passage-agreed");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!(
+            "FIRST=1\n{}MIDDLE=1\nAWS_ACCESS_KEY_ID={DECLARED_KEY}\n{}LAST=1\n",
+            env_filler(1, 30),
+            env_filler(31, 60)
+        ),
+    )
+    .unwrap();
+
+    let mut confirmer = RemembersExposures {
+        allow: true,
+        ..Default::default()
+    };
+    let (answered, _told) = edits_to_env(
+        &scratch,
+        &[EDITS_TO_THREE_KEYS],
+        &mut confirmer,
+        Task::new("move all three to 2"),
+    );
+
+    for shown in ["FIRST=2", "MIDDLE=2", "LAST=2"] {
+        assert!(answered.contains(shown), "{shown} is missing: {answered}");
+    }
+    assert!(
+        answered.contains(&format!("    33  AWS_ACCESS_KEY_ID={DECLARED_KEY}")),
+        "the line beside the middle passage is missing or misnumbered: {answered}"
+    );
+}
+
+/// The lines between two passages are not in the result, so a credential among them is not a
+/// disclosure and holding the result back over it would put a question to the person about text
+/// nothing they were shown reaches. The two passages are thirty lines apart, which one span from
+/// the first to the last would show whole.
+#[test]
+fn a_credential_between_two_passages_is_not_asked_about() {
+    let scratch = Scratch::new("credential-edit-excerpt-between-passages");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!(
+            "FIRST=1\n{}AWS_ACCESS_KEY_ID={DECLARED_KEY}\n{}LAST=1\n",
+            env_filler(1, 14),
+            env_filler(15, 28)
+        ),
+    )
+    .unwrap();
+
+    let mut confirmer = RemembersExposures::default();
+    let asked = confirmer.asked.clone();
+    let (answered, _told) = edits_to_env(
+        &scratch,
+        &[
+            r#"{"path":".env","edits":[{"old_text":"FIRST=1","new_text":"FIRST=2"},{"old_text":"LAST=1","new_text":"LAST=2"}]}"#,
+        ],
+        &mut confirmer,
+        Task::new("move both to 2"),
+    );
+
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "an edit was held up over a credential its result does not show"
+    );
+    assert!(
+        answered.contains("FIRST=2") && answered.contains("LAST=2"),
+        "a passage was left out of the result: {answered}"
+    );
+    assert!(
+        answered.contains("23 unchanged lines"),
+        "the result does not say what lies between the passages: {answered}"
+    );
+    assert!(
+        !answered.contains(DECLARED_KEY),
+        "the lines between the passages reached the planner: {answered}"
     );
 }
 
@@ -62331,6 +63672,43 @@ fn edits_far_apart_in_a_long_file_are_approved_as_two_changes() {
         .collect();
     assert_eq!(added, ["inserted early", "inserted late"]);
     assert_eq!(after.lines().count(), 5002);
+}
+
+/// EDIT-4 for several passages: the result shows each changed region, so a passage between the
+/// first and the last is not known to have landed only from the count of replacements. One span
+/// from the first change to the last, cut in the middle, shows the first and the last and leaves
+/// out the one between.
+#[test]
+fn every_passage_of_a_several_passage_edit_is_in_the_result() {
+    let before: String = (1..=120).map(|n| format!("line {n:03}\n")).collect();
+    let (after, _, second) = run_one_edit(
+        "edit-many-result",
+        &before,
+        r#"{"path":"a.txt","edits":[
+            {"old_text":"line 005\n","new_text":"LINE 005\n"},
+            {"old_text":"line 060\n","new_text":"LINE 060\n"},
+            {"old_text":"line 115\n","new_text":"LINE 115\n"}]}"#,
+    );
+    assert_eq!(after.matches("LINE ").count(), 3);
+
+    let result = second
+        .split_once("Result of edit_file:")
+        .expect("the second request carries the edit result")
+        .1;
+    for changed in ["LINE 005", "LINE 060", "LINE 115"] {
+        assert!(
+            result.contains(changed),
+            "{changed} is not in the result: {result}"
+        );
+    }
+    assert!(
+        result.contains("3 replacement(s)"),
+        "the count went missing: {result}"
+    );
+    assert!(
+        result.contains("48 unchanged lines"),
+        "the result does not say what lies between the passages: {result}"
+    );
 }
 
 /// A pair that does not match refuses the whole call: nobody is asked, the earlier pairs are not

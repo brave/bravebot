@@ -3448,8 +3448,10 @@ def test_a_run_writes_a_manifest_and_posts_nothing():
     """The mechanical half end to end, in a work directory, with no model anywhere in it."""
     def run():
         work = tempfile.mkdtemp(prefix="security-audit-selftest-")
+        listed = Path(work) / "issues.json"
+        listed.write_text(json.dumps([{"number": 7, "title": "a filed defect", "state": "OPEN"}]))
         argv = sys.argv
-        sys.argv = ["security-audit.py", "--work-dir", work]
+        sys.argv = ["security-audit.py", "--work-dir", work, "--tracker", str(listed)]
         out, err = io.StringIO(), io.StringIO()
         try:
             with redirect_stdout(out), redirect_stderr(err):
@@ -3470,6 +3472,33 @@ def test_a_run_writes_a_manifest_and_posts_nothing():
     check(
         "a lane that returned nothing is reported rather than passed over",
         kinds(verifying.load_candidates(manifest)[1]) == ["lane-incomplete"] * len(audit.LANES),
+    )
+    tracker = Path(work) / "tracker.txt"
+    check(
+        "a run writes the tracker's titles where every lane's prompt says to find them",
+        tracker.read_text(encoding="utf-8") == "#7 open: a filed defect\n"
+        and all(str(tracker) in Path(one["prompt_file"]).read_text(encoding="utf-8") for one in manifest["lanes"])
+        and any("1 security issues" in line for line in manifest["progress_lines"]),
+        str(manifest["progress_lines"]),
+    )
+
+    def mechanical():
+        asked = []
+        was = audit.tracker_entries
+        audit.tracker_entries = lambda *args, **kwargs: asked.append(args) or ([], None)
+        argv = sys.argv
+        sys.argv = ["security-audit.py", "--mechanical-only", "--work-dir", tempfile.mkdtemp()]
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                audit.main()
+        finally:
+            sys.argv = argv
+            audit.tracker_entries = was
+        return asked
+
+    check(
+        "a mechanical-only run, which CI makes, never asks the tracker for anything",
+        with_cwd(ROOT, mechanical) == [],
     )
 
 
@@ -3786,6 +3815,1026 @@ def test_a_mark_is_one_start_with_a_reason():
     )
 
 
+def test_a_test_attribute_covers_only_what_it_is_attached_to():
+    """A `#[cfg(test)]` on a field, a `use` or a statement leaves the code after it in the list.
+
+    `test_regions` reads the next `{` after the attribute as the item's, so a test-only field above
+    an `impl` hid the whole `impl` from every start list. Each shape below sits above code that has
+    to stay listed.
+    """
+    lines = [
+        "pub struct Holder {",                      # 1
+        "    #[cfg(test)]",                         # 2
+        "    pub(crate) seen: Vec<String>,",        # 3
+        "    live: u32,",                           # 4
+        "}",                                        # 5
+        "#[cfg(test)]",                             # 6
+        "use std::fs::canonicalize;",               # 7
+        "impl Holder {",                            # 8
+        "    fn real(&self) {",                     # 9
+        "        #[cfg(test)]",                     # 10
+        "        let probe = 1;",                   # 11
+        "        std::fs::canonicalize(a);",        # 12
+        "    }",                                    # 13
+        "}",                                        # 14
+        "#[cfg(test)]",                             # 15
+        "mod tests {",                              # 16
+        "    fn t() { std::fs::canonicalize(b); }",  # 17
+        "}",                                        # 18
+        "#[cfg(test)]",                             # 19
+        "fn helper<A, B>(a: A,",                    # 20
+        "    b: B) {",                              # 21
+        "    canonicalize(c);",                     # 22
+        "}",                                        # 23
+        "fn after() { canonicalize(d); }",          # 24
+    ]
+    covered = audit.test_only_lines(lines)
+    check(
+        "a test-only field, use and statement cover their own line and nothing after them",
+        {3, 7, 11} <= covered and not covered & {4, 8, 9, 12, 13, 14},
+        str(sorted(covered)),
+    )
+    literals = [
+        "#[cfg(test)]",                             # 1
+        "mod tests {",                              # 2
+        "    fn t() { let c = '{'; let s = \"}\"; }",  # 3
+        "    fn u() { let d = '}'; }",              # 4
+        "}",                                        # 5
+        "fn after() { canonicalize(d); }",          # 6
+    ]
+    check(
+        "a brace in a string or a character literal does not move the end of a test module",
+        audit.test_only_lines(literals) == {1, 2, 3, 4, 5},
+        str(sorted(audit.test_only_lines(literals))),
+    )
+    check(
+        "a test module and a generic test function are covered to their closing brace",
+        set(range(16, 19)) <= covered and set(range(20, 24)) <= covered and 24 not in covered,
+        str(sorted(covered)),
+    )
+
+
+def test_the_identity_lane_starts_from_the_calls_that_resolve_a_name():
+    """The identity lane starts from every call that turns a name into a thing, outside the tests."""
+    sources = {
+        Path("crates/agent/src/workspace.rs"): [
+            "pub struct Workspace {",
+            "    #[cfg(test)]",
+            "    pub seen: Vec<String>,",
+            "}",
+            "impl Workspace {",
+            "    fn open(&self, named: &Path) {",
+            "        let real = std::fs::canonicalize(named);",
+            "        let links = self.hard_links(named);",
+            "        // symlink_metadata is named in this comment only",
+            "    }",
+            "    fn open_again(&self) { let fd = PathFd::new(path); let l = fs::read_link(p); }",
+            "}",
+            "#[cfg(test)]",
+            "mod tests {",
+            "    fn t() { std::fs::canonicalize(x); }",
+            "}",
+        ],
+        Path("crates/agent/tests/workspace.rs"): ["fn t() { std::fs::symlink_metadata(x); }"],
+        Path("crates/agent/test-support/aliases.rs"): ["fn t() { std::fs::canonicalize(x); }"],
+        Path("crates/sandbox/src/testutil.rs"): ["fn t() { std::fs::canonicalize(x); }"],
+    }
+    found = [(s["path"], s["line"], s["function"]) for s in audit.identity_sites(sources)]
+    check(
+        "a call in code that ships is listed with the function it is in, and a comment, a test module, "
+        "a test file and a test helper are not",
+        found
+        == [
+            ("crates/agent/src/workspace.rs", 7, "open"),
+            ("crates/agent/src/workspace.rs", 8, "open"),
+            ("crates/agent/src/workspace.rs", 11, "open_again"),
+        ],
+        str(found),
+    )
+
+    real = with_cwd(ROOT, lambda: audit.identity_sites(audit.mechanics.load_sources()))
+    names = {(Path(s["path"]).name, s["function"]) for s in real}
+    check(
+        "the tree's own name-to-thing calls are listed, the workspace's hard-link check among them",
+        ("workspace.rs", "hard_links") in names and ("linux.rs", "opened_rows") in names,
+        str(sorted(names)[:8]),
+    )
+    rows = with_cwd(ROOT, lambda: audit.confinement_rows(audit.mechanics.load_sources()))
+    check(
+        "the rows `composed` grants, the scratch directory and the agent socket among them, are listed",
+        any(s["function"] == "composed" and "scratch" in s["text"] for s in rows)
+        and any(s["function"] == "composed" and "socket" in s["text"] for s in rows)
+        and any("socket_path" in s["text"] for s in rows),
+        str([(s["line"], s["text"]) for s in rows]),
+    )
+
+
+def test_the_output_lane_lists_a_write_only_where_its_arguments_are_not_all_literals():
+    """The output lane lists a write only where its arguments are not all literals.
+
+    A write of literals cannot carry anything somebody else chose, so listing it only buries the
+    others. Each case below is one shape the filter has to tell apart.
+    """
+    def listed(text, path="crates/cli/src/x.rs"):
+        sources = {Path(path): text.split("\n")}
+        return [(s["line"], tuple(s["kinds"])) for s in audit.output_sites(sources)]
+
+    check(
+        "a macro of literals is left out and one filling a placeholder is listed",
+        listed(
+            'fn f() {\n'
+            '    println!("plain");\n'
+            '    println!("a {x}");\n'
+            '    println!("a {}", x);\n'
+            '    println!("{{kept}} braces");\n'
+            '    println!("one, two");\n'
+            '}'
+        )
+        == [(3, ("println",)), (4, ("println",))],
+        str(listed('fn f() {\n    println!("a {x}");\n}')),
+    )
+    check(
+        "the destination of a write is not its text",
+        listed('fn f() {\n    writeln!(out, "plain");\n    writeln!(out, "{}", x);\n    write!(out, "{y}");\n}')
+        == [(3, ("writeln",)), (4, ("write",))],
+    )
+    check(
+        "a call that runs over several lines is read to its closing parenthesis",
+        listed('fn f() {\n    eprintln!(\n        "a {}",\n        y\n    );\n}') == [(2, ("eprintln",))],
+        str(listed('fn f() {\n    eprintln!(\n        "a {}",\n        y\n    );\n}')),
+    )
+    check(
+        "a message with no values or only literal ones is left out, and one given a variable is listed",
+        listed(
+            'fn f() {\n'
+            '    t!(heading);\n'
+            '    t!(heading, name = "fixed");\n'
+            '    t!(heading, name = value);\n'
+            '}'
+        )
+        == [(4, ("t",))],
+    )
+    check(
+        "a say of a literal or of a message with no values is left out, and one of a built string is listed",
+        listed(
+            'fn f() {\n'
+            '    asking.say("fixed");\n'
+            '    asking.say(t!(heading));\n'
+            '    asking.say(&t!(held, status = status));\n'
+            '    asking.say(&format!("{n}"));\n'
+            '}'
+        )
+        == [(4, ("say", "t")), (5, ("say",))],
+        str(listed('fn f() {\n    asking.say(&t!(held, status = status));\n}')),
+    )
+    check(
+        "a string joined to others is not a literal, however it begins and ends",
+        listed('fn f() {\n    asking.say("x".to_string() + &y + "z");\n}') == [(2, ("say",))]
+        and listed('fn f() {\n    println!("{}", "a".to_owned() + &t + "b");\n}') == [(2, ("println",))],
+        str(listed('fn f() {\n    asking.say("x".to_string() + &y + "z");\n}')),
+    )
+    check(
+        "a write in a test module, outside the three crates, or in a comment is not listed",
+        listed('#[cfg(test)]\nmod tests {\n    fn t() { println!("{x}"); }\n}\n') == []
+        and listed('fn f() { println!("{x}"); }', "crates/agent/src/x.rs") == []
+        and listed('fn f() {\n    // println!("{x}");\n}') == [],
+    )
+    check(
+        "a closing parenthesis inside a string or a character literal does not end a call",
+        listed('fn f() { println!("a) {}", \')\'); }') == [(1, ("println",))],
+        str(listed('fn f() { println!("a) {}", \')\'); }')),
+    )
+
+
+def test_the_window_list_holds_the_places_a_string_becomes_markup():
+    """The window's start list holds the places a string becomes markup or preformatted text."""
+    where = in_tree(
+        {
+            "ui/src/renderer/Card.tsx": (
+                "export function Card() {\n"
+                "  return <pre>{text}</pre>\n"
+                "}\n"
+                "const Other = () => <div dangerouslySetInnerHTML={{ __html: html }} />\n"
+                "// innerHTML is named in this comment only\n"
+            ),
+            "ui/src/renderer/Card.test.tsx": "<pre>{fixture}</pre>\n",
+            "ui/src/renderer/Plain.tsx": "export function Plain() { return <p>{text}</p> }\n",
+        }
+    )
+    found = [(s["path"], s["line"], s["function"]) for s in with_cwd(where, audit.window_sinks)]
+    check(
+        "a pre and an innerHTML are listed with their component, and a comment, a test and a plain "
+        "element are not",
+        found == [("ui/src/renderer/Card.tsx", 2, "Card"), ("ui/src/renderer/Card.tsx", 4, "Other")],
+        str(found),
+    )
+
+
+def test_the_checkout_lane_starts_from_the_layers():
+    """The lane for what a clone can set starts from where layers merge and what a file can set."""
+    sources = {
+        Path("crates/config/src/settings.rs"): [
+            "pub struct Settings {",
+            "    env: BTreeMap<String, String>,",
+            "    /// A doc line.",
+            "    model: Option<String>,",
+            "    model_ignored: Vec<PathBuf>,",
+            "    unread: Vec<(PathBuf, String)>,",
+            "    layers: Vec<PathBuf>,",
+            "    run_network: Option<Network>,",
+            "}",
+            "    unrelated: u32,",
+        ]
+    }
+    check(
+        "the fields a file can set are listed and the ones that record what was ignored are not",
+        audit.settings_fields(sources) == ["env", "model", "run_network"],
+        str(audit.settings_fields(sources)),
+    )
+
+    def real():
+        found = audit.surface(audit.mechanics.load_sources(), audit.load_specs())
+        return found
+
+    found = with_cwd(ROOT, real)
+    named = {(Path(s["path"]).name, s["function"]) for s in found["layered"]}
+    check(
+        "the merge, the unread keys, the permission texts and the names a file set are on the lane's list",
+        {
+            ("settings.rs", "layered_since"),
+            ("settings.rs", "unread_keys"),
+            ("settings.rs", "rule_texts"),
+            ("settings.rs", "names"),
+        }
+        <= named,
+        str(sorted(named)),
+    )
+    check(
+        "the two clauses that say which layer answers for which name are on it, and so are the fields",
+        [one.split(" ")[1].rstrip(":") for one in found["layer_clauses"]] == ["BACKEND-24", "BACKEND-33"]
+        and {"env", "permissions", "model"} <= set(found["settings_fields"])
+        and "model_ignored" not in found["settings_fields"],
+        str(found["layer_clauses"]),
+    )
+
+
+def test_the_prompt_lane_reaches_the_line_interface_and_the_replay():
+    """The prompt lane starts from the questions the full-screen interface's table never draws.
+
+    The line interface, the editor protocol and the background host's replay buffer put the same
+    questions with a layout of their own, and the lane used to turn them away in its last sentence. A
+    prompt whose drawn text is not the bytes a yes releases is the finding that sentence excluded.
+    """
+    def real():
+        specs = audit.load_specs()
+        found = audit.surface(audit.mechanics.load_sources(), specs)
+        return found, audit.build_lane("shown-before-answered", found, specs, Path("results.json"))
+
+    found, text = with_cwd(ROOT, real)
+    named = {(Path(s["path"]).name, s["function"]) for s in found["other_prompts"]}
+    check(
+        "the line interface's put and confirmations, the approval crate's lines, the editor protocol's ask "
+        "and the host's emit and attach are on the lane's list",
+        {
+            ("plain.rs", "put"),
+            ("plain.rs", "confirm_vetted_read"),
+            ("lib.rs", "vet_lines"),
+            ("acp.rs", "ask"),
+            ("host.rs", "emit"),
+            ("host.rs", "attach"),
+        }
+        <= named,
+        str(sorted(named)),
+    )
+    check(
+        "the lane no longer turns the line interface away and does not exclude a drawn text that "
+        "differs from the released bytes",
+        "The line interface, which puts the same questions with a layout of its own" not in text
+        and "Whether the drawn text is the bytes a yes releases" in text
+        and "Whether a question survives being replayed" in text
+        and "crates/cli/src/host.rs" in text,
+    )
+
+
+def test_the_tooling_lane_starts_from_the_scripts():
+    """The tooling lane lists the scripts, the hooks, the places they start a process and the git
+    configuration a make target sets."""
+    def real():
+        return audit.surface(audit.mechanics.load_sources(), audit.load_specs())
+
+    found = with_cwd(ROOT, real)
+    files = set(found["tool_files"])
+    check(
+        "the scripts, the contrib checks and the hooks are listed",
+        {"agents/pr_worktree.py", "contrib/affected-checks.py", ".githooks/pre-commit"} <= files
+        and "agents/skills/pr-fix/pr-fix.py" in files,
+        str(sorted(files)[:6]),
+    )
+    check(
+        "the skill and agent definitions and the settings they run under are listed",
+        {"agents/settings.json", "agents/agents/issue-poster.md", "agents/skills/pr-fix/SKILL.md"}
+        <= set(found["tool_definitions"]),
+        str(found["tool_definitions"]),
+    )
+    starts = {(s["path"], s["function"]) for s in found["process_starts"]}
+    check(
+        "a script's process start is listed with the function it is in",
+        ("agents/issue_helper.py", "gh") in starts,
+        str(sorted(starts)[:5]),
+    )
+    check(
+        "the make target that sets git's hooks path is listed",
+        any(s["function"] == "hooks" and "core.hooksPath" in s["text"] for s in found["make_recipes"])
+        and not any("check-spec" in (s["function"] or "") for s in found["make_recipes"]),
+        str(found["make_recipes"]),
+    )
+
+    where = in_tree(
+        {
+            "Makefile": (
+                "VERSION = 1\n\n"
+                ".PHONY: hooks build\n"
+                "hooks:\n"
+                "\tgit config core.hooksPath .githooks\n"
+                "build:\n"
+                "\tgit -c user.name=x commit\n"
+                "\tcargo build\n"
+            )
+        }
+    )
+    recipes = [(s["function"], s["line"]) for s in with_cwd(where, audit.make_recipes)]
+    check(
+        "a git configuration line is listed under its own target and a cargo line is not",
+        recipes == [("hooks", 5), ("build", 7)],
+        str(recipes),
+    )
+
+    where = in_tree(
+        {
+            "Makefile": (
+                "hooks:\n"
+                "\tgit \\\n"
+                "\t  config core.hooksPath .githooks\n"
+                "build:\n"
+                "\tcargo build \\\n"
+                "\t  --release\n"
+            ),
+            "agents/aliased.py": (
+                "from subprocess import run\n"
+                "import subprocess as sp\n"
+                "def go():\n"
+                "    run(['git', 'push'])\n"
+            ),
+        }
+    )
+    recipes = [(s["function"], s["line"]) for s in with_cwd(where, audit.make_recipes)]
+    check(
+        "a recipe command written over several lines is read whole and listed from its first line",
+        recipes == [("hooks", 2)],
+        str(recipes),
+    )
+    starts = [s["line"] for s in with_cwd(where, lambda: audit.process_starts(["agents/aliased.py"]))]
+    check(
+        "a script that imports a process function by name or under another name is listed",
+        starts == [1, 2],
+        str(starts),
+    )
+
+
+def test_the_new_lanes_are_run_for_the_files_they_read():
+    """A branch's diff selects the lanes that read what it touched."""
+    class Governing:
+        id = "PROMPT"
+        rel = "docs/specs/asking.md"
+        governs = ["crates/tui/src/asks.rs"]
+
+    found = {"identity": [{"path": "crates/agent/src/workspace.rs"}]}
+    was = audit.mechanics.changed_files
+    try:
+        for touched, lane, shown in [
+            ("crates/agent/src/workspace.rs", "identity", found),
+            ("crates/agent/src/confine.rs", "identity", found),
+            ("crates/config/src/settings.rs", "checkout-controls", found),
+            ("docs/specs/backends.md", "checkout-controls", found),
+            ("crates/cli/src/doctor.rs", "output-sinks", found),
+            ("ui/src/renderer/components/Card.tsx", "output-sinks", found),
+            ("agents/pr_worktree.py", "tooling", found),
+            ("contrib/check-source.py", "tooling", found),
+            (".githooks/pre-push", "tooling", found),
+            ("Makefile", "tooling", found),
+        ]:
+            audit.mechanics.changed_files = lambda base, touched=touched: iter([touched])
+            lanes = audit.changed_lanes("base", [Governing()], shown)
+            check(f"a branch that touches {touched} runs the {lane} lane", lane in lanes, str(lanes))
+
+        audit.mechanics.changed_files = lambda base: iter(["crates/tui/src/asks.rs"])
+        lanes = audit.changed_lanes("base", [Governing()], found)
+        check(
+            "a Rust file that makes no decision on a name does not run the identity lane",
+            "identity" not in lanes and "tooling" not in lanes and "checkout-controls" not in lanes,
+            str(lanes),
+        )
+
+        audit.mechanics.changed_files = lambda base: iter(["crates/tui/src/asks.rs"])
+        lanes = audit.changed_lanes("base", [Governing()])
+        check(
+            "a Rust file runs the identity lane where there is no surface to ask",
+            "identity" in lanes,
+            str(lanes),
+        )
+        audit.mechanics.changed_files = lambda base: iter(["docs/specs/asking.md"])
+        lanes = audit.changed_lanes("base", [Governing()])
+        check(
+            "a file that is not Rust does not run the identity lane where there is no surface to ask",
+            "identity" not in lanes,
+            str(lanes),
+        )
+    finally:
+        audit.mechanics.changed_files = was
+
+
+def test_the_tracker_is_written_for_the_lanes():
+    """The lanes are given the titles of the security issues, as text and never as anything else.
+
+    A title is somebody's text and a lane reads the file it goes into, so a control or an invisible
+    character is taken out, and a tracker that could not be read says so instead of passing as empty.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        listed = work / "issues.json"
+        listed.write_text(
+            json.dumps(
+                [
+                    {"number": 2900, "title": "b: a second\ndefect\u202e\u200b", "state": "CLOSED"},
+                    {"number": 2821, "title": "SANDBOX-18: a first defect", "state": "OPEN"},
+                    {"title": "no number is not an issue", "state": "OPEN"},
+                ]
+            ),
+            encoding="utf-8",
+        )
+        entries, problem = audit.tracker_entries("brave/bravebot", str(listed))
+        written = audit.write_tracker(work, entries, problem).read_text(encoding="utf-8")
+        check(
+            "the titles are written one to a line, by number, with newlines and invisible characters gone",
+            written == "#2821 open: SANDBOX-18: a first defect\n#2900 closed: b: a second defect\n"
+            and problem is None,
+            repr(written),
+        )
+
+        entries, problem = audit.tracker_entries("brave/bravebot", str(work / "missing.json"))
+        written = audit.write_tracker(work, entries, problem).read_text(encoding="utf-8")
+        check(
+            "an unreadable list is written as that, and not as a tracker with nothing in it",
+            entries == [] and written.startswith("(the tracker could not be read:"),
+            repr(written),
+        )
+
+        listed.write_text(
+            json.dumps([{"number": at, "title": "t", "state": "OPEN"} for at in (1, 2)]),
+            encoding="utf-8",
+        )
+        was_limit = audit.TRACKER_LIMIT
+        try:
+            audit.TRACKER_LIMIT = 2
+            entries, problem = audit.tracker_entries("brave/bravebot", str(listed))
+            written = audit.write_tracker(work, entries, problem).read_text(encoding="utf-8")
+        finally:
+            audit.TRACKER_LIMIT = was_limit
+        check(
+            "a list that reached the cap says older issues are missing",
+            written.startswith("(only the newest 2 security issues were listed"),
+            repr(written),
+        )
+
+        listed.write_text("[]", encoding="utf-8")
+        entries, problem = audit.tracker_entries("brave/bravebot", str(listed))
+        written = audit.write_tracker(work, entries, problem).read_text(encoding="utf-8")
+        check(
+            "a tracker with no security issue says so",
+            written == "(the tracker holds no security issue)\n",
+            repr(written),
+        )
+
+        was = audit.subprocess.run
+        try:
+            def refuse(*args, **kwargs):
+                raise FileNotFoundError("gh")
+
+            audit.subprocess.run = refuse
+            entries, problem = audit.tracker_entries("brave/bravebot")
+            check(
+                "a machine with no gh gets a lane prompt run rather than a failed audit",
+                entries == [] and "gh could not be run" in (problem or ""),
+                str(problem),
+            )
+            asked = []
+
+            def answer(command, **kwargs):
+                asked.append(command)
+                return subprocess.CompletedProcess(command, 0, '[{"number": 5, "title": "t", "state": "OPEN"}]', "")
+
+            audit.subprocess.run = answer
+            entries, problem = audit.tracker_entries("brave/bravebot")
+            check(
+                "the tracker is asked for the issues labelled security, open and closed, read only",
+                entries == [(5, "open", "t")]
+                and asked[0][:3] == ["gh", "issue", "list"]
+                and "security" in asked[0]
+                and asked[0][asked[0].index("--state") + 1] == "all"
+                and not {"create", "comment", "edit", "close"} & set(asked[0]),
+                str(asked),
+            )
+        finally:
+            audit.subprocess.run = was
+
+
+def test_no_name_in_the_enumerator_is_bound_twice():
+    """A module-level name defined twice means the later one answers for both.
+
+    `PLACEHOLDER` was a pattern for a format hole in one place and for an empty table cell in
+    another, and the second silently replaced the first: a write of a filled-in format string was
+    read as a literal and left out of a lane's start list while every test of the filter was green.
+    """
+    import ast
+
+    tree = ast.parse((HERE / "security-audit.py").read_text(encoding="utf-8"))
+    seen, twice = {}, []
+    for node in tree.body:
+        bound = (
+            [target.id for target in node.targets if isinstance(target, ast.Name)]
+            if isinstance(node, ast.Assign)
+            else [node.name]
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+            else []
+        )
+        for name in bound:
+            if name in seen:
+                twice.append(f"{name} (lines {seen[name]} and {node.lineno})")
+            seen.setdefault(name, node.lineno)
+    check("every module-level name in security-audit.py is bound once", not twice, ", ".join(twice))
+
+
+def test_every_lane_has_its_file_and_its_row():
+    """A lane in `LANES` has a prompt file and a row in the skill's table, and the table's heading
+    counts them.
+
+    The count in the heading and the description was ten while the table held ten, and only the
+    table moved when a lane was added.
+    """
+    words = {
+        10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen", 15: "fifteen",
+        16: "sixteen", 17: "seventeen", 18: "eighteen", 19: "nineteen", 20: "twenty",
+    }
+    skill = (HERE / "SKILL.md").read_text(encoding="utf-8")
+    missing = [
+        name
+        for name in audit.LANES
+        if not (HERE / "lanes" / f"{name}.md").is_file() or f"| `{name}` |" not in skill
+    ]
+    check("every lane has a prompt file and a row in the skill's table", not missing, str(missing))
+    word = words.get(len(audit.LANES), str(len(audit.LANES)))
+    check(
+        "the skill counts the lanes it has",
+        f"## The {word} lanes" in skill and f"all {word} lanes" in skill and f"in {word} lanes" in skill,
+        word,
+    )
+
+
+def test_the_exemption_stops_at_the_person_s_own_configuration():
+    """The preamble and the verifier read "this program's own configuration" as the person's, so a
+    candidate about a clone's files is not dropped under it."""
+    def build():
+        specs = audit.load_specs()
+        found = audit.surface(audit.mechanics.load_sources(), specs)
+        return audit.build_lane("checkout-controls", found, specs, Path("results.json"), None, Path("tracker.txt"))
+
+    text = with_cwd(ROOT, build)
+    check(
+        "the lane prompt limits the exemption to the person's own settings, command line and environment",
+        "covers the person's own configuration" in text and "It does not cover a checkout's" in text,
+    )
+    check(
+        "a lane leaves out a defect only an open issue holds, and reports one a closed issue names",
+        "A title with state\n`open`" in text and "A `closed` issue was fixed or declined" in text,
+    )
+    verifier = verifying.build_prompt({"summary": "s", "place": "crates/config/src/x.rs:1", "lane": "checkout-controls"}, Path("r.json"))
+    check(
+        "the verifier is told the same and is not made to drop a candidate whose bytes never reach the planner",
+        "It does not cover a checkout's" in verifier
+        and "A candidate from those lanes is not dropped because no byte reaches the planner" in verifier,
+    )
+
+
+def candidate_for(lane, summary, place, clause=None):
+    return {"lane": lane, "summary": summary, "place": place, **({"clause": clause} if clause else {})}
+
+
+def test_candidates_that_make_one_claim_are_checked_together():
+    """Two lanes that return one defect get one verifier, and two defects stay apart.
+
+    Grouping saves a verifier only when it joins duplicates. It costs a defect when it joins two
+    different ones, so each case below is one the grouping has to get right in a different direction.
+    """
+    same_a = candidate_for(
+        "identity",
+        "the scratch directory is resolved once and a stage can relink it, so the next row names a credential directory",
+        "crates/agent/src/confine.rs:156 in new",
+    )
+    same_b = candidate_for(
+        "checkout-controls",
+        "a stage can relink the scratch directory and the resolved row then names a credential directory",
+        "crates/agent/src/confine.rs:1289 in composed",
+    )
+    other_claim = candidate_for(
+        "identity",
+        "the proxy socket is connected by name for every request and an unconfined helper follows a replaced link",
+        "crates/agent/src/confine.rs:1848 in prepared",
+    )
+    other_file = candidate_for(
+        "tooling",
+        "the scratch directory is resolved once and a stage can relink it, so the next row names a credential directory",
+        "agents/pr_worktree.py:259 in pull",
+    )
+    groups = verifying.group_candidates([same_a, other_claim, same_b, other_file])
+    check(
+        "two lanes' summaries of one defect in one file are one group, kept in the order returned",
+        [[one["lane"] for one in group] for group in groups]
+        == [["identity", "checkout-controls"], ["identity"], ["tooling"]],
+        str([[one["summary"][:20] for one in group] for group in groups]),
+    )
+    check(
+        "the same words about another file, and another claim about the same file, are not joined",
+        other_file not in groups[0] and other_claim not in groups[0],
+    )
+
+    # What two lanes returned for the write prompt's cap, and for two other defects in the same file,
+    # as the lanes worded them.
+    cap_a = candidate_for(
+        "output-sinks",
+        "The line-oriented write prompt (--plain and ACP) shows the first 40 changed rows of the body and"
+        " replaces the rest with a count, although a yes writes every row, so for a processor-produced "
+        "body the rows after the 40th are approved unseen, which the code's own comment on output and vet"
+        " prompts calls 'approved unread'.",
+        "crates/approval/src/lib.rs:147 in write_lines (if changed == MOST_CONTENT_LINES { left_out += 1;"
+        " continue; }, then the transcript_more_lines row at :160)",
+        "PROMPT-1",
+    )
+    cap_b = candidate_for(
+        "shown-before-answered",
+        "The line interface and the editor protocol cut a write's change at 40 rows and, where the diff "
+        "is not exact, show none of it, so a person is asked to approve a file body they cannot see and "
+        "have no way to scroll to, unlike the output, vetting and message prompts that show every row.",
+        "crates/approval/src/lib.rs:144 in write_lines (the cap at 147-151, the early return for an "
+        "inexact diff at 135-142)",
+        "PROMPT-4",
+    )
+    other_in_the_function = candidate_for(
+        "output-sinks",
+        "The write approval draws a processor-produced body, and a destination name taken from a "
+        "quarantined listing, with only control characters replaced, so tag characters, zero-width "
+        "characters and bidirectional controls in what a yes writes draw as nothing in the terminal and "
+        "are reordered by the browser engine in the desktop window; the person approves bytes the card "
+        "did not show.",
+        "crates/approval/src/lib.rs:153 in write_lines (+/-/context rows through printable at :41); the "
+        "same rows reach crates/tui/src/confirm/write.rs:389 in draw (marked_rows, then "
+        "crates/tui/src/render.rs:152 printable) and ui/src/renderer/components/Diff.tsx:31 in Diff",
+        "PROMPT-1",
+    )
+    far_in_the_file = candidate_for(
+        "shown-before-answered",
+        "The line interface and the editor protocol draw the vouch prompt's twenty-line head as if it "
+        "were the file and drop the check's sentence, although the check read the whole file and the "
+        "answer is a standing trust rule, so a person vouches for a path on a head they are not told is "
+        "only a head.",
+        "crates/approval/src/lib.rs:371 in vouch_lines (called from crates/cli/src/plain.rs:1477 "
+        "confirm_vouch and crates/ui-bridge/src/acp.rs:1068)",
+        "PROMPT-1",
+    )
+    check(
+        "two lanes' wording of one cap, naming lines three apart in one function, is one claim",
+        verifying.same_claim(cap_a, cap_b) and verifying.same_claim(cap_b, cap_a),
+    )
+    check(
+        "a different defect a few lines away, and another a long way off in the same file, are not joined",
+        not verifying.same_claim(cap_a, other_in_the_function)
+        and not verifying.same_claim(cap_b, other_in_the_function)
+        and not verifying.same_claim(cap_b, far_in_the_file),
+    )
+
+    near = candidate_for("a", "reads a value", "crates/x.rs:90 in f", "LABEL-4")
+    near_again = candidate_for("b", "writes something else entirely", "crates/x.rs:95 in g", "LABEL-4")
+    far_labelled = candidate_for("d", "writes something else entirely", "crates/x.rs:900 in h", "LABEL-4")
+    check(
+        "one clause joins nothing: lines a few apart or a long way apart, the words still have to agree",
+        not verifying.same_claim(near, near_again) and not verifying.same_claim(near, far_labelled),
+    )
+    check(
+        "two lanes citing different clauses for one defect still make one claim",
+        verifying.same_claim(cap_a, cap_b) and cap_a["clause"] != cap_b["clause"],
+    )
+    check(
+        "a candidate with no place is never grouped",
+        not verifying.same_claim({"summary": same_a["summary"]}, {"summary": same_a["summary"]}),
+    )
+    chain_a = candidate_for("a", "alpha bravo charlie delta echo foxtrot", "crates/x.rs:1 in f")
+    chain_b = candidate_for("b", "alpha bravo charlie xray yankee zulu", "crates/x.rs:2 in f")
+    chain_c = candidate_for("c", "xray yankee zulu quebec romeo sierra", "crates/x.rs:3 in f")
+    check(
+        "a chain of near duplicates is one group",
+        len(verifying.group_candidates([chain_a, chain_c, chain_b])) == 1,
+        str(verifying.group_candidates([chain_a, chain_c, chain_b])),
+    )
+    short_a = candidate_for("a", "reads value", "crates/x.rs:1 in f")
+    short_b = candidate_for("b", "reads other value", "crates/x.rs:400 in g")
+    check(
+        "two short summaries that share a word or two are not one claim, whatever share of the shorter that is",
+        not verifying.same_claim(short_a, short_b),
+    )
+    same_five = [
+        candidate_for(f"lane{at}", "alpha bravo charlie delta echo foxtrot", "crates/x.rs:1 in f")
+        for at in range(5)
+    ]
+    sizes = [len(group) for group in verifying.group_candidates(same_five)]
+    check(
+        "a verifier is given no more than the limit, and the rest of a long chain are checked together apart",
+        sizes == [verifying.GROUP_LIMIT, 5 - verifying.GROUP_LIMIT],
+        str(sizes),
+    )
+
+
+def test_a_group_is_one_verifier_and_the_others_are_in_its_prompt():
+    """The manifest keeps the grouped candidates and the prompt hands the verifier all of them."""
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        one = candidate_for(
+            "identity",
+            "the scratch directory is resolved once and a stage can relink it",
+            "crates/agent/src/confine.rs:156 in new",
+        )
+        two = candidate_for(
+            "output-sinks",
+            "a stage can relink the scratch directory once it is resolved",
+            "crates/agent/src/confine.rs:1289 in composed",
+        )
+        alone = candidate_for("tooling", "a hook runs from the branch", "agents/pr_worktree.py:534 in rebase_onto")
+        results = {"identity": [one], "output-sinks": [two], "tooling": [alone]}
+        lanes = []
+        for name, found in results.items():
+            path = work / f"{name}_results.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "candidates": found,
+                        "already_tracked": [{"issue": 2821, "claim": "a scratch relink"}] if name == "tooling" else [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            lanes.append({"lane": name, "prompt_file": str(work / f"{name}_prompt.md"), "results_file": str(path)})
+        collect.workdir.write_manifest(work, {"lanes": lanes})
+        argv = sys.argv
+        sys.argv = ["verify-findings.py", "--work-dir", str(work)]
+        out = io.StringIO()
+        try:
+            with redirect_stdout(out):
+                status = verifying.main()
+        finally:
+            sys.argv = argv
+        manifest = collect.read_manifest(work)
+        pairs = manifest.get("verifications", [])
+        check(
+            "three candidates, two of one defect, are two verifications",
+            status == 0 and len(pairs) == 2 and [len(p["also"]) for p in pairs] == [1, 0],
+            str(pairs),
+        )
+        if len(pairs) != 2:
+            return
+        grouped = Path(pairs[0]["prompt_file"]).read_text(encoding="utf-8")
+        alone_prompt = Path(pairs[1]["prompt_file"]).read_text(encoding="utf-8")
+        check(
+            "the group's prompt carries the other candidate, numbered, and asks which are the same defect",
+            "a stage can relink the scratch directory once it is resolved" in grouped
+            and '"number": 2' in grouped
+            and "`grouped`" in grouped
+            and "`separate`" in grouped
+            and "decides which form of question 1 applies to it" in grouped
+            and not SURVIVING.search(grouped),
+        )
+        check(
+            "a candidate alone is given the prompt it always was, with nothing about a group",
+            "Candidates grouped with this one" not in alone_prompt and not SURVIVING.search(alone_prompt),
+        )
+        check(
+            "the output says which verifications are checked together and what the tracker already held",
+            "checked together with 1 more, from: output-sinks" in out.getvalue()
+            and "#2821 (tooling)" in out.getvalue()
+            and manifest["already_tracked"] == [{"lane": "tooling", "issue": 2821, "claim": "a scratch relink"}],
+            out.getvalue(),
+        )
+
+
+def verification(candidate, others=()):
+    return {
+        "id": 1,
+        "lane": candidate["lane"],
+        "summary": candidate["summary"],
+        "candidate": candidate,
+        "also": [
+            {"number": at, "lane": one["lane"], "summary": one["summary"], "candidate": one}
+            for at, one in enumerate(others, start=2)
+        ],
+    }
+
+
+def test_a_verdict_covers_the_candidates_it_says_are_the_same_defect():
+    """The collector files one finding for a defect two lanes returned, and loses none.
+
+    A verdict is the first candidate's. A candidate it does not account for was never decided, so it
+    is unverified and not filed, and one it calls a different defect is filed under its own verdict.
+    """
+    first = candidate_for("identity", "the first claim", "crates/a.rs:1 in f")
+    second = candidate_for("checkout-controls", "the same claim again", "crates/a.rs:2 in f")
+    third = candidate_for("output-sinks", "a different claim in the same file", "crates/a.rs:9 in g")
+
+    def settled(verdict, *others):
+        with tempfile.TemporaryDirectory() as tmp:
+            entry = verification(first, others)
+            entry["results_file"] = str(Path(tmp) / "r.json")
+            Path(entry["results_file"]).write_text(json.dumps(verdict), encoding="utf-8")
+            return collect.load_verdicts({"verifications": [entry]})
+
+    findings, dropped, unclear, missing = settled(
+        {"verdict": "CONFIRMED", "impact": "high", "grouped": [{"number": 2, "same_defect": True}]},
+        second,
+    )
+    check(
+        "a defect two lanes returned is one finding that names both lanes",
+        len(findings) == 1
+        and findings[0]["lane"] == "identity"
+        and findings[0].get("also_reported_by") == ["checkout-controls"]
+        and not (dropped or unclear or missing),
+        str(findings),
+    )
+
+    findings, dropped, unclear, missing = settled(
+        {
+            "verdict": "CONFIRMED",
+            "impact": "high",
+            "grouped": [{"number": 2, "same_defect": True}, {"number": 3, "same_defect": False}],
+            "separate": {"3": {"verdict": "CONFIRMED", "impact": "low", "reason": "its own"}},
+        },
+        second,
+        third,
+    )
+    check(
+        "a candidate the verifier calls a different defect is filed under the verdict it gave that one",
+        [(f["lane"], f["impact"]) for f in findings] == [("identity", "high"), ("output-sinks", "low")]
+        and findings[0].get("also_reported_by") == ["checkout-controls"]
+        and "also_reported_by" not in findings[1],
+        str(findings),
+    )
+
+    findings, dropped, unclear, missing = settled(
+        {"verdict": "CONFIRMED", "impact": "high", "grouped": [{"number": 2, "same_defect": True}]},
+        second,
+        third,
+    )
+    check(
+        "a candidate the verdict does not account for is unverified and not filed",
+        [f["lane"] for f in findings] == ["identity"]
+        and [m["lane"] for m in missing] == ["output-sinks"],
+        str((findings, missing)),
+    )
+
+    findings, dropped, unclear, missing = settled(
+        {
+            "verdict": "CONFIRMED",
+            "impact": "high",
+            "grouped": [{"number": 3, "same_defect": False}],
+            "separate": {},
+        },
+        second,
+        third,
+    )
+    check(
+        "a candidate called a different defect with no verdict of its own is unverified, not dropped",
+        [f["lane"] for f in findings] == ["identity"]
+        and sorted(m["lane"] for m in missing) == ["checkout-controls", "output-sinks"],
+        str((findings, missing)),
+    )
+
+    findings, dropped, unclear, missing = settled(
+        {"verdict": "CONFIRMED", "impact": "high", "grouped": [{"number": "2", "same_defect": True}]},
+        second,
+    )
+    check(
+        "a number written as text is read as the number",
+        len(findings) == 1 and findings[0].get("also_reported_by") == ["checkout-controls"] and not missing,
+        str((findings, missing)),
+    )
+
+    far = {**second, "place": "crates/a.rs:400 in far", "evidence": ["crates/a.rs:401 the other site"]}
+    findings, dropped, unclear, missing = settled(
+        {"verdict": "CONFIRMED", "impact": "high", "grouped": [{"number": 2, "same_defect": True}]},
+        far,
+    )
+    check(
+        "a site only the second lane named is a site of the finding",
+        "crates/a.rs:400 in far" in findings[0]["evidence"]
+        and "crates/a.rs:401 the other site" in findings[0]["evidence"],
+        str(findings[0]["evidence"]),
+    )
+
+    findings, dropped, unclear, missing = settled(
+        {
+            "verdict": "CONFIRMED",
+            "impact": "high",
+            "grouped": [{"number": 2, "same_defect": False}],
+            "separate": {"2": {"reason": "no verdict word"}},
+        },
+        third,
+    )
+    check(
+        "a separate verdict that says none of confirmed, dropped or unclear leaves the candidate unverified",
+        [f["lane"] for f in findings] == ["identity"]
+        and [m["lane"] for m in missing] == ["output-sinks"]
+        and not dropped,
+        str((findings, dropped, missing)),
+    )
+
+    findings, dropped, unclear, missing = settled(
+        {
+            "verdict": "DROPPED",
+            "reason": "question 3",
+            "grouped": [{"number": 2, "same_defect": True}],
+        },
+        second,
+    )
+    check(
+        "a dropped defect is reported once for each lane that returned it",
+        not findings and sorted(d["lane"] for d in dropped) == ["checkout-controls", "identity"],
+        str(dropped),
+    )
+
+    findings, dropped, unclear, missing = settled(
+        {"verdict": "CONFIRMED", "impact": "low"}, second
+    )
+    check(
+        "a verdict with no grouped list leaves the others unverified",
+        [f["lane"] for f in findings] == ["identity"] and [m["lane"] for m in missing] == ["checkout-controls"],
+        str((findings, missing)),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        entry = verification(first, [second])
+        entry["results_file"] = str(work / "r.json")
+        collect.workdir.write_manifest(work, {"lanes": [], "verifications": [entry]})
+        argv = sys.argv
+        sys.argv = ["collect-findings.py", "--work-dir", str(work), "--json"]
+        out = io.StringIO()
+        try:
+            with redirect_stdout(out):
+                collect.main()
+        finally:
+            sys.argv = argv
+        said = json.loads(out.getvalue())
+    check(
+        "the machine-readable report lists the candidates nobody verified, the lane that returned each named",
+        [one["lane"] for one in said.get("unverified", [])] == ["identity", "checkout-controls"],
+        str(said.get("unverified")),
+    )
+
+    finding = collect.merge(first, {"verdict": "CONFIRMED", "impact": "high"})
+    finding["also_reported_by"] = ["tooling"]
+    rendered = collect.render(
+        [finding], [], [], [], [], {"lanes": [], "verifications": [verification(first, [second])]}
+    )
+    check(
+        "the report lists every lane that returned a confirmed defect and counts every candidate",
+        "[identity, tooling]" in rendered and "2 candidates" in rendered,
+        rendered,
+    )
+
+
+def test_a_draft_names_every_lane_that_found_it():
+    """A draft names every lane that reported the defect, not only the one whose candidate was kept.
+
+    A reader of the issue judges from that list how many independent readings the finding has had.
+    A draft that named one lane would report a defect that two lanes reached from different starting
+    points as the claim of a single lane.
+    """
+    one = {"lane": "identity"}
+    two = {"lane": "identity", "also_reported_by": ["checkout-controls", "output-sinks"]}
+    check(
+        "a body names the one lane that read the code, and every lane where there were several",
+        "the `identity` lane read the code" in drafts.readers_of(one)
+        and "`identity`, `checkout-controls` and `output-sinks` lanes each read the code"
+        in drafts.readers_of(two),
+        drafts.readers_of(two),
+    )
+
+
 @contextmanager
 def contained_temporary_files():
     """Put every temporary file the tests make, and every one a program they run makes, in one directory.
@@ -3873,6 +4922,22 @@ TESTS = (
     test_a_run_writes_a_manifest_and_posts_nothing,
     test_the_manifest_is_read_from_the_work_directory,
     test_verifying_saves_the_candidates_the_collector_reads,
+    test_a_test_attribute_covers_only_what_it_is_attached_to,
+    test_the_identity_lane_starts_from_the_calls_that_resolve_a_name,
+    test_the_output_lane_lists_a_write_only_where_its_arguments_are_not_all_literals,
+    test_the_window_list_holds_the_places_a_string_becomes_markup,
+    test_the_checkout_lane_starts_from_the_layers,
+    test_the_prompt_lane_reaches_the_line_interface_and_the_replay,
+    test_the_tooling_lane_starts_from_the_scripts,
+    test_the_new_lanes_are_run_for_the_files_they_read,
+    test_the_tracker_is_written_for_the_lanes,
+    test_no_name_in_the_enumerator_is_bound_twice,
+    test_every_lane_has_its_file_and_its_row,
+    test_the_exemption_stops_at_the_person_s_own_configuration,
+    test_candidates_that_make_one_claim_are_checked_together,
+    test_a_group_is_one_verifier_and_the_others_are_in_its_prompt,
+    test_a_verdict_covers_the_candidates_it_says_are_the_same_defect,
+    test_a_draft_names_every_lane_that_found_it,
     test_a_run_leaves_nothing_in_the_temporary_directory,
     test_a_name_selects_the_tests_that_run,
 )

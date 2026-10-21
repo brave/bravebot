@@ -2848,7 +2848,8 @@ mod tests {
                         context_window: None,
                         output_limit: Some(16_000),
                     }],
-                ),
+                )
+                .expect("a valid region"),
                 stated,
                 16_000,
             ),
@@ -3267,7 +3268,8 @@ mod tests {
                     output_limit: None,
                 },
             ],
-        );
+        )
+        .expect("a valid region");
         let egress = Egress::new();
         let ceiling = |config: &Bedrock, model: &str| {
             let client = BedrockClient::new(config, &egress);
@@ -3415,7 +3417,8 @@ mod tests {
                     output_limit: None,
                 },
             ],
-        );
+        )
+        .expect("a valid region");
         let egress = Egress::new();
         let mut client = BedrockClient::new(&config, &egress);
         client.test_request = Some(Request::post("http://127.0.0.1:9/converse", Vec::new()));

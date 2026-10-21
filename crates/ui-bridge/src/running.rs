@@ -137,10 +137,10 @@ impl Scratch {
         }
     }
 
-    /// Where it is, where the session has one.
-    pub fn path(&self) -> Option<&Path> {
+    /// The directory as the session made it, where the session has one.
+    pub fn directory(&self) -> Option<bravebot_agent::ScratchDirectory> {
         match self {
-            Self::Held(held) => Some(held.path()),
+            Self::Held(held) => held.directory(),
             Self::Unavailable(_) => None,
         }
     }

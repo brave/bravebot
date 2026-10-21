@@ -7,6 +7,9 @@ Write JSON to `{results_file}` and nothing else. Do not edit any file in the tre
 {{
   "lane": "the lane name from the heading above",
   "read": ["files you actually read, so a thin pass is visible as one"],
+  "already_tracked": [
+    {{"issue": 1234, "claim": "one sentence: the defect you found and left out because the tracker holds it"}}
+  ],
   "candidates": [
     {{
       "summary": "one sentence: the mechanism that is wrong, then what it costs",
@@ -18,7 +21,7 @@ Write JSON to `{results_file}` and nothing else. Do not edit any file in the tre
       "gain": "what this buys an attacker who owns the bytes",
       "evidence": ["crates/.../file.rs:123 what is there", "docs/specs/x.md:45 the clause"],
       "clause": "LABEL-4, where a clause is involved, else omit",
-      "area": "one of: trust, tools, turns, interface, cli, delegation, backends",
+      "area": "one of: trust, tools, turns, interface, cli, delegation, backends, infrastructure (what a maintainer's tooling runs)",
       "impact": "high | medium | low",
       "fix": "what should happen instead, in a sentence",
       "screen": "what a person would be looking at when it happens, where the interface shows it",

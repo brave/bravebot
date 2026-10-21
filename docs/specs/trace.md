@@ -46,6 +46,11 @@ its name, a turn that confines none of its runs, a workspace not trusted, a mana
 a delegate, and for `scopes` a platform with no sandbox or a session with no profile directory. The
 sentence the planner reads names none of them.
 
+A `run` line put to the person and not approved, by an answer of no, Ctrl-C or nobody being there
+to ask, is recorded as a refusal under `approval` saying the line was not approved and did not run.
+Its `sandbox` entry, which names the mode the programs ran in, is written only once the line is
+approved, so a line that did not start is not recorded as having run.
+
 A `run` line that asked for `unconfined` or `scopes` and was accepted is given `(U,priv)` for its
 output whatever vouched for the same line without the request, and its `provenance` entry states
 `(U,priv)`.
@@ -58,6 +63,16 @@ directory, an opened directory holds the working directory, an opened directory 
 unusable, or the repository was refused), the directory a person opened where that was the cause,
 and how many of the call's delegates were not started, the withdrawn one included. The delegate
 still takes no number and no place under the ceiling ([DELEGATE-7](delegation.md#DELEGATE-7)).
+
+A write, an edit, a fetch or a save (`write_file`, `edit_file`, `fetch_url` and `download_url`)
+that is put to a person who does not approve it is recorded as a refusal under `approval`, and so is
+each file `apply_checkout` brings back and a write a manifest run plans. The entry names the tool, or
+the step and its tool, and says the write or the fetch was not approved and nothing was written or
+fetched. A no, a Ctrl-C and a question nobody could be asked are one answer to the policy, so the
+entry does not tell them apart. A write the credential scan raised doubts about is recorded the same
+way when it is not approved. A `download_url` asks about its host and then about its file, and
+records the question that was answered no: a host that is refused as a fetch, and a file that is
+refused as a write, with the second question not put once the first is refused.
 
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
@@ -98,6 +113,13 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`
 `verified-by: bravebot_agent::turn::a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so`
+`verified-by: bravebot_agent::turn::a_run_line_the_person_does_not_approve_is_recorded_as_not_run`
+`verified-by: bravebot_agent::turn::an_unconfined_line_the_person_does_not_approve_is_not_recorded_as_unconfined`
+`verified-by: bravebot_core::policy::a_write_or_a_fetch_the_person_did_not_approve_is_a_refusal_under_approval`
+`verified-by: bravebot_agent::turn::a_write_or_an_edit_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::a_fetch_or_a_save_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::a_file_of_an_apply_the_person_does_not_approve_is_recorded_under_the_apply`
+`verified-by: bravebot_agent::manifest::a_planned_write_the_person_does_not_approve_is_recorded_as_a_refusal`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content
@@ -232,7 +254,8 @@ with ([permission-modes.md](permission-modes.md)) by its name, before any tool i
 policy decides a command or a write is to be put to the person, a second entry under `approval`
 says what answered: the mode that answered in their place and so drew nothing, or no mode, which
 leaves it to whatever confirms (a person, or nothing that can ask). The entries before it that end
-in "asking" say what the policy decided, and they read as a person having been asked.
+in "asking" say what the policy decided, and they read as a person having been asked. A write that
+is then not approved is recorded as a refusal ([TRACE-1](#TRACE-1)).
 
 Other prompts a mode answers, such as a fetch or a server start, are not named here.
 

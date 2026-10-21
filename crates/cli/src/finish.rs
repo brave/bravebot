@@ -205,17 +205,24 @@ pub(crate) fn refusals(sink: &RecordingSink) -> Vec<json::Refusal> {
 
 /// The refusals a trail holds, then the questions nobody could be asked.
 ///
-/// Those never reached the policy, so the trail has no entry for them, and a result object that
-/// said `"ok":false,"status":4` with nothing to point at would be a refusal a script cannot read.
+/// A plan or a `run` is not told to the policy, so the trail has no entry for it, and a result
+/// object that said `"ok":false,"status":4` with nothing to point at would be a refusal a script
+/// cannot read. A question the policy did record is left out, since the trail's entry already
+/// lists it.
 pub(crate) fn with_declined(
     mut refused: Vec<json::Refusal>,
     declined: &[crate::one_shot::Declined],
 ) -> Vec<json::Refusal> {
-    refused.extend(declined.iter().map(|d| json::Refusal {
-        gate: d.gate,
-        principle: Principle::Capability.name(),
-        reason: d.reason.to_string(),
-    }));
+    refused.extend(
+        declined
+            .iter()
+            .filter(|d| !d.in_the_trail)
+            .map(|d| json::Refusal {
+                gate: d.gate,
+                principle: Principle::Capability.name(),
+                reason: d.reason.to_string(),
+            }),
+    );
     refused
 }
 

@@ -634,6 +634,53 @@ fn a_write_request_carries_whether_the_path_was_written_since_the_checkout() {
     );
 }
 
+/// PROMPT-1: the desktop is handed the name of a write and of a credential read already spelled,
+/// beside the raw one, so a card that draws it draws what the other front ends draw. A name that
+/// needs no spelling is sent as it is.
+#[test]
+fn a_write_and_a_credential_read_carry_the_name_spelled_for_a_person() {
+    use bravebot_agent::confirm::ExposureRequest;
+    let write = |path: &str| {
+        wire::write_request(
+            1,
+            &WriteRequest {
+                written_since_checkout: false,
+                path: path.into(),
+                contents: "a\n".into(),
+                existing: None,
+                diff: Diff::compute("", "a\n"),
+                intent: Intent::Create,
+                untrusted: false,
+                remark: None,
+                protected: false,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+            },
+        )
+    };
+    let exposure = |path: &str| {
+        wire::exposure_request(
+            2,
+            &ExposureRequest {
+                path: path.into(),
+                credentials: vec!["an API key at line 1".into()],
+            },
+        )
+    };
+    for sent in [write("note.md"), exposure("note.md")] {
+        assert_eq!(sent["path"], json!("note.md"));
+        assert_eq!(sent["shownPath"], json!("note.md"));
+    }
+    for sent in [write("note.md "), exposure("note.md ")] {
+        assert_eq!(sent["path"], json!("note.md "));
+        assert_eq!(sent["shownPath"], json!("\"note.md\u{2423}\""));
+    }
+    for sent in [write("a\u{202e}b"), exposure("a\u{202e}b")] {
+        assert_eq!(sent["shownPath"], json!("\"a\\u{202e}b\""));
+    }
+}
+
 /// An edit to a CRLF file keeps its terminators, which the diff cannot show because it compares
 /// lines without them. The request tells the front-end in words, and says nothing for LF files.
 #[test]
@@ -1035,6 +1082,52 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
     // This line writes a file, so no standing answer exists for it, and the front end is told so
     // rather than working it out from the fields above.
     assert_eq!(value["canBeRemembered"], json!(false));
+}
+
+/// PROMPT-1: the desktop is handed the files a line writes and the directories it is confined to
+/// already spelled, beside the raw ones, so a card that draws them draws what the other front ends
+/// draw. A name that needs no spelling is sent as it is.
+#[test]
+fn a_run_request_carries_the_written_files_and_directories_spelled_for_a_person() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Pipeline, Stage};
+    let run = |written: &str, directory: &str| {
+        let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w");
+        request.plan.writes = vec![written.into()];
+        request.confined = Some(bravebot_agent::Confined {
+            reads_the_machine: false,
+            directories: vec![directory.into()],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: Vec::new(),
+            writes_git_directories: false,
+        });
+        wire::run_request(1, &request)
+    };
+    let plain = run("note.md", "/work");
+    assert_eq!(plain["writes"], json!(["note.md"]));
+    assert_eq!(plain["shownWrites"], json!(["note.md"]));
+    assert_eq!(plain["confinement"]["directories"], json!(["/work"]));
+    assert_eq!(plain["confinement"]["shownDirectories"], json!(["/work"]));
+
+    let trailing = run("note.md ", "/work ");
+    assert_eq!(trailing["writes"], json!(["note.md "]));
+    assert_eq!(trailing["shownWrites"], json!(["\"note.md\u{2423}\""]));
+    assert_eq!(trailing["confinement"]["directories"], json!(["/work "]));
+    assert_eq!(
+        trailing["confinement"]["shownDirectories"],
+        json!(["\"/work\u{2423}\""])
+    );
+
+    let bidi = run("a\u{202e}b", "/wo\u{202e}rk");
+    assert_eq!(bidi["shownWrites"], json!(["\"a\\u{202e}b\""]));
+    assert_eq!(
+        bidi["confinement"]["shownDirectories"],
+        json!(["\"/wo\\u{202e}rk\""])
+    );
 }
 
 /// SANDBOX-26: the desktop draws no `confined`, so the names a line asked for cross as their own
@@ -1479,6 +1572,7 @@ fn an_exposure_prompt_carries_the_file_and_the_findings_and_no_text_of_the_file(
         json!({
             "request": 9,
             "path": "config/.env",
+            "shownPath": "config/.env",
             "credentials": [
                 "an AWS access key id at config/.env:1, AKIA…MPLE",
                 "a private key at config/.env:4, ----…----",

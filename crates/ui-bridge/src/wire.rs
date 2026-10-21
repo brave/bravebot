@@ -457,6 +457,7 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
     json!({
         "request": id,
         "path": request.path,
+        "shownPath": bravebot_agent::confirm::shown_name(&request.path),
         "intent": intent(request.intent),
         "untrusted": request.untrusted,
         "remark": request.remark.as_ref().map(|r| json!({"preview": r.preview, "lines": r.lines, "label": r.label})),
@@ -531,6 +532,15 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         "line": request.plan.line,
         "plan": request.plan.steps.display(),
         "writes": request.plan.writes,
+        // Each path spelled as the other front ends draw it, so a path ending in whitespace or
+        // holding a character that draws as nothing is not drawn as another. The window draws
+        // this and never `writes`, as it draws `shownPath` and never `path`.
+        "shownWrites": request
+            .plan
+            .writes
+            .iter()
+            .map(|path| bravebot_agent::confirm::shown_path(path))
+            .collect::<Vec<_>>(),
         "stdin": request.stdin,
         "releasesPrivate": request.releases_private(),
         // The credential scopes and toolchain lists the planner asked this line to be lent, by
@@ -569,6 +579,12 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
                 .directories
                 .iter()
                 .map(|directory| directory.display().to_string())
+                .collect::<Vec<_>>(),
+            // Spelled as `shownWrites` is.
+            "shownDirectories": confined
+                .directories
+                .iter()
+                .map(|directory| bravebot_agent::confirm::shown_path(directory))
                 .collect::<Vec<_>>(),
             "sentences": confined.sentences(),
         })),
@@ -860,6 +876,7 @@ pub fn exposure_request(id: u64, request: &ExposureRequest) -> Value {
     json!({
         "request": id,
         "path": request.path,
+        "shownPath": bravebot_agent::confirm::shown_name(&request.path),
         "credentials": request.credentials,
         "summary": request.summary(),
     })

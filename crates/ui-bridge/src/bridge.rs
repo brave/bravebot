@@ -1788,7 +1788,7 @@ impl Bridge {
             }
         }
         Ok(json!({
-            "paths": rules_json(&state.answers.trust),
+            "paths": listed_rules(&state.answers.trust),
             "commands": state.answers.programs.iter().map(|command| json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
             // Read now rather than when the session opened: the record belongs to every session
             // begun in the directory, and another may have kept or withdrawn the answer since.
@@ -2108,12 +2108,7 @@ fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Fail
     let (directories, scratch) = open
         .state
         .lock()
-        .map(|s| {
-            (
-                s.directories.clone(),
-                s.scratch.path().map(Path::to_path_buf),
-            )
-        })
+        .map(|s| (s.directories.clone(), s.scratch.directory()))
         .unwrap_or((Vec::new(), None));
     workspace.open_scratch(scratch);
     for directory in &directories {
@@ -2855,6 +2850,22 @@ pub(crate) fn rules_json(trust: &TrustStore) -> Vec<Value> {
         .collect()
 }
 
+/// [`rules_json`] for the permissions list, each name also spelled for a person.
+///
+/// The name as held is what a revoke is made with, so it stays as it is and the spelling goes
+/// beside it. The root is the empty name and a window words it itself.
+fn listed_rules(trust: &TrustStore) -> Vec<Value> {
+    rules_json(trust)
+        .into_iter()
+        .map(|mut rule| {
+            let shown =
+                bravebot_agent::confirm::shown_name(rule["path"].as_str().unwrap_or_default());
+            rule["shownPath"] = json!(shown);
+            rule
+        })
+        .collect()
+}
+
 /// How a session's trust stands as it opens.
 struct Opening {
     /// The map it starts with. Empty where nobody has answered, and no turn runs on it then.
@@ -3365,6 +3376,47 @@ mod permissions_tests {
         );
     }
 
+    /// PROMPT-1: the list sends each rule's name spelled beside the name as held. The name as held
+    /// is what a revoke is made with, so it is sent unchanged, and it is how a window tells the
+    /// root, so a blank name is not drawn as the root's empty row.
+    #[test]
+    fn the_permissions_list_sends_each_rule_spelled_beside_the_name_it_holds() {
+        let mut trust = TrustStore::new("/work");
+        trust.trust(".");
+        trust.distrust(" ");
+        trust.distrust("note.md ");
+        trust.distrust("a\u{202e}b");
+        trust.distrust("note.md");
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open::opened(
+            "/work".into(),
+            State::fresh(trust),
+            true,
+            None,
+            false,
+        ));
+        let list = Request::parse(
+            &json!({"id": 1, "method": "permissions.list", "params": {"session": handle}})
+                .to_string(),
+        )
+        .unwrap();
+        let listed = bridge.dispatch(&list).unwrap();
+        let shown_for = |held: &str| {
+            listed["paths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|rule| rule["path"] == json!(held))
+                .unwrap_or_else(|| panic!("{held:?} is not listed: {listed}"))["shownPath"]
+                .clone()
+        };
+        assert_eq!(shown_for(""), json!("\"\""));
+        assert_eq!(shown_for("note.md"), json!("note.md"));
+        assert_eq!(shown_for(" "), json!("\"\u{2423}\""));
+        assert_eq!(shown_for("note.md "), json!("\"note.md\u{2423}\""));
+        assert_eq!(shown_for("a\u{202e}b"), json!("\"a\\u{202e}b\""));
+    }
+
     #[test]
     fn an_undecided_boundary_is_visible_but_cannot_be_revoked() {
         let mut trust = TrustStore::new("/work");
@@ -3387,8 +3439,8 @@ mod permissions_tests {
         assert_eq!(
             before["paths"],
             json!([
-                {"path": "vendor", "integrity": "untrusted"},
-                {"path": "vendor/ours", "integrity": "undecided"}
+                {"path": "vendor", "shownPath": "vendor", "integrity": "untrusted"},
+                {"path": "vendor/ours", "shownPath": "vendor/ours", "integrity": "undecided"}
             ])
         );
         let revoke = Request::parse(

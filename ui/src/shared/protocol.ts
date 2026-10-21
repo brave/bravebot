@@ -399,6 +399,9 @@ export interface ConfirmRequest {
   lineEndings?: string | null
   request: number
   path: string
+  /** The path with whitespace at either end, zero-width and bidi characters made visible and
+   *  the name quoted, as the agent spelled it. Draw this and not `path`. */
+  shownPath: string
   intent: Intent
   untrusted: boolean
   existing: boolean
@@ -635,6 +638,8 @@ export interface ManifestError {
 export interface ExposureRequest {
   request: number
   path: string
+  /** `path` spelled as `ConfirmRequest.shownPath` is. Draw this and not `path`. */
+  shownPath: string
   credentials: string[]
   summary: string
 }
@@ -744,6 +749,8 @@ export interface RunRequest {
   /** Resolved execution plan, including conditional joins and redirections. */
   plan?: string
   writes?: string[]
+  /** `writes` with each path spelled as `ConfirmRequest.shownPath` is. Draw this and not `writes`. */
+  shownWrites: string[]
   stdin?: string | null
   stages: Stage[]
   directory: string
@@ -755,8 +762,11 @@ export interface RunRequest {
    * governing.
    */
   releasesPrivate: boolean
-  /** What the stages are confined to, or `null` where the turn does not confine them. */
-  confinement?: { heading: string; directories: string[]; sentences: string[] } | null
+  /**
+   * What the stages are confined to, or `null` where the turn does not confine them.
+   * `shownDirectories` is `directories` spelled as `shownWrites` is. Draw it and not `directories`.
+   */
+  confinement?: { heading: string; directories: string[]; shownDirectories: string[]; sentences: string[] } | null
   /** The sentence for `confinement: null`, worded by the bridge in the person's language. */
   notSandboxed?: string | null
   /**

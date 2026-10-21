@@ -471,6 +471,174 @@ fn two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_
     );
 }
 
+/// A listing reports two names the volume holds apart as two entries, each as the volume spells
+/// it, and trusts each by the rule about that name (TRUST-2). A refusal about one name reaches a
+/// listing of the other only where the two are one group. The walk turns a path into the text the
+/// map is asked about, so a step there that trims or re-spells a name would show as one entry
+/// standing for two files, or as a refusal landing on the wrong one.
+#[test]
+fn a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule() {
+    let mut asked = 0;
+    for (index, (first, first_group)) in aliases::AWKWARD_NAMES.iter().enumerate() {
+        for (second, second_group) in &aliases::AWKWARD_NAMES[index + 1..] {
+            let scratch = Scratch::new(&format!("listing-pairs-{index}-{asked}"));
+            if !aliases::two_files(&scratch.path, first, second) {
+                continue;
+            }
+            asked += 1;
+            let joined = first_group == second_group;
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let integrity_of_listing = |distrusted: Option<&str>| {
+                let mut sink = RecordingSink::new();
+                let mut policy = alias_policy(&workspace, &mut sink, distrusted);
+                workspace
+                    .list(&mut policy, &trusted_text("."), None, None)
+                    .expect("list")
+                    .label()
+                    .integrity
+            };
+            let files = || list_under(&scratch.path, ".", "**");
+
+            assert_eq!(
+                integrity_of_listing(None),
+                Integrity::Trusted,
+                "a listing of {first:?} and {second:?} is not trusted under a trusted workspace"
+            );
+            let mut expected = vec![first.to_string(), second.to_string()];
+            expected.sort();
+            assert_eq!(
+                files(),
+                expected,
+                "{first:?} and {second:?} are two files and not two entries"
+            );
+
+            for (named, other) in [(first, second), (second, first)] {
+                assert_eq!(
+                    integrity_of_listing(Some(named)),
+                    Integrity::Untrusted,
+                    "a distrust of {named:?} did not reach a listing that holds it"
+                );
+                let path = scratch.path.join(named);
+                std::fs::remove_file(&path).expect("remove the named file");
+                assert_eq!(
+                    files(),
+                    [other.to_string()],
+                    "the listing is of {other:?} alone"
+                );
+                assert_eq!(
+                    integrity_of_listing(Some(named)),
+                    if joined {
+                        Integrity::Untrusted
+                    } else {
+                        Integrity::Trusted
+                    },
+                    "a distrust of {named:?} did not leave a listing of {other:?} as the table says"
+                );
+                std::fs::write(&path, aliases::CONTENT).expect("restore the named file");
+            }
+        }
+    }
+    assert!(
+        asked > 100,
+        "only {asked} pairs were two files: the alphabet is not being used"
+    );
+}
+
+/// Names a rule's text cannot spell, each with the issue that tracks it. A rule line is trimmed
+/// when it is read and so is the specifier inside the brackets, so a name with whitespace at an end
+/// is read as the name without it and a name of whitespace alone is read as `./`, which names no
+/// file. A `*` is always a wildcard, so no rule is about the file called `*.md` and nothing else.
+/// The test below fails for a name listed here that a rule can spell, so the list is revised with
+/// the fix.
+const NOT_SPELLABLE_IN_A_RULE: &[(&str, &str)] = &[
+    ("a.md ", "#2864"),
+    ("a.md\t", "#2864"),
+    ("a.md\n", "#2864"),
+    ("a.md\u{a0}", "#2864"),
+    ("a.md\u{3000}", "#2864"),
+    ("*.md", "#2864"),
+    (" ", "#2864"),
+    ("\t", "#2864"),
+    ("\u{a0}", "#2864"),
+    ("\u{3000}", "#2864"),
+];
+
+/// A rule about one name is a rule about no other file the volume holds apart from it, whatever
+/// the polarity (TRUST-2, PERM-7). Deny and ask rules are about every canonically equivalent
+/// spelling of a name, which is one group of the awkward names, and an allow rule is about the
+/// spelling it was written in. The key a rule is matched under is built apart from the trust map's,
+/// so a step in it that trims, folds or decodes would join two files there without showing in the
+/// pair tests above.
+#[test]
+fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
+    use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject};
+
+    let mut asked = 0;
+    for (index, (first, first_group)) in aliases::AWKWARD_NAMES.iter().enumerate() {
+        for (second, second_group) in &aliases::AWKWARD_NAMES[index + 1..] {
+            let scratch = Scratch::new(&format!("rule-pairs-{index}-{asked}"));
+            if !aliases::two_files(&scratch.path, first, second) {
+                continue;
+            }
+            asked += 1;
+            let folds_case = bravebot_agent::workspace::trust_store(&scratch.path).folds_case();
+
+            for (named, other) in [(first, second), (second, first)] {
+                let spellable = !NOT_SPELLABLE_IN_A_RULE
+                    .iter()
+                    .any(|(listed, _)| listed == named);
+                for ruling in [Ruling::Deny, Ruling::Ask, Ruling::Allow] {
+                    for (subject, verb) in [(Subject::Read, "Read"), (Subject::Edit, "Edit")] {
+                        let text = vec![format!("{verb}(./{named})")];
+                        let none: Vec<String> = Vec::new();
+                        let (deny, ask, allow) = match ruling {
+                            Ruling::Deny => (&text, &none, &none),
+                            Ruling::Ask => (&none, &text, &none),
+                            Ruling::Allow => (&none, &none, &text),
+                        };
+                        let (permissions, rejected) = Permissions::parse(
+                            deny,
+                            ask,
+                            allow,
+                            &Anchors {
+                                folds_case,
+                                ..Anchors::none()
+                            },
+                        );
+                        let decides = |path: &str| {
+                            permissions.for_path(subject, path) == Decision::Ruled(ruling)
+                        };
+                        if !spellable {
+                            let about_that_file_alone = decides(named)
+                                && aliases::AWKWARD_NAMES
+                                    .iter()
+                                    .all(|(another, _)| another == named || !decides(another));
+                            assert!(
+                                rejected.is_empty() && !about_that_file_alone,
+                                "a rule for {named:?} is now rejected or is about that file alone: \
+                                 remove it from NOT_SPELLABLE_IN_A_RULE"
+                            );
+                            continue;
+                        }
+                        assert!(rejected.is_empty(), "{text:?} did not parse");
+                        assert!(decides(named), "{text:?} did not decide {named:?}");
+                        let joined = first_group == second_group && ruling != Ruling::Allow;
+                        assert_eq!(
+                            decides(other),
+                            joined,
+                            "{text:?} ({ruling:?}) decided the other file {other:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        asked > 100,
+        "only {asked} pairs were two files: the alphabet is not being used"
+    );
+}
+
 /// Fetched bytes written through one name of a file are what every name of it reads back, so the
 /// trust the earlier trusted write recorded cannot stay on the other name (TRUST-4). A row the map
 /// does not join lists the issue that tracks it.
@@ -4764,7 +4932,7 @@ fn the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace(
     let mut workspace = Workspace::new(&scratch.path)
         .expect("workspace")
         .with_reads_kept_inside(true);
-    workspace.open_scratch(Some(given.clone()));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -8005,7 +8173,7 @@ fn a_file_in_the_sessions_own_directory_is_reachable_by_its_absolute_path() {
     let given = SessionScratch::create().expect("a directory of its own");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -8046,7 +8214,7 @@ fn a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo() {
     std::fs::write(given.path().join("workings.txt"), "the first pass").expect("already there");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -8099,7 +8267,7 @@ fn a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project() {
     std::fs::write(&heavy, vec![b'x'; MAX_REWIND_BYTES]).expect("an intermediate file");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -8152,7 +8320,7 @@ fn the_sessions_own_directory_is_not_one_the_user_added() {
     let given = SessionScratch::create().expect("a directory of its own");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     assert!(workspace.added_directories().is_empty());
     assert_eq!(workspace.scratch(), Some(given.path()));
@@ -8166,7 +8334,7 @@ fn the_sessions_own_directory_cannot_be_added_by_name() {
     let given = SessionScratch::create().expect("a directory of its own");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let error = workspace
         .add_directory(given.path().to_str().expect("utf-8 path"))
@@ -8187,7 +8355,7 @@ fn the_working_directory_cannot_be_moved_into_the_sessions_own_directory() {
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
     let root = workspace.root().to_path_buf();
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     for refused in [given.path(), inside.as_path()] {
         let error = workspace
@@ -8216,7 +8384,9 @@ fn a_second_spelling_of_a_file_in_the_sessions_own_directory_reaches_the_same_ru
     std::os::unix::fs::symlink(&holder, base.join("link")).unwrap();
 
     let mut workspace = Workspace::new(holder.join("work")).expect("workspace");
-    workspace.open_scratch(Some(holder.join("given")));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(
+        holder.join("given"),
+    ));
 
     // A rule about the canonical name and nothing else. The workspace was answered about nothing, so
     // a name that reaches no rule reads untrusted and the reduction is the whole of what is tested.
@@ -8273,7 +8443,7 @@ fn the_temporary_directory_around_it_stays_unreachable() {
     ];
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     for directory in around {
         // The temporary directory is shared, so the name carries this process and the moment: a
@@ -8329,7 +8499,7 @@ fn a_symlink_out_of_the_sessions_own_directory_is_refused() {
     .unwrap();
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -8362,7 +8532,9 @@ fn shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_w
     workspace
         .add_directory(added.path.to_str().unwrap())
         .unwrap();
-    workspace.open_scratch(Some(session.path.canonicalize().unwrap()));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(
+        session.path.canonicalize().unwrap(),
+    ));
     let mut trust = TrustStore::new(workspace.root());
     trust.distrust(".");
     trust.distrust(added.path.canonicalize().unwrap().to_str().unwrap());
@@ -9416,7 +9588,7 @@ fn the_sessions_own_directory_is_still_reachable_from_its_delegates_checkout() {
         repository_with_a_state_directory("checkout-reach-session-dir", &[("README", "hello\n")]);
     let given = SessionScratch::create().expect("a directory of its own");
     std::fs::write(given.path().join("workings.txt"), "first pass").unwrap();
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
     let mut sink = RecordingSink::new();
     let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
     let made = workspace

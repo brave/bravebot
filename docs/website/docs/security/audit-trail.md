@@ -150,6 +150,17 @@ no profile directory.
 BLOCK   sandbox: run.unconfined: the request was refused and the line did not run: the strict sandbox mode does not take it
 ```
 
+A write, an edit, a fetch or a save that was put to you and not approved gets a blocked `approval` line
+naming the tool, so the trail says why nothing was written or fetched. Each file an `apply_checkout`
+brings back is a write of its own. Answering no, pressing Ctrl-C and a question nobody could be asked
+leave the same line, and a write a manifest run planned names its step.
+A `download_url` asks about the host and then about the file, and the line says which answer was no.
+
+```
+BLOCK   approval: write_file: the write was not approved, so nothing was written
+BLOCK   approval: fetch_url: the fetch was not approved, so nothing was fetched
+```
+
 ## The hosts a run's programs asked for are recorded
 
 When the sandbox holds a run to [a list of hosts](../customize/configuration.md#sandboxnetwork), the

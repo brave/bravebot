@@ -53,6 +53,7 @@ trusted inside a `vendor` marked untrusted, and the rest of that directory stays
 `verified-by: bravebot_core::policy::naming_a_file_vouches_for_nothing_beside_it`
 `verified-by: bravebot_core::policy::a_named_file_is_trusted_inside_an_untrusted_tree`
 `verified-by: bravebot_agent::turn::naming_one_file_leaves_the_rest_of_the_workspace_quarantined`
+`verified-by: bravebot_agent::turn::a_file_named_with_an_at_sign_is_vouched_for_alone_whatever_its_name`
 
 <a id="NAME-3"></a>
 ### NAME-3: the rule outlives the read
@@ -148,6 +149,7 @@ decided from the line the user typed, not from file contents.
 `verified-by: bravebot_mentions::lib::a_backslash_before_a_space_continues_a_reference`
 `verified-by: bravebot_mentions::lib::an_escaped_path_reads_back_unchanged`
 `verified-by: bravebot_mentions::lib::a_name_with_a_space_is_listed_and_finished`
+`verified-by: bravebot_mentions::lib::every_awkward_name_is_offered_and_read_back_as_the_file_it_is`
 `verified-by: bravebot_tui::references::a_name_with_a_space_completes_to_a_reference_that_names_it`
 `verified-by: bravebot_tui::references::enter_completes_a_half_typed_reference_past_an_escaped_space`
 
