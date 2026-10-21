@@ -10693,7 +10693,7 @@ mod tests {
             let mut session = Session::new("kernel-enforced");
             session.status = Status::Working;
 
-            act_while_working(&mut session, Action::Paste, || Pasted::Files(paths));
+            let _ = act_while_working(&mut session, Action::Paste, || Pasted::Files(paths));
 
             assert_eq!(session.input(), "[Image #1] ");
             assert_eq!(session.attached().len(), 1);
