@@ -1751,4 +1751,67 @@ mod tests {
         .unwrap_err();
         assert!(refused.contains("takes no text"), "{refused}");
     }
+
+    /// The item an act lands on comes from a fetch of its own connector as well as its own place,
+    /// so a fetch of another connector that names the same place is refused.
+    #[test]
+    fn an_act_lands_only_on_an_item_its_own_connector_fetched() {
+        let mirror = connector(
+            "mirror",
+            serde_json::json!({
+                "resources": {
+                    "find_issue": { "step": "fetch", "uses": ["place", "select"], "summary": "first issue",
+                        "select": ["state:*"], "receipt": true }
+                },
+                "forms": { "place": "owner/name" }
+            }),
+        );
+        let connectors = Connectors::from(BTreeMap::from([
+            ("github".to_string(), Ok(github())),
+            ("mirror".to_string(), Ok(mirror)),
+        ]));
+        let draft = Draft::new(vec![
+            DraftStep::new(CONNECTOR_FETCH)
+                .with_text("connector", "mirror")
+                .with_text("resource", "find_issue")
+                .with_text("place", "brave/bravebot")
+                .with_text("select", "state:open")
+                .with_text("out_slot", "i"),
+            act("comment").with_text("on", "i"),
+        ]);
+        let plan = validate_for_tests(&connectors.with_defaults(draft)).unwrap();
+        assert!(
+            connectors.check(&plan).unwrap_err().contains(
+                "'on' names 'i', which no fetch from this act's connector and place filled"
+            )
+        );
+    }
+
+    /// An act on every match narrows its selector only where its resource lists narrowing terms;
+    /// one that lists none takes any selector it offers.
+    #[test]
+    fn an_act_on_every_match_needs_narrowing_only_where_its_resource_lists_it() {
+        let tracker = connector(
+            "tracker",
+            serde_json::json!({
+                "resources": {
+                    "label_all": { "step": "act", "uses": ["place", "select", "option"], "summary": "label",
+                        "text": false, "select": ["state:*"], "values": { "option": ["add"] } }
+                },
+                "forms": { "place": "owner/name" }
+            }),
+        );
+        let connectors = Connectors::from(BTreeMap::from([("tracker".to_string(), Ok(tracker))]));
+        let draft = Draft::new(vec![
+            DraftStep::new(CONNECTOR_ACT)
+                .with_text("connector", "tracker")
+                .with_text("resource", "label_all")
+                .with_text("place", "brave/bravebot")
+                .with_text("select", "state:open")
+                .with_text("option", "add"),
+        ]);
+        let plan = validate_for_tests(&draft).unwrap();
+        let checked = connectors.check(&plan);
+        assert!(checked.is_ok(), "{checked:?}");
+    }
 }
