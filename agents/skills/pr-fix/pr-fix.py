@@ -80,8 +80,18 @@ def _load_shared():
     return module
 
 
+def _load_body_check():
+    path = Path(__file__).resolve().parents[3] / "contrib" / "check-pr-body.py"
+    spec = importlib.util.spec_from_file_location("check_pr_body", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 # The skill scripts are not an importable package, so the module they share is loaded by path.
 pr_worktree = _load_shared()
+# The Not covered line is read here and by CI's narration workflow, from the one implementation.
+check_pr_body = _load_body_check()
 
 BASE_REPO = pr_worktree.BASE_REPO
 die = pr_worktree.die
@@ -579,13 +589,20 @@ def issue_worktree(number, branch, here, remotes):
     return 0
 
 
-def body_problem(body, number):
-    """Why a pull request body does not have the shape the repository asks for, else None."""
+def body_problem(body, number, author=None):
+    """Why a pull request body does not have the shape the repository asks for, else None.
+
+    `author` is the login the pull request opens as. One that is not held to the Not covered line
+    skips it, and one that is not given is held.
+    """
     lines = [one.rstrip() for one in body.strip().splitlines()]
     if not lines or not re.fullmatch(rf"(?:Closes|Part of) {re.escape(BASE_REPO)}#{number}", lines[0]):
         return f"the first line must be `Closes {BASE_REPO}#{number}`, or `Part of` where the change is partial"
     if not any(one.startswith("User impact: ") and one.strip() != "User impact:" for one in lines):
         return "the body needs a `User impact: ` line"
+    problem = check_pr_body.not_covered_problem(body) if check_pr_body.author_is_held(author) else None
+    if problem:
+        return problem
     at = -1
     for heading in BODY_HEADINGS:
         if heading not in lines[at + 1 :]:
@@ -650,7 +667,8 @@ def open_pull(number, branch, title, body_file, here, remotes):
         die(f"{branch} has no commit on {onto}")
     if not title.strip() or EM_DASH in title:
         die("the title is empty or has an em-dash")
-    problem = body_problem(Path(body_file).read_text(encoding="utf-8"), number)
+    author = run("gh", "api", "user", "--jq", ".login", check=False).stdout.strip()
+    problem = body_problem(Path(body_file).read_text(encoding="utf-8"), number, author)
     if problem:
         die(problem)
     args = ["push", "origin", f"HEAD:refs/heads/{branch}"]
