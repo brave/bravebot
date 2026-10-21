@@ -2688,6 +2688,39 @@ panel-more = +{ $count } more
 panel-earlier = +{ $count } earlier
 # The same, with rows left out below as well.
 panel-earlier-and-more = +{ $earlier } earlier, +{ $later } more
+
+# The files state of the info panel, which lists what the session wrote (`/files`).
+# Its heading, above the list: how many files the session's write calls changed.
+files-heading = { $count ->
+    [one] { $count } file changed
+   *[other] { $count } files changed
+    }
+# Beside that heading after a resume, since the session record holds no write's changes.
+files-earlier-not-kept = earlier edits are not kept
+# The first and last rows of a list longer than its room, counting the files left out.
+files-more-above = ↑ { $count } more above
+files-more-below = ↓ { $count } more below
+# The last row of that list when files arrived after the reader last pressed a key.
+files-more-below-new = ↓ { $count } more below, { $new } new
+# Over each edit to the highlighted file: its place among them and the turn it was made in.
+files-edit-header = edit { $index } of { $total }, turn { $turn }
+# After the highlighted file's name.
+files-edit-count = { $count ->
+    [one] { $count } edit
+   *[other] { $count } edits
+    }
+# Left in the transcript by /files before the session has written a file.
+files-nothing-written = no file has been written in this session yet
+# Left in the transcript by /files on a terminal too narrow for the state.
+files-too-narrow = The files view needs a terminal at least { $columns } columns wide.
+# Said on the bottom line while the state is open, naming its keys.
+files-hint = ↑↓ file  ·  PgUp PgDn scroll  ·  [ ] edit  ·  q back
+# The info panel's Files section: its heading, and how many files the session wrote.
+panel-files = Files
+panel-files-total = { $count ->
+    [one] { $count } file
+   *[other] { $count } files
+    }
 # Said on the bottom line while the view is scrolled back off the tail, and gone once it reaches it.
 held-hint = { $count ->
     [one] held, { $count } row below  ·  { $chord } to return
@@ -2761,6 +2794,7 @@ command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
 command-jobs = List this turn's background jobs, and stop one by its name
 command-panel = Show or hide the info panel beside the transcript
+command-files = List the files the session wrote and show every edit to the one highlighted
 command-caffeinate = Keep the computer awake while a turn or loop is pending
 command-checkouts = List kept checkouts, bring their files back, or remove one
 command-plan = Enter plan mode, and start on a task if you give one

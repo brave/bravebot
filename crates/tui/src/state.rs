@@ -16,6 +16,7 @@ mod accounts;
 mod completion;
 mod editing;
 mod entry;
+mod files;
 mod scroller;
 mod settings;
 mod standing;
@@ -735,6 +736,11 @@ pub struct Session {
     pub show_trail: bool,
     /// Whether the person has the info panel open, which the frame then draws only where it fits.
     panel: bool,
+    /// The info panel's files state, while it is open (FILES-3).
+    ///
+    /// Beside `panel` rather than in place of it, so that ending the state puts the panel back as it
+    /// was: closed if it was closed.
+    files: Option<crate::files_mode::State>,
     /// The width the person has dragged the info panel to, which the frame clamps to the terminal
     /// it is drawn on without changing this.
     panel_width: u16,
@@ -1406,6 +1412,7 @@ impl Session {
             status: Status::Idle,
             show_trail: false,
             panel: false,
+            files: None,
             panel_width: crate::panel::WIDTH,
             panel_drag: false,
             pointer: None,
@@ -1774,6 +1781,8 @@ impl Session {
         // A new conversation has sent nothing yet, so Up starts from nothing of its own.
         self.history.forget_session();
         self.transcript.clear();
+        // The edits it listed were in the transcript that is gone (FILES-10).
+        self.files = None;
         self.expandable_lines = 0;
         self.last_request = None;
         self.turns = 0;

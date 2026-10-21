@@ -2337,6 +2337,7 @@ command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fix
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
 command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
+command-files = Lister les fichiers écrits par la session et afficher chaque modification de celui qui est sélectionné
 command-caffeinate = Garder l'ordinateur éveillé tant qu'un tour ou une boucle est en attente
 command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
 command-plan = Passer en mode plan, et commencer une tâche si vous en donnez une
@@ -3205,6 +3206,39 @@ panel-cache-written = cache écrit { $tokens }
 panel-more = +{ $count } de plus
 panel-earlier = +{ $count } avant
 panel-earlier-and-more = +{ $earlier } avant, +{ $later } de plus
+
+# L'état « fichiers » du panneau d'informations, qui liste ce que la session a écrit (`/files`).
+# Son titre, au-dessus de la liste : combien de fichiers les appels d'écriture de la session ont modifiés.
+files-heading = { $count ->
+    [one] { $count } fichier modifié
+   *[other] { $count } fichiers modifiés
+    }
+# À côté de ce titre après une reprise, puisque l'enregistrement de la session ne garde aucune modification.
+files-earlier-not-kept = les modifications antérieures ne sont pas conservées
+# La première et la dernière ligne d'une liste plus longue que sa place, avec les fichiers omis.
+files-more-above = ↑ { $count } de plus au-dessus
+files-more-below = ↓ { $count } de plus en dessous
+# La dernière ligne de cette liste quand des fichiers sont arrivés depuis la dernière touche.
+files-more-below-new = ↓ { $count } de plus en dessous, dont { $new } nouveaux
+# Au-dessus de chaque modification du fichier sélectionné : sa place parmi elles et le tour où elle a été faite.
+files-edit-header = modification { $index } sur { $total }, tour { $turn }
+# Après le nom du fichier sélectionné.
+files-edit-count = { $count ->
+    [one] { $count } modification
+   *[other] { $count } modifications
+    }
+# Laissé dans la transcription par /files avant que la session n'ait écrit un fichier.
+files-nothing-written = aucun fichier n'a encore été écrit dans cette session
+# Laissé dans la transcription par /files sur un terminal trop étroit pour cet état.
+files-too-narrow = La vue des fichiers demande un terminal d'au moins { $columns } colonnes de large.
+# Dit sur la dernière ligne tant que l'état est ouvert, avec ses touches.
+files-hint = ↑↓ fichier  ·  PgUp PgDn défiler  ·  [ ] modification  ·  q retour
+# La section Fichiers du panneau d'informations : son titre, et combien de fichiers la session a écrits.
+panel-files = Fichiers
+panel-files-total = { $count ->
+    [one] { $count } fichier
+   *[other] { $count } fichiers
+    }
 
 # Vérifications indicatives affichées uniquement dans un dépôt de sources de Bravebot.
 doctor-development = environnement de développement { $path }

@@ -8639,6 +8639,76 @@ fn an_approved_edit_reports_what_changed() {
     );
 }
 
+/// FILES-2: the counts and the line numbers of an edit are made with the diff inside the kernel and
+/// ride on the finished call, and a call that changed nothing carries none.
+#[test]
+fn what_a_write_added_and_removed_is_counted_inside_the_kernel_before_it_is_released() {
+    use bravebot_agent::diff::Numbered;
+    let scratch = Scratch::new("write-counted");
+    std::fs::write(scratch.path.join("a.txt"), "keep\nold\ntail\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        two_tool_requests(
+            (
+                "edit_file",
+                r#"{"path":"a.txt","old_text":"old","new_text":"new\nmore"}"#,
+            ),
+            (
+                "edit_file",
+                r#"{"path":"a.txt","old_text":"absent","new_text":"x"}"#,
+            ),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("edit a.txt"),
+        &mut RecordingConfirmer::approving(),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let at = |before: Option<usize>, after: Option<usize>| Numbered { before, after };
+    let edit = reporter.finished.first().expect("the edit was summarised");
+    let written = edit
+        .written
+        .as_ref()
+        .expect("a changed file carries its counts");
+    assert_eq!((written.added, written.removed), (2, 1));
+    assert_eq!(
+        written.numbers,
+        vec![
+            at(Some(1), Some(1)),
+            at(Some(2), None),
+            at(None, Some(2)),
+            at(None, Some(3)),
+            at(Some(3), Some(4)),
+        ]
+    );
+    assert_eq!(written.numbers.len(), edit.changes.len());
+
+    let refused = reporter
+        .finished
+        .get(1)
+        .expect("the second edit was summarised");
+    assert!(refused.failed);
+    assert_eq!(
+        refused.written, None,
+        "a call that changed no file carried counts"
+    );
+}
+
 /// An approved edit replaces only the passage it named, leaving the rest of the file alone.
 #[test]
 fn an_approved_edit_changes_only_the_matched_passage() {

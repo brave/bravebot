@@ -1152,6 +1152,8 @@ struct Produced {
     told: Option<Labelled<String>>,
     /// The change a write made, for showing under the line it belongs to.
     changes: Vec<crate::diff::Change>,
+    /// What the kernel counted for the diff behind `changes`, set where a write changed a file.
+    written: Option<crate::report::Written>,
     /// Whether those lines are content nobody vouched for.
     untrusted: bool,
     /// Whether this call left a file on disk different from how it found it.
@@ -1266,6 +1268,7 @@ impl Produced {
             apart: None,
             told: None,
             changes: Vec::new(),
+            written: None,
             untrusted: false,
             changed_a_file: false,
             ran_a_program: false,
@@ -1462,6 +1465,11 @@ impl Produced {
 
     fn with_changes(mut self, changes: Vec<crate::diff::Change>) -> Self {
         self.changes = changes;
+        self
+    }
+
+    fn with_written(mut self, written: crate::report::Written) -> Self {
+        self.written = Some(written);
         self
     }
 
@@ -1870,6 +1878,8 @@ pub(crate) struct Reviewed {
     pub note: String,
     /// The hunks, condensed to what is worth the room in a transcript.
     pub changes: Vec<crate::diff::Change>,
+    /// What the diff counted and where its rows stand, made with it.
+    pub written: crate::report::Written,
     /// The whole comparison, for the prompt a person approves from.
     pub diff: Diff,
 }
@@ -1894,9 +1904,15 @@ pub(crate) fn review_a_write<S: Sink>(
     let reviewed = policy.render_pair_in_place(tool, existing, body, |existing, written| {
         let diff = Diff::compute(&existing, &written);
         let (note, changes) = change_report(intent, &diff, replaced_age);
+        let written = crate::report::Written {
+            added: diff.added(),
+            removed: diff.removed(),
+            numbers: diff.condensed_numbers(DIFF_CONTEXT),
+        };
         Reviewed {
             note,
             changes,
+            written,
             diff,
         }
     });
@@ -2365,6 +2381,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         .of_tool(&name)
         .saying_why(why)
         .with_changes(std::mem::take(&mut produced.changes))
+        .with_written(produced.written.take())
         .marked_untrusted(produced.untrusted)
         .after_waiting(
             produced
@@ -4771,7 +4788,12 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_revision)) {
         Ok(_) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
-            let Reviewed { note, changes, .. } = reviewed;
+            let Reviewed {
+                note,
+                changes,
+                written,
+                ..
+            } = reviewed;
             let checked = if check_with_server {
                 diagnostics_after_a_write(policy, tools.servers.as_deref_mut(), &proposed_path)
             } else {
@@ -4819,6 +4841,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
             };
             confirmed(done, carried_note(note, &scanned))
                 .with_changes(changes)
+                .with_written(written)
                 .marked_untrusted(!body_label.is_trusted())
                 .having_changed_a_file()
         }
@@ -5523,7 +5546,12 @@ fn edit_file<S: Sink, C: Confirmer>(
     match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current) {
         Ok(_) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
-            let Reviewed { note, changes, .. } = reviewed;
+            let Reviewed {
+                note,
+                changes,
+                written,
+                ..
+            } = reviewed;
             let note = carried_note(note, &scanned);
             let headline = format!("edited {shown_path}: {occurrences} replacement(s)");
             // What a server that is already running makes of the file now (LSP-12). It reads the
@@ -5585,6 +5613,7 @@ fn edit_file<S: Sink, C: Confirmer>(
                             ),
                         )
                         .with_changes(changes)
+                        .with_written(written)
                         .marked_untrusted(false)
                         .having_changed_a_file();
                     }
@@ -5597,11 +5626,13 @@ fn edit_file<S: Sink, C: Confirmer>(
                 });
                 Produced::new(told, "", note)
                     .with_changes(changes)
+                    .with_written(written)
                     .marked_untrusted(false)
                     .having_changed_a_file()
             } else {
                 confirmed(headline, note)
                     .with_changes(changes)
+                    .with_written(written)
                     .marked_untrusted(true)
                     .having_changed_a_file()
             }

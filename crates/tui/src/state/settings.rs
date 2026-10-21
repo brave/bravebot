@@ -561,17 +561,22 @@ impl Session {
     /// The columns the info panel takes on a frame `columns` wide, border included: the width the
     /// person dragged it to, held between its minimum and what leaves the transcript its own.
     pub fn panel_columns(&self, columns: u16) -> u16 {
+        if self.files.is_some() {
+            return crate::files_mode::columns(columns);
+        }
         crate::panel::clamped(self.panel_width, columns)
     }
 
     /// Whether a press here is on the panel's border, the column a drag resizes it by.
     fn on_panel_border(&self, row: u16, column: u16) -> bool {
-        self.laid.panes.iter().any(|(pane, rect)| {
-            *pane == crate::select::Pane::Panel
-                && rect.x == column
-                && rect.y <= row
-                && row < rect.bottom()
-        })
+        // The files state is half the terminal, which dragging does not change (FILES-4).
+        self.files.is_none()
+            && self.laid.panes.iter().any(|(pane, rect)| {
+                *pane == crate::select::Pane::Panel
+                    && rect.x == column
+                    && rect.y <= row
+                    && row < rect.bottom()
+            })
     }
 
     /// Begin dragging the panel's border where the button went down, and say whether it was
@@ -682,7 +687,7 @@ impl Session {
 
     /// Whether the person has the info panel open, whether or not the last frame had room for it.
     pub fn panel_open(&self) -> bool {
-        self.panel
+        self.panel || self.files.is_some()
     }
 
     /// Open or close the info panel.
@@ -692,6 +697,14 @@ impl Session {
     /// and the next widening would bring back a panel nobody remembered opening. A press to close
     /// always closes, so a panel left open before the terminal was narrowed can be put away.
     pub fn toggle_panel(&mut self) {
+        // The key hides the panel from either state, and the state goes with it (FILES-3).
+        if self.files.take().is_some() {
+            self.panel = false;
+            if self.persist {
+                bravebot_session::store::save_panel(false);
+            }
+            return;
+        }
         if !self.panel && !crate::panel::fits(self.laid.columns) {
             self.note(t!(panel_too_narrow, columns = crate::panel::NARROWEST));
             return;

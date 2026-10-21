@@ -33,6 +33,7 @@ pub mod confirm;
 pub mod dropped;
 pub mod editor;
 pub mod effort_prompt;
+pub mod files_mode;
 pub mod goals;
 pub mod help_command;
 pub mod hidden;

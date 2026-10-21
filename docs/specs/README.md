@@ -63,6 +63,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [commits.md](commits.md) | `COMMIT` | 11 | a commit of the files each turn wrote: which paths, what message, how git is started, and how `/undo` takes the commit back (proposed, nothing built) |
 | [mouse.md](mouse.md) | `MOUSE` | 7 | dragging, double and triple clicking and shift-clicking to copy text: which cells a selection may take |
 | [info-panel.md](info-panel.md) | `PANEL` | 15 | telling many sessions apart: the terminal's title and the info panel |
+| [files-mode.md](files-mode.md) | `FILES` | 10 | a state of the info panel that lists the files the session wrote and every edit to the highlighted one |
 | [background-sessions.md](background-sessions.md) | `BG` | 16 | proposed, the roster, its list (grouped by state on a terminal) and stop, `--bg`, `/bg`, attach, reply and the supervisor that restarts an idle process built: sessions that keep running after the terminal closes, with a list, attach and reply |
 | [session-messages.md](session-messages.md) | `MSG` | 12 | proposed, built: one background session sending text to another, put to a person and never starting a turn |
 | [plugins.md](plugins.md) | `PLUGIN` | 10 | proposed, nothing built: a bundle of skills, definitions, hooks and servers installed by one command a person types, and the marketplace index it may come from |
