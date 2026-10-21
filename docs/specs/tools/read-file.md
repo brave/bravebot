@@ -72,7 +72,7 @@ bytes, in this order:
    encoding, an unpaired or cut-off unit becoming U+FFFD. UTF-32 is tried before UTF-16, because
    the UTF-32 little-endian mark begins with the UTF-16 one.
 2. Without a mark, a file holding a null byte or more than 30 percent control characters in its
-   first 8 KiB is binary, as before.
+   first 8 KiB is binary.
 3. Any other file is read as UTF-8, each invalid sequence of bytes becoming one U+FFFD, so a
    Latin-1 file with one accented character reads. Where more than 30 percent of the characters
    come out as U+FFFD the file is binary, the share of control characters step 2 already allows.
