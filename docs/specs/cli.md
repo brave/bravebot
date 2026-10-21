@@ -2079,12 +2079,20 @@ A steer and a stop reach a turn by the places a typed line and the stop key do
 ([INPUT-10](terminal-input.md#INPUT-10), [INPUT-36](terminal-input.md#INPUT-36)), so a turn gains
 nothing for being driven this way and the guarantees of those clauses hold here unchanged.
 
-**A known cost.** The program decides when turns begin and end and which of the choices the planner
-offered answers a question, so those decisions are taken from bytes a program sent, on a channel
-nobody vouched for as on one somebody did. They decide no effect and put no word into the planner's
-context. `lines.rs` reads only the fixed words and the numbers listed here to take them. The `text`
-of a line is unescaped and seen to be there, and nothing in it is read: it is carried as the line
-spelt it.
+**Not an exception to [LABEL-5](labels.md#LABEL-5).** The program decides when turns begin and end
+and which of the choices the planner offered answers a question, from bytes it sent on a channel
+nobody vouched for as on one somebody did. That is not one of the places
+[Known costs](labels.md#known-costs) lists as deciding from untrusted bytes, and it is not added to
+them. The rule keeps untrusted content out of the driver ([LAYER-2](layering.md#LAYER-2)), and
+`lines.rs` is in `bravebot-cli`, which [LAYER-1](layering.md#LAYER-1) lists as presentation: it holds
+no labelled value and mints no witness. It reads the fixed words and the numbers listed here, which
+the envelope spells, and hands the driver what any front end does: the token that stops a turn, a
+position as the answer to a question, and a steer that is the person's own words only where they
+vouched for the channel. The `text` of a line is unescaped and seen to be there, and nothing in it
+is read: it is carried as the line spelt it, under the channel's label. Those decisions settle no
+effect and put no word of the program's into the planner's context. The program is also what
+launched the run, and its command line already gives the planner words as the person's own
+([LABEL-8](labels.md#LABEL-8)), which is more than a position among words the planner wrote.
 
 **A known cost.** A later turn is carried on from the record, as a resumed session is
 ([SESSION-2](sessions.md#SESSION-2)), so a reference to quarantined content an earlier turn made

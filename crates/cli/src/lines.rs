@@ -605,6 +605,16 @@ impl State {
 }
 
 /// What the thread reading the lines hands to the run, and the run to the confirmer.
+///
+/// What INPUT-10 and INPUT-36 settle inside a turn is the agent's, and is reused rather than held
+/// here: a steer reaches the planner through [`bravebot_agent::Confirmer::interjection`], which the
+/// turn drains at a round boundary in the order sent, and a stop sets the [`Cancel`] the turn
+/// carries, as the terminal and the desktop bridge do. What is kept here is the lines protocol's
+/// own: a queue of prompts that each wait for a turn of their own, where the interface sends a line
+/// typed mid-turn into the turn, the bytes waiting, and the question waiting for its answer. The
+/// terminal holds a line sent mid-turn as screen state, with its files and marks, and the desktop
+/// bridge leaves a line the turn did not take to the window that sent it, so neither has a module
+/// for this to call.
 #[derive(Clone)]
 pub(crate) struct Channel {
     shared: Arc<Shared>,
