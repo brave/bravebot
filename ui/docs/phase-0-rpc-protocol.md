@@ -834,7 +834,11 @@ for. A server reply has none either: an approval lasts as long as the session do
 the first and no more questions about this tool in this project for the second. `mcp-tools.reply`
 and `mcp-move.reply` accept `decision`.
 `ask.reply` accepts an `answers` array, whose entries contain `typed` text or `chosen`
-indices; unreadable entries decline. Choices are fitted to the question before use.
+indices; unreadable entries decline. Choices are fitted to the question before use. The entries
+answer the `prompts` of the request by position. A question the person answered earlier in the
+session is not in `prompts`, and a series whose questions are all settled sends no `ask.request`
+([ASK-8](../../docs/specs/tools/ask-user.md#ASK-8)). A question left without an answer is not
+remembered as declined.
 
 #### Permissions
 
@@ -1161,7 +1165,8 @@ preferences to this ID just as they do for `turn.done`.
 `notices` is what the turn said about itself as it ran, as §8.2 carries for a turn that
 answered. A failed turn produces no outcome for those sentences to arrive on, and one of
 them is a hook of the person's own that could not be started, so a client that drops this
-field is a client on which nobody learns their formatter has stopped running.
+field is a client on which nobody learns their formatter has stopped running. The same list
+names each question the turn did not put because the person had already answered it.
 
 ### 8.4 Failure semantics — the load-bearing part
 

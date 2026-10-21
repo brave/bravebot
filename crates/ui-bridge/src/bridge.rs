@@ -2381,6 +2381,7 @@ fn work(work: Work) {
         cancel.clone(),
     )
     .answerable_by(answerers)
+    .remembering(Arc::clone(&state.question_answers))
     .taking_interjections(interjections);
 
     // The session's MCP servers (SERVERS-9), started by its first turn and held until it closes.
@@ -2478,7 +2479,7 @@ fn work(work: Work) {
     // which no mode a window can choose answers: only bypassing does (SERVERS-13), and a window
     // cannot reach it. The screening value is the task's, so the confirmer and the tools that fill
     // in a verdict read the same answer.
-    let mut confirmer = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
+    let mut confining = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
     open_rewind_point(&mut state, &workspace, &prompt);
     let began_at = std::time::Instant::now();
     let completed = agent_turn::resume(
@@ -2487,7 +2488,7 @@ fn work(work: Work) {
         &workspace,
         &task,
         &mut state.conversation,
-        &mut confirmer,
+        &mut confining,
         &mut reporter,
         &mut sink,
         trust,
@@ -2568,6 +2569,9 @@ fn work(work: Work) {
             let archived = save(&project, &mut state, turn, sink.trail());
 
             let rules = rules_json(&state.answers.trust);
+            // What the turn said, then each question it did not put because the person had
+            // already answered it.
+            let notices = [outcome.notices.as_slice(), confirmer.reused()].concat();
 
             Event::new(
                 "turn.done",
@@ -2583,7 +2587,7 @@ fn work(work: Work) {
                     "tokens": outcome.tokens,
                     "outputTokens": outcome.output_tokens,
                     "contextTokens": outcome.context_tokens,
-                    "notices": outcome.notices,
+                    "notices": notices,
                     "trust": { "rules": rules },
                     // The session's durable name, which is real from here and was not before:
                     // `save` above is what wrote the record, and until a record exists there is
@@ -2621,6 +2625,7 @@ fn work(work: Work) {
             );
             let _ = save(&project, &mut state, turn, sink.trail());
 
+            let notices = [reporter.notices(), confirmer.reused()].concat();
             let chosen = task.model.as_deref().unwrap_or(&config.default_model);
             let mut data = failure_fields(&error, &config, chosen);
             merge(
@@ -2631,7 +2636,7 @@ fn work(work: Work) {
                     // What the turn said about itself before it failed, as `turn.done` carries for a
                     // turn that answered. There is no outcome here to take them from, and a hook
                     // that could not be started is the person's own to hear about (HOOK-7).
-                    "notices": reporter.notices(),
+                    "notices": notices,
                     // As on `turn.done`. A turn that failed still said what it was asked, so the
                     // prompt is in the conversation and is still a place a fork can be cut at.
                     "prompt": prompt_ordinal(&state.conversation, &prompt),
