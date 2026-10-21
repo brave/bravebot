@@ -397,6 +397,62 @@ fn a_turn_that_is_stopping_or_over_does_not_take_a_line() {
     );
 }
 
+/// A line aimed at a turn other than the running one is not delivered to it (INPUT-46): the window
+/// is told so and makes a turn of the line.
+#[test]
+fn a_line_aimed_at_another_turn_is_not_taken() {
+    let mut turn = Running::start("interject-other-target");
+
+    let session = turn.session.clone();
+    let stale = turn.call(
+        "turn.interject",
+        json!({"session": session, "prompt": "for the last turn", "target": 999_999}),
+    );
+    assert_eq!(
+        stale["ok"]["accepted"], false,
+        "a line for another turn was taken by the running one: {stale}"
+    );
+    turn.release_the_first_answer();
+    until(&turn.said, |message| {
+        message["event"] == "turn.done" || message["event"] == "turn.error"
+    });
+    assert!(
+        turn.service
+            .asked
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| conversation(request)
+                .iter()
+                .all(|(_, text)| !text.contains("for the last turn"))),
+        "a line aimed at another turn reached the planner"
+    );
+}
+
+/// A session with a view has its own ordering of prompts, so it takes no interjection.
+#[test]
+fn a_session_with_a_view_refuses_a_line() {
+    let mut turn = Running::open("interject-view");
+
+    let session = turn.session.clone();
+    let viewed = turn.call(
+        "session.view.start",
+        json!({"session": session, "version": 1}),
+    );
+    assert!(
+        viewed.get("ok").is_some(),
+        "the view did not start: {viewed}"
+    );
+    let started = turn.call(
+        "turn.send",
+        json!({"session": session, "prompt": "look around"}),
+    );
+    assert!(started["ok"]["target"].is_u64(), "no turn began: {started}");
+    let refused = turn.interject("into a viewed turn");
+    assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
+    turn.release_the_first_answer();
+}
+
 /// A line with nothing in it is not a message, and a line for a session nobody opened is refused.
 #[test]
 fn a_blank_line_and_an_unknown_session_are_refused() {
