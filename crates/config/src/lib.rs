@@ -50,8 +50,8 @@ pub use sandbox_filesystem::{
 pub use settings::{
     Attribution, DEFAULT_RETENTION_DAYS, Narrowing, NotADocument, PermissionLists, Reference,
     ReferenceFault, Retention, RunDeadlines, Settings, check_document, local_settings_file, lock,
-    locked, name_a_settings_file, named_settings_file, processor_model_named, project_settings_file,
-    user_settings_file,
+    locked, name_a_settings_file, named_settings_file, processor_model_named,
+    project_settings_file, user_settings_file,
 };
 
 pub mod bedrock;
