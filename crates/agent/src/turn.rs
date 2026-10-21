@@ -6125,13 +6125,32 @@ mod tests {
             task: Task,
             replies: Vec<Result<Completion, BackendError>>,
         ) -> Taken {
+            let mut reporter = crate::report::RecordingReporter::default();
+            let (outcome, sent, moves) =
+                take_reporting_to(name, config, task, replies, &mut reporter);
+            Taken {
+                outcome,
+                reporter,
+                sent,
+                moves,
+            }
+        }
+
+        /// What [`take`] runs, with a reporter of the test's own: the outcome, the body of each
+        /// request sent, and every line the trail recorded about a move to the fallback.
+        pub(super) fn take_reporting_to<R: crate::report::Reporter + Send>(
+            name: &str,
+            config: &Config,
+            task: Task,
+            replies: Vec<Result<Completion, BackendError>>,
+            reporter: &mut R,
+        ) -> (Result<Outcome, TurnError>, Vec<String>, Vec<String>) {
             let scratch = crate::testutil::scratch_dir(name);
             let _ = std::fs::remove_dir_all(&scratch);
             std::fs::create_dir_all(&scratch).unwrap();
             let workspace = Workspace::new(&scratch).unwrap();
             let mut trust = TrustStore::new("/work");
             trust.trust(".");
-            let mut reporter = crate::report::RecordingReporter::default();
             let mut sink = bravebot_core::event::RecordingSink::new();
             scripted::script(replies);
             let outcome = resume(
@@ -6141,7 +6160,7 @@ mod tests {
                 &task,
                 &mut Conversation::new(),
                 &mut crate::confirm::ApproveWrites,
-                &mut reporter,
+                reporter,
                 &mut sink,
                 trust,
                 TrustedPrograms::new(),
@@ -6163,12 +6182,7 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            Taken {
-                outcome,
-                reporter,
-                sent,
-                moves,
-            }
+            (outcome, sent, moves)
         }
 
         fn on_primary() -> Task {
@@ -6320,7 +6334,7 @@ mod tests {
     /// BACKEND-56: a turn that begins in plan mode runs on the model `planModel` names.
     mod plan_model {
         use super::ceiling::said;
-        use super::fallback::{configured, named_in, take};
+        use super::fallback::{configured, named_in, take, take_reporting_to};
         use super::*;
 
         const SESSION: &str = "session-model";
@@ -6484,6 +6498,52 @@ mod tests {
                 two_rounds(),
             );
             assert_eq!(sent_to(&moved_into_plan), [SESSION, SESSION]);
+        }
+
+        /// Presses the key that sets the mode as the turn's first tool starts, which is between its
+        /// first request and its second.
+        struct PressesTheKey {
+            mode: crate::LiveMode,
+            to: crate::PermissionMode,
+        }
+
+        impl crate::report::Reporter for PressesTheKey {
+            fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+            fn tool_started(&mut self, _activity: crate::report::Activity) {
+                self.mode.set(self.to);
+            }
+        }
+
+        /// BACKEND-56, MODE-8: a mode chosen while the turn runs changes nothing about its model.
+        /// The fault it rejects: the mode read again for each request, so a key pressed in the
+        /// middle of a plan turn sends the rest of it to the session's model and the reverse.
+        #[test]
+        fn a_mode_chosen_while_the_turn_runs_does_not_change_its_model() {
+            use crate::PermissionMode::{AcceptEdits, Plan};
+            let config = planning(Some(PLAN));
+            for (began, pressed, answers) in
+                [(Plan, AcceptEdits, PLAN), (AcceptEdits, Plan, SESSION)]
+            {
+                let mode = crate::LiveMode::new(began);
+                let task = Task::new("look it up")
+                    .with_model(Some(SESSION.into()))
+                    .with_permission_mode(mode.clone());
+                let mut key = PressesTheKey {
+                    mode: mode.clone(),
+                    to: pressed,
+                };
+                let (outcome, sent, _) =
+                    take_reporting_to("plan-model-pressed", &config, task, two_rounds(), &mut key);
+                assert_eq!(
+                    mode.get(),
+                    pressed,
+                    "the key was pressed while the turn ran"
+                );
+                assert!(outcome.is_ok(), "{outcome:?}");
+                let sent: Vec<_> = sent.iter().map(|body| named_in(body)).collect();
+                assert_eq!(sent, [answers, answers], "a turn that began in {began:?}");
+            }
         }
 
         /// What a front end sizes the context budget for is what the turn is sent to. The fault it

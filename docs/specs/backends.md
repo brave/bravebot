@@ -2569,10 +2569,12 @@ the service that serves it, as the `model` key is.
 `verified-by: bravebot_agent::turn::a_delegate_in_plan_mode_keeps_the_model_it_was_given`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_plan_model`
 `verified-by: bravebot_config::lib::the_plan_setting_resolves_a_tier_word_and_is_absent_when_unset`
+`verified-by: bravebot_agent::turn::a_mode_chosen_while_the_turn_runs_does_not_change_its_model`
 `verified-by: bravebot_agent::turn::a_turn_begins_in_the_mode_it_was_told_and_not_the_one_held_when_it_opens`
 `verified-by: bravebot_agent::turn::the_model_answering_is_the_model_the_turn_is_sent_to`
 `verified-by: bravebot_agent::turn::a_more_specific_model_outranks_the_plan_model_in_every_mode`
 `verified-by: bravebot_tui::app::a_plan_turn_takes_the_plan_models_window_and_no_other_turn_does`
+`verified-by: bravebot_tui::app::a_mode_pressed_after_a_turn_is_settled_leaves_it_in_the_mode_its_window_was_sized_for`
 `verified-by: bravebot_tui::app::the_model_a_window_is_read_for_follows_the_order_the_agent_settles`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_plan_model_is_not_obeyed`
 

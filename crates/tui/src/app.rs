@@ -7906,6 +7906,31 @@ mod tests {
         );
     }
 
+    /// BACKEND-56, MODE-8: the mode is read once, when the turn is settled, and the task carries
+    /// that reading while its handle stays live for the rest of the turn. The fault it rejects: the
+    /// window sized for one reading and the turn begun on another, where the key that sets the mode
+    /// is pressed between them.
+    #[test]
+    fn a_mode_pressed_after_a_turn_is_settled_leaves_it_in_the_mode_its_window_was_sized_for() {
+        use bravebot_agent::{LiveMode, PermissionMode};
+
+        let config = a_config_naming_a_plan_model_with_a_window();
+        let egress = bravebot_net::Egress::new();
+        let mode = LiveMode::new(PermissionMode::Plan);
+        let task = Task::new("it").with_permission_mode(mode.clone());
+
+        let (task, turn) = settle_the_turn(&config, &egress, task, &mode, None);
+        mode.set(PermissionMode::AcceptEdits);
+
+        assert_eq!(task.began_in, Some(PermissionMode::Plan));
+        assert_eq!(
+            task.permission_mode.get(),
+            PermissionMode::AcceptEdits,
+            "what the turn decides after it opens follows the key (MODE-8)"
+        );
+        assert_eq!(turn.context_budget, A_PLAN_MODELS_WINDOW);
+    }
+
     /// BACKEND-56, DELEGATE-22: the model the window is read for is the one the agent settles on,
     /// so a definition's model outranks the plan model and a turn in any other mode does not reach
     /// for it. The fault it rejects: this crate deciding the order itself and differing from the
