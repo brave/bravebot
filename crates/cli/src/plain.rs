@@ -3434,6 +3434,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_fetch_hop_is_asked_with_the_host_it_came_from() {
+        let request = FetchRequest {
+            url: "https://other.example/a".to_string(),
+            host: "other.example".to_string(),
+            redirected_from: Some("example.com".to_string()),
+        };
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+            Vec::new(),
+        );
+        assert_eq!(asking.confirm_fetch(&request), Decision::Approve);
+        let drawn = String::from_utf8(asking.output).expect("text");
+        for line in bravebot_approval::fetch_lines(
+            "other.example",
+            &request.url,
+            false,
+            Some("example.com"),
+        ) {
+            assert!(drawn.contains(&line), "`{line}` is missing from: {drawn}");
+        }
+        assert!(
+            drawn.contains(&t!(fetch_redirected, from = "example.com")),
+            "the redirect row is missing: {drawn}"
+        );
+    }
+
     /// BG-7: every question a session puts reaches its watcher as the kind it is, which is the
     /// word the roster stores and the list shows. A method that never said its kind would be
     /// listed as a plain question, and one that said another's would be listed as that.

@@ -137,7 +137,7 @@ row saying it was reached by redirect from the host that was approved, then the 
 approved, and the metadata-service warning where the host is one. A yes sends that one request
 again with that host allowed for it alone. It is bound to the host as it was drawn, spent once and
 gone when the request reports back, and nothing is remembered ([FETCH-3](#FETCH-3)): a further hop to
-another host is refused without a question, and the next fetch asks again. A no gives the refusal a hop has always given.
+another host is refused without a question, and the next fetch asks again. A no leaves the hop refused at the egress gate, as the paragraph above says.
 Bypassing does not answer this question, since the host is a server's choice and not the planner's.
 A host a `deny` rule covers is not asked about, because that refusal is final.
 

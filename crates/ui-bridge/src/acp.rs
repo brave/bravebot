@@ -1421,6 +1421,22 @@ mod tests {
             bravebot_approval::fetch_lines(&fetch.host, &fetch.url, metadata, None).join("\n")
         );
 
+        let hop = FetchRequest {
+            redirected_from: Some("example.com".into()),
+            ..fetch
+        };
+        let (_, _, text) = shown("fetch", crate::wire::fetch_request(2, &hop));
+        assert_eq!(
+            text,
+            bravebot_approval::fetch_lines(&hop.host, &hop.url, metadata, Some("example.com"))
+                .join("\n")
+        );
+        assert_ne!(
+            text,
+            bravebot_approval::fetch_lines(&hop.host, &hop.url, metadata, None).join("\n"),
+            "the redirect row is missing from the question"
+        );
+
         let server = ServerRequest {
             language: "rust".into(),
             program: "/bin/rust-analyzer".into(),
