@@ -364,7 +364,7 @@ decision is taken from untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
 `verified-by: bravebot_agent::turn::a_child_carries_what_its_parent_has_left_and_its_spend_counts_against_the_parent`
 
 <a id="DELEGATE-7"></a>
-### DELEGATE-7: a delegate may delegate, to a fixed depth and under one ceiling for the turn
+### DELEGATE-7: a delegate may delegate, to a fixed depth and under one ceiling on the delegates running at once
 
 A delegate is offered `spawn_agent` and may start delegates of its own, and those theirs, down to
 three levels below the turn. Two bounds hold the tree, and both are the kernel's:
@@ -372,11 +372,24 @@ three levels below the turn. Two bounds hold the tree, and both are the kernel's
 - **Depth.** A delegate three levels below the turn is not offered the tool and is told it cannot
   delegate. A call to it there anyway is refused by the kernel. Two refusals rather than one,
   because a bound resting on the tool list alone rests on the model reading it.
-- **One ceiling for the whole tree.** At most 32 delegates start in one turn, counted across every
-  level and every branch, not per node. A refused request takes no place under it: only a
-  delegate that started is counted, and the trail records a refused one only as refused. A
-  fan-out ([AGENT-5](tools/spawn-agent.md#AGENT-5)) that meets the ceiling part-way starts the
-  ones that fit, and the run that asked is told how many did not start and why.
+- **One ceiling for the whole tree.** At most 64 delegates run at once in one turn, counted across
+  every level and every branch, not per node. A delegate holds a place from the moment it is
+  approved until it ends, and a place that comes back is the next delegate's, so a turn may start
+  any number of delegates one after another. A delegate ends when its run does, by any route: it
+  reports, it fails, a person stops it, it stops at its round bound or its token budget, or its
+  thread dies. A refused request takes no place, and the trail records a refused one only as
+  refused. A place that comes back does not bring its number back: a delegate's number is its path
+  from the turn, counted by the run that started it ([DELEGATE-13](#DELEGATE-13)), so no two
+  delegates of a turn share one. A fan-out ([AGENT-5](tools/spawn-agent.md#AGENT-5)) that meets the
+  ceiling part-way starts the ones that fit, and the run that asked is told how many did not start
+  and why.
+
+The 64 is the default of the `maxRunningDelegates` setting: a whole number above zero in a settings
+file, where the nearest file that names it wins. Zero, a negative or fractional number, a number in
+quotes or any other value leaves 64. The kernel reads the figure the session's configuration carries
+when a turn starts, and a run that is a delegate draws on the tree of the turn that started it and
+cannot start another with a bound of its own. Nothing a delegate or the planner reads or writes sets
+the figure.
 
 A definition can take the tool away as well. One that names its `tools:`
 ([DELEGATE-19](#DELEGATE-19)) and leaves `spawn_agent` out is not offered it, is told it cannot
@@ -384,7 +397,8 @@ delegate, and is refused by the kernel if it calls it anyway, at whatever depth 
 names no tools keeps it, as it keeps the rest of its kind's set.
 
 The tool's description names neither bound. Delegates read it too, and a model told how many it
-has left spends them.
+has left spends them. The refusal a request meets at the ceiling names the figure, since that is
+when the run that asked can act on it.
 
 Every level is gated as the first is. [DELEGATE-2](#DELEGATE-2) refuses a run whose own context
 has met something untrusted, at whatever depth it sits, and [DELEGATE-4](#DELEGATE-4) narrows
@@ -395,10 +409,25 @@ in its own context, which is the cost delegation exists to avoid, paid again one
 
 **Why these bounds.** A ceiling per node makes the bound on the tree the product of the ceilings,
 a number nobody chose. One count shared by the whole tree is chosen directly, however the tree
-is arranged. Rounds do not multiply either: a nested delegate keeps its own definition's bound
-([DELEGATE-6](#DELEGATE-6)), so the rounds one turn's delegates spend are at most 32 of the kinds'
-ceilings, at any depth. The depth keeps each number short enough to read: a delegate's number is
-its path from the turn ([DELEGATE-13](#DELEGATE-13)).
+is arranged. Rounds do not multiply with depth either: a nested delegate keeps its own
+definition's bound ([DELEGATE-6](#DELEGATE-6)), so the rounds the delegates running at once spend
+are at most 64 of the kinds' round bounds, or as many as the setting names, at any depth. The
+depth keeps each number short enough to read: a delegate's number is its path from the turn
+([DELEGATE-13](#DELEGATE-13)).
+
+**Why running and not started.** A count of delegates started refuses a later delegate of a nested
+fan-out once the turn has started that many, however few of them are running, and the ones that
+ended are the ones that made the room. A count of delegates running bounds what the figure is for:
+how many delegates' inference requests the turn has in flight at once.
+
+**What bounds a turn's total delegated work.** No bound on the number of delegates a turn starts
+in all stays. Each delegate's own bounds in rounds and tokens ([DELEGATE-6](#DELEGATE-6),
+[DELEGATE-29](#DELEGATE-29)) bound that delegate and not the turn. An interactive turn carries no
+round limit ([TURN-2](turns.md#TURN-2)), so what bounds it is a person's stop and, where one is
+set, the session's spend limit, which only the terminal session sets
+([TURN-8](turns.md#TURN-8)). A one-shot `-p` run and a manifest run carry a round limit of 200
+([TURN-2](turns.md#TURN-2)), which bounds the calls the turn's own planner makes to start delegates and not the
+delegates those start.
 
 **Why a definition's list decides it.** A child is narrowed by its parent's capabilities, not by
 the tools its parent's file named. A definition naming `read_file` alone would otherwise start a
@@ -412,9 +441,20 @@ reader holding every tool a reader has, and the narrowing a person wrote would l
 `verified-by: bravebot_core::policy::a_delegate_at_the_bottom_of_the_tree_cannot_delegate`
 `verified-by: bravebot_core::policy::a_turns_tree_holds_at_most_its_bound_however_it_is_arranged`
 `verified-by: bravebot_core::policy::a_refused_delegate_takes_no_place_in_the_tree`
+`verified-by: bravebot_core::policy::a_refused_request_still_takes_no_place_once_places_return`
+`verified-by: bravebot_core::policy::a_place_a_finished_delegate_returned_is_taken_by_the_next_one`
+`verified-by: bravebot_core::policy::a_delegate_cannot_give_itself_a_tree_with_a_bound_of_its_own`
+`verified-by: bravebot_core::policy::a_turn_whose_settings_name_no_bound_has_sixty_four_delegates_running`
 `verified-by: bravebot_core::delegate::a_tree_holds_at_most_its_bound_across_every_handle`
+`verified-by: bravebot_core::delegate::a_place_goes_back_when_the_last_copy_of_its_spec_does`
+`verified-by: bravebot_core::delegate::a_place_goes_back_when_the_delegates_thread_panics`
 `verified-by: bravebot_agent::turn::a_delegate_can_spawn_its_own_delegate_and_the_trail_names_it`
 `verified-by: bravebot_agent::turn::a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not`
+`verified-by: bravebot_agent::turn::a_place_a_finished_delegate_returned_is_taken_by_the_next_one_the_turn_starts`
+`verified-by: bravebot_agent::turn::a_delegate_that_failed_gives_its_place_back`
+`verified-by: bravebot_agent::turn::a_nested_delegate_draws_on_the_ceiling_of_the_turn_it_belongs_to`
+`verified-by: bravebot_config::settings::a_settings_file_names_how_many_delegates_a_turn_may_have_running`
+`verified-by: bravebot_config::lib::the_bound_on_running_delegates_reaches_the_configuration`
 
 ## What comes back
 
@@ -931,9 +971,13 @@ definition could ask for one model and have every delegate it starts answered by
 ### DELEGATE-23: a definition may name the skills its delegate is offered
 
 `skills:` is optional and is read as `tools:` is, on one line or as a list. A definition naming
-none offers its delegate every skill the turn found. A definition naming some offers the ones of
-those the turn found and no others: the rest are neither listed in the delegate's prompt nor
-loadable by it. An empty line names none, and its delegate is offered no skill.
+none leaves its delegate the same default any turn gets ([SKILL-18](skills.md#SKILL-18)): a
+built-in is listed in the prompt, and every other skill the turn found is neither listed nor
+excluded, so the delegate reaches it with `search_skills` and loads it by name like the turn that
+spawned it would. A definition naming some curates its delegate's catalogue the way
+[SKILL-18](skills.md#SKILL-18) says: the ones of those the turn found are listed in the prompt
+directly, and the rest are neither listed nor loadable by it, not even through `search_skills`.
+An empty line names none, and its delegate is offered no skill, built-in included.
 
 A name selects out of what the turn found and adds nothing to it, so a skill the turn could not
 load, whether from a directory nobody vouched for or from nowhere, is one no definition can offer.
@@ -953,6 +997,7 @@ has.
 `verified-by: bravebot_agent::agents::a_skill_named_twice_and_found_nowhere_is_said_once`
 `verified-by: bravebot_core::delegate::a_definition_may_name_skills_and_the_spec_carries_them`
 `verified-by: bravebot_agent::turn::a_definition_offers_its_delegate_only_the_skills_it_names`
+`verified-by: bravebot_agent::skills::a_curated_catalogues_search_does_not_reach_a_skill_outside_its_list`
 
 <a id="DELEGATE-24"></a>
 ### DELEGATE-24: a definition may name the MCP servers its worker holds
@@ -1130,6 +1175,55 @@ holds ([DELEGATE-4](#DELEGATE-4)), and a limit takes some of it away.
 `verified-by: bravebot_agent::turn::a_delegate_cannot_write_through_a_link_out_of_the_files_its_definition_names`
 `verified-by: bravebot_agent::turn::a_delegate_cannot_write_through_a_link_outside_its_files_to_one_inside`
 `verified-by: bravebot_agent::turn::a_limited_delegates_redirection_is_held_to_its_definitions_files`
+
+<a id="DELEGATE-30"></a>
+### DELEGATE-30: a definition may name the delegates its delegate may start
+
+`spawns:` is optional and is read as `tools:` is, on one line or as a list, each name a definition
+or one of the three kinds. A delegate under a definition naming some selects, when it calls
+`spawn_agent`, out of the set the driver resolved ([DELEGATE-3](#DELEGATE-3)) less every name the
+list leaves out. The kinds `spawn_agent` offers and the kinds its refusal lists are that smaller
+set, so a model is not told of a delegate it cannot pick, and a name the list left out is refused
+before a place in the tree is taken ([DELEGATE-7](#DELEGATE-7)). A definition naming none keeps
+the whole set. An empty line names none: its delegate is not offered the tool, is told it cannot
+delegate, and is refused by the kernel if it calls it anyway. A line whose every name selects
+nothing leaves the delegate in the same state, so the tool is never offered with an empty set of
+kinds.
+
+A name selects out of the set and adds nothing to it, and a name nothing in the set goes by
+selects nothing. The turn says so with the rest of what it says about what it found, naming the
+definition and the name, as it does for a skill ([DELEGATE-23](#DELEGATE-23)).
+
+**It only narrows, at every depth.** The list is carried to the delegates that delegate starts and
+to theirs, met with each one's own, so a delegate a coordinator was allowed to start holds no more
+of the set than the coordinator did, whatever its own file says. A later definition of the same
+name is met with the one it replaced, as `tools:` is ([DELEGATE-20](#DELEGATE-20)): it can shorten
+the list a person wrote and cannot lengthen it, and one writing no `spawns:` line keeps the list.
+
+**Who it applies to.** A turn a person addresses to a definition
+([ADDRESS-1](addressing-a-definition.md#ADDRESS-1)) is held to its list as a delegate is, since it
+runs the definition as a turn of the person's own and `spawn_agent` is among what it holds. Where
+the list leaves no delegate to start, the turn is offered no `spawn_agent`, as a delegate in that
+state is, so the tool is never offered with an empty set of kinds.
+
+**Why the comparison is sound.** The names are compared against a set the driver fixed before the
+turn, from files a person vouched for ([DELEGATE-20](#DELEGATE-20)), exactly as the planner's name
+is ([DELEGATE-3](#DELEGATE-3)). Nothing an attacker wrote is on either side, and the list can take
+the set down and never add to it, so it grants nothing ([DELEGATE-19](#DELEGATE-19)).
+
+`verified-by: bravebot_agent::agents::a_definition_reads_the_delegates_it_may_start`
+`verified-by: bravebot_agent::agents::a_spawns_name_nothing_resolved_is_said_once`
+`verified-by: bravebot_core::delegate::selecting_by_name_keeps_only_the_names_and_adds_none`
+`verified-by: bravebot_core::delegate::a_later_definition_cannot_widen_the_spawn_list_of_the_one_it_replaces`
+`verified-by: bravebot_core::policy::a_delegate_listing_reader_is_refused_a_worker_and_offered_only_reader`
+`verified-by: bravebot_core::policy::a_grandchild_cannot_start_what_an_ancestors_list_left_out`
+`verified-by: bravebot_core::policy::an_empty_spawns_list_starts_nothing`
+`verified-by: bravebot_core::policy::a_definition_naming_no_spawns_starts_anything_the_run_may`
+`verified-by: bravebot_core::policy::an_addressed_definition_starts_only_the_delegates_it_lists`
+`verified-by: bravebot_core::policy::an_addressed_definition_with_no_delegate_to_start_is_not_kept_spawn_agent`
+`verified-by: bravebot_agent::turn::an_addressed_definition_is_offered_spawn_agent_only_with_delegates_it_may_start`
+`verified-by: bravebot_agent::turn::a_definition_lets_its_delegate_start_only_the_delegates_it_names`
+`verified-by: bravebot_agent::turn::a_delegate_whose_spawns_names_resolve_to_nothing_is_not_offered_spawn_agent`
 
 ## Known costs
 

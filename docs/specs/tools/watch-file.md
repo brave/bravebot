@@ -121,3 +121,4 @@ leave those cases with nothing.
 
 `verified-by: bravebot_agent::tools::a_read_is_sent_to_the_watch_where_one_can_be_armed`
 `verified-by: bravebot_agent::tools::a_read_is_sent_to_the_schedule_alone_where_no_watch_can_be_armed`
+`verified-by: bravebot_agent::watch_withheld_by_tools::a_read_does_not_name_a_watch_the_command_line_took_away`

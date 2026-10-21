@@ -21,6 +21,9 @@ Three services can answer a request: the aichat endpoint Brave runs, AWS Bedrock
 AWS account, and an [OpenAI-compatible gateway](openai-compatible.md) you
 configured. Every build can reach Brave; the other two are what you configure.
 
+`AWS_REGION` is spelled as AWS spells a region: lowercase letters, digits and `-`, such as
+`us-west-2`. A value with any other character is read as no region, and Bedrock is not configured.
+
 Each tier takes either a model id or an inference-profile ARN. With `AWS_PROFILE` unset the AWS CLI
 resolves credentials as it would for any other command, which is what a machine on instance
 credentials already relies on.
@@ -82,9 +85,14 @@ your file lists, each under the id a request sends:
 ```
 
 `options.region` is **required**, for the reason `AWS_REGION` is: a guessed region is a request that
-fails somewhere far from the mistake. An entry without one configures no service at all.
+fails somewhere far from the mistake. An entry without one, or with one spelled other than the way
+`AWS_REGION` is, configures no service at all.
 `options.profile` picks which credentials sign, exactly as `AWS_PROFILE` does, and is optional on the
 same terms.
+`options.maxRetries` and `options.idleTimeoutMs` state how many times a request is sent again and how
+long a reply may go quiet, as they do for a
+[gateway](openai-compatible.md#retries-and-a-reply-gone-quiet). The tier variables have no block to
+state them in, so models they alone name keep two retries and two minutes.
 
 **There is no credential to name here.** Bedrock takes a signature over the request rather than a
 bearer token, so this entry reads neither `env` nor `options.apiKey`. Which AWS credentials sign
@@ -115,7 +123,17 @@ stopped working.
 Credentials are resolved by running the AWS CLI, which is the tool you already sign in with. It holds
 short-lived keys that expire during a session. `aws sso logout` clears them, and it takes no option to
 narrow itself: it removes every cached token, so other tools sharing that cache need a fresh
-`aws sso login` afterwards.
+`aws sso login` afterwards. The CLI is looked up only in directories a program the agent runs cannot
+write ([why](../../security/security.md)), so an `aws` found only under the session's directory reads
+as not installed.
+
+### Replies that send no tools
+
+`/recap`, `/btw`, `/handoff` and the summary a [compaction](../../using/context.md) writes send the
+model no tools. Bedrock refuses a request whose earlier messages call a tool when none is declared, so
+these used to fail with a 400 once the conversation had used a tool. The calls and results already in the
+conversation are sent as text instead, as `[call <id>: <name> <arguments>]` and
+`[result of call <id>]`.
 
 ### The assumed context window
 

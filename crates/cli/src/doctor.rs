@@ -169,7 +169,7 @@ pub(crate) fn sandbox_filesystem_lines(
     capabilities: Option<&Capabilities>,
 ) -> Vec<String> {
     let source = |entry: &bravebot_sandbox::rules::Entry| match &entry.by {
-        Some(path) => path.display().to_string(),
+        Some(path) => progress::printable_path(path),
         None => t!(doctor_sandbox_filesystem_source_flag).to_string(),
     };
     bravebot_agent::permissions::filesystem_standing(rules, directory, capabilities)
@@ -178,14 +178,14 @@ pub(crate) fn sandbox_filesystem_lines(
             None => t!(
                 doctor_sandbox_filesystem_entry,
                 key = item.list.key(),
-                path = item.entry.path.clone(),
+                path = progress::printable(&item.entry.path),
                 source = source(&item.entry)
             )
             .to_string(),
             Some(reason) => t!(
                 doctor_sandbox_filesystem_refused,
                 key = item.list.key(),
-                path = item.entry.path.clone(),
+                path = progress::printable(&item.entry.path),
                 reason = reason,
                 source = source(&item.entry)
             )
@@ -241,7 +241,7 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             t!(
                 doctor_managed_sandbox_unread,
                 key = list.key(),
-                path = entry.path.clone(),
+                path = progress::printable(&entry.path),
                 managed = managed_file.clone()
             )
             .to_string()
@@ -368,7 +368,7 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
 /// variable and gets a section of its own. A file that only configures one therefore names nothing
 /// here, which is absence rather than an empty list.
 fn report_settings_sources(settings: &bravebot_config::Settings) {
-    let named: Vec<&str> = settings.names().collect();
+    let named: Vec<String> = settings.names().map(progress::printable).collect();
     match (named.is_empty(), settings.is_empty()) {
         (false, _) => fact(
             t!(doctor_settings),
@@ -407,7 +407,7 @@ fn report_settings_sources(settings: &bravebot_config::Settings) {
         |(name, path)| {
             t!(
                 doctor_settings_overridden,
-                name = name,
+                name = progress::printable(name),
                 path = path.display().to_string()
             )
             .to_string()
@@ -450,6 +450,27 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     ignored(settings.style_ignored(), |path| {
         t!(doctor_settings_style_ignored, path = path).to_string()
     });
+    ignored(settings.language_ignored(), |path| {
+        t!(doctor_settings_language_ignored, path = path).to_string()
+    });
+    // A tag no catalog answers is read as the reference, as it is from the environment, so a typo
+    // would otherwise show English and say nothing.
+    each(
+        t!(doctor_settings_ignored),
+        settings.language().filter(|language| {
+            !language.eq_ignore_ascii_case(bravebot_i18n::AUTO)
+                && bravebot_i18n::find(language).is_none()
+        }),
+        |language| {
+            t!(
+                doctor_settings_language_unmatched,
+                language = progress::printable(language),
+                reference = bravebot_i18n::DEFAULT.tag(),
+                available = bravebot_i18n::tags().join(", ")
+            )
+            .to_string()
+        },
+    );
     ignored(settings.references_ignored(), |path| {
         t!(doctor_settings_references_ignored, path = path).to_string()
     });
@@ -509,7 +530,7 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
         |(path, key)| {
             t!(
                 doctor_settings_unread_key,
-                key = key,
+                key = progress::printable(key),
                 path = path.display().to_string()
             )
             .to_string()
@@ -617,31 +638,24 @@ fn report_allow_rules(
             _ => Vec::new(),
         };
     for rule in &proposed {
-        let path = rule.path.display().to_string();
+        let path = progress::printable_path(&rule.path);
+        let written = progress::printable(&rule.rule);
         match granted.contains(rule) {
             true => fact(
                 t!(doctor_settings_granted),
-                t!(
-                    doctor_settings_allow_granted,
-                    rule = &rule.rule,
-                    path = path
-                ),
+                t!(doctor_settings_allow_granted, rule = written, path = path),
             ),
             false => fact(
                 t!(doctor_settings_ignored),
-                t!(
-                    doctor_settings_allow_ignored,
-                    rule = &rule.rule,
-                    path = path
-                ),
+                t!(doctor_settings_allow_ignored, rule = written, path = path),
             ),
         }
     }
     granted
 }
 
-/// Counted rather than listed: a rule is the user's own text and printing it back says nothing they
-/// cannot read in the file. What is worth saying is which of them this build could not act on,
+/// Counted rather than listed: a rule can be read in the file, so printing it back says nothing the
+/// file does not. What is worth saying is which of them this build could not act on,
 /// because those are the ones that look like protection and are not.
 fn report_permissions(
     settings: &bravebot_config::Settings,
@@ -677,7 +691,7 @@ fn report_permissions(
         *ending = ends_on(*ending, Ending::Failed);
         fact(
             t!(doctor_permissions_unreadable),
-            bravebot_agent::permissions::describe(problem),
+            progress::described(problem),
         );
     }
 }

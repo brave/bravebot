@@ -27,7 +27,7 @@ documented-by: docs/website/docs/customize/configuration.md
 ## Scope
 
 `~/.bravebot`, the directory holding what outlives a session, and who on the machine may read what
-is written into it. The prompt history, the model, theme, effort and editing choices, the answer to
+is written into it. The prompt history, the model, theme, effort, language and editing choices, the answer to
 the update question, the answer to `/caffeinate`'s explanation, session records, a language server's index of a workspace, skills, standing
 instructions, an imported subscription, the command lines somebody asked to be remembered past a
 session, the reach somebody remembered for a command, the command lines a shell hook recorded for the terminal still open ([shell-integration.md](shell-integration.md)), the permission rules somebody granted a checkout and the answers to the startup question

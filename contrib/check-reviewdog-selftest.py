@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """A failed security scanner must not be reported as a clean scan."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 # The fixture runs fixed local commands with argument lists, never shell input.
 import subprocess  # nosemgrep: gitlab.bandit.B404
+import tarfile
 import tempfile
 import unittest
 
@@ -14,8 +17,8 @@ import unittest
 SCRIPT = Path(__file__).with_name("check-reviewdog.sh").resolve()
 
 
-class ScanResults(unittest.TestCase):
-    """Exercise the scan entry point without network access or real scanners."""
+class Fixture(unittest.TestCase):
+    """A scratch repository and cache holding fake scanners, so no network or real tool is needed."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -98,13 +101,38 @@ exec "{real_git}" "$@"
         path.write_text(content)
         path.chmod(0o755)
 
-    def scan(self, scenario, full, runners="opengrep"):
+    def pinned_copy(self, opengrep=True, reviewdog_tar=None):
+        """The script with the digests of the tools this fixture stands in for.
+
+        The real digests name the real release assets, which a fixture cannot reproduce, so a
+        copy has its pins swapped for the digests of the fakes. Everything else is untouched.
+        """
+        text = SCRIPT.read_text()
+        def swap(prefix, path):
+            nonlocal text
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            text = re.sub(rf"({prefix}\w*\)\s+echo )[0-9a-f]{{64}}", rf"\g<1>{digest}", text)
+        if opengrep:
+            swap("opengrep_", self.bin / "opengrep")
+        if (self.bin / "reviewdog").exists():
+            swap("reviewdog_bin_", self.bin / "reviewdog")
+        if reviewdog_tar:
+            swap("reviewdog_tar_", reviewdog_tar)
+        copy = self.root / "pinned-check-reviewdog.sh"
+        copy.write_text(text)
+        return copy
+
+    def scan(self, scenario, full, runners="opengrep", script=None):
         return subprocess.run(
-            ["bash", str(SCRIPT)] + (["--runners", runners] if runners else [])
+            ["bash", str(script or self.pinned_copy())] + (["--runners", runners] if runners else [])
             + (["--full"] if full else []),
             cwd=self.repo, env=dict(self.env, SCENARIO=scenario),
             capture_output=True, text=True, timeout=20,
         )
+
+
+class ScanResults(Fixture):
+    """Exercise the scan entry point without network access or real scanners."""
 
     def test_scan_identifies_the_branch_or_detached_commit(self):
         """The scan output must identify the checkout being checked."""
@@ -301,6 +329,98 @@ exec "{real_git}" "$@"
                     self.assertIn("no findings" if passes else "security scan failed", output)
                     if scenario == "sandbox_notice_and_failure":
                         self.assertIn("scanner failed", output)
+
+
+class DownloadedTools(Fixture):
+    """What is downloaded is compared with a pinned sha256 before anything runs it."""
+
+    def setUp(self):
+        super().setUp()
+        self.served = self.root / "served"
+        self.served.mkdir()
+        self.marker = self.root / "ran"
+        # Serves a fixture file for each tool by URL, writing it where -o says, as curl does.
+        self.executable("curl", f'''#!/bin/sh
+out=""; url=""
+while [ $# -gt 0 ]; do
+    case "$1" in -o) out="$2"; shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac
+done
+case "$url" in
+    *opengrep*) src="{self.served}/opengrep" ;;
+    *) src="{self.served}/reviewdog.tar.gz" ;;
+esac
+[ -f "$src" ] || exit 22
+cp "$src" "$out"
+''')
+
+    def serve_opengrep(self, body):
+        (self.served / "opengrep").write_text(body)
+
+    def serve_reviewdog(self, body):
+        archive = self.served / "reviewdog.tar.gz"
+        member = self.served / "reviewdog"
+        member.write_text(body)
+        member.chmod(0o755)
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(member, arcname="reviewdog")
+        member.unlink()
+        return archive
+
+    def uncache(self, name):
+        (self.bin / name).unlink()
+
+    def test_an_opengrep_asset_that_is_not_the_pinned_one_is_never_made_executable(self):
+        """A replaced release asset must stop the script before it is cached, not after."""
+        self.uncache("opengrep")
+        self.serve_opengrep(f"#!/bin/sh\ntouch {self.marker}\n")
+        result = self.scan("clean", False, script=SCRIPT)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("does not match its pinned sha256", result.stderr)
+        self.assertFalse((self.bin / "opengrep").exists())
+        self.assertFalse((self.bin / "opengrep.tmp").exists())
+        self.assertFalse(self.marker.exists())
+
+    def test_a_cached_opengrep_is_compared_before_anything_runs_it(self):
+        """The cache is not trusted: a binary that is not the pinned one is replaced, never executed."""
+        self.executable("opengrep", f"#!/bin/sh\ntouch {self.marker}\necho 1.30.0\n")
+        self.serve_opengrep("#!/bin/sh\nexit 0\n")
+        result = self.scan("clean", False, script=SCRIPT)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.marker.exists(), "the cached binary ran")
+        self.assertFalse((self.bin / "opengrep").exists())
+
+    def test_a_reviewdog_tarball_that_is_not_the_pinned_one_is_never_extracted(self):
+        self.uncache("reviewdog")
+        self.serve_reviewdog(f"#!/bin/sh\ntouch {self.marker}\n")
+        result = self.scan("clean", False, script=self.pinned_copy())
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("does not match its pinned sha256", result.stderr)
+        self.assertFalse((self.bin / "reviewdog").exists())
+        self.assertFalse(list((self.root / "cache/bravebot-reviewdog").glob("reviewdog.*")))
+        self.assertFalse(self.marker.exists())
+
+    def test_a_reviewdog_binary_that_is_not_the_pinned_one_is_not_kept(self):
+        """The tarball can match while the binary inside it is not the one pinned."""
+        self.uncache("reviewdog")
+        archive = self.serve_reviewdog(f"#!/bin/sh\ntouch {self.marker}\n")
+        result = self.scan("clean", False, script=self.pinned_copy(reviewdog_tar=archive))
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("binary does not match", result.stderr)
+        self.assertFalse((self.bin / "reviewdog").exists())
+
+    def test_assets_that_match_their_pins_are_installed_and_used(self):
+        """The check refuses on a mismatch only: matching downloads still work."""
+        fake_og = (self.bin / "opengrep").read_text()
+        fake_rd = (self.bin / "reviewdog").read_text()
+        self.serve_opengrep(fake_og)
+        archive = self.serve_reviewdog(fake_rd)
+        script = self.pinned_copy(reviewdog_tar=archive)
+        self.uncache("opengrep")
+        self.uncache("reviewdog")
+        result = self.scan("clean", False, script=script)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(os.access(self.bin / "opengrep", os.X_OK))
+        self.assertTrue(os.access(self.bin / "reviewdog", os.X_OK))
 
 
 if __name__ == "__main__":

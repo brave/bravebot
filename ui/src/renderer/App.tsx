@@ -52,7 +52,8 @@ import { Unconfigurable, METHOD, call, callBot } from './rpc'
 import { RewindConfirm } from './components/Rewind'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
-import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft } from './live'
+import { declined, markersOf, mayGo, route, sentInto } from './interjecting'
+import { type Interjection, type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft } from './live'
 
 export function App(): React.JSX.Element {
   /** Settings take the place of the chat view while open; which page was last open is kept. */
@@ -174,6 +175,7 @@ export function App(): React.JSX.Element {
               ...old,
               entries: running ? [...old.entries, t.consolidating()] : old.entries,
               running,
+              consolidating: running,
               // Only when it actually ran. Such a turn carries the briefing, so the session is
               // grounded again and the next prompt must not carry it twice — but one that never
               // left delivered nothing, and marking it said would cost the bot the briefing over
@@ -474,7 +476,7 @@ export function App(): React.JSX.Element {
   const dequeuing = useRef(new Set<string>())
   useEffect(() => {
     for (const item of openedLives.current.values()) {
-      if (item.running || !item.queued?.length || item.queuePaused || item.askingTrust) continue
+      if (item.running || !item.queued?.length || item.askingTrust || !mayGo(item)) continue
       if (dequeuing.current.has(item.handle)) continue
       const [message, ...remaining] = item.queued
       updateSession(item.handle, (old) => old ? { ...old, queued: remaining } : old)
@@ -487,6 +489,23 @@ export function App(): React.JSX.Element {
       })
     }
   }, [live, livesRevision, send, updateSession])
+
+  /**
+   * Send a line into the turn that is running (INPUT-10), or say it was not taken.
+   *
+   * The line is drawn as sent before the request goes out, because the turn can read it and say so
+   * before the answer to this call arrives, and an event with nothing to match would be lost. A line
+   * the bridge does not accept is one nothing will read: no turn is running, it is being stopped, or
+   * it is a plan run. It becomes a turn of its own.
+   */
+  const interject = useCallback(async (handle: string, line: Interjection) => {
+    const accepted = await call<{ accepted: boolean }>('turn.interject', { session: handle, prompt: line.prompt, ...markersOf(line.staged) })
+      .then((answer) => answer.accepted === true, () => false)
+    if (!accepted) {
+      updateSession(handle, (old) => old ? declined(old, line.id) : old)
+      refreshLives((revision) => revision + 1)
+    }
+  }, [updateSession])
 
   const cancel = useCallback(async () => {
     const handle = handleRef.current
@@ -654,6 +673,18 @@ export function App(): React.JSX.Element {
   }, [draft, live?.running, live?.askingTrust, live?.attachments, live?.staging, live?.bot, plan, backendReady])
 
   /** Send whatever is in the composer, on the same terms the Send button uses. */
+  /** Hold the draft for after the turn: each queued message starts a turn of its own, with the grants it names. */
+  const queueDraft = () => {
+    if (!draft.trim()) return
+    setLive((old) => old ? {
+      ...old,
+      queued: [...(old.queued ?? []), { prompt: draft.trim(), attachments: old.attachments ?? [], staged: named(old.staging, draft) }],
+      attachments: [],
+      staging: sent(old.staging),
+    } : old)
+    setDraft('')
+  }
+
   const submit = useCallback(() => {
     const prompt = draft.trim()
     if (!handleRef.current || !canSend(live, backendReady, prompt)) return
@@ -1143,18 +1174,19 @@ export function App(): React.JSX.Element {
         queuePaused={live?.queuePaused ?? false}
         onResumeQueued={() => setLive((old) => old ? { ...old, queuePaused: false } : old)}
         queued={live?.queued?.map((message) => message.prompt) ?? []}
-        onQueue={() => {
-          if (!draft.trim()) return
-          // The queued message keeps the grants it names, and sends them when its turn comes. The
-          // terminal names the files instead (DROP-8), because its queue joins the running turn.
-          setLive((old) => old ? {
-            ...old,
-            queued: [...(old.queued ?? []), { prompt: draft.trim(), attachments: old.attachments ?? [], staged: named(old.staging, draft) }],
-            attachments: [],
-            staging: sent(old.staging),
-          } : old)
+        onInterject={() => {
+          const handle = handleRef.current
+          const text = draft.trim()
+          if (!handle || !text || !live) return
+          if (route(live) === 'queue') { queueDraft(); return }
+          const staged = named(live.staging, draft)
+          const line = { id: crypto.randomUUID(), prompt: text, attachments: [], staged }
+          updateSession(handle, (old) => old ? sentInto(old, line) : old)
           setDraft('')
+          void interject(handle, line)
         }}
+        onQueue={queueDraft}
+        interjected={live?.interjected?.map((line) => line.prompt) ?? []}
         onRemoveQueued={(index) => setLive((old) => old ? { ...old, queued: old.queued?.filter((_, at) => at !== index) } : old)}
         onDismissRefusal={() => setLive((old) => old ? { ...old, sendRefused: null } : old)}
         onNew={create}

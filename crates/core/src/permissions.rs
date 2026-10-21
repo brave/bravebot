@@ -497,8 +497,9 @@ impl Rule {
 
 /// A rule that was not one, and what was wrong with it.
 ///
-/// Carries the text so a report can name it. The text came from the user's own settings file, so
-/// there is nothing untrusted in it.
+/// Carries the text so a report can name it. The text is whatever a settings file spelled, and the
+/// project and local layers are a checkout's, so it can hold control characters. A front end that
+/// writes it straight to a terminal pictures them first (LAYER-3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejected {
     pub text: String,
@@ -793,9 +794,21 @@ impl Permissions {
 
     /// The rule that decides [`Permissions::for_command`] for one stage.
     pub fn rule_for_command<S: AsRef<str>>(&self, argv: &[S]) -> Option<(Ruling, &Rule)> {
-        let argv = places(argv);
+        let words: Vec<&str> = argv.iter().map(|word| word.as_ref()).collect();
+        let argv = places(&words);
+        // The stage as run is the only one an `allow` rule is matched against, and a list that
+        // restricts is also matched against what is left after each leading wrapper (PERM-20).
+        let under_wrappers: Vec<Vec<Place>> = wrapped_commands(&words)
+            .into_iter()
+            .map(|inner| places(&inner))
+            .collect();
         self.deciding(|rule, restricting| {
-            rule.subject == Subject::Bash && rule.covers_command(&argv, restricting)
+            rule.subject == Subject::Bash
+                && (rule.covers_command(&argv, restricting)
+                    || (restricting
+                        && under_wrappers
+                            .iter()
+                            .any(|inner| rule.covers_command(inner, restricting))))
         })
     }
 
@@ -1225,6 +1238,142 @@ fn places<S: AsRef<str>>(argv: &[S]) -> Vec<Place> {
         places.extend(word.as_ref().chars().map(Place::Char));
     }
     places
+}
+
+/// How a wrapper program's leading options are read.
+enum Wrapper {
+    /// Flags that stand alone, options that take the next word, and words that stand in a fixed
+    /// place before the program: `timeout` has a duration there.
+    Options {
+        flags: &'static [&'static str],
+        valued: &'static [&'static str],
+        /// Long options that take their value after an `=` or as the next word.
+        long_valued: &'static [&'static str],
+        /// Options written as `-` and digits, which `nice` takes as an adjustment.
+        numeric: bool,
+        /// Words between the options and the program.
+        positional: usize,
+    },
+    /// `env`: options, `NAME=value` words and `--` are all read before the program.
+    Environment,
+}
+
+/// The fixed table of programs whose first word that is not an option is the program they run
+/// (PERM-20). A program that is not here is not looked through, and neither is a wrapper with an
+/// option this table does not list.
+fn wrapper(program: &str) -> Option<Wrapper> {
+    const NONE: &[&str] = &[];
+    let plain = |flags, valued, long_valued, numeric, positional| Wrapper::Options {
+        flags,
+        valued,
+        long_valued,
+        numeric,
+        positional,
+    };
+    Some(match program {
+        "timeout" => plain(
+            &["--foreground", "--preserve-status", "-v", "--verbose"],
+            &["-s", "-k"],
+            &["--signal", "--kill-after"],
+            false,
+            1,
+        ),
+        "time" => plain(&["-p", "-v", "-a"], &["-f", "-o"], NONE, false, 0),
+        "nice" => plain(NONE, &["-n"], &["--adjustment"], true, 0),
+        "stdbuf" => plain(
+            NONE,
+            &["-i", "-o", "-e"],
+            &["--input", "--output", "--error"],
+            false,
+            0,
+        ),
+        "command" => plain(&["-p"], NONE, NONE, false, 0),
+        "nohup" | "builtin" | "noglob" => plain(NONE, NONE, NONE, false, 0),
+        "env" => Wrapper::Environment,
+        _ => return None,
+    })
+}
+
+/// Whether a word is `NAME=value` with a name a shell could assign.
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty()
+            && !name.starts_with(|c: char| c.is_ascii_digit())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// What follows one leading wrapper, or `None` where the first word is not in the table, where an
+/// option is not one the table reads, or where nothing is left to run.
+fn without_wrapper<'a>(argv: &[&'a str]) -> Option<Vec<&'a str>> {
+    let (program, mut rest) = argv.split_first()?;
+    let (flags, valued, long_valued, numeric, mut positional) = match wrapper(program)? {
+        Wrapper::Options {
+            flags,
+            valued,
+            long_valued,
+            numeric,
+            positional,
+        } => (flags, valued, long_valued, numeric, positional),
+        Wrapper::Environment => {
+            while let Some((word, tail)) = rest.split_first() {
+                match *word {
+                    "--" => {
+                        rest = tail;
+                        break;
+                    }
+                    "-i" | "--ignore-environment" => rest = tail,
+                    "-u" | "--unset" => rest = tail.get(1..)?,
+                    _ if word.starts_with("--unset=") || is_assignment(word) => rest = tail,
+                    _ if word.starts_with('-') => return None,
+                    _ => break,
+                }
+            }
+            return (!rest.is_empty()).then(|| rest.to_vec());
+        }
+    };
+    let mut options = true;
+    while let Some((word, tail)) = rest.split_first() {
+        if options && *word == "--" {
+            options = false;
+            rest = tail;
+        } else if options && word.starts_with('-') && *word != "-" {
+            if flags.contains(word) {
+                rest = tail;
+            } else if valued.contains(word) || long_valued.contains(word) {
+                rest = tail.get(1..)?;
+            } else if long_valued
+                .iter()
+                .any(|name| word.strip_prefix(name).is_some_and(|v| v.starts_with('=')))
+                || valued
+                    .iter()
+                    .any(|name| word.strip_prefix(name).is_some_and(|v| !v.is_empty()))
+                || (numeric && word[1..].chars().all(|c| c.is_ascii_digit()))
+            {
+                rest = tail;
+            } else {
+                return None;
+            }
+        } else if positional > 0 {
+            positional -= 1;
+            rest = tail;
+        } else {
+            break;
+        }
+    }
+    (positional == 0 && !rest.is_empty()).then(|| rest.to_vec())
+}
+
+/// The argv left after each leading wrapper in turn, outermost first. `timeout 5 nice git push`
+/// gives `nice git push` and then `git push`.
+fn wrapped_commands<'a>(argv: &[&'a str]) -> Vec<Vec<&'a str>> {
+    let mut found = Vec::new();
+    let mut current = argv.to_vec();
+    while let Some(inner) = without_wrapper(&current) {
+        found.push(inner.clone());
+        current = inner;
+    }
+    found
 }
 
 /// Whether one character of a command pattern covers one place in the argv.
@@ -1773,6 +1922,32 @@ mod tests {
             rules(&["Read(caf\u{e9}.md)"], &[], &[]).for_path(Subject::Read, "cafe.md"),
             Decision::Unmatched
         );
+    }
+
+    /// Whitespace at either end of a name is part of it where a path is bytes, so a rule about a
+    /// name is not about the same name with whitespace at an end of it, and the path is matched as
+    /// it was written (TRUST-2).
+    #[test]
+    fn a_rule_about_a_name_does_not_cover_the_name_with_whitespace_at_an_end() {
+        let denied = rules(&["Read(.env)", "Read(secrets/**)"], &[], &[]);
+        assert_eq!(
+            denied.for_path(Subject::Read, ".env"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        for beneath in ["secrets/a", "secrets/ "] {
+            assert_eq!(
+                denied.for_path(Subject::Read, beneath),
+                Decision::Ruled(Ruling::Deny),
+                "a file named {beneath:?} is beneath `secrets`"
+            );
+        }
+        for other in [".env ", " .env", ".env\u{a0}", "secrets /a"] {
+            assert_eq!(
+                denied.for_path(Subject::Read, other),
+                Decision::Unmatched,
+                "a rule about `.env` or `secrets` decided {other:?}"
+            );
+        }
     }
 
     /// A volume that folds case compares the two forms and the two cases together.
@@ -2518,6 +2693,130 @@ mod tests {
         assert_eq!(
             permissions.for_pipeline(&stages),
             Decision::Ruled(Ruling::Ask)
+        );
+    }
+
+    /// A deny or ask rule covers a program run under a wrapper from the fixed table, so a rule
+    /// about `git push` needs no second rule for each wrapper (PERM-20).
+    #[test]
+    fn a_restricting_rule_covers_the_program_under_a_wrapper() {
+        let wrapped = [
+            "timeout 30 git push",
+            "timeout -s KILL --kill-after=5 30 git push",
+            "timeout -sKILL 30 git push",
+            "timeout --foreground -- 30 git push",
+            "time git push",
+            "time -p git push",
+            "time -f %e -o /tmp/out git push",
+            "nice git push",
+            "nice -n 10 git push",
+            "nice -n10 git push",
+            "nice -5 git push",
+            "nice --adjustment=5 git push",
+            "nohup git push",
+            "stdbuf -oL git push",
+            "stdbuf -o L -e0 git push",
+            "command git push",
+            "command -p git push",
+            "builtin git push",
+            "noglob git push",
+            "env git push",
+            "env -i git push",
+            "env -u HOME git push",
+            "env FOO=bar git push",
+            "env -- git push",
+            "timeout 5 nice -n 3 nohup env A=1 git push",
+        ];
+        for list in 0..2 {
+            let permissions = if list == 0 {
+                rules(&["Bash(git push *)"], &[], &[])
+            } else {
+                rules(&[], &["Bash(git push *)"], &[])
+            };
+            let expected = Decision::Ruled(if list == 0 { Ruling::Deny } else { Ruling::Ask });
+            for line in wrapped {
+                assert_eq!(permissions.for_command(&words(line)), expected, "{line}");
+                assert_eq!(
+                    permissions.for_pipeline(&[words("echo hi"), words(line)]),
+                    expected,
+                    "{line} as a later stage"
+                );
+            }
+        }
+    }
+
+    /// Looking through a wrapper is for the lists that restrict. An `allow` rule for `git push`
+    /// does not grant `timeout 30 git push`, which is a program the rule never named.
+    #[test]
+    fn an_allow_rule_does_not_look_through_a_wrapper() {
+        let permissions = rules(&[], &[], &["Bash(git push *)"]);
+        assert_eq!(
+            permissions.for_command(&words("git push origin")),
+            Decision::Ruled(Ruling::Allow)
+        );
+        for line in ["timeout 30 git push", "nice git push", "env git push"] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+        }
+        // A deny rule still wins over the allow rule it overlaps.
+        let permissions = rules(&["Bash(git push *)"], &[], &["Bash(timeout *)"]);
+        assert_eq!(
+            permissions.for_command(&words("timeout 30 git push")),
+            Decision::Ruled(Ruling::Deny)
+        );
+    }
+
+    /// A wrapper whose options the table cannot read is left whole, and so is one with nothing to
+    /// run, so a rule is never matched against a guess at what the wrapper starts.
+    #[test]
+    fn a_wrapper_the_table_cannot_read_is_left_whole() {
+        let permissions = rules(&["Bash(git push *)"], &[], &[]);
+        for line in [
+            "timeout --unknown 30 git push",
+            "timeout 30",
+            "timeout",
+            "nice -n",
+            "nice -x git push",
+            "command -v git push",
+            "env -S git push",
+            "env -u",
+            "time -o",
+            "env FOO=bar",
+            "xargs git push",
+            "devbox run git push",
+            "npx git push",
+            "docker exec box git push",
+            "/usr/bin/timeout 30 git push",
+        ] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+        }
+    }
+
+    /// The rule is still matched against the whole stage, so a rule naming a wrapper keeps
+    /// working, and a program that merely follows a wrapper's name does not match by prefix.
+    #[test]
+    fn a_rule_naming_the_wrapper_still_matches_the_whole_stage() {
+        let permissions = rules(&["Bash(timeout *)"], &[], &[]);
+        assert_eq!(
+            permissions.for_command(&words("timeout 30 ls")),
+            Decision::Ruled(Ruling::Deny)
+        );
+        let permissions = rules(&["Bash(git push *)"], &[], &[]);
+        assert_eq!(
+            permissions.for_command(&words("timeout 30 git pull")),
+            Decision::Unmatched
+        );
+        assert_eq!(
+            permissions.for_command(&["timeout", "30", "git push"]),
+            Decision::Ruled(Ruling::Deny),
+            "a space in a deny rule covers a space inside the program's word"
         );
     }
 

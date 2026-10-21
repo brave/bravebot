@@ -241,14 +241,22 @@ is not stopped for idleness, and a restart does not answer it.
 
 Only a person attached to the session answers it ([BG-9](#BG-9)). The attached terminal draws the
 prompt as a foreground session would, with what is at stake shown in full, and the answer is that
-person's. A prompt that ends because its process ended is gone, and the session is `interrupted`.
+person's. A terminal that attaches while the prompt is held is given all of it, however long, and
+not the part that fits in what is kept for a late terminal. A prompt that ends because its process
+ended is gone, and the session is `interrupted`.
 
 **Why.** A one-shot run declines every prompt because nobody can be asked. A background session can
 be asked later, and declining on the person's behalf while they are away would cancel work they
 expect to find waiting. Answering would make the absent person's answer a guess made in their name.
-Holding the prompt is the only choice that does neither.
+Holding the prompt is the only choice that does neither. A prompt begins with what it is about and
+what the check found, and a replay that kept only the end of a long one would put the rows a yes
+releases in front of the person without either.
 
-`verified-by: none`
+`verified-by: bravebot_cli::host::a_late_terminal_is_given_all_of_a_held_question_however_long`
+`verified-by: bravebot_cli::host::an_answered_question_is_kept_only_as_far_as_any_other_output`
+`verified-by: bravebot_cli::host::a_held_question_does_not_run_out_the_idle_time`
+`verified-by: bravebot_cli::plain::each_question_tells_the_watcher_its_kind`
+`verified-by: bravebot_cli::running::a_background_session_runs_its_prompt_and_takes_a_reply_only_while_idle`
 
 <a id="BG-8"></a>
 ### BG-8: the mode is fixed for the process, bypass is refused, and a rule that allows does not answer
@@ -584,6 +592,12 @@ it is stated.
 
 ## Known costs
 
+- **A late terminal is given the end of the transcript.** The process keeps the last 256 KiB of what
+  the session wrote, from the start of a line, for a terminal that attaches later. A prompt that is
+  held is kept whole besides, with anything the session writes while it is held, until it is
+  answered. The process holds as many bytes as the prompt has. A terminal that attaches then is sent
+  all of them while the process's other requests wait, for as long as the terminal keeps reading and
+  up to five seconds if it stops.
 - **A standing process.** The supervisor and each session's process run for as long as a person
   leaves them. The supervisor is the only one that has no work to do, and it ends with its last
   session.

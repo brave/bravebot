@@ -30,7 +30,7 @@ use bravebot_agent::confirm::{
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{PermissionMode, Workspace};
 use bravebot_config::Config;
-use bravebot_core::ask::{Answer, Asking};
+use bravebot_core::ask::{Answer, AnswerMemo, Asking};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::RecordingSink;
 use bravebot_core::permissions::Permissions;
@@ -268,7 +268,7 @@ fn run(
     for problem in &rejected {
         asking.say(&t!(
             session_permission_rule_ignored,
-            problem = bravebot_agent::permissions::describe(problem)
+            problem = crate::progress::described(problem)
         ));
     }
     // And the `allow` entries a checkout wrote, which are dropped wherever the file is read
@@ -279,8 +279,8 @@ fn run(
     for rule in bravebot_agent::permissions::proposed(&settings, profile.as_deref()) {
         asking.say(&t!(
             session_permission_allow_ignored,
-            rule = &rule.rule,
-            path = rule.path.display().to_string()
+            rule = shown(&rule.rule),
+            path = crate::progress::printable_path(&rule.path)
         ));
     }
 
@@ -564,7 +564,7 @@ fn lines<R: BufRead + Send, W: Write + Send, T: Turns<Prompting<R, W>>>(
                 reply: &said.reply,
                 notices: &said.notices,
                 attempt: None,
-                trail: None,
+                model: None,
                 clean: said.clean,
                 ending: crate::finish::ending_of_a_turn(
                     said.clean,
@@ -1068,7 +1068,7 @@ fn opening_trust<R: BufRead, W: Write>(
     // asked to answer it. That includes what a yes keeps and where.
     let keeping = keeping(root);
     let mut lines = vec![
-        root.display().to_string(),
+        bravebot_agent::confirm::shown_path(root),
         t!(trust_directory_explained).to_string(),
         t!(trust_directory_regardless).to_string(),
         t!(trust_directory_confined_lines).to_string(),
@@ -1078,7 +1078,7 @@ fn opening_trust<R: BufRead, W: Write>(
             t!(trust_directory_remember_explained).to_string(),
             t!(trust_directory_remember_exact).to_string(),
             t!(cli_plain_trust_remember_where).to_string(),
-            store.path().display().to_string(),
+            bravebot_agent::confirm::shown_path(store.path()),
         ]),
         None => lines.push(t!(trust_directory_not_remembered).to_string()),
     }
@@ -1124,7 +1124,7 @@ pub struct Prompting<R: BufRead, W: Write> {
     input: R,
     output: W,
     /// What the person answered, by the question's key, for the rest of the session (ASK-8).
-    answers: Vec<(String, Answer)>,
+    answers: AnswerMemo,
     /// Told when a line is about to be waited for and when it has come, by a session whose process
     /// a terminal does not own.
     watch: Option<Box<dyn Watcher>>,
@@ -1177,6 +1177,9 @@ pub(crate) enum Waiting {
 /// Told what the session is waiting for, so that a process nobody is at can say so and take a
 /// line only when one is being waited for (BG-7, BG-10).
 pub(crate) trait Watcher: Send {
+    /// Called before the first line of a question is written, so that what is written from here
+    /// to the answer can be kept whole for a terminal that attaches while it is held (BG-7).
+    fn asking(&mut self);
     /// Called before the read, which blocks.
     fn waiting(&mut self, on: Waiting);
     /// Called after it, with the line where one came.
@@ -1188,7 +1191,7 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
         Self {
             input,
             output,
-            answers: Vec::new(),
+            answers: AnswerMemo::default(),
             watch: None,
             kind: None,
         }
@@ -1208,19 +1211,15 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
         self.kind = Some(held);
     }
 
-    /// What the person answered the last time this exact question was put to them, if it was.
-    fn recall_answer(&self, key: &str) -> Option<Answer> {
-        self.answers
-            .iter()
-            .find(|(asked, _)| asked == key)
-            .map(|(_, answer)| answer.clone())
-    }
-
-    /// Remember an answer, replacing any earlier one for the same question.
-    fn remember_answer(&mut self, key: String, answer: Answer) {
-        match self.answers.iter_mut().find(|(asked, _)| *asked == key) {
-            Some(slot) => slot.1 = answer,
-            None => self.answers.push((key, answer)),
+    /// Write the lines of a question, after telling the watcher they are coming, so that a process
+    /// nobody is at keeps all of them for a terminal that attaches while the question is held
+    /// (BG-7). Every question is written here, whatever else it does.
+    fn say_question(&mut self, lines: &[String]) {
+        if let Some(watch) = &mut self.watch {
+            watch.asking();
+        }
+        for line in lines {
+            self.say(line);
         }
     }
 
@@ -1279,9 +1278,7 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     /// startup question reads as a refusal: a question nobody answered is not a question somebody
     /// said yes to.
     fn put(&mut self, lines: &[String], question: &str) -> Option<Decision> {
-        for line in lines {
-            self.say(line);
-        }
+        self.say_question(lines);
         let _ = write!(self.output, "{question} {} ", t!(line_answer));
         let _ = self.output.flush();
 
@@ -1303,6 +1300,7 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     /// Ask a question answered with a word rather than a yes, and read the word back trimmed, or
     /// `None` at the end of the input.
     pub(crate) fn answer(&mut self, question: &str) -> Option<String> {
+        self.say_question(&[]);
         let _ = write!(self.output, "{question} ");
         let _ = self.output.flush();
         let on = self.answering();
@@ -1425,6 +1423,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             &request.summary(),
             checked(request.verdict),
             &request.output,
+            request.hidden,
         );
         self.about(Held::Read);
         self.ask(&lines, t!(output_title))
@@ -1440,6 +1439,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             expects: &request.expects,
             check: checked(request.verdict),
             content: &request.content,
+            hidden: request.hidden,
             picture: picture
                 .as_ref()
                 .map(|(path, pdf)| bravebot_approval::Picture { path, pdf: *pdf }),
@@ -1477,6 +1477,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
         let lines = bravebot_approval::vouch_lines(
             &request.path,
+            &request.rule,
             checked(request.verdict),
             &request.preview,
         );
@@ -1531,7 +1532,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
     /// The path as the person will see it granted, the planner's reason under it, and what a yes
     /// does not do.
     fn confirm_path(&mut self, request: &bravebot_agent::confirm::PathRequest) -> Decision {
-        let shown_path = shown(&request.path.display().to_string());
+        let shown_path = bravebot_agent::confirm::shown_path(&request.path);
         let lines = [
             match request.write {
                 true => t!(path_writes, path = shown_path.as_str()).to_string(),
@@ -1571,9 +1572,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             label: &label,
         });
         lines.push(t!(message_explained_turn, key = t!(message_answer_turn)).to_string());
-        for line in &lines {
-            self.say(line);
-        }
+        self.say_question(&lines);
         let _ = write!(self.output, "{} {} ", t!(message_title), t!(message_answer));
         let _ = self.output.flush();
         self.about(Held::Message);
@@ -1620,36 +1619,24 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         // A planner that loops back over the same decision does not make the person restate it
         // (ASK-8). Each settled question is said to have been answered already, so an answer
         // reused silently is not mistaken for a question that was never put.
-        let known: Vec<Option<Answer>> = asking
-            .prompts
-            .iter()
-            .map(|prompt| self.recall_answer(&prompt.key))
-            .collect();
-        for (prompt, earlier) in asking.prompts.iter().zip(&known) {
-            if earlier.is_some() {
-                self.say(&t!(
-                    session_answered_already,
-                    question = shown(&prompt.question)
-                ));
-            }
+        let settled = self.answers.read(asking);
+        for prompt in settled.reused() {
+            self.say(&t!(
+                session_answered_already,
+                question = shown(&prompt.question)
+            ));
         }
 
         let mut fresh = Vec::new();
-        for prompt in asking
-            .prompts
-            .iter()
-            .zip(&known)
-            .filter(|(_, earlier)| earlier.is_none())
-            .map(|(prompt, _)| prompt)
-        {
-            self.say(&shown(&prompt.header));
-            self.say(&shown(&prompt.question));
+        for prompt in &settled.outstanding().prompts {
+            let mut lines = vec![shown(&prompt.header), shown(&prompt.question)];
             for row in &prompt.rows {
-                self.say(&format!("  {}", shown(&row.label)));
+                lines.push(format!("  {}", shown(&row.label)));
                 if let Some(detail) = &row.detail {
-                    self.say(&format!("    {}", shown(detail)));
+                    lines.push(format!("    {}", shown(detail)));
                 }
             }
+            self.say_question(&lines);
             let _ = write!(self.output, "{} ", t!(ask_own_words));
             let _ = self.output.flush();
             self.about(Held::Question);
@@ -1660,11 +1647,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             });
         }
 
-        let answers = bravebot_tui::ask::in_order(known, fresh);
-        for (prompt, answer) in asking.prompts.iter().zip(&answers) {
-            self.remember_answer(prompt.key.clone(), answer.clone());
-        }
-        answers
+        settled.finish(&mut self.answers, fresh)
     }
 
     /// Nothing. The only line this reads is a prompt it asked for or an answer to a question it
@@ -2312,6 +2295,45 @@ mod tests {
         (trust, said)
     }
 
+    /// PROMPT-1: the question in lines draws the file a yes is kept in with a name that would draw
+    /// as nothing, or as another name, quoted and spelled, so the file a person reads is the file
+    /// that is written. A state directory with an ordinary name is drawn as it is.
+    #[test]
+    fn the_question_in_lines_spells_the_file_a_yes_is_kept_in() {
+        let scratch = Remembering::new("plain-kept-row-name");
+        let odd = scratch.base.join("sta\u{202e}te");
+        std::fs::create_dir_all(&odd).expect("create the state directory");
+        let odd = odd.canonicalize().expect("canonical state directory");
+        let asked = |home: &std::path::Path| {
+            opening_keeping_in(
+                "n\n",
+                &scratch.root,
+                |_| None,
+                |root| bravebot_agent::trusted::record_for(Some(home), None, root),
+            )
+            .1
+        };
+        let record = |home: &std::path::Path| {
+            bravebot_agent::trusted::Store::new(home, &scratch.root)
+                .path()
+                .to_path_buf()
+        };
+
+        let plain = asked(&scratch.home);
+        let plain_row = record(&scratch.home).display().to_string();
+        assert!(plain.contains(&plain_row), "{plain}");
+        assert!(!plain.contains(&format!("\"{plain_row}")), "{plain}");
+
+        let drawn = asked(&odd);
+        let spelled = bravebot_agent::confirm::shown_path(&record(&odd));
+        assert!(
+            spelled.starts_with('"') && spelled.contains("\\u{202e}"),
+            "{spelled}"
+        );
+        assert!(drawn.contains(&spelled), "{drawn}");
+        assert!(!drawn.contains('\u{202e}'), "{drawn}");
+    }
+
     /// The startup question with this input, the record found where a session here finds it.
     fn opening_with_a_record(
         answer: &str,
@@ -2677,6 +2699,90 @@ mod tests {
         );
     }
 
+    /// The names a question in lines has to draw as what they are, with the form a person is shown.
+    const UNSEEN_NAMES: [(&str, &str); 6] = [
+        (" ", "\"\u{2423}\""),
+        ("note.md ", "\"note.md\u{2423}\""),
+        ("a\u{202e}b", "\"a\\u{202e}b\""),
+        ("a\u{200b}b", "\"a\\u{200b}b\""),
+        ("/work/state /file", "\"/work/state\u{2423}/file\""),
+        ("a\u{2800}b", "\"a\\u{2800}b\""),
+    ];
+
+    /// PROMPT-1: the question for a write, a credential read, a path and a directory draws a name
+    /// that would draw as nothing, or as another name, quoted and spelled, so a yes to `note.md `
+    /// cannot be read as one to `note.md`.
+    #[test]
+    fn a_question_in_lines_spells_a_name_that_would_draw_as_another() {
+        let write = |path: &str| {
+            change(&WriteRequest {
+                written_since_checkout: false,
+                path: path.to_string(),
+                contents: "a\n".to_string(),
+                existing: None,
+                diff: bravebot_agent::diff::Diff::compute("", "a\n"),
+                intent: bravebot_agent::confirm::Intent::Create,
+                untrusted: false,
+                remark: None,
+                protected: false,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+            })
+            .join("\n")
+        };
+        let asking = || {
+            Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(b"n\n".to_vec())),
+                Vec::new(),
+            )
+        };
+        let exposure = |path: &str| {
+            let mut asking = asking();
+            asking.confirm_exposing_read(&ExposureRequest {
+                path: path.to_string(),
+                credentials: vec!["an API key at line 1".to_string()],
+            });
+            String::from_utf8(asking.output).expect("text")
+        };
+        let granted = |path: &str| {
+            let mut asking = asking();
+            asking.confirm_path(&bravebot_agent::confirm::PathRequest {
+                path: std::path::PathBuf::from(format!("/opt/{path}")),
+                write: true,
+                why: "the build".to_string(),
+            });
+            String::from_utf8(asking.output).expect("text")
+        };
+        let directory = |path: &str| {
+            let mut asking = asking();
+            opening_trust(
+                &mut asking,
+                PermissionMode::Ask,
+                std::path::Path::new(&format!("/work/{path}")),
+                |_| None,
+                |_| None,
+                "",
+            );
+            String::from_utf8(asking.output).expect("text")
+        };
+        // `before` is what the quotation holds ahead of the name where the name ends a longer path.
+        let check = |kind: &str, put: &dyn Fn(&str) -> String, before: &str| {
+            let plain = put("note.md");
+            assert!(plain.contains("note.md"), "{kind}: {plain}");
+            for (name, spelled) in UNSEEN_NAMES {
+                let drawn = put(name);
+                assert_ne!(drawn, plain, "{kind} {name:?}");
+                let spelled = format!("\"{before}{}", &spelled[1..]);
+                assert!(drawn.contains(&spelled), "{kind} {name:?}\n{drawn}");
+            }
+        };
+        check("write", &write, "");
+        check("exposure", &exposure, "");
+        check("path", &granted, "/opt/");
+        check("directory", &directory, "/work/");
+    }
+
     /// CHECKOUT-14. The question for a file brought back from a checkout says the session wrote the
     /// path in the working directory since, and one for any other write does not.
     #[test]
@@ -2800,6 +2906,45 @@ mod tests {
             !lines.contains(t!(run_spends_authority)),
             "a line reaching no ambient authority was said to spend one: {lines}"
         );
+    }
+
+    /// PROMPT-1: the plain question for a run spells a file the line writes and a directory it is
+    /// confined to when the name would draw as nothing, or as another name, so a yes to `note.md `
+    /// cannot be read as one to `note.md`.
+    #[test]
+    fn a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another() {
+        let drawn =
+            |written: &str, directory: &str| {
+                let pipeline = bravebot_core::command::Pipeline::new(vec![
+                    bravebot_core::command::Stage::new("tee", Vec::new()),
+                ]);
+                let mut request =
+                    RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".to_string()], "/work");
+                request.plan.writes = vec![written.into()];
+                request.confined = Some(bravebot_agent::Confined {
+                    reads_the_machine: false,
+                    directories: vec![directory.into()],
+                    network: bravebot_sandbox::network::Network::Open,
+                    filesystem: Default::default(),
+                    requested: Vec::new(),
+                    requested_reaches: Vec::new(),
+                    carried: Vec::new(),
+                    writes_git_directories: false,
+                });
+                program(&request)
+            };
+        let plain = drawn("note.md", "/work");
+        assert!(plain.contains(&"  note.md".to_string()), "{plain:?}");
+        assert!(plain.contains(&"  /work".to_string()), "{plain:?}");
+        for (name, spelled) in UNSEEN_NAMES {
+            for lines in [drawn(name, "/work"), drawn("note.md", name)] {
+                assert!(
+                    lines.contains(&format!("  {spelled}")),
+                    "{name:?}: {lines:?}"
+                );
+                assert!(!lines.contains(&format!("  {name}")), "{name:?}: {lines:?}");
+            }
+        }
     }
 
     /// The plain question tells the same two stories as the panel: a run the turn confines is
@@ -2986,15 +3131,40 @@ mod tests {
         );
     }
 
-    /// A watcher that keeps what each read was for, so a test can read it back.
-    struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<Waiting>>>);
+    /// A watcher that keeps what each read was for, so a test can read it back, and fails a
+    /// question that was waited on without being announced first.
+    struct Recorded {
+        seen: std::sync::Arc<std::sync::Mutex<Vec<Waiting>>>,
+        announced: bool,
+    }
+
+    impl Recorded {
+        fn new(seen: std::sync::Arc<std::sync::Mutex<Vec<Waiting>>>) -> Self {
+            Self {
+                seen,
+                announced: false,
+            }
+        }
+    }
 
     impl Watcher for Recorded {
-        fn waiting(&mut self, on: Waiting) {
-            self.0.lock().expect("the record").push(on);
+        fn asking(&mut self) {
+            self.announced = true;
         }
 
-        fn received(&mut self, _on: Waiting, _line: Option<&str>) {}
+        fn waiting(&mut self, on: Waiting) {
+            if let Waiting::Answer(held) = on {
+                assert!(
+                    std::mem::take(&mut self.announced),
+                    "a {held:?} question was waited on without being announced"
+                );
+            }
+            self.seen.lock().expect("the record").push(on);
+        }
+
+        fn received(&mut self, _on: Waiting, _line: Option<&str>) {
+            self.announced = false;
+        }
     }
 
     /// BG-7, CLI-14: a server question is put to whoever attaches as a held question of its own
@@ -3023,7 +3193,7 @@ mod tests {
             let mut asking = Prompting::watched(
                 std::io::BufReader::new(std::io::Cursor::new(typed.to_vec())),
                 Vec::new(),
-                Box::new(Recorded(seen.clone())),
+                Box::new(Recorded::new(seen.clone())),
             );
             let answer = Attached(&mut asking).ask_to_start(&Question {
                 alias: "news",
@@ -3119,7 +3289,7 @@ mod tests {
             let mut asking = Prompting::watched(
                 std::io::BufReader::new(std::io::Cursor::new(typed.as_bytes().to_vec())),
                 Vec::new(),
-                Box::new(Recorded(seen.clone())),
+                Box::new(Recorded::new(seen.clone())),
             );
             assert_eq!(
                 asking.confirm_message(&a_message_to_ask_about()),
@@ -3163,7 +3333,7 @@ mod tests {
             let mut asking = Prompting::watched(
                 std::io::BufReader::new(std::io::Cursor::new(b"n\n".to_vec())),
                 Vec::new(),
-                Box::new(Recorded(seen.clone())),
+                Box::new(Recorded::new(seen.clone())),
             );
             put(&mut asking);
             std::mem::take(&mut *seen.lock().expect("the record"))
@@ -3205,6 +3375,7 @@ mod tests {
                     command: "ls".to_string(),
                     output: "a".to_string(),
                     lines: 1,
+                    hidden: 0,
                     reference: "ref:1".to_string(),
                     verdict,
                     reason: None,
@@ -3229,6 +3400,7 @@ mod tests {
                         expects: "notes".to_string(),
                         content: "a".to_string(),
                         lines: 1,
+                        hidden: 0,
                         verdict,
                         reason: None,
                         picture: picture.clone(),
@@ -3266,6 +3438,7 @@ mod tests {
             asked(&mut |asking| {
                 asking.confirm_vouch(&VouchRequest {
                     path: "scripts/a.sh".to_string(),
+                    rule: "scripts/a.sh".to_string(),
                     preview: "echo".to_string(),
                     truncated: false,
                     verdict,
@@ -3369,6 +3542,7 @@ mod tests {
             command: "tail -n 100 build.log".to_string(),
             output: output.clone(),
             lines: 100,
+            hidden: 0,
             reference: "ref:1".to_string(),
             verdict: Verdict::Safe,
             reason: None,
@@ -3400,6 +3574,7 @@ mod tests {
             expects: "a build log".to_string(),
             content: content.clone(),
             lines: 100,
+            hidden: 0,
             verdict: Verdict::Safe,
             reason: None,
             picture: None,
@@ -3414,6 +3589,63 @@ mod tests {
             content.lines().collect::<Vec<_>>(),
             "{screen}"
         );
+    }
+
+    /// PROMPT-1: the plain prompt says how many characters of the text drew as nothing above the
+    /// text, for an output and for a vetted read alike, and says nothing of them for a text with
+    /// none.
+    #[test]
+    fn the_plain_prompts_say_how_many_characters_of_the_text_draw_as_nothing() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A} text";
+        let said = t!(hidden_characters, count = 2usize).to_string();
+        for hidden in [2, 0] {
+            for stem in ["output", "vet"] {
+                let mut asking = Prompting::new(
+                    std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+                    Vec::new(),
+                );
+                let decision = match stem {
+                    "output" => asking.confirm_read_output(&OutputRequest {
+                        command: "cat notes".to_string(),
+                        output: text.to_string(),
+                        lines: 1,
+                        hidden,
+                        reference: "ref:1".to_string(),
+                        verdict: Verdict::Safe,
+                        reason: None,
+                        label: String::new(),
+                        reason_label: None,
+                    }),
+                    _ => asking.confirm_vetted_read(&VetRequest {
+                        origin: "notes".to_string(),
+                        expects: "notes".to_string(),
+                        content: text.to_string(),
+                        lines: 1,
+                        hidden,
+                        verdict: Verdict::Safe,
+                        reason: None,
+                        picture: None,
+                        label: None,
+                        reason_label: None,
+                    }),
+                };
+                assert_eq!(decision, Decision::Approve);
+                let screen = String::from_utf8(asking.output).expect("text");
+                let rows: Vec<&str> = screen.lines().collect();
+                let saying = rows.iter().position(|row| row.contains(&said));
+                let text_at = rows
+                    .iter()
+                    .position(|row| row.ends_with(text) && row.contains('\u{2503}'));
+                assert!(text_at.is_some(), "`{stem}`: {screen}");
+                match hidden {
+                    0 => assert!(saying.is_none(), "`{stem}`: {screen}"),
+                    _ => assert!(
+                        saying.is_some() && saying < text_at,
+                        "`{stem}` did not say {hidden} characters drew as nothing above the text: {screen}"
+                    ),
+                }
+            }
+        }
     }
 
     /// A hundred lines with an instruction on the seventieth, past the head a prompt might show.

@@ -5,10 +5,12 @@ description:
   mechanical pass (clause numbering, renumbering against main, verified-by
   resolution, governs, guards, the README table) and then a conformance review of
   the governed code, then drafts one
-  issue per finding for a person to confirm before any of them is posted. Triggers
+  issue per finding for a person to confirm before any of them is posted. A repeat
+  run reviews only what changed since each clause was last reviewed, using
+  docs/check-spec-reviewed. Triggers
   on: check spec, /check-spec, make check-spec, does the code match the spec, spec
   conformance, spec drift, file issues for spec gaps.'
-argument-hint: '[spec-name|spec-id ...] [changed] [strict]'
+argument-hint: '[spec-name|spec-id ...] [changed] [strict] [full]'
 allowed-tools: Bash(python3 agents/skills/check-spec/*), Bash(make check-spec*)
 ---
 
@@ -24,6 +26,9 @@ skill answers one question about it: **does the code do what the clauses say?**
 - **Branch run** (`/check-spec changed`): only the specs governing files this branch
   touched. This is the one to run before a commit.
 - `strict` makes warnings fail as well as errors.
+- `full` reviews every clause in full and ignores what earlier runs recorded. Without it, a
+  clause is reviewed again only as far as the code it depends on changed
+  ([what a repeat run reviews](#what-a-repeat-run-reviews)).
 
 `make check-spec` runs the mechanical pass alone, with no model in the loop. It is fast,
 deterministic, and safe in CI. The conformance review is what this skill adds.
@@ -62,6 +67,8 @@ The heavy data goes through files, never through the main session's context:
    reviewers' verdicts, renders the report, and sets the exit code.
 4. **draft-issues.py** (zero model tokens) writes one issue body per finding into the same
    work directory, and names the drafts that are still waiting for a screen.
+5. **record-reviewed.py** (zero model tokens) writes what the reviewers decided to
+   `docs/check-spec-reviewed`, so the next run starts from it.
 
 The main session orchestrates. It never reads a spec, a source file, a verdict, or an issue
 body. Every one of those is a file path passed between the steps.
@@ -73,7 +80,7 @@ body. Every one of those is a file path passed between the steps.
 ### Step 1: prepare (zero model tokens)
 
 ```bash
-python3 agents/skills/check-spec/check-spec.py [spec ...] [--changed] [--strict]
+python3 agents/skills/check-spec/check-spec.py [spec ...] [--changed] [--strict] [--full]
 ```
 
 Stdout is `{"work_dir": ..., "manifest": ...}`. The mechanical report goes to stderr; print
@@ -85,12 +92,14 @@ Parse stdout for `work_dir`.
 
 Read `{work_dir}/manifest.json`. It holds:
 
-- `progress_lines`: print these
+- `progress_lines`: print these. They say how many clauses were kept from the record, how many
+  reviewers read a diff, and why the clauses reviewed in full were
 - `mechanical_findings`: already decided, already in the report
 - `specs`: one entry per spec, each with `reviewer_prompts`, each of those with a
-  `prompt_file` and a `results_file` path (paths, never prompt text)
+  `prompt_file` and a `results_file` path (paths, never prompt text), and with `kept`, the
+  clauses the record answers without a reviewer
 
-If `specs` is empty, skip to step 4.
+If every `reviewer_prompts` list is empty, skip to step 4: the record answered every clause.
 
 ### Step 3: launch the reviewers
 
@@ -109,6 +118,10 @@ outcome but a wasted run.
 
 Wait for all of them.
 
+A prompt that names a `since-<commit>.diff` file asks the reviewer to say whether an earlier
+verdict still holds on the change since that commit, and its answers carry `holds`. The
+launch is the same.
+
 **Never write findings yourself.** You have not read the code; the reviewers have. Do not
 add, merge, reword, or drop a verdict, and do not decide a reviewer was wrong. If a
 reviewer's result is missing or unreadable, the collector says so.
@@ -119,7 +132,8 @@ reviewer's result is missing or unreadable, the collector says so.
 python3 agents/skills/check-spec/collect-findings.py --work-dir "$WORK_DIR" [--strict]
 ```
 
-Print its output. Exit code 1 means something at severity `error` survived.
+Print its output. Exit code 1 means something at severity `error` survived. A finding marked
+`recorded at <commit> and still holds` came from the record, not from a reviewer this run.
 
 ### Step 5: draft an issue per finding (zero model tokens)
 
@@ -139,6 +153,10 @@ job in step 7.
 A finding `make check-spec` already fails on gets no draft, because it is red on the branch
 that caused it and will be fixed there. So the drafts are the review findings and the clauses
 nothing pins, which is what a green CI run leaves unsaid.
+
+A finding carried from the record gets no draft either: the run that decided it drafted it. A
+`full` run reviews the clause again and drafts it again, and step 7 never posts a clause that
+already has an issue.
 
 ### Step 6: capture the screens that were asked for
 
@@ -188,10 +206,75 @@ title GitHub will refuse. Keep the defect and the cost, and say the clause id fi
 `gh` is deliberately not in this skill's `allowed-tools`, so every call the poster makes asks
 first. That is the gate, not a nuisance to work around.
 
-### Step 8: say what happened
+### Step 8: record the verdicts (zero model tokens)
+
+A clause the record keeps is reported but never drafted again, so record only after step 7, once
+the user has decided which drafts to post: a draft left unposted is not offered again until the
+code its clause depends on changes, or a `full` run. Skip this step for a run on a branch, a run of
+`changed`, and a run on a tree that was not main, which the script refuses: a verdict recorded for
+another tree would misdate the next run's diff. Otherwise:
+
+```bash
+python3 agents/skills/check-spec/record-reviewed.py --work-dir "$WORK_DIR" [--dry-run]
+```
+
+Print its output. It writes a line to `docs/check-spec-reviewed` for every clause a reviewer
+decided, and takes the line off a clause a reviewer could not decide or that no spec has any
+more. It does not commit the file. Tell the user it is written and that committing it on a branch,
+as any other change, is what lets the next run on another machine start from it.
+
+### Step 9: say what happened
 
 In two or three lines: how many clauses were checked, what failed, which finding to look at
 first, and how many drafts are waiting. Nothing else. The report is the deliverable.
+
+---
+
+## What a repeat run reviews
+
+A full run launches one reviewer per six clauses, and each reads the governed source again.
+`docs/check-spec-reviewed` keeps what a run decided so that a repeat run does less. It holds one
+line per clause: the verdict, its severity, the main commit it was reached at, a hash and the
+reviewer's one-line summary. The hash covers what a reviewer is given besides the code a diff
+shows: the clause's words and the tests it names, the paths its spec governs, the symbols it guards
+and the uses of each in files nobody watches, the text of the spec outside its clauses, where a
+spec lists the exceptions it admits, the exceptions the labels spec lists to the rule every
+reviewer is told outranks the clauses, and the reviewer's own instructions. A change to any of
+them is a change to what the verdict was read from. The wording of another clause is not in it.
+
+A run decides each clause by the record:
+
+| The record | The clause is |
+|---|---|
+| has no line for it, or its hash differs | reviewed in full, as with no record |
+| none of the code the spec watches has changed since its commit | kept: no reviewer starts, and the verdict is in the report |
+| under half of the lines the spec watches have changed | reviewed on the diff: the reviewer is given the earlier verdict and the diff, and says whether the verdict holds |
+| half or more have changed | reviewed in full |
+
+- **What a spec watches** is the paths it governs, the files its pinned guards allow a use in (the
+  set `changed` selects specs by), and the files holding the tests its clauses name. Lines changed are lines added plus lines deleted, a file
+  counted at most once over its length. `--threshold PERCENT` moves the half. Past it the diff is
+  as long as reading half of the code, which a reviewer needs beside the diff to understand it.
+- **A clause is reviewed in full** whatever the diff where git cannot say what changed: the
+  recorded commit is not in this tree's history, or a file git does not track sits in the watched
+  paths. A branch cut before the recorded commit reviews in full for that reason.
+- **A reviewer of a diff** answers each clause `holds: true` when the earlier verdict is still
+  true of the code, and otherwise gives a verdict with everything a full review gives. A reviewer
+  that says `holds` and names another verdict has named it: the collector keeps the verdict it
+  was given. A clause the reviewer left out is reported as unreviewed and keeps the line it had.
+- **`unclear` is never recorded.** It says the review decided nothing, so the clause has no line
+  and is reviewed from the start next time. `conforms`, `violation` and `untested` are reused.
+- **The record is written for main only**, since a later run takes its diff from the commit named.
+  A tree that is not main, that moved since the run was prepared, or that was not a commit when it
+  was prepared (an edited governed file, or a file git does not track in what a spec watches) is
+  refused, whatever the tree is when the script runs.
+- **A diff review reads only what changed.** A verdict held through several diff reviews is as
+  sound as the full review that began it, and a fix made in a file the spec does not watch (a
+  finding's evidence is often in one) is not seen until a full run. Run `full` on a schedule. Editing the reviewer
+  instructions in `check-spec.py` reviews every clause in full on the next run, since they are in
+  the hash.
+- **A record that cannot be read** is a mechanical error, and until it is fixed every clause is
+  reviewed in full. `make check-spec` reads the file, and `full` ignores it.
 
 ---
 
@@ -209,6 +292,7 @@ first, and how many drafts are waiting. Nothing else. The report is the delivera
 | `by-construction` says what makes the clause hold | mechanical | error |
 | `verified-by: none` | mechanical | warning |
 | `agents/unverified-clauses.txt` lists exactly the clauses a full run finds uncovered | mechanical | error |
+| Every line of `docs/check-spec-reviewed` is a well formed record | mechanical | error |
 | `governs` paths exist | mechanical | error |
 | `guards` symbols exist, a qualified one under the type or module named | mechanical | error |
 | A `guards` entry that pins its sites is used in exactly those files, that many times | mechanical | error |

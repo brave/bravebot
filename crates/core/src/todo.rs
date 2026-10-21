@@ -122,6 +122,17 @@ impl List {
             .filter(|i| i.status == Status::Cancelled)
             .count()
     }
+
+    /// How many tasks are neither finished nor dropped: the rows [`Row::struck`] leaves unstruck.
+    ///
+    /// Said as what is not struck, so a status added later counts as outstanding, as an
+    /// unrecognised one does.
+    pub fn open(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|i| !matches!(i.status, Status::Done | Status::Cancelled))
+            .count()
+    }
 }
 
 /// One line of the list, shaped for a screen.
@@ -295,6 +306,21 @@ mod tests {
     fn progress_is_counted() {
         assert_eq!(list().done(), 1);
         assert_eq!(list().len(), 3);
+    }
+
+    /// TURN-12. Open is what a row left unstruck: started and unstarted both, and a status nobody
+    /// recognised, since that reads as outstanding (TODO-2). Finished and dropped are not.
+    #[test]
+    fn a_task_is_open_unless_it_is_finished_or_dropped() {
+        let list = List::new(vec![
+            Item::new("finished", Status::Done),
+            Item::new("dropped", Status::Cancelled),
+            Item::new("started", Status::Active),
+            Item::new("not started", Status::Pending),
+            Item::new("unrecognised", Status::parse("nearly")),
+        ]);
+        assert_eq!(list.open(), 3);
+        assert_eq!(List::default().open(), 0);
     }
 
     fn with_a_cancelled_task() -> List {

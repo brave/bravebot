@@ -25,6 +25,13 @@ page past the last one, choose which matches fall on which page, and set the tal
 It then says what is not on the list: which files the walk reaches, the label of the result, the
 planner's own arguments, the text of any line reaching the planner, and any destination.
 
+For the `read_git` comparison, the list says an attacker can set the answer's line and byte counts,
+make it report itself incomplete, tell the planner by a count whether its pattern matched, and
+choose which matches or hunks fall on which page. It then says what is not on the list: the label,
+any destination, any argument of a later call and the text of any line. It cannot reuse the search's
+sentences that the label comes "before any file is opened" and that a byte never decides which files
+are reached, since `read_git` labels after the walk and a page boundary stops it.
+
 So, for each exception:
 
 1. Read the code that implements it, and the clauses around it. The processor path is
@@ -33,6 +40,8 @@ So, for each exception:
    `crates/agent/src/vet.rs`, and the vetting gates in `policy.rs`. The search path is
    `Workspace::grep_shaped` in `crates/agent/src/workspace.rs` and the `search` function in
    `crates/agent/src/tools.rs`, which decides what of the result is released beside the reference.
+   The `read_git` path is `Repository::search_blob`, `Repository::patch` and `show` in
+   `crates/agent/src/git/` and `Workspace::read_git` in `crates/agent/src/workspace.rs`.
 2. Take each item the list says an attacker **cannot** reach, and try to reach it. Steering only the
    bytes, is there a path to it? A path exists where some later decision reads a value that the split
    or the verdict influenced, even indirectly: a length, an offset, a count, a name, a flag.

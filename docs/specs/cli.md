@@ -195,6 +195,11 @@ over one set of failures is one of them going out of date.
 `verified-by: bravebot_cli::running::a_reply_off_the_output_schema_ends_on_its_own_status`
 `verified-by: bravebot_agent::backend::a_request_that_never_left_is_told_apart_from_one_that_was_answered`
 `verified-by: bravebot_cli::main::a_turn_something_was_refused_in_does_not_succeed`
+`verified-by: bravebot_cli::main::what_nobody_could_be_asked_is_kept_and_what_was_answered_is_not`
+`verified-by: bravebot_cli::running::a_write_nobody_could_approve_exits_on_the_refused_status_and_says_so`
+`verified-by: bravebot_cli::running::a_manifest_plan_nobody_could_approve_exits_on_the_refused_status`
+`verified-by: bravebot_cli::main::a_write_and_a_fetch_nobody_could_be_asked_about_count_for_the_status_and_are_listed_once`
+`verified-by: bravebot_cli::main::an_mcp_call_nobody_could_be_asked_about_counts_for_the_status_and_is_listed_once`
 
 <a id="CLI-7"></a>
 ### CLI-7: `doctor` reports configuration and confinement without changing anything
@@ -219,7 +224,9 @@ imported subscription, it is `bravebot auth login` or `bravebot auth logout`
 ([CLI-18](#CLI-18)). The signing key
 is named as never transmitted, and a value from a settings file is never printed: where a credential
 decides whether a backend works, what is reported is that one was found. A configuration error makes
-it fail rather than pass with a warning.
+it fail rather than pass with a warning. Text it names from a settings file, such as a rule, a key
+or an environment name, is drawn with its control characters replaced ([LAYER-3](layering.md#LAYER-3)),
+because the project and local files belong to whoever made the checkout.
 
 The state directory is reported with the variable that named it, and on a platform where the files
 under it cannot be restricted to one account the report says which of them carry the permissions of
@@ -255,6 +262,7 @@ that is not `<host>/<owner>` is refused with the status an argument error has.
 `verified-by: bravebot_cli::doctor::doctor_accepts_current_windows_copies_and_reports_stale_ones`
 `verified-by: bravebot_cli::doctor::doctor_checks_resolved_agent_link_targets`
 `verified-by: bravebot_cli::doctor::doctor_finds_direnv_only_when_path_contains_an_executable`
+`verified-by: bravebot_cli::running::doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures`
 
 **Why.** It exists to answer "what will this actually use", so reporting a default when a choice
 is in force would explain the wrong thing, and naming one backend where two are reachable would
@@ -552,7 +560,10 @@ definition the turn was addressed to where there was one (CLI-17), the session i
 it wrote one (CLI-25), how many rounds it took, what it
 cost in tokens, every tool it called with what it acted on and whether that call was refused, and every refusal with the principle it upholds. A tool is named as the driver
 matched it rather than by the word a person is shown. What a call acted on is the name it was given
-rather than a resolved path, since the driver carries that argument without reading it.
+rather than a resolved path, since the driver carries that argument without reading it. A refusal
+is listed once: a write, a fetch or a call to a server's tool nobody could approve is the entry the
+policy recorded under `approval` ([TRACE-1](trace.md#TRACE-1)), and the confirmer's own record of
+it is kept for the status of CLI-6 and is not listed again.
 
 A failed run retains measured cumulative token usage from completed work. The latest report
 replaces earlier reports; a successful outcome is charged once. Required numeric token fields
@@ -596,6 +607,9 @@ what may change, every field is either frozen by accident or broken without warn
 `verified-by: bravebot_cli::json::content_cannot_break_out_of_the_object_it_is_written_in`
 `verified-by: bravebot_cli::running::a_run_under_a_definition_names_it_in_the_result_object`
 `verified-by: bravebot_cli::json::a_recorded_run_names_its_session`
+`verified-by: bravebot_cli::running::a_write_nobody_could_approve_exits_on_the_refused_status_and_says_so`
+`verified-by: bravebot_cli::main::a_write_and_a_fetch_nobody_could_be_asked_about_count_for_the_status_and_are_listed_once`
+`verified-by: bravebot_cli::main::an_mcp_call_nobody_could_be_asked_about_counts_for_the_status_and_is_listed_once`
 
 <a id="CLI-13"></a>
 ### CLI-13: `--settings` names a file that outranks every layer found
@@ -710,6 +724,11 @@ the line has to be exactly that word for an effect to follow, and every other li
 interface that draws is not exposed to this because bracketed paste tells it where a paste begins
 and ends, which is one of the modes this mode does not take: reading the queue ahead of a question
 needs the terminal put in a state a session in lines does not put it in.
+
+**A known cost.** A line that is only `exit` or `quit` is sent as a prompt and starts a turn, where
+the interface that draws says so in the row under the box while the turn runs
+([CMD-2](commands.md#CMD-2)). This mode has no slash commands and no row, and the end of the input
+is its only way out.
 
 `verified-by: bravebot_cli::plain::a_session_in_lines_asks_the_terminal_for_nothing`
 `verified-by: bravebot_cli::plain::the_reply_is_the_only_thing_on_the_reply_stream`
@@ -1181,6 +1200,7 @@ what fails when they differ. Session ids are not completed.
 `verified-by: bravebot_cli::running::a_completion_script_names_every_command_and_flag_the_usage_table_lists`
 `verified-by: bravebot_cli::running::a_completion_script_reads_and_writes_nothing_under_the_home`
 `verified-by: bravebot_cli::running::a_completion_with_no_script_to_print_is_refused_with_the_argument_status`
+`verified-by: bravebot_cli::running::completion_refuses_the_agent_and_prompt_flags_behind_a_leading_sandbox_flag`
 `verified-by: bravebot_cli::running::the_bash_script_completes_commands_subcommands_and_flags_by_position`
 `verified-by: bravebot_cli::main::a_definition_is_refused_where_nothing_would_work_under_it`
 `verified-by: bravebot_cli::main::the_system_prompt_flags_are_refused_where_nothing_would_use_them`
@@ -1566,7 +1586,8 @@ the startup notice already follows by saying nothing to such a copy
 
 `bravebot permissions check <Family> <what>` loads the `permissions` rules the way a session started in
 this directory loads them, and prints which of deny, ask or allow decides the call, the rule that
-decides it as its file spelled it, and the file that wrote it. The family is `Read`, `Edit`, `Bash`,
+decides it as its file spelled it, with each control character drawn as its picture
+([LAYER-3](layering.md#LAYER-3)), and the file that wrote it. The family is `Read`, `Edit`, `Bash`,
 `WebFetch` or `Mcp`. `Read` and `Edit` take one path, `Bash` takes a program and its arguments as
 separate words, as a stage is matched ([PERM-5](permissions.md#PERM-5)), `WebFetch` takes a host or a
 URL and is decided on the host alone, and `Mcp` takes `server:tool`. The rule named is the one
@@ -1603,6 +1624,7 @@ that is written down is still asking.
 `verified-by: bravebot_cli::running::permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force`
 `verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`
 `verified-by: bravebot_cli::running::permissions_check_prints_a_reason_only_from_the_persons_own_file`
+`verified-by: bravebot_cli::running::permissions_check_draws_the_control_characters_of_a_checkouts_rules_as_pictures`
 
 <a id="CLI-31"></a>
 ### CLI-31: `-i <prompt>` opens the interface that draws and sends the prompt as its first turn
@@ -1766,8 +1788,12 @@ from adding to what is on disk, and removing leaves less behind, which is the gr
 deleted, and the only way to delete one from a terminal was to find the file by hand.
 
 **Known cost.** A session another process has open in a terminal is not seen, and its next save
-writes its record back, as for the desktop ([SESSION-30](sessions.md#SESSION-30)). The `--resume`
-picker has no key to delete a row yet.
+writes its record back, as for the desktop ([SESSION-30](sessions.md#SESSION-30)).
+
+The `--resume` picker deletes the highlighted row on Delete. It asks first, naming the title, and
+only `y` removes the record; any other key, Escape included, keeps it and stays in the list. A
+record a background session is running is refused with a note and no question. A record that cannot
+be removed stays listed. Like `sessions delete`, it is allowed under `--incognito`.
 
 `verified-by: bravebot_cli::session_delete::delete_takes_one_id_and_purge_takes_its_two_flags`
 `verified-by: bravebot_cli::session_delete::a_muddled_request_is_refused_rather_than_guessed_at`
@@ -1778,5 +1804,9 @@ picker has no key to delete a row yet.
 `verified-by: bravebot_cli::running::purge_without_a_terminal_or_yes_is_refused_and_deletes_nothing`
 `verified-by: bravebot_cli::running::a_dry_run_lists_the_records_and_deletes_nothing`
 `verified-by: bravebot_cli::running::purge_with_yes_removes_this_directorys_sessions_and_leaves_a_running_one`
+`verified-by: bravebot_tui::resume::delete_asks_and_only_y_confirms_it`
+`verified-by: bravebot_tui::resume::any_other_key_than_y_keeps_the_record`
+`verified-by: bravebot_tui::resume::delete_on_a_held_session_is_refused_without_asking`
+`verified-by: bravebot_tui::resume::a_deleted_row_leaves_the_list_and_a_failed_one_stays`
 `verified-by: bravebot_session::sessions::purging_a_project_removes_its_sessions_and_not_another_directorys`
 `verified-by: bravebot_session::sessions::purging_leaves_a_session_something_is_running`

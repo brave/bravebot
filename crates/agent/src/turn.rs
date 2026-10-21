@@ -682,7 +682,8 @@ pub struct CompletedTurn {
 ///
 /// The conversation is borrowed rather than returned because a turn that fails has still had
 /// one: what it asked, what it read, and what it was told are the very things the next turn
-/// needs in order to be told "try that again".
+/// needs in order to be told "try that again". A turn that fails after adding to it leaves a note
+/// of the failure as its last message (TURN-13).
 ///
 /// `servers` is borrowed for the same reason, and LSP-8 is why a caller running more than one turn
 /// has to own it: a server is started on the first question that needs one and kept for the
@@ -705,6 +706,7 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
     cancel: &Cancel,
 ) -> CompletedTurn {
     let mut decisions = Decisions::initial(task, trust.clone(), programs.clone());
+    let given = conversation.given();
     let outcome = run_inner(
         config,
         egress,
@@ -721,6 +723,16 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         Some(&mut decisions),
         Handback::default(),
     );
+    // A turn that answered, and one the person stopped, leave the conversation as the turn made
+    // it. One that failed leaves its tool results and nothing that says why they stop, so the
+    // driver says so before the next prompt arrives. A turn that failed before it put anything in
+    // the conversation has nothing for the planner to account for (TURN-13).
+    if let Err(error) = &outcome
+        && let crate::outcome::Ending::Failed(diagnosis) = error.ending()
+        && conversation.given() > given
+    {
+        conversation.note_failed_turn(diagnosis);
+    }
     CompletedTurn { outcome, decisions }
 }
 
@@ -1051,6 +1063,53 @@ pub fn goal<S: Sink, R: Reporter>(
     done
 }
 
+/// Draft a commit message from a diff, outside any turn.
+///
+/// What `/commit-message` runs. No conversation reaches here, so nothing the draft is made from or
+/// into can join one. The policy holds [`Capability::FileRead`], for the reader that produces the
+/// diff, and [`Capability::WebFetch`], because reaching the model is egress and the gate asks. The
+/// routing is the working directory and the range the person typed, both of which are theirs.
+///
+/// The diff goes to a processor and the draft comes back labelled by taint over the diff, so a draft
+/// of files nobody vouched for is untrusted. It is released to the person's input box and nowhere
+/// else (CMD-23).
+///
+/// `cancel` is the person's stop, and it reaches the request as it does a summary's.
+#[allow(clippy::too_many_arguments)]
+pub fn commit_message<S: Sink, R: Reporter>(
+    config: &Config,
+    egress: &Egress,
+    workspace: &Workspace,
+    source: &crate::commit_message::Source,
+    format: Option<&str>,
+    model: Option<&str>,
+    reporter: &mut R,
+    sink: &mut S,
+    trust: TrustStore,
+    cancel: &Cancel,
+) -> Result<crate::commit_message::Drafted, crate::commit_message::DraftError> {
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "draft a commit message from a diff");
+
+    let capabilities = CapabilitySet::from_iter([Capability::FileRead, Capability::WebFetch]);
+    let mut policy = Policy::begin(routing, ReleasePlan::new(), capabilities, sink)
+        .map_err(|d| crate::commit_message::DraftError::Read(d.to_string()))?
+        .with_trust(trust)
+        .with_root(workspace.root())
+        .with_scratch(workspace.scratch())
+        .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
+
+    let mut subscription = discover_subscription(config, egress, model, reporter);
+    let mut chat = crate::processor::Chat::new(config, egress)
+        .spending(subscription.as_mut())
+        .on(model)
+        .stoppable_by(cancel);
+
+    let done = crate::commit_message::draft(&mut policy, &mut chat, workspace, source, format);
+    policy.finish();
+    done
+}
+
 /// Find the subscription this turn will spend, and say so where one could not be read.
 ///
 /// Shared with [`crate::manifest`] rather than written twice, because the thing worth reporting is
@@ -1157,6 +1216,39 @@ fn routing_path<S: Sink>(policy: &Policy<'_, S>, key: &str) -> String {
         .get(key)
         .expect("routing was precommitted with this key")
         .to_string()
+}
+
+/// What to tell the person of the rule files `loaded` brought in, once per rule for the session
+/// (INSTR-16). Nothing where nobody is watching, which is a delegate: its notices are not said, so
+/// telling would use the session's one telling up where nobody reads it, and the turn that started
+/// the delegate tells when it adds the rule itself.
+fn rule_notices(
+    workspace: &Workspace,
+    person_is_watching: bool,
+    loaded: &[crate::rules::Loaded],
+) -> Vec<crate::skills::Notice> {
+    if !person_is_watching {
+        return Vec::new();
+    }
+    let mut notices = Vec::new();
+    for loaded in loaded {
+        if workspace.take_telling(&loaded.origin) {
+            notices.push(crate::skills::Notice::rule_loaded(
+                &loaded.origin,
+                &loaded.matched,
+            ));
+        }
+    }
+    notices
+}
+
+/// Record the order the rule files `loaded` went into a prompt in, which `Held::take` sorts the
+/// rules a later turn loads by, so a later turn puts them in the same place this turn did
+/// (INSTR-16).
+fn note_rules_added(workspace: &Workspace, loaded: &[crate::rules::Loaded]) {
+    for loaded in loaded {
+        workspace.note_rule_added(&loaded.origin);
+    }
 }
 
 /// Whether a `deny` rule covers a file the user named or dropped, which is then left out of the turn and
@@ -1294,6 +1386,12 @@ impl Worked {
     /// taken back in, since that is when this run learns a file changed.
     fn adopt(&mut self, round: usize, delegate: Worked) {
         self.count(round, delegate.changed_at.is_some(), delegate.ran_a_program);
+    }
+
+    /// Count a program a delegate ran in a checkout holding this run's changes as this run's own,
+    /// and nothing it changed there.
+    fn adopt_run(&mut self, delegate: Worked) {
+        self.ran_a_program |= delegate.ran_a_program;
     }
 }
 
@@ -1590,10 +1688,22 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 notices.extend(ended.notices);
                 // On both of the ways a run can end too, since a stopped delegate leaves the files
                 // it changed and has run what it ran. Only from one that shares this turn's
-                // workspace: a delegate in a checkout of its own built the commit the checkout
-                // holds, which has none of this turn's changes in it (TURN-4).
-                if working.checkout.is_none() {
-                    worked.adopt(round, ended.worked);
+                // workspace, or from one in a checkout given its changes: a delegate in a checkout
+                // of its own built the commit the checkout holds, which has none of this turn's
+                // changes in it (TURN-4).
+                match working.checkout.as_deref() {
+                    None => worked.adopt(round, ended.worked),
+                    // A checkout given the working directory's changes was built and tested with
+                    // them, so a program run there counts as run against this turn's change, and
+                    // what it wrote there is not this turn's (CHECKOUT-23).
+                    Some(checkout)
+                        if checkout
+                            .carried()
+                            .is_some_and(|carried| carried.changed_anything()) =>
+                    {
+                        worked.adopt_run(ended.worked)
+                    }
+                    Some(_) => {}
                 }
                 let ran = Some((ended.took, ended.rounds));
                 (ended.delegated, ran, partial, requests)
@@ -2038,6 +2148,57 @@ fn fire_hooks<R: Reporter + ?Sized>(
     workspace: &Workspace,
     reporter: &mut R,
 ) -> Vec<String> {
+    firing_in(hooks, moment, tool, workspace, reporter, |watch| {
+        crate::hooks::fire_watched(
+            hooks,
+            moment,
+            tool,
+            workspace.root(),
+            crate::hooks::LIMIT,
+            watch,
+        )
+    })
+}
+
+/// Run the hooks for the moment a checkout was written for a delegate, in that checkout, and
+/// answer with what went wrong where something did (HOOK-2).
+///
+/// Nothing is fired for a workspace that is not a checkout. The hook is handed two directories
+/// (HOOK-5): the checkout's, which the driver made, and the working directory it was made from,
+/// which the person's session works in. Neither is read from anything a model or a file wrote.
+fn fire_checkout_made<R: Reporter + ?Sized>(
+    hooks: &bravebot_config::hooks::Hooks,
+    workspace: &Workspace,
+    reporter: &mut R,
+) -> Vec<String> {
+    let Some(checkout) = workspace.checkout() else {
+        return Vec::new();
+    };
+    let moment = bravebot_config::hooks::Moment::CheckoutMade;
+    firing_in(hooks, moment, None, workspace, reporter, |watch| {
+        crate::hooks::fire_checkout_made(
+            hooks,
+            crate::hooks::Made {
+                checkout: checkout.path(),
+                working_directory: checkout.working_directory(),
+            },
+            crate::hooks::LIMIT,
+            watch,
+        )
+    })
+}
+
+/// What [`fire_hooks`] and [`fire_checkout_made`] share: the record that a program ran in the
+/// workspace, the display told as each hook starts and ends, and a sentence for each that went
+/// wrong. `fire` runs the hooks, telling the watcher it is given.
+fn firing_in<R: Reporter + ?Sized>(
+    hooks: &bravebot_config::hooks::Hooks,
+    moment: bravebot_config::hooks::Moment,
+    tool: Option<&str>,
+    workspace: &Workspace,
+    reporter: &mut R,
+    fire: impl FnOnce(&mut dyn FnMut(crate::hooks::Watch<'_>)) -> Vec<crate::hooks::Fired>,
+) -> Vec<String> {
     // Hook programs can write files outside the backup journal, regardless of their outcome.
     if hooks.firing(moment, tool).next().is_some() {
         workspace.mark_rewind_gap(crate::rewind::CoverageGap::Hook);
@@ -2045,19 +2206,12 @@ fn fire_hooks<R: Reporter + ?Sized>(
             checkout.mark_worked_in();
         }
     }
-    let fired_all = crate::hooks::fire_watched(
-        hooks,
-        moment,
-        tool,
-        workspace.root(),
-        crate::hooks::LIMIT,
-        &mut |edge| match edge {
-            crate::hooks::Watch::Starting { moment, program } => {
-                reporter.hook_started(moment, program.to_string())
-            }
-            crate::hooks::Watch::Over => reporter.hook_finished(),
-        },
-    );
+    let fired_all = fire(&mut |edge| match edge {
+        crate::hooks::Watch::Starting { moment, program } => {
+            reporter.hook_started(moment, program.to_string())
+        }
+        crate::hooks::Watch::Over => reporter.hook_finished(),
+    });
     let said = trouble_sentences(fired_all);
     for one in &said {
         reporter.notice(one.clone());
@@ -2226,10 +2380,24 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         false => Vec::new(),
     };
 
+    // The driver has written a checkout for this delegate and nothing has run in it: the moment a
+    // person's setup command is for (HOOK-2). A delegate that shares its parent's checkout is not
+    // the one it was made for, so the moment is fired once for each checkout and never again for
+    // a delegate started inside it.
+    let given = task.delegate.as_ref().is_some_and(|spec| {
+        workspace
+            .checkout()
+            .is_some_and(|checkout| checkout.made_for() == spec.id())
+    });
+    let set_up = match given {
+        true => fire_checkout_made(&hooks, workspace, reporter),
+        false => Vec::new(),
+    };
+
     // Where the rounds' own hook sentences land. Held here rather than inside the rounds so that
     // a turn which failed part way through still has them: the outcome that would have carried
-    // them is the thing that did not arrive.
-    let mut fired: Vec<String> = Vec::new();
+    // them is the thing that did not arrive. What a checkout's setup said is the first of them.
+    let mut fired: Vec<String> = set_up;
     let mut taken = 0;
     let mut done = Worked::default();
 
@@ -2275,7 +2443,8 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     };
 
     // The rounds' sentences alone, for the caller that asked: the two ends of the turn never fire
-    // for a delegate, so a call it made is the whole of what one has to hand back.
+    // for a delegate, so what its calls fired and what its checkout's setup said are the whole of
+    // what one has to hand back.
     if let Some(collected) = said_about_hooks {
         collected.clone_from(&fired);
     }
@@ -2410,6 +2579,8 @@ struct State<'s> {
     mcp: Option<(crate::mcp::Offer, bravebot_aichat::protocol::Usage)>,
     servers: Option<&'s mut crate::lsp::LanguageServers>,
     hook_notices: &'s mut Vec<String>,
+    /// The rule files no file touched so far matches, for a round to add once one does (INSTR-16).
+    held_rules: crate::rules::Held,
 }
 
 /// The delegates a turn has started and not yet collected, with what waiting on them has cost.
@@ -2492,6 +2663,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     if let Some(spec) = &task.delegate {
         policy = policy.within(spec);
     }
+    // After the place above, which a delegate's run keeps whatever the settings say: the bound is
+    // the turn's own and the kernel gives it to no run that is a delegate (DELEGATE-7).
+    policy = policy.with_delegate_bound(inputs.config.max_running_delegates);
 
     let started_in = task.permission_mode.get();
     policy.record_permission_mode(started_in.name());
@@ -2662,8 +2836,12 @@ where
         .map(|mcp| mcp.aliases())
         .unwrap_or_default();
     notices.extend(crate::agents::servers_not_found(&delegates, &reached));
+    notices.extend(crate::agents::spawns_not_found(&delegates));
     notices.extend(style_notice.take().map(crate::skills::Notice::from_message));
-    policy.install_delegates(delegates.clone());
+    policy.install_delegates(delegates);
+    // What the kernel holds, which is the set narrowed by every `spawns:` line above this run, so
+    // the kinds the planner is offered are the ones it may select (DELEGATE-30).
+    let delegates = policy.delegates().clone();
 
     let resolved = setup::offered_tools(
         task, workspace, &delegates, advisor, scheduling, arming, policy,
@@ -2684,6 +2862,19 @@ where
         None => catalogue,
     };
 
+    // Said once per session rather than once per turn, the way the overview of what the default
+    // listing leaves out is (SKILL-19): a long description does not change turn to turn, so a
+    // person told about it once has nothing new to learn from hearing it again.
+    if !conversation.long_descriptions_said() {
+        let long_descriptions = catalogue.long_descriptions();
+        if long_descriptions > 0 {
+            notices.push(crate::skills::Notice::descriptions_are_long(
+                long_descriptions,
+            ));
+            conversation.long_descriptions_were_said();
+        }
+    }
+
     // Nothing is started here: LSP-8 starts a server on the first question that needs one, and
     // LSP-5 asks the person before it does, so a session that never asks about a symbol never
     // prompts about a server.
@@ -2697,6 +2888,16 @@ where
         crate::lsp::LanguageServers::new(workspace.root().to_path_buf(), task.home.clone())
     });
     let servers = servers.or(owned.as_mut());
+
+    // A file the person named with `@` is one the session has reached, for the rules whose paths
+    // match it (INSTR-16). Left out where a deny rule covers it, as it is left out of the turn
+    // below.
+    for index in 0..task.files.len() {
+        let path = routing_path(policy, &format!("file_{index}"));
+        if !workspace.rule_denies_reading(policy, &path) {
+            sources.record_mention(&path);
+        }
+    }
 
     // Built once and put in front of every round of this turn. Nothing here is stored in the
     // conversation, so a session running many turns holds one copy of AGENTS.md rather than one
@@ -2719,6 +2920,12 @@ where
         policy.exchange_file_authority(rooted);
     }
     notices.extend(preamble.notices.iter().cloned());
+    notices.extend(rule_notices(
+        workspace,
+        task.delegate.is_none(),
+        &preamble.added,
+    ));
+    note_rules_added(workspace, &preamble.added);
 
     // Said here rather than only on the outcome. These describe what the turn is about to work
     // with, and an interface that waits for the turn to end draws them after every tool line, so
@@ -2745,7 +2952,19 @@ where
         }
     };
 
-    tools::state_confinement(&mut offered, task.confine_runs, task.sandbox);
+    // Decided as the turn starts, from the same facts a `scopes` argument and a `request_path` call
+    // are refused on, so the description does not name a route the session turns down. A turn is
+    // built for each message, so a workspace trusted since the last one is named from the next.
+    tools::state_confinement(
+        &mut offered,
+        task.confine_runs,
+        task.sandbox,
+        tools::requests_are_accepted(
+            task.confine_runs,
+            task.sandbox,
+            tools::workspace_is_trusted(policy, workspace),
+        ),
+    );
     tools::state_withheld_variables(&mut offered);
 
     // Who answers a read of what a run printed: nobody in a bypass with no screening, a check's
@@ -2778,6 +2997,7 @@ where
     let system = setup::system_prompt(
         task,
         workspace,
+        &delegates,
         addressed.as_ref(),
         style.as_ref(),
         &preamble,
@@ -2955,6 +3175,39 @@ where
     // So a front end that hands the prompt back to its box can take this much out of the
     // conversation, and not what the turn goes on to do.
     conversation.opening_done();
+
+    // The count and names of what the default listing leaves out, put in the conversation once
+    // per session rather than said again every turn (SKILL-19): the count tells the planner
+    // whether searching could find anything at all, and the names are a hint for when it might
+    // be worth the call. A message rather than a line in the system prompt, because the system
+    // prompt is rebuilt fresh every turn and nothing of it is kept (see `compose_in` below): a
+    // planner told only there would have the count and the names for one turn and then lose
+    // them, with nothing in its own conversation to have remembered either by. After
+    // `opening_done` rather than before, since a prompt handed back to the box takes the opening
+    // out of the conversation (`forget_since`) and this is not part of it: losing it to a resend
+    // would leave the flag saying it was said with nothing in the conversation that still does.
+    // Marked only where something was actually said, so a session that started with nothing to
+    // report still gets told if a skill appears later in it. No `Provenance`, the way a message
+    // that is partly the driver's framing and partly a directory's names is elsewhere
+    // (`admit_context_file`, `attach_vetted_pictures`): picking one of the two would mislabel the
+    // other half.
+    if !conversation.skills_overview_said() {
+        let others = catalogue.other_skill_names();
+        if !others.is_empty() {
+            let count = tools::tally(others.len(), "skill", "skills");
+            let is_are = if others.len() == 1 { "is" } else { "are" };
+            conversation.push_composed(
+                Message::user(format!(
+                    "{count}, of your own or the project's, {is_are} not listed above: {}. \
+                     Call search_skills with a word or phrase if one of these, or something \
+                     else, might apply to this task.",
+                    others.join(", ")
+                )),
+                Composed::Notice,
+            );
+            conversation.skill_overview_was_said();
+        }
+    }
 
     // Premium is used when a subscription has been imported and this build knows the premium
     // host. Discovery happens per turn so an import mid-session takes effect on the next one, and
@@ -3181,6 +3434,7 @@ where
         mcp,
         servers,
         hook_notices,
+        held_rules: preamble.held,
     };
     let completion = std::thread::scope(|scope| {
         // Started by this turn and not yet collected. A delegate cannot outlive the scope, which is
@@ -3411,7 +3665,10 @@ where
         plan.may_fall_back,
     );
     let (scheduling, arming, wallet) = (plan.scheduling, plan.arming, plan.wallet);
-    let (system, system_text, pinned_by) = (&plan.system, &plan.system_text, &plan.pinned_by);
+    let pinned_by = &plan.pinned_by;
+    // What the turn began with, copied once a round brings a rule in, which is appended to it
+    // (INSTR-16).
+    let mut grown: Option<(crate::request_view::Prompt, String)> = None;
     let (catalogue, addressed) = (&plan.catalogue, &plan.addressed);
     let read_output_is = || setup::read_output_is(task, plan.offers_read_output);
     let completion = loop {
@@ -3433,6 +3690,30 @@ where
             );
         }
         state.told_mode = chosen;
+
+        // A file the last round read or wrote may match the paths of a rule held back. The rule is
+        // appended to the system prompt before this request goes out, after every byte the last
+        // one carried, and the person is told which file brought it (INSTR-16).
+        let loaded = state.held_rules.take_for(workspace);
+        if !loaded.is_empty() {
+            let (system, system_text) =
+                grown.get_or_insert_with(|| (plan.system.clone(), plan.system_text.clone()));
+            for loaded in &loaded {
+                for (provenance, text) in crate::preamble::rule_pieces(loaded) {
+                    system.push(provenance, text);
+                }
+            }
+            *system_text = system.text();
+            for notice in rule_notices(workspace, task.delegate.is_none(), &loaded) {
+                reporter.notice(notice.message.clone());
+                state.notices.push(notice);
+            }
+            note_rules_added(workspace, &loaded);
+        }
+        let (system, system_text) = match &grown {
+            Some((system, text)) => (system, text.as_str()),
+            None => (&plan.system, plan.system_text.as_str()),
+        };
 
         // Whatever finished while the last round was running, before the planner is asked what to
         // do next. Waiting for none of them: one that is still working is left working, which is
@@ -3754,6 +4035,25 @@ where
                 if !cancel.is_cancelled() {
                     take_interjections(task, confirmer, policy, conversation, reporter);
                 }
+                continue;
+            }
+            // The planner has answered with tasks still open in the list the panel keeps. The
+            // answer goes into the conversation as it does above, and the planner is asked once
+            // for the list to be brought up to date, so the answer and the panel agree when the
+            // turn ends. A turn the person stopped as the answer arrived is not asked anything
+            // further, since the next request would end it as stopped and lose the answer. Nor is
+            // a reply the ceiling stopped, which is the turn's answer as it stands.
+            if completion.cut_off.is_none()
+                && !cancel.is_cancelled()
+                && let Some(open) =
+                    round_steps::open_tasks_to_ask_about(policy, conversation, &state.offered)
+            {
+                narrate_between_calls(policy, reporter, &completion.content);
+                record_answer(policy, conversation, &completion.content)?;
+                round_steps::ask_about_open_tasks(conversation, &mut state.reminded, open);
+                // The line a person typed as the answer arrived is meant for the turn they are
+                // watching, and the request this goes on to make is its next round.
+                take_interjections(task, confirmer, policy, conversation, reporter);
                 continue;
             }
             break completion;
@@ -4662,7 +4962,7 @@ where
                     if shown_window && let Some(window) = output.window.take() {
                         conversation.shown_read(window);
                     }
-                    if shown_window && output.task_list {
+                    if shown_window && output.task_list.is_some() {
                         conversation.task_list_shown();
                     }
                 }
@@ -4671,6 +4971,13 @@ where
                     Composed::ToolResult,
                     result_from,
                 ),
+            }
+            // How many tasks the list leaves open, whichever way the result went into the
+            // conversation. Kept only where the planner was shown the list: a list it was not shown
+            // is still the panel's, and the count of the one before it no longer describes that.
+            if let Some(open) = output.task_list.take() {
+                conversation
+                    .open_tasks_counted(shown_window.then_some(open), state.reminded.open_tasks);
             }
             if let Some(cancelled) = cancellation {
                 attach_vetted_pictures(policy, conversation, &mut attached);
@@ -4739,6 +5046,35 @@ mod tests {
             .expect("a trusted run may delegate")
     }
 
+    /// INSTR-16: the person is told of a rule once, and a delegate does not use the telling up. A
+    /// delegate's notices are not said, so one that took the telling would leave the turn that
+    /// started it, which adds the same rule a round later, with nothing to say.
+    #[test]
+    fn a_delegate_leaves_the_telling_of_a_rule_to_the_turn_that_started_it() {
+        let root = crate::testutil::scratch_dir("rule-telling");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).expect("workspace");
+        let loaded = [crate::rules::Loaded {
+            origin: ".bravebot/rules/rust.md".to_string(),
+            text: "RULE".to_string(),
+            matched: "src/lib.rs".to_string(),
+            introduces: true,
+        }];
+        let delegate = Task::delegated(a_delegate_spec("reader", CapabilitySet::default()));
+        let person = Task::new("a prompt");
+
+        assert!(rule_notices(&workspace, delegate.delegate.is_none(), &loaded).is_empty());
+        let told = rule_notices(&workspace, person.delegate.is_none(), &loaded);
+        assert_eq!(told.len(), 1);
+        assert_eq!(
+            told[0].message,
+            ".bravebot/rules/rust.md was added to the instructions: src/lib.rs matches its paths"
+        );
+        assert!(rule_notices(&workspace, person.delegate.is_none(), &loaded).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn configured_with_advisor(setting: Option<&str>) -> Config {
         let mut config = Config::from_lookup(|key| match key {
             "SERVICES_KEY_AICHAT" => Some("test-key".into()),
@@ -4798,6 +5134,43 @@ mod tests {
             crate::watch::Arming::Unavailable
         );
         assert_eq!(setup::arming_for(&plain(Task::new("x"))), allowed);
+    }
+
+    /// ARM-6: a run limited by `--tools` to a list without `watch_file` is not told by the
+    /// read's description that a watch is the better answer, since none can be armed.
+    #[test]
+    fn a_read_does_not_name_a_watch_the_command_line_took_away() {
+        let limit = bravebot_core::tool_set::Limit {
+            only: Some(vec!["read_file".into(), "list_files".into()]),
+            no_shell: false,
+        };
+        let kept = bravebot_core::tool_set::Limit::default();
+        let task = Task::new("x").arming(crate::watch::Arming::Allowed { free: 8 });
+        let read_described = |arming| {
+            tools::for_planner(
+                tools::Scheduling::ArrangingALook,
+                arming,
+                &bravebot_core::delegate::Definitions::default(),
+                crate::exec::Deadlines::BUILT_IN,
+                tools::Running::Offered,
+            )
+            .into_iter()
+            .find(|tool| tool.function.name == "read_file")
+            .expect("read_file is offered")
+            .function
+            .description
+        };
+
+        let limited = read_described(setup::arming_under(&task, limit.allows("watch_file")));
+        assert!(
+            !limited.contains("watch_file"),
+            "a read names a watch the run cannot arm: {limited}"
+        );
+        let unlimited = read_described(setup::arming_under(&task, kept.allows("watch_file")));
+        assert!(
+            unlimited.contains("watch_file is the better answer"),
+            "a run with watches is not sent to them: {unlimited}"
+        );
     }
 
     /// ADVISOR-8: a setting alone names the advisor, and the flag, which is a person's choice for
@@ -6312,6 +6685,46 @@ mod tests {
             )),
             "{:?}",
             reporter.narration
+        );
+    }
+
+    /// TURN-12. A reply cut off in its prose is the turn's answer as it stands, so a list with tasks
+    /// still open is not asked about: the turn ends there, as it does for a list with none.
+    #[test]
+    fn a_reply_cut_off_in_its_prose_is_not_asked_about_open_tasks() {
+        use bravebot_aichat::CutOff;
+        use ceiling::*;
+        let (outcome, _, bodies, _) = turn(
+            "ceiling-stop-with-open-tasks",
+            vec![
+                said(
+                    "",
+                    &[(
+                        "todo_write",
+                        r#"{"todos":[{"content":"write it","status":"in_progress"}]}"#,
+                    )],
+                    None,
+                ),
+                said(
+                    "The three causes are first, the",
+                    &[],
+                    Some(CutOff {
+                        ceiling: CEILING,
+                        call: None,
+                        thought: false,
+                    }),
+                ),
+                said("never asked for", &[], None),
+            ],
+        );
+        assert_eq!(
+            outcome.unwrap().reply_for_display(),
+            "The three causes are first, the"
+        );
+        assert_eq!(
+            bodies.len(),
+            2,
+            "a reply the ceiling stopped was asked about the list: {bodies:#?}"
         );
     }
 

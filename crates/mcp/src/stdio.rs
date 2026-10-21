@@ -13,7 +13,7 @@ use crate::protocol::{
     Listing, RpcNotification, RpcRequest, RpcResponse, ToolResult, call_params, initialize_params,
     paged,
 };
-use crate::{McpError, McpResult, malformed, named};
+use crate::{McpError, McpResult, log_step, malformed, named};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
@@ -91,25 +91,6 @@ impl Drop for StdioServer {
         // A server that ignores a closed stdin would otherwise linger.
         let _ = self.child.kill();
         let _ = self.child.wait();
-    }
-}
-
-/// Writes how a handshake step ended to the diagnostic log: that it did, or which kind of failure.
-/// Never the server's name or anything it sent, since both are text someone else chose.
-fn log_step<T>(step: &'static str, outcome: &McpResult<T>) {
-    match outcome {
-        Ok(_) => bravebot_diag::info(step, &[("outcome", bravebot_diag::Field::word("ok"))]),
-        Err(error) => {
-            let kind = match error {
-                McpError::Confinement(_) => "confinement",
-                McpError::Denied(_) => "denied",
-                McpError::Transport(_) => "transport",
-                McpError::Server { .. } => "server",
-                McpError::ToolFailed { .. } => "tool_failed",
-                McpError::TimedOut { .. } => "timed_out",
-            };
-            bravebot_diag::error(step, &[("kind", bravebot_diag::Field::word(kind))]);
-        }
     }
 }
 

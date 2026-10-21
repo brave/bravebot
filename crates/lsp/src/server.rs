@@ -780,18 +780,19 @@ impl Server {
             language_ids,
         } = spec;
 
-        let mut command = std::process::Command::new(resolved);
-        command.args(&args);
-
         // The user's environment reaches the server, because it runs with their access and a
         // toolchain reads its own variables to work: `CARGO_HOME`, `GOPATH`, `NODE_PATH`. What does
         // not reach it is this agent's own credentials, which is RUN-12 exactly: a person approving a
         // server read what it is and where it will run, and a credential travelling alongside was
         // granted without having been seen. The names come from the caller because which they are is
         // the host's business, the same reason `resolved` is passed in rather than looked up here.
-        for name in withheld {
-            command.env_remove(name);
-        }
+        // Its `PATH` is bravebot's own: it runs the project's interpreter on purpose (LSP-5).
+        let mut command = bravebot_sandbox::programs::start(
+            &bravebot_sandbox::programs::Resolved::found_earlier(resolved),
+            bravebot_sandbox::programs::Inherits::Without(withheld),
+            bravebot_sandbox::programs::SearchPath::Inherited,
+        );
+        command.args(&args);
 
         // Where the index goes, said to each ecosystem in its own spelling. Nothing is written to the
         // workspace, which is LSP-10.
@@ -1886,6 +1887,50 @@ done
                 "orderly={orderly}: {log}"
             );
         }
+    }
+
+    /// RUN-12: a server is not handed a name its launcher is told to withhold, and is handed the
+    /// rest. The regression it rejects: a start that ignores the names, which hands a server this
+    /// agent's own credentials. The server writes its environment and exits, so the launch fails
+    /// and the file is what it was handed.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_is_not_handed_the_names_it_is_told_to_withhold() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("a scratch directory");
+        let seen = tmp.path().join("environment.txt");
+        let script = tmp.path().join("records-its-environment.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\n/usr/bin/env > '{}'\n", seen.display()),
+        )
+        .expect("write the script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let handed = |withheld: &[String]| {
+            // A launch that fails writes to the process-wide diagnostic log.
+            let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = std::fs::remove_file(&seen);
+            // A script written a moment ago can be refused for being open for writing while another
+            // test forks, so it is launched again until it has run.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !seen.exists() && std::time::Instant::now() < deadline {
+                let _ = Server::launch(
+                    Language::Rust,
+                    &script,
+                    tmp.path(),
+                    &tmp.path().join("cache"),
+                    withheld,
+                );
+            }
+            std::fs::read_to_string(&seen)
+                .expect("the server ran")
+                .lines()
+                .filter_map(|line| line.split_once('=').map(|(name, _)| name.to_string()))
+                .collect::<Vec<String>>()
+        };
+
+        assert!(handed(&[]).contains(&"PATH".to_string()));
+        assert!(!handed(&["PATH".to_string()]).contains(&"PATH".to_string()));
     }
 
     /// LSP-5: nothing starts until a person says so, and a refusal is not a failure of the tool.

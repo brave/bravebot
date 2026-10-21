@@ -4,6 +4,8 @@
 //! depends on the environment it is handed and a test controls that only by starting the program
 //! itself. It stops before it reads `OUT_DIR`, so nothing else of cargo's is needed.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use bravebot_config::env_var;
 use std::path::{Path, PathBuf};
 use std::process::Command;

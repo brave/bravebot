@@ -105,6 +105,7 @@ pub(super) fn draw_output(
             inside.width as usize,
         ));
     }
+    lines.extend(hidden_rows(request.hidden, inside.width as usize));
     lines.push(Line::raw(""));
 
     // An empty result is a fact worth stating. Drawing nothing would read as a prompt that failed
@@ -144,6 +145,22 @@ pub(super) fn draw_output(
         scroll,
         seen,
     )
+}
+
+/// The sentence saying what the tokens in the text below are, where some of it drew as nothing.
+///
+/// Above the first row of the text, so it is one of the rows a yes waits on, and coloured rather
+/// than muted: the text a model reads holds characters the person cannot see, and the tokens are
+/// where they are.
+fn hidden_rows(hidden: usize, width: usize) -> Vec<Line<'static>> {
+    match hidden {
+        0 => Vec::new(),
+        count => indented(
+            t!(hidden_characters, count = count),
+            Style::default().fg(theme::running()),
+            width,
+        ),
+    }
 }
 
 /// The key row of a prompt about a slot a check looked at, as a function of whether a yes is taken
@@ -475,6 +492,7 @@ pub(super) fn draw_vet(
             inside.width as usize,
         ));
     }
+    lines.extend(hidden_rows(request.hidden, inside.width as usize));
     lines.push(Line::raw(""));
 
     // Why the planner wanted it, in the planner's own words. It is not what the answer binds to:
@@ -628,10 +646,20 @@ pub(super) fn draw_vouch(
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                request.path.clone(),
+                bravebot_agent::confirm::shown_name(&request.path),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
         ]),
+        // The rule a yes writes, under the name it was asked about: the name is what the planner
+        // wrote, and the rule is what the map will hold, which can be wider than it reads.
+        Line::from(Span::styled(
+            t!(
+                vouch_rule,
+                rule = bravebot_agent::confirm::shown_name(&request.rule).as_str()
+            )
+            .to_string(),
+            Style::default().fg(theme::muted()),
+        )),
         Line::raw(""),
     ];
     // What a check made of the whole file, above the head of it the person can read. The two are

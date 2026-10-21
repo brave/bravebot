@@ -8,10 +8,20 @@
 # lines, or read the warnings check-spec prints.
 
 docs/specs/background-sessions.md:BG-1: a background session is an ordinary session in a process the terminal does not own
-docs/specs/background-sessions.md:BG-7: a question the session would ask is held until a person answers it
 docs/specs/background-sessions.md:BG-9: attaching draws the session as a foreground one, and detaching leaves it running
 docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers nothing that was asked
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own
+docs/specs/commits.md:COMMIT-1: `commit` is a setting with two values, `off` and `turn`, and only the person's own files set it
+docs/specs/commits.md:COMMIT-2: a turn that ends with a reply makes one commit, in a fixed order, and a turn that does not end with one makes none
+docs/specs/commits.md:COMMIT-3: the paths committed are the turn's own that three conditions leave in, and nothing else
+docs/specs/commits.md:COMMIT-4: a path that held changes before the turn is left out of its commit, so the commit holds only the turn's edits
+docs/specs/commits.md:COMMIT-5: the message is one line the planner writes, a fixed one when it cannot be used, and `attribution` follows it
+docs/specs/commits.md:COMMIT-6: the driver starts git with arguments it fixed, and takes from it an exit status and the branch it left
+docs/specs/commits.md:COMMIT-7: the commit runs no program a file in the repository names, and is made only where the reader opens the repository
+docs/specs/commits.md:COMMIT-8: the person is told what was committed and what was left out, and the trail records it
+docs/specs/commits.md:COMMIT-9: taking a turn back takes its commit back, as one unbroken run the branch still stands on
+docs/specs/commits.md:COMMIT-10: a rewind point holds the commit its turn made, and a resume brings it back
+docs/specs/commits.md:COMMIT-11: every front end commits and rewinds through one shared implementation
 docs/specs/plugins.md:PLUGIN-1: a plugin is installed only by a command a person types
 docs/specs/plugins.md:PLUGIN-2: `plugin.toml` names its parts, and a part it does not name is not installed
 docs/specs/plugins.md:PLUGIN-3: fetching a source is a network effect, and the host is put to the person before it happens
@@ -23,6 +33,7 @@ docs/specs/plugins.md:PLUGIN-8: a marketplace is an index naming sources and dig
 docs/specs/plugins.md:PLUGIN-9: update, remove and list work from the recorded source
 docs/specs/plugins.md:PLUGIN-10: a plugin's text reaches a turn only as the part it is
 docs/specs/references.md:REFER-5: a `repository` entry is fetched once, with the person's yes, into `~/.bravebot/references`
+docs/specs/sandboxing.md:SANDBOX-32: a person may remember a reviewed prefix for an unconfined line, for programs on a hand-written list only
 docs/specs/worktrees.md:WORKTREE-1: `--worktree` starts a fresh interactive session in a worktree made for it
 docs/specs/worktrees.md:WORKTREE-2: a name is a label of ASCII letters, digits, `.`, `_` and `-`, and decides no path
 docs/specs/worktrees.md:WORKTREE-3: `--worktree` is refused where a delegate's checkout would be, and where a checkout would not be kept

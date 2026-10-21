@@ -69,6 +69,31 @@ fn alone() -> &'static AtomicBool {
     &ALONE
 }
 
+/// Whether the terminal last reported being in front of the person.
+fn in_front() -> &'static AtomicBool {
+    static IN_FRONT: AtomicBool = AtomicBool::new(true);
+    &IN_FRONT
+}
+
+/// Whether the terminal is believed to be in front of the person.
+///
+/// `true` until the terminal reports being left, so one that reports no change of focus is always
+/// taken to be in front. Kept here rather than by the readers that act on it, because a prompt
+/// discards the events that are not keys and a report it discarded would leave the answer wrong
+/// until the next one.
+pub fn terminal_is_in_front() -> bool {
+    in_front().load(Ordering::Relaxed)
+}
+
+/// Take what an event handed out says about the terminal's focus.
+fn note_focus(event: &TermEvent) {
+    match event {
+        TermEvent::FocusGained => in_front().store(true, Ordering::Relaxed),
+        TermEvent::FocusLost => in_front().store(false, Ordering::Relaxed),
+        _ => {}
+    }
+}
+
 /// Whether the last event handed out arrived on its own.
 ///
 /// `true` where the terminal had one event waiting, which is what a person pressing a key looks
@@ -162,6 +187,7 @@ fn is_a_stream(event: &TermEvent) -> bool {
 pub fn read() -> io::Result<TermEvent> {
     if let Some((event, on_its_own)) = pending().pop_front() {
         alone().store(on_its_own, Ordering::Relaxed);
+        note_focus(&event);
         return Ok(event);
     }
 
@@ -175,6 +201,7 @@ pub fn read() -> io::Result<TermEvent> {
         )
     })?;
     alone().store(on_its_own, Ordering::Relaxed);
+    note_focus(&event);
     Ok(event)
 }
 
@@ -351,7 +378,9 @@ mod tests {
     /// because the queue and the flag are process globals: split up, these assertions would race
     /// each other under parallel execution rather than testing anything. Nothing else in this crate
     /// touches either, and `read` is called exactly as many times as there are events queued, so a
-    /// fault fails here instead of reaching the terminal a test does not have.
+    /// fault fails here instead of reaching the terminal a test does not have. It ends with the
+    /// focus flag, which `read` sets from the events it hands out and which is a global for the
+    /// same reason.
     #[test]
     fn the_queue_is_answered_before_the_terminal_and_in_arrival_order() {
         assert!(
@@ -410,6 +439,27 @@ mod tests {
             );
             assert_eq!(pending().len(), 2, "asking took an event out of the queue");
             pending().clear();
+        }
+
+        // A prompt reads through `read` and throws away every event that is not a key, so a report
+        // of the terminal being left or returned to is noted where it is read, and a person who
+        // comes back while a question is open is in front when the turn ends.
+        assert!(
+            terminal_is_in_front(),
+            "nothing had reported the terminal left"
+        );
+        for (reported, in_front) in [
+            (TermEvent::FocusLost, false),
+            (key(KeyCode::Char('a')), false),
+            (TermEvent::FocusGained, true),
+        ] {
+            pending().push_back((reported.clone(), true));
+            assert_eq!(read().expect("an event was queued"), reported);
+            assert_eq!(
+                terminal_is_in_front(),
+                in_front,
+                "{reported:?} left the focus wrong"
+            );
         }
     }
 }

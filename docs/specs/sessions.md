@@ -781,6 +781,7 @@ takes a number cannot also have it, so the number is on a word that has one.
 `verified-by: bravebot_tui::app::the_list_names_what_each_point_would_put_back`
 `verified-by: bravebot_tui::app::the_list_of_a_session_with_no_points_says_there_is_nothing`
 `verified-by: bravebot_session::rewind::going_back_further_than_the_session_remembers_rewinds_nothing`
+`verified-by: bravebot_tui::app::the_rewind_command_goes_back_the_number_it_was_given_and_nowhere_for_anything_else`
 
 
 <a id="SESSION-22"></a>
@@ -989,7 +990,8 @@ planner message of its own needed to hold them. A recorded failure carries only 
 interface composed, never a message from the backend. A prompt handed back to the editor on
 cancellation stays out of the transcript on resume while that turn's spend and timing stay with its
 number; whether those words remain available to recall is SESSION-6, and the two are independent of
-each other. None of this is sent to the planner.
+each other. None of this is sent to the planner. What the planner is told of a failure is the note
+of [TURN-13](turns.md#TURN-13), which holds no more than the category and the request count.
 Accepted corrections remain within the cancelled turn through reload, export and later turns.
 
 **Why.** Turn boundaries cannot be recovered from the conversation afterwards, because a
@@ -1585,7 +1587,11 @@ The session-review skill reads the notes of a session it reviews and shows them 
 verifier as data from the person. The analyzer checks a note against the audit trail and the code
 like any other claim and reports it only when the cause is in bravebot. Nothing in a note is run or
 followed as an instruction, and an issue filed from a review carries none of its text. A session is
-reviewed again when it has more notes than the last review considered.
+reviewed again when it has more notes than the last review considered. The analyzer's summary of a
+session with a note the last review did not consider says what was decided about each such note. A
+review whose summary of such a session is empty leaves the session undecided and records no marker,
+so the next run offers it again; a session with no new note needs no summary, and one with notes
+but no problems is marked once its summary is written.
 
 **Why.** A person watching a session sees things the record does not show: the wrong file was
 edited, the answer was slow, the plan was misread. Saying so where the session is, at the turn it
@@ -1611,4 +1617,4 @@ as data.
 `verified-by: bravebot_tui::app::a_note_typed_at_an_idle_prompt_is_recorded_on_the_last_finished_turn`
 `verified-by: bravebot_tui::app::a_note_with_no_text_lists_the_notes_the_session_holds`
 `verified-by: bravebot_session::sessions::a_note_where_no_record_can_be_written_says_it_reached_none`
-`verified-by: by-construction (the session-review skill reads a record's notes into a file beside the copy of the record, names that file to the analyzer and verifier prompts, and writes the number of notes shown into the marker; make check-scripts runs agents/skills/session-review/selftest.py, whose test_a_session_is_reviewed_once_for_its_notes_and_again_only_when_a_new_one_is_added pins that a session whose notes were all considered is not offered again, that a new note offers it again for the new note alone, and that a session with notes and no problems still gets its marker)`
+`verified-by: by-construction (the session-review skill reads a record's notes into a file beside the copy of the record, names that file to the analyzer and verifier prompts, and writes the number of notes shown into the marker; make check-scripts runs agents/skills/session-review/selftest.py, whose test_a_session_is_reviewed_once_for_its_notes_and_again_only_when_a_new_one_is_added pins that a session whose notes were all considered is not offered again, that a new note offers it again for the new note alone, and that a session with notes and no problems still gets its marker; test_a_session_with_a_new_note_and_no_summary_is_left_undecided_for_the_next_run pins that a session with a new note and an empty summary is undecided while one with no new note is not)`

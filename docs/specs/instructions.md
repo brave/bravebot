@@ -4,8 +4,10 @@ title: Resolving standing instructions
 status: normative
 governs:
   - crates/agent/src/preamble.rs
+  - crates/agent/src/rules.rs
   - crates/agent/src/agents.rs
   - crates/agent/src/home.rs
+  - crates/agent/src/styles.rs
 documented-by: docs/website/docs/customize/instructions.md
 ---
 
@@ -22,18 +24,20 @@ It does not cover what a skill file looks like or what any source is trusted for
 ## The sources
 
 <a id="INSTR-1"></a>
-### INSTR-1: ten sources kept as files, and no others
+### INSTR-1: twelve sources kept as files, and no others
 
 | File | Applies to |
 |---|---|
 | `~/.bravebot/AGENTS.md` | every project |
 | `~/.bravebot/skills/<name>/SKILL.md` | every project |
 | `~/.bravebot/agents/<name>.md` | every project |
+| `~/.bravebot/rules/<name>.md` | every project, from the turn a file its `paths` match is touched, or every turn without `paths` |
 | `<workspace>/AGENTS.md`, else `CLAUDE.md`, else `.claude/CLAUDE.md` | this project |
 | `<workspace>/.bravebot/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.claude/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.agents/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.bravebot/agents/<name>.md` | this project |
+| `<workspace>/.bravebot/rules/<name>.md` | this project, from the turn a file its `paths` match is touched, or every turn without `paths` |
 | `<workspace>/<directory>/AGENTS.md` | this project, once the session has worked in that directory |
 | `<workspace>/<directory>/.bravebot/skills/<name>/SKILL.md` | this project, once the session has worked in that directory |
 
@@ -48,7 +52,7 @@ symlinking each one into `.bravebot/skills` is work the project should not have 
 `~/.claude/skills` and `~/.agents/skills` are not sources, because [INSTR-2](#INSTR-2) tries no
 user directory but `~/.bravebot`.
 
-The command line is a ninth source that is not a file, and [INSTR-10](#INSTR-10) is the whole of it.
+The command line is a source that is not a file, and [INSTR-10](#INSTR-10) is the whole of it.
 
 A skill is a directory because it has other material to keep beside its instructions. A delegate
 definition is one file, so `agents/` is flat: there is nothing for the directory to hold. What a
@@ -311,12 +315,14 @@ it is the planner's.
 `verified-by: bravebot_agent::turn::the_road_for_a_github_url_goes_out_with_the_fact_it_rests_on`
 
 <a id="INSTR-10"></a>
-### INSTR-10: words from the command line are the last standing source, and a replacement reaches the opening alone
+### INSTR-10: words from the command line have the last word on precedence, and a replacement reaches the opening alone
 
 `--append-system-prompt` ([CLI-19](cli.md#CLI-19)) adds its words to the standing instructions under
 the heading "From the command line", after the project's instructions, so the order of INSTR-4
-continues one place further and the words have the last word. They are trimmed, and they are in the
-text a delegate reads as well as the one a person's turn does.
+continues one place further and the words have the last word on precedence. A rule file a touched
+file brings in is appended after them ([INSTR-16](#INSTR-16)), so it comes later in the prompt and
+the words stand where it disagrees. They are trimmed, and they are in the text a delegate reads as
+well as the one a person's turn does.
 
 `--system-prompt` replaces the opening of the system prompt, which is the paragraph saying what kind
 of assistant this is, and leaves the rest of the prompt as it is: the instructions for reading a
@@ -334,7 +340,7 @@ workspace may be added to them. This is also why a file's bytes passed in with
 about the file.
 
 **Why.** A standing instruction a person wants for one run should not have to be written into a file
-in the project first. Last place is the most specific source, as INSTR-4 orders them. Only the
+in the project first. Last place among the sources INSTR-4 orders is the most specific. Only the
 opening is replaceable because what follows it is what the other clauses rely on.
 
 `verified-by: bravebot_agent::preamble::words_from_the_command_line_follow_the_projects_file_in_what_a_delegate_reads`
@@ -529,7 +535,8 @@ file, or which skills directory with a count, and never what it holds ([SKILL-4]
 
 Composed per turn like every other source ([INSTR-7](#INSTR-7)): a file read in a turn takes effect
 from the next turn, and the turn that read it keeps the instructions it started with. The record is
-the session's, so it is empty again in a resumed session and after `/cd`.
+the session's, so it is empty again in a resumed session and after `/cd`. [INSTR-16](#INSTR-16)
+reads the files of the same record.
 
 **Why.** A package in a monorepo has conventions the project's root file cannot state without
 every turn carrying every package's. Reading downward only into directories the planner chose, and
@@ -567,7 +574,8 @@ said once for the turn, at the source that crosses the figure. Neither figure ke
 the prompt: every source that passes the trust gate reaches it, whatever its size.
 
 The sources measured are the ones [INSTR-4](#INSTR-4) orders: `~/.bravebot/AGENTS.md`, the
-project's file, and each nested `AGENTS.md` of [INSTR-14](#INSTR-14). Words from
+project's file, each nested `AGENTS.md` of [INSTR-14](#INSTR-14), and each rule file of
+[INSTR-16](#INSTR-16) that is in the prompt when the turn begins. Words from
 `--append-system-prompt` are not measured, for the reason [INSTR-10](#INSTR-10) does not read them
 through the gate: a person who typed them for this run has said what this run carries. A source an
 untrusted directory holds is already out before this rule is reached, so nothing untrusted is
@@ -601,6 +609,138 @@ compaction ([compaction.md](compaction.md)) is where that question belongs.
 `verified-by: bravebot_agent::preamble::a_long_instructions_file_loads_and_its_size_is_said`
 `verified-by: bravebot_agent::preamble::a_very_large_instructions_file_still_loads`
 `verified-by: bravebot_agent::preamble::sources_long_together_are_reported_once`
+`verified-by: bravebot_agent::preamble::a_long_rule_file_in_force_is_measured_like_an_instructions_file`
+
+<a id="INSTR-16"></a>
+### INSTR-16: a rule file with `paths` is added once a file one of its globs matches is touched
+
+`~/.bravebot/rules/<name>.md` and `<workspace>/.bravebot/rules/<name>.md` are rule files: the
+`.md` files directly in each directory, in name order, the person's own before the project's
+([INSTR-4](#INSTR-4)). A file whose name is not UTF-8 text is not one, and the person is told how many
+were passed over. A rule file with no `paths` key in its frontmatter is standing text like the
+project's `AGENTS.md`, in force on every turn, and follows the `AGENTS.md` of its own root. A rule
+file with a `paths` list is held back. It is added to the system prompt once a file one of its
+globs matches has been touched, and stays for the rest of the session. `paths: []` names no file,
+so such a rule never loads. A file that opens a frontmatter block and never closes it, or whose
+`paths` list opens a `[` and never closes it, is left out and the person is told, and is not read
+as text for every turn. A byte order mark or blank lines before the first marker are not part of
+the file. No other key is read.
+
+`paths` is a list of globs, written one `- glob` to a line, as `[a, b]`, which may run over several
+lines, or as one glob or a comma-separated run after the colon. A comma inside `{}` or quotes
+belongs to the glob, and a `#` after whitespace begins a comment. A glob is the dialect
+`list_files` takes: `*`, `**`, `?` and `{a,b}`, matched against a name relative to the project
+root. A glob with no `/` is matched against the file's own name at any depth, unless it is written
+with a leading `/` or `./`, which names the project root's own files and is otherwise dropped. A
+glob ending in `/` names everything below that directory. A `paths` value that is not a list of
+globs, such as a block scalar, is left out and the person is told, as an unclosed list is; `null`
+names no file, as `[]` does.
+
+A file is touched when `read_file` read it, a tool that writes wrote it, or the person named it
+with `@` in the prompt and a file is there. What is compared with a glob is the name the planner typed to the tool, or
+the person typed after `@`, placed under the root by its spelling alone as INSTR-14 places a
+directory, so a link is not followed to where it lands. No file's content and no tool's output is
+compared, so a name a listing, a search, a command or a processor printed is not a touch, and
+neither is a file read through a reference, since the planner typed the reference and not the
+file's name. A name outside the root, or one a refused call or a `deny` rule kept from being read,
+is not a touch either, although a declined credential read still records its directory for
+INSTR-14. A file named with `@` is not worked in, so it adds no directory to INSTR-14's record,
+and a name that is a directory, or is nothing, is not a file named.
+
+A rule's text comes through the read, the trust map and the `deny` rules of
+[INSTR-8](#INSTR-8), and the person's own are trusted for sitting in `~/.bravebot` unless the way
+to the directory goes through one a turn can write to ([SKILL-3](skills.md#SKILL-3)). The project's
+directory is listed to count its files, and no file in it is opened until the map has been asked. A
+directory the map does not vouch for contributes one notice with a count and no name, a file a
+`deny` rule covers is left out with a notice naming it ([PERM-7](permissions.md#PERM-7)), and a rule
+is taken as it stands: a pointer or an `@path` import in it is ordinary text. A safe session reads
+no rule file.
+
+Rule files are read when a turn begins ([INSTR-7](#INSTR-7)). The rules a touched file already
+matches, from an earlier turn or from this prompt's `@`, are in the system prompt before the first
+request. A file touched while a turn runs adds its rule before the next request of that turn. In
+both cases a rule is appended after everything else the system prompt holds, the words about the
+mode and the words from the command line ([INSTR-10](#INSTR-10)) included, under one heading, so
+the bytes in front of the rule are the ones the last request sent. The heading says that every
+instruction above, the mode and the command line's words among them, stands where a rule
+disagrees. Rules the session added
+before keep the order it added them in, and the rest follow in the order the rule files are read,
+so a turn that starts after the last round of another carries the same prompt. The person is told
+once for the session which rule was added and which touched file matched it. A rule file written
+during a turn takes effect on the next one. A rule in force on every turn, and a rule a touched file
+has already brought in when the turn begins, is measured by [INSTR-15](#INSTR-15) as an
+`AGENTS.md` is.
+
+The record of touched files is INSTR-14's, kept beside its directories: the session's, empty again
+in a resumed session and after `/cd`, and at most 1024 files, which are compared with a held rule's
+globs once when a turn begins and once more for each file touched after. A front end that builds a
+workspace for each turn hands it on with the checkouts the session keeps
+([CHECKOUT-16](checkouts.md#CHECKOUT-16)), so the record outlives a turn there too.
+
+**Why.** A convention for one kind of file costs a line in every request of a session that never
+goes near one, and putting it in the project's `AGENTS.md` makes it share a file with everything
+else. Matching only names the planner or the person chose keeps what INSTR-1 refused when it
+refused to walk upward: nothing a file holds, and nothing a tool printed, decides which trusted
+file is read. Appending rather than inserting at the place the rule would stand if it had been
+there from the start leaves the prompt up to the rule as the last request sent it, which is what a
+service that reuses a prefix reads again, and the next turn starts with the rule in the same place.
+
+**Known costs.** A glob has no character class, as `list_files` has none: a `[` in one is an
+ordinary character. A name is compared as it was typed, so on a volume that folds case a name typed
+in another case than the glob does not match. A session that touches more than 1024 files loads no
+rule for the 1025th. A rule that arrives while a turn runs changes the system message, which is
+where [BACKEND-27](backends.md#BACKEND-27) and [BACKEND-32](backends.md#BACKEND-32) put their first
+breakpoint, so the next request reads the system prompt and the history in front of it again at
+full price, once per request that adds a rule. A rule that arrives while a turn runs is not
+measured by [INSTR-15](#INSTR-15) until the next turn begins. A resumed session loads a path-scoped
+rule again only when a file it matches is touched again.
+
+`verified-by: bravebot_agent::preamble::a_rule_with_paths_is_in_the_prompt_only_after_a_file_it_matches_is_touched`
+`verified-by: bravebot_agent::preamble::a_loaded_rule_goes_after_everything_else_in_the_prompt`
+`verified-by: bravebot_agent::preamble::a_rule_with_no_paths_is_in_force_every_turn_and_the_projects_have_the_last_word`
+`verified-by: bravebot_agent::preamble::a_rule_whose_paths_list_is_empty_never_loads`
+`verified-by: bravebot_agent::preamble::naming_a_file_with_at_loads_its_rule_and_not_its_directorys_instructions`
+`verified-by: bravebot_agent::preamble::a_rule_in_the_persons_own_directory_loads_on_a_matching_file`
+`verified-by: bravebot_agent::preamble::a_rule_in_an_untrusted_directory_is_a_notice_and_no_text`
+`verified-by: bravebot_agent::preamble::a_rule_file_a_deny_rule_covers_is_not_read`
+`verified-by: bravebot_agent::preamble::a_rule_whose_frontmatter_or_paths_list_never_closes_is_left_out_with_a_notice`
+`verified-by: bravebot_agent::preamble::the_persons_rules_are_not_read_by_a_way_that_goes_through_the_workspace`
+`verified-by: bravebot_agent::preamble::a_rule_stays_in_force_for_the_turns_after_the_file_that_loaded_it`
+`verified-by: bravebot_agent::preamble::a_long_rule_file_in_force_is_measured_like_an_instructions_file`
+`verified-by: bravebot_agent::preamble::a_rule_file_whose_name_is_not_text_is_not_read_as_the_one_its_lossy_spelling_names`
+`verified-by: bravebot_agent::rules::a_block_list_names_one_glob_a_line`
+`verified-by: bravebot_agent::rules::a_list_at_the_keys_own_indent_ends_at_the_next_key`
+`verified-by: bravebot_agent::rules::a_comma_inside_braces_or_quotes_belongs_to_the_glob`
+`verified-by: bravebot_agent::rules::an_empty_list_names_no_file_and_no_key_names_every_turn`
+`verified-by: bravebot_agent::rules::a_comment_after_a_glob_is_not_part_of_it`
+`verified-by: bravebot_agent::rules::a_bracket_inside_a_glob_does_not_close_the_list`
+`verified-by: bravebot_agent::rules::a_byte_order_mark_or_blank_lines_before_the_frontmatter_are_not_part_of_the_file`
+`verified-by: bravebot_agent::rules::a_value_that_is_not_a_list_is_unreadable_and_null_names_no_file`
+`verified-by: bravebot_agent::rules::a_glob_ending_in_a_slash_names_what_is_below_it`
+`verified-by: bravebot_agent::rules::a_quote_inside_a_word_is_part_of_the_glob`
+`verified-by: bravebot_agent::rules::a_list_in_brackets_may_run_over_several_lines`
+`verified-by: bravebot_agent::rules::a_glob_written_from_the_root_is_about_the_roots_own_files`
+`verified-by: bravebot_agent::rules::rules_added_before_keep_the_order_they_were_added_in`
+`verified-by: bravebot_agent::rules::an_indented_paths_line_is_not_the_key`
+`verified-by: bravebot_agent::rules::a_glob_with_a_separator_anchors_and_a_bare_one_matches_at_any_depth`
+`verified-by: bravebot_agent::rules::a_rule_is_taken_once_and_only_the_first_carries_the_heading`
+`verified-by: bravebot_agent::turn::a_rule_a_round_brings_in_is_appended_to_the_system_prompt_of_the_next_round`
+`verified-by: bravebot_agent::turn::a_file_a_listing_or_a_search_names_does_not_load_a_rule`
+`verified-by: bravebot_agent::turn::a_file_the_person_names_with_at_loads_its_rule_for_the_first_request`
+`verified-by: bravebot_agent::turn::a_file_written_or_edited_loads_its_rule_for_the_next_round`
+`verified-by: bravebot_agent::turn::a_read_the_person_declined_for_a_credential_does_not_load_a_rule`
+`verified-by: bravebot_agent::turn::a_file_named_with_at_that_a_deny_rule_covers_loads_no_rule`
+`verified-by: bravebot_agent::turn::a_delegate_started_after_a_read_carries_the_rule_and_leaves_the_telling_to_the_turn`
+`verified-by: bravebot_agent::turn::a_delegate_leaves_the_telling_of_a_rule_to_the_turn_that_started_it`
+`verified-by: bravebot_agent::turn::a_file_read_through_a_reference_does_not_load_a_rule`
+`verified-by: bravebot_agent::turn::rules_added_in_one_order_are_carried_in_that_order_by_the_next_turn`
+`verified-by: bravebot_agent::workspace::moving_the_working_directory_forgets_the_files_touched_and_the_rules_told_of`
+`verified-by: bravebot_agent::workspace::a_name_typed_with_at_records_the_file_and_not_its_directory`
+`verified-by: bravebot_agent::workspace::a_name_typed_with_at_that_is_a_directory_or_nothing_is_not_a_file`
+`verified-by: bravebot_agent::workspace::a_touched_file_is_recorded_by_the_spelling_the_planner_typed`
+`verified-by: bravebot_agent::workspace::a_workspace_given_what_the_session_kept_has_the_files_it_touched`
+`verified-by: bravebot_agent::workspace::the_files_touched_stop_at_a_thousand_and_twenty_four`
+`verified-by: bravebot_agent::safe::a_safe_session_reads_no_rule_file`
 
 ## Known costs
 
@@ -610,6 +750,11 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   to the 64 the record keeps. There is no cache, because one would have to be invalidated when a
   file appears or changes mid-session. A directory only listed, searched or named in a shell
   command is not recorded: only a read or a write is.
+- **Every rule file is read and gated on every turn, whether it applies to every turn or is held
+  for a path.** Its `paths` are in the file, so there is no knowing which to read without reading
+  them all, and a cache would have to be invalidated by a write nobody tells this about
+  ([INSTR-7](#INSTR-7)). A project with many rule files pays one read, one trail entry and one parse
+  for each, on every turn and every delegate it starts.
 - **Resolution costs up to three directory listings and up to three file reads every turn.** Cheap
   next to the model call it precedes, and the alternative is a cache that has to be invalidated by
   something, which is a second thing to be wrong about how the filesystem looks. A project keeping

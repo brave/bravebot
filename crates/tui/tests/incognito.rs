@@ -181,21 +181,38 @@ fn a_choice_applies_to_the_session_and_is_not_recorded() {
     let scratch = Scratch::incognito("choices");
     scratch.seed("model", "claude-sonnet-4-5\n");
     scratch.seed("theme", "nord\n");
+    scratch.seed("language", "fr\n");
 
     // Reading is the half that must keep working: a private session still opens with the model and
     // theme the person chose, which is what makes it a private session rather than a fresh install.
     assert_eq!(store::load_model().as_deref(), Some("claude-sonnet-4-5"));
     assert_eq!(store::load_theme().as_deref(), Some("nord"));
+    assert_eq!(store::load_language().as_deref(), Some("fr"));
 
     store::save_model("some-other-model");
     store::save_theme("brave");
     store::save_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
     store::save_editing(bravebot_tui::vim::Editing::Vi.as_str());
+    // The language is the one choice that applies from the next start, so a save that reports
+    // having kept it is the only sign of a choice nothing recorded.
+    assert!(
+        !store::save_language(Some("en-US")),
+        "an incognito session said it had saved a language"
+    );
+    assert!(
+        !store::save_language(None),
+        "an incognito session said it had forgotten the language"
+    );
 
     assert_eq!(
         store::load_model().as_deref(),
         Some("claude-sonnet-4-5"),
         "an incognito session overwrote the recorded model"
+    );
+    assert_eq!(
+        store::load_language().as_deref(),
+        Some("fr"),
+        "an incognito session replaced or removed the recorded language"
     );
     assert_eq!(
         store::load_theme().as_deref(),
@@ -213,7 +230,11 @@ fn a_choice_applies_to_the_session_and_is_not_recorded() {
         "an incognito session recorded a style of editing"
     );
 
-    let mut expected = vec!["model".to_string(), "theme".to_string()];
+    let mut expected = vec![
+        "language".to_string(),
+        "model".to_string(),
+        "theme".to_string(),
+    ];
     expected.sort();
     assert_eq!(scratch.contents(), expected);
 }

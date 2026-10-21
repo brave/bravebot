@@ -43,8 +43,21 @@ works**, in every terminal and in shell mode too.
 With [vi editing](#editing-the-way-vi-does) chosen, Escape enters NORMAL mode instead of discarding
 the line, and the letters do what they do in vi.
 
-Ten of these chords can be [moved to keys of your own](#moving-a-key). Every chord named on this
+Eleven of these chords can be [moved to keys of your own](#moving-a-key). Every chord named on this
 page, and every one the interface names on your screen, is the default.
+
+## Undoing an edit
+
+Ctrl-_ puts the line and the caret back as they were before the last edit, up to a thousand edits
+back. A run of typed characters is one edit. A delete, a kill (Ctrl-W, Alt-D, Ctrl-U, Ctrl-K) and a
+paste are one edit each, and undoing the deletion of a `[Image #1]`-style marker brings its
+attachment back with it. One press goes back one edit in either editing style, and it works while a
+turn is running. Sending the line, clearing it, putting it away or bringing it back, switching the
+editing style and recalling an earlier prompt leave nothing to undo.
+
+Some terminals report the same key as Ctrl-7, Ctrl-Shift-_, Ctrl-/ or Ctrl-Shift-/. While `undo` is on its default
+those answer too, except one that you moved another action onto. Ctrl-Z is not used, because it
+suspends the process in a terminal that has job control on.
 
 ## Editing the way vi does
 
@@ -62,7 +75,7 @@ objects, VISUAL selection and REPLACE mode, and how each treats a [marker](#mark
 
 A `keybindings` block in [`settings.json`](../customize/configuration.md) names an action and the
 chord you want to answer it. Write a chord as `ctrl-x`, `alt-o` or `ctrl+x`. The block layers per
-action the way `env` does, so a project file moving one action says nothing about the other nine.
+action the way `env` does, so a project file moving one action says nothing about the other ten.
 
 ```json
 {
@@ -73,7 +86,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 }
 ```
 
-**Ten actions can be moved, and nothing else can:**
+**Eleven actions can be moved, and nothing else can:**
 
 | Action | Default | What it does |
 |---|---|---|
@@ -87,6 +100,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](sessions.md#telling-sessions-apart) |
 | `scope` | `ctrl-n` | cycle Up between every stored prompt, this project's and this session's |
+| `undo` | `ctrl-_` | put back the last edit to the line ([below](#undoing-an-edit)) |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, and the arrows walk the caret and the history.
@@ -126,7 +140,10 @@ your own words, is readable by nobody else, and does not outlive the edit.
 Which editor opens: `$VISUAL`, then `$EDITOR`, then the first of `vim`, `vi`, `emacs`, `nano` that is
 installed. That fallback list is the same on every platform. A name is looked for under every spelling
 your `PATH` may hold it under, so an editor installed as `vim.exe` on Windows is still found by
-`vim`. A variable exported as empty counts as unset. An editor you named that will not start is
+`vim`. A bare name is found only in `PATH` directories that a program the agent runs cannot write, so
+an editor installed under the session's own directory (a project `node_modules/.bin`, say) reads as
+not found. A name with a path in it, such as `/opt/editors/vim`, is yours and is never looked up. A
+variable exported as empty counts as unset. An editor you named that will not start is
 reported as such and nothing else is tried, so a fallback never runs an editor you did not ask for.
 
 An editor is started under the name it was asked for, rather than under the file a symbolic link
@@ -215,7 +232,7 @@ Escape only ever stops, and never leaves. Ctrl-C is read against what is happeni
 
 | What is happening | What Ctrl-C does |
 |---|---|
-| a turn in flight, or a command running | stops it, and the session stays where it was |
+| a turn in flight, a summary, an aside or a goal check, or a command running | stops it, and the session stays where it was |
 | nothing running, a line in the box | takes the line, and offers the way out |
 | nothing running, an empty box | offers the way out |
 | nothing running, an empty box, the way out already offered | ends the session |
@@ -225,9 +242,14 @@ Ctrl-D leaves an empty box the same way. The offer lives for exactly one press: 
 one of the two keys that leave withdraws it, a mouse report or a resize included, and letting go of a
 key does not.
 
+`exit` or `quit` typed without the slash does not leave, since it is a prompt like any other line. A
+line that is only one of them is sent at the first Enter, and while the turn it starts runs, the row
+beneath the box says that it was sent as a prompt, that Ctrl-C stops it and that `/exit` leaves.
+
 **A turn you asked to stop says so until it ends.** From the press, the working indicator reads
 "Stopping" ahead of whatever it would otherwise say. A turn ends only once every delegate it started
-has returned, which can take seconds, and a further press finds the same word. If several delegates are waiting on an approval, the first press answers the one
+has returned, which can take seconds, so while delegates are still running it reads "Stopping, waiting
+on 2 delegates" and the count falls as they return. A further press finds the same word. If several delegates are waiting on an approval, the first press answers the one
 drawn and declines the rest without drawing them.
 
 **Leaving takes two separate presses.** Ctrl-C or Ctrl-D that arrives in the same read as other input
@@ -295,11 +317,16 @@ comes off the box and is drawn under it like anything else waiting, but it is no
 in flight, so nothing about it reaches the planner. It runs when the queue is reached after the turn
 has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/status`, `/watch`, `/jobs`, `/panel`, `/copy`, `/export`, `/loop`
 and `/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
-that sets one, which wait. `/rename`, `/note`, `/issue`, `/pr`, `/forget-trust`, `/model`, `/theme`, `/effort` and
-`/config` are too
-when nothing is waiting, and the four that open a list draw it over the turn. What they answer goes into the
+that sets one, which wait. `/theme`, `/config` and `/language` are too, whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
+`/forget-trust`, `/model` and `/effort` are too unless a line waiting ahead of them could change what they act on, a
+waiting `/clear` for `/rename`, say, and then they wait behind that line and the mark under the box names it. A waiting `/sandbox off` holds none of
+them back. The four that open a list draw it over the turn. What they answer goes into the
 transcript as it is said, so it scrolls with the rest of the history, and nothing waiting moves. During a compaction, a `/btw` question, a `/manifest` run or a goal check,
-every command waits.
+every command waits. A paste or a pasted picture arriving during one of them is kept in the box like any other. While work runs, the list of commands offered when you type `/` marks each row: `now` for a
+command carried out as you press Enter, `queued` for one that waits, and `now/queued` where it depends
+on what follows the word and on what is already waiting. A `now` row reads `queued` while a line of the
+same command waits, and during a compaction or an aside every row reads `queued`. Tab, or Enter on a
+half-typed word, takes the highlighted row and queues nothing.
 
 **The turn in flight is the one on the screen.** Work handed out to a [delegate](#watching-a-delegate-reading-a-command-and-asking-something-aside)
 is a turn of its own, and you may not know one is running, so what you type waits for the turn you are
@@ -336,7 +363,8 @@ and the rest go on waiting in order.
 is waiting goes at once. The waiting prompts go together as one turn, one to a line, carrying the
 files and pictures each of them named, and the routing for that turn is settled from all of them. It
 reaches only as far as the first slash command or shell line, which keeps its place and runs after
-that turn as it would have anyway. A prompt you queue after pressing it waits for a turn of its own.
+that turn as it would have anyway. A prompt waiting behind that command is not given to the turn that
+starts now: it goes after the command, as its own turn. A prompt you queue after pressing it waits for a turn of its own.
 
 Only a turn is stopped this way. During a compaction, a question asked aside, a goal check or a
 manifest run, Ctrl-Enter only queues the line, and Escape is still the key that stops one. A
@@ -393,6 +421,11 @@ box, newest at the bottom and seeded with whatever single line you had already t
 | Ctrl-S | cycle between every prompt, the ones sent from this project and the ones this session sent |
 | Enter | put the prompt under the cursor into the box |
 | Escape, Ctrl-C, Backspace past the start | close the search and leave the box as it was |
+
+In a resumed session, "this session" holds the prompts the resumed record sent and the ones you send now. A prompt such as `continue` that other sessions also stored is not counted from before the session began, and a cancelled prompt is not counted.
+
+A paste, a dropped file and a Ctrl-V for a picture do nothing while the search is open: they reach
+neither the box nor the search, and closing the search leaves the box as it was.
 
 Each row says how long ago that prompt was sent, and the one under the cursor is drawn in full beside
 the list with a word for the lines that did not fit. A terminal too narrow for two columns keeps the
@@ -563,6 +596,8 @@ what it printed before the move and every look the model takes afterwards are in
 Opening it says which job it is and whether it is still running, has ended, or was stopped when the
 turn ended.
 
+While a turn runs, the newest lines a running job has printed since the model last looked are drawn after the row's own lines, with a note that the model has not read them. They appear without waiting for the model to call `job_output`. They are not part of the conversation, and the next look returns every line and takes them off the row. Between turns the row shows the lines it had at the turn's last step.
+
 **A command's row says how the run ended**, with the same three marks a delegate's row carries: one
 for a run whose every step exited zero, one for a run a step failed, and the mark of work still going
 for a run stopped at [its deadline](../reference/run-tool.md#a-line-has-a-deadline). Opening
@@ -603,7 +638,8 @@ or a command line that waited being run.
 
 Escape and Ctrl-C reach this mode before they reach what is running behind it, whether that is a turn,
 a summary, an aside or the check a goal is judged by, so the press that closes the view leaves all of
-them alone and a goal armed behind a check is not touched.
+them alone and a goal armed behind a check is not touched. A command line that waited in the queue
+begins as the turn ends with the view still open, and the press that closes the view does not stop it.
 
 A delegate keeps more of its work than its block draws, and drops its oldest once it holds several
 hundred lines, so arriving late at a very long run means reading from wherever that bound has reached.
@@ -626,7 +662,7 @@ session asks for four things, each because something here cannot work without it
 
 | What it asks for | What it buys |
 |---|---|
-| mouse reporting, narrowed to the buttons, the wheel, and motion while a button is held | the wheel scrolls the transcript |
+| mouse reporting, narrowed to the buttons, the wheel, and motion while a button is held (not asked for where [`tui.mouse`](../customize/configuration.md#tuimouse) is `false`) | the wheel scrolls the transcript |
 | bracketed paste | a pasted prompt does not send itself on the newline most clipboards carry |
 | focus reporting | the clipboard is worth a look the moment a picture appears on it, rather than polled forever |
 | disambiguated keys, where the terminal says it understands the request | Shift-Enter and Ctrl-Enter arrive at all |

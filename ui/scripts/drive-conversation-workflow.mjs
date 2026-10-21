@@ -32,7 +32,8 @@ try {
   await page.getByRole('button', {name: 'Send', exact: true}).click()
   await emit('ask.request', {request: 1, prompts: [{header: 'Color', question: 'Which color?', rows: [{index: 0, label: 'Blue', detail: 'Cool'}], multiple: false, key: 'color'}]})
   await composer.fill('Queued follow-up')
-  await composer.press('Enter')
+  // Enter would send it into the running turn; Alt+Enter holds it for after.
+  await composer.press('Alt+Enter')
   await second().click()
   await first().getByText('Waiting for your answer', {exact: false}).waitFor()
   await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === 'Draft two', null, {timeout: 3000}).catch(() => {})

@@ -204,7 +204,11 @@ fn run_client(
     client: &[std::ffi::OsString],
     current: &Current,
 ) {
-    let mut command = std::process::Command::new(&client[0]);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::named_by_person(&client[0]),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+    );
     command.args(&client[1..]);
     let mut linked = match bravebot_ui_bridge::control_link::launch(command) {
         Ok(linked) => linked,

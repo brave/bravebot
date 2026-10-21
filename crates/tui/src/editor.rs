@@ -18,7 +18,6 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// What to open when nothing is configured, in the order they are tried.
@@ -347,8 +346,11 @@ fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failur
         .to_string_lossy()
         .into_owned();
 
-    let mut command = Command::new(program);
-    bravebot_sandbox::programs::restrict_path(&mut command);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::named_by_person(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Reduced,
+    );
     match command.args(arguments).arg(path).status() {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(Failure::Editor(match status.code() {
@@ -621,7 +623,7 @@ mod tests {
         let path = std::env::join_paths([session.join(".venv/bin"), system.clone()]).unwrap();
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env(SYSTEM, &system)
@@ -666,7 +668,7 @@ mod tests {
         }
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env("PATH", &bin)
@@ -774,7 +776,7 @@ mod tests {
         let path = std::env::join_paths(entries(&session, &tools)).unwrap();
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let mut child = Command::new(std::env::current_exe().unwrap());
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
         child
             .args(["--exact", test, "--test-threads=1", "--nocapture"])
             .env(STARTED_SESSION, &session)

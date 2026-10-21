@@ -89,6 +89,19 @@ pub(super) fn spec(revision: &str) -> Result<Spec<'_>, Declined> {
     }
 }
 
+/// Whether `text` is one word naming two revisions, `a..b` or `a...b`, with both written out. The
+/// reading is [`spec`]'s, so a range is valid here exactly where a diff's revision is.
+pub fn is_range(text: &str) -> bool {
+    let (Ok(Spec::Range(from, to) | Spec::Symmetric(from, to)), false, false) =
+        (spec(text), text.starts_with('.'), text.ends_with('.'))
+    else {
+        return false;
+    };
+    [from, to]
+        .iter()
+        .all(|name| !name.starts_with('-') && !name.contains(".."))
+}
+
 /// The path a single revision names after its `:`, relative to the repository's root, so the
 /// caller can hold it against the trust map before anything is opened.
 pub fn path_in(revision: &str) -> Option<&str> {

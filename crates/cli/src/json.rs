@@ -254,6 +254,10 @@ pub struct Streaming {
     /// The same events with the time of each, which is what the session's trail file holds.
     stamped: bravebot_session::audit::Trail,
     stream: Option<Stream>,
+    /// Where `--trace` writes each decision as the gate takes it, rather than after the run.
+    live_trace: Option<Stream>,
+    /// Whose events are arriving, for the line written live.
+    recording: Option<DelegateId>,
 }
 
 impl Streaming {
@@ -262,7 +266,19 @@ impl Streaming {
             recorded: RecordingSink::new(),
             stamped: bravebot_session::audit::Trail::new(),
             stream,
+            live_trace: None,
+            recording: None,
         }
+    }
+
+    /// Write every decision to `trace` as it is made, after the trail's heading.
+    ///
+    /// The sink writes the gate names, labels and paths the event carries and branches on none of
+    /// them (TRACE-2).
+    pub fn with_live_trace(mut self, mut trace: Stream) -> Self {
+        trace.line(crate::finish::TRAIL_HEADING);
+        self.live_trace = Some(trace);
+        self
     }
 
     pub fn recorded(&self) -> &RecordingSink {
@@ -292,11 +308,15 @@ impl Sink for Streaming {
                 reason: reason.clone(),
             }));
         }
+        if let Some(trace) = self.live_trace.as_mut() {
+            trace.line(&crate::finish::trace_line(self.recording, &event));
+        }
         self.stamped.emit(event.clone());
         self.recorded.emit(event);
     }
 
     fn recording_for(&mut self, delegate: Option<DelegateId>) {
+        self.recording = delegate;
         self.stamped.recording_for(delegate);
         self.recorded.recording_for(delegate);
     }
@@ -606,6 +626,61 @@ mod tests {
         );
         assert_eq!(sink.recorded().blocked().count(), 1);
         assert_eq!(sink.recorded().events().len(), 2);
+    }
+
+    /// `--trace` writes a decision the moment the gate takes it, in the words the trail printed
+    /// whole uses, and a stderr nobody reads does not stop the run.
+    #[test]
+    fn a_decision_is_traced_when_the_gate_takes_it() {
+        let out = Shared::default();
+        let mut sink = Streaming::new(None).with_live_trace(Stream::new(out.clone()));
+        assert_eq!(out.written(), "audit trail\n");
+
+        let passed = Event::GatePassed {
+            gate: "action",
+            detail: "read_file".to_string(),
+        };
+        sink.emit(passed.clone());
+        assert_eq!(
+            out.written(),
+            format!(
+                "audit trail\n{}\n",
+                crate::finish::trace_line(None, &passed)
+            ),
+            "the line was not there as soon as the gate decided"
+        );
+
+        let delegate = DelegateId::nth(1);
+        sink.recording_for(Some(delegate));
+        let blocked = Event::GateBlocked {
+            gate: "action",
+            detail: "write_file".to_string(),
+            reason: "injection blocked".to_string(),
+            principle: bravebot_core::event::Principle::IntegrityGate,
+        };
+        sink.emit(blocked.clone());
+        assert!(
+            out.written().ends_with(&format!(
+                "{}\n",
+                crate::finish::trace_line(Some(delegate), &blocked)
+            )),
+            "a delegate's decision lost its attribution: {}",
+            out.written()
+        );
+        assert_eq!(sink.recorded().events().len(), 2);
+
+        struct Closed;
+        impl Write for Closed {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+        }
+        let mut closed = Streaming::new(None).with_live_trace(Stream::new(Closed));
+        closed.emit(passed);
+        assert_eq!(closed.recorded().events().len(), 1);
     }
 
     /// Without the flag nothing is written, and the trail is kept all the same.

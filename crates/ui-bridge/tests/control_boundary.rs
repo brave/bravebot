@@ -19,6 +19,7 @@
 //! it never tried.
 
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use bravebot_ui_bridge::control_link::{self, Linked};
 use serde_json::{Value, json};

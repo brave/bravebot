@@ -52,6 +52,7 @@ responses and event payloads retain their meaning.
 `verified-by: bravebot_ui_bridge::fetch::the_session_view_orders_prompts_approvals_and_labelled_results`
 `verified-by: bravebot_ui_bridge::fetch::session_views_keep_two_sessions_and_terminal_outcomes_separate`
 `verified-by: bravebot_ui_bridge::fetch::a_legacy_session_emits_no_view_events`
+`verified-by: bravebot_ui_bridge::fetch::a_view_started_after_trust_was_answered_opens_idle`
 
 <a id="RPCVIEW-2"></a>
 ### RPCVIEW-2: Rust supplies ordered rows and authoritative status
@@ -87,6 +88,7 @@ The bridge retains only current view metadata and the pending payload. Clients r
 `verified-by: bravebot_ui_bridge::view::failures_have_authoritative_terminal_status`
 `verified-by: bravebot_ui_bridge::view::a_finished_call_replaces_the_row_of_the_call_it_ends`
 `verified-by: bravebot_ui_bridge::wire::accepted_composed_prompts_cross_without_their_text`
+`verified-by: bravebot_ui_bridge::view::a_terminal_update_clears_the_question_still_waiting`
 
 <a id="RPCVIEW-3"></a>
 ### RPCVIEW-3: the existing approval implementation owns answers

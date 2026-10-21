@@ -4,6 +4,8 @@
 //! saves: the unit that builds the record and the unit that reads it each look right alone, and
 //! only a save after a resume shows the history that was there before it gone.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -411,6 +413,42 @@ fn a_failed_turn_is_recorded_with_the_reason_the_interface_composed() {
         json!({"kind": "failed",
                "reason": "error: the service would not accept the credentials (HTTP 401)"}),
         "{saved}"
+    );
+    assert!(
+        !saved.to_string().contains("BACKEND-WORDS"),
+        "the record repeats the backend's words: {saved}"
+    );
+}
+
+/// A turn that failed after a tool call in the desktop leaves the planner a note that it failed,
+/// last in the saved conversation, so a resume holds it as the live window did (TURN-13).
+///
+/// The faults this rejects: a note made for the interface and never put in the conversation, a note
+/// the saved conversation leaves out, and a note that repeats the service's words.
+#[test]
+fn a_failed_turn_leaves_the_planner_a_note_in_the_saved_conversation() {
+    let scratch = Scratch::new("bridge-failed-turn-note");
+    let (endpoint, _) = stub_service(Chat::PlansThenRefuses);
+
+    let ended =
+        Window::open(&scratch.home(), &scratch.project(), &endpoint, None).turn("make a plan");
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+
+    let saved = record(&scratch.home());
+    let messages = saved["conversation"]["messages"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no conversation: {saved}"));
+    let last = messages.last().expect("the conversation holds messages");
+    assert_eq!(last["composed"]["kind"], "notice", "{saved}");
+    assert_eq!(last["role"], "user", "{saved}");
+    let words = last["content"].as_str().unwrap_or_default();
+    assert!(
+        words.ends_with("Failure category: unauthorized. Requests sent for the failed call: 1."),
+        "{saved}"
+    );
+    assert!(
+        !words.contains("401"),
+        "the status of the reply is in the note: {saved}"
     );
     assert!(
         !saved.to_string().contains("BACKEND-WORDS"),

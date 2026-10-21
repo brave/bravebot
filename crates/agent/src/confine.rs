@@ -14,6 +14,7 @@
 use crate::confirm::{Carried, Confined, KeyChoice, Offered, Remembered};
 use crate::exec::ExecError;
 use crate::reach::{ChosenKey, Grant, Reached};
+use crate::scratch::ScratchDirectory;
 use bravebot_config::git_identities::Identities;
 use bravebot_config::sandbox_network::Hosts;
 use bravebot_core::command::Step;
@@ -35,6 +36,7 @@ use bravebot_sandbox::scope::{
 };
 use bravebot_sandbox::signing;
 use bravebot_sandbox::toolchain::Toolchain;
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -62,6 +64,10 @@ pub struct Confinement {
     home: Option<PathBuf>,
     roots: Vec<PathBuf>,
     scratch: Option<PathBuf>,
+    /// The directory `scratch` was made as. `scratch` is a row only while its name leads to this
+    /// directory, and each stage is refused as it starts once the name leads to a link or a file
+    /// (SANDBOX-18). None where the confinement was built from a path alone.
+    scratch_made: Option<ScratchDirectory>,
     /// Where the run is, for the `[includeIf]` blocks of the person's git configuration: the
     /// session's first directory, and every directory the session may write.
     place: signing::Place,
@@ -101,6 +107,12 @@ pub struct Confinement {
     /// What the planner asked this one line to add to every stage that has no assignment in front
     /// of it, from the fixed menu. Empty for every line that asked for nothing.
     requested: Vec<Requested>,
+    /// Whether the session would accept a `scopes` argument and a `request_path` call, which the
+    /// failure sentence names only where it would (SANDBOX-19). Off unless the caller says the
+    /// session accepts them, so a sentence is never worded for a route the session refuses. A
+    /// confinement exists only where runs are confined in a mode other than `off`, so the cause
+    /// left for it to be off is a workspace that is not trusted.
+    requests_offered: bool,
     /// The key the person chose for each owner's repositories (`git.identities`), offered by a
     /// `git` stage whose argv names an ssh address of that owner (SANDBOX-16).
     identities: Identities,
@@ -118,15 +130,28 @@ impl Confinement {
     ///
     /// `roots` are the directories the person opened the session on, each read and written. `home`
     /// is the account's profile directory, which is what `~` means and what no row reaches.
-    pub fn here(roots: Vec<PathBuf>, scratch: Option<&Path>, home: Option<&Path>) -> Option<Self> {
+    ///
+    /// `scratch` is the session's own directory as the session made it. It is a row only while its
+    /// name still leads to that directory (SANDBOX-18), since `canonical` would turn the row for a
+    /// name that has become a link into wherever the link leads, and it is no row where it is or
+    /// lies inside a credential location.
+    pub fn here(
+        roots: Vec<PathBuf>,
+        scratch: Option<&ScratchDirectory>,
+        home: Option<&Path>,
+    ) -> Option<Self> {
         let prelude = Prelude::current()?;
-        let confinement = Self::new(
-            prelude,
-            canonical(&temporary_directory()),
-            home,
-            roots,
-            scratch,
-        );
+        // Resolved first and compared second, so the row is the path that was checked and not a
+        // second reading of a name a stage may have changed in between.
+        let row = scratch.and_then(|made| {
+            let named = canonical(made.path());
+            made.stands_as_made_at(&named).then_some(named)
+        });
+        let confinement = Self::built(prelude, canonical(&temporary_directory()), home, roots, row);
+        let confinement = Self {
+            scratch_made: scratch.cloned(),
+            ..confinement
+        };
         #[cfg(target_os = "macos")]
         let confinement = Self {
             user_cache: bravebot_sandbox::macos::user_cache_directory(),
@@ -145,12 +170,28 @@ impl Confinement {
         roots: Vec<PathBuf>,
         scratch: Option<&Path>,
     ) -> Self {
+        Self::built(prelude, temporary, home, roots, scratch.map(canonical))
+    }
+
+    /// [`Confinement::new`] for a scratch row that is already resolved, so nothing reads the name a
+    /// second time. A row that is or lies inside a credential location is left out, since it is a
+    /// read and write one and is held to what a session directory is.
+    fn built(
+        prelude: Prelude,
+        temporary: PathBuf,
+        home: Option<&Path>,
+        roots: Vec<PathBuf>,
+        scratch: Option<PathBuf>,
+    ) -> Self {
         let roots: Vec<PathBuf> = roots.iter().map(|root| canonical(root)).collect();
-        let scratch = scratch.map(canonical);
+        let home = home.map(canonical);
+        let scratch = scratch.filter(|row| {
+            reaching_credentials(prelude, home.as_deref(), std::iter::once(row)).is_none()
+        });
         Self {
             prelude,
             temporary,
-            home: home.map(canonical),
+            home,
             place: signing::Place {
                 directory: roots.first().cloned(),
                 sessions: roots.iter().chain(scratch.iter()).cloned().collect(),
@@ -158,6 +199,7 @@ impl Confinement {
             },
             roots,
             scratch,
+            scratch_made: None,
             user_cache: None,
             developer: None,
             network: Network::Open,
@@ -171,6 +213,7 @@ impl Confinement {
             unasked_writes: false,
             host_grants: Vec::new(),
             requested: Vec::new(),
+            requests_offered: false,
             identities: Identities::default(),
             chosen_keys: Vec::new(),
             #[cfg(test)]
@@ -332,9 +375,11 @@ impl Confinement {
     /// This confinement given, where [`Confinement::writes_without_a_request`] allows it, every path
     /// a `request_path` for writing would be granted when a stage starts (SANDBOX-28).
     ///
-    /// `bypass` is whether the permission mode answers a request in the person's place and the
-    /// caller is the lead session, which is the only one offered the tool. Nothing a program wrote
-    /// or printed is among its inputs.
+    /// `bypass` is whether the permission mode answers a request in the person's place, the caller
+    /// is the lead session, which is the only one offered the tool, and the session accepts a
+    /// request at all. A workspace the person has not trusted accepts none (PATHREQ-5), so its
+    /// stages are given no row a request would have added. Nothing a program wrote or printed is
+    /// among its inputs.
     #[must_use]
     pub fn with_unasked_writes(mut self, bypass: bool) -> Self {
         self.unasked_writes = bypass;
@@ -688,6 +733,14 @@ impl Confinement {
                 .position(|name| *name == request.name())
         });
         self.requested = kept;
+        self
+    }
+
+    /// This confinement with whether the session would accept a `scopes` argument and a
+    /// `request_path` call, which decides whether the failure sentence names either (SANDBOX-19).
+    #[must_use]
+    pub fn with_requests_offered(mut self, offered: bool) -> Self {
+        self.requests_offered = offered;
         self
     }
 
@@ -1391,7 +1444,7 @@ impl Confinement {
             "{}{source}{refusal}{}{commit}{git}{}",
             self.reach(steps),
             self.identity_sentence(steps, unconfined_offered, environment),
-            credential_locations_sentence(self.mode),
+            credential_locations_sentence(self.mode, self.requests_offered),
         )
     }
 
@@ -1706,12 +1759,12 @@ impl Confinement {
         )
     }
 
-    /// The sentence naming what a line may ask for, or nothing where this session names no home to
-    /// apply a request under.
+    /// The sentence naming what a line may ask for, or nothing where this session would not accept
+    /// a request or names no home to apply one under.
     ///
     /// The same words follow every failure of the line, the exit code not among its inputs.
     fn menu_sentence(&self) -> String {
-        match self.accepts_requests() {
+        match self.requests_offered && self.accepts_requests() {
             true => format!(" {}", requests_menu_sentence(self.mode)),
             false => String::new(),
         }
@@ -1726,34 +1779,15 @@ impl Confinement {
     /// refused path lifts the refusal. Names are compared without regard to case on Windows and
     /// macOS, whose file systems fold it, and exactly on Linux.
     fn root_reaching_credentials(&self) -> Option<(&Path, PathBuf)> {
-        // The locations under the home need one to name them; `/Library/Keychains` does not.
-        let mut locations = self
-            .home
-            .as_deref()
-            .map(|home| credential_locations(self.prelude, home))
-            .unwrap_or_default();
-        if self.prelude == Prelude::MacOs {
-            locations.push(PathBuf::from(
-                bravebot_sandbox::base::MACOS_SYSTEM_KEYCHAINS,
-            ));
-        }
-        let reaches = |root: &Path, candidate: &Path| match self.prelude {
-            Prelude::Windows => overlaps(root, candidate),
-            Prelude::MacOs => {
-                overlaps(root, candidate)
-                    && root.components().count() >= candidate.components().count()
-            }
-            Prelude::Linux => root.starts_with(candidate),
-        };
-        self.roots.iter().find_map(|root| {
-            locations.iter().find_map(|location| {
-                let resolved = canonical(location);
-                [location, &resolved]
-                    .into_iter()
-                    .any(|candidate| reaches(root, candidate))
-                    .then(|| (root.as_path(), location.clone()))
-            })
-        })
+        reaching_credentials(self.prelude, self.home.as_deref(), self.roots.iter())
+    }
+
+    /// The scratch directory, if its name now leads to a link or a file.
+    fn scratch_linked(&self) -> Option<&Path> {
+        self.scratch_made
+            .as_ref()
+            .filter(|made| made.leads_elsewhere())
+            .map(ScratchDirectory::path)
     }
 
     /// What `command` is started as under this confinement, or the reason it cannot be.
@@ -1786,6 +1820,14 @@ impl Confinement {
                     location.display()
                 ),
             }));
+        }
+        if let Some(linked) = self.scratch_linked() {
+            return Err(not_confined(format!(
+                "the session's scratch directory `{}` has been replaced by a link or a file, so a \
+                 stage given it to write could reach wherever its name now leads; start a new \
+                 session to be given another",
+                linked.display()
+            )));
         }
         let proxy = self.host_proxy(step).map_err(not_confined)?;
         let proxied = proxy.as_deref().map(Proxy::environment).unwrap_or_default();
@@ -1914,6 +1956,24 @@ pub(crate) struct Contained {
     _sandbox: Box<dyn bravebot_sandbox::Sandbox>,
 }
 
+/// `command`, started as the leader of a process group of its own on Unix.
+///
+/// The group is what ending a stage addresses, so that the programs the stage started are ended
+/// with it ([`crate::exec`], RUN-11). A stage that stayed in the session's group could not be
+/// signalled without signalling the session.
+fn leading_a_group(command: Command) -> Command {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = command;
+        command.process_group(0);
+        command
+    }
+    #[cfg(not(unix))]
+    command
+}
+
 /// `command`, ready to start under `confinement`, or the reason it cannot be.
 pub(crate) fn begin(
     confinement: Option<&Confinement>,
@@ -1922,13 +1982,22 @@ pub(crate) fn begin(
     directory: &Path,
 ) -> Result<Launch, ExecError> {
     let Some(confinement) = confinement else {
-        return Ok(Launch::Command(command));
+        return Ok(Launch::Command(leading_a_group(command)));
     };
     #[cfg(unix)]
     {
         confinement
             .wrap(command, step, directory)
-            .map(Launch::Command)
+            // A Linux stage is a session leader once the backend has called `setsid`, and a
+            // session leader leads a group of its own. Asking for the group as well would make
+            // that call fail, since it refuses a process that already leads a group.
+            .map(|wrapped| {
+                if cfg!(target_os = "linux") {
+                    Launch::Command(wrapped)
+                } else {
+                    Launch::Command(leading_a_group(wrapped))
+                }
+            })
     }
     #[cfg(windows)]
     {
@@ -2003,12 +2072,21 @@ impl Container {
 /// programs do not have. Where the platform has no base to confine on, it is told the opposite.
 ///
 /// The `off` mode says nothing either, for the same reason: the programs have no boundary to state.
-pub fn stated_to_the_planner(confine_runs: bool, mode: SandboxMode) -> Option<String> {
+///
+/// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call.
+/// Where it would not, the description names neither and says which routes the person has instead
+/// (SANDBOX-19).
+pub fn stated_to_the_planner(
+    confine_runs: bool,
+    mode: SandboxMode,
+    requests_offered: bool,
+) -> Option<String> {
     let said = stated(
         confine_runs,
         Prelude::current(),
         bravebot_config::run_network(),
         mode,
+        requests_offered,
     )?;
     Some(with_temporary_held_back_said(
         said,
@@ -2051,11 +2129,42 @@ const READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE: &str = " A credential location su
      read is asked for with the `request_path` tool: the person is asked, and a yes lasts for this \
      session. A request for a path to write is refused in this mode before anyone is asked.";
 
-/// The fixed text that ends every profile line under `mode`.
-fn credential_locations_sentence(mode: SandboxMode) -> &'static str {
-    match mode {
-        SandboxMode::ReadOnly => READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE,
-        _ => CREDENTIAL_LOCATIONS_SENTENCE,
+/// Said in place of the sentences that name the `scopes` menu and `request_path` where the session
+/// would accept neither (SANDBOX-19, PATHREQ-5). Names the routes the person has instead, and no
+/// argument the session would turn down.
+///
+/// Says the workspace is not trusted because that is the only fact left to refuse on where this is
+/// reached: a description or a failure sentence is written only for a turn that confines its runs
+/// in a mode other than `off`. Under `read-only` a directory is added to read, and a request to
+/// read a path is the one a trusted workspace accepts (SANDBOX-22).
+fn requests_refused_sentence(mode: SandboxMode) -> String {
+    let (directory, request) = match mode {
+        SandboxMode::ReadOnly => ("a directory to read", "a request to read a path"),
+        _ => ("a directory", "a request"),
+    };
+    format!(
+        " This workspace is not trusted, so `run` accepts no `scopes` argument and the \
+         `request_path` tool is refused, and nobody is asked. Say which path or credential the \
+         command needs and what for: the person can trust the workspace, so that {request} is \
+         accepted, or add {directory} with `/add-dir` or `--add-dir`."
+    )
+}
+
+/// The first sentence of [`CREDENTIAL_LOCATIONS_SENTENCE`], which holds whether or not a request is
+/// accepted.
+const CREDENTIAL_LOCATIONS_NOT_ADDABLE_SENTENCE: &str = " A credential location such as `~/.ssh`, \
+     `~/.aws` or `~/.kube` cannot be added with `/add-dir` or `--add-dir`.";
+
+/// The fixed text that ends every profile line under `mode`, where the session would accept a
+/// request (`requests_offered`) or would not.
+fn credential_locations_sentence(mode: SandboxMode, requests_offered: bool) -> Cow<'static, str> {
+    match (requests_offered, mode) {
+        (false, _) => Cow::Owned(format!(
+            "{CREDENTIAL_LOCATIONS_NOT_ADDABLE_SENTENCE}{}",
+            requests_refused_sentence(mode)
+        )),
+        (true, SandboxMode::ReadOnly) => Cow::Borrowed(READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE),
+        (true, _) => Cow::Borrowed(CREDENTIAL_LOCATIONS_SENTENCE),
     }
 }
 
@@ -2307,6 +2416,7 @@ fn stated(
     prelude: Option<Prelude>,
     network: Network,
     mode: SandboxMode,
+    requests_offered: bool,
 ) -> Option<String> {
     if !confine_runs || mode == SandboxMode::Off {
         return None;
@@ -2379,8 +2489,13 @@ fn stated(
     });
     if prelude.is_some() {
         said.push_str(commit_sentence(mode));
-        said.push(' ');
-        said.push_str(&requests_menu_sentence(mode));
+        match requests_offered {
+            true => {
+                said.push(' ');
+                said.push_str(&requests_menu_sentence(mode));
+            }
+            false => said.push_str(&requests_refused_sentence(mode)),
+        }
     }
     if prelude == Some(Prelude::MacOs) {
         said.push_str(MACOS_LISTENING_SENTENCE);
@@ -2602,6 +2717,40 @@ fn lookup(environment: &[(String, String)], name: &str, fold_case: bool) -> Opti
         .filter(|value| !value.is_empty())
 }
 
+/// The first of `directories` that is or lies inside a credential location, or on Windows holds
+/// one, and that location (SANDBOX-18). See [`Confinement::root_reaching_credentials`].
+fn reaching_credentials<'a>(
+    prelude: Prelude,
+    home: Option<&Path>,
+    directories: impl Iterator<Item = &'a PathBuf>,
+) -> Option<(&'a Path, PathBuf)> {
+    // The locations under the home need one to name them; `/Library/Keychains` does not.
+    let mut locations = home
+        .map(|home| credential_locations(prelude, home))
+        .unwrap_or_default();
+    if prelude == Prelude::MacOs {
+        locations.push(PathBuf::from(
+            bravebot_sandbox::base::MACOS_SYSTEM_KEYCHAINS,
+        ));
+    }
+    let reaches = |root: &Path, candidate: &Path| match prelude {
+        Prelude::Windows => overlaps(root, candidate),
+        Prelude::MacOs => {
+            overlaps(root, candidate) && root.components().count() >= candidate.components().count()
+        }
+        Prelude::Linux => root.starts_with(candidate),
+    };
+    directories.into_iter().find_map(|root| {
+        locations.iter().find_map(|location| {
+            let resolved = canonical(location);
+            [location, &resolved]
+                .into_iter()
+                .any(|candidate| reaches(root, candidate))
+                .then(|| (root.as_path(), location.clone()))
+        })
+    })
+}
+
 fn canonical(path: &Path) -> PathBuf {
     without_verbatim_prefix(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
 }
@@ -2813,6 +2962,7 @@ mod tests {
             roots.iter().map(PathBuf::from).collect(),
             Some(Path::new("/var/scratch")),
         )
+        .with_requests_offered(true)
     }
 
     /// Every directory a stage is granted writes in is out of the search for a program bravebot
@@ -2888,6 +3038,7 @@ mod tests {
             roots.iter().map(PathBuf::from).collect(),
             Some(Path::new("/var/scratch")),
         )
+        .with_requests_offered(true)
     }
 
     fn held(confined: &Confinement, steps: &[&Step]) -> Containment {
@@ -3291,6 +3442,278 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A confinement on `prelude` whose scratch row is `scratch`, with a session directory that is
+    /// beside every credential location.
+    fn scratch_confinement(prelude: Prelude, scratch: &str) -> Confinement {
+        Confinement::new(
+            prelude,
+            PathBuf::from("/tmp"),
+            Some(Path::new(HOME)),
+            vec![PathBuf::from("/people/person/project")],
+            Some(Path::new(scratch)),
+        )
+    }
+
+    /// What `confinement` refuses a stage for when it is about the scratch directory, and nothing
+    /// otherwise.
+    fn refused_for_the_scratch_directory(confinement: &Confinement) -> Option<String> {
+        match prepared_in(confinement) {
+            Err(ExecError::NotConfined { detail, .. }) if detail.contains("scratch directory") => {
+                Some(detail)
+            }
+            _ => None,
+        }
+    }
+
+    /// SANDBOX-18: the scratch row is a read and write row as a session directory is, so it is not
+    /// granted where it is or lies inside a credential location, on every platform, and the stage
+    /// still starts. The regressions it rejects: the row left out of the comparison the session
+    /// directories go through, and a refusal of every stage for a temporary directory that lies in
+    /// such a place, which no new session can clear.
+    #[test]
+    fn a_scratch_directory_inside_a_credential_location_gets_no_row_on_every_platform() {
+        let rows = |prelude, scratch: &str| {
+            let confinement = scratch_confinement(prelude, scratch);
+            let policy = confinement.policy(
+                &step("/bin/cat", &["f"]),
+                Path::new("/people/person/project"),
+                &[],
+            );
+            (
+                reads(&policy, scratch) || writes(&policy, scratch),
+                refused_for_the_scratch_directory(&confinement),
+            )
+        };
+        for prelude in [Prelude::MacOs, Prelude::Linux, Prelude::Windows] {
+            for scratch in [
+                "/people/person/.ssh",
+                "/people/person/.ssh/keys",
+                "/people/person/.bravebot",
+                "/people/person/.aws/sso",
+            ] {
+                assert_eq!(
+                    rows(prelude, scratch),
+                    (false, None),
+                    "{prelude:?}: {scratch}"
+                );
+            }
+            for scratch in ["/var/scratch", "/people/person/.sshfoo"] {
+                assert_eq!(
+                    rows(prelude, scratch),
+                    (true, None),
+                    "{prelude:?}: {scratch}"
+                );
+            }
+        }
+    }
+
+    /// The scratch directory of a session, made as the session makes it, and a confinement on
+    /// `prelude` holding it to the directory it was made as.
+    #[cfg(unix)]
+    fn made_scratch(prelude: Prelude) -> (crate::SessionScratch, Confinement) {
+        let session = crate::SessionScratch::create().expect("a scratch directory");
+        let confinement = Confinement {
+            scratch_made: session.directory(),
+            ..Confinement::new(
+                prelude,
+                PathBuf::from("/tmp"),
+                Some(Path::new(HOME)),
+                vec![PathBuf::from("/people/person/project")],
+                Some(session.path()),
+            )
+        };
+        (session, confinement)
+    }
+
+    /// What a stage with a write row on the temporary directory can put at the scratch directory's
+    /// name that leads somewhere else: a link to each kind of place, and a file.
+    #[cfg(unix)]
+    fn what_leads_elsewhere(outside: &Path) -> Vec<(&'static str, crate::testutil::PutThere<'_>)> {
+        use std::os::unix::fs::symlink;
+        vec![
+            (
+                "a link to a credential directory",
+                Box::new(|name| symlink(outside.join(".ssh"), name).expect("link")),
+            ),
+            (
+                "a link to a shell startup file",
+                Box::new(|name| symlink(outside.join(".bashrc"), name).expect("link")),
+            ),
+            (
+                "a link to a directory no row names",
+                Box::new(|name| symlink(outside.join("elsewhere"), name).expect("link")),
+            ),
+            (
+                "a file",
+                Box::new(|name| std::fs::write(name, "x").expect("a file")),
+            ),
+        ]
+    }
+
+    /// What a stage can put at the name that leads nowhere else: another directory, or nothing.
+    #[cfg(unix)]
+    fn what_leads_nowhere_else() -> Vec<(&'static str, crate::testutil::PutThere<'static>)> {
+        vec![
+            (
+                "an empty directory made in its place",
+                Box::new(|name| std::fs::create_dir(name).expect("a directory")),
+            ),
+            ("nothing", Box::new(|_| {})),
+        ]
+    }
+
+    /// The directories a link can lead to, under a directory of their own.
+    #[cfg(unix)]
+    fn somewhere_to_link_to(name: &str) -> PathBuf {
+        let outside = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(outside.join(".ssh")).expect("a credential directory");
+        std::fs::create_dir_all(outside.join("elsewhere")).expect("a directory");
+        std::fs::write(outside.join(".bashrc"), "export X=1\n").expect("a startup file");
+        outside
+    }
+
+    /// SANDBOX-18: a stage is refused once the scratch directory's name leads to a link or a file,
+    /// wherever it leads, on every platform that reads the machine. The check is made as each
+    /// stage starts, since the confinement is built before the first stage of a line and a later
+    /// stage of the same line starts after an earlier one changed the name. The regressions it
+    /// rejects: the check made only when the confinement is built, which lets the second stage of
+    /// `a && b` through, and one that compares where the name leads with the credential table
+    /// alone, which passes a link to a directory that holds none.
+    #[cfg(unix)]
+    #[test]
+    fn a_stage_is_refused_once_the_scratch_directory_leads_to_a_link_or_a_file() {
+        let outside = somewhere_to_link_to("confine-scratch-linked");
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            for (change, put_there) in what_leads_elsewhere(&outside) {
+                let (session, confinement) = made_scratch(prelude);
+                assert_eq!(
+                    refused_for_the_scratch_directory(&confinement),
+                    None,
+                    "{prelude:?}: refused before it was changed"
+                );
+
+                let aside = crate::testutil::moved_aside_and_replaced(session.path(), put_there);
+
+                let refused = refused_for_the_scratch_directory(&confinement)
+                    .unwrap_or_else(|| panic!("{prelude:?}: {change} was not refused"));
+                assert!(
+                    refused.contains(&session.path().display().to_string()),
+                    "{prelude:?}: {refused}"
+                );
+                let _ = std::fs::remove_file(session.path());
+                let _ = std::fs::remove_dir_all(&aside);
+            }
+        }
+    }
+
+    /// SANDBOX-18: a scratch directory that was removed, or replaced by another directory, is no
+    /// longer the one the session made and gets no row, and the stage still starts. The
+    /// regressions it rejects: the row kept for a directory that is not the one made, which grants
+    /// whatever a stage made there, and a refusal for a name that leads nowhere else, which ends
+    /// every later `run` of a session whose temporary directory was cleaned or whose scratch
+    /// directory a program made again.
+    #[cfg(unix)]
+    #[test]
+    fn a_scratch_directory_that_is_replaced_or_gone_gets_no_row_and_stops_no_stage() {
+        for (change, put_there) in what_leads_nowhere_else() {
+            let session = crate::SessionScratch::create().expect("a scratch directory");
+            let made = session.directory().expect("the directory as made");
+            let confinement = |made: &ScratchDirectory| {
+                Confinement::here(
+                    vec![PathBuf::from("/people/person/project")],
+                    Some(made),
+                    Some(Path::new(HOME)),
+                )
+                .expect("a platform with a base")
+            };
+            let scratch = session.path().canonicalize().expect("canonical");
+            let scratch = scratch.display().to_string();
+            let policy = |confinement: &Confinement| {
+                confinement.policy(
+                    &step("/bin/cat", &["f"]),
+                    Path::new("/people/person/project"),
+                    &[],
+                )
+            };
+            let before = confinement(&made);
+            assert!(reads(&policy(&before), &scratch), "{change}: before");
+
+            let aside = crate::testutil::moved_aside_and_replaced(session.path(), put_there);
+            let after = confinement(&made);
+
+            let policy = policy(&after);
+            assert!(!reads(&policy, &scratch), "{change}: read");
+            assert!(!writes(&policy, &scratch), "{change}: written");
+            assert_eq!(refused_for_the_scratch_directory(&before), None, "{change}");
+            assert_eq!(refused_for_the_scratch_directory(&after), None, "{change}");
+            let _ = std::fs::remove_dir_all(session.path());
+            let _ = std::fs::remove_dir_all(&aside);
+        }
+    }
+
+    /// SANDBOX-18: a scratch directory already a link when the next line's confinement is built
+    /// gets no row, so the confirmation of that line does not describe a grant of wherever the
+    /// name now leads, and the stage is refused. The regression it rejects: the row built from the
+    /// name as `canonical` resolves it, which is the target of the link.
+    #[cfg(unix)]
+    #[test]
+    fn a_scratch_directory_linked_before_the_confinement_is_built_gets_no_row() {
+        let outside = somewhere_to_link_to("confine-scratch-linked-first");
+        let target = outside
+            .join(".ssh")
+            .canonicalize()
+            .expect("a canonical target");
+        let session = crate::SessionScratch::create().expect("a scratch directory");
+        let made = session.directory().expect("the directory as made");
+        let aside = crate::testutil::moved_aside_and_replaced(session.path(), |name| {
+            std::os::unix::fs::symlink(&target, name).expect("link")
+        });
+
+        let confinement = Confinement::here(
+            vec![PathBuf::from("/people/person/project")],
+            Some(&made),
+            Some(Path::new(HOME)),
+        )
+        .expect("a platform with a base");
+        let policy = confinement.policy(
+            &step("/bin/cat", &["f"]),
+            Path::new("/people/person/project"),
+            &[],
+        );
+
+        let target = target.display().to_string();
+        assert!(!reads(&policy, &target) && !writes(&policy, &target));
+        assert!(refused_for_the_scratch_directory(&confinement).is_some());
+        let _ = std::fs::remove_file(session.path());
+        let _ = std::fs::remove_dir_all(&aside);
+    }
+
+    /// The directory the session made is a row and starts a stage. The control for the three
+    /// above: a check that refuses every stage, or grants no row, rejects them for the wrong
+    /// reason.
+    #[cfg(unix)]
+    #[test]
+    fn the_scratch_directory_the_session_made_is_a_row_and_starts_a_stage() {
+        let session = crate::SessionScratch::create().expect("a scratch directory");
+        let confinement = Confinement::here(
+            vec![PathBuf::from("/people/person/project")],
+            session.directory().as_ref(),
+            Some(Path::new(HOME)),
+        )
+        .expect("a platform with a base");
+        let policy = confinement.policy(
+            &step("/bin/cat", &["f"]),
+            Path::new("/people/person/project"),
+            &[],
+        );
+
+        let scratch = session.path().canonicalize().expect("canonical");
+        let scratch = scratch.display().to_string();
+        assert!(reads(&policy, &scratch) && writes(&policy, &scratch));
+        assert_eq!(refused_for_the_scratch_directory(&confinement), None);
     }
 
     /// SANDBOX-12, SANDBOX-18: a macOS session on the home directory or above it grants a row that
@@ -3862,8 +4285,14 @@ mod tests {
     #[test]
     fn the_planner_is_told_a_read_only_stage_cannot_write_the_project() {
         for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
-            let said = stated(true, Some(prelude), Network::Open, SandboxMode::ReadOnly)
-                .expect("a statement");
+            let said = stated(
+                true,
+                Some(prelude),
+                Network::Open,
+                SandboxMode::ReadOnly,
+                true,
+            )
+            .expect("a statement");
             assert!(said.contains("cannot write the project"), "{said}");
             assert!(said.contains("choosing another sandbox mode"), "{said}");
             assert!(
@@ -3879,6 +4308,7 @@ mod tests {
                 Some(prelude),
                 Network::Open,
                 SandboxMode::WorkspaceWrite,
+                true,
             )
             .expect("a statement");
             assert!(!writing.contains("cannot write the project"), "{writing}");
@@ -3903,8 +4333,14 @@ mod tests {
     fn under_read_only_the_description_offers_no_remedy_that_cannot_write() {
         let any_path = "A path outside the workspace that a command needs is asked for";
         for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
-            let said = stated(true, Some(prelude), Network::Open, SandboxMode::ReadOnly)
-                .expect("a statement");
+            let said = stated(
+                true,
+                Some(prelude),
+                Network::Open,
+                SandboxMode::ReadOnly,
+                true,
+            )
+            .expect("a statement");
             for refused in [
                 "(`/add-dir`, `--add-dir`)",
                 "by choosing another sandbox mode (",
@@ -3943,6 +4379,7 @@ mod tests {
                 Some(prelude),
                 Network::Open,
                 SandboxMode::WorkspaceWrite,
+                true,
             )
             .expect("a statement");
             assert!(writing.contains("(`/add-dir`, `--add-dir`)"), "{writing}");
@@ -3950,7 +4387,7 @@ mod tests {
             assert!(!writing.contains("refused in this mode"), "{writing}");
             assert!(!writing.contains("`git commit`"), "{writing}");
         }
-        let macos = |mode| stated(true, Some(Prelude::MacOs), Network::Open, mode).unwrap();
+        let macos = |mode| stated(true, Some(Prelude::MacOs), Network::Open, mode, true).unwrap();
         assert!(
             macos(SandboxMode::ReadOnly).contains(MACOS_READ_ONLY_GIT_SENTENCE),
             "{}",
@@ -3980,7 +4417,8 @@ mod tests {
             None,
             roots.iter().map(PathBuf::from).collect(),
             Some(Path::new("/var/scratch")),
-        );
+        )
+        .with_requests_offered(true);
         let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
         let machine_written = "and write /work/project, /var/scratch and the temporary directory";
         let machine_held = "and nothing else of /work/project or the toolchain caches";
@@ -4448,6 +4886,7 @@ mod tests {
                 Some(prelude),
                 Network::Open,
                 SandboxMode::WorkspaceWrite,
+                true,
             )
             .expect("says something")
         };
@@ -4460,6 +4899,7 @@ mod tests {
                 Some(prelude),
                 Network::Closed,
                 SandboxMode::WorkspaceWrite,
+                true,
             )
             .expect("says something")
         };
@@ -4481,8 +4921,9 @@ mod tests {
             (SandboxMode::ReadOnly, MACOS_READ_ONLY_GIT_SENTENCE),
             (SandboxMode::Strict, MACOS_GIT_SENTENCE),
         ] {
-            let described =
-                |prelude| stated(true, Some(prelude), Network::Open, mode).expect("says something");
+            let described = |prelude| {
+                stated(true, Some(prelude), Network::Open, mode, true).expect("says something")
+            };
             let failed = |prelude| {
                 reading_confinement(prelude, &["/work/project"])
                     .with_mode(mode)
@@ -4676,7 +5117,7 @@ mod tests {
     /// `strict`, `read-only` and `workspace-write`, and not in `off`.
     #[test]
     fn the_planner_is_told_of_the_menu_in_every_mode_but_off() {
-        let told = |mode| stated(true, Some(Prelude::MacOs), Network::Open, mode);
+        let told = |mode| stated(true, Some(Prelude::MacOs), Network::Open, mode, true);
         for mode in [
             SandboxMode::Strict,
             SandboxMode::ReadOnly,
@@ -4694,6 +5135,104 @@ mod tests {
             "{workspace_write}"
         );
         assert_eq!(told(SandboxMode::Off), None);
+    }
+
+    /// SANDBOX-19, PATHREQ-5: where the session would accept no request, as in a workspace that is
+    /// not trusted, the sentence after a failed step names neither the menu nor `request_path`, and
+    /// names the routes the person has. The control is the same line where requests are accepted,
+    /// which names both, so a sentence left out whatever the session accepts fails it. Each mode is
+    /// walked because the read-only ending of the fixed text is a text of its own. The faults it
+    /// rejects are a menu sentence or a fixed ending that still names a route the session refuses.
+    #[test]
+    fn a_session_that_accepts_no_request_is_told_of_no_menu_and_no_request_path_after_a_failure() {
+        let script = step("/bin/sh", &["-c", "false"]);
+        for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
+            for mode in [
+                SandboxMode::Strict,
+                SandboxMode::ReadOnly,
+                SandboxMode::WorkspaceWrite,
+            ] {
+                let session = reading_confinement(prelude, &["/work/project"]).with_mode(mode);
+                let refused = session
+                    .clone()
+                    .with_requests_offered(false)
+                    .profile(&[&script]);
+                let accepted = session.with_requests_offered(true).profile(&[&script]);
+                let at = format!("{prelude:?} {mode:?}");
+
+                for route in [
+                    "A line that needs more can ask",
+                    "asked for with the `request_path` tool",
+                    "a credential scope is how a line reaches one",
+                ] {
+                    assert!(accepted.contains(route), "{at}: {route} not in {accepted}");
+                    assert!(!refused.contains(route), "{at}: {route} in {refused}");
+                }
+                for name in ["kubernetes", "gradle"] {
+                    assert!(!refused.contains(name), "{at}: {name} in {refused}");
+                }
+                assert!(
+                    refused.ends_with(&requests_refused_sentence(mode)),
+                    "{at}: {refused}"
+                );
+                for route in ["`/add-dir`", "`--add-dir`", "trust the workspace"] {
+                    assert!(refused.contains(route), "{at}: {route} not in {refused}");
+                }
+                // A directory added under `read-only` is read and not written.
+                assert_eq!(
+                    refused.contains("add a directory to read with"),
+                    mode == SandboxMode::ReadOnly,
+                    "{at}: {refused}"
+                );
+                assert_eq!(
+                    refused.matches("cannot be added").count(),
+                    1,
+                    "{at}: {refused}"
+                );
+            }
+        }
+    }
+
+    /// SANDBOX-19, PATHREQ-5: the `run` description names neither the menu nor `request_path`
+    /// where the session would accept no request, and keeps the rest of what it says, such as the
+    /// sentence about `.git` that follows it on macOS. The control is the same description where
+    /// requests are accepted. The faults it rejects are a description that still names a route
+    /// the session refuses, and one that names it whatever the session accepts.
+    #[test]
+    fn a_session_that_accepts_no_request_is_told_of_no_menu_and_no_request_path_in_the_description()
+    {
+        for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
+            for mode in [
+                SandboxMode::Strict,
+                SandboxMode::ReadOnly,
+                SandboxMode::WorkspaceWrite,
+            ] {
+                let told = |offered| {
+                    stated(true, Some(prelude), Network::Open, mode, offered)
+                        .expect("says something")
+                };
+                let (refused, accepted) = (told(false), told(true));
+                let at = format!("{prelude:?} {mode:?}");
+
+                for route in [
+                    "A line that needs more can ask",
+                    "asked for with the `request_path` tool",
+                ] {
+                    assert!(accepted.contains(route), "{at}: {route} not in {accepted}");
+                    assert!(!refused.contains(route), "{at}: {route} in {refused}");
+                }
+                assert!(
+                    refused.contains(&requests_refused_sentence(mode)),
+                    "{at}: {refused}"
+                );
+                if prelude == Prelude::MacOs {
+                    assert!(
+                        refused.contains(macos_git_sentence(mode)),
+                        "{at}: {refused}"
+                    );
+                }
+            }
+        }
     }
 
     /// A tool's own scope lifts its own directory and no other, and a stage that names none keeps
@@ -4762,13 +5301,15 @@ mod tests {
                 true,
                 Some(Prelude::Linux),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             ),
             stated(
                 true,
                 Some(Prelude::Windows),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             )
         );
         assert_eq!(
@@ -4776,7 +5317,8 @@ mod tests {
                 true,
                 Some(Prelude::Linux),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             )
             .map(|linux| format!(
                 "{linux}{MACOS_LISTENING_SENTENCE}{MACOS_GIT_SENTENCE}{TRUSTED_DIRECTORY_LINE_SENTENCE}"
@@ -4785,7 +5327,8 @@ mod tests {
                 true,
                 Some(Prelude::MacOs),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             )
         );
         assert!(
@@ -4793,7 +5336,8 @@ mod tests {
                 true,
                 Some(Prelude::Linux),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             )
             .is_some_and(|said| said.contains("except the places that hold a credential"))
         );
@@ -5457,6 +6001,162 @@ mod tests {
         }
     }
 
+    /// A remembered scope is attached to a stage only where the scope table would give the stage
+    /// that scope for its whole argv. The regression it rejects: keying on the program and the
+    /// operation word alone, so a remembered `git push` lends the credential rows and the closed
+    /// network's egress to `git push --receive-pack=<file>`, which a fresh scope is refused. Each
+    /// row is an argv the table refuses for its program, with the grant a person would remember
+    /// for the same program and operation word; `git push origin` is the argv it is given to.
+    #[test]
+    fn a_remembered_scope_is_not_attached_to_an_argv_the_table_refuses() {
+        let netrc = format!("{HOME}/.netrc");
+        let rows: &[(&str, Option<&str>, &str, &[&str])] = &[
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "--receive-pack=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "--rec=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "--exec=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "--upload-pack=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &[
+                    "push",
+                    "--config=core.sshCommand=/work/project/hook.sh",
+                    "origin",
+                ],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "origin", "ext::sh -c id"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "foo://host/repo"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("pull"),
+                "remote",
+                &["pull", "--strategy=hook", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("pull"),
+                "remote",
+                &["pull", "-s", "hook", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("fetch"),
+                "remote",
+                &["fetch", "--upload-pack=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("clone"),
+                "remote",
+                &["clone", "-u", "/work/project/hook.sh", "o"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("clone"),
+                "remote",
+                &["clone", "--template=/work/project/dir", "o"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("ls-remote"),
+                "remote",
+                &["ls-remote", "--upload-pack=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/gh",
+                Some("repo"),
+                "remote",
+                &[
+                    "repo",
+                    "clone",
+                    "o/r",
+                    "--",
+                    "--upload-pack=/work/project/hook.sh",
+                ],
+            ),
+            (
+                "/usr/bin/kubectl",
+                Some("get"),
+                "kubernetes",
+                &["get", "pods", "--kubeconfig=/work/project/config"],
+            ),
+            (
+                "/usr/bin/docker",
+                Some("ps"),
+                "docker",
+                &["ps", "--config=/work/project/dir"],
+            ),
+        ];
+        for (binary, operation, scope, argv) in rows {
+            let confined = confinement(&["/work/project"])
+                .with_network(Network::Closed)
+                .with_grants(vec![remembered(binary, *operation, a_scope(scope), false)]);
+            let refused = step(binary, argv);
+            let given = step(binary, &[argv[0], "origin"]);
+            let wanted = |confined: &Confinement, step: &Step| {
+                let policy = confined.policy(step, Path::new("/work"), &[]);
+                (
+                    reads(&policy, &netrc) || reads(&policy, &format!("{HOME}/.config/gh")),
+                    confined.egress(step),
+                    confined.describe(&[step]).sentences(),
+                )
+            };
+
+            let (read, egress, sentences) = wanted(&confined, &refused);
+            assert!(!read, "{argv:?} read a credential row");
+            assert!(!egress, "{argv:?} kept the network");
+            assert!(
+                sentences
+                    .iter()
+                    .all(|sentence| !sentence.contains("remembered for this command")),
+                "{argv:?} named a remembered scope: {sentences:?}"
+            );
+
+            let (read, egress, sentences) = wanted(&confined, &given);
+            assert!(
+                egress
+                    && sentences
+                        .iter()
+                        .any(|sentence| sentence.contains("remembered for this command")),
+                "{binary} {operation:?} was not given the scope it was remembered for: {egress} {sentences:?}"
+            );
+            if *scope == "remote" {
+                assert!(read, "{binary} {operation:?} read no credential row");
+            }
+        }
+    }
+
     /// A remembered scope is a credential scope for the closed network too, and a remembered
     /// directory is not. The regressions it rejects: a remote credential lent to a stage with no
     /// way to use it, and a directory read earning the network.
@@ -5863,6 +6563,7 @@ mod tests {
             Some(Prelude::Linux),
             Network::Open,
             SandboxMode::WorkspaceWrite,
+            true,
         )
         .expect("a confining turn says something");
 
@@ -5884,6 +6585,7 @@ mod tests {
             Some(Prelude::MacOs),
             Network::Open,
             SandboxMode::WorkspaceWrite,
+            true,
         )
         .expect("says something");
         let closed = stated(
@@ -5891,6 +6593,7 @@ mod tests {
             Some(Prelude::MacOs),
             Network::Closed,
             SandboxMode::WorkspaceWrite,
+            true,
         )
         .expect("says something");
         assert!(!open.contains("The network is closed"), "{open}");
@@ -5908,6 +6611,7 @@ mod tests {
             Some(Prelude::Linux),
             Network::Open,
             SandboxMode::WorkspaceWrite,
+            true,
         )
         .expect("says something");
         assert!(
@@ -5919,12 +6623,19 @@ mod tests {
                 false,
                 Some(Prelude::MacOs),
                 Network::Closed,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             ),
             None
         );
-        let unconfined = stated(true, None, Network::Closed, SandboxMode::WorkspaceWrite)
-            .expect("says something");
+        let unconfined = stated(
+            true,
+            None,
+            Network::Closed,
+            SandboxMode::WorkspaceWrite,
+            true,
+        )
+        .expect("says something");
         assert!(!unconfined.contains("network is closed"), "{unconfined}");
     }
 
@@ -5937,7 +6648,8 @@ mod tests {
                 false,
                 Some(Prelude::Linux),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             ),
             None
         );
@@ -5946,12 +6658,19 @@ mod tests {
                 false,
                 Some(Prelude::MacOs),
                 Network::Open,
-                SandboxMode::WorkspaceWrite
+                SandboxMode::WorkspaceWrite,
+                true,
             ),
             None
         );
         assert_eq!(
-            stated(false, None, Network::Open, SandboxMode::WorkspaceWrite),
+            stated(
+                false,
+                None,
+                Network::Open,
+                SandboxMode::WorkspaceWrite,
+                true,
+            ),
             None
         );
     }
@@ -5960,7 +6679,7 @@ mod tests {
     /// is the confined sentence on a platform whose programs run with the person's own access.
     #[test]
     fn a_platform_with_no_base_says_its_programs_are_not_confined() {
-        let said = stated(true, None, Network::Open, SandboxMode::WorkspaceWrite)
+        let said = stated(true, None, Network::Open, SandboxMode::WorkspaceWrite, true)
             .expect("a confining turn says something");
 
         assert!(said.contains("not confined"), "{said}");
@@ -6032,6 +6751,7 @@ mod tests {
                 roots.iter().map(PathBuf::from).collect(),
                 Some(Path::new("/var/scratch")),
             )
+            .with_requests_offered(true)
         };
         let writing = CREDENTIAL_LOCATIONS_SENTENCE;
         let read_only = READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE;
@@ -7174,7 +7894,8 @@ mod tests {
             vec![PathBuf::from("/work/project")],
             Some(Path::new("/var/scratch")),
         )
-        .with_network(Network::Closed);
+        .with_network(Network::Closed)
+        .with_requests_offered(true);
         (home, confined)
     }
 
@@ -7930,6 +8651,7 @@ mod tests {
                 Some(prelude),
                 Network::Open,
                 SandboxMode::WorkspaceWrite,
+                true,
             )
             .expect("a statement");
             let held = with_temporary_held_back_said(said.clone(), Some(prelude), true);
@@ -8026,6 +8748,7 @@ mod tests {
                 None,
             )
             .with_identities(Some(settings.git_identities()))
+            .with_requests_offered(true)
         }
 
         fn work_key(&self) -> PathBuf {

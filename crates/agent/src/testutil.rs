@@ -1,5 +1,7 @@
 //! Scratch directories for tests.
 
+#[cfg(unix)]
+use std::path::Path;
 use std::path::PathBuf;
 
 /// An absolute path under the workspace `target/test-scratch/`.
@@ -20,4 +22,19 @@ pub(crate) fn scratch_dir(name: &str) -> PathBuf {
     path.push("test-scratch");
     path.push(name);
     path
+}
+
+/// What a stage puts at the name of a directory once it has moved the directory.
+#[cfg(unix)]
+pub(crate) type PutThere<'a> = Box<dyn Fn(&Path) + 'a>;
+
+/// What a stage with a write row on the temporary directory can do to a directory's name: moves
+/// the directory aside and puts something else at the name. Returns where the directory went, so
+/// the test can remove it.
+#[cfg(unix)]
+pub(crate) fn moved_aside_and_replaced(path: &Path, put_there: impl FnOnce(&Path)) -> PathBuf {
+    let aside = path.with_extension("aside");
+    std::fs::rename(path, &aside).expect("the directory moved aside");
+    put_there(path);
+    aside
 }

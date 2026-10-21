@@ -135,11 +135,13 @@ report is the only thing on the screen that says what the run was for: a delegat
 file says which one there and nowhere else, and a round count in its place leaves a person with a
 number for work done in a directory they own.
 
+`verified-by: bravebot_tui::render::a_finished_delegates_lines_are_still_there_to_be_opened`
 `verified-by: bravebot_tui::state::what_a_delegate_ended_with_closes_its_block`
 `verified-by: bravebot_tui::render::a_finished_delegate_collapses_to_what_the_turn_was_told`
 `verified-by: bravebot_tui::render::a_finished_delegate_says_what_it_reported`
 `verified-by: bravebot_tui::render::a_delegate_that_could_not_finish_reports_nothing`
 `verified-by: bravebot_agent::turn::what_a_delegate_reported_reaches_the_person_watching`
+`verified-by: bravebot_tui::render::a_finished_delegates_work_is_still_there_to_be_opened`
 
 <a id="WATCH-6"></a>
 ### WATCH-6: a reply a delegate is writing is drawn nowhere
@@ -212,9 +214,11 @@ at the last one and know that it is the last.
 `verified-by: bravebot_tui::state::the_turns_view_is_not_dragged_by_reading_through_a_delegate`
 `verified-by: bravebot_tui::render::a_delegates_view_draws_its_own_lines_and_not_the_turns`
 `verified-by: bravebot_tui::render::a_finished_delegates_view_ends_on_what_the_turn_was_told`
+`verified-by: bravebot_tui::render::a_delegates_view_opens_on_what_it_was_asked_above_its_lines`
 `verified-by: bravebot_tui::render::a_delegates_view_ends_on_what_it_reported`
 `verified-by: bravebot_tui::render::a_delegates_view_does_not_open_on_the_mark`
 `verified-by: bravebot_tui::app::n_and_p_move_between_delegates`
+`verified-by: bravebot_tui::render::a_delegates_view_names_what_it_was_asked_above_its_lines_and_keeps_it_there`
 
 <a id="WATCH-9"></a>
 ### WATCH-9: the view takes every key, and the way out is read against the nearest level

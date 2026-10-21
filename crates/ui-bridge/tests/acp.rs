@@ -4,6 +4,8 @@
 //! turn did is read off the disk and off what the model was sent, and what the editor was told is
 //! read off the messages written to it.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 #[allow(dead_code)]
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;

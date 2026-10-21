@@ -35,6 +35,11 @@ fn describe() -> String {
 }
 
 fn git(args: &[&str]) -> Option<String> {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "a build script runs once, as the person building, with their own PATH and none of \
+                  a session's directories, so no confined stage chose this `git`"
+    )]
     let output = Command::new("git").args(args).output().ok()?;
     output
         .status

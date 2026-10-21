@@ -109,6 +109,43 @@ fn a_directory_completes_so_typing_can_continue_into_it() {
     assert_eq!(session.input(), "@src/main.rs ");
 }
 
+/// NAME-11: a fragment that begins nothing in the root is looked for below it, so a person who
+/// remembers part of a name and not its directory gets the file, and Tab writes the whole path
+/// without disturbing the sentence it is in.
+#[test]
+fn a_fragment_finds_a_file_below_and_tab_writes_the_whole_path() {
+    let scratch = Scratch::new("found-tab");
+    let mut session = session(&scratch);
+    typing(&mut session, "explain @mnrs");
+
+    assert_eq!(offered_paths(&session), ["src/main.rs"]);
+    assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::Redraw);
+    assert_eq!(session.input(), "explain @src/main.rs ");
+}
+
+/// NAME-7, NAME-11: Enter on a fragment takes the file found below instead of sending the fragment,
+/// and the line then names that file, which is the one the person was shown.
+#[test]
+fn enter_completes_a_fragment_to_the_file_found_below_and_names_that_file() {
+    let scratch = Scratch::new("found-enter");
+    let mut session = session(&scratch);
+    typing(&mut session, "explain @mnrs");
+
+    assert_eq!(
+        handle_key(&mut session, key(KeyCode::Enter)),
+        Action::Redraw
+    );
+    assert_eq!(session.input(), "explain @src/main.rs ");
+    assert!(
+        session.transcript.is_empty(),
+        "a half-typed reference was sent"
+    );
+    assert_eq!(
+        bravebot_mentions::referenced(session.input()),
+        ["src/main.rs"]
+    );
+}
+
 /// The arrows walk the offered files, and Enter takes one rather than sending a half-typed path.
 #[test]
 fn the_arrows_and_enter_choose_among_the_offered_files() {

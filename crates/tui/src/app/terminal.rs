@@ -17,7 +17,8 @@ pub(super) const TRACK_MOTION_ONLY_WHILE_DRAGGING: &str = "\x1b[?1003l\x1b[?1000
 /// Put the terminal into the state the interface draws in.
 ///
 /// Mouse capture is what makes the wheel scroll the transcript. It costs the terminal's own text
-/// selection, so it is given back on the way out.
+/// selection, so it is given back on the way out. `mouse` is `tui.mouse`: where it is off, capture
+/// is never asked for and the terminal keeps its own selection and wheel.
 ///
 /// Bracketed paste is what keeps a pasted prompt from sending itself. Without it the terminal
 /// delivers a paste as ordinary keystrokes, and the newline most clipboards carry at the end
@@ -33,25 +34,33 @@ pub(super) const TRACK_MOTION_ONLY_WHILE_DRAGGING: &str = "\x1b[?1003l\x1b[?1000
 /// One definition rather than one per caller, because the interface gives the terminal away and
 /// takes it back again whenever the prompt is edited elsewhere, and a difference between the two
 /// setups would show as a mode that only survives until the first edit.
-pub(super) fn take_over_terminal<W: Write>(out: &mut W) -> io::Result<()> {
+pub(super) fn take_over_terminal<W: Write>(out: &mut W, mouse: bool) -> io::Result<()> {
     enable_raw_mode()?;
     // After raw mode, so the reply arrives as bytes rather than a line, and before the
     // alternate screen, so the query is not painted into the session.
     crate::theme::sense(out);
     crate::theme::restore_saved();
-    ask_for_modes(out, enhanced_keys())
+    ask_for_modes(out, enhanced_keys(), mouse, crate::pointer::is_asked())
 }
 
 /// Ask the terminal for every mode the interface draws and reads in.
 ///
 /// Separate from raw mode, and told rather than asked whether the terminal understands
 /// disambiguated keys, because both of those are properties of a real tty: what is left here is
-/// bytes, so a test can read back what was asked for and what was given up.
-pub(super) fn ask_for_modes<W: Write>(out: &mut W, enhanced: bool) -> io::Result<()> {
+/// bytes, so a test can read back what was asked for and what was given up. `hover` is whether the
+/// terminal draws the pointer shape it is asked for ([`crate::pointer::is_asked`]).
+pub(super) fn ask_for_modes<W: Write>(
+    out: &mut W,
+    enhanced: bool,
+    mouse: bool,
+    hover: bool,
+) -> io::Result<()> {
+    execute!(out, EnterAlternateScreen)?;
+    if mouse {
+        execute!(out, EnableMouseCapture)?;
+    }
     execute!(
         out,
-        EnterAlternateScreen,
-        EnableMouseCapture,
         EnableBracketedPaste,
         // Asked for so the clipboard can be looked at when the user comes back from copying
         // something, which is the moment a picture appears on it and the only cheap moment to
@@ -70,13 +79,22 @@ pub(super) fn ask_for_modes<W: Write>(out: &mut W, enhanced: bool) -> io::Result
     // of events for a pointer merely crossing the window and a redraw for each one. Only the
     // drag matters here, so all-motion reporting goes back off: what stays on reports the
     // buttons, the wheel, and motion while a button is held, which is the gesture being read.
-    write!(out, "{TRACK_MOTION_ONLY_WHILE_DRAGGING}")?;
+    // Except where the terminal draws a pointer shape on request: finding the border to draw it
+    // over takes the pointer's position without a button, so all motion stays on there. Capture
+    // asks for it last of the three tracking modes, which is the one a terminal that keeps a single
+    // tracking state ends in.
+    if mouse && !hover {
+        write!(out, "{TRACK_MOTION_ONLY_WHILE_DRAGGING}")?;
+    }
     out.flush()
 }
 
 /// Put the terminal back the way it was found.
 pub(super) fn hand_back_terminal<W: Write>(out: &mut W) -> io::Result<()> {
     disable_raw_mode()?;
+    // Before the screen is left: a terminal that keeps a pointer shape for each screen applies the
+    // reset to the one it is on, and the shape was asked for on this one.
+    crate::pointer::give_back(out)?;
     give_back_modes(out, enhanced_keys())?;
     crate::title::give_back(out)
 }
@@ -126,7 +144,7 @@ pub(super) fn edit_prompt(
 
     let edited = crate::editor::edit(session.input());
 
-    take_over_terminal(terminal.backend_mut())?;
+    take_over_terminal(terminal.backend_mut(), session.mouse_captured())?;
     terminal.clear()?;
 
     match edited {
@@ -153,7 +171,7 @@ pub(super) fn show_transcript(
 
     let shown = crate::editor::show(&text);
 
-    take_over_terminal(terminal.backend_mut())?;
+    take_over_terminal(terminal.backend_mut(), session.mouse_captured())?;
     terminal.clear()?;
 
     // Said rather than swallowed, for the reason the prompt's editor says it: an editor that

@@ -45,6 +45,7 @@ const asked = (overrides = {}) =>
   t.askedExposure({
     request: 6,
     path: '.env',
+    shownPath: '.env',
     credentials: FINDINGS,
     summary: 'let the model read .env, which holds 2 credentials',
     ...overrides,

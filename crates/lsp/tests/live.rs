@@ -9,6 +9,8 @@
 //! state of the world and not a broken test. A skip prints why, so a run that quietly tested nothing
 //! does not read as a pass.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::RecordingSink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};

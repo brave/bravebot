@@ -3842,6 +3842,51 @@ mod tests {
         assert!(!map.is_trusted("src/fetched.json"));
     }
 
+    /// A recorded rule is about the name it is stored under and no other. A record that holds a
+    /// name without the whitespace its file had cannot be told from one about the name without it,
+    /// so it resumes as a rule about that name, and the same record written now keeps the whitespace
+    /// and resumes as a rule about the name with it (TRUST-2, and Known costs).
+    #[test]
+    fn a_recorded_rule_resumes_as_a_rule_about_the_name_it_is_stored_under() {
+        let mut stored_without_whitespace = a_record();
+        stored_without_whitespace.trust = Some(vec![
+            StoredRule {
+                path: String::new(),
+                integrity: "trusted".to_string(),
+            },
+            StoredRule {
+                path: "a.md".to_string(),
+                integrity: "untrusted".to_string(),
+            },
+        ]);
+        let map = stored_without_whitespace
+            .trust_map(&stored_without_whitespace.directory)
+            .expect("a map was recorded");
+        assert_eq!(map.integrity_of("a.md"), Some(Integrity::Untrusted));
+        assert_eq!(
+            map.integrity_of("a.md "),
+            Some(Integrity::Trusted),
+            "a rule stored under `a.md` reached `a.md `"
+        );
+
+        let mut written = TrustStore::new("/tmp/x");
+        written.trust(".");
+        written.distrust("a.md ");
+        let mut stored_as_written = a_record();
+        stored_as_written.trust = Some(stored_rules(&written));
+        let encoded = serde_json::to_value(&stored_as_written).unwrap();
+        let record: Record = serde_json::from_value(encoded).unwrap();
+        let map = record
+            .trust_map(&record.directory)
+            .expect("a map was recorded");
+        assert_eq!(map.integrity_of("a.md "), Some(Integrity::Untrusted));
+        assert_eq!(
+            map.integrity_of("a.md"),
+            Some(Integrity::Trusted),
+            "a rule stored under `a.md ` reached `a.md`"
+        );
+    }
+
     /// A record written before every spelling of a path became one rule can hold two spellings of
     /// one file, and the two now collapse to a single key. The untrusted answer is the one the
     /// session actually gave about that file, so it has to be the one that survives; leaving the

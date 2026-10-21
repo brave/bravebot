@@ -44,7 +44,7 @@ pub(super) fn model_was_substituted(config: &Config, resolved: &str, answered: &
         && asked != answered
 }
 
-/// Which of the two reminders a turn has already put to the planner. Each is said once.
+/// Which of the reminders a turn has already put to the planner. Each is said once.
 #[derive(Default)]
 pub(super) struct Reminded {
     /// Whether the driver has already said this turn that no write has been asked for. Whether one
@@ -56,6 +56,10 @@ pub(super) struct Reminded {
     /// Set once the reminder that files changed and nothing was run has been put, so it is said once
     /// a turn and a planner that keeps not running anything is not nagged every round.
     pub(super) nothing_run: bool,
+    /// Set once the planner has been asked to bring its task list up to date. Set where the answer
+    /// is handled rather than by [`nudges`], and read where a task list's result is recorded: a list
+    /// written after the question is its answer to it, and the conversation does not count it.
+    pub(super) open_tasks: bool,
 }
 
 /// The two reminders put to the planner after a round's results and any interjection.
@@ -145,6 +149,62 @@ pub(super) fn nudges(
             Provenance::Driver,
         );
     }
+}
+
+/// How many tasks the planner's latest list leaves open, where the planner is to be asked about
+/// them before the turn ends with its answer (TURN-12). `None` where it is not: no list, none
+/// open, the planner already asked about this one, or no way to send a list this turn.
+///
+/// The count is taken from the conversation whether or not it leads to a question, so a list is
+/// read once: a list with nothing open is not read again at the end of every turn after it. A turn
+/// that cannot send a list leaves it for one that can.
+///
+/// Whether to ask is a decision, so the count is read through `Policy::read_trusted_content`, which
+/// refuses a list that is not trusted. None is kept for one: the conversation records a count only
+/// where the planner was shown its list, and a list at any other label is held back from it.
+pub(super) fn open_tasks_to_ask_about<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    offered: &[Tool],
+) -> Option<usize> {
+    if !offered
+        .iter()
+        .any(|tool| tool.function.name == "todo_write")
+    {
+        return None;
+    }
+    let open = conversation.take_open_tasks()?;
+    policy
+        .read_trusted_content("todo_write", &open)
+        .ok()
+        .filter(|count| *count > 0)
+}
+
+/// Ask the planner to bring its task list up to date, saying how many tasks it leaves open and
+/// nothing about them.
+///
+/// Conditional in its wording rather than in its firing, as the reminders above are. The driver
+/// cannot tell a list the planner finished from one it left open for a reason, such as a question
+/// it put to the person, and must not try: it knows only how many tasks are open, and the planner
+/// knows whether that is wrong.
+pub(super) fn ask_about_open_tasks(
+    conversation: &mut Conversation,
+    reminded: &mut Reminded,
+    open: usize,
+) {
+    reminded.open_tasks = true;
+    let tasks = if open == 1 { "task" } else { "tasks" };
+    conversation.push_composed_from(
+        Message::user(format!(
+            "{TOOL_BUDGET_SPENT} Your task list still has {open} {tasks} not marked completed \
+             or cancelled. Send the whole list again with todo_write, marking a task completed \
+             where it is done and cancelled where it was dropped. If work remains, leave those \
+             tasks open and say in your answer what is left. Then give your answer again in \
+             full, since the person is shown the last one as your reply."
+        )),
+        Composed::Notice,
+        Provenance::Driver,
+    );
 }
 
 /// Take the tools away from the next request once this delegate has spent its token budget, and
@@ -527,6 +587,19 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
     // compared is the last round's, so this is one round late by construction, which is why
     // the budget sits below any window rather than at it.
     let mut shortened = false;
+    // The cheaper step first (COMPACT-18): drop what old tool results hold, and summarise only
+    // if that was not enough. A refused request has no figure to lower, so it goes straight on.
+    if retries.refused.is_none()
+        && *may_compact
+        && account.context_tokens >= config.context_budget
+        && conversation.mask_old_results().is_some()
+    {
+        account.context_tokens = conversation.last_request_tokens();
+        reporter.spent(crate::outcome::Spent {
+            timing: spent.finish(),
+            ..*account
+        });
+    }
     if retries.refused.is_some() || *may_compact && account.context_tokens >= config.context_budget
     {
         reporter.phase(Phase::Compacting);

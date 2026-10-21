@@ -28,8 +28,11 @@ set -uo pipefail
 # src/installOpengrep.js, reviewdog_version in actions/main/action.yml. They
 # move rarely; when they do, this drifts silently rather than breaking, so
 # check them if a finding here disagrees with one on a PR.
-OPENGREP_VERSION="v1.11.5"
+OPENGREP_VERSION="v1.30.0"
 REVIEWDOG_VERSION="0.17.5"
+# Tracks main on purpose: the organization's required `security` check runs the same ref, so
+# the rules reported here are the rules CI reports. The tools above are different: they are
+# third-party release assets, so each is compared with a sha256 below before it runs.
 SECURITY_ACTION_REF="${SECURITY_ACTION_REF:-main}"
 
 # The runners reviewdog.yml defines and reviewdog.sh actually enables. tfsec
@@ -91,6 +94,44 @@ for tool in git curl jq ruby python3; do
     command -v "$tool" >/dev/null || die "$tool is required and is not on PATH"
 done
 
+# ── the sha256 each downloaded tool has to match ─────────────────────────────
+
+# A release tag does not fix content: whoever owns the release can replace an asset under it,
+# and what is downloaded here runs as whoever runs this script. So nothing is made executable,
+# extracted or run until its bytes match a digest written down here. The opengrep digests are
+# the ones brave/security-action's installOpengrep.js pins (OPENGREP_BIN_SHA256), re-checked
+# against the release assets; the reviewdog ones were taken from the v0.17.5 release and match
+# its checksums file, once for each tarball and once for the binary inside it, because the
+# binary is what a later run executes from the cache. An asset with no line here is refused.
+# Moving a version means moving its lines, and nothing else.
+pinned_sha256() {
+    case "$1" in
+        opengrep_manylinux_x86)     echo 35779bdd72e92129c8df2a77f0c55e8c08356801ea92591ef32108d6b28d564c ;;
+        opengrep_manylinux_aarch64) echo a5d5a4a58ba5d46ff51e921663da1c2bba38f4b03987f4aeec87f16c6ad3ecae ;;
+        opengrep_osx_arm64)         echo 0f5bc3dec09d995c61331a4017b856ede508f90d95b018d95f1dc6166be89fdd ;;
+        reviewdog_tar_Linux_x86_64)  echo 8480e1776bd54dfca3167bff4b117ef439fe6fe5869cdabbe4985652dfbcf417 ;;
+        reviewdog_tar_Linux_arm64)   echo 7e51a552484582a794d66a71292ec42f3beac795c4ef8765e1d9e73f073c4b44 ;;
+        reviewdog_tar_Darwin_x86_64) echo a8405e653df595b02048610460fb345bed73280ed07e1ca09d51c4903a1c0b11 ;;
+        reviewdog_tar_Darwin_arm64)  echo 0d670a7777dc9d296f7f3045197a9e744d8b06094df08b35a73540ed56b00448 ;;
+        reviewdog_bin_Linux_x86_64)  echo a286d19863df1386d3449884e6b70dca43260e36e9a8e847aec7da5cac87db1e ;;
+        reviewdog_bin_Linux_arm64)   echo c59f48a284ca2ae1aef44f9ebde234bc599fa611e1d21e27e922237f9253afdd ;;
+        reviewdog_bin_Darwin_x86_64) echo 558f4a26e73cbafea44d920ea1e764b4a081283a21263f1eda5423b77822fd68 ;;
+        reviewdog_bin_Darwin_arm64)  echo f83986e51963817b2804c5cf5fc50b6468d342061d993f26bf281f26fde348e6 ;;
+    esac
+}
+
+sha256_of() {
+    if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1
+    else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+
+# matches_pin FILE NAME: FILE exists and is exactly the bytes pinned for NAME.
+matches_pin() {
+    local want
+    want="$(pinned_sha256 "$2")"
+    [ -n "$want" ] && [ -f "$1" ] && [ "$(sha256_of "$1")" = "$want" ]
+}
+
 # ── the pinned tools, downloaded once ────────────────────────────────────────
 
 case "$(uname -s)" in
@@ -109,22 +150,39 @@ esac
 
 mkdir -p "$CACHE/bin" || die "cannot create $CACHE"
 
-if [ ! -x "$CACHE/bin/opengrep" ] || \
-   [ "$("$CACHE/bin/opengrep" --version 2>/dev/null)" != "${OPENGREP_VERSION#v}" ]; then
+[ -n "$(pinned_sha256 "$og_asset")" ] \
+    || die "no sha256 is pinned for $og_asset, so it is not downloaded"
+[ -n "$(pinned_sha256 "reviewdog_bin_${rd_os}_${rd_arch}")" ] \
+    || die "no sha256 is pinned for reviewdog on ${rd_os}_${rd_arch}, so it is not downloaded"
+
+# A cached binary is compared before anything runs it, so one that was replaced after it was
+# fetched is downloaded again, not executed by a version probe.
+if ! matches_pin "$CACHE/bin/opengrep" "$og_asset"; then
     say "downloading opengrep $OPENGREP_VERSION"
+    rm -f "$CACHE/bin/opengrep" "$CACHE/bin/opengrep.tmp"
     curl -sfL -o "$CACHE/bin/opengrep.tmp" \
         "https://github.com/opengrep/opengrep/releases/download/$OPENGREP_VERSION/$og_asset" \
-        || die "could not download opengrep $OPENGREP_VERSION ($og_asset)"
+        || { rm -f "$CACHE/bin/opengrep.tmp"; die "could not download opengrep $OPENGREP_VERSION ($og_asset)"; }
+    matches_pin "$CACHE/bin/opengrep.tmp" "$og_asset" \
+        || { rm -f "$CACHE/bin/opengrep.tmp"; die "opengrep $OPENGREP_VERSION ($og_asset) does not match its pinned sha256; not running it"; }
     chmod +x "$CACHE/bin/opengrep.tmp"
     mv "$CACHE/bin/opengrep.tmp" "$CACHE/bin/opengrep"
 fi
 
-if [ ! -x "$CACHE/bin/reviewdog" ] || \
-   ! "$CACHE/bin/reviewdog" -version 2>/dev/null | grep -qx "$REVIEWDOG_VERSION"; then
+if ! matches_pin "$CACHE/bin/reviewdog" "reviewdog_bin_${rd_os}_${rd_arch}"; then
     say "downloading reviewdog $REVIEWDOG_VERSION"
-    curl -sfL "https://github.com/reviewdog/reviewdog/releases/download/v$REVIEWDOG_VERSION/reviewdog_${REVIEWDOG_VERSION}_${rd_os}_${rd_arch}.tar.gz" \
-        | tar xz -C "$CACHE/bin" reviewdog \
-        || die "could not download reviewdog $REVIEWDOG_VERSION"
+    rm -f "$CACHE/bin/reviewdog"
+    rd_tmp="$(mktemp -d "$CACHE/reviewdog.XXXXXX")" || die "cannot create a scratch directory in $CACHE"
+    curl -sfL -o "$rd_tmp/reviewdog.tar.gz" "https://github.com/reviewdog/reviewdog/releases/download/v$REVIEWDOG_VERSION/reviewdog_${REVIEWDOG_VERSION}_${rd_os}_${rd_arch}.tar.gz" \
+        || { rm -rf "$rd_tmp"; die "could not download reviewdog $REVIEWDOG_VERSION"; }
+    matches_pin "$rd_tmp/reviewdog.tar.gz" "reviewdog_tar_${rd_os}_${rd_arch}" \
+        || { rm -rf "$rd_tmp"; die "reviewdog $REVIEWDOG_VERSION does not match its pinned sha256; not extracting it"; }
+    tar xzf "$rd_tmp/reviewdog.tar.gz" -C "$rd_tmp" reviewdog \
+        || { rm -rf "$rd_tmp"; die "could not extract reviewdog $REVIEWDOG_VERSION"; }
+    matches_pin "$rd_tmp/reviewdog" "reviewdog_bin_${rd_os}_${rd_arch}" \
+        || { rm -rf "$rd_tmp"; die "the reviewdog binary does not match its pinned sha256; not running it"; }
+    mv "$rd_tmp/reviewdog" "$CACHE/bin/reviewdog"
+    rm -rf "$rd_tmp"
 fi
 
 # The runner definitions and the rule set. A shallow clone, refreshed on every

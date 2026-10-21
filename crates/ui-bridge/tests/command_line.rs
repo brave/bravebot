@@ -7,6 +7,8 @@
 //! it through one parser, and each prints the answer under its own name and ends as the answer
 //! says.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use std::process::{Command, Stdio};
 
 /// Each stdio transport, the name it gives itself and what its usage line says it does.

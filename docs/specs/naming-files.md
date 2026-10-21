@@ -53,6 +53,7 @@ trusted inside a `vendor` marked untrusted, and the rest of that directory stays
 `verified-by: bravebot_core::policy::naming_a_file_vouches_for_nothing_beside_it`
 `verified-by: bravebot_core::policy::a_named_file_is_trusted_inside_an_untrusted_tree`
 `verified-by: bravebot_agent::turn::naming_one_file_leaves_the_rest_of_the_workspace_quarantined`
+`verified-by: bravebot_agent::turn::a_file_named_with_an_at_sign_is_vouched_for_alone_whatever_its_name`
 
 <a id="NAME-3"></a>
 ### NAME-3: the rule outlives the read
@@ -66,10 +67,12 @@ in a directory declined at startup.
 <a id="NAME-4"></a>
 ### NAME-4: typing `@` offers what is in the workspace, so the choice is informed
 
-The list opens on the root with directories first, a prefix narrows it, a slash descends, and
-version-control and build directories are not offered. Tab completes without disturbing the rest of
-the sentence, a directory completes so typing can continue into it, and the arrows and Enter choose
-among what is offered.
+The list opens on the root with directories first, a prefix narrows it, a slash descends, a
+fragment is also looked for below the directory it is typed in (NAME-11), and version-control and
+build directories are not offered, nor is a name that is not valid UTF-8, since a line written from
+it would name another file. Tab completes without disturbing the rest of the sentence, a
+directory completes so typing can continue into it, and the arrows and Enter choose among what is
+offered.
 
 **Why.** A path typed blind is a path the user did not really choose.
 
@@ -83,6 +86,8 @@ among what is offered.
 `verified-by: bravebot_mentions::lib::a_prefix_narrows_the_list`
 `verified-by: bravebot_mentions::lib::a_slash_lists_what_is_inside_that_directory`
 `verified-by: bravebot_mentions::lib::noise_directories_are_not_offered`
+`verified-by: bravebot_mentions::lib::a_name_that_is_not_text_is_told_apart_from_its_lookalike`
+`verified-by: bravebot_mentions::lib::a_name_that_is_not_text_is_not_offered_under_its_lookalike`
 `verified-by: bravebot_tui::references::a_paste_returns_the_cursor_to_the_top_of_the_narrowed_list`
 
 <a id="NAME-5"></a>
@@ -148,33 +153,35 @@ decided from the line the user typed, not from file contents.
 `verified-by: bravebot_mentions::lib::a_backslash_before_a_space_continues_a_reference`
 `verified-by: bravebot_mentions::lib::an_escaped_path_reads_back_unchanged`
 `verified-by: bravebot_mentions::lib::a_name_with_a_space_is_listed_and_finished`
+`verified-by: bravebot_mentions::lib::every_awkward_name_is_offered_and_read_back_as_the_file_it_is`
 `verified-by: bravebot_tui::references::a_name_with_a_space_completes_to_a_reference_that_names_it`
 `verified-by: bravebot_tui::references::enter_completes_a_half_typed_reference_past_an_escaped_space`
 
 <a id="NAME-9"></a>
 ### NAME-9: the desktop message box names a file on the same terms
 
-The clauses above are worded for the terminal, and the desktop app's message box keeps each of
-them, because both front ends call the same `bravebot-mentions` code: the same list (NAME-4), `..`,
-an absolute path and a link leading out of the workspace refused (NAME-5), a name ending in `/`, a
-bare `@` and an address in a sentence naming nothing (NAME-6), and Enter completing a half-typed
-name and sending a finished one (NAME-7), and a backslash before a space keeping the space in a name
-(NAME-8). The bridge reads the names back out of the prompt at
-`turn.send` rather than taking a list from the window, so the files that go are the ones the sent
-line names. Each is surveyed by the read the turn will make, and a name that would fail it (outside
-the workspace, missing, a directory, or not text) refuses the send before a turn starts, where the
-terminal would end the turn. The project is the folder the conversation runs in, which for a bot's
-conversation is the bot's home folder or the project chosen for it. A prompt the app composes
-itself names no file.
+The clauses above are worded for the terminal, and the desktop app's message box keeps each of them,
+because both front ends call the same `bravebot-mentions` code: the same list (NAME-4) with the
+names found below it (NAME-11), `..`, an absolute path and a link leading out of the workspace
+refused (NAME-5), a name ending in `/`, a bare `@` and an address in a sentence naming nothing
+(NAME-6), and Enter completing a half-typed name and sending a finished one (NAME-7), and a
+backslash before a space keeping the space in a name (NAME-8). The bridge reads the names back out
+of the prompt at `turn.send` rather than taking a list from the window, so the files that go are the
+ones the sent line names. Each is surveyed by the read the turn will make, and a name that would
+fail it (outside the workspace, missing, a directory, or not text) refuses the send before a turn
+starts, where the terminal would end the turn. The project is the folder the conversation runs in,
+which for a bot's conversation is the bot's home folder or the project chosen for it. A prompt the
+app composes itself names no file.
 
 **Why.** One person names files in both front ends, and a name the window treated differently from
 the terminal would send a file nobody chose or drop one somebody did.
 
 `verified-by: bravebot_ui_bridge::mentions::the_window_is_offered_the_terminals_list_of_the_project`
 `verified-by: bravebot_ui_bridge::mentions::an_entry_with_a_space_is_offered_escaped_over_the_whole_word`
+`verified-by: bravebot_ui_bridge::mentions::a_fragment_is_offered_the_file_below_it_and_enter_completes_it`
 `verified-by: bravebot_ui_bridge::mentions::a_prompt_names_only_text_files_inside_the_project`
 `verified-by: bravebot_ui_bridge::mentions::a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn`
-`verified-by: by-construction (the window's half is not a crate this workspace compiles, so ui/scripts/drive-at-mentions.mjs drives the real app and bridge against a stub model and asserts the list, its keys, Tab into a directory, Enter completing a half-typed name, a directory holding a space completed to the escaped text and Enter completing a name already holding an escaped space (ui/scripts/mentions.test.mjs pins the splice), the file's contents in the model request, the Read row, the refusal of @../outside.txt at send, and that a bot's conversation with no project lists and reads the bot's home folder and refuses a project file)`
+`verified-by: by-construction (the window's half is not a crate this workspace compiles, so ui/scripts/drive-at-mentions.mjs drives the real app and bridge against a stub model and asserts the list, a fragment finding a file in a directory below with Tab writing its whole path, its keys, Tab into a directory, Enter completing a half-typed name, a directory holding a space completed to the escaped text and Enter completing a name already holding an escaped space (ui/scripts/mentions.test.mjs pins the splice), the file's contents in the model request, the Read row, the refusal of @../outside.txt at send, and that a bot's conversation with no project lists and reads the bot's home folder and refuses a project file)`
 
 <a id="NAME-10"></a>
 ### NAME-10: `@session:<id>` adds the newest part of an earlier session to the message
@@ -222,7 +229,72 @@ row so the cost is known before sending.
 `verified-by: bravebot_cli::main::a_session_ref_flag_names_a_session_once`
 `verified-by: bravebot_cli::running::a_session_ref_brings_an_earlier_session_into_a_new_run`
 
+<a id="NAME-11"></a>
+### NAME-11: a fragment is looked for in every directory below, so a file is found without its directory
+
+A fragment with no slash is looked for in every directory of the workspace as well as in the one it
+is typed in, and so is a fragment with a slash where the directory it names offers nothing. A name
+matches when its characters hold those of the fragment in order, without regard to case, and a
+directory is a name like a file. Each match is a row with its path from the workspace root, and
+choosing one completes to that whole path as a row of the directory's own does, so what the line
+names, and what the trust rule is applied to, is the path the person was shown. Enter decides a
+finished name from the workspace (NAME-7), never from the rows offered.
+
+The rows come after what the directory offers, at most ten of them, and the list holds at most 40
+rows, so what the directory offers leaves less room for them. They are ordered best first: a name that matches before a
+name whose path matches, then a match that starts the text before one inside it before one with
+other characters between, then the shorter path, then the alphabetical one. An empty fragment and a
+name under a reference directory's alias are answered by the one directory alone.
+
+The walk starts at the root and goes one level at a time, reading at most 10,000 names. It offers
+only the names NAME-4 offers, steps over `.claude/worktrees` as well as the directories NAME-4
+leaves out, and follows no link: a link is a name of its own, as the directory's list offers it,
+and nothing inside a linked directory is (NAME-5). A name made since the last key is found. Both
+front ends offer these rows (NAME-9).
+
+**Why.** A person who remembers part of a name and not its directory otherwise has to walk the tree
+by hand. The rows are names shown to the person typing, the release the list already makes, and none
+reaches the planner before the line is sent, so nothing is decided from what a file holds. The bound
+keeps a very large tree from stalling a key, and going one level at a time leaves out the deepest
+names rather than the nearest. Ten rows are what a person chooses from: a short fragment has its
+letters in the path of most of a large tree, and the terminal draws every row under the box.
+
+`verified-by: bravebot_mentions::lib::a_bare_fragment_finds_a_name_in_a_directory_below`
+`verified-by: bravebot_mentions::lib::a_fragment_matches_a_name_in_every_script_without_regard_to_case`
+`verified-by: bravebot_mentions::lib::a_bare_fragment_finds_a_directory_below_and_offers_it_as_one`
+`verified-by: bravebot_mentions::lib::a_fragment_with_a_slash_is_looked_for_below_only_where_its_directory_offers_nothing`
+`verified-by: bravebot_mentions::lib::a_name_ranks_before_a_path_and_a_closer_match_before_a_looser_one`
+`verified-by: bravebot_mentions::lib::what_a_directory_offers_comes_first_and_is_not_repeated_below`
+`verified-by: bravebot_mentions::lib::no_more_than_ten_names_found_below_follow_what_the_directory_offers`
+`verified-by: bravebot_mentions::lib::the_list_never_holds_more_than_forty_rows`
+`verified-by: bravebot_mentions::lib::the_names_every_walk_skips_are_skipped_at_every_depth`
+`verified-by: bravebot_mentions::lib::the_walk_follows_no_link_out_of_the_workspace_or_back_into_it`
+`verified-by: bravebot_mentions::lib::the_walk_stops_at_its_bound_having_read_the_shallow_names_first`
+`verified-by: bravebot_mentions::lib::a_name_made_after_a_walk_is_found_by_the_next`
+`verified-by: bravebot_mentions::lib::the_directories_a_walk_read_are_kept_for_the_next_key`
+`verified-by: bravebot_mentions::lib::a_name_with_a_space_found_below_reads_back_as_that_file`
+`verified-by: bravebot_mentions::lib::a_name_under_an_alias_is_not_looked_for_in_the_workspace`
+`verified-by: bravebot_mentions::lib::enter_sends_a_finished_name_and_completes_a_fragment_to_a_found_row`
+`verified-by: bravebot_tui::references::a_fragment_finds_a_file_below_and_tab_writes_the_whole_path`
+`verified-by: bravebot_tui::references::enter_completes_a_fragment_to_the_file_found_below_and_names_that_file`
+`verified-by: bravebot_ui_bridge::mentions::a_fragment_is_offered_the_file_below_it_and_enter_completes_it`
+
 ## Known costs
 
 - **Content you have not read is content you are vouching for.** Be as careful naming a file as
   answering yes to a directory. The planner will act on what it says.
+- **A tree of more than 10,000 names is searched only as far as the bound.** The walk goes one
+  level at a time, so a fragment misses the deepest names of such a tree. Typing the path to one
+  still lists it, since its own directory answers.
+- **A directory is read whole before the walk takes names from it.** A directory of many thousands
+  of names costs one read when the walk first reaches it, and can use the whole bound, which leaves
+  the directories after it unread.
+- **A fragment is looked for in the workspace, not in a reference directory.** A name under the alias
+  of a reference directory ([references.md](references.md)) is found by typing its path from the
+  alias.
+- **A name behind a link to a directory is not found by a fragment.** The walk follows no link, so
+  `docs` linked to `../docs` is a row of its own and its files are reached by typing through it,
+  where NAME-5 decides whether the link leads outside the workspace.
+- **Rows found below come before the sessions NAME-10 offers.** A word that is part of a session's
+  title also matches file names, so the session rows follow those. `@session:` narrows to the
+  sessions.

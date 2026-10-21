@@ -43,6 +43,9 @@ export interface ComposerProps {
   draft: string
   onDraft: (draft: string) => void
   onSend: () => void
+  /** Enter while a turn runs: send the line into it, for the planner to read at its next round (INPUT-10). */
+  onInterject: () => void
+  /** Alt-Enter while a turn runs: hold the line for after it, as a turn of its own. */
   onQueue: () => void
   onCancel: () => void
   /** Offered only where a plan run can start: a conversation, not a bot. */
@@ -61,6 +64,8 @@ export interface ComposerProps {
   /** Take a staged file or picture off, by taking its marker out of the draft. */
   onRemoveStaged: (marker: string) => void
   onPreview: (path: string) => void
+  /** Lines sent into the running turn that it has not read yet. */
+  interjected: string[]
   queued: string[]
   queuePaused: boolean
   onResumeQueued: () => void
@@ -161,7 +166,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
     draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
-    queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
+    interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, starting = false,
   } = props
   // Read by the key handler, which Leo may keep from the first render.
@@ -248,7 +253,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     }
     const props = latest.current
     if (props.askingTrust || props.starting || props.backendReady === false || !props.draft.trim()) return
-    if (props.running) props.onQueue()
+    if (props.running) props.onInterject()
     else submit()
   }
 
@@ -279,11 +284,24 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     <footer className="composer" data-paste-session={session}>
       <div className="composer-stack">
         {backendReady === false && <BackendTray onSetup={onSetup} onCheckBackend={onCheckBackend} onDiagnostics={onDiagnostics} />}
+        {interjected.length > 0 && (
+          <div className="composer-tray interjected-messages" role="group" aria-label="Sent to this turn" data-test="interjected-messages">
+            <div className="tray-head">
+              <span className="tray-title">Sent to this turn <span className="num">· {interjected.length}</span></span>
+              <span className="tray-note">Read at the next round</span>
+            </div>
+            {interjected.map((text, index) => (
+              <div className="tray-row" key={index}>
+                <span className="tray-text" data-tooltip={text}>{text}</span>
+              </div>
+            ))}
+          </div>
+        )}
         {queued.length > 0 && (
           <div className="composer-tray queued-messages" role="group" aria-label="Queued messages">
             <div className="tray-head">
               <span className="tray-title">{queuePaused ? 'Queue paused' : 'Queued'} <span className="num">· {queued.length}</span></span>
-              <span className="tray-note">{queuePaused ? 'Held until you resume' : 'Each starts a new turn after this one'}</span>
+              <span className="tray-note">{queuePaused ? 'Held until you resume' : 'Each starts a turn of its own after this one'}</span>
               {queuePaused && (
                 <Button kind="plain" size="tiny" className="tray-action" aria-label="Resume queue"
                   isDisabled={running || backendReady === false} onClick={onResumeQueued}>Resume</Button>
@@ -375,10 +393,17 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 now.onCancel()
                 return
               }
+              // Holds the line for after the turn: its own turn, and paused by Stop, where Enter sends
+              // it into the turn that is running.
+              if (event.key === 'Enter' && event.altKey && !event.shiftKey && !event.metaKey && !event.ctrlKey && !composing) {
+                event.preventDefault()
+                if (!event.repeat && now.running && now.draft.trim() && !now.askingTrust && !now.starting && now.backendReady !== false) now.onQueue()
+                return
+              }
               if (event.key === 'Enter' && plain && !composing) {
                 event.preventDefault()
                 // The round button is Stop for the whole time a reply is generating. Enter still
-                // queues a follow-up, which is the path the button used to offer as "Queue message".
+                // sends a follow-up, into the turn that is running.
                 if (!event.repeat) void list.enter(now.draft, list.active)
               }
             }} />
@@ -386,6 +411,12 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             <IconButton icon="attachment" label="Attach files" className="attach-files" onClick={onAttach}
               disabled={!canAttach} tooltip={!canAttach ? 'Send a first message, then attach files' : 'Attach files'} />
             <span className="toolbar-spacer" />
+            {running && (
+              <Button kind="plain" size="tiny" className="queue-for-after" data-test="queue-message"
+                isDisabled={blocked || draft.trim().length === 0}
+                data-tooltip="Hold this message until the turn ends, then send it as a turn of its own (Alt+Enter)"
+                onClick={props.onQueue}>Queue for after</Button>
+            )}
             <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
             {permissionMode && onMode && <PermissionModePicker key={`mode-${session}`} mode={permissionMode} onChoose={onMode} />}
             {sandboxMode && onSandbox && <SandboxModePicker key={`sandbox-${session}`} mode={sandboxMode} onChoose={onSandbox} />}

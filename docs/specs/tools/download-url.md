@@ -61,11 +61,14 @@ preference of its own, since [FETCH-7](fetch-url.md#FETCH-7) is for a page a pro
 The destination goes through the write gate of [WRITE-3](write-file.md#WRITE-3): the path must be
 endorsed by a person and the endorsement is single-use and bound to that path. The question is
 put whatever the trust map says about the path, and shows the pair `url -> path`. An existing file
-is shown as an overwrite. Nothing is sent before it is answered, and a decline sends nothing.
+is shown as an overwrite. Nothing is sent before it is answered, and a decline sends nothing. A
+destination the workspace does not reach is refused first, before the host is asked about, since no
+answer to either question makes it reachable ([TRUST-10](../trust-map.md#TRUST-10)).
 
 `verified-by: bravebot_agent::turn::a_download_asks_about_the_host_and_then_shows_url_and_path`
 `verified-by: bravebot_agent::turn::a_download_over_an_existing_file_is_put_as_an_overwrite`
 `verified-by: bravebot_agent::turn::a_declined_destination_sends_no_request_and_leaves_the_file`
+`verified-by: bravebot_agent::turn::a_download_to_a_file_outside_the_workspace_is_refused_before_the_person_is_asked`
 `verified-by: bravebot_agent::turn::a_download_from_a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_agent::turn::a_download_redirected_to_another_host_saves_nothing`
 `verified-by: bravebot_agent::turn::a_download_sends_no_accept_preference_of_its_own`

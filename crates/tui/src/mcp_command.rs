@@ -240,7 +240,7 @@ fn disable(session: &mut Session, settings: &Settings, alias: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::state::Speaker;
 
@@ -498,7 +498,7 @@ mod tests {
     }
 
     /// A session holding each of `aliases` as running, with `servers` reading it.
-    fn holding(aliases: &[&'static str]) -> Session {
+    pub(crate) fn holding(aliases: &[&'static str]) -> Session {
         let mut session = Session::new("none");
         session.servers.session = Some(bravebot_agent::mcp::Session::new(
             aliases.iter().map(|alias| reached(alias)).collect(),
@@ -508,6 +508,74 @@ mod tests {
             bravebot_config::Managed::default(),
         ));
         refresh(&mut session.servers);
+        session
+    }
+
+    /// A session holding `alias` with `policy` against it, on the same stand-in connection `holding`
+    /// uses: what is under test is what a screen draws from a session's policies, and a launch that
+    /// makes them is checked in `bravebot_agent::servers`.
+    pub(crate) fn holding_started_under(
+        alias: &'static str,
+        policy: servers::EffectivePolicy,
+    ) -> Session {
+        let mut session = Session::new("none");
+        session.servers.session = Some(bravebot_agent::mcp::Session::new(
+            vec![reached(alias).confined_by(policy)],
+            std::path::PathBuf::from("/work"),
+            None,
+            false,
+            bravebot_config::Managed::default(),
+        ));
+        refresh(&mut session.servers);
+        session
+    }
+
+    /// A session holding `weather` with its list put to a person who answered `yes`, so its list
+    /// stands as offered, or as declined.
+    pub(crate) fn holding_a_list_answered(yes: bool) -> Session {
+        use bravebot_agent::confirm::Unattended;
+        use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{Policy, ReleasePlan, Routing};
+        let session = holding(&["weather"]);
+        let config = bravebot_config::Config::from_lookup(|name| match name {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.com".into()),
+            _ => None,
+        })
+        .expect("config");
+        let egress = bravebot_net::Egress::new();
+        let mut chat = bravebot_agent::processor::Chat::new(&config, &egress);
+        let holding = CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("weather"))]);
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "reach an MCP server");
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            Policy::begin(routing, ReleasePlan::new(), holding.clone(), &mut sink).expect("policy");
+        // Bypassing is the mode that answers a list's question yes without a person, and makes no
+        // check, so no model is reached. Unattended is the one that answers no.
+        let mode = bravebot_agent::PermissionMode::Bypass;
+        let mut reporter = bravebot_agent::IgnoreReports;
+        let mcp = session.servers.session.as_ref().expect("servers");
+        match yes {
+            true => mcp.settle(
+                &mut policy,
+                &mut chat,
+                &mut bravebot_agent::Confining::new(&mut Unattended, mode, false),
+                &mut reporter,
+                mode,
+                &holding,
+            ),
+            false => mcp.settle(
+                &mut policy,
+                &mut chat,
+                &mut Unattended,
+                &mut reporter,
+                mode,
+                &holding,
+            ),
+        };
         session
     }
 

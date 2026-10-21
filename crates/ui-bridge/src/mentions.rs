@@ -104,6 +104,24 @@ mod tests {
         assert_eq!(answer["entries"][0]["written"], "My\\ Documents/");
     }
 
+    /// NAME-9, NAME-11: the window is offered what the terminal is, so a fragment that begins
+    /// nothing in the project finds the file below it, with the path a completion writes, and Enter
+    /// completes it rather than sending the fragment.
+    #[test]
+    fn a_fragment_is_offered_the_file_below_it_and_enter_completes_it() {
+        let root = tempfile::Builder::new()
+            .prefix("bravebot-offer-found-")
+            .tempdir()
+            .expect("a scratch project");
+        std::fs::create_dir_all(root.path().join("crates/cli/src")).expect("directory");
+        std::fs::write(root.path().join("crates/cli/src/main.rs"), "").expect("file");
+        let answer = offer(root.path(), "read @mainrs", 0, || Ok(Vec::new())).expect("answers");
+        assert_eq!(answer["entries"][0]["path"], "crates/cli/src/main.rs");
+        assert_eq!(answer["entries"][0]["written"], "crates/cli/src/main.rs");
+        assert_eq!(answer["entries"][0]["directory"], false);
+        assert_eq!(answer["completes"], true);
+    }
+
     /// The window asks about every line it holds, and opening the session's workspace for each one
     /// made a turn waiting on an approval unable to be stopped. Only a name being typed needs it.
     #[test]

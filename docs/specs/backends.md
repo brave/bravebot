@@ -1132,7 +1132,10 @@ reaches nothing.
 **The region is required and the endpoint is not.** The host carries the region, so one value
 produces the other and there is nothing left to state. An entry naming no region configures no
 service, for the reason a Bedrock block without one does not: a guessed region is a request that
-fails somewhere far from the mistake.
+fails somewhere far from the mistake. An entry whose region is not lowercase letters, digits and `-`
+starting with a letter or a digit configures no service either, since the host is built from it and
+one holding `/`, `@`, `?`, `#`, `:` or `.` would send the signed request to another host or another
+route than the one the person named. [BACKEND-33](#BACKEND-33) gives the same rule for `AWS_REGION`.
 
 **What a row says.** A model named here has no tier, so a picker row carries what the block called
 it, and its id where the block called it nothing. An inference-profile ARN is not a name anybody
@@ -1141,6 +1144,8 @@ reads, which is why this is worth stating rather than left to fall out of the id
 `verified-by: bravebot_config::provider::an_aws_block_configures_bedrock_rather_than_a_gateway`
 `verified-by: bravebot_config::provider::an_aws_model_the_block_did_not_name_is_shown_by_its_id`
 `verified-by: bravebot_config::provider::an_aws_block_without_a_region_configures_nothing`
+`verified-by: bravebot_config::provider::an_aws_block_whose_region_would_move_the_request_configures_nothing`
+`verified-by: bravebot_config::bedrock::a_provider_account_whose_region_would_move_the_request_is_not_built`
 `verified-by: bravebot_config::lib::a_model_an_aws_block_named_reaches_bedrock_rather_than_a_gateway`
 `verified-by: bravebot_config::lib::a_name_qualified_by_the_aws_id_is_not_a_gateway_either`
 `verified-by: bravebot_agent::backend::a_model_an_aws_block_named_selects_the_bedrock_backend`
@@ -1403,6 +1408,13 @@ two answers comes whole from one place: [NET-7](network-egress.md#NET-7) and
 [NET-8](network-egress.md#NET-8) say how. The names are spelled as the environment spells them in
 upper case, and a lower-case spelling is not read from a file.
 
+`AWS_REGION` is written into the host a Bedrock request is signed for and sent to, so it names a
+region only as lowercase letters, digits and `-` starting with a letter or a digit, the characters
+a Google location is held to ([BACKEND-49](#BACKEND-49)). A value with any other character, `/`,
+`@`, `?`, `#`, `:` and `.` among them, configures no account, as an absent one does. That holds for
+every layer that may set the name, a checkout's included, and for an exported variable, and the
+`options.region` of a `provider` entry is held to it too ([BACKEND-29](#BACKEND-29)).
+
 A gateway is not configured from this block: it is a `provider` entry, whose shape BACKEND-13
 states and whose credential BACKEND-16 names. The three Google names are the one exception, and only
 together: BACKEND-50 says when they name a service. The top-level `model` key is not one of these either, being a
@@ -1421,6 +1433,10 @@ and the two budgets carry this program's own prefix, for the reason BACKEND-24 g
 copied from elsewhere should work unedited, while a name that decides what *this* program does
 belongs to this program and must not collide with whatever else a shared shell profile wanted.
 
+The region is checked because the host is built from it and a checkout's layer can write it. A
+file names only the region, and the rest of the host is compiled in, so a value that passes the
+check gives a host under `amazonaws.com`.
+
 `verified-by: bravebot_config::lib::every_name_a_settings_block_may_set_reaches_the_configuration`
 `verified-by: bravebot_config::settings::an_env_block_is_read`
 `verified-by: bravebot_config::settings::a_proxy_and_an_authority_in_the_persons_own_file_are_handed_over`
@@ -1430,6 +1446,9 @@ belongs to this program and must not collide with whatever else a shared shell p
 `verified-by: bravebot_config::settings::a_blank_or_non_string_network_value_states_nothing`
 `verified-by: bravebot_agent::transport::the_settings_and_the_transport_name_the_same_variables`
 `verified-by: bravebot_agent::transport::a_proxy_in_the_persons_file_is_the_one_a_client_carries_and_a_checkouts_is_not`
+`verified-by: bravebot_config::bedrock::a_region_that_would_move_the_request_configures_nothing`
+`verified-by: bravebot_config::bedrock::a_region_holding_only_the_characters_aws_uses_is_accepted`
+`verified-by: bravebot_config::settings::a_checkouts_region_that_would_move_the_request_configures_no_account`
 
 <a id="BACKEND-34"></a>
 ### BACKEND-34: a settings value is a string, and anything else is not a value
@@ -1852,7 +1871,8 @@ reply of unstated length. A ceiling of 32,000 tokens is given 23 minutes and 20 
 8,192 the egress layer's ten minutes. A streamed reply is given it from the moment it begins, and
 waits to begin as long as any other reply; one asked for whole is given it for that wait as well,
 since the model writes it before any of it is sent. The gap allowed between two pieces of the reply
-is the egress layer's whatever the ceiling.
+is the egress layer's whatever the ceiling, or the one the account's block states
+([BACKEND-55](#BACKEND-55)).
 
 The aichat backend states no ceiling at all, so nothing here applies to it: its requests carry no
 such field and whatever bounds a reply there belongs to the service.
@@ -2410,7 +2430,8 @@ as the `model` key is, and the switch is decided by a category the driver derive
 ### BACKEND-54: a rate limit is waited out for as long as the service asked, up to a ceiling
 
 A reply that is refused with a status that means not now ([NET-6](network-egress.md#NET-6)) is
-sent again, at most twice. Where the answer was a 429 and carried a `Retry-After`
+sent again, at most twice unless the entry's block states another count
+([BACKEND-55](#BACKEND-55)). Where the answer was a 429 and carried a `Retry-After`
 header the wait before the next request is the one it asked for instead of the doubling from one
 second; any other status keeps the doubling whatever the header said. The
 header is read by the egress layer, as whole seconds or an HTTP date in the IMF-fixdate form, and
@@ -2439,6 +2460,69 @@ parsed number only how long.
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_a_service_asked_for`
 `verified-by: bravebot_agent::backend::a_rate_limit_keeps_the_wait_the_service_asked_for`
 `verified-by: bravebot_session::sessions::a_rate_limit_says_how_long_the_service_asked_for`
+
+<a id="BACKEND-55"></a>
+### BACKEND-55: a provider entry states how often a request is sent again and how long a reply may go quiet
+
+An entry under `provider`, for a gateway and for an AWS account alike, may state two figures in its
+`options`. `maxRetries` is how many times a request to it is sent again after a failure worth
+another attempt ([NET-6](network-egress.md#NET-6)). `idleTimeoutMs` is the longest gap, in
+milliseconds, between two pieces of a reply that is still arriving
+([NET-5](network-egress.md#NET-5)).
+
+Where `maxRetries` is not stated a request is sent again at most twice, and where `idleTimeoutMs` is
+not stated the gap is two minutes. A count of zero sends every request once. A count above seven is
+seven, and a gap above ten minutes is ten minutes. A value that is not a whole number, a negative
+one, and a gap of zero state nothing, and the entry is otherwise read as written.
+
+The figures set a count and a timer and decide nothing else. A request is sent again for the same
+failures as without them, taken from the status or the kind of failure and never from anything a
+reply said. The pause before each is the doubling from one second, a wait a service asked for is
+bound as [BACKEND-54](#BACKEND-54) says, and the count of requests a failure reports is the one
+[BACKEND-37](#BACKEND-37) states, so a stated count shows in it. A stated gap replaces the default
+in either direction, and does not move the bound on the reply as a whole.
+
+The block is read from the person's own settings, from the file `--settings` names and from the
+machine-level file, and from no project or local layer ([BACKEND-24](#BACKEND-24)): a layer that
+names a `provider` block with these keys is dropped whole and `doctor` names the file. The model
+Brave's endpoint serves, and an account the tier variables alone configure, have no entry to state
+them in and are held to the defaults. A streamed reply from a gateway on this machine is waited on
+through any silence while a person can stop it ([NET-10](network-egress.md#NET-10)), so a stated
+gap does not reach it, and a stated count does.
+
+**Why.** The defaults suit a service answering over a link that works. A person whose gateway
+thinks silently for longer than two minutes, or whose link drops more than two requests in a row,
+has no way to raise either, and a person billed for each request has no way to lower the count. A
+checkout does not get a say in either: a gap it stretched holds a turn on a connection that has
+died, and a count it raised multiplies requests billed to the person's account, on the strength of
+a file they did not open.
+
+Seven retries pause for 127 seconds in all by the doubling, and none for longer than 64, which stays
+inside the two minutes [BACKEND-54](#BACKEND-54) holds a service's own request to. A gap longer than
+ten minutes would be longer than the bound on a reply of unstated length, so it could never be the
+bound that ended one. Both figures are read as numbers and set a count and a timer, so a service has
+no say in either.
+
+`verified-by: bravebot_config::provider::a_block_states_how_often_a_request_is_sent_again_and_how_long_a_quiet_reply_is_waited_on`
+`verified-by: bravebot_config::provider::zero_retries_is_a_statement_and_zero_milliseconds_is_not`
+`verified-by: bravebot_config::provider::a_figure_above_the_cap_is_the_cap`
+`verified-by: bravebot_config::provider::a_figure_that_is_not_a_whole_number_states_nothing`
+`verified-by: bravebot_config::provider::an_aws_entry_states_the_same_two_figures`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_change_a_gateways_retry_count_or_idle_gap`
+`verified-by: bravebot_config::lib::a_managed_gateway_states_its_own_retry_count_and_idle_gap`
+`verified-by: bravebot_aichat::client::a_gateway_stating_no_retries_is_asked_once`
+`verified-by: bravebot_aichat::client::a_gateway_stating_a_retry_count_is_asked_again_that_many_times`
+`verified-by: bravebot_aichat::client::a_gateway_stating_nothing_is_asked_three_times`
+`verified-by: bravebot_aichat::client::a_larger_retry_count_does_not_make_a_refusal_worth_asking_again`
+`verified-by: bravebot_aichat::client::a_gateway_stating_an_idle_gap_waits_that_long_for_a_reply_gone_quiet`
+`verified-by: bravebot_aichat::client::a_gateway_stating_a_shorter_idle_gap_gives_up_on_a_quiet_reply_sooner`
+`verified-by: bravebot_aichat::client::a_gateway_on_this_machine_is_waited_on_through_silence_whatever_gap_was_stated`
+`verified-by: bravebot_bedrock::lib::an_account_stating_no_retries_is_asked_once`
+`verified-by: bravebot_bedrock::lib::an_account_stating_a_retry_count_is_asked_again_that_many_times`
+`verified-by: bravebot_bedrock::lib::an_account_stating_a_retry_count_reaches_a_service_that_recovers_inside_it`
+`verified-by: bravebot_bedrock::lib::a_larger_retry_count_does_not_make_a_refusal_worth_asking_again`
+`verified-by: bravebot_bedrock::lib::an_account_stating_an_idle_gap_waits_that_long_for_a_reply_gone_quiet`
+`verified-by: bravebot_bedrock::lib::an_account_stating_a_shorter_idle_gap_gives_up_on_a_quiet_reply_sooner`
 
 ## Known costs
 
@@ -2533,7 +2617,8 @@ parsed number only how long.
   refuse the ask (BACKEND-46), measured on Bedrock, wanting to be told whether to think as well as
   how, and asked nothing Sonnet at the level `high` sent nothing for 22 seconds before the start of
   its message. The egress layer's gap bound ([NET-5](network-egress.md#NET-5)) ends such a silence
-  at two minutes, and a reply ended before any of its body arrived is not sent again
+  at two minutes, or at the gap the account's block states ([BACKEND-55](#BACKEND-55)), and a
+  reply ended before any of its body arrived is not sent again
   ([BACKEND-37](#BACKEND-37)). Telling those models whether to think would close it, and would
   decide for them something that is now their own default; Haiku refuses being told to decide for
   itself. A model that refuses only a later concession, the level, the ceiling or the ask for
@@ -2562,6 +2647,14 @@ parsed number only how long.
   states to the planner. It is free text that reaches the planner's context on every round, so it is
   refused from the project layers outright, as `references` is, and reported by `doctor`. A checkout
   cannot say what its own history carries; the person says it once in their own file.
+
+- **A region refused for what it holds is not reported.** A Bedrock region outside the characters of
+  [BACKEND-33](#BACKEND-33), in an `env` block or in a `provider` entry, configures no account as an
+  absent one does, and nothing names the value that was refused: `doctor` lists the names a file set,
+  so an account missing from its output is the only sign, and a person who mistyped a region has the
+  other backends in force. Importing from Claude Code ([IMPORT-3](import.md#IMPORT-3)) writes the
+  region the file states, so one this refuses is imported and then not read, and an `amazon-bedrock`
+  entry from opencode with one is left with the reason that it has no region.
 
 - **The aichat endpoint Brave runs discards the effort level.** Measured against that endpoint: a
   nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits
@@ -2660,9 +2753,10 @@ parsed number only how long.
 
 - **The request BACKEND-32 sends again is outside the retry budget, and spends a credential.** It is
   not a retry: nothing failed in transit, and the same body with a field removed is a different
-  request. So it does not count against the three attempts a failure gets, which means the worst case
-  is four requests rather than three. On a premium subscription it also costs one more single-use
-  credential, each request presenting its own. That is once per service and model per process, and
+  request. So it does not count against the attempts a failure gets, which means the worst case
+  is one request more than the count allows, four rather than three where none is stated. On a
+  premium subscription it also costs one more single-use credential, each request presenting its
+  own. That is once per service and model per process, and
   the alternative is paying for the whole prompt on every request instead.
 
 - **A gateway credential may be a plaintext string in the settings file.** The shape this block
@@ -2741,11 +2835,17 @@ parsed number only how long.
   answers every question and the sandbox mode is workspace-write, a stage is given every path the account
   can write, so an `aws` in a directory the account owns, such as a Homebrew prefix, is found before
   the first stage runs and not after, and every Bedrock request from then until bravebot exits gets
-  `NotInstalled`.
+  `NotInstalled`. The CLI is also started with a `PATH` of those same entries, so a program it starts
+  by name, the interpreter of an `aws` that is a script or a bare `credential_process` command, is
+  not found by it in a directory left out.
   An editor found outside those directories still starts, with a `PATH` of the searched entries
   alone, so a program it starts by name that lives only in a directory left out is not found by it:
   a tool a plugin runs from a project's `node_modules/.bin`, or one in `~/.local/bin` under a
   session opened on the home directory. A program the editor leaves running keeps that `PATH`.
+  A clipboard tool, `osascript` included, is given the same `PATH`, so a launcher among them that
+  starts a program by name finds it only among the searched entries. A tool that then fails passes
+  for one that is absent: the next tool is tried, and with none left a copy goes out as the
+  terminal's own escape sequence and a paste reads as an empty clipboard.
 
 - **An `openai` entry naming no models is offered everything OpenAI's listing returns.** The listing
   states an id and an owner for each model and nothing about what it can do, so BACKEND-19 has
@@ -2778,3 +2878,23 @@ parsed number only how long.
   qualified before it reads it as a bare name a block lists, so `openai/gpt-oss-120b` listed by
   another gateway and written without that gateway's id goes to OpenAI. A name picked from `/model`
   is recorded qualified, as `openrouter/openai/gpt-oss-120b`, and is not affected.
+
+- **Brave's endpoint and an account the tier variables alone configure take neither figure of
+  BACKEND-55.** Both figures live in a `provider` entry's `options`. The model Brave's endpoint
+  serves has no entry, and the tier variables of BACKEND-33 have no block to state anything in, so a
+  person reaching either is held to two retries and a two minute gap. Tier words that resolve
+  through an `amazon-bedrock` entry take that entry's figures. Stating them for the tier variables
+  would take a name in BACKEND-33's table or a top-level key, and neither is decided here.
+
+- **A stated gap does not lengthen the bound on a gateway's reply as a whole.** A reply whose
+  request states no length is ended ten minutes after it began
+  ([NET-5](network-egress.md#NET-5)), so a gateway whose model is silent for longer than that is
+  still cut off whatever `idleTimeoutMs` says. The cap on the gap is that bound, so no stated figure
+  is wasted, and a person whose model needs longer than ten minutes has no setting that gives it.
+
+- **A wait a service asks for is taken on every retry, so a large count lengthens it.** A rate limit
+  that keeps asking for the two minutes BACKEND-54 takes in full is waited out before each of up to
+  seven retries, about fourteen minutes with the requests themselves, and the pause the doubling
+  gives is only the least of each wait. The count is the person's, and nothing shortens a wait the
+  service asked for within the two minutes, since sending sooner is the failure that clause exists
+  to avoid.

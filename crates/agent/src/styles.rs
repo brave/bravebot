@@ -103,24 +103,30 @@ pub fn named(name: &str) -> Option<&'static Style> {
 /// The name is compared whole against the built-in list and must be a slug to name a file, so
 /// nothing typed after `/style` can reach a path outside the directory. A built-in name always
 /// means the built-in: a file cannot stand in for it.
-pub fn find(home: Option<&Path>, name: &str) -> Option<Style> {
+pub fn find(workspace: &Workspace, home: Option<&Path>, name: &str) -> Option<Style> {
     if let Some(built_in) = named(name) {
         return Some(built_in.clone());
     }
-    read_file(home?, name)
+    read_file(workspace, home?, name)
 }
 
 /// The words of `<home>/styles/<name>.md`, where that is a small regular file of UTF-8 text.
 ///
 /// A symbolic link is not followed, for the reason a skill's is not: the file stands for what is
 /// in the directory, and a link would make it stand for something outside it.
-fn read_file(home: &Path, name: &str) -> Option<Style> {
+///
+/// Nor is a file whose path goes through the workspace, because a turn can write it and the trust
+/// map would record it untrusted (SKILL-3). The project's own styles are read by
+/// [`resolve_project`] through the map.
+fn read_file(workspace: &Workspace, home: &Path, name: &str) -> Option<Style> {
     use std::io::Read;
     if !crate::memory::is_a_slug(name) {
         return None;
     }
     let path = home.join(DIRECTORY).join(format!("{name}.md"));
-    if !std::fs::symlink_metadata(&path).ok()?.is_file() {
+    if !std::fs::symlink_metadata(&path).ok()?.is_file()
+        || crate::skills::goes_through_the_workspace(workspace, &path)
+    {
         return None;
     }
     let mut text = String::new();
@@ -142,7 +148,7 @@ fn read_file(home: &Path, name: &str) -> Option<Style> {
 
 /// The names `/style` offers: the built-in ones, then the person's files that would be accepted,
 /// each once and in order.
-pub fn available(home: Option<&Path>) -> Vec<String> {
+pub fn available(workspace: &Workspace, home: Option<&Path>) -> Vec<String> {
     let mut names: Vec<String> = BUILT_IN.iter().map(|s| s.name.to_string()).collect();
     let Some(entries) = home.and_then(|h| std::fs::read_dir(h.join(DIRECTORY)).ok()) else {
         return names;
@@ -151,7 +157,8 @@ pub fn available(home: Option<&Path>) -> Vec<String> {
         .filter_map(|entry| {
             let file = entry.ok()?.file_name().into_string().ok()?;
             let name = file.strip_suffix(".md")?;
-            (named(name).is_none() && read_file(home?, name).is_some()).then(|| name.to_string())
+            (named(name).is_none() && read_file(workspace, home?, name).is_some())
+                .then(|| name.to_string())
         })
         .collect();
     files.sort_unstable();
@@ -226,7 +233,9 @@ pub fn project_names<S: Sink>(
             let name = file.strip_suffix(".md")?.to_string();
             Some(name)
         })
-        .filter(|name| named(name).is_none() && home.is_none_or(|h| read_file(h, name).is_none()))
+        .filter(|name| {
+            named(name).is_none() && home.is_none_or(|h| read_file(workspace, h, name).is_none())
+        })
         .filter(|name| resolve_project(policy, workspace, name).is_some())
         .collect();
     names.sort_unstable();
@@ -301,6 +310,13 @@ mod tests {
         assert_eq!(names.len(), BUILT_IN.len());
     }
 
+    /// A working directory that holds neither the home directory nor anything a style is read from.
+    fn project() -> Workspace {
+        let directory = crate::testutil::scratch_dir("bravebot-styles-project");
+        std::fs::create_dir_all(&directory).unwrap();
+        Workspace::new(&directory).expect("workspace")
+    }
+
     /// A directory holding `styles/<name>.md` for each pair, fresh for this test.
     fn home_with(label: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
         let home = crate::testutil::scratch_dir(&format!("bravebot-styles-{label}"));
@@ -315,22 +331,22 @@ mod tests {
     #[test]
     fn a_file_in_the_home_directory_is_a_style_by_its_name() {
         let home = home_with("found", &[("terse", "\n  Answer in one line.  \n")]);
-        let style = find(Some(&home), "terse").expect("the file is a style");
+        let style = find(&project(), Some(&home), "terse").expect("the file is a style");
         assert_eq!(style.name, "terse");
         assert_eq!(style.words, "Answer in one line.");
         assert_eq!(style.origin, Origin::Home);
-        assert_eq!(find(None, "terse"), None, "no home, no file");
-        assert_eq!(find(Some(&home), "missing"), None);
+        assert_eq!(find(&project(), None, "terse"), None, "no home, no file");
+        assert_eq!(find(&project(), Some(&home), "missing"), None);
     }
 
     #[test]
     fn a_file_cannot_stand_in_for_a_built_in_name() {
         let home = home_with("shadow", &[("concise", "Ramble on at length.")]);
-        let style = find(Some(&home), "concise").expect("built-in");
+        let style = find(&project(), Some(&home), "concise").expect("built-in");
         assert_eq!(style.origin, Origin::BuiltIn);
         assert!(!style.words.contains("Ramble"));
         assert_eq!(
-            available(Some(&home)),
+            available(&project(), Some(&home)),
             ["concise", "explanatory", "proactive"]
         );
     }
@@ -348,7 +364,11 @@ mod tests {
             "-ok",
             "",
         ] {
-            assert_eq!(find(Some(&home), name), None, "{name:?} named a file");
+            assert_eq!(
+                find(&project(), Some(&home), name),
+                None,
+                "{name:?} named a file"
+            );
         }
     }
 
@@ -370,11 +390,36 @@ mod tests {
                 home.join(DIRECTORY).join("linked.md"),
             )
             .unwrap();
-            assert_eq!(find(Some(&home), "linked"), None);
+            assert_eq!(find(&project(), Some(&home), "linked"), None);
         }
-        assert_eq!(find(Some(&home), "empty"), None);
-        assert_eq!(find(Some(&home), "long"), None);
-        assert!(find(Some(&home), "exact").is_some(), "the cap is inclusive");
+        assert_eq!(find(&project(), Some(&home), "empty"), None);
+        assert_eq!(find(&project(), Some(&home), "long"), None);
+        assert!(
+            find(&project(), Some(&home), "exact").is_some(),
+            "the cap is inclusive"
+        );
+    }
+
+    /// SKILL-3. A turn can write `.bravebot/styles/<name>.md` where the working directory is or
+    /// holds the home directory, and the trust map then records it untrusted, so the file is not a
+    /// style from provenance. The same file outside the workspace is one.
+    #[test]
+    fn a_style_file_the_workspace_can_write_is_not_read_as_the_persons_own() {
+        let root = crate::testutil::scratch_dir("bravebot-styles-inside");
+        let _ = std::fs::remove_dir_all(&root);
+        let inside = root.join(".bravebot");
+        std::fs::create_dir_all(inside.join(DIRECTORY)).unwrap();
+        std::fs::write(inside.join(DIRECTORY).join("planted.md"), "INJECTED").unwrap();
+        let workspace = Workspace::new(&root).expect("workspace");
+
+        assert_eq!(find(&workspace, Some(&inside), "planted"), None);
+        assert_eq!(
+            available(&workspace, Some(&inside)),
+            ["concise", "explanatory", "proactive"]
+        );
+
+        let outside = home_with("outside-the-workspace", &[("planted", "INJECTED")]);
+        assert!(find(&workspace, Some(&outside), "planted").is_some());
     }
 
     #[test]
@@ -385,10 +430,13 @@ mod tests {
         );
         std::fs::write(home.join(DIRECTORY).join("notes.txt"), "not md").unwrap();
         assert_eq!(
-            available(Some(&home)),
+            available(&project(), Some(&home)),
             ["concise", "explanatory", "proactive", "alpha", "zed"]
         );
-        assert_eq!(available(None), ["concise", "explanatory", "proactive"]);
+        assert_eq!(
+            available(&project(), None),
+            ["concise", "explanatory", "proactive"]
+        );
     }
 
     /// A workspace holding `.bravebot/styles/<name>.md` for each pair, fresh for this test.

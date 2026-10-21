@@ -449,6 +449,32 @@ branch would be taken as the one before this release.
 `verified-by: bravebot_agent::git::tags_given_a_revision_are_only_those_its_history_holds`
 `verified-by: bravebot_agent::git::tags_page_by_count_and_skip`
 
+<a id="GIT-15"></a>
+### GIT-15: `staged` is a question only the driver asks, and no tool argument names it
+
+`staged` prints what the index holds that `HEAD` does not, as `git diff --cached --no-renames`
+prints it: the hunks of each path that was added, changed or deleted in the index, as `diff` prints
+them for two trees. Nothing is read from the working tree. A path in conflict and a path marked only
+with `git add -N` hold no staged content, so a conflicted path is named on a line of its own and
+neither is given hunks. An index that matches `HEAD` says nothing is staged. It is labelled as every
+other answer is ([GIT-3](#GIT-3)), by the whole of `.git` and by each path it showed, and a path the
+trust map withholds is left out and the answer says so.
+
+`Query::named` does not return it, so `query` has no value that asks for it and the planner is not
+offered it. It exists for `/commit-message` ([CMD-23](../commands.md#CMD-23)), which asks it of the
+working directory's own repository.
+
+**Why.** A draft of a commit message needs what is about to be committed, and `status` lists paths
+without their changes and `diff` compares only commits. Offering the question to the planner would
+widen a tool nobody asked to widen.
+
+`verified-by: bravebot_agent::git::staged_prints_the_index_against_head_and_not_the_working_tree`
+`verified-by: bravebot_agent::git::staged_says_so_when_the_index_matches_head`
+`verified-by: bravebot_agent::git::staged_leaves_out_a_withheld_path_and_says_so`
+`verified-by: bravebot_agent::git::staged_names_a_conflicted_path_and_prints_no_hunks_for_it`
+`verified-by: bravebot_agent::git::the_staged_question_is_not_one_a_tool_can_name`
+`verified-by: bravebot_agent::commit_message::the_staged_source_is_drafted_from_the_index_and_not_the_working_tree`
+
 <a id="GIT-14"></a>
 ### GIT-14: a search is labelled by every file it read, matched or not
 
@@ -472,6 +498,8 @@ in anything other than the lines it printed would repeat or skip one on the next
 
 `verified-by: bravebot_agent::turn::read_git_searches_the_files_at_a_revision_and_pages_the_lines`
 `verified-by: bravebot_agent::turn::a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not`
+`verified-by: bravebot_agent::turn::what_a_distrusted_blob_holds_changes_a_searchs_counts_and_nothing_else`
+`verified-by: bravebot_agent::turn::the_skip_a_cut_read_git_search_offers_stays_inside_a_distrusted_blobs_body`
 `verified-by: bravebot_agent::workspace::a_search_pattern_is_held_to_trusted_public_before_anything_is_read`
 `verified-by: bravebot_agent::git::search_lists_the_lines_a_pattern_matches_at_a_revision_as_git_grep_does`
 `verified-by: bravebot_agent::git::a_search_shows_every_file_it_read_whether_or_not_it_matched`

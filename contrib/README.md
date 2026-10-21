@@ -132,6 +132,29 @@ and its untracked files. The
 a title or body runs this alone. `--selftest` builds a repository and checks what each source
 contributes; `make check-narration` runs it first.
 
+## check-pr-body.py
+
+Fails a pull request opened by `netzenbot` whose body does not say which cases it leaves undone, with an
+issue for each.
+
+The body has a line `Not covered: none`, or `Not covered:` followed by one bullet per case, each
+naming the issue that tracks it as `#N` or `brave/bravebot#N`. The rule is in
+[commits.md](../docs/development/commits.md). It cannot read whether the list is complete or whether
+an issue is about its case, so a reviewer reads the diff for that
+([GAP-001](../docs/best-practices/gaps.md#GAP-001)), and it does not look a number up. A quoted line
+inside a fenced code block or an HTML comment is not the line.
+
+```sh
+PR_BODY="$(cat body.md)" make check-pr-body   # a draft body
+make check-pr-body                            # the selftest alone, where there is no PR_BODY
+```
+
+In CI the [narration workflow](../.github/workflows/narration.yml) runs it with the event's body and
+author, when the pull request is opened, pushed to or edited. A body that is empty fails there. Only
+pull requests whose `PR_AUTHOR` is `netzenbot` are held to the line, and a run with no author holds the body. `pr-fix.py` loads
+this file to check the body it opens a pull request with. `--selftest` checks the verdict on known
+bodies and that the workflow runs the check on an edit.
+
 ## affected-checks.py
 
 Says which checks a change needs, from the paths it touches. CI's `Affected checks` job runs it on
@@ -188,6 +211,12 @@ issues at once. The exit code is still not a verdict on
 the tests: it is nonzero when the measurement did not happen, or when an issue that was meant to be
 filed was not, because a filer that has quietly stopped working looks exactly like a suite that
 stopped being flaky.
+
+`--save FILE` writes what was measured, and `--load FILE` files issues from that file and runs
+nothing else. The workflow measures in one job that holds no token, because cargo runs every build
+script and proc macro in `Cargo.lock` and the child environment would otherwise carry it, and files
+from another job that holds `issues: write` and runs only `gh` (#2789). The script drops `GH_TOKEN`
+and `GITHUB_TOKEN` from the environment it gives cargo as well.
 
 `--summary FILE` appends the same report to a file, which is how the weekly
 [Test determinism](../.github/workflows/test-determinism.yml) workflow puts it in a job summary.

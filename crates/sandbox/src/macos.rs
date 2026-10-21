@@ -327,7 +327,11 @@ pub fn developer_directory() -> Option<std::path::PathBuf> {
     static DIRECTORY: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     DIRECTORY
         .get_or_init(|| {
-            let mut command = std::process::Command::new("/usr/bin/xcode-select");
+            let mut command = crate::programs::start(
+                &crate::programs::Resolved::written_in_source("/usr/bin/xcode-select"),
+                crate::programs::Inherits::All,
+                crate::programs::SearchPath::Inherited,
+            );
             command
                 .arg("-p")
                 .env_remove("DEVELOPER_DIR")
@@ -496,7 +500,13 @@ impl SeatbeltSandbox {
             });
         }
 
-        let mut wrapped = Command::new(SANDBOX_EXEC);
+        // The program is `SANDBOX_EXEC`, an absolute path written here. The program it confines is
+        // an argument the caller chose, and runs under the profile.
+        let mut wrapped = crate::programs::start(
+            &crate::programs::Resolved::written_in_source(SANDBOX_EXEC),
+            crate::programs::Inherits::All,
+            crate::programs::SearchPath::Inherited,
+        );
         wrapped.arg("-p").arg(Self::profile(policy));
         wrapped.args(confined_argv(
             program,
