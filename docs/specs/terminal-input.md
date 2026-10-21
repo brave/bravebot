@@ -402,6 +402,7 @@ named here and nowhere else:
 | Ctrl-Enter | queues the line as Enter does, then stops the turn in flight so what is waiting goes now (INPUT-36) |
 | Ctrl-D | leaves, which is not something the box does |
 | Ctrl-G | hands the screen the turn is drawing on to an editor (INPUT-14) |
+| Ctrl-P | does nothing, since the exchange the rewrite is asked over belongs to the turn (INPUT-48) |
 | `!` | arms a mode that changes what Enter does, over whatever the box holds when the turn ends ([shell-mode.md](shell-mode.md)) |
 | Up | takes back what is waiting before it walks the history (INPUT-18) |
 
@@ -1063,6 +1064,18 @@ and readline from disagreeing about what was last taken.
 - **A session in an orphaned process group is not stopped.** The kernel discards the stop signal for a
   group whose parent is outside its session, such as the first process of a container. The terminal is
   given back and taken again, the screen is drawn afresh, and the key does nothing else.
+- **A rewrite can only name what the exchange holds.** The request reads no file and lists no
+  directory, so a file the session has not read or been told of is not one a rewrite can name, and in
+  a session with no turn yet the rewrite is made from the line alone (INPUT-48). Giving the request
+  the workspace would give it a policy that reaches files, which a question asked beside the work does
+  not have, and the exchange is all the planner could have been shown. The cost is a rewrite less
+  specific than one written over the files.
+- **A file a rewrite names is vouched for by the Enter that sends it.** A reference in the box
+  vouches for nothing until the line is sent, and sending is the grant
+  ([naming-files.md](naming-files.md)), so a person who sends a rewrite without reading it vouches for
+  a path a model chose, where `@` otherwise leaves the choice to them. The line is drawn whole in the
+  box and nothing sends it but Enter, which is all that stands between the rewrite and the turn
+  (INPUT-48). A suggestion (INPUT-43) has the same cost.
 
 <a id="INPUT-19"></a>
 ### INPUT-19: Ctrl-R searches every prompt sent, and what is chosen goes into the box
@@ -2121,13 +2134,13 @@ one carries to the other.
 `verified-by: bravebot_tui::history::narrowing_picks_the_nearest_earlier_prompt_not_the_oldest`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move twelve chords, and nothing else
+### INPUT-32: a settings file can move thirteen chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
 action's key says nothing about the others. There is no second file and no other spelling of the
-block, so one place answers what a key does. Twelve actions can be moved on a platform that can
-suspend the session, eleven on one that cannot (INPUT-47), and nothing else can be moved:
+block, so one place answers what a key does. Thirteen actions can be moved on a platform that can
+suspend the session, twelve on one that cannot (INPUT-47), and nothing else can be moved:
 
 - `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
   ([RUN-25](tools/run.md#RUN-25)).
@@ -2144,6 +2157,7 @@ suspend the session, eleven on one that cannot (INPUT-47), and nothing else can 
 - `undo` (default: `ctrl-_`): put back the last edit to the line (INPUT-44).
 - `suspend` (default: `ctrl-z`): stop the session and give the terminal to the shell (INPUT-47). Not
   an action on Windows, so a settings file naming it there names nothing.
+- `enhance` (default: `ctrl-p`): rewrite the line in the box to be more specific (INPUT-48).
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is
 typed into the line, Enter sends, Escape clears it, Tab takes what is offered, and the arrows walk
@@ -2219,6 +2233,7 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::the_scope_chord_is_ctrl_n_and_can_be_moved`
 `verified-by: bravebot_tui::keybindings::the_suspend_chord_is_ctrl_z_and_can_be_moved`
 `verified-by: bravebot_tui::keybindings::a_chord_contested_with_suspend_is_given_up_by_the_request`
+`verified-by: bravebot_tui::keybindings::the_enhance_chord_is_ctrl_p_and_can_be_moved`
 `verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`
 `verified-by: bravebot_config::settings::a_keybindings_entry_that_is_not_a_chord_is_dropped`
 `verified-by: bravebot_config::settings::a_project_layer_overrides_keybindings_per_name`
@@ -2737,6 +2752,7 @@ has otherwise finished typing.
 `verified-by: bravebot_tui::state::undo_after_a_style_switch_has_nothing_to_restore_in_the_ordinary_box`
 `verified-by: bravebot_tui::state::undo_after_recalling_history_has_nothing_to_restore_in_the_ordinary_box`
 `verified-by: bravebot_tui::keybindings::an_alternate_spelling_given_to_another_action_no_longer_answers_undo`
+`verified-by: bravebot_tui::keybindings::an_alternate_spelling_given_to_enhance_no_longer_answers_undo`
 `verified-by: bravebot_tui::keybindings::a_block_written_before_undo_existed_that_named_ctrl_underscore_gives_it_up`
 
 <a id="INPUT-45"></a>
@@ -2883,3 +2899,89 @@ has, since one byte another program writes should not take the terminal from the
 `verified-by: bravebot_tui::keybindings::where_nothing_suspends_ctrl_z_is_free_for_another_action`
 `verified-by: bravebot_tui::render::the_shortcut_list_names_the_suspend_chord`
 `verified-by: bravebot_tui::app::every_mode_a_session_asks_for_is_given_back`
+
+<a id="INPUT-48"></a>
+### INPUT-48: a key rewrites the line to be more specific, and the rewrite waits in the box for the person to edit
+
+With a prompt in the box and no turn running, the enhance key makes one request, to the model the
+session is using, over the exchange the planner already holds and with no tools. The request is the
+line as written, a folded paste put back to its words, behind an instruction the driver writes: make
+the message more specific and easier to act on, keep what was asked for, add no requirement, file
+name or fact that neither the line nor the exchange gives, and write the message only. The exchange
+is read and not changed, the request reads no file, and what it cost is charged to the session and
+its trail kept. The box goes on taking what is typed while the request is out, and the keys that stop
+a turn stop it and leave the line as it was ([INPUT-4](#INPUT-4)).
+
+What comes back replaces the line in the box as text, and nothing is sent to a turn. The person edits
+it, and Enter sends the line as a prompt whatever it begins with: a line a model wrote is not carried
+out as a command, so a rewrite that begins with `/` is words. A `@` reference in it is text like any
+other, names nothing while it is in the box, and is vouched for only by the Enter that sends the line,
+as [naming-files.md](naming-files.md) has it.
+
+Escape in the ordinary style, and Ctrl-C in either style, put back the line that was in the box
+before the rewrite and keep the rewrite as the draft Up brings back, so an edit made to it is not
+lost. The next press clears the line as it clears any. In vi's style Escape leaves INSERT as it does
+everywhere. Enhancing a rewrite again keeps the first line as the one put back. Emptying the box, or
+replacing its line by recalling a prompt or by taking it back from an editor, ends the enhancement,
+and a line typed afterwards is an ordinary line.
+
+The driver reads the answer for its length and for characters a terminal draws as nothing, and for
+nothing else. It is offered only where the exchange has met nothing untrusted, because words written
+over such an exchange are ones the planner could not have held ([sessions.md](sessions.md)), and
+otherwise the person is told so and the line stays. An answer that is empty, or longer than 4000
+characters, is not offered rather than cut to something the model did not write. Characters a
+terminal draws as nothing are taken out of what is offered and counted, as they are from a paste
+([pasting.md](pasting.md)). An answer is not written over a line the person has typed into since the
+request went out, and says so.
+
+The key does nothing for an empty box, in shell mode, and while a turn runs, since the exchange
+belongs to the turn then (INPUT-9). For a line whose first word is a slash and a name, which is how a
+command or a skill is written, for one holding a picture or a dropped file, which a rewrite of words
+would lose, and for one longer than 4000 characters, which a rewrite could not be offered at, it says
+so and leaves the line as written. A first word with a second slash in it is a path, and a line
+beginning with one is a prompt. The key is one of the chords a settings file can move (INPUT-32), and
+the `?` list shows it (INPUT-13).
+
+**Why.** A prompt that says what is wanted, how done looks and which parts of the work it touches
+gets a better turn than one that leaves the planner to ask, and the exchange already holds what is
+known of those parts. The request is the driver's own words over the planner's own context, and the
+answer lands where the person reads and edits it before it is anything a planner sees, so it decides
+nothing. Counting is the only judgement the driver makes of it, which keeps this on the right side of
+the rule that the driver does not branch on what a model wrote. Nothing is sent until Enter because
+only the person can say whether the rewrite is what they meant, and the original comes back because a
+key that could lose the line would not be safe to press. A key and not a command because a person
+reaches for it with the line half written, where a command word would have to be typed in front of it.
+
+`verified-by: bravebot_agent::aside::an_enhancement_is_offered_whole_or_not_at_all`
+`verified-by: bravebot_agent::aside::the_enhancement_limit_counts_characters_rather_than_bytes`
+`verified-by: bravebot_agent::aside::an_enhancement_asks_for_the_draft_over_the_exchange_and_leaves_it_alone`
+`verified-by: bravebot_agent::aside::an_enhancement_carries_what_the_exchange_had_met`
+`verified-by: bravebot_agent::aside::an_enhancement_is_told_to_rewrite_and_not_to_answer`
+`verified-by: bravebot_agent::turn::an_enhancement_asks_for_the_draft_over_the_exchange_and_leaves_the_conversation_alone`
+`verified-by: bravebot_agent::turn::an_enhancement_over_an_untrusted_exchange_is_not_offered_for_the_box`
+`verified-by: bravebot_tui::keybindings::the_enhance_chord_is_ctrl_p_and_can_be_moved`
+`verified-by: bravebot_tui::app::the_enhance_chord_asks_for_the_line_and_sends_nothing`
+`verified-by: bravebot_tui::app::the_enhance_chord_has_nothing_to_rewrite_in_an_empty_box_or_a_shell_line`
+`verified-by: bravebot_tui::app::a_line_written_like_a_command_or_a_skill_is_left_as_written_and_says_so`
+`verified-by: bravebot_tui::app::a_prompt_that_starts_with_a_path_is_rewritten_like_any_other`
+`verified-by: bravebot_tui::app::a_line_too_long_to_be_rewritten_is_left_as_written_and_says_so`
+`verified-by: bravebot_tui::app::a_line_holding_a_picture_is_left_as_written_and_says_so`
+`verified-by: bravebot_tui::app::a_folded_paste_goes_to_the_request_as_its_words`
+`verified-by: bravebot_tui::app::a_moved_enhance_chord_enhances_and_the_old_one_does_not`
+`verified-by: bravebot_tui::app::the_enhance_chord_answers_in_every_mode_of_vi_s_style`
+`verified-by: bravebot_tui::app::the_enhance_chord_does_nothing_while_a_turn_runs`
+`verified-by: bravebot_tui::app::an_enhancement_is_placed_in_the_box_and_nothing_is_sent`
+`verified-by: bravebot_tui::app::escape_puts_back_what_was_written_and_the_next_escape_clears_it`
+`verified-by: bravebot_tui::app::ctrl_c_puts_back_what_was_written_in_either_style`
+`verified-by: bravebot_tui::app::enter_on_an_enhancement_sends_it_as_a_prompt_whatever_it_begins_with`
+`verified-by: bravebot_tui::app::enter_on_an_enhancement_mid_turn_queues_it_as_a_prompt_and_never_as_a_command`
+`verified-by: bravebot_tui::app::a_line_typed_after_the_enhancement_was_wiped_out_is_a_new_line`
+`verified-by: bravebot_tui::app::enhancing_an_enhancement_still_puts_back_the_line_the_person_wrote`
+`verified-by: bravebot_tui::app::an_enhancement_from_an_exchange_that_met_something_untrusted_is_not_offered`
+`verified-by: bravebot_tui::app::an_enhancement_that_is_empty_or_too_long_is_not_offered_and_says_so`
+`verified-by: bravebot_tui::app::an_enhancement_is_not_written_over_a_line_typed_since_the_request_went`
+`verified-by: bravebot_tui::app::a_stopped_or_failed_request_leaves_the_line_and_says_so`
+`verified-by: bravebot_tui::app::the_note_names_the_key_that_puts_the_line_back_in_each_style`
+`verified-by: bravebot_tui::app::an_enhancements_cost_is_charged_to_the_session`
+`verified-by: bravebot_tui::app::characters_that_draw_as_nothing_are_taken_out_of_an_enhancement_and_counted`
+`verified-by: bravebot_tui::render::the_shortcuts_name_the_enhance_chord_in_force`

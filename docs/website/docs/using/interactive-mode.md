@@ -22,6 +22,7 @@ growing further. It keeps growing while a turn runs.
 | Shift-Enter, Ctrl-J | start a new line without sending |
 | Ctrl-G | compose in `$VISUAL` or `$EDITOR` and take back what you saved |
 | Ctrl-V | paste what is on the clipboard, a picture or a copied file included |
+| Ctrl-P | with a prompt typed, rewrite it to be more specific and leave the rewrite in the box to edit ([below](#enhancing-a-prompt)) |
 | Ctrl-S | put the line away, bring back the one you put away, or search this workspace |
 | Escape | discard a half-typed prompt, keeping it for Up, or stop a running turn (with vi editing, from NORMAL mode) |
 | Ctrl-C | stop the nearest thing there is to stop, and leave when there is nothing left |
@@ -44,7 +45,7 @@ works**, in every terminal and in shell mode too.
 With [vi editing](#editing-the-way-vi-does) chosen, Escape enters NORMAL mode instead of discarding
 the line, and the letters do what they do in vi.
 
-Twelve of these chords can be [moved to keys of your own](#moving-a-key), eleven on Windows. Every chord named on this
+Thirteen of these chords can be [moved to keys of your own](#moving-a-key), twelve on Windows. Every chord named on this
 page, and every one the interface names on your screen, is the default.
 
 ## Undoing an edit
@@ -82,6 +83,33 @@ process group of its shell, such as the first process of a container, the stop h
 
 Windows has no suspend, so Ctrl-Z does nothing there and the `?` list does not name it.
 
+## Enhancing a prompt
+
+Ctrl-P with a prompt typed in the box asks the model you are using to make it more specific, and puts
+the rewrite in the box in place of what you wrote. Nothing is sent to a turn. You edit the rewrite and
+press Enter, which sends it as a prompt like any other. The request carries your line and the
+conversation so far, so the rewrite can name what you and the model have already been through, and it
+reads no file of its own: a file nobody has read in the session is not one the rewrite can name. It
+is asked not to add a requirement, a file name or a fact that neither your line nor the conversation
+gives, but it is a model's reading of what you meant, so read it before you send it. A `@path` in it
+is text until you send the line, and sending is what names the file, exactly as if you had typed it.
+
+Escape puts back the line you wrote, and Ctrl-C does the same in either editing style, since Escape in
+vi's style leaves INSERT. The rewrite is kept as the line Up brings back, so an edit you made to it is
+not lost. Pressing Ctrl-P again on a rewrite asks for another, and Escape still returns to what you
+first wrote. Emptying the box ends all of this, and what you type next is an ordinary line. The press
+that asks costs one request, charged to the session, and Escape or Ctrl-C while it is out stops it and
+leaves your line as it was.
+
+The key does nothing on an empty box, in [shell mode](./shell-mode.md), and while a turn is running.
+A line whose first word is a slash and a name is a command or a skill, a line holding a picture or a
+dropped file holds more than words, and a line over 4,000 characters is longer than a rewrite is put
+in the box at, so each is left as written with a note saying why. A line that begins with a path such
+as `/Users/me/proj/src/main.rs` is a prompt and is rewritten. A rewrite that comes back empty or
+longer than 4,000 characters is not put in the box, and neither is one written after the
+conversation has read something untrusted, since words written over that conversation are not ones
+the planner could have held. Your line stays where it was, and a note says why.
+
 ## Editing the way vi does
 
 [`/config`](../reference/commands.md#config) chooses between the ordinary box and vi's editing keys,
@@ -109,7 +137,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 }
 ```
 
-**Twelve actions can be moved, and nothing else can** (eleven on Windows, which has no `suspend`):
+**Thirteen actions can be moved, and nothing else can** (twelve on Windows, which has no `suspend`):
 
 | Action | Default | What it does |
 |---|---|---|
@@ -125,6 +153,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 | `scope` | `ctrl-n` | cycle Up between every stored prompt, this project's and this session's |
 | `suspend` | `ctrl-z` | [suspend the session to the shell](#suspending-to-the-shell) |
 | `undo` | `ctrl-_` | put back the last edit to the line ([below](#undoing-an-edit)) |
+| `enhance` | `ctrl-p` | rewrite the line to be more specific ([below](#enhancing-a-prompt)) |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, and the arrows walk the caret and the history.

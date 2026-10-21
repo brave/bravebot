@@ -3431,6 +3431,21 @@ commit-message-stopped = la rédaction du message de commit a été arrêtée
 handoff-started = transmis : ceci est une nouvelle session, et la précédente est restée telle quelle. Pour y revenir, lancez `bravebot --resume { $id }`
 resume-handed-off = depuis { $id }
 
+enhance-ready = la ligne améliorée est dans la zone de saisie. Modifiez-la, puis Entrée l'envoie, ou Échap remet ce que vous aviez écrit
+enhance-ready-vi = la ligne améliorée est dans la zone de saisie. Modifiez-la, puis Entrée l'envoie, ou Ctrl-C remet ce que vous aviez écrit
+enhance-invisible-removed = { $count ->
+    [one] { $count } caractère invisible a été retiré de la ligne améliorée
+   *[other] { $count } caractères invisibles ont été retirés de la ligne améliorée
+    }
+enhance-untrusted = l'amélioration n'a pas été proposée : cette conversation a rencontré du contenu non fiable, donc la réécriture ne serait pas faite de mots que le planificateur aurait pu retenir
+enhance-unusable = l'amélioration n'a pas été proposée : elle est revenue vide ou de plus de { $limit } caractères
+enhance-line-changed = l'amélioration n'a pas été proposée : la ligne a changé pendant son écriture
+enhance-failed = la ligne n'a pas pu être améliorée : { $problem }
+enhance-stopped = l'amélioration a été arrêtée
+enhance-not-a-command = { $key } réécrit une invite, et une ligne qui commence par / est une commande ou une compétence, donc elle a été laissée telle quelle
+enhance-not-with-a-picture = { $key } réécrit des mots, et cette ligne contient une image ou un fichier déposé, donc elle a été laissée telle quelle
+enhance-too-long = { $key } réécrit une ligne de { $limit } caractères au plus, et celle-ci est plus longue, donc elle a été laissée telle quelle
+
 # /sandbox. Le mode est le choix d'une personne, et les phrases disent ce qu'il change et à partir de quand.
 session-sandbox-report = mode du bac à sable : { $detail }
 session-sandbox-from-command = { $mode } depuis /sandbox

@@ -104,6 +104,15 @@ fn lines_in(text: &str) -> usize {
     }
 }
 
+/// Why a line cannot be rewritten by the enhance key (INPUT-48).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Unenhanceable {
+    /// It names a picture or a dropped file, which a rewrite of words would lose.
+    HoldsAttachment,
+    /// It is longer than a rewrite is offered at.
+    TooLong,
+}
+
 /// One replayed line.
 ///
 /// A line the agent composed is drawn as the message it was, which is what this transcript has
@@ -600,6 +609,14 @@ pub struct Session {
     /// by [`Session::propose_handoff`], and dropped the moment the box is replaced or found empty,
     /// so a prompt typed after the brief was wiped out is never the one that starts a session.
     handoff: bool,
+    /// The line the box held before the enhancement now in it replaced it, which the box puts back
+    /// on Escape or Ctrl-C (INPUT-48).
+    ///
+    /// Like `handoff`, a mode over the line and not part of it: set only by
+    /// [`Session::propose_enhancement`], and dropped the moment the box is replaced or found empty,
+    /// so a line typed after the enhancement was wiped out never has an older one put back over it.
+    /// The line as the box held it, so a paste folded behind a marker comes back behind it.
+    enhanced: Option<String>,
     /// The prompt a new session is to begin with, once the session [`Session::hand_over`] named has
     /// been set up, and the next pass of the loop sends it.
     handed_over: Option<String>,
@@ -1380,6 +1397,7 @@ impl Session {
             stashed: None,
             shell: false,
             handoff: false,
+            enhanced: None,
             handed_over: None,
             shell_private: false,
             shortcuts: false,
@@ -3113,6 +3131,99 @@ impl Session {
         let text = self.unfolded(&typed);
         self.take_line(&typed);
         Some(text)
+    }
+
+    /// The words the enhance key would rewrite, or why the line is not words it can (INPUT-48).
+    ///
+    /// A folded paste is put back to the words it stands for, as it is where the line leaves the box
+    /// for the planner. A line that names a picture or a dropped file is refused, because the rewrite
+    /// is words and the marker standing for the file is not: a rewrite that dropped it would lose the
+    /// attachment, and one that kept it would send a file its writer had not chosen to keep. A line
+    /// longer than a rewrite is offered at is refused too, since the request would be paid for and
+    /// the answer, which keeps what the line says, could not be used.
+    pub fn draft_to_enhance(&self) -> Result<String, Unenhanceable> {
+        if !self.pasted_named(&self.input).is_empty()
+            || !self.attachments_named(&self.input).is_empty()
+        {
+            return Err(Unenhanceable::HoldsAttachment);
+        }
+        let draft = self.unfolded(self.input.trim());
+        if draft.chars().count() > bravebot_agent::aside::ENHANCE_LIMIT {
+            return Err(Unenhanceable::TooLong);
+        }
+        Ok(draft)
+    }
+
+    /// What an answer to the request for an enhancement offers, with what draws as nothing taken out
+    /// and counted, as it is from a paste (`pasting.md` PASTE-10), or `None` where nothing usable is
+    /// left (INPUT-48).
+    ///
+    /// Taken out before the answer is counted, so one made of nothing but those characters is empty
+    /// and not offered: the person is about to read this line and send it as their own, and what
+    /// they cannot see they cannot have meant.
+    pub fn clean_enhancement(&mut self, shown: &str) -> Option<String> {
+        let (text, removed) = crate::invisible::without_invisible(&normalised(shown));
+        if removed > 0 {
+            self.note(t!(enhance_invisible_removed, count = removed));
+        }
+        bravebot_agent::aside::enhancement(&text)
+    }
+
+    /// Put the enhancement of `line` in the box for the person to read and edit (INPUT-48).
+    ///
+    /// `line` is what the box held when the request went out. A box that holds something else by now
+    /// has been typed into since, and what is there is what the person is looking at, so nothing is
+    /// written over it and `false` comes back. Where it holds `line`, that line is kept as the one
+    /// [`Session::restore_unenhanced`] puts back.
+    pub fn propose_enhancement(&mut self, line: &str, text: String) -> bool {
+        if self.status != Status::Idle || self.input != line {
+            return false;
+        }
+        // The oldest line, so enhancing an enhancement and pressing Escape lands on what the person
+        // wrote and not on the rewrite before this one.
+        let original = self.enhanced.clone().unwrap_or_else(|| line.to_string());
+        self.history.leave();
+        self.set_input(text);
+        self.shell = false;
+        self.enhanced = Some(original);
+        true
+    }
+
+    /// Whether the line in the box is an enhancement, which Escape and Ctrl-C put the original back
+    /// over and Enter sends as a prompt and never as a command.
+    pub fn enhanced_pending(&self) -> bool {
+        self.enhanced.is_some() && !self.input.trim().is_empty()
+    }
+
+    /// End an enhancement the box was holding, where the box has since been emptied.
+    ///
+    /// Asked before each key and each paste, for the reason [`Session::drop_a_wiped_handoff`] is: the
+    /// one edit that leaves the box empty is the one that decides the next thing typed is a new line
+    /// and not the enhancement being edited.
+    pub fn drop_a_wiped_enhancement(&mut self) {
+        if self.input.trim().is_empty() {
+            self.enhanced = None;
+        }
+    }
+
+    /// Put back the line the enhancement in the box replaced (INPUT-48).
+    ///
+    /// What is in the box now is kept as the draft Up brings back, as clearing it does, so an edit
+    /// made to the enhancement is not lost with it. Once the original is back the box holds an
+    /// ordinary line, and the next Escape clears it as it clears any.
+    pub fn restore_unenhanced(&mut self) {
+        if self.status != Status::Idle {
+            return;
+        }
+        let Some(original) = self.enhanced.take() else {
+            return;
+        };
+        if !self.input.trim().is_empty() {
+            self.history.keep_draft(self.input.clone());
+        }
+        self.history.leave();
+        self.set_input(original);
+        self.shell = false;
     }
 
     /// Hold the prompt the session beginning now is to open with.
