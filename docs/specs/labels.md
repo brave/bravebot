@@ -15,6 +15,7 @@ guards:
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 1
+      - crates/agent/src/skills.rs: 1
       - crates/agent/src/tools.rs: 29
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 14
@@ -130,7 +131,7 @@ guards:
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 14
+      - crates/agent/src/turn.rs: 15
       - crates/core/src/policy.rs: 9
   - symbol: Policy::render_in_place
     sites:

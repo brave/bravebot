@@ -2237,3 +2237,356 @@ fn other_skill_names_is_empty_for_a_curated_catalogue() {
         curated.other_skill_names()
     );
 }
+
+/// Write a skill with its own description, whose frontmatter also carries the lines given. The
+/// description is what a test looks for in a prompt, so it is one nothing else there contains.
+fn write_described(root: &Path, dir: &str, description: &str, lines: &str) {
+    let at = root.join("skills").join(dir);
+    std::fs::create_dir_all(&at).expect("create skill directory");
+    std::fs::write(
+        at.join("SKILL.md"),
+        format!("---\nname: {dir}\ndescription: {description}\n{lines}---\n\nthe body\n"),
+    )
+    .expect("write skill");
+}
+
+/// Resolve the skills of a home directory the way a turn does, with no project.
+fn found_in(home: &Path, project: &Path) -> (skills::Catalogue, Vec<skills::Notice>) {
+    let workspace = Workspace::new(project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = policy(&mut sink, &[]);
+    skills::discover(&mut policy, &workspace, Some(home))
+}
+
+/// A skill whose file says `disable-model-invocation: true` is kept from the planner: neither its
+/// name nor its description is in the lines the prompt carries. The ordinary skill beside it is the
+/// control, since a prompt that advertised nothing would pass for the skill being left out.
+#[test]
+fn a_skill_kept_from_the_planner_is_left_out_of_what_the_prompt_advertises() {
+    let scratch = Scratch::new("person-only-advertised");
+    let home = scratch.home();
+    write_described(
+        &home,
+        "ship-it",
+        "DEPLOYS-TO-PRODUCTION",
+        "disable-model-invocation: true\n",
+    );
+    write_described(&home, "commit-style", "HOW-COMMITS-READ", "");
+
+    let (catalogue, notices) = found_in(&home, &scratch.workspace());
+    // Listed in full only where a definition's `skills:` line curated the set (SKILL-18), so that
+    // the ordinary skill is a line in the prompt for the control to find.
+    let curated = catalogue
+        .clone()
+        .only(&["ship-it".to_string(), "commit-style".to_string()]);
+    let advertised = curated.describe_for_prompt();
+
+    assert!(
+        notices.is_empty(),
+        "a notice for a usable value: {notices:?}"
+    );
+    assert!(
+        advertised.contains("commit-style") && advertised.contains("HOW-COMMITS-READ"),
+        "the ordinary skill was not advertised, so this proves nothing: {advertised}"
+    );
+    assert!(
+        !advertised.contains("ship-it") && !advertised.contains("DEPLOYS-TO-PRODUCTION"),
+        "a skill kept from the planner was advertised: {advertised}"
+    );
+    // Found by a search as an ordinary skill is, and never as one kept from the planner, whose
+    // name and description reach the planner by no route.
+    assert_eq!(catalogue.search("commit-style").0.len(), 1);
+    assert!(
+        catalogue.search("ship-it").0.is_empty() && catalogue.search("DEPLOYS").0.is_empty(),
+        "a search found a skill kept from the planner"
+    );
+    assert_eq!(catalogue.other_skill_names(), ["commit-style"]);
+    assert!(
+        catalogue.get("ship-it").expect("still found").person_only,
+        "the key was read and the skill not marked"
+    );
+    assert!(!catalogue.get("commit-style").expect("found").person_only);
+}
+
+/// Only `true` keeps a skill from the planner. A `false`, a blank value and no key at all leave it
+/// advertised, and the case of the word does not matter. A reading that took the key's presence for a
+/// yes would hide the skill a person wrote `false` to keep available.
+#[test]
+fn only_a_true_value_keeps_a_skill_from_the_planner() {
+    let scratch = Scratch::new("person-only-values");
+    let home = scratch.home();
+    for (dir, line) in [
+        ("lower", "disable-model-invocation: true\n"),
+        ("upper", "disable-model-invocation: TRUE\n"),
+        ("title", "disable-model-invocation: \"True\"\n"),
+        ("off", "disable-model-invocation: false\n"),
+        ("blank", "disable-model-invocation:\n"),
+        ("absent", ""),
+    ] {
+        write_described(&home, dir, "when to use it", line);
+    }
+
+    let (catalogue, notices) = found_in(&home, &scratch.workspace());
+
+    assert!(
+        notices.is_empty(),
+        "a notice for a usable value: {notices:?}"
+    );
+    let kept: Vec<&str> = catalogue
+        .iter()
+        .filter(|skill| skill.person_only)
+        .map(|skill| skill.name.as_str())
+        .collect();
+    assert_eq!(kept, ["lower", "title", "upper"]);
+}
+
+/// A word that is neither `true` nor `false` is said back and read as `true`. The key exists to keep a
+/// skill with side effects from being chosen by a model, so a misspelling that left the skill
+/// advertised would expose the skill the key was written to protect, and the person can still name it.
+#[test]
+fn a_value_that_is_neither_true_nor_false_keeps_the_skill_from_the_planner_and_is_reported() {
+    let scratch = Scratch::new("person-only-unreadable");
+    let home = scratch.home();
+    write_described(
+        &home,
+        "ship-it",
+        "DEPLOYS-TO-PRODUCTION",
+        "disable-model-invocation: yes\n",
+    );
+
+    let (catalogue, notices) = found_in(&home, &scratch.workspace());
+
+    let skill = catalogue.get("ship-it").expect("the skill was dropped");
+    assert!(
+        skill.person_only,
+        "an unreadable value left the skill advertised"
+    );
+    assert!(
+        !catalogue
+            .clone()
+            .only(&["ship-it".to_string()])
+            .describe_for_prompt()
+            .contains("DEPLOYS-TO-PRODUCTION")
+            && catalogue.search("DEPLOYS-TO-PRODUCTION").0.is_empty(),
+        "an unreadable value left the skill advertised"
+    );
+    assert_eq!(notices.len(), 1, "expected one notice: {notices:?}");
+    assert!(
+        notices[0].message.contains("yes") && notices[0].message.contains("ship-it"),
+        "the notice names neither the word nor the file: {}",
+        notices[0].message
+    );
+}
+
+/// A trailing YAML comment is not part of the value. A file written for another agent says
+/// `false # keep available` and means false, so reading the whole line as an unknown word would hide
+/// a skill its author left open to the planner and report it every turn. `true # only me` is the
+/// same line the other way round, and a quoted word with a comment after it is the word. A value that
+/// is only a comment is blank, which is no value. A `#` inside a word is not a comment, so it is still
+/// an unknown word.
+#[test]
+fn a_trailing_comment_is_not_part_of_the_value() {
+    let scratch = Scratch::new("person-only-comment");
+    let home = scratch.home();
+    for (dir, line) in [
+        ("open", "disable-model-invocation: false # keep available\n"),
+        (
+            "quoted-open",
+            "disable-model-invocation: \"false\" # keep available\n",
+        ),
+        ("nothing", "disable-model-invocation: # nothing here\n"),
+        ("two", "disable-model-invocation: false\t# a # b\n"),
+        ("closed", "disable-model-invocation: true # only me\n"),
+        (
+            "quoted-closed",
+            "disable-model-invocation: 'true' # only me\n",
+        ),
+        ("tabbed", "disable-model-invocation: true\t# only me\n"),
+        ("glued", "disable-model-invocation: true#only-me\n"),
+    ] {
+        write_described(&home, dir, "when to use it", line);
+    }
+
+    let (catalogue, notices) = found_in(&home, &scratch.workspace());
+
+    let kept: Vec<&str> = catalogue
+        .iter()
+        .filter(|skill| skill.person_only)
+        .map(|skill| skill.name.as_str())
+        .collect();
+    assert_eq!(
+        kept,
+        ["closed", "glued", "quoted-closed", "tabbed"],
+        "a comment changed the value"
+    );
+    assert_eq!(
+        notices.len(),
+        1,
+        "expected a notice for the glued word alone: {notices:?}"
+    );
+    assert!(
+        notices[0].message.contains("glued"),
+        "{}",
+        notices[0].message
+    );
+}
+
+/// The key is read, so `doctor` has nothing to report about it: a key reported as unread says the
+/// line does nothing while the turn is running on it.
+#[test]
+fn the_key_is_read_and_not_carried_out_as_unread() {
+    let scratch = Scratch::new("person-only-read");
+    let home = scratch.home();
+    write_described(
+        &home,
+        "ship-it",
+        "when to use it",
+        "disable-model-invocation: true\nlicense: MPL-2.0\n",
+    );
+
+    let (catalogue, _) = found_in(&home, &scratch.workspace());
+
+    assert_eq!(
+        catalogue.get("ship-it").expect("found").unread,
+        ["license"],
+        "the key was carried out as unread, or the one nothing reads was lost"
+    );
+}
+
+/// What an interface lists is the set a turn would resolve, and that set still holds the skill, marked
+/// so the list can say only the person may have it loaded (SKILL-14). A set that dropped it would leave
+/// a person with no way to find the name to type.
+#[test]
+fn the_set_an_interface_resolves_still_holds_a_skill_kept_from_the_planner() {
+    let scratch = Scratch::new("person-only-listed");
+    let home = scratch.home();
+    write_described(
+        &home,
+        "ship-it",
+        "DEPLOYS-TO-PRODUCTION",
+        "disable-model-invocation: true\n",
+    );
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let interface = skills::offered(
+        &workspace,
+        Some(&home),
+        TrustStore::new("/work"),
+        Default::default(),
+        &mut sink,
+    );
+
+    let skill = interface.get("ship-it").expect("the list lost the skill");
+    assert!(
+        skill.person_only,
+        "the list cannot tell the skill is the person's alone"
+    );
+    assert_eq!(skill.description, "DEPLOYS-TO-PRODUCTION");
+}
+
+/// A word of the line names a skill as the whole of `/name`, with the quotes, brackets and sentence
+/// punctuation around it taken off, because a person ends a sentence with the name and a skill that
+/// loaded for `/name` and not for `/name.` would fail in silence. A prefix, another case, a longer name
+/// and the bare name each select nothing, since guessing would load instructions nobody asked for
+/// (LOAD-2). The skills the line names are exactly the ones that were found and kept from the planner:
+/// an ordinary skill is not named this way, and a name that was never found cannot be.
+#[test]
+fn a_line_names_a_kept_skill_only_by_its_whole_name_after_a_slash() {
+    let scratch = Scratch::new("person-only-named");
+    let home = scratch.home();
+    write_described(
+        &home,
+        "ship-it",
+        "when to use it",
+        "disable-model-invocation: true\n",
+    );
+    write_described(
+        &home,
+        "deploy",
+        "when to use it",
+        "disable-model-invocation: true\n",
+    );
+    write_described(&home, "commit-style", "when to use it", "");
+
+    let (catalogue, _) = found_in(&home, &scratch.workspace());
+    let named = |line: &str| -> Vec<String> {
+        catalogue
+            .named_in(line)
+            .into_iter()
+            .map(|skill| skill.name)
+            .collect()
+    };
+
+    assert_eq!(named("/ship-it"), ["ship-it"]);
+    assert_eq!(named("please run /ship-it now"), ["ship-it"]);
+    assert_eq!(
+        named("/deploy then /ship-it"),
+        ["deploy", "ship-it"],
+        "found order"
+    );
+    assert_eq!(named("/ship-it /ship-it"), ["ship-it"], "named once");
+    for punctuated in [
+        "tag it with /ship-it.",
+        "/ship-it,",
+        "/ship-it!",
+        "(/ship-it)",
+        "run `/ship-it` now",
+        "say \"/ship-it\" to start",
+        "is it /ship-it?",
+        "say \u{201c}/ship-it\u{201d}",
+        "then /ship-it\u{2026}",
+    ] {
+        assert_eq!(
+            named(punctuated),
+            ["ship-it"],
+            "{punctuated:?} did not name it"
+        );
+    }
+    for near in [
+        "ship-it",
+        "/ship",
+        "/ship-its",
+        "/Ship-It",
+        "/ship-it-now",
+        "/ship-it.md",
+        "/ship-it/",
+        "a/ship-it",
+        "//ship-it",
+        "/ ship-it",
+        "/commit-style",
+        "/nothing-by-this-name",
+        "",
+    ] {
+        assert_eq!(
+            named(near),
+            Vec::<String>::new(),
+            "{near:?} named a skill it is not the whole name of"
+        );
+    }
+}
+
+/// A catalogue holding only skills kept from the planner advertises none, so the prompt has no section
+/// of skills to name: its heading over an empty list would promise names that do not follow. One
+/// ordinary skill beside them is the control.
+#[test]
+fn a_catalogue_of_kept_skills_alone_advertises_nothing() {
+    let scratch = Scratch::new("person-only-alone");
+    let home = scratch.home();
+    write_described(
+        &home,
+        "ship-it",
+        "when to use it",
+        "disable-model-invocation: true\n",
+    );
+    write_described(&home, "commit-style", "when to use it", "");
+
+    let (catalogue, _) = found_in(&home, &scratch.workspace());
+    let kept_alone = catalogue.clone().only(&["ship-it".to_string()]);
+    let with_an_ordinary_one = catalogue.only(&["ship-it".to_string(), "commit-style".to_string()]);
+
+    assert_eq!(kept_alone.len(), 1, "the fixture lost the skill");
+    assert!(!kept_alone.advertises_any());
+    assert_eq!(kept_alone.describe_for_prompt(), "");
+    assert!(with_an_ordinary_one.advertises_any());
+}

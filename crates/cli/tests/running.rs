@@ -8355,7 +8355,7 @@ fn doctor_says_nothing_of_a_skill_with_every_key_read_or_one_a_turn_drops() {
         .with_file(
             ".bravebot/skills/tidy/SKILL.md",
             "---\nname: tidy\ndescription: every key is one this reads\nmodel: haiku\n\
-             argument-hint: <file>\n---\n\nthe body\n",
+             argument-hint: <file>\ndisable-model-invocation: true\n---\n\nthe body\n",
         )
         .with_file(
             ".bravebot/skills/broken/SKILL.md",

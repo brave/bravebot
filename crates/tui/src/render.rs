@@ -6665,12 +6665,14 @@ mod tests {
                     description: "Draft the notes\nfrom the \u{1b}[31mchangelog, ".repeat(8),
                     argument_hint: None,
                     source: Source::Workspace.into(),
+                    person_only: false,
                 },
                 crate::skills::Skill {
                     name: "release-check".to_string(),
                     description: "Check a tag".to_string(),
                     argument_hint: None,
                     source: Source::Home.into(),
+                    person_only: false,
                 },
             ]
         });
@@ -6769,6 +6771,48 @@ mod tests {
         }
     }
 
+    /// A skill its file keeps from the planner is drawn with that said beside where it was found, so a
+    /// person choosing one to name knows only they can have it loaded (SKILL-20). The ordinary skill
+    /// beside it is the control: a mark on every row says nothing about either.
+    #[test]
+    fn a_skill_row_says_when_only_the_person_can_have_it_loaded() {
+        use bravebot_agent::skills::Source;
+        let mut session = Session::new("none");
+        for c in "/ship".chars() {
+            session.type_char(c);
+        }
+        session.settle_skills(|| {
+            ["ship-it", "ship-notes"]
+                .map(|name| crate::skills::Skill {
+                    name: name.to_string(),
+                    description: "Put it live".to_string(),
+                    argument_hint: None,
+                    person_only: name == "ship-it",
+                    source: Source::Workspace.into(),
+                })
+                .to_vec()
+        });
+
+        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered())
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows[0].contains("/ship-it"), "{rows:?}");
+        assert!(
+            rows[0].ends_with("Put it live (project) (only you)"),
+            "{rows:?}"
+        );
+        assert!(rows[1].contains("/ship-notes"), "{rows:?}");
+        assert!(rows[1].ends_with("Put it live (project)"), "{rows:?}");
+    }
+
     /// The first row of the box after its border and prompt, one cell to an entry with the colour
     /// it is drawn in.
     fn input_cells_at(session: &Session, width: u16, height: u16) -> Vec<(String, Color)> {
@@ -6824,6 +6868,7 @@ mod tests {
             description: format!("what {name} is for"),
             argument_hint: hint.map(str::to_string),
             source: Source::Home.into(),
+            person_only: false,
         })
         .collect()
     }
@@ -6949,6 +6994,7 @@ mod tests {
         session.settle_skills(|| {
             vec![crate::skills::Skill {
                 argument_hint: Some("<a\u{1b}[31mb>".to_string()),
+                person_only: false,
                 ..skills_taking_arguments().remove(0)
             }]
         });

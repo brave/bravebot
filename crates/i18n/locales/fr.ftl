@@ -2387,7 +2387,11 @@ skill-from-project = (projet)
 skill-from-user = (utilisateur)
 skill-from-built-in = (intégré)
 skill-from-mcp-server = (MCP { $alias })
+skill-person-only = (vous seul)
 skill-effort-not-a-level = { $skill } demande l'effort { $effort }, qui n'est aucun de { $levels }, donc ses tours gardent celui de cette session
+skill-person-only-not-a-boolean = { $skill } donne à disable-model-invocation la valeur { $value }, qui n'est ni true ni false, donc elle n'est pas proposée au planificateur
+skill-named-by-the-person = { $skill } est chargée parce que vous l'avez nommée
+turn-named-skill-not-shown = { $skill } a été nommée mais n'a pas pu être montrée au planificateur
 skill-asks-a-model = { $skill } demande { $model } pour le reste de ce tour
 skill-asks-an-effort = { $skill } demande l'effort { $effort } pour le reste de ce tour
 skill-model-needs-sign-in = { $skill } demande { $model }, qui exige d'abord une connexion, donc ses tours gardent le modèle de cette session
@@ -3070,6 +3074,11 @@ delegate-skills-not-found =
     { $count ->
         [one] { $definition } nomme une compétence que cette session n'a pas trouvée, si bien qu'elle n'est pas proposée à son délégué : { $skills }
        *[other] { $definition } nomme des compétences que cette session n'a pas trouvées, si bien qu'elles ne sont pas proposées à son délégué : { $skills }
+    }
+delegate-skills-kept-from-the-planner =
+    { $count ->
+        [one] { $definition } nomme une compétence que son fichier garde hors de portée du planificateur, si bien qu'elle n'est pas proposée à son délégué : { $skills }
+       *[other] { $definition } nomme des compétences que leurs fichiers gardent hors de portée du planificateur, si bien qu'elles ne sont pas proposées à son délégué : { $skills }
     }
 delegate-servers-not-found =
     { $count ->

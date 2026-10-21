@@ -2825,6 +2825,8 @@ skill-from-project = (project)
 skill-from-user = (user)
 skill-from-built-in = (built-in)
 skill-from-mcp-server = (MCP { $alias })
+# Beside where it was found, on a skill row whose file says only the person may have it loaded.
+skill-person-only = (only you)
 
 
 ## What the session says back
@@ -3686,6 +3688,14 @@ delegate-skills-not-found =
         [one] { $definition } names a skill this session did not find, so its delegate is offered without it: { $skills }
        *[other] { $definition } names skills this session did not find, so its delegate is offered without them: { $skills }
     }
+# A definition's skills line named skills whose files keep them from the planner, so no delegate is
+# offered them. The definition is its file's path and the skills are that file's own words, joined
+# with a comma, both from a vouched-for file.
+delegate-skills-kept-from-the-planner =
+    { $count ->
+        [one] { $definition } names a skill its file keeps from the planner, so its delegate is offered without it: { $skills }
+       *[other] { $definition } names skills their files keep from the planner, so its delegate is offered without them: { $skills }
+    }
 # A definition's mcpServers line named servers this session did not reach. The definition is its
 # file's path and the servers are that file's own words, joined with a comma, both from a
 # vouched-for file. "MCP" is a protocol's name and stays as it is.
@@ -3763,6 +3773,18 @@ delegate-memory-in-checkout = { $definition } keeps its memory only in a turn yo
 # An effort word naming none of the five levels. The levels are this program's own names for them,
 # joined with a comma, and are not translated: they are what a file has to write to be understood.
 skill-effort-not-a-level = { $skill } asks for effort { $effort }, which is none of { $levels }, so its rounds keep this session's
+# A skill's disable-model-invocation holds a word that is neither true nor false. It is read as true,
+# so the planner is not offered the skill and the person can still name it. The skill is its file's
+# path and the value is that file's own word, both from a source somebody vouched for.
+skill-person-only-not-a-boolean = { $skill } sets disable-model-invocation to { $value }, which is neither true nor false, so the planner is not offered it
+# A skill only the person may have loaded was named as /name in the line they typed, so the driver
+# put its instructions in front of the planner. Said because nothing else on the screen shows a skill
+# was loaded: no tool call is drawn for it. The skill is its file's name, from a vouched-for source.
+skill-named-by-the-person = { $skill } is loaded because you named it
+# A skill the person named could not be shown to the planner, which a skill passing the trusted-content
+# gate cannot be. The turn stops rather than goes on without a skill the person asked for. The skill
+# is its file's name, from a vouched-for source.
+turn-named-skill-not-shown = { $skill } was named but could not be shown to the planner
 # A skill was loaded and asks the rest of the turn of a model of its own, over whatever the session
 # was running. Said because a switch nobody is told about is the person's money spent on a choice
 # they did not make.

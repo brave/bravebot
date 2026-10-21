@@ -119,6 +119,19 @@ pub enum Composed {
         /// The skill's name as the catalogue spells it.
         name: String,
     },
+    /// The instructions of a skill only the person may have loaded, put in front of the planner
+    /// because the person typed its name as `/name` (SKILL-20).
+    ///
+    /// The name is the driver's own, taken from the catalogue entry the line was matched against and
+    /// never from the line or from the skill's text. A compaction reads it to find what the planner
+    /// was told to follow, as it does a skill the planner loaded (COMPACT-17).
+    ///
+    /// House-keeping for the planner: the line the person typed is already drawn as their prompt, and
+    /// no cut falls between the two.
+    SkillNamed {
+        /// The skill's name as the catalogue spells it.
+        name: String,
+    },
     /// A skill's text sent again after a summary, because the summary replaced the result that
     /// carried it (COMPACT-17).
     ///
@@ -193,6 +206,7 @@ impl Composed {
                 | Self::Resumed
                 | Self::Summary
                 | Self::Skill { .. }
+                | Self::SkillNamed { .. }
                 | Self::SkillKept { .. }
                 | Self::Notice
                 | Self::MessageSent { .. }
@@ -591,6 +605,21 @@ impl Conversation {
         self.push_composed_from(message, Composed::Skill { name }, source);
     }
 
+    /// Add the instructions of a skill the person named as `/name`, tagged with the skill, after
+    /// the line that named it.
+    ///
+    /// The name is the catalogue's, so a compaction can carry the skill's text across the summary
+    /// (COMPACT-17) without reading anything that was said. `body` is what the kernel let through.
+    pub fn push_named_skill(&mut self, name: &str, body: &str, source: Provenance) {
+        self.push_composed_from(
+            Message::user(format!("{}{body}", named_skill_header(name))),
+            Composed::SkillNamed {
+                name: name.to_string(),
+            },
+            source,
+        );
+    }
+
     /// Add the result of a `message_session` call whose message was delivered, tagged with who it
     /// went to and what it said (MSG-11).
     pub fn push_message_result(&mut self, message: Message, sent: Composed, source: Provenance) {
@@ -902,19 +931,25 @@ impl Conversation {
         let mut room = SKILLS_KEPT_BYTES;
         let mut carried = Vec::new();
         for stored in self.skill_loads(boundary).into_iter().rev() {
-            let Some(Composed::Skill { name }) = &stored.composed else {
+            let Some(name) = skill_loaded(stored) else {
                 continue;
             };
             let text = stored.message.content.text();
-            let body = text.strip_prefix(&header).unwrap_or(&text);
+            let body = text
+                .strip_prefix(&header)
+                .or_else(|| named_skill_body(&text))
+                .unwrap_or(&text);
             let limit = room.min(SKILL_KEPT_BYTES);
             if limit == 0 {
                 break;
             }
             let (shown, cut) = within(body, limit);
             room -= shown.len();
+            // A skill the person named is not one the planner loaded or may load, so it is said in
+            // other words, and the rest of one cut short is the person's to ask for again.
+            let named = matches!(stored.composed, Some(Composed::SkillNamed { .. }));
             carried.push(Stored {
-                message: Message::user(kept_skill(name, shown, cut)),
+                message: Message::user(kept_skill(name, shown, cut, named)),
                 composed: Some(Composed::SkillKept { name: name.clone() }),
                 source: stored.source.clone(),
             });
@@ -1541,10 +1576,35 @@ const MASK_RESULT_MIN_BYTES: usize = 500 * BYTES_PER_TOKEN;
 
 /// The skill a stored message is the result of loading, by its tag and its role.
 fn skill_loaded(stored: &Stored) -> Option<&String> {
-    match &stored.composed {
-        Some(Composed::Skill { name }) if stored.message.role == Role::Tool => Some(name),
+    match (&stored.composed, stored.message.role) {
+        (Some(Composed::Skill { name }), Role::Tool) => Some(name),
+        // A skill the person named is put in front of the planner as a message of the user's side,
+        // since no call of its own asked for it (SKILL-20).
+        (Some(Composed::SkillNamed { name }), Role::User) => Some(name),
         _ => None,
     }
+}
+
+/// A skill the person named, without the driver's paragraph in front of it, where `text` is one.
+///
+/// Read from the words the paragraph opens with and the blank line it ends at, so a later wording of
+/// the rest of it still finds the skill in a record an earlier build wrote.
+fn named_skill_body(text: &str) -> Option<&str> {
+    text.strip_prefix(NAMED_SKILL_OPENING)?
+        .split_once("\n\n")
+        .map(|(_, body)| body)
+}
+
+/// How the driver's paragraph in front of a skill the person named begins.
+const NAMED_SKILL_OPENING: &str = "The user named the skill ";
+
+/// What the driver writes in front of the instructions of a skill the person named. The whole of
+/// it is this program's own sentence; the skill's text follows it.
+fn named_skill_header(name: &str) -> String {
+    format!(
+        "{NAMED_SKILL_OPENING}{name} as /{name} in their line, so its instructions are given here. \
+         Apply them as that line asks.\n\n"
+    )
 }
 
 /// An estimate of how many bytes a token is, since nothing here has a tokeniser.
@@ -1583,20 +1643,33 @@ fn within(text: &str, limit: usize) -> (&str, bool) {
 }
 
 /// The words a skill is sent again in. The driver's, around the skill's text.
-fn kept_skill(name: &str, body: &str, cut: bool) -> String {
-    let ending = if cut {
-        format!(
+///
+/// A skill the planner loaded is its own to read again with `load_skill`. One the person named is
+/// not offered to it, so it is told the instructions are for the line that named it and that only the
+/// person can have the rest loaded again.
+fn kept_skill(name: &str, body: &str, cut: bool, named: bool) -> String {
+    let ending = match (cut, named) {
+        (false, _) => String::new(),
+        (true, false) => format!(
             "\n\nThe rest of this skill was left out to keep the request short. Call load_skill \
              with the name {name} to read all of it."
-        )
-    } else {
-        String::new()
+        ),
+        (true, true) => "\n\nThe rest of this skill was left out to keep the request short. Only \
+             the user can have it loaded again, by naming it in a line they type."
+            .to_string(),
     };
-    format!(
-        "You loaded the skill {name} earlier in this conversation, and the messages that held it \
-         are summarised above. Its instructions still apply. This is what you were given:\n\n\
-         {body}{ending}"
-    )
+    match named {
+        false => format!(
+            "You loaded the skill {name} earlier in this conversation, and the messages that held \
+             it are summarised above. Its instructions still apply. This is what you were given:\n\n\
+             {body}{ending}"
+        ),
+        true => format!(
+            "{NAMED_SKILL_OPENING}{name} earlier in this conversation, and the messages that held \
+             it are summarised above. Apply its instructions as the line that named it asked. This \
+             is what you were given:\n\n{body}{ending}"
+        ),
+    }
 }
 
 /// Whether a message begins a round, so a cut may fall in front of it: anything that is not the
@@ -1605,7 +1678,7 @@ fn opens_a_round(stored: &Stored) -> bool {
     stored.message.tool_call_id.is_none()
         && !matches!(
             stored.composed,
-            Some(Composed::ToolResult | Composed::SkillKept { .. })
+            Some(Composed::ToolResult | Composed::SkillNamed { .. } | Composed::SkillKept { .. })
         )
 }
 
@@ -1621,6 +1694,7 @@ fn opens_an_exchange(stored: &Stored) -> bool {
             Some(
                 Composed::ToolResult
                     | Composed::Resumed
+                    | Composed::SkillNamed { .. }
                     | Composed::SkillKept { .. }
                     | Composed::Notice
             )
@@ -3510,6 +3584,133 @@ mod tests {
         );
     }
 
+    /// COMPACT-17 and SKILL-20. A skill the person named is in the request as a message of its own, with
+    /// no call and no result, and a cut that takes it out sends it again as it sends one the planner
+    /// loaded. The copy holds the skill's words and not the driver's sentence that introduced them, so
+    /// the planner is not told the same thing twice around the same text.
+    #[test]
+    fn a_skill_the_person_named_is_sent_again_word_for_word_after_a_cut() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first /ship-it"));
+        conversation.push_named_skill(
+            "ship-it",
+            "always run the script\nthen tag",
+            Provenance::TrustedFile("project skill".to_string()),
+        );
+        // Long enough that giving the exchange up frees more than the copy of the skill costs
+        // (COMPACT-5 weighs bytes).
+        conversation.push(Message::assistant("done ".repeat(400)));
+        for prompt in ["second", "third", "fourth", "fifth"] {
+            an_exchange(&mut conversation, prompt);
+        }
+
+        compact_now(&mut conversation);
+
+        let kept = kept_skills(&conversation);
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(kept[0].0, "ship-it");
+        assert!(
+            kept[0].1.contains("always run the script\nthen tag"),
+            "{kept:?}"
+        );
+        assert!(
+            !kept[0].1.contains("in their line"),
+            "the driver's introduction was carried as though it were the skill: {kept:?}"
+        );
+        // Said as the person's request and not as the planner's own load, and still as something to
+        // apply as the line asked, so a line that refused the skill is not read as an order for it.
+        assert!(
+            kept[0].1.starts_with("The user named the skill ship-it")
+                && kept[0]
+                    .1
+                    .contains("Apply its instructions as the line that named it asked")
+                && !kept[0].1.contains("You loaded"),
+            "a skill the person named was carried as one the planner loaded: {kept:?}"
+        );
+        let sent = conversation.with_system("be careful");
+        assert_eq!(
+            sent.iter()
+                .filter(|m| m.content.text().contains("always run the script"))
+                .count(),
+            1,
+            "the skill was sent twice or not at all: {sent:?}"
+        );
+    }
+
+    /// A skill cut to the bound tells the planner how to read the rest, and the answer depends on who may
+    /// load it. One the planner loaded is read with `load_skill`; one the person named is not offered
+    /// to the planner in a turn that does not name it, so sending the planner to `load_skill` would
+    /// send it to a refusal.
+    #[test]
+    fn the_cut_of_a_skill_says_who_can_read_the_rest() {
+        let long = "x".repeat(SKILL_KEPT_BYTES + 100);
+
+        // As long as the cut skill is, so that giving the exchange up frees more than its copy costs.
+        let answer = "done ".repeat(SKILL_KEPT_BYTES / 2);
+        let mut loaded = Conversation::new();
+        loaded.push(Message::user("first"));
+        a_skill_load(&mut loaded, "c1", "commit-style", &long);
+        loaded.push(Message::assistant(answer.clone()));
+        let mut named = Conversation::new();
+        named.push(Message::user("first /ship-it"));
+        named.push_named_skill("ship-it", &long, Provenance::Trusted("skill"));
+        named.push(Message::assistant(answer));
+        for conversation in [&mut loaded, &mut named] {
+            for prompt in ["second", "third", "fourth", "fifth"] {
+                an_exchange(conversation, prompt);
+            }
+            compact_now(conversation);
+        }
+
+        let loaded = kept_skills(&loaded);
+        assert!(
+            loaded[0]
+                .1
+                .contains("Call load_skill with the name commit-style"),
+            "a skill the planner loaded was not pointed at load_skill: {:?}",
+            loaded[0].1
+        );
+        let named = kept_skills(&named);
+        assert!(
+            named[0]
+                .1
+                .contains("Only the user can have it loaded again")
+                && !named[0].1.contains("Call load_skill"),
+            "a skill the person named was pointed at a call that is refused: {:?}",
+            named[0].1
+        );
+    }
+
+    /// No cut falls between the line a person typed and the skill it named, since the skill belongs to
+    /// that exchange and a cut in front of it would leave the exchange without the instructions it
+    /// asked for. Decided from the tag, as it is for every message the driver writes.
+    #[test]
+    fn a_cut_never_falls_in_front_of_a_skill_the_person_named() {
+        let named = Stored {
+            message: Message::user("The user named the skill ship-it as /ship-it"),
+            composed: Some(Composed::SkillNamed {
+                name: "ship-it".to_string(),
+            }),
+            source: None,
+        };
+
+        assert!(
+            !opens_an_exchange(&named),
+            "a cut may fall in front of it as an exchange"
+        );
+        assert!(
+            !opens_a_round(&named),
+            "a cut may fall in front of it as a round"
+        );
+        let typed = Stored::plain(Message::user(
+            "The user named the skill ship-it as /ship-it",
+        ));
+        assert!(
+            opens_an_exchange(&typed) && opens_a_round(&typed),
+            "the same words typed by a person are an exchange, so this tests the tag"
+        );
+    }
+
     /// Loaded twice, a skill is one set of instructions. The newer load is the one in force.
     #[test]
     fn a_skill_loaded_twice_is_sent_once_from_its_newer_load() {
@@ -3877,6 +4078,49 @@ mod tests {
         let kept = kept_skills(&restored);
         assert_eq!(kept.len(), 1, "{kept:?}");
         assert!(kept[0].1.contains("always sign"));
+    }
+
+    /// A skill the person named is carried as a loaded one is: through a session written down and read
+    /// back, and through a second cut, where the copy the first cut made is not the one carried again
+    /// but the message it was made from.
+    #[test]
+    fn a_skill_the_person_named_survives_being_written_down_and_a_second_cut() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("first /ship-it"));
+        conversation.push_named_skill(
+            "ship-it",
+            "always run the script",
+            Provenance::Trusted("skill"),
+        );
+        conversation.push(Message::assistant("done ".repeat(400)));
+        for prompt in ["second", "third", "fourth", "fifth"] {
+            an_exchange(&mut conversation, prompt);
+        }
+
+        let written = serde_json::to_string(&conversation.snapshot()).expect("written");
+        let snapshot: Snapshot = serde_json::from_str(&written).expect("read back");
+        let mut restored = Conversation::restored(snapshot);
+        compact_now(&mut restored);
+        assert_eq!(
+            kept_skills(&restored).len(),
+            1,
+            "{:?}",
+            kept_skills(&restored)
+        );
+
+        let mut exchanges = 0;
+        while restored.compaction_boundary().is_none() {
+            an_exchange(&mut restored, &format!("more {exchanges}"));
+            exchanges += 1;
+        }
+        compact_now(&mut restored);
+
+        let kept = kept_skills(&restored);
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert!(
+            kept[0].1.contains("always run the script") && !kept[0].1.contains("in their line"),
+            "the second cut carried a copy of a copy: {kept:?}"
+        );
     }
 
     /// The tag is believed only on a tool result. A user message carrying it, which only an edited

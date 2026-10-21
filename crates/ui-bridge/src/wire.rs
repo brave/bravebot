@@ -387,6 +387,7 @@ fn said(said: &Said) -> Value {
                 | Composed::Summary
                 | Composed::Imported
                 | Composed::Skill { .. }
+                | Composed::SkillNamed { .. }
                 | Composed::SkillKept { .. }
                 | Composed::Notice
                 | Composed::MessageSent { .. }

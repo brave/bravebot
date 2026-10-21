@@ -308,13 +308,19 @@ fn slash_lines(
         let chosen = highlighted.as_ref() == Some(skill);
         let word = skill_word(skill);
         let padding = column.saturating_sub(word.chars().count()) + 2;
-        let from = match &skill.source {
+        let found = match &skill.source {
             Origin::Skill(Source::Workspace) => t!(skill_from_project).to_string(),
             Origin::Skill(Source::Home) => t!(skill_from_user).to_string(),
             Origin::Skill(Source::BuiltIn) => t!(skill_from_built_in).to_string(),
             Origin::Server { alias, .. } => {
                 t!(skill_from_mcp_server, alias = alias.as_str()).to_string()
             }
+        };
+        // After where it was found, so the row says both: a skill the planner is kept from is one only
+        // this line can load (SKILL-20).
+        let from = match skill.person_only {
+            true => format!("{found} {}", t!(skill_person_only)),
+            false => found.to_string(),
         };
         // Cut rather than wrapped, since nothing below the box wraps, and cut short of the width so
         // where the skill came from is still on the row.

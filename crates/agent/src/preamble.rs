@@ -298,7 +298,7 @@ pub fn compose_in<S: Sink>(
         }
     }
 
-    if !skills.is_empty() {
+    if skills.advertises_any() {
         let find_more = if skills.is_curated() {
             "This is the whole set a definition named for this turn; there are no others to find."
         } else {

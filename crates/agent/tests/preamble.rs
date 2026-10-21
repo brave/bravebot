@@ -1353,6 +1353,63 @@ fn the_skills_section_points_at_search_skills_only_where_more_could_be_found() {
     );
 }
 
+/// A skill kept from the planner contributes nothing to the prompt: no line for it, and no section of
+/// skills at all where it is the only one the catalogue holds, since the heading would promise names that
+/// do not follow. The same catalogue with an ordinary skill beside it is the control, so a prompt that
+/// never had a section would not pass for the heading being left out.
+#[test]
+fn a_catalogue_holding_only_a_skill_kept_from_the_planner_has_no_section_of_skills() {
+    let scratch = Scratch::new("skill-kept-section");
+    let project = scratch.directory("project");
+    for (name, extra) in [
+        ("ship-it", "disable-model-invocation: true\n"),
+        ("commit-style", ""),
+    ] {
+        let at = project.join(".bravebot/skills").join(name);
+        std::fs::create_dir_all(&at).expect("create skill directory");
+        std::fs::write(
+            at.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: DESCRIPTION-OF-{name}\n{extra}---\n\nbody\n"),
+        )
+        .expect("write skill");
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let text_for = |names: &[&str]| {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink, &["."]);
+        let (catalogue, _) = bravebot_agent::skills::discover(&mut policy, &workspace, None);
+        let names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
+        let catalogue = catalogue.only(&names);
+        assert_eq!(catalogue.len(), names.len(), "the fixture lost a skill");
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &catalogue,
+            None,
+            None,
+            &Attribution::default(),
+        )
+        .text
+    };
+
+    let kept_alone = text_for(&["ship-it"]);
+    assert!(
+        !kept_alone.contains("Skills. Each is a set of instructions")
+            && !kept_alone.contains("ship-it")
+            && !kept_alone.contains("DESCRIPTION-OF-ship-it"),
+        "a skill kept from the planner reached the prompt: {kept_alone}"
+    );
+    let with_an_ordinary_one = text_for(&["ship-it", "commit-style"]);
+    assert!(
+        with_an_ordinary_one.contains("Skills. Each is a set of instructions")
+            && with_an_ordinary_one.contains("DESCRIPTION-OF-commit-style")
+            && !with_an_ordinary_one.contains("DESCRIPTION-OF-ship-it"),
+        "the ordinary skill was not advertised, or the kept one was: {with_an_ordinary_one}"
+    );
+}
+
 /// Empty is the value the block exists to carry, so a planner that is told nothing when a person
 /// wrote `""` has had the one thing they configured discarded on the way to the only context it
 /// could have acted in. The other half matters as much: `pr` was left unwritten, and saying

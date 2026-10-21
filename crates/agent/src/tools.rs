@@ -10355,7 +10355,10 @@ fn load_skill<S: Sink>(
         return produced;
     }
 
-    let Some(skill) = skills.get(&name) else {
+    // A skill kept from the planner is answered as a name that matches nothing, whether or not the
+    // person named it: they are supplied for the line that names them, so there is nothing for a
+    // call to load and nothing it may learn about the skill (SKILL-20).
+    let Some(skill) = skills.get(&name).filter(|skill| !skill.person_only) else {
         // A built-in is listed in the system prompt; the rest are found with search_skills
         // (SKILL-18). Either way the name has to come from one of those two, so this is a
         // mistake worth naming rather than a refusal worth explaining.
@@ -10368,24 +10371,7 @@ fn load_skill<S: Sink>(
     let note = note_for(policy, "load_skill", skill.body(), |text: String| {
         tally(text.lines().count(), "line", "lines")
     });
-    // The files beside the skill, as the driver found them before the turn began (LOAD-4). A name is
-    // written into the result in the kernel, after the body, so the body keeps the label it was read
-    // with and the names are the driver's own list and never a lookup of the planner's.
-    let body = match (&skill.directory, skill.files.is_empty()) {
-        (Some(directory), false) => {
-            let listing = beside_the_skill(directory, &skill.files);
-            policy.render_in_place("load_skill", skill.body(), |text| {
-                format!("{text}{listing}")
-            })
-        }
-        _ => skill.body().clone(),
-    };
-    // The way into those files for a skill of the user's own: a read of one, which no read reaches
-    // otherwise. For a project's skill the files are inside the workspace already and the trust map
-    // decides each, as it does any other read.
-    if let Some(reach) = skill.reach() {
-        policy.reach_skill_directory(reach);
-    }
+    let body = opened_skill(policy, skill);
     let mut produced = Produced::new(body, skill.origin.clone(), note);
     produced.skill = Some(skill.name.clone());
     // Carried out rather than acted on here. The rounds after this one are the turn's to ask, and a
@@ -10446,6 +10432,38 @@ fn search_skills<S: Sink>(
         ));
     }
     Produced::new(Labelled::trusted(text), String::new(), note)
+}
+
+/// A skill's instructions as the planner is given them, and the reach into its directory that
+/// being given them brings.
+///
+/// Shared by `load_skill` and by a turn supplying a skill the person named (SKILL-20), so the two
+/// give the planner the same text and the same reach.
+///
+/// The files beside the skill are named as the driver found them before the turn began (LOAD-4). A
+/// name is written into the result in the kernel, after the body, so the body keeps the label it was
+/// read with and the names are the driver's own list and never a lookup of the planner's.
+///
+/// The reach is the way into those files for a skill of the user's own: a read of one, which no read
+/// reaches otherwise. For a project's skill the files are inside the workspace already and the trust
+/// map decides each, as it does any other read.
+pub(crate) fn opened_skill<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    skill: &crate::skills::Skill,
+) -> Labelled<String> {
+    let body = match (&skill.directory, skill.files.is_empty()) {
+        (Some(directory), false) => {
+            let listing = beside_the_skill(directory, &skill.files);
+            policy.render_in_place("load_skill", skill.body(), |text| {
+                format!("{text}{listing}")
+            })
+        }
+        _ => skill.body().clone(),
+    };
+    if let Some(reach) = skill.reach() {
+        policy.reach_skill_directory(reach);
+    }
+    body
 }
 
 /// What follows a skill's body when it keeps other files beside its `SKILL.md`.
