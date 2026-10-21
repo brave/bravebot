@@ -3404,6 +3404,8 @@ paste-with-the-first-tick =
 paste-too-large = that picture is { $size }, and a paste carries at most { $limit }
 attachment-too-large = { $name } is { $size }, and an attachment carries at most { $limit }
 paste-nothing-on-clipboard = there is nothing on the clipboard to paste
+paste-files-refused =
+    a copied file's name is not text or holds a line break, so none of the files were pasted
 return-not-pressed =
     that return arrived with other keys, so it was not a press: press Enter to send this line, or Escape to clear it
 leave-not-pressed =
@@ -3437,7 +3439,7 @@ cli-prompt-invisible-removed = { $count ->
    *[other] removed { $count } invisible characters from the prompt -i gave
     }
 drop-name-not-written =
-    a dropped file's name holds a control character or one a terminal draws as nothing, so no path was written into the command
+    a dropped or copied file's name holds a control character or one a terminal draws as nothing, so no path was written into the command
 kilobytes = { $size } KB
 megabytes = { $size } MB
 gigabytes = { $size } GB

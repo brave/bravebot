@@ -21,7 +21,7 @@ growing further. It keeps growing while a turn runs.
 | Ctrl-Enter | mid-turn, stop the turn and send what is waiting as one turn |
 | Shift-Enter, Ctrl-J | start a new line without sending |
 | Ctrl-G | compose in `$VISUAL` or `$EDITOR` and take back what you saved |
-| Ctrl-V | paste what is on the clipboard, a picture included |
+| Ctrl-V | paste what is on the clipboard, a picture or a copied file included |
 | Ctrl-S | put the line away, bring back the one you put away, or search this workspace |
 | Escape | discard a half-typed prompt, keeping it for Up, or stop a running turn (with vi editing, from NORMAL mode) |
 | Ctrl-C | stop the nearest thing there is to stop, and leave when there is nothing left |

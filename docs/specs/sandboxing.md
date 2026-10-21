@@ -33,7 +33,7 @@ guards:
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 1
       - crates/sandbox/src/programs.rs: 19
-      - crates/tui/src/clipboard.rs: 8
+      - crates/tui/src/clipboard.rs: 9
       - crates/tui/src/editor.rs: 2
   - symbol: find_in_with
     sites:
@@ -3472,6 +3472,7 @@ program is in, as when bravebot runs as root, none is found under a row of that 
 `verified-by: bravebot_tui::clipboard::the_clipboard_entry_points_start_no_tool_found_only_in_a_directory_a_stage_may_write`
 `verified-by: bravebot_tui::clipboard::a_copy_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_tui::clipboard::a_paste_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
+`verified-by: bravebot_tui::clipboard::the_reads_of_the_clipboard_start_no_tool_found_only_in_a_directory_a_stage_may_write`
 `verified-by: bravebot_cli::push_identity::the_checkout_holding_the_directory_is_left_out_with_it`
 `verified-by: bravebot_cli::push_identity::a_directory_under_no_checkout_is_left_out_by_itself`
 `verified-by: bravebot_cli::running::doctor_push_identity_starts_no_program_from_the_checkout_it_runs_in`

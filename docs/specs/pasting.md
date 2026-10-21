@@ -21,7 +21,8 @@ documented-by: docs/website/docs/using/context.md
 
 ## Scope
 
-What Ctrl-V puts into a turn, whether it is text or a picture, and on what footing. Pasted text is
+What Ctrl-V puts into a turn, whether it is text, a picture or files a file manager copied, and on
+what footing. Pasted text is
 presentation and holds no labels: it is the user's own words either way, and the only question is
 that the box stays readable. A pasted picture is a claim about provenance, and most of this spec is
 about that claim. A paste leaves a marker in the box, and deleting the marker takes the paste off.
@@ -120,10 +121,12 @@ the clipboard reader owns, and never from a filename or from what a tool printed
 
 The bridge's set is `PASTED_IMAGE_MEDIA` in the agent crate: `image/png`, `image/jpeg`,
 `image/gif` and `image/webp`. A front end's `media` string selects an entry, and the entry is what
-is sent; a string that matches none, `IMAGE/PNG` included, refuses the send.
+is sent; a string that matches none, `IMAGE/PNG` included, refuses the send. Every type the
+terminal's clipboard reader names ([PASTE-7](#PASTE-7)) is an entry.
 
 `verified-by: by-construction (the type is a static string from the clipboard reader's literals to the data URL it is formatted into, so a media type read from a filename or from what a tool printed does not compile)`
 `verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`
+`verified-by: bravebot_tui::clipboard::every_flavour_is_sent_as_a_media_type_the_turn_carries`
 
 
 <a id="PASTE-4"></a>
@@ -216,7 +219,20 @@ meant, except while the scroller ([SCROLL-2](scroller.md#SCROLL-2)), the delegat
 ([WATCH-9](watching.md#WATCH-9)), a picker ([CMD-8](commands.md#CMD-8)) or the prompt search
 ([INPUT-19](terminal-input.md#INPUT-19)) is open, where every paste is ignored and none reads the
 clipboard. A picture wins over text when the clipboard holds both, since copying an image in a browser
-leaves the page's URL behind as text and text has another key.
+leaves the page's URL behind as text and text has another key. Files the clipboard names win over
+both ([PASTE-12](#PASTE-12)).
+
+A picture is read in the first of the flavours the clipboard holds, tried in this order, and the
+flavour decides the media type, which is one of the reader's own literals ([PASTE-3](#PASTE-3)):
+PNG as `image/png`, then JPEG as `image/jpeg`, then on macOS TIFF. The system offers TIFF for a
+picture it holds in any form, so it is how a GIF or a HEIC is reached, and nothing here decodes it:
+AppKit writes it as PNG and it is sent as `image/png`. AppKit draws it only within the decode limits
+that [PASTE-6](#PASTE-6) holds a picture over the cap to, read from the header before anything is
+decoded, and a TIFF declaring more reads as no picture. A flavour the clipboard does not hold, or one
+that reads as empty, is the next one's turn, and the flavours after the first that answers are
+never read. Windows asks the system for whatever picture the clipboard holds and gets PNG. A JPEG
+over the cap is scaled down and sent as PNG, as a PNG is ([PASTE-6](#PASTE-6)), and the hint that
+Ctrl-V would paste a picture appears for any of the flavours.
 
 On macOS this reads the pasteboard through `osascript`. On Linux it needs `wl-paste` or `xclip`.
 
@@ -227,6 +243,22 @@ On macOS this reads the pasteboard through `osascript`. On Linux it needs `wl-pa
 `verified-by: bravebot_tui::app::which_key_carries_a_picture_is_said_once_per_session`
 `verified-by: bravebot_tui::clipboard::a_picture_wins_over_the_text_beside_it`
 `verified-by: bravebot_tui::clipboard::the_text_beside_a_picture_is_never_read`
+`verified-by: bravebot_tui::clipboard::a_png_is_read_before_a_jpeg_beside_it`
+`verified-by: bravebot_tui::clipboard::a_clipboard_holding_only_a_jpeg_yields_that_picture`
+`verified-by: bravebot_tui::clipboard::a_flavour_that_reads_as_empty_is_not_a_picture`
+`verified-by: bravebot_tui::clipboard::a_clipboard_holding_no_picture_flavour_yields_none`
+`verified-by: bravebot_tui::clipboard::a_tiff_is_sent_as_the_png_the_platform_wrote_it_as`
+`verified-by: bravebot_tui::clipboard::a_jpeg_is_decoded_and_scaled_down_to_a_png_as_a_png_over_the_cap_is`
+`verified-by: bravebot_tui::clipboard::a_pasteboard_holding_a_png_is_read_as_that_png`
+`verified-by: bravebot_tui::clipboard::a_pasteboard_holding_only_a_jpeg_is_read_as_that_jpeg`
+`verified-by: bravebot_tui::clipboard::a_pasteboard_holding_only_a_tiff_is_read_as_a_png_of_the_same_picture`
+`verified-by: bravebot_tui::clipboard::a_pasteboard_holding_only_text_reads_as_no_picture`
+`verified-by: bravebot_tui::clipboard::a_pasteboard_holding_a_tiff_declaring_a_canvas_past_the_limit_is_not_drawn`
+`verified-by: bravebot_tui::clipboard::a_pasteboard_offering_any_picture_flavour_is_said_to_hold_an_image`
+`verified-by: bravebot_tui::clipboard::a_jpeg_only_clipboard_yields_a_picture_through_wl_paste`
+`verified-by: bravebot_tui::clipboard::a_jpeg_only_clipboard_yields_a_picture_through_xclip`
+`verified-by: bravebot_tui::clipboard::a_png_is_asked_for_before_a_jpeg_through_the_tools`
+`verified-by: bravebot_tui::clipboard::a_clipboard_offering_a_jpeg_is_said_to_hold_an_image`
 `verified-by: bravebot_tui::clipboard::a_picture_over_the_cap_that_will_not_decode_is_refused_rather_than_swapped_for_the_text`
 `verified-by: bravebot_tui::clipboard::text_alone_is_the_paste`
 `verified-by: bravebot_tui::clipboard::an_empty_clipboard_reads_as_nothing_rather_than_as_empty_text`
@@ -351,6 +383,82 @@ carries one to the planner (PASTE-6): the bridge's `manifest.run` takes a task a
 `verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`
 `verified-by: by-construction (the preload and the renderer are not crates this workspace compiles, so ui/scripts/pastes.test.mjs pins the shared counter, the markers, and the main process's grants, its re-encode, its stripping of a window's images, and its use of the answer, type, noun and note a stub bridge gives with values the agent does not use, and fails if any file under ui/src says a size in megabytes; ui/scripts/drive-paste.mjs pastes from the real clipboard into the real app and bridge against a stub model, asserts an oversized picture is refused with the bridge's note, and asserts a page-dispatched paste stages nothing; make check-ui runs the tests)`
 
+<a id="PASTE-12"></a>
+### PASTE-12: a file the clipboard names is treated as a drop
+
+When Ctrl-V finds files on the clipboard, as copying a file in Finder, Explorer or a Linux file
+manager leaves, the paths are put to the terminal's drop handling as the line a paste of them would
+have been ([DROP-7](dropping.md#DROP-7)), and that is the only gate they pass. Each file is then
+read under a drop's rules ([DROP-4](dropping.md#DROP-4)): a picture or a PDF is carried as bytes, a
+text file becomes context, and any other type has its path written into the line. Each leaves a
+drop's rule in the trust map ([DROP-2](dropping.md#DROP-2)) and may be from outside the workspace
+([DROP-3](dropping.md#DROP-3)). In shell mode the paths are written as words and nothing is staged
+([DROP-6](dropping.md#DROP-6)), and the markers, the numbering and the order are a drop's. The
+clipboard's own bytes for a file are never read, so nothing goes through the gate
+[PASTE-2](#PASTE-2) states, which still admits a picture a person pasted and nothing else.
+
+The files win over a picture and over the text beside them, since copying a file leaves its name
+behind as text as copying an image in a browser leaves its page. A path is taken when it is
+absolute and names a regular file. One that is not, a directory ([DROP-5](dropping.md#DROP-5)) or a
+file that is gone, is left out, and a clipboard left with none is read as the rest of it would be.
+A name that is not text, or that holds a line break, refuses the whole copy with a note that none
+of the files were pasted, and the text beside it is not pasted in its place. A name that is not
+UTF-8 has no spelling as text, and what it arrives as, a name holding U+FFFD, is the name of
+another file or of none, so a name holding U+FFFD is refused as the desktop window refuses it
+([DROP-12](dropping.md#DROP-12)), whether or not a file has that name. A newline or a carriage
+return would end the line a drop is read from and begin another, so that a file named
+`a<newline>/etc/hosts` would be taken for two. Refusing the whole copy is for the reason
+[DROP-6](dropping.md#DROP-6) refuses the whole drop: the files taken would not be the files
+copied. Any other control character is the drop handling's to judge, so a copied name holding one
+refuses a shell line as a dragged one does. A file gone by the time the line is read says there is
+nothing on the clipboard to paste. It applies while a turn runs, as every Ctrl-V does
+([PASTE-7](#PASTE-7)).
+
+The files are read from the macOS pasteboard's file URLs through `osascript`, on Linux from the
+`text/uri-list` or the GNOME file managers' `x-special/gnome-copied-files` that `wl-paste` or
+`xclip` reads, and on Windows from the clipboard's file drop list through PowerShell.
+
+**Why.** What a drop's rules rest on is where its path came from: a person's gesture put it there,
+and nothing a model said or a file held could. A path on the clipboard has the same origin, a
+person's copy of a file in their own file manager followed by the key that pastes it, and the file
+is read when the turn is built, as a dropped one is, so that justification is the drop's and
+needs no second gate. A picture pasted from its bytes is a different claim, about content that
+arrived on the clipboard, and keeping the two apart is what keeps PASTE-2 narrow.
+
+`verified-by: bravebot_tui::clipboard::files_win_over_the_picture_and_the_text_beside_them`
+`verified-by: bravebot_tui::clipboard::a_clipboard_naming_no_files_reads_what_else_it_holds`
+`verified-by: bravebot_tui::clipboard::a_relative_path_on_the_clipboard_is_not_a_file_that_was_copied`
+`verified-by: bravebot_tui::clipboard::a_name_holding_a_line_break_refuses_the_whole_list_rather_than_being_read_as_two_files`
+`verified-by: bravebot_tui::clipboard::a_name_that_arrived_as_the_replacement_character_refuses_the_whole_list`
+`verified-by: bravebot_tui::clipboard::a_name_holding_a_tab_or_an_escape_is_left_for_the_drop_handling_to_judge`
+`verified-by: bravebot_tui::clipboard::a_refused_list_is_not_swapped_for_the_text_beside_it`
+`verified-by: bravebot_tui::clipboard::a_file_whose_name_is_not_text_refuses_the_list_it_is_copied_in`
+`verified-by: bravebot_tui::clipboard::the_reads_of_the_clipboard_start_no_tool_found_only_in_a_directory_a_stage_may_write`
+`verified-by: bravebot_tui::clipboard::a_directory_and_a_missing_path_are_not_files_that_were_copied`
+`verified-by: bravebot_tui::clipboard::the_files_keep_the_order_they_were_copied_in`
+`verified-by: bravebot_tui::clipboard::a_script_reports_a_name_holding_a_newline_as_one_path`
+`verified-by: bravebot_tui::clipboard::output_that_is_not_a_list_of_paths_names_no_files`
+`verified-by: bravebot_tui::clipboard::a_file_manager_copy_is_read_from_the_uri_list_it_leaves`
+`verified-by: bravebot_tui::clipboard::a_gnome_file_manager_copy_is_read_from_the_type_it_leaves`
+`verified-by: bravebot_tui::clipboard::the_files_on_a_pasteboard_are_read_as_their_paths_in_order`
+`verified-by: bravebot_tui::clipboard::a_pasteboard_holding_only_a_picture_names_no_files`
+`verified-by: bravebot_tui::dropped::the_line_of_paths_reads_back_as_those_paths`
+`verified-by: bravebot_tui::dropped::a_path_with_a_space_is_one_word_of_the_line`
+`verified-by: bravebot_tui::dropped::a_uri_list_names_the_files_it_lists`
+`verified-by: bravebot_tui::dropped::the_verb_line_of_a_gnome_copied_files_payload_is_not_a_path`
+`verified-by: bravebot_tui::dropped::a_name_holding_a_newline_stays_one_entry_of_a_uri_list`
+`verified-by: bravebot_tui::dropped::a_uri_list_line_that_is_not_a_local_file_names_nothing`
+`verified-by: bravebot_tui::dropped::a_uri_naming_localhost_is_a_file_on_this_machine`
+`verified-by: bravebot_tui::dropped::a_name_that_is_not_text_refuses_the_list_and_is_not_taken_for_its_lookalikes`
+`verified-by: bravebot_tui::app::a_file_the_clipboard_names_is_staged_as_dropping_it_stages_it`
+`verified-by: bravebot_tui::app::a_copied_file_is_carried_read_or_written_out_by_its_type_as_a_dropped_one_is`
+`verified-by: bravebot_tui::app::a_copied_file_named_with_a_space_and_a_quote_is_one_file`
+`verified-by: bravebot_tui::app::a_copied_file_is_written_as_its_path_in_shell_mode_and_nothing_is_staged`
+`verified-by: bravebot_tui::app::a_copied_file_that_is_gone_says_there_is_nothing_to_paste`
+`verified-by: bravebot_tui::app::a_copied_file_is_staged_while_a_turn_runs_too`
+`verified-by: bravebot_tui::app::a_refused_list_of_copied_files_says_so_and_stages_nothing`
+`verified-by: bravebot_tui::app::a_copied_file_with_an_escape_in_its_name_refuses_a_shell_line_as_a_dragged_one_does`
+
 ## Known costs
 
 - **The desktop decodes a pasted picture in its main process.** The clipboard's bytes come from
@@ -358,6 +466,25 @@ carries one to the planner (PASTE-6): the bridge's `manifest.run` takes a task a
   PNG and to draw the chip's drawing. A dropped picture is decoded in the sandboxed renderer
   instead. The decode is the one Electron's clipboard image read always did, and one over the cap
   as it came off the clipboard is refused before it is decoded.
+
+- **Whatever put the files on the clipboard chose them.** Ctrl-V reads the list as it finds it, so
+  a program that wrote one there has the file read as a drop would be. The marker, or the path of a
+  type nothing takes, is in the line before anything is sent, so the person sees which files.
+  A file read this way is trusted and may be from outside the workspace, as a dropped one is.
+
+- **A read of the clipboard starts a process for each thing it looks for.** Ctrl-V asks for files,
+  then for each picture flavour, then for text, by starting the platform's tool each time, and
+  stops at the first answer. On macOS a clipboard holding only text starts five, `osascript` for the
+  files, the PNG, the JPEG and the TIFF and then `pbpaste`, at about 70 ms each. On Windows each
+  read is a PowerShell that loads the clipboard assembly.
+
+- **A TIFF can paste a picture where the text beside it was meant.** On macOS the system offers a
+  TIFF for any picture it holds, and the TIFF is the last picture flavour tried, so an application
+  that offers a drawing of what it copied only as a TIFF is pasted as that drawing by Ctrl-V.
+  Command-V pastes the text.
+
+- **The Windows readers run in no test.** CI lints the Windows target and does not run it, so the
+  PowerShell scripts that read a clipboard's file list and its picture are checked by reading only.
 
 - **A pasted picture lands on disk.** It is written into the session record so a resume can restore
   it (PASTE-9), which means a screenshot pasted into a session outlives the session. Deleting the
