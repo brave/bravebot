@@ -19637,22 +19637,35 @@ fn a_missing_agents_file_is_not_an_error() {
     );
 }
 
-/// Only the name and description are advertised. A directory of long skills would otherwise fill
-/// a context that has room for the task instead, which is the whole point of load_skill.
+/// A skill of the user's own, unlike a built-in, has only its name in the system prompt by
+/// default (SKILL-18), on the first turn of the session the overview of it is said on. Its
+/// description is not: it is found with `search_skills`, which advertises its name and
+/// description and not its body (LOAD-3), and only then loaded by name like any other skill
+/// (LOAD-1). Nothing a directory holds is unreachable just because the catalogue did not
+/// advertise its description up front, and a query matches the skill wired into a real turn
+/// rather than only `Catalogue::search` called directly.
+///
+/// The skill's name avoids the words a tool's own description already uses as an example (such
+/// as "commit-style" in `load_skill`'s), so a match in the request body is the skill and not the
+/// tool definition sent with every request.
 #[test]
-fn a_skill_body_stays_out_of_the_context_until_it_is_asked_for() {
-    let scratch = Scratch::new("skills-listed");
+fn a_skill_body_stays_out_of_the_context_until_search_finds_it_and_load_skill_is_asked() {
+    let scratch = Scratch::new("skills-search-then-load");
     write_project_skill(
         &scratch.path,
-        "commit-style",
-        "commit-style",
+        "wombat-polish",
+        "wombat-polish",
         "THE-BODY-NOBODY-ASKED-FOR",
     );
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-
-    let (endpoint, received) = serve(&reply_with("the answer"));
-    let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("search_skills", r#"{"query":"wombat-polish"}"#),
+        tool_request("load_skill", r#"{"name":"wombat-polish"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
     let mut sink = RecordingSink::new();
 
     turns::run_with_trust(
@@ -19666,14 +19679,387 @@ fn a_skill_body_stays_out_of_the_context_until_it_is_asked_for() {
     )
     .expect("turn runs");
 
-    let body = received.recv().expect("request body");
+    let first = received.recv().expect("first request");
     assert!(
-        body.contains("commit-style") && body.contains("when to use it"),
-        "the skill was not advertised at all"
+        first.contains("wombat-polish"),
+        "the first turn's overview did not name the one project skill there is: {first}"
     );
     assert!(
-        !body.contains("THE-BODY-NOBODY-ASKED-FOR"),
-        "the body was sent without being asked for: {body}"
+        !first.contains("when to use it"),
+        "the overview carried the skill's description, not only its name: {first}"
+    );
+
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("wombat-polish") && second.contains("when to use it"),
+        "search_skills did not return the project skill a query matched: {second}"
+    );
+    assert!(
+        !second.contains("THE-BODY-NOBODY-ASKED-FOR"),
+        "search_skills sent the body without being asked to load it: {second}"
+    );
+
+    let third = received.recv().expect("third request");
+    assert!(
+        third.contains("THE-BODY-NOBODY-ASKED-FOR"),
+        "load_skill did not return the body of a skill search_skills found: {third}"
+    );
+}
+
+/// SKILL-19: the count and names of what the default listing leaves out are put in the
+/// conversation on the first turn of a session and not said again: a second turn carries the
+/// same message forward in its history, same as any other earlier exchange, rather than being
+/// told the names a second time.
+#[test]
+fn the_skills_overview_is_said_once_per_session_not_once_per_turn() {
+    let scratch = Scratch::new("skills-overview-once-per-session");
+    write_project_skill(&scratch.path, "aardvark-polish", "aardvark-polish", "BODY");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("first answer"),
+        reply_with("second answer"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("first task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the first turn finishes");
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("second task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+
+    let first = received.recv().expect("first request");
+    assert_eq!(
+        first.matches("aardvark-polish").count(),
+        1,
+        "the first turn of the session did not name the one project skill there is, exactly \
+         once: {first}"
+    );
+
+    // The message from the first turn is still in the conversation's history on the second, the
+    // same as any earlier exchange would be, so the name is still in the request. What must not
+    // happen is a second copy of the sentence: that would be the session saying it again.
+    let second = received.recv().expect("second request");
+    assert_eq!(
+        second.matches("aardvark-polish").count(),
+        1,
+        "the second turn of the same session either lost the first turn's message or said it \
+         again: {second}"
+    );
+}
+
+/// SKILL-19: the overview is not part of the opening, so a prompt handed back to the box
+/// (`forget_since`) takes the opening with it and leaves the overview behind, the same as a
+/// kept-job notice would be. Pushed before `opening_done` instead, it would be forgotten with the
+/// opening while the flag that says it was already told stays set, losing it for the rest of the
+/// session.
+#[test]
+fn the_skills_overview_survives_a_prompt_handed_back_to_the_box() {
+    let scratch = Scratch::new("skills-overview-survives-forget-since");
+    write_project_skill(&scratch.path, "aardvark-polish", "aardvark-polish", "BODY");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with("first answer")]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let began = conversation.mark();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    cancel.cancel();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("first task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .expect_err("a pre-cancelled turn does not produce an answer");
+
+    assert!(
+        conversation.skills_overview_said(),
+        "a cancelled turn still put the overview in the conversation before it stopped"
+    );
+    assert!(
+        conversation.forget_since(began),
+        "nothing after the opening is a reply, so handing the prompt back should still work"
+    );
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("second answer")]);
+    let config = config_for(&endpoint);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("second task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+
+    let sent = received.recv().expect("second request");
+    assert!(
+        !sent.contains("first task"),
+        "handing the first prompt back to the box should have kept it out of the next \
+         request: {sent}"
+    );
+    assert_eq!(
+        sent.matches("aardvark-polish").count(),
+        1,
+        "the overview should have stayed in the conversation across the resend: {sent}"
+    );
+}
+
+/// SKILL-19: a session whose first turn has no skill to name beyond a built-in is not thereby
+/// marked as told. A skill written into the project before the next turn still gets named then,
+/// which a guard that marked the session told regardless of whether anything was said would
+/// break: the second turn would get the plain pointer to search_skills instead.
+#[test]
+fn a_skill_written_in_after_an_empty_first_turn_is_still_named_on_the_next() {
+    let scratch = Scratch::new("skills-overview-nothing-then-something");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("first answer"),
+        reply_with("second answer"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("first task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the first turn finishes");
+
+    write_project_skill(&scratch.path, "bison-polish", "bison-polish", "BODY");
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("second task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+
+    let first = received.recv().expect("first request");
+    assert!(
+        !first.contains("bison-polish"),
+        "the first turn named a skill that did not exist yet: {first}"
+    );
+
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("bison-polish"),
+        "a skill written in after an empty first turn was not named on the next: {second}"
+    );
+}
+
+/// SKILL-18: a skill with a description long enough to warn about is said, as a count, and the
+/// person is still shown the skill's name nowhere in that notice (SKILL-6).
+#[test]
+fn a_long_description_is_said_as_a_count_and_never_cut() {
+    let scratch = Scratch::new("skills-long-description-notice");
+    let tail = "ZEBRA-TAIL";
+    let long = format!("when the task is {} {tail}", "y".repeat(1_100));
+    let dir = scratch.path.join(".bravebot/skills/verbose");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: verbose\ndescription: {long}\n---\n\nTHE-BODY\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("search_skills", r#"{"query":"verbose"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let outcome = turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(&long),
+        "search_skills cut a description instead of returning it whole: {second}"
+    );
+
+    assert!(
+        outcome
+            .notices
+            .iter()
+            .any(|notice| notice.contains("1 skill") && notice.contains("not shortened")),
+        "the person was not told a description was long: {:?}",
+        outcome.notices
+    );
+    assert!(
+        !outcome.notices.iter().any(|notice| notice.contains(tail)),
+        "the notice repeated the description back: {:?}",
+        outcome.notices
+    );
+}
+
+/// SKILL-18: the count of long descriptions is said once per session rather than once per turn,
+/// the way SKILL-19 says the overview is: a second turn of the same session is not warned again
+/// about a description a first turn already said was long.
+#[test]
+fn a_long_description_warning_is_said_once_per_session_not_once_per_turn() {
+    let scratch = Scratch::new("skills-long-description-once-per-session");
+    let long = format!("when the task is {} ZEBRA-TAIL", "y".repeat(1_100));
+    let dir = scratch.path.join(".bravebot/skills/verbose");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: verbose\ndescription: {long}\n---\n\nTHE-BODY\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("first answer"),
+        reply_with("second answer"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let first = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("first task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the first turn finishes");
+
+    let second = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("second task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+
+    let _first_request = received.recv().expect("first request");
+    let _second_request = received.recv().expect("second request");
+
+    assert!(
+        first
+            .notices
+            .iter()
+            .any(|notice| notice.contains("1 skill") && notice.contains("not shortened")),
+        "the first turn of the session did not warn about the long description: {:?}",
+        first.notices
+    );
+    assert!(
+        !second
+            .notices
+            .iter()
+            .any(|notice| notice.contains("not shortened")),
+        "the second turn of the same session warned about the long description again: {:?}",
+        second.notices
     );
 }
 
@@ -36340,10 +36726,13 @@ fn a_delegate_on_an_alias_the_reply_resolves_reports_no_substitution() {
     );
 }
 
-/// A definition naming skills gives its delegate those and no others: the rest of what the turn
-/// found is neither listed for it nor loadable by it, where a definition naming none is offered
-/// the whole of it and one whose line is empty is offered nothing. A name nothing found selects
-/// nothing and is said, so a misspelt one does not read to its author as a skill the delegate has.
+/// A definition naming skills gives its delegate those and no others, listed directly: the rest
+/// of what the turn found is neither listed for it nor loadable by it, not even through
+/// search_skills. A definition naming none leaves its delegate the default any turn gets
+/// (SKILL-18): a built-in listed, every other skill the turn found reachable with search_skills
+/// and loadable by name. One whose line is empty is offered nothing, built-in included. A name
+/// nothing found selects nothing and is said, so a misspelt one does not read to its author as a
+/// skill the delegate has.
 #[test]
 fn a_definition_offers_its_delegate_only_the_skills_it_names() {
     let scratch = Scratch::new("delegate-definition-skills");
@@ -36408,7 +36797,13 @@ fn a_definition_offers_its_delegate_only_the_skills_it_names() {
                 reply_with("reviewed"),
             ],
         ),
-        ("REVIEW-WITH-EVERY-SKILL", vec![reply_with("reviewed")]),
+        (
+            "REVIEW-WITH-EVERY-SKILL",
+            vec![
+                tool_request("load_skill", r#"{"name":"commit-style"}"#),
+                reply_with("reviewed"),
+            ],
+        ),
         ("REVIEW-WITH-NO-SKILLS", vec![reply_with("reviewed")]),
     ]);
     let config = config_for(&endpoint);
@@ -36467,13 +36862,18 @@ fn a_definition_offers_its_delegate_only_the_skills_it_names() {
     );
 
     let plain = delegate("REVIEW-WITH-EVERY-SKILL");
-    let plain = plain
+    let first_plain = plain
         .first()
         .expect("the delegate whose definition names none never ran");
     assert_eq!(
-        listed(plain),
-        ["review-style", "commit-style", "loop"],
-        "a definition naming no skills was not offered every skill the turn found"
+        listed(first_plain),
+        ["loop"],
+        "a definition naming no skills was listed something beyond the built-in by default"
+    );
+    let last_plain = plain.last().expect("asked at least once");
+    assert!(
+        last_plain.contains("COMMIT-STYLE-BODY"),
+        "a definition naming no skills still could not load a skill it never excluded: {last_plain}"
     );
 
     let bare = delegate("REVIEW-WITH-NO-SKILLS");
@@ -36683,9 +37083,10 @@ fn an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind() {
     }
 }
 
-/// ADDRESS-1 and DELEGATE-23: a definition a person addresses supplies the skills it names as it does
-/// to a delegate. The turn is listed those and no others and cannot load another, where a definition
-/// naming none is offered every skill the turn found and one whose line is empty is offered nothing.
+/// ADDRESS-1 and DELEGATE-23: a definition a person addresses supplies the skills it names as it
+/// does to a delegate. The turn is listed those and no others, and cannot load another, not even
+/// through search_skills. A definition naming none leaves the turn the default any turn gets
+/// (SKILL-18), and one whose line is empty is offered nothing, built-in included.
 #[test]
 fn an_addressed_turn_is_offered_only_the_skills_its_definition_names() {
     let home = Scratch::new("address-skills-home");
@@ -36749,6 +37150,11 @@ fn an_addressed_turn_is_offered_only_the_skills_its_definition_names() {
         ["review-style"],
         "the addressed turn was not listed only the skills its definition named"
     );
+    assert!(
+        !styled[0].contains("not listed above"),
+        "a curated turn was given an overview of skills it cannot search for: {}",
+        styled[0]
+    );
     let last = styled.last().expect("asked at least once");
     assert!(
         last.contains("no skill named 'commit-style'") && !last.contains("COMMIT-STYLE-BODY"),
@@ -36762,12 +37168,22 @@ fn an_addressed_turn_is_offered_only_the_skills_its_definition_names() {
     let plain = run(
         "plain",
         "ADDRESSED-EVERY-SKILL",
-        vec![reply_with("reviewed")],
+        vec![
+            tool_request("load_skill", r#"{"name":"commit-style"}"#),
+            reply_with("reviewed"),
+        ],
     );
     assert_eq!(
         listed(&plain[0]),
-        ["review-style", "commit-style", "loop"],
-        "a definition naming no skills was not offered every skill the turn found"
+        ["loop"],
+        "a definition naming no skills was listed something beyond the built-in by default"
+    );
+    assert!(
+        plain
+            .last()
+            .expect("asked at least once")
+            .contains("COMMIT-STYLE-BODY"),
+        "a definition naming no skills still could not load a skill it never excluded"
     );
 
     let bare = run("bare", "ADDRESSED-NO-SKILLS", vec![reply_with("reviewed")]);

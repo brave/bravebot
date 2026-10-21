@@ -50,15 +50,17 @@ Write the subject in the imperative. Explain why in the body, never what.
 `verified-by: bravebot_agent::skills::a_marker_inside_the_body_is_left_alone`
 
 <a id="SKILL-2"></a>
-### SKILL-2: only the name and description reach the prompt; the body waits for `load_skill`
+### SKILL-2: only the name and description reach the planner; the body waits for `load_skill`
 
-The description is what the planner decides from, so it should say *when* to use the skill rather
+Whether a skill is listed in the prompt or found with `search_skills` ([SKILL-18](#SKILL-18)),
+what reaches the planner before `load_skill` is the name and the description, never the body. The
+description is what the planner decides from, so it should say *when* to use the skill rather
 than what it contains.
 
 **Why.** A directory of long skills would otherwise crowd out the task.
 
 `verified-by: bravebot_agent::skills::what_the_prompt_advertises_holds_no_bodies`
-`verified-by: bravebot_agent::turn::a_skill_body_stays_out_of_the_context_until_it_is_asked_for`
+`verified-by: bravebot_agent::turn::a_skill_body_stays_out_of_the_context_until_search_finds_it_and_load_skill_is_asked`
 `verified-by: bravebot_agent::skills::skills_are_offered_in_the_same_order_every_time`
 
 <a id="SKILL-3"></a>
@@ -372,12 +374,87 @@ is read.
 `verified-by: bravebot_cli::running::doctor_names_a_projects_unread_key_only_where_the_directory_is_trusted`
 `verified-by: bravebot_agent::turn::a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so`
 
+<a id="SKILL-18"></a>
+### SKILL-18: a skill of the user's own is found with `search_skills`, not listed by default
+
+Only a built-in ([SKILL-12](#SKILL-12)) is in the prompt's listing by default. A skill of the
+user's own or the project's is not, however many there are: it is found by calling
+[`search_skills`](tools/search-skills.md) with a word or phrase, which matches it by name or
+description against the whole catalogue, built-ins included, and returns each match in full. A
+skill `search_skills` finds is loaded by `load_skill` the same way a listed one is
+([LOAD-1](tools/load-skill.md#LOAD-1)): nothing is removed from the set `load_skill` selects from,
+so a skill search finds is never a skill `load_skill` then refuses.
+
+A definition's own `skills:` line ([ADDRESS-1](addressing-a-definition.md#ADDRESS-1),
+[DELEGATE-23](delegation.md#DELEGATE-23)) is the one exception: naming skills there already makes
+a short, deliberate list, so the whole of it is listed directly rather than held back for
+`search_skills` to find. A definition naming none keeps the ordinary default.
+
+No description is ever cut, wherever one reaches the planner: not in the default listing, not in
+a `search_skills` result. One past 1,024 characters is said as a count instead, never cut and
+never named, per [SKILL-6](#SKILL-6). The count is said to the person once per session rather than
+once per turn, the way [SKILL-19](#SKILL-19) says the overview is: a long description does not
+change turn to turn, so there is nothing a second telling would add.
+
+**Why.** The name and description of every skill in a directory going into every request leaves a
+directory of fifty verbose skills less room for the task than the task needs, and the body each
+skill keeps out of the prompt ([SKILL-2](#SKILL-2)) bounds nothing about that. Holding the default
+listing to built-ins removes the cost at its source, and a search call that returns every
+description whole costs only the one request that asks for it. Cutting a description to fit would
+risk losing the half of it that mattered: a person who wrote that much meant to, and the cost is
+worth a count rather than a guess at which half was safe to drop.
+
+`verified-by: bravebot_agent::skills::describe_for_prompt_lists_only_built_in_skills`
+`verified-by: bravebot_agent::skills::a_long_description_is_never_cut_and_is_counted`
+`verified-by: bravebot_agent::skills::search_matches_every_word_case_insensitively_and_caps_the_result`
+`verified-by: bravebot_agent::turn::a_skill_body_stays_out_of_the_context_until_search_finds_it_and_load_skill_is_asked`
+`verified-by: bravebot_agent::turn::a_long_description_is_said_as_a_count_and_never_cut`
+`verified-by: bravebot_agent::turn::a_long_description_warning_is_said_once_per_session_not_once_per_turn`
+`verified-by: bravebot_agent::turn::an_addressed_turn_is_offered_only_the_skills_its_definition_names`
+`verified-by: bravebot_agent::preamble::the_skills_section_points_at_search_skills_only_where_more_could_be_found`
+
+<a id="SKILL-19"></a>
+### SKILL-19: the first turn of a session not already told puts the count and names of what the listing leaves out in the conversation
+
+Where [SKILL-18](#SKILL-18) holds a skill back from the default listing, the first turn of a
+session that has not already been told puts a message in the conversation giving how many such
+skills there are and what each is named, so the planner can tell whether `search_skills` could
+find anything before it calls it. A message in the conversation rather than a line in the system
+prompt: the prompt is rebuilt fresh every turn and none of it is kept, so a planner told only
+there would have the count and the names for the one turn that built it and nothing of its own to
+have remembered either by. Put in the conversation once, the count and the names are carried
+forward in every later request the ordinary way any earlier exchange is, and the turn that put
+them there does not put them there again.
+
+Names only, never a description: a description is what `search_skills` is for, and giving every
+one away up front would pay back the cost [SKILL-18](#SKILL-18) removed it to avoid. Nothing is
+put there where there is nothing to report, so a curated catalogue ([DELEGATE-23](delegation.md#DELEGATE-23))
+and a session with no skill beyond a built-in are both silent on it, and a session that starts
+silent because of the second reason is not thereby marked told: a skill written into the project
+later in the session still gets its own turn to be named.
+
+**Why.** Without the message, a planner that never thinks to call `search_skills` never learns an
+unlisted skill exists. A count and names cost one message, once per session, against the room a
+full listing would cost on every turn of it.
+
+`verified-by: bravebot_agent::skills::other_skill_names_is_empty_for_a_curated_catalogue`
+`verified-by: bravebot_agent::turn::the_skills_overview_is_said_once_per_session_not_once_per_turn`
+`verified-by: bravebot_agent::turn::an_addressed_turn_is_offered_only_the_skills_its_definition_names`
+`verified-by: bravebot_agent::turn::a_skill_written_in_after_an_empty_first_turn_is_still_named_on_the_next`
+`verified-by: bravebot_agent::turn::the_skills_overview_survives_a_prompt_handed_back_to_the_box`
+
 ## Known costs
 
 - **A skill downloaded into `~/.bravebot/skills` is trusted exactly as far as a config file the
   user pasted is.** The name, the description and the body all go to the model as instructions.
   Nothing downstream second-guesses it, because everything downstream is built to trust what the
   user vouched for. Read one before installing it.
+
+- **A skill of the user's own or the project's is loaded only where the planner calls
+  `search_skills` for it, where a built-in is seen whether the planner looks for it or not.**
+  [SKILL-19](#SKILL-19) names it once, on the first turn a session has one to name, but a skill
+  written into the project after that turn has no later one: the names said were the ones found
+  then, and nothing says the count changed.
 
 - **A subscription is looked for once per turn, from the model the turn starts on, so a skill that
   moves the rounds onto a model needing one finds none in hand.** Such a round is answered by a
