@@ -63,6 +63,7 @@ cli-usage-sessions-list = List the sessions recorded for this directory
 cli-usage-sessions-delete = Delete one recorded session, its trail and its search index
 cli-usage-sessions-purge = Delete every session recorded for this directory
 cli-usage-sessions-import = Copy sessions another agent kept for this directory
+cli-usage-stats = Total the turns and tokens recorded sessions spent; takes --days <n>, --models and --project [<dir>]
 cli-usage-bg = Start a session that keeps running after the terminal closes
 cli-usage-attach = Join a background session's terminal
 cli-usage-reply = Send a prompt to an idle background session
@@ -3992,6 +3993,32 @@ sessions-purge-question = Delete the recorded sessions for { $directory }, { $co
 sessions-purge-needs-yes = sessions purge asks before it deletes, and there is no terminal to ask on. Pass -y to delete without asking, or --dry-run to see what it would delete.
 sessions-purge-declined = Nothing was deleted.
 sessions-purge-done = Deleted: { $count }.
+# What `bravebot stats` says. The figures are numbers the program wrote down, so the only words
+# here are the headings and the sentence saying what the figures cover.
+stats-usage = stats takes --days and a number of days, --models, and --project with a directory if it is not this one
+stats-scope-everything = Every recorded session, in every project
+stats-scope-days = { $days ->
+    [one] Sessions last written in the last day, in every project
+   *[other] Sessions last written in the last { $days } days, in every project
+    }
+stats-scope-project = Every recorded session in { $project }
+stats-scope-days-project = { $days ->
+    [one] Sessions last written in the last day, in { $project }
+   *[other] Sessions last written in the last { $days } days, in { $project }
+    }
+stats-column-model = Model
+stats-column-sessions = Sessions
+stats-column-turns = Turns
+stats-column-tokens = Tokens
+stats-row-total = Total
+# A session whose record names no model: one written before the model was kept, one whose turns
+# never reached a server, and one copied in from another program.
+stats-model-unknown = unknown
+stats-incognito = An incognito session leaves no record, so none is counted.
+stats-unreadable = { $count ->
+    [one] 1 entry in the sessions directory could not be read as a record and is not counted.
+   *[other] { $count } entries in the sessions directory could not be read as records and are not counted.
+    }
 sessions-state-working = working
 sessions-state-idle = idle
 sessions-state-stopped = stopped

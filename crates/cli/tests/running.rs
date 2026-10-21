@@ -18045,3 +18045,300 @@ fn a_later_turn_rewinds_to_where_the_turn_before_it_left_the_files() {
         "{backups:#?}"
     );
 }
+
+/// A scratch home holding session records of known spend, for the `stats` runs (CLI-37).
+struct Spending {
+    scratch: Scratch,
+}
+
+impl Spending {
+    fn new(name: &str) -> Self {
+        Self {
+            scratch: Scratch::new(name),
+        }
+    }
+
+    /// A directory a session could have run in, resolved the way a record names it.
+    fn checkout(&self, name: &str) -> PathBuf {
+        let path = self.scratch.path.join(name);
+        std::fs::create_dir_all(&path).expect("create the checkout");
+        path.canonicalize().expect("canonical checkout")
+    }
+
+    fn store(&self, project: &Path) -> PathBuf {
+        let store = self
+            .scratch
+            .path
+            .join(".bravebot/sessions")
+            .join(bravebot_agent::home::key_for(project));
+        std::fs::create_dir_all(&store).expect("create the store");
+        store
+    }
+
+    /// The record of a session that ran in `project` and was last written `hours_ago` hours ago.
+    fn record(
+        &self,
+        project: &Path,
+        id: &str,
+        hours_ago: u64,
+        (turns, tokens): (u64, u64),
+        model: Option<&str>,
+    ) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("a clock after the epoch")
+            .as_secs();
+        let record = serde_json::json!({
+            "id": id,
+            "title": "work",
+            "directory": project.display().to_string(),
+            "updated": now - hours_ago * 3600,
+            "turns": turns,
+            "tokens": tokens,
+            "model": model,
+        });
+        let store = self.store(project);
+        std::fs::write(store.join(format!("{id}.json")), record.to_string())
+            .expect("seed the record");
+        // Beside every record a session has written there are a trail and an index of what it
+        // said, under other extensions, and neither is a record.
+        std::fs::write(store.join(format!("{id}.audit.jsonl")), "{}\n").expect("seed the trail");
+        std::fs::write(store.join(format!("{id}.search")), "words\n").expect("seed the index");
+    }
+
+    fn stats(&self, cwd: &Path, arguments: &[&str]) -> Output {
+        let mut all = vec!["stats"];
+        all.extend_from_slice(arguments);
+        bravebot_started_in(&self.scratch.path, cwd, &[], &all)
+    }
+
+    /// Every file under the sessions directory and what it holds, so a run can be shown to have
+    /// left the records as they were.
+    fn records(&self) -> Vec<(PathBuf, Vec<u8>)> {
+        fn walk(directory: &Path, found: &mut Vec<(PathBuf, Vec<u8>)>) {
+            let Ok(entries) = std::fs::read_dir(directory) else {
+                return;
+            };
+            for entry in entries.map(|entry| entry.expect("an entry")) {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, found);
+                } else {
+                    let held = std::fs::read(&path).expect("read the record");
+                    found.push((path, held));
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(&self.scratch.path.join(".bravebot/sessions"), &mut found);
+        found.sort();
+        found
+    }
+}
+
+/// The rows of a `stats` table, as the words on each line, after the sentence and the heading.
+fn stats_rows(stdout: &str) -> Vec<Vec<String>> {
+    stdout
+        .lines()
+        .skip(3)
+        .map(|line| line.split_whitespace().map(str::to_string).collect())
+        .collect()
+}
+
+/// The figures on the last row of a `stats` table, which is the total: sessions, turns, tokens.
+fn stats_total(stdout: &str) -> Vec<u64> {
+    let rows = stats_rows(stdout);
+    let total = rows
+        .last()
+        .unwrap_or_else(|| panic!("no total in: {stdout}"));
+    assert_eq!(total[0], "Total", "{stdout}");
+    total[1..]
+        .iter()
+        .map(|figure| figure.parse().expect("a figure"))
+        .collect()
+}
+
+/// CLI-37: the totals are the records' own figures added up. Two projects hold three sessions of
+/// known spend, and the day count and the project each leave out the sessions they should. The run
+/// writes nothing, and the notes about what is not counted go to stderr so stdout is the table.
+#[test]
+fn stats_adds_up_every_projects_sessions_and_the_day_and_project_narrow_the_total() {
+    let spending = Spending::new("cli-running-stats-totals");
+    let one = spending.checkout("one");
+    let two = spending.checkout("two");
+    spending.record(&one, "a", 24, (3, 1_000), Some("big"));
+    spending.record(&one, "b", 240, (5, 250), Some("small"));
+    spending.record(&two, "c", 48, (7, 30), Some("big"));
+    let before = spending.records();
+
+    let everything = spending.stats(&one, &[]);
+    let (stdout, stderr) = said(&everything);
+    assert!(everything.status.success(), "{stderr}");
+    assert_eq!(stats_total(&stdout), [3, 15, 1_280], "{stdout}");
+    assert!(
+        stdout.starts_with("Every recorded session, in every project"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("incognito"),
+        "a note about what is not counted was written among the figures: {stdout}"
+    );
+    assert!(
+        stderr.contains("An incognito session leaves no record, so none is counted."),
+        "{stderr}"
+    );
+    assert_eq!(stderr.matches("incognito").count(), 1, "{stderr}");
+    assert!(
+        !stderr.contains("could not be read"),
+        "a trail or an index beside a record was counted as a record that could not be read: {stderr}"
+    );
+
+    // Last written within three days, so the session ten days back is left out.
+    let recent = spending.stats(&one, &["--days", "3"]);
+    let (stdout, stderr) = said(&recent);
+    assert!(recent.status.success(), "{stderr}");
+    assert_eq!(stats_total(&stdout), [2, 10, 1_030], "{stdout}");
+    assert!(stdout.contains("last 3 days"), "{stdout}");
+
+    // Bare, the project is the directory the command ran in.
+    let here = spending.stats(&one, &["--project"]);
+    let (stdout, stderr) = said(&here);
+    assert!(here.status.success(), "{stderr}");
+    assert_eq!(stats_total(&stdout), [2, 8, 1_250], "{stdout}");
+    assert!(stdout.contains(&one.display().to_string()), "{stdout}");
+
+    // Named, it is that directory whatever the command ran in.
+    let named = spending.stats(&one, &["--project", &two.display().to_string()]);
+    let (stdout, stderr) = said(&named);
+    assert!(named.status.success(), "{stderr}");
+    assert_eq!(stats_total(&stdout), [1, 7, 30], "{stdout}");
+
+    // Both narrowings at once leave what is in both.
+    let both = spending.stats(&one, &["--days", "3", "--project"]);
+    assert_eq!(stats_total(&said(&both).0), [1, 3, 1_000]);
+
+    assert_eq!(spending.records(), before, "a stats run changed a record");
+}
+
+/// CLI-37: `--models` puts a row for each model above the total, the one that spent most first,
+/// and a session whose record names no model is its own row rather than part of another.
+#[test]
+fn stats_by_model_has_a_row_for_each_model_and_one_for_a_record_that_names_none() {
+    let spending = Spending::new("cli-running-stats-models");
+    let one = spending.checkout("one");
+    spending.record(&one, "a", 1, (1, 10), Some("big"));
+    spending.record(&one, "b", 1, (2, 20), Some("big"));
+    spending.record(&one, "c", 1, (4, 400), Some("small"));
+    spending.record(&one, "d", 1, (8, 8_000), None);
+
+    let output = spending.stats(&one, &["--models"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    let words = |row: &[&str]| row.iter().map(|word| word.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        stats_rows(&stdout),
+        [
+            words(&["unknown", "1", "8", "8000"]),
+            words(&["small", "1", "4", "400"]),
+            words(&["big", "2", "3", "30"]),
+            words(&["Total", "4", "15", "8430"]),
+        ],
+        "{stdout}"
+    );
+}
+
+/// CLI-37: a file in the store that is not a record is counted and not named, and adds to no
+/// figure. Nothing about the file but how many reaches either stream.
+#[test]
+fn stats_counts_a_record_it_cannot_read_without_naming_it() {
+    let spending = Spending::new("cli-running-stats-unreadable");
+    let one = spending.checkout("one");
+    spending.record(&one, "good", 1, (2, 20), Some("m"));
+    let store = spending.store(&one);
+    std::fs::write(store.join("torn-record-name.json"), r#"{"id":"torn","dir"#)
+        .expect("seed the torn record");
+    std::fs::write(store.join("not-a-record-name.json"), r#"{"hello":"world"}"#)
+        .expect("seed the other file");
+
+    let output = spending.stats(&one, &[]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(stats_total(&stdout), [1, 2, 20], "{stdout}");
+    assert!(
+        stderr.contains(
+            "2 entries in the sessions directory could not be read as records and are not counted."
+        ),
+        "{stderr}"
+    );
+    for name in ["torn-record-name", "not-a-record-name"] {
+        assert!(!stdout.contains(name) && !stderr.contains(name), "{name}");
+    }
+}
+
+/// CLI-37: a model name is the server's word, so one holding an escape reaches the table without
+/// it. The record is read as it was written and the screen is not.
+#[test]
+fn stats_draws_a_model_name_with_nothing_a_terminal_would_act_on() {
+    let spending = Spending::new("cli-running-stats-model-name");
+    let one = spending.checkout("one");
+    spending.record(&one, "a", 1, (1, 10), Some("evil\u{1b}[2Jmodel"));
+
+    let output = spending.stats(&one, &["--models"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(!stdout.contains('\u{1b}'), "{stdout:?}");
+    assert!(stdout.contains("evil [2Jmodel"), "{stdout}");
+}
+
+/// CLI-37: a request the words do not make is refused with the status for an argument and prints
+/// no figures, and says what `stats` takes. A project that is not a directory is refused the way
+/// `sessions list` refuses one, naming the path. An empty directory is a request the words do not
+/// make, so it gets the first of those rather than a refusal with no path in it.
+#[test]
+fn a_muddled_stats_request_is_refused_with_the_argument_status_and_no_figures() {
+    let spending = Spending::new("cli-running-stats-refused");
+    let one = spending.checkout("one");
+    spending.record(&one, "a", 1, (1, 10), Some("m"));
+
+    for (arguments, said_so) in [
+        (&["--days"][..], "stats takes"),
+        (&["--days", "0"], "stats takes"),
+        (&["--days", "two"], "stats takes"),
+        (&["--days", "1", "--days", "2"], "stats takes"),
+        (&["--models", "--models"], "stats takes"),
+        (&["--json"], "stats takes"),
+        (&["everything"], "stats takes"),
+        (&["--project", ""], "stats takes"),
+        (
+            &["--project", "/no/such/directory/anywhere"],
+            "/no/such/directory/anywhere is not a directory",
+        ),
+    ] {
+        let output = spending.stats(&one, arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(stdout.is_empty(), "{arguments:?}: {stdout}");
+        assert!(stderr.contains("BB1002"), "{arguments:?}: {stderr}");
+        assert!(stderr.contains(said_so), "{arguments:?}: {stderr}");
+    }
+}
+
+/// CLI-37: `--incognito` adds nothing to the store and `stats` only reads it, so the two run
+/// together and give the figures a run without the flag does.
+#[test]
+fn stats_runs_under_incognito_and_counts_the_records_written_before() {
+    let spending = Spending::new("cli-running-stats-incognito");
+    let one = spending.checkout("one");
+    spending.record(&one, "a", 1, (2, 20), Some("m"));
+    let before = spending.records();
+
+    let output = bravebot_started_in(&spending.scratch.path, &one, &[], &["--incognito", "stats"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(stats_total(&stdout), [1, 2, 20], "{stdout}");
+    assert_eq!(spending.records(), before);
+}

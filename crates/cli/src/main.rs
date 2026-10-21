@@ -29,6 +29,7 @@ mod session_import;
 mod session_search;
 mod sessions_list;
 mod shell_init;
+mod stats;
 #[cfg(unix)]
 mod supervisor;
 #[cfg(test)]
@@ -629,6 +630,7 @@ fn main() -> ExitCode {
         Some("bug-report") => bug_report::command(&args[1..]),
         Some("auth") => auth::command(&args[1..]),
         Some("sessions") => background::sessions(&args[1..]),
+        Some("stats") => stats::command(&args[1..]),
         Some("--bg") => match carried {
             Some(flag) => stopped_before_the_turn(
                 as_json,
@@ -1062,6 +1064,7 @@ fn starts_no_program(first: Option<&str>) -> bool {
                 | "auth"
                 | "permissions"
                 | "sessions"
+                | "stats"
                 | "attach"
                 | "completion"
                 | "import-leo-creds"
@@ -3178,7 +3181,7 @@ mod tests {
     /// and ignoring it would read as honoured, which is the reason CLI-13 refuses it by name.
     #[test]
     fn the_commands_that_start_no_session_refuse_every_flag_that_shapes_one() {
-        let thirteen = [
+        let commands = [
             "doctor",
             "update",
             "bug-report",
@@ -3186,6 +3189,7 @@ mod tests {
             "mcp",
             "permissions",
             "sessions",
+            "stats",
             "attach",
             "reply",
             "import-leo-creds",
@@ -3193,7 +3197,7 @@ mod tests {
             "completion",
             "shell-init",
         ];
-        for command in thirteen {
+        for command in commands {
             assert!(without_a_definition(Some(command)).is_some(), "{command}");
             assert!(
                 without_a_prompt_to_give("--system-prompt", Some(command)).is_some(),
@@ -4672,6 +4676,7 @@ mod tests {
             "mcp",
             "permissions",
             "sessions",
+            "stats",
             "attach",
             "reply",
             "import-leo-creds",
@@ -4798,6 +4803,7 @@ mod tests {
             "mcp",
             "permissions",
             "sessions",
+            "stats",
             "attach",
             "reply",
             "import-leo-creds",
@@ -5975,6 +5981,7 @@ mod tests {
             "auth",
             "permissions",
             "sessions",
+            "stats",
             "attach",
             "completion",
             "import-providers",

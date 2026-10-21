@@ -73,6 +73,7 @@ Usage:
 | `bravebot sessions list [--json] [--limit <n>]` | print the sessions recorded for this directory, newest first ([Sessions](../using/sessions.md#picking-one-back-up)) |
 | `bravebot sessions delete <id>` | delete one session recorded for this directory, with its trail and search index ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot sessions purge [--dry-run] [-y]` | delete every session recorded for this directory, asking first unless `-y` is given ([Sessions](../using/sessions.md#deleting-a-session)) |
+| `bravebot stats [--days <n>] [--models] [--project [<dir>]]` | total the sessions, turns and tokens the recorded sessions spent, for every project or one ([below](#stats)) |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot permissions check <call>` | say which permission rule decides a tool call, and the file it is in ([below](#permissions-check)) |
 | `bravebot completion <shell>` | print a completion script for `bash`, `zsh` or `fish` ([below](#completion)) |
@@ -442,7 +443,7 @@ standing is better piped in, where it is quarantined.
 
 A flag with no words after it, a blank one, or one whose words open with `-` and hold no space is
 refused with status 2. A sentence opening with `-` is words. If a flag is given twice, the last is
-used. Both are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`,
+used. Both are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`, `stats`,
 `import-leo-creds`, `import-providers`, `completion` and `shell-init`. There is no settings key for them: words a checkout
 always wants belong in its `AGENTS.md`.
 
@@ -1008,6 +1009,52 @@ checkout's settings is not in force until you grant it at the question a session
 never reported as the rule that decides: a line says it would allow the call and is not in force.
 It starts nothing and changes nothing. It checks the rules only, not the
 [permission modes](../security/permissions.md), and a command line that names no call exits 2.
+
+## `stats`
+
+```sh
+bravebot stats [--days <n>] [--models] [--project [<dir>]]
+```
+
+Adds up what the session records under `~/.bravebot` hold and prints the number of sessions, turns
+and tokens, for every project unless `--project` narrows it. It writes nothing, and it runs under
+`--incognito`.
+
+```
+$ bravebot stats --days 7 --models
+Sessions last written in the last 7 days, in every project
+
+Model        Sessions  Turns  Tokens
+qwen-3-235b         2     10  214600
+unknown             1      2       0
+Total               3     12  214600
+```
+
+| Option | What it does |
+|---|---|
+| `--days <n>` | count only the sessions last written within the last `n` days, in days of 24 hours. `n` is a whole number from 1 to 9223372036854775807 |
+| `--models` | put a row for each model above the total, the one that spent the most first |
+| `--project [<dir>]` | count only the sessions that ran in this directory, or in `<dir>` when one follows. A word that starts with `-` is the next option, not a directory. An empty `<dir>` is refused, so quote a variable: an unquoted empty one leaves `--project` bare, which is this directory |
+
+The figures are tokens, not money, and a session's tokens are one total: the record keeps no split
+between tokens read and tokens written, and no price ([Sessions](../using/sessions.md#asking-what-it-has-cost)
+says why). A session is counted whole, under the day it was last written and the model that answered
+its last turn, so a session that ran over several days or changed model part way is not split between
+them. The `unknown` row holds sessions whose record names no model: ones written before the model
+was kept, ones whose turns never reached a server, and ones copied in from another program. A model
+name is shown with the characters a terminal would act on removed and cut to 60 characters, and
+names that read alike after that are one row.
+
+Each record is counted, and a record can hold spend another one holds. A session forked with
+`--fork` or `/branch` starts with the spend of the original, and one moved with `/cd` leaves its
+record in the directory it came from beside the one it writes in the new directory. Such a session
+is counted once for each record, so the totals can read higher than what was spent.
+
+An incognito session leaves no record, so it is not counted, and the command says so on stderr.
+Entries in the sessions directory that cannot be read as a record are counted there as well, without
+their names, and add to no figure. Stdout holds the table and nothing else, so
+`bravebot stats | tail -n 1` is the total. A project that is not a directory, a count that is zero,
+too large or not a number, a repeated option and any other word are refused with status 2.
 
 ## `completion`
 
