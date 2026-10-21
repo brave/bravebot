@@ -16,6 +16,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod conversation;
 pub mod llama_server;
 pub mod lm_studio;
 pub mod models;
@@ -1025,6 +1026,25 @@ const BACKOFF: Duration = Duration::from_secs(1);
 /// than a turn sitting unattended for minutes. Lower than `bravebot_net::LONGEST_RETRY_AFTER`,
 /// which only bounds the figure the network layer will carry.
 pub const LONGEST_WAIT: Duration = Duration::from_secs(120);
+
+/// The slowest a reply is taken to be written, in tokens a second.
+///
+/// Well under half the slowest rate measured on Bedrock, 69 tokens a second on Claude Opus 5.5, so
+/// a reply running to its ceiling on a slow day still finishes inside the bound.
+const SLOWEST_WRITING: u64 = 25;
+
+/// How long a reply may take to begin, reading the prompt, before the first token of it.
+const BEFORE_WRITING: Duration = Duration::from_secs(120);
+
+/// How long a reply that may run to `ceiling` tokens is given.
+///
+/// For a service whose requests state a ceiling, which is what says how long a reply can run.
+/// Never less than the bound the egress layer puts on a reply of unstated length, which stays the
+/// figure for a short reply.
+pub fn reply_bound(ceiling: u64) -> Duration {
+    (BEFORE_WRITING + Duration::from_secs(ceiling.div_ceil(SLOWEST_WRITING)))
+        .max(bravebot_net::Timeouts::default().reply)
+}
 
 /// How often a reply that has not started arriving looks up to see whether it should stop.
 ///
