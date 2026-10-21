@@ -314,6 +314,8 @@ age does not end them.
 `verified-by: bravebot_cli::running::the_period_in_settings_decides_what_a_one_shot_run_removes`
 `verified-by: bravebot_ui_bridge::old_records::a_desktop_front_end_removes_old_records_as_it_starts_and_nothing_a_person_kept`
 `verified-by: bravebot_ui_bridge::old_records::a_desktop_front_end_with_an_unreadable_period_removes_nothing`
+`verified-by: bravebot_ui_bridge::old_records::an_editor_front_end_removes_old_records_as_it_starts`
+`verified-by: bravebot_ui_bridge::host_process::a_host_sweeps_the_state_directory_and_leaves_the_root_it_was_given`
 
 ## Known costs
 

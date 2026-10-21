@@ -54,7 +54,12 @@ impl Drop for Home {
 }
 
 fn front_end(home: &Path) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_bravebot-rpc"))
+    started(env!("CARGO_BIN_EXE_bravebot-rpc"), home)
+}
+
+/// The front end `binary` names, on `home`, with its input held open.
+fn started(binary: &str, home: &Path) -> Child {
+    Command::new(binary)
         .env_clear()
         .env("HOME", home)
         .env("BRAVEBOT_LOCALE", "en-US")
@@ -160,4 +165,25 @@ fn a_desktop_front_end_with_an_unreadable_period_removes_nothing() {
 
     assert!(control_swept, "the sweep never ran, so nothing was shown");
     assert!(survived, "a period that cannot be read removed a record");
+}
+
+/// STATE-4: an editor front end removes a record nothing has written for longer than the period as
+/// it starts, as the desktop's does, and leaves one written inside the period. It speaks only when a
+/// client does, so the sweep is all it has done by the time the test looks.
+#[test]
+fn an_editor_front_end_removes_old_records_as_it_starts() {
+    let home = Home::new("bridge-editor-old-records");
+    let old = home.put("sessions/project/old-session.json", 400);
+    let recent = home.put("sessions/project/recent-session.json", 3);
+
+    let mut child = started(env!("CARGO_BIN_EXE_bravebot-acp"), &home.path);
+    let removed = removed_while_running(&old);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(removed, "the record 400 days old was still there");
+    assert!(
+        recent.exists(),
+        "a record written three days ago was removed"
+    );
 }
