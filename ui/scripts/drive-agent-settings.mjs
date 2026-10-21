@@ -20,7 +20,7 @@ try {
   await app.evaluate(({ ipcMain, BrowserWindow }, directory) => {
     const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', credential: 'not required' }], selected: null, layers: [], overrides: [], managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
     // Figures that are not the agent's real ones, so a placeholder that held its own would not match them.
-    const defaultFor = { 'turn-started': 41, 'tool-finished': 42, 'turn-finished': 43, 'prompt-shown': 44, 'session-started': 45, 'session-ended': 7 }
+    const defaultFor = { 'turn-started': 41, 'tool-finished': 42, 'turn-finished': 43, 'prompt-shown': 44, 'checkout-made': 46, 'compacted': 47, 'session-started': 45, 'session-ended': 7 }
     const state = { report, defaultFor, hooks: { path: '/test/.bravebot/hooks.json', text: '{"hooks":[]}', entire: true, hooks: [] }, watches: [], replies: [], turns: 0, conflict: false, unreadable: false }
     const emit = (event, data, session = 's-a') => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event', { event, data, session })
     globalThis.agentSettingsFixture = { state, emit }
