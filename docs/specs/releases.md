@@ -12,6 +12,7 @@ governs:
   - npm/tests/launcher.test.mjs
   - npm/tests/package.test.mjs
   - install.sh
+  - install.ps1
   - package.json
   - ui/package.json
   - contrib/check-versions.py
@@ -30,11 +31,11 @@ Building for a platform is not this topic. Reproducible cross-builds are ordinar
 in [../development/releasing.md](../development/releasing.md). This file governs only the path from a version to a
 published asset, and the checks along it.
 
-Three routes carry what is published: the npm packages, which hold the binaries themselves and are
-built from the GitHub release when they are published, the shell script served from the trunk
-of this repository, which fetches the release when it runs, and the Homebrew cask and the WinGet
-package, whose manifests name the release's assets and their digests. All are governed here. Learning from
-a running copy that a newer release exists is [updates.md](updates.md).
+Four routes carry what is published: the npm packages, which hold the binaries themselves and are
+built from the GitHub release when they are published, the shell script and the PowerShell script
+served from the trunk of this repository, which fetch the release when they run, and the Homebrew
+cask and the WinGet package, whose manifests name the release's assets and their digests. All are
+governed here. Learning from a running copy that a newer release exists is [updates.md](updates.md).
 
 GitHub Actions compiles and tests. It does not create a GitHub release. Signed, configured
 binaries are built and published by the Jenkins job `bravebot-build` in the devops repository.
@@ -46,8 +47,9 @@ path, the Jenkins publish path, or the npm publish workflow rather than by anyth
 suite can execute, so each of those clauses says in brackets what makes it hold. Some are the
 exception. What the package script downloads from, what the wrapper installs and which package the
 launcher runs are pinned by Node tests that the npm lockfile job runs and `cargo test` does not
-reach, and what the script and `install.sh` do with a signature is pinned by a Rust test that runs
-both of them against a release it made.
+reach, and what the package script and `install.sh` do with a signature is pinned by a Rust test
+that runs both of them against a release it made. What `install.ps1` fetches, checks and writes is
+pinned by another, which runs it under `pwsh`.
 
 ## Clauses
 
@@ -176,9 +178,9 @@ distinguish a bad download from a good one now fires on every good one.
 <a id="RELEASE-9"></a>
 ### RELEASE-9: a downloaded binary is checked against its published checksum before it is written
 
-`install.sh` and the script that builds the npm platform packages each fetch the published
-checksum, compare it against what they downloaded, and write no executable when the two differ or
-the checksum is not well formed. Well formed is the digest and nothing else: sixty-four hex
+`install.sh`, `install.ps1` and the script that builds the npm platform packages each fetch the
+published checksum, compare it against what they downloaded, and write no executable when the two
+differ or the checksum is not well formed. Well formed is the digest and nothing else: sixty-four hex
 digits, with no filename beside them. An npm install fetches no checksum: the registry's integrity
 hash covers the bytes of the package it serves, and those bytes passed this check when the package
 was built.
@@ -189,6 +191,9 @@ can check on every platform. It is published beside the binary, so it shows that
 arrived intact and not who produced it; [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15)
 are what check that.
 
+`verified-by: bravebot_cli::installer_powershell::a_binary_that_does_not_match_its_checksum_installs_nothing`
+`verified-by: bravebot_cli::installer_powershell::a_malformed_checksum_installs_nothing`
+`verified-by: bravebot_cli::installer_powershell::a_checksum_in_either_case_installs`
 `verified-by: by-construction (install.sh and the package script each hash what they downloaded, compare it against the published value, and exit without writing when they differ or the published value is not sixty-four hex digits)`
 
 <a id="RELEASE-10"></a>
@@ -271,8 +276,9 @@ touching `package.json`.
 <a id="RELEASE-13"></a>
 ### RELEASE-13: each tool's release origin is composed from nothing
 
-The repository `install.sh` and the package script download from is stated in each. Nothing
-outside it chooses that repository: not an argument, not a file, and not the environment.
+The repository `install.sh`, `install.ps1` and the package script download from is stated in
+each. Nothing outside it chooses that repository: not an argument, not a file, and not the
+environment.
 
 **Why.** Each fetches an asset and the checksum of that asset from the same release, so an
 origin supplied from outside moves both halves of the comparison together. A substituted binary
@@ -283,12 +289,19 @@ manifest names the real package, and the log prints the version it fetched rathe
 fetched it from. The line a person is handed to update with is one fixed line for the same reason,
 which [updates.md](updates.md) sets out.
 
-The one input install.sh accepts is a version: three decimal numbers with an optional leading `v`,
-composed into a tag under that fixed repository, and refused before any request when it is
-anything else. It chooses a release, never a host or a path, and every check in
-[RELEASE-9](#RELEASE-9), [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15) runs unchanged
-against it. `crates/cli/tests/installer_signature.rs` pins which URLs each argument reaches.
+The one input either install script accepts that reaches a URL is a version: three decimal numbers
+with an optional leading `v`, composed into a tag under that fixed repository, and refused before
+any request when it is anything else. It chooses a release, never a host or a path, and every
+check in [RELEASE-9](#RELEASE-9), [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15) runs
+unchanged against it. `crates/cli/tests/installer_signature.rs` pins which URLs each argument
+reaches for `install.sh`, and `crates/cli/tests/installer_powershell.rs` does the same for
+`install.ps1` and also holds it to the environment variables it is written to read, none of which
+names a repository, a host, a tag or a URL. The tag the newest-release lookup answers with is held
+to the shape of a published one before it is composed into a URL.
 
+`verified-by: bravebot_cli::installer_powershell::the_script_installs_the_version_it_is_given_and_refuses_what_is_not_one`
+`verified-by: bravebot_cli::installer_powershell::nothing_the_environment_names_chooses_where_the_script_downloads_from`
+`verified-by: bravebot_cli::installer_powershell::a_newest_release_tag_that_is_not_a_version_installs_nothing`
 `verified-by: by-construction (install.sh states the repository as a literal, and the package script composes both URLs from one constant and the version in the tree; npm/tests/stage-platform-package.test.mjs calls that origin with an environment set against it, holds the script to that one URL, and fails on any reach into the environment. make check-npm runs it)`
 
 <a id="RELEASE-14"></a>
@@ -335,17 +348,18 @@ serve an older release's binary, checksum and signature together, and they verif
 <a id="RELEASE-15"></a>
 ### RELEASE-15: on macOS and Windows, a binary not signed by Brave installs nothing
 
-Before an executable is written, `install.sh` and the package script check the code signature the
-binary carries. On macOS the binary has to satisfy a `codesign` requirement that names Brave's
+Before an executable is written, `install.sh`, `install.ps1` and the package script check the code
+signature the binary carries. On macOS the binary has to satisfy a `codesign` requirement that names Brave's
 Developer ID team, and has to pass `spctl` as an installer package, which is where notarization is
-checked. On Windows, in the package script, Authenticode has to report the signature as valid and
-the signing certificate's name has to be `Brave Software, Inc.`. When the signature is missing, is
-from any other signer, or does not verify, or when the tool that checks it cannot be run, no
-executable is written. Linux binaries carry no code signature and are checked as
-[RELEASE-14](#RELEASE-14) says. The install script does not install Windows. The package script
-builds a macOS package on a macOS runner and a Windows package on a Windows runner, because
-`codesign`, `spctl` and PowerShell's Authenticode check run nowhere else. An npm install checks no
-signature of its own.
+checked. On Windows, in `install.ps1` and the package script, Authenticode has to report the signature as
+valid and the signing certificate's name has to be `Brave Software, Inc.`. When the signature is
+missing, is from any other signer, or does not verify, or when the tool that checks it cannot be
+run, no executable is written. Linux binaries carry no code signature and are checked as
+[RELEASE-14](#RELEASE-14) says. `install.sh` does not install Windows, and `install.ps1` installs
+nothing else: a PowerShell with no `Get-AuthenticodeSignature`, such as PowerShell on macOS or
+Linux, installs nothing and names `install.sh`. The package script builds a macOS package
+on a macOS runner and a Windows package on a Windows runner, because `codesign`, `spctl` and
+PowerShell's Authenticode check run nowhere else. An npm install checks no signature of its own.
 
 **Why.** The checksum is published beside the binary, so whoever can replace one can replace the
 other, and the checksum cannot say who produced the binary. The macOS and Windows binaries are
@@ -360,12 +374,16 @@ because `-t execute` rejects any bare executable that is not an app bundle, howe
 
 **Note.** The macOS check was run by hand against the published arm64 release and accepted it. The
 Windows check has not been run on Windows: the signer name was read from the certificate with
-`openssl`, and the PowerShell that reads it is exercised here only through a stand-in. It
-compares the certificate's common name and pins no thumbprint, so a certificate carrying that
+`openssl`, and the PowerShell that reads it is exercised here only through a stand-in, in the
+package script's tests and in `install.ps1`'s alike. `install.ps1` has been run under PowerShell 7
+on macOS and Linux with `Get-AuthenticodeSignature` replaced by a function, and not under Windows
+PowerShell 5.1, which is the edition Windows ships. It compares the certificate's common name and
+pins no thumbprint, so a certificate carrying that
 name from another authority the machine trusts would pass; a thumbprint would refuse every install
 at the next certificate renewal. The tests replace `codesign`, `spctl` and `powershell.exe` with
-programs that answer from a marker in the binary, so they hold `install.sh` and the package script to
-what they ask and how they treat the answer, and not to what the real tools say. `spctl` can need
+programs, and `Get-AuthenticodeSignature` with a function, that answer from the file they are given,
+so they hold `install.sh`, `install.ps1` and the package script to what they ask and how they treat
+the answer, and not to what the real tools say. `spctl` can need
 the network to check notarization, so an offline macOS install may be refused. The first run of the
 package script on a hosted macOS or Windows runner is a release's publish.
 
@@ -379,6 +397,11 @@ package script on a hosted macOS or Windows runner is a release's publish.
 `verified-by: bravebot_cli::installer_signature::a_windows_binary_whose_signature_is_not_valid_installs_nothing`
 `verified-by: bravebot_cli::installer_signature::a_windows_install_without_powershell_installs_nothing`
 `verified-by: bravebot_cli::installer_signature::a_linux_install_runs_neither_codesign_nor_powershell`
+`verified-by: bravebot_cli::installer_powershell::a_windows_binary_signed_by_brave_installs`
+`verified-by: bravebot_cli::installer_powershell::a_windows_binary_signed_by_someone_else_installs_nothing`
+`verified-by: bravebot_cli::installer_powershell::an_unsigned_windows_binary_installs_nothing`
+`verified-by: bravebot_cli::installer_powershell::a_windows_binary_whose_signature_is_not_valid_installs_nothing`
+`verified-by: bravebot_cli::installer_powershell::an_install_without_the_signature_tool_installs_nothing`
 
 <a id="RELEASE-16"></a>
 ### RELEASE-16: installing the npm package runs no script and fetches nothing from the release
@@ -468,7 +491,8 @@ download rather than writing a package for a version nobody can fetch.
   by-construction, which means a refusal can be removed and only a reader will notice. The tests
   for [RELEASE-14](#RELEASE-14) and [RELEASE-15](#RELEASE-15) run on Linux alone and skip where
   `gpg` or `node` is missing, so on a macOS checkout it passes having checked nothing; the Linux job in CI has
-  both. The tagging path is shell in a makefile,
+  both. The tests for `install.ps1` run wherever `pwsh` is installed and skip where it is not, which
+  the Linux job in CI has, since its image ships PowerShell. The tagging path is shell in a makefile,
   publication is a Jenkins job in another repository, and a test that shelled out to a real tag
   push would have to publish something to prove anything. Three checks hold part of it from outside
   the suite. `make check-security` holds the shape of the publish workflow rather than any of these
@@ -482,6 +506,24 @@ download rather than writing a package for a version nobody can fetch.
   supplies, and [RELEASE-17](#RELEASE-17) when the launcher and the publish step stop agreeing. It
   reaches the package script alone, and the shell script beside it is read by nothing. It does not
   run `publish-npm.yml`, whose platform jobs run for the first time at a release.
+
+- **`install.ps1` does not change the `PATH`.** It installs under `%LOCALAPPDATA%\Programs\bravebot`
+  unless `INSTALL_DIR` or an earlier run's record names another directory, and when that directory is
+  not on the `PATH` it says so and leaves adding it to the person. It does not say which `bravebot`
+  runs when another, an npm copy's shim for one, comes first on the `PATH`.
+
+- **`install.ps1` has not run on Windows.** Its tests run it under PowerShell 7 on macOS and Linux,
+  with the network and `Get-AuthenticodeSignature` replaced by functions. What Windows PowerShell
+  5.1 does with it, including the TLS setting it adds for that edition, the architecture an emulated
+  PowerShell reports, and what `Get-AuthenticodeSignature` says about Brave's binary, are first seen
+  by the person who runs it. A command it needs that is missing is a refusal that writes nothing, so
+  the failure is an install that does not happen.
+
+- **On Windows the update line may not be able to replace a copy that is running.** The startup
+  notice is shown inside a session, so the line it offers is run beside that session, and Windows
+  does not let a running executable be overwritten. Where replacing it fails, `install.ps1` says so,
+  installs nothing and leaves the old copy in place, and the person closes the session and runs the
+  line again. Nothing in the tests runs it on Windows (the entry above).
 
 - **Opening the package changes is manual, and a package lags its release.** Between a GitHub
   release and the tap and WinGet repository taking the change, the startup notice

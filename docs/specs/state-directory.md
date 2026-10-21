@@ -19,6 +19,7 @@ governs:
   - crates/lsp/src/server.rs
   - crates/ui-bridge/src/store.rs
   - install.sh
+  - install.ps1
 guards:
   - symbol: home::create_directory
   - symbol: home::write_file
@@ -235,6 +236,7 @@ that invented a fallback would be the case above, whichever crate it happened in
 `verified-by: bravebot_cli::installer_state_directory::the_record_goes_under_home_where_no_directory_is_named`
 `verified-by: bravebot_cli::installer_state_directory::a_value_that_names_no_directory_is_passed_over`
 `verified-by: bravebot_cli::installer_state_directory::a_value_that_names_no_directory_leaves_no_state_directory_to_guess`
+`verified-by: bravebot_cli::installer_powershell::with_no_profile_directory_the_script_installs_and_records_nothing`
 
 <a id="STATE-3"></a>
 ### STATE-3: a surface that only reads this directory does not write into it

@@ -47,6 +47,7 @@ READ_BY_RUST = (
 # one is a change to what those tests exercise, whatever else reads it.
 READ_BY_INSTALLER_TESTS = {
     "install.sh": frozenset({"rust"}),
+    "install.ps1": frozenset({"rust"}),
     "npm/scripts/stage-platform-package.js": frozenset({"npm", "rust"}),
 }
 
@@ -344,6 +345,7 @@ CASES = (
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
     ("npm/scripts/stage-platform-package.js", {"npm", "rust"}),
     ("install.sh", {"rust"}),
+    ("install.ps1", {"rust"}),
     ("package-lock.json", {"npm"}),
     ("pnpm-lock.yaml", {"npm"}),
     ("pnpm-workspace.yaml", {"npm"}),

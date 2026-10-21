@@ -35,7 +35,16 @@ That puts the binary in `/usr/local/bin`, and takes `INSTALL_DIR` for somewhere 
 curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
-Either way, run `bravebot` in a repository afterwards. Both installers verify the release
+Or on Windows, in PowerShell, without Node:
+
+```powershell
+irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
+```
+
+That puts `bravebot.exe` in `%LOCALAPPDATA%\Programs\bravebot`, takes `INSTALL_DIR` for somewhere
+else, and leaves your `PATH` alone.
+
+Either way, run `bravebot` in a repository afterwards. The installers verify the release
 checksum and the signature on the binary (see "Check a download by hand" in the
 [quickstart](docs/website/docs/quickstart.md)), and a session started on an old version says so and gives the line that updates it. See
 [docs/getting-started.md](docs/getting-started.md) for installing, running, and what it asks you.

@@ -1575,9 +1575,10 @@ a regular-expression `pattern` would need one the dependency policy bans.
 ### CLI-29: `update` says the command that updates this copy, and runs nothing
 
 `bravebot update` prints the command for the way this copy was installed: the npm package's line
-for one the npm launcher started, and the install script's own line for the binary that script
-recorded putting there, and `brew upgrade --cask bravebot` or `winget upgrade Brave.Bravebot` for
-one that Homebrew or WinGet unpacked. A copy none of those put here, a build from source above all, is told
+for one the npm launcher started, the install script's own line for the binary that script
+recorded putting there, the PowerShell install script's own line for the binary that script
+recorded, and `brew upgrade --cask bravebot` or `winget upgrade Brave.Bravebot` for one that
+Homebrew or WinGet unpacked. A copy none of those put here, a build from source above all, is told
 there is no update command for it and that a build is updated by building again; that is a success
 rather than a failure, since nothing about the machine is wrong. It takes no argument, and a word
 after it is refused with the status for an argument (CLI-6).
@@ -1587,8 +1588,8 @@ and the output never names a version. The command is a literal per installation 
 comes from a file, an environment variable or a response.
 
 **Why.** How to update is a question with an answer the program already holds and the person does
-not: which of the four installers put this binary here is not something somebody can read off their
-own machine, and the four commands are not interchangeable. The npm line installs a package
+not: which of the five installers put this binary here is not something somebody can read off their
+own machine, and the five commands are not interchangeable. The npm line installs a package
 manager's copy, so sent to a script install it leaves the running binary untouched and a second one
 elsewhere; the script's line writes over the path the script recorded, so sent to a build from
 source it would replace a binary this program did not install.

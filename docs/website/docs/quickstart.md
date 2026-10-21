@@ -51,9 +51,43 @@ Running the line again is how an install made this way is updated. The script re
 the binary, so a second run with no directory named replaces that one rather than leaving two on
 your `PATH`.
 
+On Windows there is a PowerShell script, for a machine with no Node on it. It needs no
+Administrator:
+
+```powershell
+irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
+```
+
+It fetches the newest release for the architecture your PowerShell reports, checks it against the
+published checksum, and checks that the binary's Authenticode signature is valid and was made by `Brave
+Software, Inc.`. It writes nothing if either check fails. It puts `bravebot.exe` in
+`%LOCALAPPDATA%\Programs\bravebot`, and `INSTALL_DIR` puts it somewhere else:
+
+```powershell
+$env:INSTALL_DIR = "$HOME\bin"; irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
+```
+
+It does not change your `PATH`. When the directory is not on it, the script says so, and you add it
+to your user `PATH` and open a new terminal to run `bravebot` by name.
+
+To install a release other than the newest, run the script as a script block and give it a version.
+It takes three numbers, with or without a leading `v`, and checks that release exactly as it checks
+the newest:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1))) 1.2.3
+```
+
+Running the first line again is how an install made this way is updated. The script records where it
+put the binary in `.bravebot\installed-by-powershell` under your profile directory, so a second run
+with no directory named replaces that one. Windows may not let a `bravebot.exe` that is running be
+replaced. The script then installs nothing and says so: close every session of it and run the line
+again. The script needs PowerShell on Windows, since the signature check is
+`Get-AuthenticodeSignature`, and in any other PowerShell it installs nothing.
+
 ### Check a download by hand
 
-Both installers check the binary before they write it, and refuse when it does not verify. To check
+The installers check the binary before they write it, and refuse when it does not verify. To check
 a release yourself, download the asset for your platform from the
 [releases page](https://github.com/brave/bravebot/releases), then:
 
@@ -129,9 +163,10 @@ serve it. `doctor` says the same and fails. See
 A session that opens on a version something newer has replaced says so, once, under the trust
 question, and gives the line that updates the copy you are running. The notice names the version you
 are running rather than the newer one, which may have moved by the time you update: the npm command for an npm
-install, the script again for a script install, `brew upgrade --cask bravebot` for a copy a Homebrew
-cask installed and `winget upgrade Brave.Bravebot` for one WinGet installed. A package manager's
-copy is recognised by the directory the manager keeps it in. A build from source is told nothing,
+install, the script again for a script install, the PowerShell script again for a PowerShell script
+install, `brew upgrade --cask bravebot` for a copy a Homebrew cask installed and `winget upgrade
+Brave.Bravebot` for one WinGet installed. A package manager's copy is recognised by the directory the
+manager keeps it in. A build from source is told nothing,
 since none of those lines would update one. A package can arrive after the release it follows, and
 until it does the manager says there is nothing to upgrade.
 
@@ -172,7 +207,19 @@ the directory is not yours to write to:
 sudo rm /usr/local/bin/bravebot
 ```
 
-Neither route touches `~/.bravebot`. It holds your settings, prompt history, session records, themes,
+A PowerShell script install is one binary as well, and the script wrote down where it put it:
+
+```powershell
+Get-Content "$env:USERPROFILE\.bravebot\installed-by-powershell"
+```
+
+The file is under the directory `HOME` names where that is set, which is where bravebot keeps its
+state directory too, so use `$env:HOME` in its place there. It holds the full path of `bravebot.exe`, which is under `%LOCALAPPDATA%\Programs\bravebot`
+unless `INSTALL_DIR` named somewhere else. Remove `bravebot.exe` at that path, and the directory
+that held it if nothing else is in it. If you added the directory to your `PATH`, remove that entry
+too.
+
+No route touches `~/.bravebot`. It holds your settings, prompt history, session records, themes,
 MCP declarations and any imported subscription, so removing the binary leaves all of that for a later
 install to find. To remove it too:
 

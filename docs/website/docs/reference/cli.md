@@ -793,18 +793,22 @@ status 2.
 bravebot update
 ```
 
-Prints the command that updates this copy, and runs nothing. Two installations have a command it
+Prints the command that updates this copy, and runs nothing. Five installations have a command it
 can name:
 
 | How this copy was installed | What it prints |
 |---|---|
 | the npm package `@brave/bravebot` | `npm install -g @brave/bravebot@latest` |
 | `install.sh` | the same `curl` line that installed it, piped to `sh` |
+| `install.ps1` | the same `irm` line that installed it, piped to `iex` |
+| the Homebrew cask | `brew upgrade --cask bravebot` |
+| the WinGet package | `winget upgrade Brave.Bravebot` |
 
-A copy neither of those put here, a build from source above all, is told there is no update command
-for it; that is a success, since nothing on the machine is wrong. The two lines are not
+A copy none of those put here, a build from source above all, is told there is no update command
+for it; that is a success, since nothing on the machine is wrong. The lines are not
 interchangeable: the npm one installs a package manager's copy, which leaves a script install's
-binary untouched, and the script's one writes over the path the script recorded.
+binary untouched, the shell script's one cannot run in a Windows shell, and each script's one writes
+over the path that script recorded.
 
 It asks nothing of any registry, so the command is the same whether or not a newer version has been
 published and no version is named. Whether one is out is said once at the top of an interface
