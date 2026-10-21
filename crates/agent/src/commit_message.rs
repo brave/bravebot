@@ -12,8 +12,9 @@
 //! does ([CMD-17](../../../docs/specs/commands.md)), and never the diff.
 //!
 //! What this function decides from the diff is limited to two counts the reader reports about its
-//! own answer: whether it showed no file at all, and whether it stopped at a cap. Both are said to
-//! the person. No word of the diff or of the draft is read.
+//! own answer, whether it showed no file at all and whether it stopped at a cap, and one yes or no
+//! from a credential scan of a diff nobody vouched for. All three are said to the person. No word
+//! of the diff or of the draft is read.
 
 use bravebot_aichat::protocol::Usage;
 use bravebot_core::event::Sink;

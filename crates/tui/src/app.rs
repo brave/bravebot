@@ -4672,6 +4672,9 @@ fn commit_message_answered(
         Ok(drafted) => {
             session.end_aside(drafted.usage.total());
             session.propose_commit_message(&drafted.message);
+            if let Some(written) = &drafted.substituted {
+                session.note(t!(processor_model_substituted, model = written));
+            }
             if drafted.partial {
                 session.note(t!(commit_message_partial));
             }
@@ -14310,6 +14313,23 @@ mod tests {
                 .transcript
                 .iter()
                 .any(|entry| entry.text == t!(paste_invisible_removed, count = 1)),
+            "the person was not told"
+        );
+    }
+
+    /// PROC-13: a draft written by a model other than the one `processorModel` named says so, in the
+    /// driver's words naming the model as the setting wrote it.
+    #[test]
+    fn a_draft_answered_by_another_model_than_the_configured_one_says_so() {
+        let mut session = Session::new("none");
+        let mut done = drafted("Fix it");
+        done.substituted = Some("fast-model".to_string());
+        commit_message_answered(&mut session, Ok(done));
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(processor_model_substituted, model = "fast-model")),
             "the person was not told"
         );
     }

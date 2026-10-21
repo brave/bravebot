@@ -298,8 +298,9 @@ driver's own fixed words and the format the person typed after the command, both
 
 What differs from a call a planner makes is where the output goes. The document is released by the
 display gate to the person's input box, and the remark is never released. The driver reads two
-counts of the reader's own answer, whether it showed no file and whether it stopped at a cap, and
-nothing of the diff or the draft. A diff that holds what looks like a credential is not given to the
+counts of the reader's own answer, whether it showed no file and whether it stopped at a cap, and,
+for a diff nobody vouched for, one yes or no from a credential scan of its text. It reads nothing
+else of the diff and nothing of the draft. A diff that holds what looks like a credential is not given to the
 processor, whether or not its files are vouched for, since nobody is at a prompt to agree to it as
 for a planner's read ([CRED-15](credential-protection.md#CRED-15)).
 
@@ -311,6 +312,7 @@ starts, and the person is the only reader of the draft before they decide what t
 `verified-by: bravebot_agent::commit_message::an_untrusted_diff_holding_a_credential_is_not_sent`
 `verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
 `verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
+`verified-by: bravebot_tui::app::a_draft_answered_by_another_model_than_the_configured_one_says_so`
 
 ## Known costs
 
