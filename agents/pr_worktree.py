@@ -34,6 +34,11 @@ REASON_WIDTH = 120
 REASON_LINES = 3
 WIDTH = 300
 REBASE_STATES = ("rebase-merge", "rebase-apply")
+# The directory of the repository's common git directory that `make hooks` fills, which no branch
+# tracks. Git runs hooks from here and nowhere else, since a pull request's worktree would otherwise
+# run the hooks that pull request tracks, as whoever runs the script.
+HOOKS_DIR = "bravebot-hooks"
+HOOKS_DIRS = {}
 
 
 def die(message):
@@ -56,8 +61,37 @@ def printed(done):
     return "\n".join(part for part in (done.stderr.strip(), out) if part)
 
 
+def hooks_dir(cwd):
+    """The directory git runs hooks from for the repository `cwd` is in, or None outside one.
+
+    It does not exist until `make hooks` creates it. The common git directory of a path does not change
+    while a script runs, so a resolved answer is kept rather than asked for again before every git command.
+    """
+    key = str(Path(cwd or ".").resolve())
+    if key not in HOOKS_DIRS:
+        try:
+            done = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=cwd, capture_output=True, text=True)
+        except OSError:
+            return None
+        if done.returncode:
+            return None
+        HOOKS_DIRS[key] = Path(key, done.stdout.strip()).resolve() / HOOKS_DIR
+    return HOOKS_DIRS[key]
+
+
+def hooks_note(main):
+    """One line saying that no hook runs, or an empty string when `make hooks` has created the directory."""
+    directory = hooks_dir(main)
+    if directory is None or directory.is_dir():
+        return ""
+    return f"hooks: none run, {directory} does not exist; `make hooks` in {main} creates it"
+
+
 def run(*args, cwd=None, check=True, env=None):
-    done = subprocess.run(args, cwd=cwd, capture_output=True, text=True, env=env)
+    # A `-c` reaches the commands git starts itself, such as the commits a rebase makes, and outranks
+    # whatever `core.hooksPath` the repository's config holds.
+    command = ("git", "-c", f"core.hooksPath={hooks_dir(cwd) or os.devnull}", *args[1:]) if args[0] == "git" else args
+    done = subprocess.run(command, cwd=cwd, capture_output=True, text=True, env=env)
     if check and done.returncode:
         die(f"{' '.join(map(str, args))} failed:\n{printed(done)}")
     return done
@@ -231,11 +265,14 @@ def reuse_note(pr):
 
 
 def announce(pr):
-    """Say which worktree a step works in, and where it is when the script did not choose the place."""
+    """Say which worktree a step works in, where it is when not the standard place, and when no hooks run."""
     print(f"worktree {pr.tree}", flush=True)
     note = reuse_note(pr)
     if note:
         print(note, flush=True)
+    hooks = hooks_note(pr.main)
+    if hooks:
+        print(hooks, flush=True)
 
 
 def refuse_locked(pr, script, words, allowed):
@@ -685,6 +722,9 @@ def push(pr, script):
         print(f"{pr.url} is already at {now[:8]}; nothing to push")
         return 0
     refuse_unsigning(pr, tip, now, tree)
+    hooks = hooks_note(pr.main)
+    if hooks:
+        print(hooks, flush=True)
     push_head(pr, tree, tip)
     print(f"pushed {tip[:8]} -> {now[:8]} to {pr.tip}\n{pr.url}")
     return 0

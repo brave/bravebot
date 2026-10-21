@@ -4220,6 +4220,22 @@ def test_the_tooling_lane_starts_from_the_scripts():
         str(starts),
     )
 
+    where = in_tree(
+        {
+            "Makefile": (
+                "hooks:\n"
+                "\t@echo " + "x" * 300 + " && \\\n"
+                "\t  git config core.hooksPath /somewhere\n"
+            )
+        }
+    )
+    texts = [s["text"] for s in with_cwd(where, audit.make_recipes)]
+    check(
+        "a git configuration set late in a long recipe is still in the listed text",
+        len(texts) == 1 and "core.hooksPath /somewhere" in texts[0],
+        str(texts),
+    )
+
 
 def test_the_new_lanes_are_run_for_the_files_they_read():
     """A branch's diff selects the lanes that read what it touched."""
