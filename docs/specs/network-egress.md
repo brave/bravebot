@@ -356,7 +356,7 @@ A redirect is named by a server, and how long its target is waited on is not a s
 lengthen. A proxy is another machine, so a request through one is another machine's request. With
 no bound, the only end to a wait on a server that took the request and hung is somebody stopping
 it, so a request nobody can stop is not waited on this way. A whole reply is always one of those,
-because its body is read to the end without a stop being looked at.
+because its body is read to the end and a stop pressed meanwhile is not acted on.
 
 `verified-by: bravebot_net::egress::a_stream_from_this_machine_that_asks_is_waited_on_through_any_silence`
 `verified-by: bravebot_net::egress::a_redirect_from_this_machine_keeps_the_bounds`

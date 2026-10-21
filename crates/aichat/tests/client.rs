@@ -2083,6 +2083,72 @@ fn a_retry_is_written_to_the_diagnostic_log() {
     assert!(!log.contains("a private prompt"), "{log}");
 }
 
+/// A reply cut off after it began is written as the failure it was, once for each attempt it cut,
+/// as well as the retry it led to. The request got a 200 and a first frame, so the failure is in
+/// reading the rest. A log that holds the retry without it says a request was sent again with no
+/// reason.
+#[test]
+fn a_reply_cut_off_part_way_is_written_to_the_diagnostic_log_as_well_as_its_retries() {
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let begun = || {
+        Attempt::BrokenFrames(vec![frame(
+            r#"{"choices":[{"delta":{"content":"a private answer"}}]}"#,
+        )])
+    };
+    let (endpoint, _received) = serve_attempts(vec![begun(), begun(), begun()]);
+    let host = format!("host={}", endpoint.trim_start_matches("http://"));
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    bravebot_diag::configure(bravebot_diag::Level::Info, Some(dir.path().to_path_buf()));
+    // Points the log nowhere again when an assertion below panics.
+    struct Unconfigure;
+    impl Drop for Unconfigure {
+        fn drop(&mut self) {
+            bravebot_diag::configure(bravebot_diag::Level::Error, None);
+        }
+    }
+    let unconfigure = Unconfigure;
+
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    // Backoffs no other test in this binary uses, so the retry lines below are this test's own.
+    let mut client = AichatClient::new(&config, &egress).with_backoff(Duration::from_millis(13));
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+    let failed = client.complete_streaming(&mut policy, &request, |_| {});
+    assert!(matches!(failed, Err(ChatError::Incomplete)), "{failed:?}");
+
+    let log: String = std::fs::read_dir(dir.path().join("logs"))
+        .expect("a failure makes the log")
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect();
+    drop(unconfigure);
+
+    let cut: Vec<_> = log
+        .lines()
+        .filter(|line| line.contains("ERROR net.fetch") && line.contains(&host))
+        .collect();
+    assert_eq!(cut.len(), 3, "one for each attempt that was cut: {log}");
+    assert!(
+        cut.iter().all(|line| line.contains("kind=transport")),
+        "{log}"
+    );
+    for line in [
+        "INFO aichat.retry attempt=2 backoff_ms=13",
+        "INFO aichat.retry attempt=3 backoff_ms=26",
+    ] {
+        assert!(log.contains(line), "missing {line:?} in {log}");
+    }
+    assert!(!log.contains("a private answer"), "{log}");
+}
+
 /// The listing is a plain GET on the base host. It carries no signature and no credential: the
 /// endpoint requires neither, and spending a subscription credential to read a public list would
 /// be spending one for nothing.

@@ -17,7 +17,7 @@
 use crate::protocol::{
     Listing, RpcRequest, RpcResponse, ToolResult, call_params, initialize_params, paged,
 };
-use crate::{McpError, McpResult, malformed, named};
+use crate::{McpError, McpResult, log_step, malformed, named};
 use bravebot_core::capability::{Capability, ServerAlias};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
@@ -196,13 +196,16 @@ impl HttpServer {
         client_name: &str,
         client_version: &str,
     ) -> McpResult<()> {
-        self.send(
-            policy,
-            egress,
-            "initialize",
-            Some(initialize_params(client_name, client_version)),
-        )?;
-        Ok(())
+        let done = self
+            .send(
+                policy,
+                egress,
+                "initialize",
+                Some(initialize_params(client_name, client_version)),
+            )
+            .map(|_| ());
+        log_step("mcp.initialize", &done);
+        done
     }
 
     /// List the tools this server offers, as the one labelled text a person vouches for before any
@@ -212,8 +215,9 @@ impl HttpServer {
         policy: &mut Policy<'_, S>,
         egress: &Egress,
     ) -> McpResult<Listing> {
-        let list = paged(|params| self.send(policy, egress, "tools/list", params))?;
-        Ok(list.listing(&self.name))
+        let listed = paged(|params| self.send(policy, egress, "tools/list", params));
+        log_step("mcp.list_tools", &listed);
+        Ok(listed?.listing(&self.name))
     }
 
     /// Call a tool.
