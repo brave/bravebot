@@ -3933,9 +3933,18 @@ def make_recipes():
             target = named.group(1)
         if held and not held.endswith("\\"):
             # A recipe line written over several lines is one command, read from its first line.
-            if MAKE_RECIPE_GIT.search(held):
+            matched = MAKE_RECIPE_GIT.search(held)
+            if matched:
+                # The text runs to a little past the end of the match, so a long recipe still shows the
+                # configuration it sets.
+                text = held.strip()
                 found.append(
-                    {"path": "Makefile", "line": first, "text": held.strip()[:200], "function": target}
+                    {
+                        "path": "Makefile",
+                        "line": first,
+                        "text": text[: max(200, matched.end() + 100)],
+                        "function": target,
+                    }
                 )
             held = ""
         elif held:
