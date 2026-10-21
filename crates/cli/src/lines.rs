@@ -1,4 +1,4 @@
-//! The lines a run given `--input-format lines` reads from stdin, and what becomes of each (CLI-35).
+//! The lines a run given `--input-format lines` reads from stdin, and what becomes of each (CLI-36).
 //!
 //! One process serves several turns: a `prompt` line starts one, a `steer` line reaches the one
 //! running, an `answer` line replies to a question the planner asked, and a `stop` line ends the
@@ -664,7 +664,7 @@ impl Channel {
 
     /// How the run hands a `prompt` line to its turn: as the turn's own prompt where a person
     /// vouched for the channel, and as piped input, which the planner is given a reference to,
-    /// where nobody did (CLI-35).
+    /// where nobody did (CLI-36).
     pub(crate) fn vouched(&self) -> bool {
         self.shared.vouched
     }

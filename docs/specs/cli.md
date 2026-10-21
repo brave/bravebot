@@ -61,7 +61,7 @@ found a value in are still refused, because nobody can be asked. The two are ref
 `--accept-edits` is refused where the line starts no one-shot run, since a session has the mode key
 for the same thing. The planner's questions are declined in both modes, because they are not
 permissions. A run given `--input-format lines` puts them to the program sending its lines instead,
-which picks among the choices the planner offered and writes none of the words (CLI-35).
+which picks among the choices the planner offered and writes none of the words (CLI-36).
 
 **Why.** The alternative to a person is not a default, it is a guess made in their name. The
 planner is told a reply came from a person, so inventing one would be worse than not asking. A flag
@@ -98,7 +98,7 @@ answer. Writing stays refused without one of the flags above.
 
 A terminal's stdin is left alone, so an interactive invocation does not sit waiting for input
 nobody is sending. Piped bytes are read when there are any. A run given `--input-format lines` reads
-stdin a line at a time until it closes, whatever stdin is (CLI-35).
+stdin a line at a time until it closes, whatever stdin is (CLI-36).
 
 A question this run asked is the exception, and it is not the case this clause is about: the bytes
 are read because somebody was prompted for them a moment earlier, so they are input that is being
@@ -113,7 +113,7 @@ a pipe is never read for an answer.
 
 Nothing vouched for what a pipe carries: `gh pr diff` and `cat build-error.txt` both arrive the
 same way and neither passed through the trust map. So it is quarantined and the planner is given a
-reference, never the bytes. The lines of CLI-35 are labelled the same way, unless a person typed
+reference, never the bytes. The lines of CLI-36 are labelled the same way, unless a person typed
 `--trust-input-lines`.
 
 **Why.** A pipe has no path, so there is nothing for the trust map to have an opinion about. The
@@ -141,7 +141,7 @@ was released. The one thing that may take the reply's place on that stream is th
 CLI-12, and it is still the only thing on it. The events of CLI-24 are the second exception: a run
 given `--json-stream` writes them ahead of that object, and nothing else is on the stream. A run
 given `--input-format lines` writes a result object for each turn it runs, and the two events of
-CLI-35 beside the others.
+CLI-36 beside the others.
 
 **Why.** A progress line mixed into stdout would corrupt whatever the user piped the reply into.
 
@@ -719,7 +719,7 @@ Prompts are read only from a terminal because they are the trusted input, and wh
 that a pipe carries bytes nothing vouched for. A session reading prompts from a pipe would take its
 instructions from whatever fed it, and answer its own approval questions out of the same bytes,
 which is the whole guarantee inverted for the sake of a convenience `-p` already provides.
-`--input-format lines` (CLI-35) reads prompts from a pipe as well, and leaves the guarantee standing
+`--input-format lines` (CLI-36) reads prompts from a pipe as well, and leaves the guarantee standing
 by labelling them as a pipe's until a person types the flag that says they are theirs.
 
 **What it does not have.** Everything that was a drawing: the scroller and its search, the key
@@ -1341,7 +1341,7 @@ line, to stdout as each of these happens, in the order they happen:
 
 The last line is the result object of CLI-12, byte for byte what `--json` writes for the same run.
 A run given `--input-format lines` runs several turns and writes one result object for each, after
-the events of that turn (CLI-35). It has no `event` field, so a caller tells it from an event by
+the events of that turn (CLI-36). It has no `event` field, so a caller tells it from an event by
 that. Every event carries the
 `schema` number of CLI-12 and its add-only rule: within one number a field may be added to an event,
 and an event kind may be added, and neither is removed, renamed or given a different meaning.
@@ -1976,8 +1976,8 @@ that broke, and from one that found nothing to connect to.
 `verified-by: bravebot_cli::progress::a_streamed_total_never_falls_when_the_next_round_starts`
 `verified-by: bravebot_cli::progress::a_notice_a_later_round_says_again_is_kept_once`
 
-<a id="CLI-35"></a>
-### CLI-35: `--input-format lines` reads turns, steers, answers and stops from stdin, a JSON object to a line
+<a id="CLI-36"></a>
+### CLI-36: `--input-format lines` reads turns, steers, answers and stops from stdin, a JSON object to a line
 
 A one-shot run given `--input-format lines` is a `--json-stream` run (CLI-24), since its questions are
 put and its results written there, and reads stdin a line at a time until it closes, where CLI-2

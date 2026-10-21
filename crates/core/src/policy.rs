@@ -2380,7 +2380,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     /// Record that a line reached the turn from an input channel the person vouched for, while the
-    /// turn ran (CLI-35).
+    /// turn ran (CLI-36).
     ///
     /// The same footing as [`Policy::admit_interjection`] and for the same reason: the line carries
     /// the person's words and may not route, and the trail records it as the person's own input.
@@ -15721,7 +15721,7 @@ five
         );
     }
 
-    /// CLI-35: a line from a channel the person vouched for is accounted for as that, and is a
+    /// CLI-36: a line from a channel the person vouched for is accounted for as that, and is a
     /// decision about provenance only: it does not lower what the context has met, so the planner
     /// is not quarantined from its own steering.
     #[test]

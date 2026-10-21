@@ -7593,7 +7593,7 @@ fn a_prompt_typed_mid_turn_is_recorded_as_the_users_own_input() {
     );
 }
 
-/// CLI-35: a line a program sends on a channel the person vouched for is the person's words and is
+/// CLI-36: a line a program sends on a channel the person vouched for is the person's words and is
 /// recorded as that. Nobody typed it at a keyboard, so a trail that said so would be recording an
 /// input that did not happen, and a turn that took it would be accounted for wrongly.
 #[test]

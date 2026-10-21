@@ -154,7 +154,7 @@ only which question it is on, its drafts and its focus.
 In a one-shot `bravebot "..."` run, every question in the series is declined rather than answered
 on the user's behalf. A run given `--input-format lines` puts the questions to the program sending
 its lines instead, which answers by position among the choices offered and in no words of its own
-([CLI-35](../cli.md#CLI-35)).
+([CLI-36](../cli.md#CLI-36)).
 
 **Why.** The planner is told the reply came from a person, so inventing one would be worse than
 not asking.

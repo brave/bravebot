@@ -48,7 +48,7 @@ pub(crate) struct OneShot<R: Read, W: Write> {
     /// server's tool is told to the policy, so it is kept for the status alone
     /// (`Declined::in_the_trail`).
     declined: Vec<Declined>,
-    /// The input lines a run given `--input-format lines` reads (CLI-35), where it was.
+    /// The input lines a run given `--input-format lines` reads (CLI-36), where it was.
     ///
     /// The planner's questions are put to the program on the other end of it and a steer line is
     /// what an interjection takes. Nothing else changes: a write, a run, a fetch and every other
@@ -270,7 +270,7 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
     /// Declined rather than answered, as everywhere nobody can be asked: a reply invented here would
     /// be reported to the planner as the person's own words. Where lines are being read the question
     /// is put to the program sending them, and what comes back is a pick among the choices the
-    /// planner offered (CLI-35).
+    /// planner offered (CLI-36).
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
         match &self.lines {
             Some(lines) => lines.ask(asking),

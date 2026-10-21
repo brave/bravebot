@@ -16782,7 +16782,7 @@ fn prompt_line(words: &str) -> String {
     serde_json::json!({"type": "prompt", "text": words}).to_string()
 }
 
-/// CLI-35: one process runs the turns it is sent, each over the conversation the last one left,
+/// CLI-36: one process runs the turns it is sent, each over the conversation the last one left,
 /// and each ends with a result object of its own. A run that gave every line a conversation of its
 /// own would answer the second prompt as though nothing had come before it.
 #[test]
@@ -16842,7 +16842,7 @@ fn the_command_lines_own_prompt_is_the_first_turn() {
     assert!(sent[1].contains("COMMAND-WORDS") && sent[1].contains("LINE-WORDS"));
 }
 
-/// CLI-3 and CLI-35: a line on a pipe is the launching program's words, so the planner is given a
+/// CLI-3 and CLI-36: a line on a pipe is the launching program's words, so the planner is given a
 /// reference to them and never the words, until a person typed the flag that says they are theirs.
 /// The same prompt is sent both ways and only the flag differs, so what the request holds is what
 /// the flag decided.
@@ -16878,7 +16878,7 @@ fn lines_nobody_vouched_for_never_reach_the_planner_and_vouched_ones_do() {
     assert!(!vouched[0].contains("Piped input could not be shown to you"));
 }
 
-/// CLI-35: a steer reaches the turn that is running at its next round boundary, so the request that
+/// CLI-36: a steer reaches the turn that is running at its next round boundary, so the request that
 /// follows the round carries it and the one already on the wire does not.
 #[test]
 fn a_steer_on_a_vouched_channel_reaches_the_turn_that_is_running() {
@@ -16919,7 +16919,7 @@ fn a_steer_on_a_vouched_channel_reaches_the_turn_that_is_running() {
     );
 }
 
-/// CLI-35: where nobody vouched for the channel a steer waits for a turn of its own. Handed to the
+/// CLI-36: where nobody vouched for the channel a steer waits for a turn of its own. Handed to the
 /// running turn it would be a reference the planner cannot read, and the words themselves never
 /// reach it either way.
 #[test]
@@ -16959,7 +16959,7 @@ fn a_steer_on_a_channel_nobody_vouched_for_waits_for_a_turn_and_is_never_shown()
     );
 }
 
-/// CLI-35: a stop ends the turn that is running and leaves the prompts behind it to run, as it
+/// CLI-36: a stop ends the turn that is running and leaves the prompts behind it to run, as it
 /// does in the interface that draws. A stop that cleared the queue would lose the second prompt.
 #[test]
 fn a_stop_ends_the_running_turn_and_the_prompt_behind_it_still_runs() {
@@ -17018,7 +17018,7 @@ fn a_gateway_asking_which_cache() -> Gateway {
     )
 }
 
-/// CLI-35: a question the planner asks is put to the program on the stream with an id, and what
+/// CLI-36: a question the planner asks is put to the program on the stream with an id, and what
 /// the program picks reaches the planner as the choice at that position. An answer naming another
 /// id is refused and leaves the question waiting.
 #[test]
@@ -17050,7 +17050,7 @@ fn a_question_is_put_to_the_program_and_its_pick_reaches_the_planner() {
     );
 }
 
-/// CLI-35: a question nothing can answer, because the input ended, is declined and the turn goes
+/// CLI-36: a question nothing can answer, because the input ended, is declined and the turn goes
 /// on. A run that waited for an answer that cannot come would never end.
 #[test]
 fn a_question_is_declined_when_the_input_ends_without_an_answer() {
@@ -17071,7 +17071,7 @@ fn a_question_is_declined_when_the_input_ends_without_an_answer() {
     );
 }
 
-/// CLI-1 and CLI-35: nothing a program sends approves an effect. The write the planner asks for is
+/// CLI-1 and CLI-36: nothing a program sends approves an effect. The write the planner asks for is
 /// refused as it is in any run nobody can ask, whatever the lines say, and an `answer` is not a
 /// way to approve it.
 #[test]
@@ -17105,7 +17105,7 @@ fn a_line_does_not_approve_a_write() {
     );
 }
 
-/// CLI-35: a command line that cannot go with the flag is refused with the argument status before
+/// CLI-36: a command line that cannot go with the flag is refused with the argument status before
 /// anything is read, each saying which flag was the problem.
 #[test]
 fn input_lines_is_refused_beside_what_it_cannot_go_with() {
@@ -17156,7 +17156,7 @@ fn input_lines_is_refused_beside_what_it_cannot_go_with() {
     }
 }
 
-/// CLI-35: a run that reads lines is a `--json-stream` run without being told so, since its
+/// CLI-36: a run that reads lines is a `--json-stream` run without being told so, since its
 /// questions are put and its results written on the stream. A run that required the flag would be
 /// refused, one that took the result object alone would write no `usage` event ahead of it, and one
 /// that took the events alone would write no result object at all.
@@ -17185,7 +17185,7 @@ fn a_run_reading_lines_streams_without_being_given_the_stream_flag() {
     );
 }
 
-/// CLI-35: a command line that fails to parse is answered with a result object when the run is
+/// CLI-36: a command line that fails to parse is answered with a result object when the run is
 /// one that reads lines, as it is for `--json-stream`, since a program that reads the run's stdout
 /// for objects has no other way to hear of it.
 #[test]
@@ -17205,7 +17205,7 @@ fn a_failed_command_line_for_a_lines_run_is_a_result_object() {
     assert_eq!(result["status"], 2, "{stdout}");
 }
 
-/// CLI-35: a run that was sent no prompt before its input ended has no task, and says so with the
+/// CLI-36: a run that was sent no prompt before its input ended has no task, and says so with the
 /// status for an argument and a result object, as a run with no task does everywhere else.
 #[test]
 fn a_run_that_reads_lines_and_is_sent_no_prompt_has_no_task() {
@@ -17227,7 +17227,7 @@ fn a_run_that_reads_lines_and_is_sent_no_prompt_has_no_task() {
     );
 }
 
-/// CLI-35: what the command line attached belongs to the first turn. The conversation the second
+/// CLI-36: what the command line attached belongs to the first turn. The conversation the second
 /// turn carries on already holds the file, so a file attached again would be in it twice.
 #[test]
 fn a_file_the_command_line_names_is_attached_to_the_first_turn_alone() {
@@ -17264,7 +17264,7 @@ fn a_file_the_command_line_names_is_attached_to_the_first_turn_alone() {
     );
 }
 
-/// CLI-35 and CLI-25: a `--resume` on the command line names the record the first turn continues,
+/// CLI-36 and CLI-25: a `--resume` on the command line names the record the first turn continues,
 /// and the turns after it carry on the same one.
 #[test]
 fn a_resume_on_the_command_line_names_the_record_the_first_turn_continues() {
@@ -17296,7 +17296,7 @@ fn a_resume_on_the_command_line_names_the_record_the_first_turn_continues() {
     );
 }
 
-/// CLI-35: a turn that answered and wrote no record leaves nothing for the next to carry on from,
+/// CLI-36: a turn that answered and wrote no record leaves nothing for the next to carry on from,
 /// and the next says so and is not run. Started anyway it would answer as though nothing had come
 /// before it.
 #[test]
@@ -17333,7 +17333,7 @@ fn a_turn_after_one_that_wrote_no_record_is_not_run_on_an_empty_conversation() {
     );
 }
 
-/// CLI-35 and SESSION-19: each later turn of a run gets a rewind point that puts back what that
+/// CLI-36 and SESSION-19: each later turn of a run gets a rewind point that puts back what that
 /// turn wrote over, which is where the turn before left the file. A backup the first turn made and
 /// nothing took would be kept for the first write to the path, and the second turn's point would
 /// put the file back to where the run found it.

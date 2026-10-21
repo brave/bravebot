@@ -1263,10 +1263,10 @@ struct Invocation {
     /// The condition the run works towards until a judge says it holds (CLI-35).
     goal: Option<String>,
     /// Whether stdin carries lines that start turns, steer them and answer their questions
-    /// (CLI-35).
+    /// (CLI-36).
     input_lines: bool,
     /// Whether the person typed `--trust-input-lines`, which makes those lines their own words
-    /// where otherwise they are a program's (CLI-35).
+    /// where otherwise they are a program's (CLI-36).
     trust_input_lines: bool,
 }
 
@@ -1553,7 +1553,7 @@ fn manifest_conflict(
 }
 
 /// Why `--input-format lines` or `--trust-input-lines` cannot go with the rest of the command line,
-/// as the sentence that refuses it, or `None` where nothing is wrong (CLI-35).
+/// as the sentence that refuses it, or `None` where nothing is wrong (CLI-36).
 ///
 /// `--incognito` is refused because each turn is carried on from the record the one before wrote,
 /// and an incognito run writes none.
@@ -1623,7 +1623,7 @@ struct Prepared {
     named_on_the_command_line: bool,
     permission_mode: bravebot_agent::PermissionMode,
     goal: Option<String>,
-    /// Whether stdin carries the lines of CLI-35 and not a task.
+    /// Whether stdin carries the lines of CLI-36 and not a task.
     input_lines: bool,
     /// Whether the person vouched for those lines.
     trust_input_lines: bool,
@@ -2168,7 +2168,7 @@ fn check_the_model_can_serve_the_run(
 ///
 /// `task` is the prompt to run, which is the one in `prepared` for a run of one turn and the
 /// words of a line for each turn of a run reading lines. `continued` is the record to carry on,
-/// and `lines` is where such a run's questions go and its steers come from (CLI-35).
+/// and `lines` is where such a run's questions go and its steers come from (CLI-36).
 fn run_and_report(
     prepared: &Prepared,
     task: &Task,
@@ -2436,7 +2436,7 @@ fn run_and_report(
 }
 
 /// A run reading lines from stdin: one turn for each `prompt`, each carried on from the record the
-/// turn before wrote, until the input has ended and nothing is left waiting (CLI-35).
+/// turn before wrote, until the input has ended and nothing is left waiting (CLI-36).
 ///
 /// The words on the command line, where there are any, are the first turn and are the person's own.
 /// A line's words are the person's only where they vouched for the channel; otherwise they are
@@ -2803,7 +2803,7 @@ fn off_schema_message(broke: &bravebot_agent::output_schema::Mismatch) -> String
 /// Whether a result object was asked for, read straight off the command line.
 ///
 /// Only for the case where the parse failed, which is the one moment the parsed invocation cannot
-/// answer. `--input-format lines` is a `--json-stream` run (CLI-35), so it asks for one too.
+/// answer. `--input-format lines` is a `--json-stream` run (CLI-36), so it asks for one too.
 fn wants_json(args: &[String]) -> bool {
     args.iter()
         .any(|arg| arg == "--json" || arg == "--json-stream")

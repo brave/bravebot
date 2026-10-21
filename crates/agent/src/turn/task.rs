@@ -92,7 +92,7 @@ pub struct Task {
     /// is shown a handle and never the text (MCP-11).
     pub mcp_prompt: Option<crate::mcp::PromptRequest>,
     /// Whether the lines a running turn takes were sent on a channel the person vouched for with a
-    /// flag they typed, rather than typed at a keyboard (CLI-35).
+    /// flag they typed, rather than typed at a keyboard (CLI-36).
     ///
     /// `false` for every caller but a one-shot run reading `--input-format lines` with
     /// `--trust-input-lines`. It changes what the audit trail says an interjection was and nothing
@@ -629,7 +629,7 @@ impl Task {
     }
 
     /// Say that the lines handed to a running turn come from a channel the person vouched for
-    /// (CLI-35), so the trail records them as that.
+    /// (CLI-36), so the trail records them as that.
     pub fn with_vouched_channel(mut self) -> Self {
         self.vouched_channel = true;
         self
