@@ -23,7 +23,12 @@ fr:cli-usage-sessions-purge
 fr:colour-codes-not-drawn
 fr:command-hunks
 fr:diff-no-final-newline
+fr:home-rules-reached-through-the-workspace
 fr:leave-word-sent
+fr:rule-frontmatter-unreadable
+fr:rule-loaded
+fr:rule-names-not-text
+fr:rules-directory-not-trusted
 fr:session-hunk-added
 fr:session-hunk-changed
 fr:session-hunk-failed

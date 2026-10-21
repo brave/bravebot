@@ -187,26 +187,11 @@ fn runs_as(front: &Frontmatter, origin: &str, notices: &mut Vec<Notice>) -> Runs
 ///
 /// `None` means "not frontmatter", and every caller drops the file on that answer.
 pub fn declarations(text: &str) -> Option<std::collections::BTreeMap<String, String>> {
-    let mut lines = text.lines();
-    if lines.next().map(str::trim_end) != Some(MARKER) {
-        return None;
-    }
-
-    let mut block = Vec::new();
-    let mut closed = false;
-    for line in lines {
-        if line.trim_end() == MARKER {
-            closed = true;
-            break;
-        }
-        block.push(line);
-    }
-
     // An unterminated block is not frontmatter that happens to run long: it is a file whose whole
     // contents would otherwise be read as declarations.
-    if !closed {
+    let Block::Lines(block) = frontmatter_lines(text) else {
         return None;
-    }
+    };
 
     let mut declared = std::collections::BTreeMap::new();
 
@@ -238,6 +223,34 @@ pub fn declarations(text: &str) -> Option<std::collections::BTreeMap<String, Str
     }
 
     Some(declared)
+}
+
+/// What the top of a file holds between its two markers.
+pub(crate) enum Block<'a> {
+    /// The first line is not a marker, so the file has no frontmatter.
+    Absent,
+    /// The first line is a marker and no later line closes the block.
+    Unclosed,
+    /// The lines between the two markers.
+    Lines(Vec<&'a str>),
+}
+
+/// The lines of the frontmatter block at the top of `text`, which is the one reading of where a
+/// block starts and stops that every file with frontmatter shares.
+pub(crate) fn frontmatter_lines(text: &str) -> Block<'_> {
+    let mut lines = text.lines();
+    if lines.next().map(str::trim_end) != Some(MARKER) {
+        return Block::Absent;
+    }
+
+    let mut block = Vec::new();
+    for line in lines {
+        if line.trim_end() == MARKER {
+            return Block::Lines(block);
+        }
+        block.push(line);
+    }
+    Block::Unclosed
 }
 
 /// How many columns a line is indented by, which is what says whether it continues the one above.
@@ -289,7 +302,7 @@ fn value_of(first: &str, wrapped: &[&str]) -> String {
 /// The quotes are YAML's, put there so a value may open with a character that would otherwise
 /// mean something. They are not part of what the planner is choosing from, and leaving them in
 /// puts a stray apostrophe at each end of every description on the screen.
-fn unquoted(value: &str) -> String {
+pub(crate) fn unquoted(value: &str) -> String {
     let opens = value.chars().next();
     let closes = value.chars().last();
     match (opens, closes) {
@@ -478,6 +491,50 @@ impl Notice {
     /// Said once for the turn, at the source that crosses the line, since the total is one fact.
     pub(crate) fn sources_large_together(bytes: usize, limit: usize) -> Self {
         Self::new(t!(sources_large_together, bytes = bytes, limit = limit))
+    }
+
+    /// That a rule file was added to the instructions because a file the session used matches its
+    /// paths (INSTR-16).
+    ///
+    /// Both are names, one a file in a rules directory and one a file the planner or the person
+    /// typed, so both are drawn as [`crate::confirm::shown_name`] draws a name.
+    pub(crate) fn rule_loaded(rule: &str, file: &str) -> Self {
+        Self::new(t!(
+            rule_loaded,
+            rule = crate::confirm::shown_name(rule),
+            file = crate::confirm::shown_name(file)
+        ))
+    }
+
+    /// That `count` files in a rules directory are not rules, because their names are not text
+    /// (INSTR-16). `directory` is one of the two places INSTR-1 gives.
+    pub(crate) fn rule_names_not_text(directory: &str, count: usize) -> Self {
+        Self::new(t!(
+            rule_names_not_text,
+            directory = directory,
+            count = count
+        ))
+    }
+
+    /// That the project's rule files were not read, because the directory is not trusted
+    /// (INSTR-16). A count and no name, as [SKILL-6] has it: a name in a directory nobody vouched
+    /// for is not the user's to read.
+    ///
+    /// [SKILL-6]: ../../../docs/specs/skills.md#SKILL-6
+    pub(crate) fn rules_directory_not_trusted(count: usize) -> Self {
+        Self::new(t!(rules_directory_not_trusted, count = count))
+    }
+
+    /// That a rule file was left out because its frontmatter has no closing marker, or its `paths`
+    /// list no closing bracket (INSTR-16).
+    pub(crate) fn rule_frontmatter_unreadable(rule: &str) -> Self {
+        Self::new(t!(rule_frontmatter_unreadable, rule = rule))
+    }
+
+    /// That rule files in `~/.bravebot/rules` were not read, because the way to them goes through
+    /// the workspace (INSTR-16, SKILL-3).
+    pub(crate) fn home_rules_reached_through_the_workspace(count: usize) -> Self {
+        Self::new(t!(home_rules_reached_through_the_workspace, count = count))
     }
 
     /// That `~/.bravebot/AGENTS.md` was not read, because the way to it goes through the workspace
@@ -898,6 +955,15 @@ fn discover_home<S: Sink>(
 /// The most links followed on the way to one home skill before it is taken to go through the
 /// workspace, which is the limit Linux puts on resolving one path.
 const MAX_LINKS_TO_A_HOME_SKILL: usize = 40;
+
+/// Whether `a` and `b` are the one directory, wherever each is spelled. False where either cannot be
+/// found.
+pub(crate) fn same_directory(a: &Path, b: &Path) -> bool {
+    std::fs::canonicalize(a)
+        .ok()
+        .zip(std::fs::canonicalize(b).ok())
+        .is_some_and(|(a, b)| a == b)
+}
 
 /// Whether the way to `path` goes through a directory the workspace's file tools may write to.
 ///

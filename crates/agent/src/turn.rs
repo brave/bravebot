@@ -1159,6 +1159,37 @@ fn routing_path<S: Sink>(policy: &Policy<'_, S>, key: &str) -> String {
         .to_string()
 }
 
+/// What to tell the person of the rule files `loaded` brought in, once per rule for the session
+/// (INSTR-16). Nothing where nobody is watching, which is a delegate: its notices are not said, so
+/// telling would use the session's one telling up where nobody reads it, and the turn that started
+/// the delegate tells when it adds the rule itself.
+fn rule_notices(
+    workspace: &Workspace,
+    person_is_watching: bool,
+    loaded: &[crate::rules::Loaded],
+) -> Vec<crate::skills::Notice> {
+    if !person_is_watching {
+        return Vec::new();
+    }
+    let mut notices = Vec::new();
+    for loaded in loaded {
+        if workspace.take_telling(&loaded.origin) {
+            notices.push(crate::skills::Notice::rule_loaded(
+                &loaded.origin,
+                &loaded.matched,
+            ));
+        }
+    }
+    notices
+}
+
+/// Record that the rule files `loaded` went into a prompt, in that order (INSTR-16).
+fn note_rules_added(workspace: &Workspace, loaded: &[crate::rules::Loaded]) {
+    for loaded in loaded {
+        workspace.note_rule_added(&loaded.origin);
+    }
+}
+
 /// Whether a `deny` rule covers a file the user named or dropped, which is then left out of the turn and
 /// the person told, as a covered instructions file is (PERM-7).
 ///
@@ -2410,6 +2441,8 @@ struct State<'s> {
     mcp: Option<(crate::mcp::Offer, bravebot_aichat::protocol::Usage)>,
     servers: Option<&'s mut crate::lsp::LanguageServers>,
     hook_notices: &'s mut Vec<String>,
+    /// The rule files no file touched so far matches, for a round to add once one does (INSTR-16).
+    held_rules: crate::rules::Held,
 }
 
 /// The delegates a turn has started and not yet collected, with what waiting on them has cost.
@@ -2705,6 +2738,16 @@ where
     });
     let servers = servers.or(owned.as_mut());
 
+    // A file the person named with `@` is one the session has reached, for the rules whose paths
+    // match it (INSTR-16). Left out where a deny rule covers it, as it is left out of the turn
+    // below.
+    for index in 0..task.files.len() {
+        let path = routing_path(policy, &format!("file_{index}"));
+        if !workspace.rule_denies_reading(policy, &path) {
+            sources.record_mention(&path);
+        }
+    }
+
     // Built once and put in front of every round of this turn. Nothing here is stored in the
     // conversation, so a session running many turns holds one copy of AGENTS.md rather than one
     // per turn.
@@ -2726,6 +2769,12 @@ where
         policy.exchange_file_authority(rooted);
     }
     notices.extend(preamble.notices.iter().cloned());
+    notices.extend(rule_notices(
+        workspace,
+        task.delegate.is_none(),
+        &preamble.added,
+    ));
+    note_rules_added(workspace, &preamble.added);
 
     // Said here rather than only on the outcome. These describe what the turn is about to work
     // with, and an interface that waits for the turn to end draws them after every tool line, so
@@ -3201,6 +3250,7 @@ where
         mcp,
         servers,
         hook_notices,
+        held_rules: preamble.held,
     };
     let completion = std::thread::scope(|scope| {
         // Started by this turn and not yet collected. A delegate cannot outlive the scope, which is
@@ -3431,7 +3481,10 @@ where
         plan.may_fall_back,
     );
     let (scheduling, arming, wallet) = (plan.scheduling, plan.arming, plan.wallet);
-    let (system, system_text, pinned_by) = (&plan.system, &plan.system_text, &plan.pinned_by);
+    let pinned_by = &plan.pinned_by;
+    // What the turn began with, copied once a round brings a rule in, which is appended to it
+    // (INSTR-16).
+    let mut grown: Option<(crate::request_view::Prompt, String)> = None;
     let (catalogue, addressed) = (&plan.catalogue, &plan.addressed);
     let read_output_is = || setup::read_output_is(task, plan.offers_read_output);
     let completion = loop {
@@ -3453,6 +3506,30 @@ where
             );
         }
         state.told_mode = chosen;
+
+        // A file the last round read or wrote may match the paths of a rule held back. The rule is
+        // appended to the system prompt before this request goes out, after every byte the last
+        // one carried, and the person is told which file brought it (INSTR-16).
+        let loaded = state.held_rules.take_for(workspace);
+        if !loaded.is_empty() {
+            let (system, system_text) =
+                grown.get_or_insert_with(|| (plan.system.clone(), plan.system_text.clone()));
+            for loaded in &loaded {
+                for (provenance, text) in crate::preamble::rule_pieces(loaded) {
+                    system.push(provenance, text);
+                }
+            }
+            *system_text = system.text();
+            for notice in rule_notices(workspace, task.delegate.is_none(), &loaded) {
+                reporter.notice(notice.message.clone());
+                state.notices.push(notice);
+            }
+            note_rules_added(workspace, &loaded);
+        }
+        let (system, system_text) = match &grown {
+            Some((system, text)) => (system, text.as_str()),
+            None => (&plan.system, plan.system_text.as_str()),
+        };
 
         // Whatever finished while the last round was running, before the planner is asked what to
         // do next. Waiting for none of them: one that is still working is left working, which is
@@ -4783,6 +4860,35 @@ mod tests {
                 None,
             )
             .expect("a trusted run may delegate")
+    }
+
+    /// INSTR-16: the person is told of a rule once, and a delegate does not use the telling up. A
+    /// delegate's notices are not said, so one that took the telling would leave the turn that
+    /// started it, which adds the same rule a round later, with nothing to say.
+    #[test]
+    fn a_delegate_leaves_the_telling_of_a_rule_to_the_turn_that_started_it() {
+        let root = crate::testutil::scratch_dir("rule-telling");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).expect("workspace");
+        let loaded = [crate::rules::Loaded {
+            origin: ".bravebot/rules/rust.md".to_string(),
+            text: "RULE".to_string(),
+            matched: "src/lib.rs".to_string(),
+            introduces: true,
+        }];
+        let delegate = Task::delegated(a_delegate_spec("reader", CapabilitySet::default()));
+        let person = Task::new("a prompt");
+
+        assert!(rule_notices(&workspace, delegate.delegate.is_none(), &loaded).is_empty());
+        let told = rule_notices(&workspace, person.delegate.is_none(), &loaded);
+        assert_eq!(told.len(), 1);
+        assert_eq!(
+            told[0].message,
+            ".bravebot/rules/rust.md was added to the instructions: src/lib.rs matches its paths"
+        );
+        assert!(rule_notices(&workspace, person.delegate.is_none(), &loaded).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn configured_with_advisor(setting: Option<&str>) -> Config {

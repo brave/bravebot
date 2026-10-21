@@ -12160,3 +12160,127 @@ fn moving_the_working_directory_forgets_the_directories_worked_in() {
 
     assert!(workspace.touched_directories().is_empty());
 }
+
+/// INSTR-16: moving the root drops the files a session touched and what it was told about the rules
+/// they loaded, for the reason INSTR-14 drops the directories. Kept, `src/lib.rs` would load a rule
+/// under the new root for a file nothing there touched, and a rule added again under the new root
+/// would never be said.
+#[test]
+fn moving_the_working_directory_forgets_the_files_touched_and_the_rules_told_of() {
+    let scratch = Scratch::new("moved-touched-files");
+    std::fs::create_dir_all(scratch.path.join("inner")).unwrap();
+    std::fs::write(scratch.path.join("README.md"), "").unwrap();
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    workspace.record_touch("src/lib.rs");
+    workspace.record_mention("README.md");
+    assert_eq!(workspace.touched_files(), ["src/lib.rs", "README.md"]);
+    assert!(workspace.take_telling(".bravebot/rules/rust.md"));
+
+    workspace
+        .change_root(scratch.path.join("inner").to_str().expect("utf-8 path"))
+        .expect("the working directory moves");
+
+    assert!(workspace.touched_files().is_empty());
+    assert!(
+        workspace.take_telling(".bravebot/rules/rust.md"),
+        "what the person was told under the old root was kept"
+    );
+}
+
+/// INSTR-16: a file the person names with `@` is a touch for the rules and not for the directories
+/// of INSTR-14, and a name that leaves the root, or names it, records nothing, so a planner cannot
+/// make a rule load for a file outside the project.
+#[test]
+fn a_name_typed_with_at_records_the_file_and_not_its_directory() {
+    let scratch = Scratch::new("mention-records-file");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(project.join("pkg")).unwrap();
+    std::fs::write(project.join("pkg/a.rs"), "").unwrap();
+    std::fs::write(scratch.path.join("outside.rs"), "").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    workspace.record_mention("pkg/a.rs");
+    workspace.record_mention("../outside.rs");
+    workspace.record_mention(".");
+    workspace.record_touch("../outside/b.rs");
+
+    assert_eq!(workspace.touched_files(), ["pkg/a.rs"]);
+    assert!(workspace.touched_directories().is_empty());
+}
+
+/// INSTR-16: a file a tool touched is recorded by the name the planner typed, beside the directories
+/// INSTR-14 records, and by that spelling alone: a link in the name is not followed.
+#[test]
+fn a_touched_file_is_recorded_by_the_spelling_the_planner_typed() {
+    let scratch = Scratch::new("touch-records-file");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    workspace.record_touch("./pkg/../pkg/a.rs");
+    workspace.record_touch("pkg/a.rs");
+
+    assert_eq!(workspace.touched_files(), ["pkg/a.rs"]);
+    assert_eq!(workspace.touched_directories(), ["pkg"]);
+}
+
+/// INSTR-16: the record keeps at most 1024 files, so a planner reading through a large tree cannot
+/// make every turn compare every rule with thousands of names. The first 1024 stay and the one past
+/// them is not recorded, and a name typed with `@` is held to the same count.
+#[test]
+fn the_files_touched_stop_at_a_thousand_and_twenty_four() {
+    let scratch = Scratch::new("touch-files-cap");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for n in 0..1100 {
+        workspace.record_touch(&format!("f{n:04}.rs"));
+    }
+    workspace.record_mention("mentioned.rs");
+
+    let files = workspace.touched_files();
+    assert_eq!(files.len(), 1024);
+    assert_eq!(files.first().map(String::as_str), Some("f0000.rs"));
+    assert_eq!(files.last().map(String::as_str), Some("f1023.rs"));
+}
+
+/// INSTR-16: a front end that builds a workspace for each turn gives it what the session kept, and
+/// what the session touched and what the person was told about its rules are among it. Without them
+/// every turn would start with no file touched, and a rule would be gone one turn after the file
+/// that loaded it.
+#[test]
+fn a_workspace_given_what_the_session_kept_has_the_files_it_touched() {
+    let scratch = Scratch::new("kept-touched");
+    std::fs::write(scratch.path.join("README.md"), "").unwrap();
+    let first = Workspace::new(&scratch.path).expect("workspace");
+    first.record_touch("pkg/a.rs");
+    first.record_mention("README.md");
+    assert!(first.take_telling(".bravebot/rules/rust.md"));
+    let kept = first.kept_between_turns();
+
+    let next_turn = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_kept_between_turns(&kept);
+
+    assert_eq!(next_turn.touched_files(), ["pkg/a.rs", "README.md"]);
+    assert_eq!(next_turn.touched_directories(), ["pkg"]);
+    assert!(!next_turn.take_telling(".bravebot/rules/rust.md"));
+    let stranger = Workspace::new(&scratch.path).expect("workspace");
+    assert!(stranger.touched_files().is_empty());
+}
+
+/// INSTR-16: a name typed with `@` is a file named only where a file is there. A directory is not a
+/// file, and a glob such as `src/**` matches the name of the directory it is for, so recording one
+/// would load a rule for a file nobody named. A name that is nothing is not a file either.
+#[test]
+fn a_name_typed_with_at_that_is_a_directory_or_nothing_is_not_a_file() {
+    let scratch = Scratch::new("mention-needs-a-file");
+    std::fs::create_dir_all(scratch.path.join("src")).unwrap();
+    std::fs::write(scratch.path.join("src/lib.rs"), "").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    workspace.record_mention("src");
+    workspace.record_mention("src/");
+    workspace.record_mention("missing.rs");
+    assert!(workspace.touched_files().is_empty());
+
+    workspace.record_mention("src/lib.rs");
+    assert_eq!(workspace.touched_files(), ["src/lib.rs"]);
+}

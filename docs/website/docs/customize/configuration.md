@@ -78,6 +78,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/AGENTS.md` | standing instructions for every project |
 | `~/.bravebot/skills/<name>/SKILL.md` | skills available in every project |
 | `~/.bravebot/agents/<name>.md` | [delegate definitions](agents.md) available in every project |
+| `~/.bravebot/rules/<name>.md` | [rules](instructions.md) for every project, in force every turn or once a file their `paths` match is touched |
 | `~/.bravebot/sessions/<directory>/` | session records and audit trails |
 | `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace ([`lsp`](../reference/tools.md#the-index-is-cached-and-it-is-not-small)) |
 | `~/.bravebot/findings/<workspace>.jsonl` | the credentials a turn's own writes were found to hold, one per workspace |

@@ -3697,6 +3697,36 @@ import-not-loaded = { $import } was not imported: it is outside this project, ca
 source-is-large = { $source } is { $bytes } bytes, and every request this session sends carries it
 # Said once for the turn, about every instructions file together rather than any one of them.
 sources-large-together = standing instructions are { $bytes } bytes in all, past { $limit }, and every request this session sends carries them
+# A rule file, kept in .bravebot/rules or ~/.bravebot/rules, that was added to the instructions
+# because a file the session used matches one of its paths. The rule is its place and stays as it
+# is; the file is the name the planner or the person typed, drawn so that no character in it is
+# hidden.
+rule-loaded = { $rule } was added to the instructions: { $file } matches its paths
+# The project's rule files that were not read, because the directory is not trusted. A count and
+# no name: a name in a directory nobody vouched for is not shown.
+rules-directory-not-trusted =
+    { $count ->
+        [one] 1 rule file in .bravebot/rules was not loaded: this directory is not trusted
+       *[other] { $count } rule files in .bravebot/rules were not loaded: this directory is not trusted
+    }
+# Files in a rules directory (.bravebot/rules or ~/.bravebot/rules) that are not rules, because their
+# names are not text and so cannot be compared or shown. The directory stays as it is.
+rule-names-not-text =
+    { $count ->
+        [one] 1 file in { $directory } was not read as a rule: its name is not text
+       *[other] { $count } files in { $directory } were not read as rules: their names are not text
+    }
+# A rule file that opens a frontmatter block and never closes it, or a paths list with a [ and no
+# closing ], or a paths value that is not a list of globs. Left out rather than read as text for
+# every turn, since the file meant to limit itself to some paths and they cannot be read.
+rule-frontmatter-unreadable = { $rule } was not loaded: its frontmatter or its paths could not be read, so a --- or ] may be missing, or paths is not a list
+# Rule files in the person's own ~/.bravebot/rules that were not loaded, because the way to the file
+# goes through the working directory or a directory opened beside it, where a turn can write.
+home-rules-reached-through-the-workspace =
+    { $count ->
+        [one] 1 rule file in ~/.bravebot/rules was not loaded: the way to it goes through a directory this session can write to
+       *[other] { $count } rule files in ~/.bravebot/rules were not loaded: the way to them goes through a directory this session can write to
+    }
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }

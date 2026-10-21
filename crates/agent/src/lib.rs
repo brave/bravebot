@@ -60,6 +60,7 @@ pub mod repo_map;
 pub mod report;
 pub mod request_view;
 pub mod rewind;
+pub mod rules;
 pub mod sandbox_reason;
 pub mod scratch;
 pub mod servers;

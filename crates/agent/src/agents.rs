@@ -667,10 +667,8 @@ fn discover_home<S: Sink>(
         );
     }
     // The project's own pass has said what it did with each file where it reads this directory.
-    let read_as_the_projects = std::fs::canonicalize(root)
-        .ok()
-        .zip(std::fs::canonicalize(workspace.root().join(WORKSPACE_AGENTS)).ok())
-        .is_some_and(|(home, project)| home == project);
+    let read_as_the_projects =
+        crate::skills::same_directory(root, &workspace.root().join(WORKSPACE_AGENTS));
     if passed_over > 0 && !read_as_the_projects {
         notices.push(Notice::from_message(t!(
             home_definitions_reached_through_the_workspace,
@@ -1030,18 +1028,32 @@ fn counted(n: usize) -> (String, &'static str) {
 /// filesystem would vary by machine, which would make which of two definitions is live vary with
 /// it.
 fn definition_files(root: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
-    };
+    markdown_files(root).0
+}
 
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter(|e| e.path().is_file())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|name| name.ends_with(".md"))
-        .collect();
+/// The `.md` files directly in `root`, in name order, and how many more there are whose names are
+/// not text.
+///
+/// A name that is not UTF-8 is never turned into one that is: the file under the lossy spelling is
+/// another file, or none. It is counted so that a caller can say so (PATH-002).
+pub(crate) fn markdown_files(root: &Path) -> (Vec<String>, usize) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return (Vec::new(), 0);
+    };
+    let mut names = Vec::new();
+    let mut not_text = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.as_encoded_bytes().ends_with(b".md") || !entry.path().is_file() {
+            continue;
+        }
+        match name.into_string() {
+            Ok(name) => names.push(name),
+            Err(_) => not_text += 1,
+        }
+    }
     names.sort();
-    names
+    (names, not_text)
 }
 
 /// What a definition made for a desktop bot came to.
