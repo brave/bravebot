@@ -350,6 +350,43 @@ mod tests {
         );
     }
 
+    /// STATE-4, PATH-003: a file whose name is not text is not a session's file, so it is left where
+    /// it is at any age, and the recent file named by the lossy rendering of that name is not removed
+    /// in its place. A sweep that chose by the rendering, and took a replacement character as part of
+    /// a session's name, would join the rendering back onto the directory and remove the lookalike.
+    /// Only a Linux file system holds the name, so this runs there.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_name_that_is_not_text_is_left_and_the_file_its_lossy_rendering_names_is_not_removed() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let state = State::new("retention-not-text");
+        let control = state.put("sessions/one/plain-old.json", "{}", 40 * DAY);
+        let directory = state.path.join("sessions").join("one");
+        let record = directory.join(OsStr::from_bytes(b"old-\xff.json"));
+        let trail = directory.join(OsStr::from_bytes(b"old-\xff.audit.jsonl"));
+        let lookalike = directory.join("old-\u{FFFD}.json");
+        for (path, seconds) in [(&record, 40 * DAY), (&trail, 40 * DAY), (&lookalike, 60)] {
+            std::fs::write(path, "{}").expect("write");
+            written_ago(path, seconds);
+        }
+
+        let removed = sweep(&state.path, days(30), SystemTime::now(), InUse::default());
+
+        assert_eq!(removed.sessions, 1, "only the record with a text name goes");
+        assert!(!control.exists());
+        assert!(
+            record.exists(),
+            "a record whose name is not text was removed"
+        );
+        assert!(trail.exists(), "a trail whose name is not text was removed");
+        assert!(
+            lookalike.exists(),
+            "a recent file was removed through the lossy rendering of another's name"
+        );
+    }
+
     /// STATE-1: removal stops at the state directory and steps over links. A link standing as the
     /// directory of projects, as a project's directory or as a record leads to something this was not
     /// given, and what is there is not removed.

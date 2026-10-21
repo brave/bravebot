@@ -246,7 +246,8 @@ root a process was told to keep its records in was named by whoever started it, 
 link standing as the directory of sessions, of indexes or of findings, or as one project's
 directory, one index or one record, is stepped over and what it leads to is not touched. A project's
 directory that the removal leaves empty is removed with its last record, unless a session is
-starting in that project. A file that cannot be removed is left, and costs that file only. An
+starting in that project. A file that cannot be removed is left, and costs that file only. A file in a
+project's directory whose name is not text is not a session's file and is left. An
 incognito session removes nothing, and neither does a machine with no state directory.
 
 **Why.** A record holds a whole conversation and the previous contents of files a turn overwrote
@@ -285,6 +286,7 @@ age does not end them.
 `verified-by: bravebot_session::retention::the_shortest_period_still_keeps_what_was_written_today`
 `verified-by: bravebot_session::retention::a_file_stamped_in_the_future_is_kept`
 `verified-by: bravebot_session::retention::a_trail_or_temporary_file_with_no_record_goes_by_its_own_age`
+`verified-by: bravebot_session::retention::a_name_that_is_not_text_is_left_and_the_file_its_lossy_rendering_names_is_not_removed`
 `verified-by: bravebot_session::retention::the_sweep_does_not_follow_a_link_out_of_the_state_directory`
 `verified-by: bravebot_session::retention::what_a_person_asked_to_keep_is_left_whatever_its_age`
 `verified-by: bravebot_session::retention::a_paused_sweep_removes_nothing`
