@@ -986,6 +986,8 @@ mod tests {
         ("a.md\n", "#2863"),
         ("a.md\u{a0}", "#2863"),
         ("a.md\u{3000}", "#2863"),
+        ("a\u{a0}b.md", "#2863"),
+        ("a\u{3000}b.md", "#2863"),
         ("a.md\\", "#2863"),
         ("\t", "#2863"),
         ("\u{a0}", "#2863"),
@@ -998,8 +1000,9 @@ mod tests {
     /// file where the volume holds both.
     #[test]
     fn every_awkward_name_is_offered_and_read_back_as_the_file_it_is() {
+        let names = aliases::held_names();
         let mut asked = 0;
-        for (index, (name, _)) in aliases::AWKWARD_NAMES.iter().enumerate() {
+        for (index, (name, _)) in names.iter().enumerate() {
             let scratch = Scratch::new(&format!("awkward-{index}"));
             let file = scratch.path.join(name);
             std::fs::create_dir_all(file.parent().expect("a name is in a directory"))

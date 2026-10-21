@@ -10,9 +10,9 @@ given a second name or a parent renamed leaves a decision about one thing and a 
 The clauses are `TRUST-2` in `docs/specs/trust-map.md`, whose table lists the names one file has and
 calls an uncovered cell a defect, `PERM-7` in `docs/specs/permissions.md`, which says a deny rule is
 about the file and not the spelling used to ask for it, `SANDBOX-18` and `SANDBOX-24` in
-`docs/specs/sandboxing.md`, and `PATH-007` in `docs/best-practices/paths.md`. `AWKWARD_NAMES` in
-`crates/agent/test-support/aliases.rs` is the tests' list of names to try. Do not report a spelling the
-table-driven tests already fail on, or a gap the table records with its issue.
+`docs/specs/sandboxing.md`, and `PATH-007` in `docs/best-practices/paths.md`. `held_names()` in
+`crates/agent/test-support/aliases.rs` is the tests' list of names to try. Do not report a spelling
+the table-driven tests already fail on, or a gap the table records with its issue.
 
 ### Where to start
 

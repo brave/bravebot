@@ -172,8 +172,9 @@ two names that must stay different do.** The test makes both names in a director
 whether they are one file, and asserts two keys when it holds them apart. A step that joins files on
 purpose says so in the clause that governs it, as a distrust joining canonically equivalent forms
 does in [TRUST-2](../specs/trust-map.md#TRUST-2). [PATH-004](#PATH-004) covers one file with many
-names; this covers many files with one key. The names to build the pairs from are `AWKWARD_NAMES` in
-`crates/agent/test-support/aliases.rs`.
+names; this covers many files with one key. The names to build the pairs from are `held_names()` in
+`crates/agent/test-support/aliases.rs`: `AWKWARD_NAMES` and `WINDOWS_NAMES`, less what a Windows
+host does not hold.
 
 **Why:** a table of the names one file has cannot show a step that merges two files, because every
 row in it is a pair the volume already opens as one. Each such step was found by a report after it
