@@ -166,6 +166,7 @@ does not cover.
 `verified-by: bravebot_core::manifest::a_connector_plan_locks_every_routing_field_and_not_its_target_slot`
 `verified-by: bravebot_core::manifest::a_connector_act_naming_its_item_validates_without_a_fetch`
 `verified-by: bravebot_agent::manifest::an_act_naming_a_fetch_from_another_place_is_refused_before_anybody_is_asked`
+`verified-by: bravebot_agent::manifest::an_act_on_a_fetch_that_returned_no_receipt_is_never_sent`
 
 <a id="MANIFEST-7"></a>
 ### MANIFEST-7: the only path to a screen is the one the plan named
