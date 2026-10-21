@@ -1047,12 +1047,18 @@ mod tests {
         let _claim = claimed(&path).expect("claimed");
         letting_go.join().expect("let go");
 
-        assert_eq!(mode_of(&path), CLAIMED, "mode was {:o}", mode_of(&path));
+        assert_eq!(mode_of(&path), 0o700, "mode was {:o}", mode_of(&path));
     }
 
     /// A lock something else keeps does not keep a session from opening. It goes on with its
     /// directory private to it, at a mode the sweep leaves, rather than waiting as long as the
     /// holder pleases or being taken for a leftover once nothing holds it.
+    ///
+    /// The mode, the wait and the limit on it are the numbers the clause states, written here as
+    /// numbers. A constant compared with itself passes whatever it is changed to, and each of
+    /// these decides something a person can see: `1700` is what keeps the sweep off a directory
+    /// that is in use and still closed to everyone else, and a longer wait is a session that
+    /// starts when whatever holds the lock pleases (TRUST-25).
     #[test]
     #[cfg(unix)]
     fn a_claim_held_by_something_else_does_not_stall_the_session() {
@@ -1061,6 +1067,7 @@ mod tests {
         let holder = held_by_something_else(&path);
         let (sent, answer) = std::sync::mpsc::channel();
         let claiming = path.clone();
+        let started = std::time::Instant::now();
         std::thread::spawn(move || {
             let _ = sent.send(claimed(&claiming));
         });
@@ -1069,12 +1076,17 @@ mod tests {
             .recv_timeout(SETTLE)
             .expect("the session waited on the holder")
             .expect("its directory");
-        assert_eq!(
-            mode_of(&path) & 0o777,
-            0o700,
-            "mode was {:o}",
-            mode_of(&path)
+        let waited = started.elapsed();
+        assert_eq!(CLAIM_WAIT, std::time::Duration::from_secs(1));
+        assert!(
+            waited >= std::time::Duration::from_secs(1),
+            "the session gave up on the lock after {waited:?}"
         );
+        assert!(
+            waited < std::time::Duration::from_secs(3),
+            "the session waited {waited:?} for the lock"
+        );
+        assert_eq!(mode_of(&path), 0o1700, "mode was {:o}", mode_of(&path));
         drop(holder);
         drop(claim);
         sweep(root.path(), owner_of(root.path()));

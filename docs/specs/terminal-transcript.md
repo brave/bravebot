@@ -765,6 +765,7 @@ holds no bytes of what the rows contain and the rule is kept ([SCROLL-5](scrolle
 
 `verified-by: bravebot_tui::render::a_held_view_says_how_many_rows_arrived_below_and_the_key_back`
 `verified-by: bravebot_tui::render::a_held_view_on_a_narrow_terminal_drops_the_cue_and_keeps_the_mode`
+`verified-by: bravebot_tui::render::the_held_cue_is_drawn_dim`
 
 
 <a id="VIEW-28"></a>

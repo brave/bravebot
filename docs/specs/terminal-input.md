@@ -47,6 +47,7 @@ transcript, and the box stays beneath the list.
 
 `verified-by: bravebot_tui::render::the_input_box_grows_with_the_text`
 `verified-by: bravebot_tui::render::the_input_box_stops_growing_at_the_cap`
+`verified-by: bravebot_tui::render::the_input_box_holds_ten_rows_of_text_and_no_more`
 `verified-by: bravebot_tui::render::a_very_long_input_scrolls_to_the_cursor`
 `verified-by: bravebot_tui::render::the_box_grows_mid_turn_too`
 `verified-by: bravebot_tui::render::a_long_list_leaves_room_for_the_box_and_the_transcript`
@@ -1340,6 +1341,7 @@ vi gives `m` no key, and a box that waited for one would swallow the instruction
 `verified-by: bravebot_tui::list_picker::escape_and_ctrl_c_cancel`
 `verified-by: bravebot_tui::list_picker::the_arrows_and_vis_own_keys_walk_the_list`
 `verified-by: bravebot_tui::list_picker::enter_takes_the_row_under_the_cursor`
+`verified-by: bravebot_tui::app::a_style_chosen_in_the_config_panel_is_kept_and_said_in_the_transcript`
 `verified-by: bravebot_tui::config_prompt::every_row_says_what_it_means`
 
 <a id="INPUT-24"></a>
