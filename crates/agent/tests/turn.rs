@@ -31719,7 +31719,8 @@ fn a_vouch_for_a_file_with_an_awkward_name_is_a_rule_about_that_file_alone() {
 
     let scratch = Scratch::new("vouch-awkward");
     let mut files = Vec::new();
-    for (name, _) in aliases::AWKWARD_NAMES {
+    let names = aliases::held_names();
+    for (name, _) in &names {
         let path = scratch.path.join(name);
         std::fs::create_dir_all(path.parent().expect("a name is in a directory")).unwrap();
         std::fs::write(&path, "AWKWARD_NAMED\n")
@@ -31802,7 +31803,8 @@ fn a_file_named_with_an_at_sign_is_vouched_for_alone_whatever_its_name() {
     let scratch = Scratch::new("named-awkward");
     std::fs::write(scratch.path.join("sibling.md"), "AWKWARD_NAMED\n").unwrap();
     let mut files = Vec::new();
-    for (name, _) in aliases::AWKWARD_NAMES {
+    let names = aliases::held_names();
+    for (name, _) in &names {
         let path = scratch.path.join(name);
         std::fs::create_dir_all(path.parent().expect("a name is in a directory")).unwrap();
         std::fs::write(&path, "AWKWARD_NAMED\n")

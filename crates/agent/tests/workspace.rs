@@ -347,9 +347,10 @@ fn each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_l
 /// a refusal joins on purpose.
 #[test]
 fn two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group() {
+    let names = aliases::held_names();
     let mut asked = 0;
-    for (index, (first, first_group)) in aliases::AWKWARD_NAMES.iter().enumerate() {
-        for (second, second_group) in &aliases::AWKWARD_NAMES[index + 1..] {
+    for (index, (first, first_group)) in names.iter().enumerate() {
+        for (second, second_group) in &names[index + 1..] {
             let scratch = Scratch::new(&format!("two-rules-{index}-{asked}"));
             if !aliases::two_files(&scratch.path, first, second) {
                 continue;
@@ -383,7 +384,7 @@ fn two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group() {
         }
     }
     assert!(
-        asked > 100,
+        asked > aliases::least_pairs(),
         "only {asked} pairs were two files: the alphabet is not being used"
     );
 }
@@ -397,9 +398,10 @@ fn two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group() {
 #[test]
 fn two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group()
 {
+    let names = aliases::held_names();
     let mut asked = 0;
-    for (index, (first, first_group)) in aliases::AWKWARD_NAMES.iter().enumerate() {
-        for (second, second_group) in &aliases::AWKWARD_NAMES[index + 1..] {
+    for (index, (first, first_group)) in names.iter().enumerate() {
+        for (second, second_group) in &names[index + 1..] {
             let scratch = Scratch::new(&format!("two-keys-{index}-{asked}"));
             if !aliases::two_files(&scratch.path, first, second) {
                 continue;
@@ -466,7 +468,7 @@ fn two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_
         }
     }
     assert!(
-        asked > 100,
+        asked > aliases::least_pairs(),
         "only {asked} pairs were two files: the alphabet is not being used"
     );
 }
@@ -478,9 +480,10 @@ fn two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_
 /// standing for two files, or as a refusal landing on the wrong one.
 #[test]
 fn a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule() {
+    let names = aliases::held_names();
     let mut asked = 0;
-    for (index, (first, first_group)) in aliases::AWKWARD_NAMES.iter().enumerate() {
-        for (second, second_group) in &aliases::AWKWARD_NAMES[index + 1..] {
+    for (index, (first, first_group)) in names.iter().enumerate() {
+        for (second, second_group) in &names[index + 1..] {
             let scratch = Scratch::new(&format!("listing-pairs-{index}-{asked}"));
             if !aliases::two_files(&scratch.path, first, second) {
                 continue;
@@ -539,7 +542,7 @@ fn a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule()
         }
     }
     assert!(
-        asked > 100,
+        asked > aliases::least_pairs(),
         "only {asked} pairs were two files: the alphabet is not being used"
     );
 }
@@ -573,9 +576,10 @@ const NOT_SPELLABLE_IN_A_RULE: &[(&str, &str)] = &[
 fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
     use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject};
 
+    let names = aliases::held_names();
     let mut asked = 0;
-    for (index, (first, first_group)) in aliases::AWKWARD_NAMES.iter().enumerate() {
-        for (second, second_group) in &aliases::AWKWARD_NAMES[index + 1..] {
+    for (index, (first, first_group)) in names.iter().enumerate() {
+        for (second, second_group) in &names[index + 1..] {
             let scratch = Scratch::new(&format!("rule-pairs-{index}-{asked}"));
             if !aliases::two_files(&scratch.path, first, second) {
                 continue;
@@ -610,7 +614,7 @@ fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
                         };
                         if !spellable {
                             let about_that_file_alone = decides(named)
-                                && aliases::AWKWARD_NAMES
+                                && names
                                     .iter()
                                     .all(|(another, _)| another == named || !decides(another));
                             assert!(
@@ -634,7 +638,7 @@ fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
         }
     }
     assert!(
-        asked > 100,
+        asked > aliases::least_pairs(),
         "only {asked} pairs were two files: the alphabet is not being used"
     );
 }

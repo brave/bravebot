@@ -242,7 +242,9 @@ pub fn expect(row: &Alias, consumer: Consumer, handled: bool) {
 
 /// Legal but awkward file names, shared by every test that asks what a name is held under. Each is
 /// a relative name for a file, and none is a directory another entry sits in, so any two can be
-/// created side by side. A host that cannot hold a name skips the pair it is in.
+/// created side by side. A host that cannot hold a name skips the pair it is in. A test takes its
+/// names from [`held_names`], which adds [`WINDOWS_NAMES`] and leaves out what a Windows host does
+/// not hold.
 ///
 /// The second field is the name's group: names of one group are one name on purpose, because a
 /// refusal recorded about one is about every canonically equivalent spelling (TRUST-2). Every
@@ -282,13 +284,77 @@ pub const AWKWARD_NAMES: &[(&str, &str)] = &[
     ("cafe\u{301}.md", "accent"),
 ];
 
+/// Names of `AWKWARD_NAMES` that a Windows host does not hold as written. Windows refuses `*` and
+/// a control character in a name, reads `\` as a separator and `:` as the start of a stream, and
+/// drops a space or dot at the end of a name. The workspace refuses a stream and a trailing space
+/// or dot before a key is made (TRUST-2), so a test that opens one through it stops at the refusal.
+const NOT_ON_WINDOWS: &[&str] = &[
+    "a.md ", "a.md\t", "a.md\n", "a.md.", "*.md", "a\\b.md", "a.md\\", "a:b.md", " ", "\t",
+    "x /a.md", "x/ /a.md",
+];
+
+/// Names a Windows host holds as written and `AWKWARD_NAMES` has no pair for. They are legal on
+/// every host, so a test asks about each the volume holds on the host it runs on.
+///
+/// Each differs from another name here, or in `AWKWARD_NAMES`, only where a step that turns a name
+/// into a key could drop the difference: whitespace inside a name, a character Unicode gives no
+/// width, or a bidirectional control. None repeats a name or a group of another.
+pub const WINDOWS_NAMES: &[(&str, &str)] = &[
+    ("ab.md", "no character inside"),
+    ("a b.md", "one space inside"),
+    ("a  b.md", "two spaces inside"),
+    ("a\u{a0}b.md", "no-break space inside"),
+    ("a\u{3000}b.md", "ideographic space inside"),
+    ("a\u{200b}b.md", "zero-width space inside"),
+    ("a\u{200d}b.md", "zero-width joiner inside"),
+    ("a\u{feff}b.md", "zero-width no-break space inside"),
+    ("a\u{202e}b.md", "right-to-left override inside"),
+    ("a\u{2066}b.md", "left-to-right isolate inside"),
+];
+
+/// The names a test makes files of: `AWKWARD_NAMES` and `WINDOWS_NAMES`, less the names a Windows
+/// host does not hold when the host is Windows.
+pub fn held_names() -> Vec<(&'static str, &'static str)> {
+    assert!(
+        NOT_ON_WINDOWS
+            .iter()
+            .all(|name| AWKWARD_NAMES.iter().any(|(held, _)| held == name)),
+        "NOT_ON_WINDOWS lists a name AWKWARD_NAMES does not have"
+    );
+    assert!(
+        WINDOWS_NAMES
+            .iter()
+            .enumerate()
+            .all(|(index, (name, group))| {
+                AWKWARD_NAMES
+                    .iter()
+                    .chain(&WINDOWS_NAMES[..index])
+                    .all(|(other, other_group)| other != name && other_group != group)
+            }),
+        "WINDOWS_NAMES repeats a name or a group of another name"
+    );
+    AWKWARD_NAMES
+        .iter()
+        .filter(|(name, _)| !cfg!(windows) || !NOT_ON_WINDOWS.contains(name))
+        .chain(WINDOWS_NAMES)
+        .copied()
+        .collect()
+}
+
+/// The fewest pairs a pair test may ask of a host, below which it has asked nothing worth passing.
+/// A host that holds every name as written asks about 590 pairs, and `AWKWARD_NAMES` alone makes
+/// 300, so the floor is above what a run that leaves out `WINDOWS_NAMES` reaches. A Windows host
+/// holds fewer of the names, so its floor is lower.
+pub fn least_pairs() -> usize {
+    if cfg!(windows) { 100 } else { 400 }
+}
+
 /// Whether the volume holds `first` and `second` as two files, made side by side under `root`.
 ///
-/// False where the second name opens the first (the TRUST-2 table covers those pairs), where the
-/// host cannot make either name, and on a host with no file identity to compare.
-#[cfg(unix)]
+/// False where the second name opens the first (the TRUST-2 table covers those pairs), and where
+/// the host cannot make either name. The pair is two files when a write through the second name
+/// leaves the first as it was, which needs no file identity and so asks the same of every host.
 pub fn two_files(root: &Path, first: &str, second: &str) -> bool {
-    use std::os::unix::fs::MetadataExt;
     let make = |name: &str| -> bool {
         let path = root.join(name);
         std::fs::create_dir_all(path.parent().expect("a name is in a directory")).is_ok()
@@ -297,16 +363,6 @@ pub fn two_files(root: &Path, first: &str, second: &str) -> bool {
     if !make(first) || root.join(second).exists() || !make(second) {
         return false;
     }
-    match (
-        std::fs::metadata(root.join(first)),
-        std::fs::metadata(root.join(second)),
-    ) {
-        (Ok(one), Ok(other)) => (one.dev(), one.ino()) != (other.dev(), other.ino()),
-        _ => false,
-    }
-}
-
-#[cfg(not(unix))]
-pub fn two_files(_: &Path, _: &str, _: &str) -> bool {
-    false
+    std::fs::write(root.join(second), "another file").is_ok()
+        && std::fs::read_to_string(root.join(first)).is_ok_and(|text| text == CONTENT)
 }
