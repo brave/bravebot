@@ -3111,13 +3111,101 @@ fn a_binary_file_is_reported_as_binary() {
     );
 }
 
-/// A file with no null byte and no control characters passes the sniff of its first bytes, so the
-/// only thing that can name it binary is the decoding that follows. Latin-1 text is that file: the
-/// clause forbids reporting it as a decoding error, in a whole read and in a paged one.
+/// `text` as a Windows tool writes it: UTF-16 after a byte order mark, with CRLF line ends.
+fn utf16_file(text: &str, little: bool) -> Vec<u8> {
+    let mark: [u8; 2] = if little { [0xFF, 0xFE] } else { [0xFE, 0xFF] };
+    let units = text.encode_utf16().flat_map(|unit| {
+        if little {
+            unit.to_le_bytes()
+        } else {
+            unit.to_be_bytes()
+        }
+    });
+    mark.into_iter().chain(units).collect()
+}
+
+/// The page `read_file` shows the planner, which is decoded where the file is in another
+/// encoding.
+fn shown_page(
+    workspace: &Workspace,
+    policy: &mut Policy<'_, RecordingSink>,
+    name: &str,
+) -> Result<Labelled<bravebot_agent::workspace::Page>, WorkspaceError> {
+    match workspace.read_page_unless_unchanged(policy, &trusted_text(name), 1, 10, None)? {
+        bravebot_agent::workspace::Reading::Page { page, .. } => Ok(page),
+        other => panic!("a read with no earlier token answered {other:?}"),
+    }
+}
+
+/// A file read for the planner may be in another encoding, and the planner is shown its text. A
+/// Windows tool's UTF-16 source is the common case: every character holds a null byte, which the
+/// binary sniff refuses, so the mark is what says it is text. Either byte order reads, the line
+/// ends are the file's own, and the page says how it was decoded.
 #[test]
-fn a_file_that_passes_the_sniff_but_is_not_utf8_is_reported_as_binary() {
-    let scratch = Scratch::new("read-not-utf8");
+fn a_utf16_file_with_a_mark_pages_as_its_text_in_either_byte_order() {
+    let scratch = Scratch::new("page-utf16");
+    let text = "one\r\ntwo é 😀\r\n";
+    std::fs::write(scratch.path.join("le.txt"), utf16_file(text, true)).unwrap();
+    std::fs::write(scratch.path.join("be.txt"), utf16_file(text, false)).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = alias_policy(&workspace, &mut sink, None);
+
+    for (name, decoding) in [
+        ("le.txt", bravebot_filetype::Decoding::Utf16Le),
+        ("be.txt", bravebot_filetype::Decoding::Utf16Be),
+    ] {
+        let page = shown_page(&workspace, &mut policy, name)
+            .unwrap_or_else(|e| panic!("{name} should page as text: {e}"));
+        let page = policy
+            .read_trusted_content("test", &page)
+            .expect("the page is trusted");
+        assert_eq!(page.lines, ["one", "two é 😀"], "{name}");
+        assert_eq!(page.total_lines, 2, "{name}");
+        assert_eq!(page.decoding, decoding, "{name}");
+    }
+}
+
+/// Latin-1 text with one accented character is not UTF-8 and is not binary. The page shows the
+/// byte that is not UTF-8 as U+FFFD, and says that it did.
+#[test]
+fn a_file_with_a_stray_invalid_byte_pages_with_a_replacement_character() {
+    let scratch = Scratch::new("page-latin1");
     std::fs::write(scratch.path.join("latin1.txt"), b"caf\xe9 au lait\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = alias_policy(&workspace, &mut sink, None);
+
+    let page = shown_page(&workspace, &mut policy, "latin1.txt")
+        .expect("a stray invalid byte pages as text");
+    let page = policy
+        .read_trusted_content("test", &page)
+        .expect("the page is trusted");
+    assert_eq!(page.lines, ["caf\u{FFFD} au lait"]);
+    assert_eq!(page.decoding, bravebot_filetype::Decoding::Utf8Replaced);
+}
+
+/// A file that is UTF-8 as it stands says nothing about a decoding, so a page of an ordinary file
+/// carries no note.
+#[test]
+fn a_utf8_file_pages_without_a_decoding() {
+    let scratch = Scratch::new("page-utf8");
+    std::fs::write(scratch.path.join("a.txt"), "héllo\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let page = workspace.page("a.txt", 1, 10).expect("page");
+    assert_eq!(page.lines, ["héllo"]);
+    assert_eq!(page.decoding, bravebot_filetype::Decoding::Utf8);
+}
+
+/// The mark is what makes the nulls text. The same nulls without it are a binary file, in a page
+/// the planner is shown as well as in one a slot is filled from.
+#[test]
+fn nulls_without_a_byte_order_mark_are_still_binary() {
+    let scratch = Scratch::new("page-nulls-no-mark");
+    std::fs::write(scratch.path.join("data.bin"), b"o\0n\0e\0\n\0").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let mut sink = RecordingSink::new();
@@ -3128,26 +3216,147 @@ fn a_file_that_passes_the_sniff_but_is_not_utf8_is_reported_as_binary() {
         &mut sink,
     )
     .expect("policy");
-    let path = Labelled::trusted("latin1.txt".to_string());
 
-    let whole = workspace
-        .read(&mut policy, &path)
-        .expect_err("bytes that are not UTF-8 must not read as text");
-    let paged = workspace
-        .read_page(&mut policy, &path, 1, 10)
-        .expect_err("bytes that are not UTF-8 must not page as text");
+    assert!(matches!(
+        shown_page(&workspace, &mut policy, "data.bin"),
+        Err(WorkspaceError::Binary { .. })
+    ));
+    assert!(matches!(
+        workspace.page("data.bin", 1, 10),
+        Err(WorkspaceError::Binary { .. })
+    ));
+}
 
-    for error in [whole, paged] {
+/// The text a whole read returns is written back by an edit, so a decoding of another encoding
+/// is not offered to it. The refusal says the file is text in another encoding, since "binary"
+/// would contradict the page the planner was just shown, and never names a decoding error.
+#[test]
+fn a_whole_read_of_a_file_that_is_not_utf8_is_refused_as_another_encoding() {
+    let scratch = Scratch::new("read-not-utf8");
+    std::fs::write(scratch.path.join("latin1.txt"), b"caf\xe9 au lait\n").unwrap();
+    std::fs::write(
+        scratch.path.join("wide.txt"),
+        utf16_file("one\ntwo\n", true),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    for name in ["latin1.txt", "wide.txt"] {
+        let error = workspace
+            .read(&mut policy, &trusted_text(name))
+            .expect_err("text in another encoding is not what an edit writes back");
         assert!(
-            matches!(error, WorkspaceError::Binary { .. }),
-            "expected a binary error, got {error:?}"
+            matches!(error, WorkspaceError::NotUtf8 { .. }),
+            "{name}: expected the other-encoding refusal, got {error:?}"
         );
         let message = error.to_string();
-        assert!(message.contains("binary"), "unhelpful message: {message}");
         assert!(
-            !message.contains("UTF-8"),
-            "the internal decoding error leaked: {message}"
+            message.contains("encoding other than UTF-8"),
+            "{name}: unhelpful message: {message}"
         );
+        assert!(
+            !message.contains("binary") && !message.contains("did not contain valid"),
+            "{name}: the file was called binary or a decoding error leaked: {message}"
+        );
+    }
+}
+
+/// What a deferred read fills a slot with is written back to a file or handed to a program as the
+/// file, so a slot is filled from the file's own UTF-8 or not at all, and so is the page a plan
+/// reads into one. A decoding in its place would write U+FFFD over the byte it replaced, or a
+/// different encoding over the file.
+#[test]
+fn a_slot_is_never_filled_from_a_decoding_of_another_encoding() {
+    let scratch = Scratch::new("slot-not-utf8");
+    std::fs::write(scratch.path.join("latin1.txt"), b"caf\xe9 au lait\n").unwrap();
+    std::fs::write(
+        scratch.path.join("wide.txt"),
+        utf16_file("one\ntwo\n", false),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = alias_policy(&workspace, &mut sink, None);
+    for name in ["latin1.txt", "wide.txt"] {
+        let error = workspace
+            .page(name, 1, usize::MAX)
+            .expect_err("a slot must not hold a decoding");
+        assert!(
+            matches!(error, WorkspaceError::NotUtf8 { .. }),
+            "{name}: expected the other-encoding refusal, got {error:?}"
+        );
+        // The page a plan reads goes into a slot too, so it is held to the same text.
+        let error = workspace
+            .read_page(&mut policy, &trusted_text(name), 1, 10)
+            .expect_err("a plan's page must not hold a decoding");
+        assert!(
+            matches!(error, WorkspaceError::NotUtf8 { .. }),
+            "{name}: expected the other-encoding refusal from a plan's page, got {error:?}"
+        );
+    }
+}
+
+/// A deferred read reserves the slot above, so it answers the question the slot's fill would: a
+/// UTF-16 file is reported as binary at the moment the planner asks, not as text and then refused
+/// when something needs its bytes.
+#[test]
+fn a_deferred_read_of_a_utf16_file_is_reported_as_binary() {
+    let scratch = Scratch::new("survey-utf16");
+    std::fs::write(
+        scratch.path.join("wide.txt"),
+        utf16_file("one\ntwo\n", true),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    assert!(matches!(
+        workspace.survey("wide.txt"),
+        Err(WorkspaceError::Binary { .. })
+    ));
+}
+
+/// The label comes from the path and from nothing a file holds. A decoded UTF-16 page is trusted
+/// where the map vouches for the path and untrusted where it does not, as a UTF-8 file would be.
+#[test]
+fn a_decoded_page_is_labelled_by_its_path_alone() {
+    let scratch = Scratch::new("page-decoded-label");
+    std::fs::create_dir_all(scratch.path.join("fetched")).unwrap();
+    let bytes = utf16_file("one\ntwo\n", true);
+    std::fs::write(scratch.path.join("wide.txt"), &bytes).unwrap();
+    std::fs::write(scratch.path.join("fetched/wide.txt"), &bytes).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("fetched");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    for (name, integrity) in [
+        ("wide.txt", Integrity::Trusted),
+        ("fetched/wide.txt", Integrity::Untrusted),
+    ] {
+        let page = shown_page(&workspace, &mut policy, name)
+            .unwrap_or_else(|e| panic!("{name} should page: {e}"));
+        assert_eq!(page.label().integrity, integrity, "{name}");
     }
 }
 
@@ -3241,6 +3450,9 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
             path: carried.to_string(),
         },
         WorkspaceError::Binary {
+            path: carried.to_string(),
+        },
+        WorkspaceError::NotUtf8 {
             path: carried.to_string(),
         },
         WorkspaceError::TooLarge {

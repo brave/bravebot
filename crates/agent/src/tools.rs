@@ -3945,6 +3945,11 @@ fn render_page(page: &Page, token: ChangeToken) -> String {
     if page.long_lines > 0 {
         notes.push(format!("{} long line(s) were shortened", page.long_lines));
     }
+    // A reading of the file and not its bytes, said so the planner does not take an edit of it to
+    // be possible: a read that is written back is of the file's own text only (READ-3).
+    if let Some(how) = decoding_note(page.decoding) {
+        notes.push(format!("{how}, so edit_file cannot change this file"));
+    }
     if token == ChangeToken::Shown {
         notes.push(format!("change token {}", page.change_token));
     }
@@ -3962,6 +3967,19 @@ fn render_page(page: &Page, token: ChangeToken) -> String {
         body
     } else {
         format!("{body}\n\n({})", notes.join("; "))
+    }
+}
+
+/// How a page that is not the file's own text was read, in the words a note about it uses.
+fn decoding_note(decoding: bravebot_filetype::Decoding) -> Option<&'static str> {
+    use bravebot_filetype::Decoding;
+    match decoding {
+        Decoding::Utf8 => None,
+        Decoding::Utf8Replaced => Some("bytes that are not valid UTF-8 are shown as U+FFFD"),
+        Decoding::Utf16Le => Some("decoded from UTF-16 little-endian"),
+        Decoding::Utf16Be => Some("decoded from UTF-16 big-endian"),
+        Decoding::Utf32Le => Some("decoded from UTF-32 little-endian"),
+        Decoding::Utf32Be => Some("decoded from UTF-32 big-endian"),
     }
 }
 
@@ -14271,6 +14289,7 @@ mod tests {
             total_lines: 1,
             long_lines: 0,
             change_token: "0123456789abcdef".to_string(),
+            decoding: bravebot_filetype::Decoding::Utf8,
         };
 
         assert_eq!(render_page(&page, ChangeToken::Withheld), "alpha");
@@ -14278,6 +14297,47 @@ mod tests {
             render_page(&page, ChangeToken::Shown),
             "alpha\n\n(change token 0123456789abcdef)"
         );
+    }
+
+    /// A page that is a decoding says so, in words that name the encoding and say that an edit of the
+    /// file is refused, so the planner does not take a replacement character for something in the
+    /// file or an edit of it for something that can land. A page of the file's own UTF-8 says
+    /// nothing, since a note on every read would be a line in every file.
+    #[test]
+    fn a_decoded_page_says_how_it_was_decoded() {
+        use bravebot_filetype::Decoding;
+
+        let page_of = |decoding| Page {
+            lines: vec!["alpha".to_string()],
+            ends_with_newline: true,
+            first_line: 1,
+            total_lines: 1,
+            long_lines: 0,
+            change_token: "0123456789abcdef".to_string(),
+            decoding,
+        };
+        let consequence = "so edit_file cannot change this file";
+
+        assert_eq!(
+            render_page(&page_of(Decoding::Utf8), ChangeToken::Withheld),
+            "alpha"
+        );
+        for (decoding, how) in [
+            (
+                Decoding::Utf8Replaced,
+                "bytes that are not valid UTF-8 are shown as U+FFFD",
+            ),
+            (Decoding::Utf16Le, "decoded from UTF-16 little-endian"),
+            (Decoding::Utf16Be, "decoded from UTF-16 big-endian"),
+            (Decoding::Utf32Le, "decoded from UTF-32 little-endian"),
+            (Decoding::Utf32Be, "decoded from UTF-32 big-endian"),
+        ] {
+            assert_eq!(
+                render_page(&page_of(decoding), ChangeToken::Withheld),
+                format!("alpha\n\n({how}, {consequence})"),
+                "{decoding:?}"
+            );
+        }
     }
 
     /// The same ban across every tool rather than only `run`, because the tool a shell arrives in

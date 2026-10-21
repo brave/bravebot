@@ -79,7 +79,7 @@ interpreter. [`run`](#run) takes a command line, and bravebot compiles it itself
 
 ## `read_file`
 
-Reads a UTF-8 text file from the workspace and returns its lines.
+Reads a text file from the workspace and returns its lines.
 
 | Parameter | |
 |---|---|
@@ -91,7 +91,11 @@ Reads a UTF-8 text file from the workspace and returns its lines.
 Long files come back one page at a time, at most 500 lines and 100,000 characters, with each line
 shortened to 2,000 characters. A page of long lines ends at the last whole line that fits under the
 character cap. The result says so and gives the offset to continue from. A
-file that is not text is reported as binary, a picture being the exception.
+file that is not text is reported as binary, a picture being the exception. A UTF-16 or UTF-32
+file that begins with a byte order mark is shown decoded, and so is a file with a few bytes that
+are not UTF-8, such as Latin-1 text, with each such byte shown as U+FFFD. The result says when it
+decoded the file, and `edit_file` refuses a file that is not UTF-8, since it would write the file
+back as UTF-8.
 
 **A picture is quarantined whatever the trust map says, and leaves quarantine only through
 [`vet_content`](#vet_content).** A file whose extension names a picture or a PDF comes back as a

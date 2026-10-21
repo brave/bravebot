@@ -1164,6 +1164,39 @@ fn a_write_lands_where_the_plan_said_and_carries_what_it_never_read() {
     );
 }
 
+/// A page a plan reads goes into a slot that a later step writes. Latin-1 text decoded for the
+/// planner has U+FFFD where a byte was, so writing it would put a replacement character in a copy
+/// of the file that the file never held. The page is read as the file's own UTF-8 or the step
+/// fails, and nothing is written.
+#[test]
+fn a_paged_read_in_a_plan_never_carries_a_decoding_of_another_encoding() {
+    let scratch = Scratch::new("paged-not-utf8");
+    std::fs::write(scratch.path.join("latin1.txt"), b"caf\xe9 au lait\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "latin1.txt", "limit": 10, "out_slot": "page"}},
+            {"capability": "FILE_WRITE", "args": {"path": "copy.txt", "from_slot": "page"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let error = run(&config, &workspace, "copy latin1.txt", &mut sink)
+        .expect_err("a decoding of the file was read into a slot");
+    assert!(
+        error.to_string().contains("encoding other than UTF-8"),
+        "the step failed for another reason: {error}"
+    );
+    assert!(
+        !scratch.path.join("copy.txt").exists(),
+        "a decoding was written as a copy: {:?}",
+        std::fs::read(scratch.path.join("copy.txt"))
+    );
+}
+
 /// An unmarked processor answer is a remark, not a file. Treating it as the slot would write
 /// an explanation over whatever the plan named next, which is the thing the marker exists to
 /// stop.

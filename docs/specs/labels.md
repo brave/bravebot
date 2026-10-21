@@ -68,7 +68,7 @@ guards:
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
-      - crates/agent/tests/workspace.rs: 280
+      - crates/agent/tests/workspace.rs: 279
       - crates/core/src/policy.rs: 25
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -579,8 +579,8 @@ arrives at all.
 
 - **Seven places do look at untrusted bytes in order to decide something.** Three are in the policy
   layer, the fourth is the search, which is in `bravebot-agent`, the fifth is the diagnostics
-  sentence, the sixth is `read_git` and the seventh is the text-or-binary sniff of a read, which are
-  in `bravebot-agent` too. The clauses above say
+  sentence, the sixth is `read_git` and the seventh is the text-or-binary sniff and decoding of a
+  read, which are in `bravebot-agent` too. The clauses above say
   nothing may, so these are exceptions, and they are written down rather than left to be found.
 
   The first is splitting a processor's answer. A processor hands back a single piece of text that
@@ -835,11 +835,15 @@ arrives at all.
   control characters. A file that fails is refused to the planner in the driver's own words, "is a
   binary file, so it cannot be read as text", and one that passes becomes a reference with a byte
   count. The same test runs again over the whole file, followed by a check that it is valid UTF-8,
-  when a slot is filled or a page is read (`Workspace::read` and `page`). The comparison is in
-  `bravebot-agent`, which is the driver too ([LABEL-4](#LABEL-4)), and the `filetype` crate holds
-  no `declassify`, so no pinned count moves when it changes. Where the path is vouched for, the bytes
-  are trusted and the comparison is the case [LABEL-5](#LABEL-5) allows. The rest of this entry is
-  about a path nobody vouched for.
+  when a slot is filled or a whole read is made (`Workspace::read` and `page`). A page the planner
+  is shown goes through `bravebot_filetype::decode_text` instead, which looks for a UTF-16 or UTF-32
+  byte order mark before the NUL test, decodes a file with one, and reads any other file that
+  passes the test as UTF-8 with each invalid byte replaced, unless the replacements are more than
+  30 percent of it. It then applies the same sniff to the decoded text. A page that is a decoding
+  carries a note naming it ([READ-3](tools/read-file.md#READ-3)). The comparisons are in
+  `bravebot-agent`, which is the driver too ([LABEL-4](#LABEL-4)), and in the `filetype` crate it
+  calls. That crate holds no `declassify`, so no pinned count moves when it changes. Where the path is vouched for, the bytes are trusted and the comparison is the case
+  [LABEL-5](#LABEL-5) allows. The rest of this entry is about a path nobody vouched for.
 
   Suppose an attacker owns the file. Everything that buys them is on this list:
 
@@ -847,7 +851,12 @@ arrives at all.
     with a size, or the refusal above. That is one bit, and the planner was already free to read a
     different path.
   - **Put the file out of reach of a processor.** A NUL in the first 8 KiB, or bytes that are not
-    valid UTF-8 anywhere, makes a later fill of the slot fail with the same refusal.
+    valid UTF-8 anywhere, makes a later fill of the slot fail with a refusal in the driver's own
+    words, as does a byte order mark. A slot is filled from text that is UTF-8 as it stands.
+  - **Choose how the bytes are split into lines** for a page of the file that is read through a
+    manifest step. A mark makes the units two or four bytes, and an invalid byte makes one
+    character. The line and byte counts the planner is told for a quarantined page are already the
+    attacker's to set ([LABEL-3](#LABEL-3)).
 
   What is **not** on the list: the label, which depends on the path alone, any destination, any
   argument of a later call, and any byte of the file. The size the planner is told is the file's own

@@ -57,15 +57,71 @@ for the line cap, and a read the planner may not see reports only its size
 `verified-by: bravebot_agent::turn::the_model_can_ask_for_a_later_page`
 
 <a id="READ-3"></a>
-### READ-3: a file that is not text is reported as binary
+### READ-3: a file that is not text is reported as binary, and text in another encoding is decoded for the planner
 
-Never as a decoding error, which would read as a fault rather than as a fact about the file. A
-picture is the exception and is [READ-5](#READ-5): there is something to do with one, so saying
-"binary" would be refusing a read that can be answered.
+A file that is not text is reported as binary, never as a decoding error, which would read as a
+fault rather than as a fact about the file. A picture is the exception and is
+[READ-5](#READ-5): there is something to do with one, so saying "binary" would be refusing a read
+that can be answered.
+
+**What reads as text.** A page the planner is shown is decoded from the shape of the file's first
+bytes, in this order:
+
+1. A UTF-16 or UTF-32 byte order mark, in either byte order, is checked before the null-byte test,
+   since every such file holds nulls. The mark is stripped and the rest is decoded as that
+   encoding, an unpaired or cut-off unit becoming U+FFFD. UTF-32 is tried before UTF-16, because
+   the UTF-32 little-endian mark begins with the UTF-16 one.
+2. Without a mark, a file holding a null byte or more than 30 percent control characters in its
+   first 8 KiB is binary.
+3. Any other file is read as UTF-8, each invalid sequence of bytes becoming one U+FFFD, so a
+   Latin-1 file with one accented character reads. Where more than 30 percent of the characters
+   come out as U+FFFD the file is binary, the share of control characters step 2 already allows.
+
+A decoded text is held to the test in step 2 as well, so a binary file that happens to begin with a
+mark is binary. A UTF-16 file with no mark is binary by step 2, and so is text in an encoding such
+as Shift-JIS, which has no mark and is mostly bytes UTF-8 does not allow. A file that is not UTF-16
+but begins with the bytes of its mark reads as UTF-16, since the first bytes are all that decides.
+
+**The page says it was decoded.** Where a file was not valid UTF-8, its page ends with a note
+naming the decoding (UTF-16 or UTF-32 with the byte order, or that bytes which are not UTF-8 are
+shown as U+FFFD) and saying that `edit_file` cannot change the file.
+
+**These are decisions on the shape of the first bytes**, the same class as the null-byte test,
+and the seventh entry under Known costs in [labels.md](../labels.md) lists them with it. The label
+comes from the path ([READ-1](#READ-1)) and never from how a file decoded.
+
+**A decoding is not the file's bytes.** An edit writes its text back to the file, and the text a
+slot holds is written to a file or handed to a program as the file, so neither may be a decoding of
+another encoding. The whole read an edit works from, the read that fills a slot and the page a
+plan reads accept only text that is UTF-8 as it stands. They refuse a file with a mark or with
+invalid bytes as text in an encoding other than UTF-8, a fact about the file and not a decoding
+error. The survey a deferred read makes answers for the slot it reserves, so it ignores a byte
+order mark: in a directory nobody vouched for, a UTF-16 file is reported as binary when the
+planner asks, and a Latin-1 file is refused when something needs its bytes. A `write_file` body is
+the planner's own text and replaces the file as [WRITE-1](write-file.md#WRITE-1) says, whatever
+encoding the file had.
+
+**Why.** A UTF-16 source file from a Windows tool, and a Latin-1 file with one accented character,
+are text a person reads in an editor. Reported as binary, they leave the planner with no way to read
+them short of a shell command. The decoding stops at what the planner is shown, because anything
+written back from it would change bytes the planner never saw: U+FFFD over the byte it replaced, or
+UTF-8 over a UTF-16 file.
 
 `verified-by: bravebot_agent::workspace::a_binary_file_is_reported_as_binary`
 `verified-by: bravebot_agent::workspace::a_paged_read_of_a_binary_file_is_refused`
-`verified-by: bravebot_agent::workspace::a_file_that_passes_the_sniff_but_is_not_utf8_is_reported_as_binary`
+`verified-by: bravebot_agent::workspace::a_utf16_file_with_a_mark_pages_as_its_text_in_either_byte_order`
+`verified-by: bravebot_agent::workspace::a_file_with_a_stray_invalid_byte_pages_with_a_replacement_character`
+`verified-by: bravebot_agent::workspace::a_utf8_file_pages_without_a_decoding`
+`verified-by: bravebot_agent::workspace::nulls_without_a_byte_order_mark_are_still_binary`
+`verified-by: bravebot_agent::workspace::a_whole_read_of_a_file_that_is_not_utf8_is_refused_as_another_encoding`
+`verified-by: bravebot_agent::workspace::a_slot_is_never_filled_from_a_decoding_of_another_encoding`
+`verified-by: bravebot_agent::manifest::a_paged_read_in_a_plan_never_carries_a_decoding_of_another_encoding`
+`verified-by: bravebot_agent::workspace::a_deferred_read_of_a_utf16_file_is_reported_as_binary`
+`verified-by: bravebot_agent::workspace::a_decoded_page_is_labelled_by_its_path_alone`
+`verified-by: bravebot_agent::turn::a_utf16_file_is_read_as_text_and_an_edit_of_it_is_refused`
+`verified-by: bravebot_agent::turn::a_file_with_a_stray_invalid_byte_is_read_with_a_replacement_character_and_an_edit_is_refused`
+`verified-by: bravebot_agent::turn::a_copy_through_a_reference_never_carries_a_decoding_of_another_encoding`
+`verified-by: bravebot_agent::tools::a_decoded_page_says_how_it_was_decoded`
 `verified-by: bravebot_agent::workspace::text_files_are_not_mistaken_for_binary`
 `verified-by: bravebot_agent::workspace::an_empty_file_is_not_binary`
 `verified-by: bravebot_filetype::lib::a_null_byte_in_the_sniffed_head_is_binary`
@@ -73,6 +129,15 @@ picture is the exception and is [READ-5](#READ-5): there is something to do with
 `verified-by: bravebot_filetype::lib::thirty_percent_control_characters_is_text_and_thirty_one_is_not`
 `verified-by: bravebot_filetype::lib::tab_newline_form_feed_and_carriage_return_are_text`
 `verified-by: bravebot_filetype::lib::an_empty_file_is_not_binary`
+`verified-by: bravebot_filetype::lib::a_utf16_file_with_a_mark_decodes_in_either_byte_order`
+`verified-by: bravebot_filetype::lib::a_utf32_file_with_a_mark_decodes_in_either_byte_order`
+`verified-by: bravebot_filetype::lib::a_utf32_mark_is_not_taken_for_a_utf16_one`
+`verified-by: bravebot_filetype::lib::a_half_a_unit_or_an_unpaired_surrogate_in_a_wide_file_is_a_replacement_character`
+`verified-by: bravebot_filetype::lib::nulls_without_a_mark_are_binary_and_a_mark_alone_is_empty`
+`verified-by: bravebot_filetype::lib::a_binary_file_that_begins_with_a_mark_is_not_text`
+`verified-by: bravebot_filetype::lib::a_stray_invalid_byte_decodes_with_a_replacement_character`
+`verified-by: bravebot_filetype::lib::valid_utf8_decodes_as_itself`
+`verified-by: bravebot_filetype::lib::thirty_percent_invalid_bytes_is_text_and_thirty_one_is_not`
 
 <a id="READ-4"></a>
 ### READ-4: the planner may choose which file to read
