@@ -1384,6 +1384,38 @@ mod tests {
         assert!(calls(&http)[0].get("extra_content").is_none());
     }
 
+    /// Brave's own endpoint is no gateway, so no service of its own attached the member and the
+    /// request is built without it, whatever a conversation carried over from another service.
+    #[test]
+    fn extra_content_is_not_sent_to_braves_own_endpoint() {
+        let config = config();
+        let egress = Egress::new();
+        let mut request = request("m");
+        request.messages.push(Message::assistant_calling(
+            "",
+            vec![protocol::ToolCallRequest {
+                id: "call_1".into(),
+                kind: "function".into(),
+                function: protocol::ToolCallRequestFunction {
+                    name: "read_file".into(),
+                    arguments: "{}".into(),
+                },
+                extra_content: Some(serde_json::json!({"google": {"thought_signature": "s"}})),
+            }],
+        ));
+        let http = AichatClient::new(&config, &egress)
+            .prepare(&request)
+            .expect("prepared");
+        let calls = body(&http)["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .find_map(|message| message.get("tool_calls").cloned())
+            .expect("the call stays");
+        assert_eq!(calls[0]["id"], "call_1");
+        assert!(calls[0].get("extra_content").is_none(), "{calls}");
+    }
+
     /// A local Ollama wants no credential, and `Bearer` with nothing after it is not the same request
     /// as one carrying no credential at all: some services read the empty value as a bad token and
     /// refuse, which is the failure this exists to avoid.
