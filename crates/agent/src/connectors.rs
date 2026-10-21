@@ -444,9 +444,6 @@ impl Connectors {
                 return Err(format!("'{name}' does not take '{field}'"));
             }
         }
-        if given("take") && resource.takes.is_empty() {
-            return Err(format!("'{name}' does not take 'take'"));
-        }
         // A step that takes every with value it gives has given them all.
         let given_or_taken = |field: &str| given(field) || (field == "with" && given("take"));
         for alternatives in resource.alternatives() {
