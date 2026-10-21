@@ -22,6 +22,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
 use crate::input;
+use crate::state::Session;
 use crate::theme;
 
 /// Longest answer the user can type.
@@ -668,20 +669,26 @@ impl<'a> Picker<'a> {
     }
 }
 
-/// Put remembered answers back beside the fresh ones, in the order the questions were asked.
+/// Put a series to the person, asking only what the session has not been answered already.
 ///
-/// The picker is only shown the questions nobody has settled yet, so what it hands back is
-/// shorter than the series and lines up with nothing. This is where the two are woven together.
-///
-/// A fresh answer that never arrived leaves a decline rather than pulling the next one forward.
-/// Shifting answers up would report the person as having said, about one question, what they
-/// said about another.
-pub fn in_order(known: Vec<Option<Answer>>, fresh: Vec<Answer>) -> Vec<Answer> {
-    let mut fresh = fresh.into_iter();
-    known
-        .into_iter()
-        .map(|earlier| earlier.or_else(|| fresh.next()).unwrap_or(Answer::Declined))
-        .collect()
+/// A planner that loops back over the same decision does not make the person restate it. The note
+/// is what keeps that from being invisible: an answer given once and reused silently would look
+/// like a question that was never asked. `ask` draws the questions still outstanding, so the count
+/// in its title is the number the person has to answer. What the person answers is remembered for
+/// the next time, and a question `ask` returned no answer for is drawn again (ASK-8).
+pub fn put(
+    session: &mut Session,
+    asking: &Asking,
+    ask: impl FnOnce(&Asking) -> Vec<Answer>,
+) -> Vec<Answer> {
+    let settled = session.answers.read(asking);
+    for prompt in settled.reused() {
+        session.note(t!(session_answered_already, question = &prompt.question));
+    }
+
+    let fresh = ask(settled.outstanding());
+
+    settled.finish(&mut session.answers, fresh)
 }
 
 /// The tag a question is shown under, or nothing where it has none.
@@ -1170,51 +1177,6 @@ mod tests {
             KeyCode::Enter,
         ];
         assert_eq!(answer(&prompt(true), &keys), Some(Answer::Chosen(vec![0])));
-    }
-
-    /// The weave the main loop depends on. Fresh answers fill the gaps the remembered ones left,
-    /// and every question keeps its own place.
-    #[test]
-    fn remembered_answers_keep_their_places_beside_the_fresh_ones() {
-        let known = vec![
-            Some(Answer::Chosen(vec![1])),
-            None,
-            Some(Answer::Declined),
-            None,
-        ];
-        let fresh = vec![Answer::Typed("second".into()), Answer::Chosen(vec![0])];
-        assert_eq!(
-            in_order(known, fresh),
-            vec![
-                Answer::Chosen(vec![1]),
-                Answer::Typed("second".into()),
-                Answer::Declined,
-                Answer::Chosen(vec![0]),
-            ]
-        );
-    }
-
-    /// A series everyone has already answered asks nothing, and still reports every answer.
-    #[test]
-    fn a_series_answered_entirely_from_memory_asks_nothing() {
-        let known = vec![Some(Answer::Chosen(vec![0])), Some(Answer::Declined)];
-        assert_eq!(
-            in_order(known, Vec::new()),
-            vec![Answer::Chosen(vec![0]), Answer::Declined]
-        );
-    }
-
-    /// An interface that answered fewer than it was shown leaves the rest declined. Pulling the
-    /// next answer forward would report the person as having said, about one question, what they
-    /// said about another.
-    #[test]
-    fn an_interface_that_answered_fewer_leaves_the_rest_declined() {
-        let known = vec![None, None, None];
-        let fresh = vec![Answer::Chosen(vec![0])];
-        assert_eq!(
-            in_order(known, fresh),
-            vec![Answer::Chosen(vec![0]), Answer::Declined, Answer::Declined]
-        );
     }
 
     /// A picker shown nothing draws nothing and answers nothing, which is what lets the main
@@ -1822,5 +1784,127 @@ mod tests {
 
         assert!(screen.contains("skip the question"));
         assert!(!screen.contains("back to the options"));
+    }
+
+    /// What the session said beside the work, oldest first.
+    fn said(session: &Session) -> Vec<String> {
+        session
+            .transcript
+            .iter()
+            .filter(|entry| entry.speaker == crate::state::Speaker::System)
+            .map(|entry| entry.text.clone())
+            .collect()
+    }
+
+    /// ASK-8 as the main loop reaches it. The picker is drawn by `ask`, so a stand-in that records
+    /// what it was shown is what tells a series put whole from one put only for what is left.
+    #[test]
+    fn a_question_the_person_answered_is_not_drawn_again() {
+        let mut session = Session::new(".");
+        let asking = one(&prompt(false));
+
+        let first = put(&mut session, &asking, |shown| {
+            assert_eq!(shown, &asking, "the first time the question is drawn whole");
+            vec![Answer::Chosen(vec![1])]
+        });
+        let again = put(&mut session, &asking, |shown| {
+            assert!(
+                shown.prompts.is_empty(),
+                "a question answered before was drawn again: {shown:?}"
+            );
+            Vec::new()
+        });
+
+        assert_eq!(first, vec![Answer::Chosen(vec![1])]);
+        assert_eq!(again, first, "the remembered answer was not handed back");
+    }
+
+    /// Said once per question answered from memory, so a reused answer is not mistaken for a
+    /// question that was never put.
+    #[test]
+    fn an_answer_reused_from_memory_is_said_to_have_been_given_already() {
+        let mut session = Session::new(".");
+        let asking = one(&prompt(false));
+        put(&mut session, &asking, |_| vec![Answer::Declined]);
+        assert!(said(&session).is_empty(), "the first asking said something");
+
+        put(&mut session, &asking, |_| Vec::new());
+
+        assert_eq!(
+            said(&session),
+            vec![t!(session_answered_already, question = "Which cache layer?").to_string()]
+        );
+    }
+
+    /// The questions still open are the only ones drawn, and every answer keeps the place of the
+    /// question it belongs to, whichever of them were remembered.
+    #[test]
+    fn a_series_with_some_questions_settled_draws_only_the_rest() {
+        let mut session = Session::new(".");
+        put(&mut session, &one(&platforms()), |_| {
+            vec![Answer::Chosen(vec![0, 1])]
+        });
+
+        let both = Asking {
+            prompts: vec![prompt(false), platforms()],
+        };
+        let given = put(&mut session, &both, |shown| {
+            assert_eq!(
+                shown.prompts,
+                vec![prompt(false)],
+                "the settled one was drawn"
+            );
+            vec![Answer::Typed("neither".into())]
+        });
+
+        assert_eq!(
+            given,
+            vec![Answer::Typed("neither".into()), Answer::Chosen(vec![0, 1])]
+        );
+    }
+
+    /// A picker that could not draw, or lost the keyboard, answers nothing. The question was not
+    /// put to the person, so it is not remembered as skipped and is drawn when asked again.
+    #[test]
+    fn a_question_the_picker_left_unanswered_is_drawn_again() {
+        let mut session = Session::new(".");
+        let asking = one(&prompt(false));
+
+        let first = put(&mut session, &asking, |_| Vec::new());
+        let mut drawn = 0;
+        put(&mut session, &asking, |shown| {
+            drawn = shown.prompts.len();
+            vec![Answer::Chosen(vec![0])]
+        });
+
+        assert_eq!(first, vec![Answer::Declined]);
+        assert_eq!(drawn, 1, "a question nobody was asked was not drawn again");
+    }
+
+    /// A question that differs in its tag is another question, and is drawn.
+    #[test]
+    fn a_question_that_differs_in_its_tag_is_drawn_though_the_sentence_was_answered() {
+        let mut session = Session::new(".");
+        put(&mut session, &one(&prompt(false)), |_| {
+            vec![Answer::Chosen(vec![0])]
+        });
+        let retagged = bravebot_core::ask::prompt(&Question::new(
+            "Caching",
+            "Which cache layer?",
+            vec![
+                Choice::new("HTTP", Some("in front of the handler".into())),
+                Choice::new("Query", None),
+                Choice::new("Neither", None),
+            ],
+            false,
+        ));
+
+        let mut drawn = 0;
+        put(&mut session, &one(&retagged), |shown| {
+            drawn = shown.prompts.len();
+            vec![Answer::Declined]
+        });
+
+        assert_eq!(drawn, 1);
     }
 }

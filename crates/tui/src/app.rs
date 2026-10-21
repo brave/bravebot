@@ -5680,37 +5680,9 @@ fn run_turn_animated(
                     let _ = answer_tx.send(crate::remote_confirm::Reply::Host(answer.decision()));
                 }
                 crate::remote_confirm::ToMain::Ask(asking) => {
-                    // A planner that loops back over the same decision should not make the user
-                    // restate it. The note is what keeps that from being invisible: an answer given
-                    // once and reused silently would look like a question that was never asked.
-                    let known: Vec<Option<bravebot_core::ask::Answer>> = asking
-                        .prompts
-                        .iter()
-                        .map(|prompt| session.recall_answer(&prompt.key))
-                        .collect();
-                    for (prompt, earlier) in asking.prompts.iter().zip(&known) {
-                        if earlier.is_some() {
-                            session.note(t!(session_answered_already, question = &prompt.question));
-                        }
-                    }
-
-                    // Only what is still outstanding is drawn, so the count in the title is the
-                    // number of questions the person actually has to answer.
-                    let outstanding = bravebot_core::ask::Asking {
-                        prompts: asking
-                            .prompts
-                            .iter()
-                            .zip(&known)
-                            .filter(|(_, earlier)| earlier.is_none())
-                            .map(|(prompt, _)| prompt.clone())
-                            .collect(),
-                    };
-                    let fresh = crate::ask::ask(terminal, &outstanding);
-
-                    let answers = crate::ask::in_order(known, fresh);
-                    for (prompt, answer) in asking.prompts.iter().zip(&answers) {
-                        session.remember_answer(prompt.key.clone(), answer.clone());
-                    }
+                    let answers = crate::ask::put(session, &asking, |outstanding| {
+                        crate::ask::ask(terminal, outstanding)
+                    });
                     let _ = answer_tx.send(crate::remote_confirm::Reply::Ask(answers));
                 }
                 // No reply: each of these is recorded and the next redraw, one iteration away,
@@ -26746,7 +26718,7 @@ mod tests {
         );
         workspace.grant_hosts(&["yes.example".to_string()]);
         workspace.decline_hosts(&["no.example".to_string()]);
-        session.remember_answer(
+        session.answers.remember(
             "pick one: Cache: Which?".into(),
             bravebot_core::ask::Answer::Chosen(vec![0]),
         );
@@ -26789,7 +26761,7 @@ mod tests {
             "the copy kept a host answer"
         );
         assert_eq!(
-            session.recall_answer("pick one: Cache: Which?"),
+            session.answers.recall("pick one: Cache: Which?"),
             None,
             "the copy kept an answer to the planner's question"
         );

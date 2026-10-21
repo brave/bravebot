@@ -477,7 +477,7 @@ pub(super) fn branch_session(
             ));
             answers.forget_what_no_record_keeps();
             workspace.forget_reach_and_hosts();
-            session.answers.clear();
+            session.answers.forget();
             true
         }
         Err(refused) => {

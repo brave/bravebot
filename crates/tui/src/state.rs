@@ -1180,10 +1180,10 @@ pub struct Session {
     /// Answers the user has already given this session, keyed by the question.
     ///
     /// A repeated question is answered from here rather than put to them again, since a planner
-    /// that loops back over the same decision should not make the user restate it. Kept in the
-    /// interface rather than the kernel: it is a convenience for the person, not a rule about
-    /// labels, and the key is trusted text by the time it reaches here.
-    pub answers: Vec<(String, bravebot_core::ask::Answer)>,
+    /// that loops back over the same decision should not make the user restate it. The memo is the
+    /// one every front end keeps; which session it belongs to is this interface's to say, and
+    /// the key is trusted text by the time it reaches here.
+    pub answers: bravebot_core::ask::AnswerMemo,
     /// Pictures pasted into the line being typed, each with the text standing in for it.
     ///
     /// The marker is the handle. A paste writes `[Image #1]` where the caret was and the picture
@@ -1474,7 +1474,7 @@ impl Session {
             said_while_working: Vec::new(),
             composing: None,
             attributed_to: None,
-            answers: Vec::new(),
+            answers: bravebot_core::ask::AnswerMemo::default(),
             pasted: Vec::new(),
             previews: Vec::new(),
             sent_pasted: Vec::new(),
@@ -1753,7 +1753,7 @@ impl Session {
         self.recall.clear();
         // ASK-8: kept, a question in the new conversation would be answered from the one that was
         // thrown away, and the person asked nothing.
-        self.answers.clear();
+        self.answers.forget();
         self.turn_places.clear();
         self.unplaced_todos.clear();
         self.hunks_listed = None;
@@ -4614,22 +4614,6 @@ impl Session {
         }
         self.said.push(message.clone());
         self.note(message);
-    }
-
-    /// What the user said last time this exact question was asked, if they were asked it.
-    pub fn recall_answer(&self, key: &str) -> Option<bravebot_core::ask::Answer> {
-        self.answers
-            .iter()
-            .find(|(asked, _)| asked == key)
-            .map(|(_, answer)| answer.clone())
-    }
-
-    /// Remember an answer, replacing any earlier one for the same question.
-    pub fn remember_answer(&mut self, key: String, answer: bravebot_core::ask::Answer) {
-        match self.answers.iter_mut().find(|(asked, _)| *asked == key) {
-            Some(slot) => slot.1 = answer,
-            None => self.answers.push((key, answer)),
-        }
     }
 
     pub fn toggle_trail(&mut self) {
@@ -7559,64 +7543,32 @@ mod tests {
         assert_eq!(session.top_row(), 120, "the view stopped at the old end");
     }
 
-    /// A question nobody has been asked has no answer to recall, which is what makes the memo
-    /// safe to consult for every question in a series.
-    #[test]
-    fn a_question_never_asked_has_no_remembered_answer() {
-        let session = Session::new(".");
-        assert_eq!(session.recall_answer("pick one: Cache: Which?"), None);
-    }
-
-    /// The key is the whole question, so two that differ anywhere are two questions and the
-    /// second is put to the person rather than answered with the first one's reply.
-    #[test]
-    fn a_different_question_is_not_answered_from_an_earlier_one() {
-        let mut session = Session::new(".");
-        session.remember_answer("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
-        assert_eq!(session.recall_answer("pick one: Branch: Which?"), None);
-    }
-
-    /// Answering again replaces rather than accumulates, or the memo would grow a second entry
-    /// for the same question and recall would keep returning the stale one.
-    #[test]
-    fn answering_the_same_question_again_replaces_what_was_remembered() {
-        let mut session = Session::new(".");
-        session.remember_answer("q".into(), Answer::Chosen(vec![0]));
-        session.remember_answer("q".into(), Answer::Chosen(vec![1]));
-        assert_eq!(session.answers.len(), 1);
-        assert_eq!(session.recall_answer("q"), Some(Answer::Chosen(vec![1])));
-    }
-
     /// ASK-8: an answer is remembered for the session, and `/clear` begins another. A question the
     /// new conversation puts is asked, not answered from the one that was thrown away.
     #[test]
     fn clearing_the_conversation_forgets_the_answers_to_the_planners_questions() {
         let mut session = Session::new(".");
-        session.remember_answer("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
-        session.remember_answer("skip: Branch: Which?".into(), Answer::Declined);
+        session
+            .answers
+            .remember("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
+        session
+            .answers
+            .remember("skip: Branch: Which?".into(), Answer::Declined);
 
         session.clear();
 
         assert_eq!(
-            session.recall_answer("pick one: Cache: Which?"),
+            session.answers.recall("pick one: Cache: Which?"),
             None,
             "a chosen answer outlived /clear"
         );
         assert_eq!(
-            session.recall_answer("skip: Branch: Which?"),
+            session.answers.recall("skip: Branch: Which?"),
             None,
             "a declined question outlived /clear"
         );
     }
 
-    /// A decline is an answer, so it is remembered as one. Treating it as absence would put a
-    /// question the person deliberately passed over back in front of them.
-    #[test]
-    fn a_skipped_question_is_remembered_as_skipped() {
-        let mut session = Session::new(".");
-        session.remember_answer("q".into(), Answer::Declined);
-        assert_eq!(session.recall_answer("q"), Some(Answer::Declined));
-    }
     use bravebot_core::label::Label;
 
     fn session() -> Session {

@@ -30,7 +30,7 @@ use bravebot_agent::confirm::{
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{PermissionMode, Workspace};
 use bravebot_config::Config;
-use bravebot_core::ask::{Answer, Asking};
+use bravebot_core::ask::{Answer, AnswerMemo, Asking};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::RecordingSink;
 use bravebot_core::permissions::Permissions;
@@ -1124,7 +1124,7 @@ pub struct Prompting<R: BufRead, W: Write> {
     input: R,
     output: W,
     /// What the person answered, by the question's key, for the rest of the session (ASK-8).
-    answers: Vec<(String, Answer)>,
+    answers: AnswerMemo,
     /// Told when a line is about to be waited for and when it has come, by a session whose process
     /// a terminal does not own.
     watch: Option<Box<dyn Watcher>>,
@@ -1191,7 +1191,7 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
         Self {
             input,
             output,
-            answers: Vec::new(),
+            answers: AnswerMemo::default(),
             watch: None,
             kind: None,
         }
@@ -1220,22 +1220,6 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
         }
         for line in lines {
             self.say(line);
-        }
-    }
-
-    /// What the person answered the last time this exact question was put to them, if it was.
-    fn recall_answer(&self, key: &str) -> Option<Answer> {
-        self.answers
-            .iter()
-            .find(|(asked, _)| asked == key)
-            .map(|(_, answer)| answer.clone())
-    }
-
-    /// Remember an answer, replacing any earlier one for the same question.
-    fn remember_answer(&mut self, key: String, answer: Answer) {
-        match self.answers.iter_mut().find(|(asked, _)| *asked == key) {
-            Some(slot) => slot.1 = answer,
-            None => self.answers.push((key, answer)),
         }
     }
 
@@ -1635,28 +1619,16 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         // A planner that loops back over the same decision does not make the person restate it
         // (ASK-8). Each settled question is said to have been answered already, so an answer
         // reused silently is not mistaken for a question that was never put.
-        let known: Vec<Option<Answer>> = asking
-            .prompts
-            .iter()
-            .map(|prompt| self.recall_answer(&prompt.key))
-            .collect();
-        for (prompt, earlier) in asking.prompts.iter().zip(&known) {
-            if earlier.is_some() {
-                self.say(&t!(
-                    session_answered_already,
-                    question = shown(&prompt.question)
-                ));
-            }
+        let settled = self.answers.read(asking);
+        for prompt in settled.reused() {
+            self.say(&t!(
+                session_answered_already,
+                question = shown(&prompt.question)
+            ));
         }
 
         let mut fresh = Vec::new();
-        for prompt in asking
-            .prompts
-            .iter()
-            .zip(&known)
-            .filter(|(_, earlier)| earlier.is_none())
-            .map(|(prompt, _)| prompt)
-        {
+        for prompt in &settled.outstanding().prompts {
             let mut lines = vec![shown(&prompt.header), shown(&prompt.question)];
             for row in &prompt.rows {
                 lines.push(format!("  {}", shown(&row.label)));
@@ -1675,11 +1647,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             });
         }
 
-        let answers = bravebot_tui::ask::in_order(known, fresh);
-        for (prompt, answer) in asking.prompts.iter().zip(&answers) {
-            self.remember_answer(prompt.key.clone(), answer.clone());
-        }
-        answers
+        settled.finish(&mut self.answers, fresh)
     }
 
     /// Nothing. The only line this reads is a prompt it asked for or an answer to a question it
