@@ -2557,6 +2557,61 @@ fn a_refused_google_vertex_request_does_not_repeat_the_key() {
     }
 }
 
+/// The key is a credential, so it is in no text a refusal produces on either path, whatever the
+/// status, and in nothing the run recorded about the request that carried it.
+#[test]
+fn a_vertex_key_is_in_no_error_and_no_recorded_event_on_either_path_for_any_refusal() {
+    const KEY: &str = "placeholder-key-77c2e0";
+    for status in [401, 403, 404] {
+        for streaming in [false, true] {
+            let (endpoint, received) = serve_attempts(vec![Attempt::Status(status)]);
+            let config = config_for(&endpoint);
+            let provider = vertex_at(&endpoint);
+            let egress = Egress::new();
+            let mut sink = RecordingSink::new();
+            let error = {
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::WebFetch]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let mut client = AichatClient::new(&config, &egress).for_gateway(
+                    &provider,
+                    "google/gemini-2.5-flash",
+                    Some(bravebot_config::Secret::new(KEY)),
+                );
+                let request = ChatRequest::new(
+                    "google-vertex/google/gemini-2.5-flash",
+                    vec![Message::user("hello")],
+                );
+                if streaming {
+                    client.complete_streaming(&mut policy, &request, |_| {})
+                } else {
+                    client.complete(&mut policy, &request)
+                }
+                .expect_err("the service refused")
+            };
+
+            let sent = received.recv().expect("the request arrived");
+            assert_eq!(sent.header("x-goog-api-key"), Some(KEY));
+            assert_eq!(sent.header("authorization"), None);
+            let said = [
+                error.to_string(),
+                format!("{error:?}"),
+                format!("{:?}", sink.events()),
+            ];
+            for text in said {
+                assert!(
+                    !text.contains(KEY),
+                    "the key is in {text} (status {status}, streaming {streaming})"
+                );
+            }
+        }
+    }
+}
+
 /// A malformed tool call must not hide a valid bill.
 #[test]
 fn malformed_whole_reply_keeps_known_usage() {
