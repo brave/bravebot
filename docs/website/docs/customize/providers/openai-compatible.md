@@ -191,8 +191,31 @@ Ollama wants no API key, so its block names none:
 `baseURL` is written down because `ollama` is not one of the names an endpoint is
 [compiled in](#where-the-requests-go) for. There is no `models` key, so Ollama is asked what it has
 pulled and `/model` lists what came back. A first run with nothing configured offers to write this
-block for you where Ollama is running ([Importing from Claude Code, opencode or
-Ollama](../configuration.md#importing-from-claude-code-opencode-or-ollama)).
+block for you where Ollama is running ([Importing from Claude Code, opencode or a local model
+server](../configuration.md#importing-from-claude-code-opencode-or-a-local-model-server)).
+
+LM Studio and llama-server want no key either, so their blocks differ from this one in the name and
+the address. LM Studio's server listens on port `1234` once it is started, and llama-server's on
+`9931` unless it is told another port:
+
+```json
+{
+  "provider": {
+    "lmstudio": {
+      "name": "LM Studio (local)",
+      "options": { "baseURL": "http://127.0.0.1:1234/v1" }
+    },
+    "llama-server": {
+      "name": "llama-server (local)",
+      "options": { "baseURL": "http://127.0.0.1:9931/v1" }
+    }
+  },
+  "model": "lmstudio/qwen/qwen3-coder-30b"
+}
+```
+
+The model names are the ones each server lists: `/model` shows them once the block is in place. A
+first run offers to write either block where the server is running, as it does for Ollama.
 
 ### Which models are offered
 
@@ -233,8 +256,8 @@ window does not compact a conversation late, it stops compacting it at all. A wi
 is taken where the file stated none; a figure in the file outranks it. `options.contextWindow` is the
 figure for every model of the provider that states none, and is the place to keep one for a block
 that lists no models, such as a local Ollama, whose window is one server setting. A model's own
-`limit.context` outranks it, and a gateway's report does not. The Ollama import writes it where the
-server holds the model with fewer than 131,072 tokens. Following opencode, `limit`
+`limit.context` outranks it, and a gateway's report does not. The Ollama and LM Studio imports write
+it where the server holds the model with fewer than 131,072 tokens. Following opencode, `limit`
 needs `output` alongside `context` or it is not a `limit` and its figure is not read. `output` states
 [how far a reply may run](../configuration.md#how-long-a-reply-may-run).
 

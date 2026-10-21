@@ -385,17 +385,21 @@ onboarding-no-model = no model service is configured yet
 # case is one import away rather than a whole configuration away.
 onboarding-subscription-unusable = the subscription that is stored could not be used: { $problem }
 # Said before the routes where Claude Code or opencode configures a service bravebot can use, or a
-# running Ollama serves one, and nobody was there to be asked about it: a one-shot run, --json, a
-# pipe, or doctor.
+# running Ollama, LM Studio or llama-server serves one, and nobody was there to be asked about it: a
+# one-shot run, --json, a pipe, or doctor.
 onboarding-import-one =
     { $source } configures a model service bravebot can use: run `bravebot auth login import` in a terminal to import it.
-# The same, where the one source is Ollama running on this machine.
+# The same, where the one source is a server running on this machine: Ollama, LM Studio or
+# llama-server.
 onboarding-import-running =
     { $source } is running here with models bravebot can use: run `bravebot auth login import` in a terminal to import it.
 onboarding-import-both =
     { $first } and { $second } each have a model service bravebot can use: run `bravebot auth login import` in a terminal to import them.
 onboarding-import-three =
     { $first }, { $second } and { $third } each have a model service bravebot can use: run `bravebot auth login import` in a terminal to import them.
+# Where more than three have one. The names arrive as one comma-separated list.
+onboarding-import-many =
+    { $sources } each have a model service bravebot can use: run `bravebot auth login import` in a terminal to import them.
 # Said instead, where a service is configured and only the model in force is Brave's own. A
 # settings block copied out of another tool names its models and names no default, so this is
 # where somebody following that route lands, and what they have to do is name one of their own.
@@ -937,7 +941,7 @@ hook-stopped =
     stopped
 
 
-## Importing a model service Claude Code or opencode configured, or a running Ollama serves
+## Importing a model service Claude Code or opencode configured, or a running Ollama, LM Studio or llama-server serves
 
 # Said above everything an import would write, naming the files it was read from. Every name and
 # value follows before the question, because what is written is what the person approves.
@@ -945,13 +949,15 @@ import-found = { $source } configures a model service bravebot can use, in { $fi
 # Where no file was read: the setup is exported rather than written down.
 import-found-exported =
     { $source } configures a model service bravebot can use, in this process's environment.
-# Where the source is a server that answered rather than a file: Ollama, at the address asked.
+# Where the source is a server that answered rather than a file: Ollama, LM Studio or llama-server,
+# at the address asked.
 import-found-running = { $source } is running at { $url }, serving models bravebot can use.
 # Under the model, where the running server stated the window it holds that model loaded with.
-import-ollama-window = the server has it loaded with a context window of { $window } tokens
+import-window = the server has it loaded with a context window of { $window } tokens
 # Said where that window is below the one a conversation is otherwise budgeted against. The entry
 # listed below it carries the figure as contextWindow, so a conversation is kept within it.
 import-ollama-window-small = Ollama drops the earliest turns beyond that window, so the entry below records it as contextWindow and a conversation is kept within it rather than within { $assumed } tokens. Set OLLAMA_CONTEXT_LENGTH higher before starting Ollama to keep more.
+import-lm-studio-window-small = A conversation longer than that window does not fit the model as LM Studio has loaded it, so the entry below records it as contextWindow and a conversation is kept within it rather than within { $assumed } tokens. Load the model with a longer context length in LM Studio to keep more.
 import-adds = Importing it adds these to { $file }:
 # One gateway, with the host its requests go to: that host is where a credential is sent, so it is
 # the part of the entry the question is really about.
@@ -976,7 +982,7 @@ import-left-another-sdk = an entry reached through an SDK other than an OpenAI-c
 import-left-no-endpoint = no reachable endpoint is stated or known for it
 import-left-substitution =
     its key is built from an opencode substitution inside a longer value, which bravebot does not make
-import-left-elsewhere = names a server on another machine, which is not asked
+import-left-elsewhere = names an address other than this machine's loopback, which is not asked
 import-left-no-tool-model = running there, with no model that can call tools
 import-question = Import this from { $source }?
 # Asked on its own, after the import is approved, and never showing the key.
@@ -1003,7 +1009,7 @@ import-needs-a-terminal = import-providers asks before it writes anything, so it
 import-not-while-incognito = an import writes settings to disk, which an incognito session will not do
 import-no-home = there is no home directory to write settings in
 import-nothing-found =
-    neither Claude Code nor opencode configures a model service bravebot can use, and no Ollama serving one is running here
+    neither Claude Code nor opencode configures a model service bravebot can use, and no Ollama, LM Studio or llama-server serving one is running here
 import-nothing-new = nothing is left to import: every name found is already set, or pinned
 import-takes-nothing-else = import-providers takes no arguments
 
@@ -1024,7 +1030,7 @@ auth-logout-needs-a-way = bravebot auth logout needs the name of the way to sign
 auth-ways-heading = Ways to sign in to a model service:
 auth-way-leo = Brave Leo Premium, from a Brave install that subscribes
 auth-way-bedrock = An AWS account, for Amazon Bedrock
-auth-way-import = A model service Claude Code, opencode or Ollama has, imported into settings
+auth-way-import = A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
 auth-way-gateway = A key for a gateway a provider block in settings names, typed here and kept by bravebot
 # The status of the gateway way where keys are stored. The ids are provider ids.
 auth-gateway-held = a key stored for { $ids }

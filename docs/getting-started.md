@@ -220,7 +220,8 @@ No `models` key, so Ollama is asked what it has pulled, and `/model` lists what 
 
 You need not write it by hand. With Ollama running and nothing else configured, a first run in a
 terminal shows this block, with the newest of your models that can call tools as `model`, and asks
-whether to write it. `bravebot import-providers` asks the same at any time.
+whether to write it. A running LM Studio or llama-server is offered the same way, as a block of its
+own. `bravebot import-providers` asks the same at any time.
 
 ### Brave Leo Premium, if you already subscribe
 

@@ -609,8 +609,9 @@ impl Egress {
     /// As [`Egress::new`], with different bounds on how long a request may take.
     ///
     /// Exists so the bounds can be exercised in a test at a scale a test can wait for, and for the
-    /// one request a start waits on before it has said anything: asking a local Ollama what it
-    /// serves (`bravebot_aichat::ollama`). Every other request takes the defaults.
+    /// requests a start waits on before it has said anything: asking a local Ollama, LM Studio or
+    /// llama-server what it serves (`bravebot_aichat::ollama`, `lm_studio` and `llama_server`).
+    /// Every other request takes the defaults.
     pub fn with_timeouts(timeouts: Timeouts) -> Self {
         Self::with_transport(timeouts, Transport::shared())
     }

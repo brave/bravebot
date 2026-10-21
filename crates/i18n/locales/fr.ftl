@@ -369,6 +369,8 @@ onboarding-import-both =
     { $first } et { $second } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour les importer.
 onboarding-import-three =
     { $first }, { $second } et { $third } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour les importer.
+onboarding-import-many =
+    { $sources } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour les importer.
 onboarding-name-a-configured-model =
     Un service est configuré, mais le modèle en vigueur est l'un de ceux de Brave : indiquez l'un des vôtres avec la clé `model` dans ~/.bravebot/settings.json, ou avec --model pour une exécution unique. `bravebot doctor` indique ce que propose chaque service configuré.
 onboarding-pick-one = Configurez l'une de ces options, puis relancez bravebot :
@@ -780,14 +782,15 @@ hook-stopped =
     arrêté
 
 
-## Importer un service de modèle configuré par Claude Code ou opencode, ou servi par un Ollama lancé
+## Importer un service de modèle configuré par Claude Code ou opencode, ou servi par un Ollama, un LM Studio ou un llama-server lancé
 
 import-found = { $source } configure un service de modèle que bravebot peut utiliser, dans { $files }.
 import-found-exported =
     { $source } configure un service de modèle que bravebot peut utiliser, dans l'environnement de ce processus.
 import-found-running = { $source } tourne à { $url } et sert des modèles que bravebot peut utiliser.
-import-ollama-window = le serveur l'a chargé avec une fenêtre de contexte de { $window } jetons
+import-window = le serveur l'a chargé avec une fenêtre de contexte de { $window } jetons
 import-ollama-window-small = Ollama abandonne les premiers tours au-delà de cette fenêtre, donc l'entrée ci-dessous l'enregistre comme contextWindow et une conversation est gardée sous cette fenêtre plutôt que sous { $assumed } jetons. Définissez OLLAMA_CONTEXT_LENGTH plus haut avant de démarrer Ollama pour en garder davantage.
+import-lm-studio-window-small = Une conversation plus longue que cette fenêtre ne tient pas dans le modèle tel que LM Studio l'a chargé, donc l'entrée ci-dessous l'enregistre comme contextWindow et une conversation est gardée sous cette fenêtre plutôt que sous { $assumed } jetons. Chargez le modèle avec une longueur de contexte plus grande dans LM Studio pour en garder davantage.
 import-adds = L'import ajoute ceci à { $file } :
 import-adds-gateway = provider.{ $id }, joignable à { $endpoint } : { $entry }
 import-key-held = provider.{ $id } : une clé est détenue pour cette entrée ; elle fait l'objet d'une question à part
@@ -808,7 +811,7 @@ import-left-another-sdk = une entrée qui passe par un SDK autre qu'un SDK compa
 import-left-no-endpoint = aucune adresse joignable n'est indiquée ni connue pour cette entrée
 import-left-substitution =
     sa clé est construite à partir d'une substitution opencode au milieu d'une valeur plus longue, que bravebot ne fait pas
-import-left-elsewhere = désigne un serveur sur une autre machine, qui n'est pas interrogé
+import-left-elsewhere = désigne une adresse autre que la boucle locale de cette machine, qui n'est pas interrogée
 import-left-no-tool-model = tourne là, sans aucun modèle capable d'appeler des outils
 import-question = Importer ceci depuis { $source } ?
 import-key-question =
@@ -833,7 +836,7 @@ import-needs-a-terminal = import-providers demande confirmation avant d'écrire 
 import-not-while-incognito = un import enregistre des réglages sur le disque, ce qu'une session incognito ne fera pas
 import-no-home = il n'y a pas de répertoire personnel où écrire les réglages
 import-nothing-found =
-    ni Claude Code ni opencode ne configure de service de modèle que bravebot puisse utiliser, et aucun Ollama qui en serve un ne tourne ici
+    ni Claude Code ni opencode ne configure de service de modèle que bravebot puisse utiliser, et aucun Ollama, LM Studio ou llama-server qui en serve un ne tourne ici
 import-nothing-new = il ne reste rien à importer : chaque nom trouvé est déjà défini, ou épinglé
 import-takes-nothing-else = import-providers ne prend aucun argument
 
@@ -851,7 +854,7 @@ auth-logout-needs-a-way = bravebot auth logout a besoin du nom de la façon dont
 auth-ways-heading = Façons de se connecter à un service de modèle :
 auth-way-leo = Brave Leo Premium, depuis une installation de Brave abonnée
 auth-way-bedrock = Un compte AWS, pour Amazon Bedrock
-auth-way-import = Un service de modèle de Claude Code, opencode ou Ollama, importé dans les réglages
+auth-way-import = Un service de modèle de Claude Code, opencode, Ollama, LM Studio ou llama-server, importé dans les réglages
 auth-way-gateway = Une clé pour une passerelle nommée par un bloc provider des réglages, saisie ici et gardée par bravebot
 auth-gateway-held = une clé enregistrée pour { $ids }
 auth-gateway-held-unreadable = le fichier des clés de passerelle ne peut pas être lu
