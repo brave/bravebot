@@ -86,6 +86,28 @@ talk to the planner, so it is claimed as narrowly as possible: asking how a comm
 stay a question. Prefix matching would have made `/add-dirs are useful` open a directory called
 `s are useful`.
 
+**`exit` and `quit` typed with no slash are not commands, and a line that is only one of them is
+held once.** The line is a prompt, so the first Enter on a trimmed line equal to either word in any
+case leaves it in the box and sends nothing. The row under the box says that Enter again sends it as
+a prompt and that Ctrl-C leaves. A second Enter with no other input between sends the line as it
+would any other prompt. Any other input withdraws the hold, whether a key, a paste, a mouse report,
+a resize or a change of focus, and so does a turn that begins with no press, such as a loop's tick,
+so the word is held again wherever it is next sent. A line with anything else in it is sent at the
+first Enter. The hold is on the Enter that sends a line at rest; where Enter queues a line behind a
+running turn, the word is queued as any prompt is (see Known costs). In shell mode the line is a
+command line (CMD-3) and runs at the first Enter. The row names Ctrl-C and not `/exit` or Ctrl-D,
+because the line is still in the box: Ctrl-C clears it and a second press leaves
+([terminal-input.md](terminal-input.md)), `/exit` typed after it is part of the same line, and
+Ctrl-D leaves only an empty box. The row is short enough that any one permission mode name is still
+drawn beside it on a terminal eighty columns wide.
+
+**Why.** Other terminal agents leave on the bare word, so a person who types it expects to leave,
+and sending it starts a paid turn on a word that meant to end the session. Claiming the word would
+take it out of the language a person can use to talk to the planner, and a question about leaving
+would stop being a question, so it is held and not claimed. The second Enter keeps the word
+sendable. The line is the text of the person's own box, and what it decides is only whether a
+second press is asked for.
+
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_the_command_is_a_prompt`
 `verified-by: bravebot_tui::app::an_argument_is_taken_only_after_the_whole_command_word`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_add_dir_command_is_still_a_prompt`
@@ -118,6 +140,18 @@ stay a question. Prefix matching would have made `/add-dirs are useful` open a d
 `verified-by: bravebot_tui::app::a_prompt_containing_the_caffeinate_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_caffeinate_is_a_prompt`
 `verified-by: bravebot_tui::app::init_with_words_after_it_is_a_prompt`
+`verified-by: bravebot_tui::app::the_first_enter_on_a_bare_leave_word_is_held_and_the_second_sends_it`
+`verified-by: bravebot_tui::app::a_bare_leave_word_is_held_in_any_case_and_with_spaces_around_it`
+`verified-by: bravebot_tui::app::a_line_that_holds_more_than_a_leave_word_is_sent_at_the_first_enter`
+`verified-by: bravebot_tui::app::any_other_input_withdraws_the_hold_on_a_bare_leave_word`
+`verified-by: bravebot_tui::app::letting_go_of_enter_leaves_the_hold_on_a_bare_leave_word_up`
+`verified-by: bravebot_tui::app::two_presses_of_ctrl_c_leave_from_a_held_leave_word`
+`verified-by: bravebot_tui::app::a_held_leave_word_that_is_edited_and_sent_again_is_held_again`
+`verified-by: bravebot_tui::state::a_turn_that_begins_without_a_press_takes_down_the_hold_on_a_leave_word`
+`verified-by: bravebot_tui::app::the_hold_on_a_bare_leave_word_does_not_slow_the_exit_command`
+`verified-by: bravebot_tui::app::a_bare_leave_word_in_shell_mode_is_run_as_the_command_line_it_is`
+`verified-by: bravebot_tui::render::the_row_under_the_box_says_a_held_leave_word_goes_to_the_model_as_a_prompt`
+`verified-by: bravebot_tui::render::the_note_on_a_held_leave_word_leaves_the_permission_mode_on_an_eighty_column_row`
 
 
 <a id="CMD-3"></a>
@@ -1053,3 +1087,17 @@ apart from the parser drifts from it.
   typeable in full, and typing a letter or two narrows the list back onto the screen; what a
   short terminal costs is the discovery the list exists for. Bounding it would mean a window that
   scrolls with the cursor, which is a second scroller beside the transcript's.
+- **A lone `exit` or `quit` typed while a turn runs is queued as a prompt with no hold (CMD-2).**
+  The hold is on the Enter that sends a line at rest, which starts a turn on it. Where Enter queues
+  the line behind a running turn, nothing starts, the line is drawn above the box as waiting, and the
+  person can stop the turn with Ctrl-C. A hold there would also have to say that a first Ctrl-C stops
+  the turn and does not leave, so the row would need a second sentence for that state.
+- **The row for a held `exit` or `quit` is 47 columns, and a terminal narrower than that cuts it at
+  the last column, which loses the way out (CMD-2).** It is the row's right-hand note, and the parts
+  of the line are fitted against the width it leaves. On a row eighty columns wide that is 31
+  columns, which holds the longest permission mode name alone and a shorter one beside a vi mode.
+  Where the parts do not fit, the whole left side is cleared while the note is up.
+- **The row for a held `exit` or `quit` is drawn again only by the next frame where the input that
+  withdrew it answers with no action (CMD-2).** A right click or a change of focus withdraws the
+  hold, so the next Enter holds the line again, and the note stays on the screen until something
+  else is drawn. `ctrl-c again to exit` is withdrawn and drawn the same way.

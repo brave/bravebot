@@ -985,6 +985,12 @@ pub struct Session {
     /// press is what reads it. Cleared by any key that is not itself an interrupt, so a person who
     /// went off and did something else is asked again rather than leaving on one press later.
     pub offered_to_leave: bool,
+    /// Whether the last Enter was held because the line is only `exit` or `quit` (CMD-2).
+    ///
+    /// The row under the box says the line goes to the model on a second Enter, and which way leaves.
+    /// The second Enter and that row are what read it, and any other input withdraws it, as does a
+    /// turn beginning, so a line edited and then sent as another bare word is held again.
+    pub leave_word_held: bool,
     /// Whether the key being answered arrived on its own rather than in a run with others.
     ///
     /// Set from the reader before each key is dispatched, and `true` on a session nobody has read
@@ -1449,6 +1455,7 @@ impl Session {
             cleared_by_interrupt: false,
             expandable_lines: 0,
             offered_to_leave: false,
+            leave_word_held: false,
             key_arrived_alone: true,
             image_on_clipboard: false,
             written: 0,
@@ -4256,6 +4263,11 @@ impl Session {
         self.hunks_listed = None;
         self.prompt_at = None;
         self.said_while_working.clear();
+        // The hold answers a press at rest over the line it was put up for. A tick, a watch or a
+        // queued prompt begins a turn with nobody pressing, so left up it would go on saying Enter
+        // sends the line over a turn already running, and count the next Enter after the turn as
+        // the second press.
+        self.leave_word_held = false;
         self.recall = recall;
         (self.sent, self.sent_pasted) = taken;
         self.turn_places
@@ -9882,6 +9894,24 @@ mod tests {
             s.loop_tick().is_some(),
             "a due tick was never sent once the session was free"
         );
+    }
+
+    /// A tick starts a turn with nobody pressing anything, so input cannot be what takes down the
+    /// hold on a lone `exit`. Left up, the row goes on saying Enter sends the line over a turn
+    /// that is already running, and the first Enter after the turn counts as the second press and
+    /// sends the word with no note.
+    #[test]
+    fn a_turn_that_begins_without_a_press_takes_down_the_hold_on_a_leave_word() {
+        let mut s = session();
+        s.looping = Some(a_loop_that_is_due());
+        for c in "exit".chars() {
+            s.type_char(c);
+        }
+        s.leave_word_held = true;
+
+        assert!(s.loop_tick().is_some(), "the due tick was not sent");
+
+        assert!(!s.leave_word_held, "the hold outlived the line it was for");
     }
 
     fn caffeinated() -> Session {

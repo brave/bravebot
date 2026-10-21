@@ -159,6 +159,21 @@ pub(crate) const CHECKOUTS_COMMAND: &str = "/checkouts";
 /// The one line that ends the session instead of starting a turn.
 pub(crate) const EXIT_COMMAND: &str = "/exit";
 
+/// The words other terminal agents leave on when they are typed alone, with no slash.
+///
+/// Not commands: [`EXIT_COMMAND`] is the only line that leaves, so a question about leaving stays a
+/// question (CMD-2). A line that is only one of these is held once before it is sent as the prompt it
+/// is.
+pub(crate) const LEAVE_WORDS: [&str; 2] = ["exit", "quit"];
+
+/// Whether the line is only one of [`LEAVE_WORDS`], in any case and with spaces around it.
+pub(crate) fn is_a_lone_leave_word(line: &str) -> bool {
+    let line = line.trim();
+    LEAVE_WORDS
+        .iter()
+        .any(|word| line.eq_ignore_ascii_case(word))
+}
+
 /// The line that writes the transcript as a markdown file.
 pub(crate) const EXPORT_COMMAND: &str = "/export";
 

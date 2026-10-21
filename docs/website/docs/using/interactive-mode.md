@@ -242,6 +242,10 @@ Ctrl-D leaves an empty box the same way. The offer lives for exactly one press: 
 one of the two keys that leave withdraws it, a mouse report or a resize included, and letting go of a
 key does not.
 
+`exit` or `quit` typed without the slash does not leave, since it is a prompt like any other line. A
+line that is only one of them is held on the first Enter, and the row beneath the box says that
+Enter again sends it as a prompt and that Ctrl-C leaves.
+
 **A turn you asked to stop says so until it ends.** From the press, the working indicator reads
 "Stopping" ahead of whatever it would otherwise say. A turn ends only once every delegate it started
 has returned, which can take seconds, so while delegates are still running it reads "Stopping, waiting

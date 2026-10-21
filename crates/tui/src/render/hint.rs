@@ -467,6 +467,12 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
 /// One note at a time, in this order, since they share the room: the parts of the line are fitted
 /// against the width this leaves.
 fn note_at_the_right(session: &Session) -> Option<String> {
+    // The line is still in the box, held rather than sent, and nothing else on the screen says why
+    // a press of Enter did nothing or what the line would be if it were pressed again (CMD-2).
+    if session.leave_word_held {
+        return Some(format!("{}  ", t!(leave_word_held)));
+    }
+
     // The line the person was writing has just gone, so the press that took it is the one thing
     // worth explaining: without this, a key they pressed to stop something emptied the box and
     // said nothing, and the next press of it ends the session.

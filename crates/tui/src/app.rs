@@ -13518,6 +13518,216 @@ mod tests {
         assert!(!session.is_quitting());
     }
 
+    /// Input as the loop delivers it, through [`took_input`]. That reads whether the key arrived on its
+    /// own from a process-wide reader that other tests leave unset, so the key is made to arrive alone
+    /// here, as the Ctrl-C tests do.
+    fn delivered(session: &mut Session, event: TermEvent) {
+        took_input(session, &event);
+        session.key_arrived_alone = true;
+    }
+
+    /// Other terminal agents leave on a lone `exit` or `quit`, so a person who types one expects to
+    /// leave. Here it is a prompt, and the first Enter says so and keeps the line instead of starting
+    /// a paid turn on it. The second Enter sends it, so the word stays sendable.
+    #[test]
+    fn the_first_enter_on_a_bare_leave_word_is_held_and_the_second_sends_it() {
+        for word in ["exit", "quit"] {
+            let mut session = Session::new("none");
+            type_line(&mut session, word);
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Redraw,
+                "{word}: the first Enter did not hold the line"
+            );
+            assert_eq!(session.input(), word, "{word}: the held line left the box");
+            assert!(
+                session.transcript.is_empty() && session.status == Status::Idle,
+                "{word}: the held line started a turn"
+            );
+            assert!(!session.is_quitting(), "{word}: the bare word left");
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(word.to_string()),
+                "{word}: the second Enter did not send the line"
+            );
+        }
+    }
+
+    /// The word is held whatever case it was typed in and whatever spaces surround it, since a
+    /// person who typed `Exit ` meant the same thing as one who typed `exit`.
+    #[test]
+    fn a_bare_leave_word_is_held_in_any_case_and_with_spaces_around_it() {
+        for line in ["Exit", "QUIT", "  exit  ", "qUiT "] {
+            let mut session = Session::new("none");
+            type_line(&mut session, line);
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Redraw,
+                "{line:?} was sent at once"
+            );
+        }
+    }
+
+    /// Only the whole line is held, so asking about leaving, or any sentence that contains the word,
+    /// is still sent at the first Enter (CMD-2).
+    #[test]
+    fn a_line_that_holds_more_than_a_leave_word_is_sent_at_the_first_enter() {
+        for line in [
+            "exit now",
+            "how do I exit",
+            "exits",
+            "quit?",
+            "exit quit",
+            "e xit",
+        ] {
+            let mut session = Session::new("none");
+            type_line(&mut session, line);
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string()),
+                "{line:?} was held"
+            );
+        }
+    }
+
+    /// The hold answers the press just made. Any other input changes the line or moves on from it, so
+    /// the word is held again where it is next sent, which is what keeps a Backspace and a retyped
+    /// letter from skipping the note.
+    #[test]
+    fn any_other_input_withdraws_the_hold_on_a_bare_leave_word() {
+        for between in [
+            TermEvent::Key(key(KeyCode::Char('x'))),
+            TermEvent::Key(key(KeyCode::Esc)),
+            TermEvent::Key(shift(KeyCode::Enter)),
+            TermEvent::Resize(100, 30),
+            TermEvent::Paste(String::new()),
+            TermEvent::Mouse(drag(MouseEventKind::Moved, 0, 0)),
+            TermEvent::FocusLost,
+            TermEvent::FocusGained,
+        ] {
+            let mut session = Session::new("none");
+            type_line(&mut session, "exit");
+            delivered(&mut session, TermEvent::Key(key(KeyCode::Enter)));
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Redraw
+            );
+            assert!(session.leave_word_held, "the hold was never put up");
+
+            delivered(&mut session, between.clone());
+            assert!(!session.leave_word_held, "{between:?} left the hold up");
+
+            assert_eq!(session.input(), "exit");
+            delivered(&mut session, TermEvent::Key(key(KeyCode::Enter)));
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Redraw,
+                "the word was sent unheld after {between:?}"
+            );
+        }
+    }
+
+    /// A person who was told the word goes to the model as a prompt and edits it before sending
+    /// again is sending a different line, so the note is owed again. Each key goes through what the
+    /// loop runs for it: the record of the input first, then the key.
+    #[test]
+    fn a_held_leave_word_that_is_edited_and_sent_again_is_held_again() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "exit");
+        for (key, expected) in [
+            (key(KeyCode::Enter), Action::Redraw),
+            (key(KeyCode::Backspace), Action::Redraw),
+            (key(KeyCode::Char('t')), Action::Redraw),
+            (key(KeyCode::Enter), Action::Redraw),
+            (key(KeyCode::Enter), Action::Submit("exit".to_string())),
+        ] {
+            delivered(&mut session, TermEvent::Key(key));
+            assert_eq!(handle_key(&mut session, key), expected, "{key:?}");
+        }
+    }
+
+    /// Letting go of Enter is the tail of the press that was just answered, so it must not withdraw
+    /// the hold the way another input does, or the second Enter would find it gone on a terminal that
+    /// reports key releases.
+    #[test]
+    fn letting_go_of_enter_leaves_the_hold_on_a_bare_leave_word_up() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "exit");
+        delivered(&mut session, TermEvent::Key(key(KeyCode::Enter)));
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        delivered(
+            &mut session,
+            TermEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            )),
+        );
+        delivered(&mut session, TermEvent::Key(key(KeyCode::Enter)));
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("exit".to_string())
+        );
+    }
+
+    /// The slash command still leaves on the first press: the hold is for the word that is a prompt,
+    /// and a person who typed the command meant it.
+    #[test]
+    fn the_hold_on_a_bare_leave_word_does_not_slow_the_exit_command() {
+        let mut session = Session::new("none");
+        type_line(&mut session, EXIT_COMMAND);
+
+        assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::Quit);
+        assert!(!session.leave_word_held, "the command was held");
+    }
+
+    /// In shell mode the line is a command line and nothing else (CMD-3), and `exit` is a word a
+    /// shell has. The hold is for the word that would be a prompt, so it runs at the first Enter.
+    #[test]
+    fn a_bare_leave_word_in_shell_mode_is_run_as_the_command_line_it_is() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "!exit");
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Run("exit".to_string())
+        );
+        assert!(!session.leave_word_held, "a command line was held");
+    }
+
+    /// The row says Ctrl-C leaves, so a person who follows it has to end the session: the first press
+    /// takes the line and the second leaves (INPUT-4). `/exit` and Ctrl-D are not offered because the
+    /// held line is still in the box: typing the command appends it to the word, and Ctrl-D leaves
+    /// only an empty box. The first Ctrl-C takes the hold with the line, so the note is not left over
+    /// an empty box.
+    #[test]
+    fn two_presses_of_ctrl_c_leave_from_a_held_leave_word() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "exit");
+        delivered(&mut session, TermEvent::Key(key(KeyCode::Enter)));
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert!(session.leave_word_held, "the hold was never put up");
+
+        delivered(&mut session, TermEvent::Key(ctrl('c')));
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
+        assert!(session.input().is_empty(), "the first press left the line");
+        assert!(!session.leave_word_held, "the hold outlived its line");
+        assert!(!session.is_quitting(), "one press left");
+
+        delivered(&mut session, TermEvent::Key(ctrl('c')));
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
+        assert!(session.is_quitting());
+    }
+
     /// A command, not a prompt: asking for the picker must not also ask the planner about models.
     #[test]
     fn typing_the_model_command_opens_the_picker() {

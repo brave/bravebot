@@ -4858,6 +4858,78 @@ mod tests {
         assert!(hint.contains("ctrl-c again to exit"), "{hint}");
     }
 
+    /// An Enter that sends nothing has to say why, or it reads as an interface that stopped
+    /// answering. The row under the box is where a person who typed `exit` is already looking, and
+    /// it names what a second Enter does and the way that leaves with the line still in the box.
+    #[test]
+    fn the_row_under_the_box_says_a_held_leave_word_goes_to_the_model_as_a_prompt() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut session = typed("exit");
+        let before = hint_row_at(&session, 90, 24);
+        assert!(
+            !before.contains("Enter again"),
+            "said before any Enter: {before}"
+        );
+
+        crate::app::handle_key(
+            &mut session,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        let hint = hint_row_at(&session, 90, 24);
+        assert!(
+            hint.contains("Enter again sends it as a prompt; ctrl-c leaves"),
+            "{hint}"
+        );
+    }
+
+    /// The note takes its room ahead of the parts of the line, and the permission mode is the part
+    /// given up last because it decides whether the next write stops to ask. A note too wide for
+    /// eighty columns clears the whole left side, so the person reading it is told how to leave and
+    /// not told that every write is going through.
+    #[test]
+    fn the_note_on_a_held_leave_word_leaves_the_permission_mode_on_an_eighty_column_row() {
+        use bravebot_agent::PermissionMode;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        for (mode, vi) in [
+            (PermissionMode::Bypass, false),
+            (PermissionMode::AcceptEdits, true),
+            (PermissionMode::Plan, true),
+        ] {
+            let mut session = Session::new("kernel-enforced").starting_in_bypass();
+            while session.permission_mode() != mode {
+                session.cycle_permission_mode();
+            }
+            if vi {
+                session.choose_editing(crate::vim::Editing::Vi);
+            }
+            for c in "exit".chars() {
+                session.type_char(c);
+            }
+            crate::app::handle_key(
+                &mut session,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            );
+
+            let hint = hint_row_at(&session, 80, 24);
+            assert!(
+                hint.contains("Enter again sends it as a prompt; ctrl-c leaves"),
+                "{mode:?}: {hint}"
+            );
+            let named =
+                crate::status::named_mode(mode, true).expect("every mode but asking is named");
+            assert!(
+                hint.contains(named),
+                "{mode:?} (vi: {vi}) was cleared by the note: {hint}"
+            );
+            if vi {
+                assert!(hint.contains("INSERT"), "{mode:?} lost the vi mode: {hint}");
+            }
+        }
+    }
+
     /// Rubbing the marker out is the only way a person has to change their mind about a file, and
     /// the row under the box is the only place they can see whether it worked. Left drawn, it says
     /// a file is going that is not.

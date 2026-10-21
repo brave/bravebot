@@ -2,7 +2,7 @@
 //! to a turn or a command in flight.
 
 use crate::command_table::{
-    command_typed, runs_while_working, waits_behind_the_queue, why_it_waits,
+    command_typed, is_a_lone_leave_word, runs_while_working, waits_behind_the_queue, why_it_waits,
 };
 use crate::state::{Session, Status};
 use crate::{input, render};
@@ -1118,12 +1118,35 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             session.accept_completion();
             Action::Redraw
         }
+        // A lone `exit` or `quit` leaves in other terminal agents and is a prompt here, so the first
+        // Enter on one says so under the box and the second sends it (CMD-2). After every command
+        // arm, since it is no command and a slash word is answered before it is reached, and before
+        // the arm that sends.
+        KeyCode::Enter if is_the_first_enter_on_a_leave_word(session) => {
+            session.leave_word_held = true;
+            Action::Redraw
+        }
         KeyCode::Enter => match session.submit() {
             Some(prompt) => Action::Submit(prompt),
             None => Action::None,
         },
         _ => navigate(session, key),
     }
+}
+
+/// Whether this Enter is held rather than sent, because the line is only `exit` or `quit` and the
+/// press has not been held already (CMD-2).
+///
+/// Those words leave in other terminal agents and are a prompt here, so the first Enter on one puts
+/// up the row saying so and leaves the line in the box. A second Enter with nothing typed between
+/// sends it as written, so the word stays sendable, and a question about leaving stays a question
+/// because the words are not claimed as commands.
+///
+/// Read from the box's own text, as every command arm is, and it decides only whether a second press
+/// is asked for. Asked in the ladder that answers Enter at rest and not in [`Session::submit`], which
+/// a loop's tick and a brief handed over also send through.
+fn is_the_first_enter_on_a_leave_word(session: &Session) -> bool {
+    !session.leave_word_held && is_a_lone_leave_word(session.input())
 }
 
 /// The keys that mean the same thing whether or not a turn is running.
@@ -1624,14 +1647,16 @@ pub(super) fn wants_cancel(key: KeyEvent) -> bool {
 
 /// Record what the reader just handed out, before any arm acts on it.
 ///
-/// Two things the arms cannot work out for themselves. Whether the key arrived on its own, which only
-/// the reader knows and only the rung that ends the session asks about. And whether anything at all
+/// Three things the arms cannot work out for themselves. Whether the key arrived on its own, which only
+/// the reader knows and only the rung that ends the session asks about. Whether anything at all
 /// has happened since the way out was offered: the offer answers the press just made, so any other
 /// input withdraws it. A mouse report or a resize means somebody is still here and has moved on, and
-/// an offer left standing through one would let a byte written much later take it.
+/// an offer left standing through one would let a byte written much later take it. And whether
+/// anything but the Enter that sends it has happened since a lone `exit` or `quit` was held, which
+/// withdraws that hold for the same reason.
 pub(super) fn took_input(session: &mut Session, taken: &TermEvent) {
     // A release is the tail of a press that has already been answered, not something somebody did
-    // next, so it says nothing about either of the two things below. Windows reports a key-up for
+    // next, so it says nothing about any of the things below. Windows reports a key-up for
     // every keystroke and carries the modifiers still held at that moment, so letting go of Ctrl
     // before C arrives here as a bare `c`: read as other input, it withdrew the offer that the same
     // person's press had just armed, and no press of Ctrl-C ever reached the rung that leaves.
@@ -1655,6 +1680,15 @@ pub(super) fn took_input(session: &mut Session, taken: &TermEvent) {
     });
     if !asks_to_leave {
         session.offered_to_leave = false;
+    }
+
+    // The hold on a lone `exit` or `quit` answers the press just made, and a plain Enter, which is
+    // the press that sends the word, keeps it. Anything else, a mouse report or a paste included,
+    // has changed the line or moved on from it, so the word is held again the next time it is sent.
+    let sends =
+        input::key_of(taken).is_some_and(|key| key.code == KeyCode::Enter && !starts_a_line(key));
+    if !sends {
+        session.leave_word_held = false;
     }
 }
 
