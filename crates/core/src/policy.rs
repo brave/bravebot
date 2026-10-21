@@ -2902,7 +2902,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
-    /// Record that a run reached a limit its person gave it, and ended there (TURN-13).
+    /// Record that a run reached a limit its person gave it, and ended there (TURN-14).
     ///
     /// Counts and a fixed word for what they count, so the line carries no content (TRACE-2). A
     /// run that stops leaves nothing else saying which of its limits did it, or how far the run

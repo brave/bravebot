@@ -262,7 +262,7 @@ fn after_a_ceiling_stop(
     )
 }
 
-/// Which of the limits a person gave a run ended it, and what the run had done by then (TURN-13).
+/// Which of the limits a person gave a run ended it, and what the run had done by then (TURN-14).
 ///
 /// Numbers the driver counted and nothing a reply or a tool result said, so a caller may put them
 /// in a sentence or a result object without reading content.
@@ -307,7 +307,7 @@ impl fmt::Display for LimitReached {
     }
 }
 
-/// The limit on tokens a person gave the run, where the run has spent it (TURN-13).
+/// The limit on tokens a person gave the run, where the run has spent it (TURN-14).
 fn token_limit_reached(task: &Task, state: &State<'_>) -> Option<LimitReached> {
     let most = task.limits.tokens?;
     (state.account.tokens >= most).then_some(LimitReached::Tokens {
@@ -318,7 +318,7 @@ fn token_limit_reached(task: &Task, state: &State<'_>) -> Option<LimitReached> {
 }
 
 /// End the run at a limit its person gave it, with a line in the trail saying which and how far
-/// the run had got (TURN-13).
+/// the run had got (TURN-14).
 fn stopped_at<S: Sink>(
     policy: &mut Policy<'_, S>,
     round: usize,
@@ -336,7 +336,7 @@ fn stopped_at<S: Sink>(
 pub enum TurnError {
     /// The user asked for the turn to stop.
     Cancelled { attempts: Option<u32> },
-    /// The run reached a limit its person gave it, and stopped before going past it (TURN-13).
+    /// The run reached a limit its person gave it, and stopped before going past it (TURN-14).
     LimitReached(LimitReached),
     /// Routing could not be precommitted.
     Precommit(String),
@@ -4084,7 +4084,7 @@ where
         }
 
         // The person's own limit on the run, which ends it where the session limit above asks
-        // (TURN-13). Nobody is asked: a run that has one has nobody to ask, and raising a limit
+        // (TURN-14). Nobody is asked: a run that has one has nobody to ask, and raising a limit
         // the person set is theirs to do by running it again.
         if let Some(reached) = token_limit_reached(task, state) {
             return Err(stopped_at(policy, state.steps, reached));
@@ -4116,7 +4116,7 @@ where
         )?;
 
         // Again, because the summary a compaction asks for spends tokens of its own, and the
-        // request that follows it is the one this limit is meant to hold back (TURN-13).
+        // request that follows it is the one this limit is meant to hold back (TURN-14).
         if let Some(reached) = token_limit_reached(task, state) {
             return Err(stopped_at(policy, state.steps, reached));
         }
@@ -4372,7 +4372,7 @@ where
         }
 
         // The planner asked for a round past the most the person allowed. Stopped before that
-        // round runs, so nothing it would have done has happened (TURN-13). A run that answered
+        // round runs, so nothing it would have done has happened (TURN-14). A run that answered
         // after its last allowed round never gets here, since it asked for no further round.
         if let Some(most) = task.limits.rounds
             && state.steps >= most

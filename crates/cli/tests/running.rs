@@ -16174,7 +16174,7 @@ fn limited_run(name: &str, gateway: &Gateway, limit_flags: &[&str]) -> (Output, 
     (output, result)
 }
 
-/// CLI-35, TURN-13: a run whose planner asks for a round past `--max-rounds` ends on status 7, with
+/// CLI-35, TURN-14: a run whose planner asks for a round past `--max-rounds` ends on status 7, with
 /// the rounds it made in the result object and no round run after the limit.
 ///
 /// The model asks for a listing for ever. Three rounds are allowed, so the gateway is sent four
@@ -16268,7 +16268,7 @@ fn a_run_that_finishes_within_max_rounds_ends_as_it_would_without_it() {
     assert_eq!(gateway.asked.try_iter().count(), 4);
 }
 
-/// CLI-35, TURN-13: `--max-tokens` ends the run before the request that would follow the one that
+/// CLI-35, TURN-14: `--max-tokens` ends the run before the request that would follow the one that
 /// reached it, and the result object says what was spent.
 ///
 /// Each reply reports 60 tokens in and 40 out. A limit of 250 is reached by the third request,

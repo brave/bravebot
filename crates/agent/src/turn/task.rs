@@ -40,7 +40,7 @@ pub struct SystemPrompts {
     pub appending: Option<String>,
 }
 
-/// What the person who started a run said it may spend before it stops (TURN-13, CLI-35).
+/// What the person who started a run said it may spend before it stops (TURN-14, CLI-35).
 ///
 /// Counts the driver keeps itself, rounds made and tokens the backends reported, so reaching one
 /// depends on no reply and no tool result. `None` is no limit of the person's, which leaves the run
@@ -234,7 +234,7 @@ pub struct Task {
     /// [`MAX_TOOL_ROUNDS`], where nothing else can end a loop.
     pub rounds: Option<usize>,
     /// What the person who started this run said it may spend, which ends the run where
-    /// [`Task::rounds`] takes its tools away (TURN-13).
+    /// [`Task::rounds`] takes its tools away (TURN-14).
     ///
     /// Empty unless a caller says otherwise, and only a caller with a flag to read them from does.
     /// A delegate carries none: its bounds are its definition's, and what it spends reaches the
