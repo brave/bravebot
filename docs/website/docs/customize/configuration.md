@@ -171,7 +171,9 @@ variable that named it, which settles which of the two is in force, and says whe
 
 The variable is read from the environment and from nothing else. This directory is trusted for being
 yours, and a settings file, which a checkout can supply, cannot move it. `install.sh` reads it too and
-records where it installed in that directory.
+records where it installed in that directory. The [shell hook](../reference/cli.md#shell-init) reads it
+as your shell sources the hook, so export it before the line in your shell's startup file that
+evaluates the hook, and the hook records in that directory.
 
 :::warning
 A program a `run` starts is refused `~/.bravebot`, where the gateway keys and the premium token are,

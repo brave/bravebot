@@ -59,7 +59,7 @@ itself.
 The programs a `run` starts are refused the whole directory except `sessions/`, which they read and
 never write ([SANDBOX-12](sandboxing.md#SANDBOX-12)). A file added to the directory later is refused
 without a change to any list. That refusal is of `~/.bravebot`, and a directory `BRAVEBOT_HOME` puts
-anywhere else is not covered by it.
+anywhere else is not covered by it ([Known costs](#known-costs)).
 
 Three of those kinds of file are bounded by age: session records, a language server's indexes and the
 files of what a scan found. [STATE-4](#STATE-4) says which are removed, when, and which are left
@@ -389,6 +389,14 @@ age does not end them.
   thread is running, which leaves a record whose trail went first, and still opens, or an index whose
   directory is partly removed, which a server starts on and fills again. A client that loads a record
   as the sweep removes it reads it without its trail.
+- **A directory `BRAVEBOT_HOME` puts anywhere other than `~/.bravebot` is not refused to the programs
+  a `run` starts.** [SANDBOX-12](sandboxing.md#SANDBOX-12) refuses the state directory by its default
+  name under the profile directory, so the gateway keys and the premium token in a moved directory
+  can be read by a program a stage starts, as any file outside that table can. Refusing the directory
+  the variable names is [#2917](https://github.com/brave/bravebot/issues/2917), which needs a
+  security review: the refusal is built from the profile directory in each platform's engine, in the
+  rules that judge a granted path and in the scopes that name a directory. The documentation tells a
+  person to keep the directory where they would accept that, or to leave the variable unset.
 - **A directory `BRAVEBOT_HOME` names is narrowed whatever else is kept in it.** STATE-1 gives the
   state directory mode 0700 and the installer does the same, and the variable can name a directory
   somebody already uses: their home directory, a shared directory or a project. The program then

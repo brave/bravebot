@@ -1113,9 +1113,11 @@ a reference to them. Quote the question. The lines are emptied once sent, so the
 carries only what you ran after it.
 
 - Only the command line is recorded, as you submitted it. What a command printed is not.
-- Lines are written to `~/.bravebot/shell/<process id of the shell>`, readable by you alone, and the
-  file is removed when the terminal closes. A terminal that is killed leaves its file until another
-  shell with the same process id starts.
+- Lines are written to `shell/<process id of the shell>` in your state directory, which is
+  `~/.bravebot` or the directory `BRAVEBOT_HOME` names in the shell that sourced the hook
+  ([moving the state directory](../customize/configuration.md#moving-the-state-directory)). The file
+  is readable by you alone, and it is removed when the terminal closes. A terminal that is killed
+  leaves its file until another shell with the same process id starts.
 - A line that is `@bravebot` or begins with `@bravebot` and a space is not recorded. bash records a
   line when the command finishes, and a line your `HISTCONTROL` or `HISTIGNORE` drops is not
   recorded. Anything piped into `@bravebot` is ignored, and the lines are emptied when the question
