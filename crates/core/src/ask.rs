@@ -421,7 +421,11 @@ impl<'a> Settled<'a> {
             .map(|(prompt, _)| prompt)
     }
 
-    /// Whether any question was answered earlier.
+    /// Whether the person's earlier answers decide any part of the series.
+    ///
+    /// When nobody could be asked the rest, a series that reuses an answer still reports what
+    /// the person said, and one that reuses none reports nothing. [`Settled::is_settled`] cannot
+    /// tell the two apart: it is false for a series that is only partly settled.
     pub fn reuses_any(&self) -> bool {
         self.known.iter().any(Option::is_some)
     }
