@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/title.rs
   - crates/tui/src/panel.rs
+  - crates/tui/src/pointer.rs
 documented-by: docs/website/docs/using/sessions.md
 ---
 
@@ -120,6 +121,15 @@ draws it at the stored width clamped to the new size, and the stored width is le
 press on the border starts no selection in either pane ([MOUSE-2](mouse.md#MOUSE-2)), and the
 release of a drag that began there copies nothing.
 
+In a terminal that draws a pointer shape on request, the pointer is the resize one while it is over
+the border column, from the panel's first row to its last, and while a drag of the border is held.
+It is asked for with OSC 22 when the shape changes and not for each report of the pointer, and it is
+given back when the pointer leaves the border, when the panel closes, and before the terminal is
+handed back. Kitty, Ghostty and foot are asked, with the name `ew-resize`. Any other terminal is
+written nothing and keeps its own pointer. The terminals asked are also told of motion with no
+button held ([INPUT-33](terminal-input.md#INPUT-33)), which is how the pointer is found over the
+border.
+
 `verified-by: bravebot_tui::panel::the_panel_is_drawn_from_a_hundred_columns_and_not_below`
 `verified-by: bravebot_tui::panel::a_press_on_a_narrow_terminal_does_not_open_the_panel_and_does_close_it`
 `verified-by: bravebot_tui::panel::the_transcript_and_the_input_wrap_to_the_columns_the_panel_leaves`
@@ -127,6 +137,12 @@ release of a drag that began there copies nothing.
 `verified-by: bravebot_tui::panel::the_width_is_clamped_at_both_ends`
 `verified-by: bravebot_tui::panel::a_narrowed_terminal_reclamps_without_forgetting_the_choice`
 `verified-by: bravebot_tui::panel::a_drag_from_the_border_never_selects_or_copies`
+`verified-by: bravebot_tui::panel::the_resize_pointer_is_over_the_border_column_and_nowhere_else`
+`verified-by: bravebot_tui::panel::a_drag_holds_the_resize_pointer_and_its_end_follows_the_border`
+`verified-by: bravebot_tui::panel::a_panel_closed_under_the_pointer_gives_the_resize_pointer_back`
+`verified-by: bravebot_tui::pointer::a_shape_is_written_when_it_changes_and_not_while_it_stays`
+`verified-by: bravebot_tui::pointer::a_terminal_with_no_known_name_is_written_nothing`
+`verified-by: bravebot_tui::pointer::only_terminals_documented_to_take_css_names_are_asked`
 
 <a id="PANEL-7"></a>
 ### PANEL-7: the panel ends with the key that hides it
@@ -358,3 +374,17 @@ produced ([PANEL-11](#PANEL-11)). [PANEL-4](#PANEL-4) holds: no marker is writte
 `verified-by: bravebot_tui::app::a_question_turns_the_title_to_waiting_and_other_messages_do_not`
 `verified-by: bravebot_tui::app::every_approval_a_manifest_step_draws_turns_the_title_to_waiting`
 `verified-by: bravebot_tui::app::a_manifest_step_marks_the_title_waiting_while_it_asks_and_working_after`
+
+## Known costs
+
+- **A terminal that is not asked shows no resize pointer.** Over the border it draws its own pointer,
+  so a person there finds that the border drags by trying it. iTerm2 and xterm read the sequence
+  ([PANEL-6](#PANEL-6)) but take other names for the shape, a subset of X11's that iTerm2 does not
+  list and X11's own for xterm, and each is asked once the name it takes for this shape is confirmed
+  in that terminal. VTE-based terminals and Alacritty do not read the sequence. A terminal not asked
+  is also not told of motion with no button held ([INPUT-33](terminal-input.md#INPUT-33)), so it
+  pays nothing for a pointer shape it cannot draw.
+
+- **A prompt or a picker opened under the pointer leaves the resize pointer in place.** The prompts
+  and pickers read their own events and none of them reads the pointer, so a pointer on the border
+  when one opens keeps its shape until the prompt closes and the pointer next moves.

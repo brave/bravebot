@@ -52,6 +52,7 @@ pub mod mcp_command;
 pub mod model_prompt;
 pub mod panel;
 pub mod picking;
+mod pointer;
 pub mod preview;
 pub mod prompt_files;
 pub mod reasoning;
