@@ -395,6 +395,10 @@ LANES = (
 IDENTITY_CALLS = re.compile(
     r"\b(?:canonicalize|hard_links|read_link|symlink_metadata)\b|\bPathFd::new\b"
 )
+# A deny rule asked about a path as it is spelled. A call that names one file is judged under every
+# name the file has, and a walk that asks the same question of each entry it meets judges the name
+# it met the entry under, which is where a second name of a covered file is read.
+DENY_JUDGEMENTS = re.compile(r"(?<!fn )\bread_is_denied\b")
 # Where a session's rows are put together. A row granted here is a path the sandbox then holds a
 # stage to, so each one is a name something decided was safe.
 CONFINEMENT = Path("crates/agent/src/confine.rs")
@@ -3737,15 +3741,25 @@ def site_at(path, lines, number, raw, **more):
     }
 
 
-def identity_sites(sources):
-    """Every call outside the tests that turns a name into a thing or asks what a name is."""
+def sites_matching(sources, pattern):
+    """Every line of code that ships which `pattern` finds, with the function it is in."""
     return [
         site_at(path, lines, number, raw)
         for path, lines in sources.items()
         if not is_test_path(path)
         for number, raw in code_lines(lines)
-        if IDENTITY_CALLS.search(raw)
+        if pattern.search(raw)
     ]
+
+
+def identity_sites(sources):
+    """Every call outside the tests that turns a name into a thing or asks what a name is."""
+    return sites_matching(sources, IDENTITY_CALLS)
+
+
+def deny_judgements(sources):
+    """Every place outside the tests that asks a deny rule about a path by its spelling."""
+    return sites_matching(sources, DENY_JUDGEMENTS)
 
 
 def confinement_rows(sources):
@@ -4130,6 +4144,7 @@ def surface(sources, specs):
         "prompts": prompt_sites(sources, specs),
         "other_prompts": other_prompt_sites(sources),
         "identity": identity_sites(sources),
+        "deny_judgements": deny_judgements(sources),
         "confinement_rows": confinement_rows(sources),
         "layered": layered_sites(sources),
         "settings_fields": settings_fields(sources),
@@ -4245,6 +4260,8 @@ def build_lane(name, found, specs, results_file, surface_file=None, tracker_file
         "tracker_file": str(tracker_file) if tracker_file else "(not written)",
         "identity_count": len(found["identity"]),
         "identity_files": as_files(found["identity"]),
+        "deny_count": len(found["deny_judgements"]),
+        "deny_files": as_files(found["deny_judgements"]),
         "confinement_rows": as_list(found["confinement_rows"]),
         "layer_clauses": "\n".join(f"- `{one}`" for one in found["layer_clauses"]) or "- (none)",
         "layered_sites": as_list(found["layered"]),
@@ -4289,10 +4306,10 @@ def changed_lanes(base, specs, found=None):
         lanes.add("shown-before-answered")
     if touches_kept_answers(touched, specs):
         lanes.add("approval-binding")
-    if rust and (
-        found is None
-        or rust & ({site["path"] for site in found["identity"]} | {str(CONFINEMENT)})
-    ):
+    names = {str(CONFINEMENT)}
+    if found is not None:
+        names.update(site["path"] for site in found["identity"] + found["deny_judgements"])
+    if rust and (found is None or rust & names):
         lanes.add("identity")
     if any(
         one.startswith("crates/config/") or one in ("docs/specs/backends.md", str(SETTINGS_FILE))

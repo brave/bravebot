@@ -3964,6 +3964,72 @@ def test_the_identity_lane_starts_from_the_calls_that_resolve_a_name():
     )
 
 
+def test_the_identity_lane_starts_from_the_questions_put_to_a_deny_rule():
+    """The identity lane lists every question put to a deny rule about a spelled path, so a walk that
+    asks it of each entry is opened, and the prompt it is given names the list."""
+    sources = {
+        Path("crates/agent/src/workspace.rs"): [
+            "impl Workspace {",
+            "    fn list(&self, policy: &Policy) {",
+            "        let denied = |path: &str| policy.read_is_denied(path);",
+            "        // read_is_denied is named in this comment only",
+            "        let any = policy.any_read_is_denied();",
+            "    }",
+            "}",
+            "#[cfg(test)]",
+            "mod tests {",
+            "    fn t() { policy.read_is_denied(x); }",
+            "}",
+        ],
+        Path("crates/core/src/policy.rs"): [
+            "impl Policy {",
+            "    pub fn read_is_denied(&self, path: &str) -> bool { self.rules(path) }",
+            "}",
+        ],
+        Path("crates/agent/tests/workspace.rs"): ["fn t() { policy.read_is_denied(x); }"],
+    }
+    found = [(s["path"], s["line"], s["function"]) for s in audit.deny_judgements(sources)]
+    check(
+        "a question asked in code that ships is listed with the function it is in, and the definition, "
+        "a longer name that ends in it, a comment, a test module and a test file are not",
+        found == [("crates/agent/src/workspace.rs", 3, "list")],
+        str(found),
+    )
+
+    def build():
+        specs = audit.load_specs()
+        real = audit.mechanics.load_sources()
+        return (
+            audit.deny_judgements(real),
+            audit.build_lane(
+                "identity",
+                audit.surface(real, specs),
+                specs,
+                Path("results.json"),
+                Path("surface.json"),
+                Path("tracker.txt"),
+            ),
+        )
+
+    real, prompt = with_cwd(ROOT, build)
+    check(
+        "the tree's own questions are listed, the workspace's among them",
+        any(s["path"] == "crates/agent/src/workspace.rs" for s in real),
+        str(sorted({s["path"] for s in real})),
+    )
+    shown = with_cwd(ROOT, lambda: audit.as_files(real))
+    check(
+        "the identity prompt gives the deny list with its count, apart from the identity list, and asks "
+        "what a walk judges each entry by",
+        f"{len(real)} questions put to a deny rule" in prompt
+        and f"every entry it meets, so open the callers of these as well as the functions named:\n\n{shown}\n"
+        in prompt
+        and "{deny_files}" not in prompt
+        and "what the question is asked about" in prompt,
+        prompt[prompt.find("questions put to") - 20 : prompt.find("questions put to") + 500],
+    )
+
+
 def test_the_output_lane_lists_a_write_only_where_its_arguments_are_not_all_literals():
     """The output lane lists a write only where its arguments are not all literals.
 
@@ -4259,12 +4325,16 @@ def test_the_new_lanes_are_run_for_the_files_they_read():
         rel = "docs/specs/asking.md"
         governs = ["crates/tui/src/asks.rs"]
 
-    found = {"identity": [{"path": "crates/agent/src/workspace.rs"}]}
+    found = {
+        "identity": [{"path": "crates/agent/src/workspace.rs"}],
+        "deny_judgements": [{"path": "crates/agent/src/walker.rs"}],
+    }
     was = audit.mechanics.changed_files
     try:
         for touched, lane, shown in [
             ("crates/agent/src/workspace.rs", "identity", found),
             ("crates/agent/src/confine.rs", "identity", found),
+            ("crates/agent/src/walker.rs", "identity", found),
             ("crates/config/src/settings.rs", "checkout-controls", found),
             ("docs/specs/backends.md", "checkout-controls", found),
             ("crates/cli/src/doctor.rs", "output-sinks", found),
@@ -5056,6 +5126,7 @@ TESTS = (
     test_verifying_saves_the_candidates_the_collector_reads,
     test_a_test_attribute_covers_only_what_it_is_attached_to,
     test_the_identity_lane_starts_from_the_calls_that_resolve_a_name,
+    test_the_identity_lane_starts_from_the_questions_put_to_a_deny_rule,
     test_the_output_lane_lists_a_write_only_where_its_arguments_are_not_all_literals,
     test_the_window_list_holds_the_places_a_string_becomes_markup,
     test_the_checkout_lane_starts_from_the_layers,
