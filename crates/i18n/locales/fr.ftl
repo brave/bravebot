@@ -2872,6 +2872,9 @@ return-not-pressed =
     cette entrée est arrivée avec d'autres touches, donc ce n'était pas une frappe : appuyez sur Entrée pour envoyer cette ligne, ou Échap pour l'effacer
 leave-not-pressed =
     cela est arrivé avec d'autres touches, donc ce n'était pas une frappe : appuyez à nouveau pour quitter
+suspend-not-pressed =
+    cela est arrivé avec d'autres touches, donc ce n'était pas une frappe : appuyez à nouveau pour suspendre
+suspend-failed = impossible de suspendre la session : { $reason }
 prompt-file-unreadable =
     /{ $name } est un fichier d'invite illisible comme texte, donc la ligne n'a pas été envoyée : { $path }
 prompt-file-too-large =

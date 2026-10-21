@@ -1588,7 +1588,7 @@ only; a project or local file that sets it is ignored and reported by `bravebot 
 { "keybindings": { "stash": "alt-s", "scroller": "alt-o" } }
 ```
 
-Eleven actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
+Twelve actions can be moved and nothing else can (eleven on Windows, which has no `suspend`). A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
 
 | Action | Default | What it does |
 |---|---|---|
@@ -1602,6 +1602,7 @@ Eleven actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](../using/sessions.md#telling-sessions-apart) |
 | `scope` | `ctrl-n` | switch Up between every stored prompt and this session's |
+| `suspend` | `ctrl-z` | suspend the session to the shell ([Interactive mode](../using/interactive-mode.md#suspending-to-the-shell)) |
 | `undo` | `ctrl-_` | put back the last edit to the line ([Interactive mode](../using/interactive-mode.md#undoing-an-edit)) |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is already answered (a character is typed,
@@ -1613,13 +1614,13 @@ are not rebindable.
 **Every action keeps a key of its own.** A chord that cannot be read, or that the input box already
 answers, leaves that action on its default. So does one two actions both asked for: both fall back
 rather than one winning, since which won would come down to the order the file was read in. Two
-actions *trading* chords is not a conflict and both get what they asked for. `scope` and `undo` are
-the newest of the eleven, so a file that already gave `ctrl-n` or `ctrl-_` to another action now asks
-for a chord the new action stands on, and that action is back on its default until the file moves
-`scope` or `undo` as well.
+actions *trading* chords is not a conflict and both get what they asked for. `scope`, `undo` and
+`suspend` are the newest of the twelve, so a file that already gave `ctrl-n`, `ctrl-_` or `ctrl-z` to
+another action now asks for a chord the new action stands on, and that action is back on its default
+until the file moves `scope`, `undo` or `suspend` as well.
 
 The block layers per action the way `env` does, so a project file moving one action says nothing about
-the other ten. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
+the others. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
 
 ### `search`
 

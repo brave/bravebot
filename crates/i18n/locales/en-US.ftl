@@ -3410,6 +3410,9 @@ return-not-pressed =
     that return arrived with other keys, so it was not a press: press Enter to send this line, or Escape to clear it
 leave-not-pressed =
     that arrived with other keys, so it was not a press: press it again to leave
+suspend-not-pressed =
+    that arrived with other keys, so it was not a press: press it again to suspend
+suspend-failed = could not suspend the session: { $reason }
 # Said under the box while the turn runs that the bare word exit or quit began, which other terminal
 # agents leave on and which here is a prompt for the model. A turn is running, so the first way out
 # it names is the one that stops it. Drawn at the right of the hint row, where the parts of the line

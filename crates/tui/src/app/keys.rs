@@ -36,6 +36,10 @@ pub enum Action {
     /// Write the prompt somewhere with room to think. Needs the terminal, which the loop hands
     /// over to the editor and takes back afterwards.
     Edit,
+    /// Stop the process and hand the terminal to the shell until it is continued (INPUT-47). Needs
+    /// the terminal, which the loop gives back before the stop and takes again after it.
+    #[cfg(unix)]
+    Suspend,
     /// Ask which model to use. Needs the network and the terminal, so the loop runs it.
     ChooseModel,
     /// Ask which theme to paint in. Needs the terminal, so the loop runs it.
@@ -1161,6 +1165,28 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
 fn navigate(session: &mut Session, key: KeyEvent) -> Action {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
+        // The shell, for as long as it takes to use it (INPUT-47). In the shared ladder because it
+        // sends nothing and changes nothing the person typed, so a running turn has no reason to
+        // refuse it: the turn stops with the process and carries on when it continues.
+        //
+        // First in this ladder, so the chord answers on the keys the arms below read whatever is
+        // held with them: an arm for Backspace, Tab, the arrows, Home or End would otherwise take
+        // `alt-backspace` or `ctrl-up` before this was asked. At rest the arm for Escape sits above
+        // this ladder and takes `alt-esc` first, as it takes the chords of the actions below (#2924).
+        //
+        // A press that arrived with other keys suspends nothing, for the reason the rung that leaves
+        // is held to the same rule (INPUT-34): a program that writes one byte at the terminal
+        // should not be able to take the session away from somebody. Said rather than ignored, as
+        // that rung says it.
+        #[cfg(unix)]
+        _ if session.bindings().is_suspend(&key) => {
+            if session.key_arrived_alone {
+                Action::Suspend
+            } else {
+                session.note(t!(suspend_not_pressed));
+                Action::Redraw
+            }
+        }
         KeyCode::Backspace => {
             session.backspace();
             Action::Redraw

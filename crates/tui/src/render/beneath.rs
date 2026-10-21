@@ -394,17 +394,17 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The eleven the file can move
+/// list names the key that answers rather than the key that used to. The twelve the file can move
 /// are the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
     bindings: &Keybindings,
-) -> [(String, &'static str); 27] {
+) -> Vec<(String, &'static str)> {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "letters as commands, then stop",
     };
-    [
+    let mut listed = vec![
         ("!".to_string(), "run a shell command"),
         ("/".to_string(), "commands and skills"),
         ("@".to_string(), "name a file"),
@@ -433,9 +433,15 @@ pub(super) fn shortcuts(
             "earlier prompts: this session or all",
         ),
         (bindings.undo_name(), "undo the last edit"),
+    ];
+    // Where the session can be suspended, which is every platform but Windows (INPUT-47).
+    #[cfg(unix)]
+    listed.push((bindings.suspend_name(), "suspend to the shell"));
+    listed.extend([
         ("drag".to_string(), "select, copy on release"),
         ("shift-drag".to_string(), "the terminal's own selection"),
-    ]
+    ]);
+    listed
 }
 
 /// The shortcuts in as many columns as the width will hold.
