@@ -1812,9 +1812,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
   diagnostics drawn over it would be a server's bytes where the interface draws. A one-shot run and
   the plain interface pass it through to their own stderr.
 - **A server too slow for its handshake is left out.** A stdio server that has not answered
-  `initialize` or `tools/list` within its startup bound is stopped and left out of the session
-  ([SERVERS-15](#SERVERS-15)). A handshake stuck where no request bound reaches, a name that will not
-  resolve for one, is given up on after twice the bound and 5 seconds, and its thread holds the
+  `initialize`, `tools/list` or, where it declared prompts, `prompts/list` within its startup bound is
+  stopped and left out of the session ([SERVERS-15](#SERVERS-15)). A handshake stuck where no request
+  bound reaches, a name that will not resolve for one, is given up on after three times the bound and
+  5 seconds, whether or not the server declared prompts, and its thread holds the
   server until it answers or the process exits. The session opens after the last handshake or that
   time, and draws nothing while it waits.
 - **A call past its bound may have acted.** A server whose call timed out has been stopped or
