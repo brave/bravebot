@@ -38,7 +38,8 @@ a different surface entirely and is [shell-mode.md](shell-mode.md). `/copy` has 
 belong to, so what it copies is CMD-11, and neither has `/caffeinate`, so what it holds is CMD-12. `/init` starts an ordinary turn, but the words that turn is given and
 when it is refused are CMD-13. `/review` is the same kind of turn, and what it is given and what
 it may not do are CMD-18. `/help` is the same kind of turn, given a question and
-the name of the skill that carries the documentation, which is CMD-24. `/request` shows the request a turn built, which is
+the name of the skill that carries the documentation, which is CMD-24, and `/changelog` shows text
+this program carries and starts no turn, which is CMD-25. `/request` shows the request a turn built, which is
 [TRACE-9](trace.md#TRACE-9)'s, and `/context` divides what it measured, which is CMD-19.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
@@ -323,7 +324,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/changelog`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/sandbox off`, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
@@ -1204,6 +1205,44 @@ the typed line itself is never sent (CMD-4).
 `verified-by: bravebot_tui::help_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
 `verified-by: by-construction (the command returns Action::Submit like any typed line, and the one place a submitted line is run reads it as the person's; nothing in the command marks the question as anything else)`
 
+<a id="CMD-25"></a>
+### CMD-25: `/changelog` shows the release notes this program carries, and starts no turn
+
+`/changelog` puts the notes of the version that is running in the transcript, from the changelog
+compiled into this program. Nothing is read, fetched or sent, and no turn starts. The notes are the
+lines under that version's heading, each markdown link drawn as its text, under a heading that names
+the version.
+
+Where the changelog has no heading for the running version, the notes shown are the newest
+release's and the heading says whose they are and which version runs, so they are not taken for the
+running version's. A version matches only as a whole, so `0.1` is not the release `0.17.0`. A program
+that carries no release says so.
+
+The command takes no argument, so `/changelog` followed by words is a prompt (CMD-2). It touches
+nothing a running turn holds, so typed during one it is carried out as it is typed (CMD-8). A prompt
+file or skill named `changelog` is shadowed by the command (CMD-17).
+
+**Why.** The release notes are written for the people who run a version, and the version that
+runs is what a person asking has in mind. The text is carried in the program, so the notes match
+the build with no network and no checkout, and a model is not needed to read out a file.
+
+`verified-by: bravebot_tui::app::the_changelog_command_shows_notes_and_starts_no_turn`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_changelog_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::the_changelog_command_is_carried_out_while_a_turn_runs`
+`verified-by: bravebot_tui::state::the_changelog_is_headed_by_the_running_version_and_has_its_links_written_as_text`
+`verified-by: bravebot_tui::state::the_changelog_of_a_build_with_no_notes_of_its_own_says_whose_notes_it_shows`
+`verified-by: bravebot_tui::state::a_changelog_with_no_release_says_so`
+`verified-by: bravebot_tui::help_command::a_link_is_drawn_as_its_text_and_the_rest_of_the_line_is_untouched`
+`verified-by: bravebot_tui::help_command::brackets_that_are_not_a_link_are_kept`
+`verified-by: bravebot_tui::help_command::an_address_that_is_not_closed_takes_nothing_after_it`
+`verified-by: bravebot_tui::help_command::a_backtick_left_open_does_not_hide_the_links_on_the_next_line`
+`verified-by: bravebot_tui::help_command::an_address_with_parentheses_of_its_own_is_one_address`
+`verified-by: bravebot_tui::help_command::an_image_and_a_link_in_a_code_span_are_kept_and_a_link_after_them_is_not`
+`verified-by: bravebot_tui::help_command::a_release_is_the_lines_under_its_heading_up_to_the_next_heading`
+`verified-by: bravebot_tui::help_command::only_a_line_that_begins_with_the_heading_mark_starts_a_release`
+`verified-by: bravebot_tui::help_command::a_release_is_found_by_its_whole_version_and_else_the_newest_is_given`
+`verified-by: bravebot_tui::help_command::the_carried_changelog_lists_releases_newest_first_and_the_newest_has_notes`
+
 ## Known costs
 
 - **The list is one row per command and per skill, and a screen with no room for it loses the
@@ -1229,3 +1268,12 @@ the typed line itself is never sent (CMD-4).
 - **The row for a sent `exit` or `quit` is up only while the turn runs (CMD-2).** A turn that
   answers at once takes the note down with it, and a person who looked away has nothing under the
   box to say the word was a prompt. The transcript still shows the line and the reply.
+- **`/changelog` shows one release, and a long release scrolls its heading off the screen
+  (CMD-25).** The release is the running version's, or the newest where this build has none of its
+  own. Between releases the top section holds the notes of changes not yet released, headed with the
+  last release's version, so a build made from the commits after a release shows them under that
+  version's number. The notes are rows of the transcript, which shows its end, so a
+  release with more rows than the terminal has leaves the heading above the rows drawn and a person
+  scrolls up to it. The program
+  carries every earlier release's notes and no command shows one, so a person upgrading across several
+  versions reads the earlier ones on the releases page.

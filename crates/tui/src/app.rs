@@ -617,6 +617,12 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         }
         return Action::Submit(session.start_help(question));
     }
+    // From text this program carries: nothing is read, fetched or sent, and no turn starts.
+    if line.trim() == CHANGELOG_COMMAND {
+        let running = env!("CARGO_PKG_VERSION");
+        session.report_changelog(running, crate::help_command::release_notes(running));
+        return Action::Redraw;
+    }
     // Carried unparsed, because which names exist is read from the workspace and the trust map,
     // both of which the loop owns.
     if let Some(argument) = argument_to(line, AGENT_COMMAND) {
@@ -14812,6 +14818,73 @@ mod tests {
         }
     }
 
+    /// The heading `/changelog` writes for this build, from the notes the program carries.
+    fn the_changelog_heading_of_this_build() -> String {
+        let version = env!("CARGO_PKG_VERSION");
+        let release = crate::help_command::release_notes(version).expect("a carried release");
+        crate::help_command::shown(&release, version).0
+    }
+
+    /// CMD-25: `/changelog` puts notes in the transcript and starts no turn, so nothing is sent
+    /// and nothing is spent.
+    #[test]
+    fn the_changelog_command_shows_notes_and_starts_no_turn() {
+        let heading = the_changelog_heading_of_this_build();
+        let mut session = Session::new("none");
+        assert_eq!(enter_line(&mut session, "/changelog"), Action::Redraw);
+        assert_eq!(session.turns, 0);
+        let shown = session.transcript.last().expect("the notes");
+        assert!(shown.text.starts_with(&heading), "{}", shown.text);
+        assert!(shown.text.len() > heading.len(), "no notes under {heading}");
+        assert!(
+            session
+                .transcript
+                .iter()
+                .all(|entry| entry.speaker != crate::state::Speaker::User),
+            "the line was recorded as a prompt"
+        );
+        assert!(!session.take_driver_prompt());
+    }
+
+    /// CMD-25, CMD-2: the command takes no argument, so a sentence that starts with the word is a
+    /// prompt.
+    #[test]
+    fn a_prompt_containing_the_changelog_command_or_a_longer_word_is_still_a_prompt() {
+        for line in ["/changelog since 0.16.0", "/changelogs", "show /changelog"] {
+            let mut session = Session::new("none");
+            assert_eq!(
+                enter_line(&mut session, line),
+                Action::Submit(line.to_string())
+            );
+            assert_eq!(session.turns, 1, "{line:?}");
+        }
+    }
+
+    /// CMD-25, CMD-8: typed while a turn runs, the notes are put in the transcript as typed. The
+    /// turn holds nothing the command reads, and queueing it behind a long turn would answer a
+    /// question about this version after the turn that may have changed the person's mind.
+    #[test]
+    fn the_changelog_command_is_carried_out_while_a_turn_runs() {
+        let mut session = a_turn_running_on("first");
+        assert_eq!(
+            type_while_working(&mut session, "/changelog"),
+            Action::Redraw
+        );
+        assert!(
+            session.take_queued_command().is_none(),
+            "the command was queued"
+        );
+        let said = session.said_while_working();
+        assert_eq!(said.len(), 1);
+        assert!(
+            said[0]
+                .text
+                .starts_with(&the_changelog_heading_of_this_build()),
+            "{}",
+            said[0].text
+        );
+    }
+
     /// `/request` opens the last request built, and nothing else: no turn starts and no prompt is
     /// recorded.
     #[test]
@@ -20923,6 +20996,7 @@ mod tests {
             vec![
                 ADVISOR_COMMAND,
                 CAFFEINATE_COMMAND,
+                CHANGELOG_COMMAND,
                 CONFIG_COMMAND,
                 CONTEXT_COMMAND,
                 COPY_COMMAND,

@@ -2327,6 +2327,7 @@ command-memory = Lister la mémoire de chaque définition, où elle est gardée 
 command-init = Faire rédiger par le planificateur un AGENTS.md pour ce projet
 command-review = Faire examiner par le planificateur des modifications locales ou une pull request
 command-help = Poser une question sur bravebot, avec une réponse tirée de sa documentation
+command-changelog = Afficher ce qui a changé dans cette version
 command-export = Exporter la transcription de la session vers un fichier markdown
 command-copy = Copier la dernière réponse dans le presse-papiers, ou une plus ancienne en reculant d'autant de réponses
 command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
@@ -2911,6 +2912,12 @@ review-usage = Usage : /review [staged | since <réf> | commit <réf> | pr <num�
 
 # Ce que /help répond quand il est tapé sans question.
 help-usage = Usage : /help <question>, par exemple /help comment arrêter une tâche. Tapez / pour les commandes
+
+# Ce que /changelog écrit au-dessus des notes : la version en cours, ou la plus récente publiée
+# quand cette version n'a pas de notes, ou rien quand le programme n'en contient aucune.
+changelog-heading = Ce qui a changé dans { $version }
+changelog-newest = Aucune note de version n'est incluse pour { $running }. Les plus récentes concernent { $version }
+changelog-none = Aucune note de version n'est incluse dans ce programme
 
 # Ce que la session dit d'une définition qu'une personne a désignée avec /agent. Chaque nom ici a
 # été résolu par la session depuis une source que quelqu'un a approuvée ; il peut donc être affiché,

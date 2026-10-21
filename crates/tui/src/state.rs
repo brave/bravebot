@@ -3876,6 +3876,23 @@ impl Session {
         )
     }
 
+    /// Put the release notes `/changelog` shows in the transcript (CMD-25).
+    ///
+    /// `release` is what the build carries for `running`, which is the newest release's where the
+    /// changelog has no heading for that version, and `None` where it carries no release at all.
+    pub fn report_changelog(
+        &mut self,
+        running: &str,
+        release: Option<crate::help_command::Release<'_>>,
+    ) {
+        let Some(release) = release else {
+            self.note(t!(changelog_none));
+            return;
+        };
+        let (heading, notes) = crate::help_command::shown(&release, running);
+        self.note(format!("{heading}\n{notes}"));
+    }
+
     /// Whether the turn starting now sends a prompt the driver wrote, without taking the answer.
     pub fn driver_prompt_is_pending(&self) -> bool {
         self.driver_prompt_pending
@@ -9584,6 +9601,56 @@ mod tests {
         assert!(s.take_driver_prompt());
         assert!(!s.take_driver_prompt());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `/changelog` names the notes for the version that runs, with each link written as its text.
+    /// Notes with their addresses left in, or under another version's name, would be read as what
+    /// this build changed.
+    #[test]
+    fn the_changelog_is_headed_by_the_running_version_and_has_its_links_written_as_text() {
+        let mut s = session();
+        s.report_changelog(
+            "0.17.0",
+            Some(crate::help_command::Release {
+                version: "0.17.0",
+                notes: " - Fixed a hang. ([#2122](https://github.com/brave/bravebot/issues/2122))",
+            }),
+        );
+        assert_eq!(
+            s.transcript.last().expect("the notes").text,
+            format!(
+                "{}\n - Fixed a hang. (#2122)",
+                t!(changelog_heading, version = "0.17.0")
+            )
+        );
+    }
+
+    /// A build whose version has no notes shows the newest release's and says so. Headed as the
+    /// running version's, they would be taken for what this build changed.
+    #[test]
+    fn the_changelog_of_a_build_with_no_notes_of_its_own_says_whose_notes_it_shows() {
+        let mut s = session();
+        s.report_changelog(
+            "0.18.0",
+            Some(crate::help_command::Release {
+                version: "0.17.0",
+                notes: " - Fixed a hang.",
+            }),
+        );
+        assert!(s.transcript.last().expect("the notes").text.starts_with(
+            &t!(changelog_newest, running = "0.18.0", version = "0.17.0").to_string()
+        ));
+    }
+
+    /// A build that carries no release says so rather than drawing an empty heading.
+    #[test]
+    fn a_changelog_with_no_release_says_so() {
+        let mut s = session();
+        s.report_changelog("0.17.0", None);
+        assert_eq!(
+            s.transcript.last().expect("a note").text,
+            t!(changelog_none)
+        );
     }
 
     fn a_request() -> bravebot_agent::request_view::RequestView {

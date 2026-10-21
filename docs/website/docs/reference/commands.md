@@ -27,6 +27,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/limit` | `[<amount> \| off]` | Show the session's spend limit, set it in tokens or credits, or remove it |
 | `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
 | `/help` | `<question>` | Ask a question about bravebot, answered from its own documentation |
+| `/changelog` | | Show what changed in this version |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/recap` | | Recap where this session stands, without putting it in the conversation |
@@ -914,6 +915,20 @@ A skill named `bravebot-help` of your own, or one in a project you trusted, repl
 its pages, and `/help` then loads that one. A prompt file or skill named `help` is shadowed by the
 command.
 
+## `/changelog`
+
+Shows the release notes of the version you are running: a heading naming the version, then its
+entries, each link written as its text. The notes are carried inside the program, so nothing is
+fetched and no turn starts. Where the notes carry no heading for the version you run, the heading says
+it is showing the newest release's, and which version runs. Between releases the top section holds
+the notes of changes not yet released, headed with the last release's version, so a build made from
+the commits after a release shows them under that version's number.
+
+Only that one release is shown, and it is drawn in the transcript, so a release longer than the screen
+shows its end and the heading is above it. The word takes no argument: `/changelog` followed by words is a
+prompt. It touches nothing a running turn holds, so typed while a turn runs it is carried out at once.
+A prompt file or skill named `changelog` is shadowed by the command.
+
 ## `/agent <name> <task>`
 
 Runs one of your [delegate definitions](../customize/agents.md) on a task yourself, rather than
@@ -1333,7 +1348,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/panel`, `/caffeinate`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/panel`, `/caffeinate`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so

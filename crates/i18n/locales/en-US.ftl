@@ -2741,6 +2741,7 @@ command-memory = List each definition's memory, where it is kept and whether it 
 command-init = Have the planner draft an AGENTS.md for this project
 command-review = Have the planner review local changes or a pull request
 command-help = Ask a question about bravebot, answered from its own documentation
+command-changelog = Show what changed in this version
 command-export = Export the session transcript to a markdown file
 command-copy = Put the last reply on the clipboard, or the one that many replies back
 command-undo = Rewind one turn and put back the files it wrote
@@ -3463,6 +3464,12 @@ review-usage = Usage: /review [staged | since <ref> | commit <ref> | pr <number 
 
 # What /help says when it is typed with no question.
 help-usage = Usage: /help <question>, such as /help how do I stop a background job. Type / for the commands
+
+# What /changelog puts above the notes: the version that is running, or the newest release where
+# this build's own version has no notes, or nothing where the build carries none at all.
+changelog-heading = What changed in { $version }
+changelog-newest = No release notes are carried for { $running }. The newest are for { $version }
+changelog-none = No release notes are carried in this build
 
 # What the session says about a definition a person addressed with /agent. Every name here is one
 # the session resolved from a source somebody vouched for, so it may be printed; it is never offered
