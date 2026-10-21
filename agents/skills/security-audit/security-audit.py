@@ -945,6 +945,21 @@ START_CALLS = (
     "windows_sys::Win32::System::Threading::CreateProcessW",
 )
 START_LINT = "clippy::disallowed_methods"
+# The production files that hold a mark, with how many each holds and why. A program is started with
+# `bravebot_sandbox::programs::start`, which takes a `Resolved` that only a lookup or a named
+# constructor builds, and the `PATH` and variables the program is given, so a mark anywhere else is
+# a start that skipped all three. What stays marked is `start` itself, `CreateProcessW`, which `start`
+# does not wrap, and a build script, which cannot depend on `bravebot-sandbox`. A file holds the
+# number written here and no more, so a second start beside one of these is a change to this list
+# that a reviewer reads.
+START_MARKS_ALLOWED = {
+    "crates/sandbox/src/programs.rs": (1, "`start`, the one `Command::new` of a program"),
+    "crates/sandbox/src/windows/appcontainer.rs": (
+        1,
+        "the command line a caller asked to run, created inside an AppContainer",
+    ),
+    "crates/stamp/build.rs": (1, "a build script, run once by the person building"),
+}
 # Allowing a group that holds the lint, or every warning, refuses nothing either.
 WIDE_ALLOW = re.compile(r"\b(?:allow|expect)\s*\([^()]*\b(?:clippy::style|clippy::all|warnings)\b")
 REASON = re.compile(r'\breason\s*=\s*"((?:[^"\\]|\\.)*)"', re.DOTALL)
@@ -1028,8 +1043,11 @@ def check_process_starts_are_marked(sources):
     beside it and a reviewer reads each one in the diff.
 
     What this decides is what clippy cannot: that the ban is still configured, that nothing makes
-    a crate read another configuration, that a mark carries a reason, and that a mark covers a
-    start and not a crate or a module.
+    a crate read another configuration, that a mark carries a reason, that a mark covers a
+    start and not a crate or a module, and that a mark in production code is in a file that
+    `START_MARKS_ALLOWED` lists. Every other start goes through
+    `bravebot_sandbox::programs::start`, which takes a `Resolved` that a lookup or a named
+    constructor builds, so a new spawn is that call and no mark.
     """
     missing = [call for call in START_CALLS if call not in refused_calls()]
     if missing:
@@ -1060,6 +1078,7 @@ def check_process_starts_are_marked(sources):
             fix="move its settings into the `clippy.toml` at the root and remove it",
             gain="a crate whose spawns no lint reads",
         )
+    marked = {}
     for path in sorted(sources):
         raw = "\n".join(sources[path])
         if START_LINT not in raw and not WIDE_ALLOW.search(raw):
@@ -1104,6 +1123,28 @@ def check_process_starts_are_marked(sources):
                 )
             if START_LINT not in attribute:
                 continue
+            if not test_only:
+                marked[path.as_posix()] = marked.get(path.as_posix(), 0) + 1
+            if not test_only and path.as_posix() not in START_MARKS_ALLOWED:
+                yield finding(
+                    ERROR,
+                    "process-start-mark-outside-start",
+                    "a program started with a mark and not through `programs::start` skips the "
+                    "lookup and the environment rules every start is given",
+                    f"`{path}:{number}` marks a start in a file that `START_MARKS_ALLOWED` does not "
+                    "list",
+                    "sandbox",
+                    "high",
+                    evidence=shown,
+                    fix="resolve the program with `bravebot_sandbox::programs` (`Resolved::find`, or "
+                    "`Resolved::own_executable`, `named_by_person`, `found_earlier`, "
+                    "`written_in_source` or `to_confine` where no lookup is involved) and start it "
+                    "with `programs::start`, which takes the environment and the `PATH` the program "
+                    "is given as arguments, or for a test allow the lint at the crate root with "
+                    "`#![cfg_attr(test, allow(...))]` "
+                    "([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+                    gain="a start whose program and environment nobody had to choose",
+                )
             reason = REASON.search(attribute)
             if reason and re.sub(r"\\\n\s*", "", reason.group(1)).strip():
                 continue
@@ -1116,10 +1157,46 @@ def check_process_starts_are_marked(sources):
                 "sandbox",
                 "high",
                 evidence=shown,
-                fix="add `reason = \"...\"` saying who chose the program: a path from "
-                "`bravebot_sandbox::programs`, `current_exe()`, the person's own line, or a "
-                "program a person's setting names ([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+                fix="add `reason = \"...\"` saying who chose the program, for a start that cannot "
+                "call `bravebot_sandbox::programs::start` "
+                "([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
                 gain="a mark nobody has to justify, which is how a spawn goes unreviewed",
+            )
+    for allowed, (expected, why) in START_MARKS_ALLOWED.items():
+        if Path(allowed) not in sources:
+            continue
+        held = marked.get(allowed, 0)
+        if held < expected:
+            yield finding(
+                ERROR,
+                "process-start-allowance-unused",
+                "a file listed as holding marks holds fewer, so the list admits a mark nobody has "
+                "written",
+                f"`{allowed}` is in `START_MARKS_ALLOWED` for {why} with {expected} "
+                f"mark{'s' if expected != 1 else ''} and holds {held}",
+                "sandbox",
+                "medium",
+                evidence=[allowed],
+                fix="lower the count, or remove the file, in `START_MARKS_ALLOWED` in "
+                "`agents/skills/security-audit/security-audit.py`",
+                gain="a start marked in a file the list still admits, unread",
+            )
+        elif held > expected:
+            yield finding(
+                ERROR,
+                "process-start-mark-count",
+                "a second start marked in a file the list admits skips the lookup and the "
+                "environment rules, and no start outside `start` is read in the diff",
+                f"`{allowed}` is in `START_MARKS_ALLOWED` for {why} with {expected} "
+                f"mark{'s' if expected != 1 else ''} and holds {held}",
+                "sandbox",
+                "high",
+                evidence=[allowed],
+                fix="start the program with `bravebot_sandbox::programs::start`, or raise the "
+                "count in `START_MARKS_ALLOWED` in `agents/skills/security-audit/security-audit.py` "
+                "and say why in the pull request "
+                "([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+                gain="a start whose program and environment nobody had to choose",
             )
 
 

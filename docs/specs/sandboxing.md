@@ -3242,11 +3242,12 @@ program: `own_executable`, `written_in_source`, `named_by_person`, `found_earlie
 `path` is `SearchPath::Reduced` or `SearchPath::Inherited`. Neither has a default and `start`
 applies both, so a new spawn picks a constructor, what the program inherits and which `PATH` it is
 given in the diff, and does not compile until it has. `start` holds the one `Command::new` the tree
-has outside a build script and a test. A start that stays marked with
-`#[allow(clippy::disallowed_methods, reason = "...")]` says in the reason who chose the program.
-`make check-security` fails a mark whose reason is empty, a mark that covers more than one start,
-and a second clippy configuration that hides the refusal from a crate. Tests are allowed at the root
-of their crate or file. A new spawn that looks a name up through
+has outside a build script and a test. `make check-security` fails a
+`#[allow(clippy::disallowed_methods, reason = "...")]` mark in a production file other than the three
+it lists (`start`, the one `CreateProcessW` and a build script) or a second mark in one of those, a
+mark whose reason is empty, a mark that covers more than one start, and a second clippy
+configuration that hides the refusal from a crate. Tests are allowed at the root of their crate or
+file. A new spawn that looks a name up through
 `PATH` is added to the list above, in the same change, or resolved first.
 
 - **Those directories are the session's.** Each directory the session was opened on, added, or
