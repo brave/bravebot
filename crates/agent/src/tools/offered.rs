@@ -1268,12 +1268,17 @@ fn table(
                              last commit to work in, so that delegates writing at the same time \
                              do not edit or build in one working tree. Changes not yet committed \
                              are not in it, and what it changes stays there until it is brought \
-                             back. Not for a \"reader\", and not for a delegate that is already \
-                             in one. A definition may ask for one itself, and its delegates are \
-                             then started as if this were set. {}",
+                             back. \"checkout_with_changes\" is the same, and also copies into it \
+                             the changes your working directory has now: the files you wrote and \
+                             the ones git status lists as changed. Use it for a delegate that has \
+                             to check or build what you have written and not the last commit. \
+                             Which files were carried, and which were not, is in the answer. Not \
+                             for a \"reader\", and not for a delegate that is already in one. A \
+                             definition may ask for one itself, and its delegates are then \
+                             started as if \"checkout\" were set. {}",
                             checkouts_share_refs(running)
                         ),
-                        "enum": ["checkout"]
+                        "enum": ["checkout", "checkout_with_changes"]
                     },
                     "mcp_servers": {
                         "type": "array",
@@ -1868,7 +1873,8 @@ fn offer_kinds(tools: &mut [Tool], delegates: &bravebot_core::delegate::Definiti
             let apart = match definition.asks_for_checkout() {
                 true => {
                     " Its delegates work in a checkout of the last commit, which holds no change \
-                     not yet committed."
+                     not yet committed unless the call sets isolation to \
+                     \"checkout_with_changes\"."
                 }
                 false => "",
             };

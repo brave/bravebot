@@ -4369,6 +4369,234 @@ mod tests {
             assert_eq!(written, Path::new("a_b"));
         }
 
+        /// A checkout with `README`, `src/lib.rs` and `docs/page.md` made, for the tests of what is
+        /// put into one and taken out of one.
+        fn made_with_files(tag: &str) -> Repo {
+            let repo = Repo::new(tag);
+            let readme = repo.blob("hello\n");
+            let lib = repo.blob("pub fn f() {}\n");
+            let src = repo.tree(&[("100644", "lib.rs", lib)]);
+            let page = repo.blob("page\n");
+            let docs = repo.tree(&[("100644", "page.md", page)]);
+            committed(
+                &repo,
+                &[
+                    ("100644", "README", readme),
+                    ("40000", "docs", docs),
+                    ("40000", "src", src),
+                ],
+            );
+            made(&repo).expect("made");
+            repo
+        }
+
+        /// CHECKOUT-23. A carried file replaces the one the checkout has and a new one is made, with
+        /// the directories above it, readable by its owner alone and runnable by it only where asked.
+        #[test]
+        fn a_carried_file_replaces_the_checkouts_and_is_owner_only() {
+            use crate::git::checkout::carry;
+            let repo = made_with_files("carry-writes");
+            let out = target(&repo);
+            carry(&out, "README", &mut "changed\n".as_bytes(), false, 100).expect("replaced");
+            carry(
+                &out,
+                "deep/er/run.sh",
+                &mut "#!/bin/sh\n".as_bytes(),
+                true,
+                100,
+            )
+            .expect("created");
+            carry(&out, "src/lib.rs", &mut "".as_bytes(), false, 100).expect("emptied");
+
+            let read = |path: &str| std::fs::read_to_string(out.join(path)).expect(path);
+            assert_eq!(read("README"), "changed\n");
+            assert_eq!(read("deep/er/run.sh"), "#!/bin/sh\n");
+            assert_eq!(read("src/lib.rs"), "");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = |path: &str| {
+                    std::fs::metadata(out.join(path))
+                        .expect(path)
+                        .permissions()
+                        .mode()
+                        & 0o777
+                };
+                assert_eq!(mode("README"), 0o600);
+                assert_eq!(mode("deep/er/run.sh"), 0o700);
+                assert_eq!(mode("deep"), 0o700);
+                assert_eq!(mode("deep/er"), 0o700);
+            }
+        }
+
+        /// CHECKOUT-23. Nothing is followed or replaced on the way: a link, a file where a
+        /// directory has to be, and a directory where the file goes each refuse the path and leave
+        /// what stands there, and a name a checkout does not hold is refused before anything is made.
+        #[test]
+        fn a_carried_file_is_refused_where_something_else_stands_in_its_way() {
+            use crate::git::checkout::{Carry, carry};
+            let repo = made_with_files("carry-in-the-way");
+            let out = target(&repo);
+            let elsewhere = repo.root.join("elsewhere");
+            std::fs::create_dir(&elsewhere).expect("elsewhere");
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&elsewhere, out.join("via")).expect("link");
+                assert_eq!(
+                    carry(&out, "via/x.txt", &mut "x".as_bytes(), false, 100),
+                    Err(Carry::InTheWay)
+                );
+                assert_eq!(
+                    std::fs::read_dir(&elsewhere).expect("elsewhere").count(),
+                    0,
+                    "a file was written through a link"
+                );
+            }
+            assert_eq!(
+                carry(&out, "README/inside.txt", &mut "x".as_bytes(), false, 100),
+                Err(Carry::InTheWay)
+            );
+            assert_eq!(
+                std::fs::read_to_string(out.join("README")).expect("README"),
+                "hello\n",
+                "a file where a directory had to be was replaced"
+            );
+            assert_eq!(
+                carry(&out, "docs", &mut "x".as_bytes(), false, 100),
+                Err(Carry::InTheWay)
+            );
+            assert!(
+                out.join("docs/page.md").exists(),
+                "a directory was replaced"
+            );
+
+            for name in [".git/hooks/pre-commit", ".GIT/config", "src/../escape.txt"] {
+                let refused = carry(&out, name, &mut "x".as_bytes(), false, 100);
+                assert!(
+                    matches!(refused, Err(Carry::Name(_))),
+                    "{name} was not refused as a name: {refused:?}"
+                );
+            }
+            assert!(!out.join("escape.txt").exists());
+            assert!(
+                std::fs::read_to_string(out.join(".git"))
+                    .expect(".git")
+                    .starts_with("gitdir: "),
+                "the checkout's .git was written into"
+            );
+        }
+
+        /// CHECKOUT-23. A file that cannot be copied to the end leaves what the checkout had at its
+        /// place, and nothing half written beside it. A source that holds more than the limit is
+        /// refused the same way.
+        #[test]
+        fn a_carried_file_that_fails_part_way_leaves_what_the_checkout_had() {
+            use crate::git::checkout::{Carry, carry};
+            struct Fails;
+            impl std::io::Read for Fails {
+                fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                    Err(std::io::Error::other("the source went away"))
+                }
+            }
+            let repo = made_with_files("carry-fails");
+            let out = target(&repo);
+            assert_eq!(
+                carry(&out, "new.txt", &mut Fails, false, 100),
+                Err(Carry::Unwritable)
+            );
+            assert!(!out.join("new.txt").exists(), "a partial file was left");
+            assert_eq!(
+                carry(&out, "deep/er/new.txt", &mut Fails, false, 100),
+                Err(Carry::Unwritable)
+            );
+            assert!(
+                !out.join("deep").exists(),
+                "directories a failed copy made were left"
+            );
+            assert_eq!(
+                carry(
+                    &out,
+                    "deep/er/new.txt",
+                    &mut "0123456789".as_bytes(),
+                    false,
+                    5
+                ),
+                Err(Carry::TooMuch)
+            );
+            assert!(
+                !out.join("deep").exists(),
+                "directories a refused copy made were left"
+            );
+            assert_eq!(
+                carry(&out, "README", &mut Fails, false, 100),
+                Err(Carry::Unwritable)
+            );
+            assert_eq!(
+                carry(&out, "README", &mut "0123456789".as_bytes(), false, 5),
+                Err(Carry::TooMuch)
+            );
+            assert_eq!(
+                std::fs::read_to_string(out.join("README")).expect("README"),
+                "hello\n",
+                "a file the checkout had was lost to a copy that failed"
+            );
+            assert_eq!(
+                carry(&out, "src/lib.rs", &mut "12345".as_bytes(), false, 5),
+                Ok(5),
+                "a source of exactly the limit was refused"
+            );
+            for directory in [out.clone(), out.join("src")] {
+                let beside: Vec<_> = std::fs::read_dir(&directory)
+                    .expect("a directory")
+                    .flatten()
+                    .filter(|entry| entry.file_name().to_string_lossy().contains("carrying"))
+                    .collect();
+                assert!(
+                    beside.is_empty(),
+                    "a file written beside the place was left in {}",
+                    directory.display()
+                );
+            }
+        }
+
+        /// CHECKOUT-23. Taking a file out removes it and the directories that leaves empty, goes no
+        /// further than the checkout, follows no link, and is not an error where it is not there.
+        #[test]
+        fn an_uncarried_file_goes_with_the_directories_only_it_held() {
+            use crate::git::checkout::{Carry, carry, uncarry};
+            let repo = made_with_files("uncarry");
+            let out = target(&repo);
+            carry(&out, "docs/deep/er.md", &mut "x".as_bytes(), false, 100).expect("created");
+            assert_eq!(uncarry(&out, "docs/deep/er.md"), Ok(true));
+            assert!(
+                !out.join("docs/deep").exists(),
+                "an empty directory was left"
+            );
+            assert!(
+                out.join("docs/page.md").exists(),
+                "a directory holding a file went"
+            );
+            assert_eq!(uncarry(&out, "docs/page.md"), Ok(true));
+            assert!(!out.join("docs").exists(), "an empty directory was left");
+            assert!(out.exists(), "the checkout itself was removed");
+            assert_eq!(uncarry(&out, "docs/page.md"), Ok(false));
+            assert_eq!(uncarry(&out, "never/there.md"), Ok(false));
+            assert_eq!(uncarry(&out, "src"), Err(Carry::InTheWay));
+            assert!(out.join("src/lib.rs").exists());
+            #[cfg(unix)]
+            {
+                let elsewhere = repo.root.join("elsewhere");
+                std::fs::create_dir(&elsewhere).expect("elsewhere");
+                std::fs::write(elsewhere.join("keep.txt"), "kept").expect("kept");
+                std::os::unix::fs::symlink(&elsewhere, out.join("via")).expect("link");
+                assert_eq!(uncarry(&out, "via/keep.txt"), Err(Carry::InTheWay));
+                assert!(
+                    elsewhere.join("keep.txt").exists(),
+                    "a file was removed through a link"
+                );
+            }
+        }
+
         /// A directory that exists, or a `worktrees/` entry another worktree holds, refuses the
         /// checkout and is left as it was.
         #[test]

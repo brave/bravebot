@@ -145,9 +145,12 @@ pub enum Happened {
     Removed,
     /// A file a delegate wrote there came back into the working directory (CHECKOUT-14).
     Applied,
+    /// The working directory's uncommitted changes were put into it (CHECKOUT-23).
+    Carried,
 }
 
-/// Record in the trail that a checkout was made, applied from or removed (CHECKOUT-19).
+/// Record in the trail that a checkout was made, carried into, applied from or removed
+/// (CHECKOUT-19).
 ///
 /// The event holds the checkout's path. The sink attributes it as it does any decision, to the run
 /// whose gates it is recording, so a checkout a delegate's run made for a delegate of its own keeps
@@ -159,6 +162,7 @@ pub fn record_checkout<S: Sink + ?Sized>(sink: &mut S, happened: Happened, path:
         Happened::Made => "made",
         Happened::Removed => "removed",
         Happened::Applied => "applied from",
+        Happened::Carried => "carried changes into",
     };
     sink.emit(bravebot_core::event::Event::GatePassed {
         gate: "checkout",
@@ -176,6 +180,9 @@ pub struct CheckoutInfo {
     pub(super) source: Workspace,
     pub(super) listed: Arc<Mutex<Vec<PathBuf>>>,
     pub(super) session_checkouts: Arc<Mutex<Vec<Made>>>,
+    /// What was carried into it from the working directory, set once by the call that gave the
+    /// checkout to its delegate (CHECKOUT-23).
+    pub(super) carried: std::sync::OnceLock<super::carry::Carried>,
 }
 
 impl CheckoutInfo {
@@ -270,6 +277,16 @@ impl CheckoutInfo {
     /// The repository-relative paths a deny rule covered, which were not written.
     pub fn left_out(&self) -> &[String] {
         &self.left_out
+    }
+
+    /// What was carried into it from the working directory, where the call that gave it to a
+    /// delegate asked for that (CHECKOUT-23).
+    pub fn carried(&self) -> Option<&super::carry::Carried> {
+        self.carried.get()
+    }
+
+    pub(super) fn set_carried(&self, carried: super::carry::Carried) {
+        let _ = self.carried.set(carried);
     }
 
     /// Record that a file effect or a program happened in the checkout.

@@ -1159,7 +1159,7 @@ impl std::fmt::Debug for Tree {
 /// text carried, and a person typed it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckoutRefusal {
-    /// `isolation` held something other than `"checkout"`.
+    /// `isolation` held something other than `"checkout"` or `"checkout_with_changes"`.
     UnknownIsolation,
     /// A reader writes nothing, so a checkout separates it from nobody.
     Reader,

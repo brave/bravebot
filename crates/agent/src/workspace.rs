@@ -43,11 +43,13 @@ fn locked<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
     lock.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+mod carry;
 mod checkouts;
 #[path = "../../ui-files/src/names.rs"]
 mod names;
 mod reach;
 
+pub use carry::{Carried, CarryBound, CarryPlan, NotCarried, StatusRead};
 pub use checkouts::{
     Candidates, CheckoutInfo, CheckoutRead, Happened, Retired, SessionCheckout, Unremoved,
     record_checkout,
@@ -4630,20 +4632,12 @@ impl Workspace {
         if !candidate {
             return Err(CheckoutRead::NotACandidate);
         }
-        let mut file = made.path.clone();
-        for component in Path::new(relative).components() {
-            let Component::Normal(part) = component else {
-                return Err(CheckoutRead::NotACandidate);
-            };
-            file.push(part);
-            let kind = std::fs::symlink_metadata(&file)
-                .map_err(|_| CheckoutRead::NotAFile)?
-                .file_type();
-            if kind.is_symlink() {
-                return Err(CheckoutRead::Linked);
-            }
-        }
-        let metadata = std::fs::metadata(&file).map_err(|_| CheckoutRead::NotAFile)?;
+        let (file, metadata) =
+            carry::walk_plain(&made.path, relative).map_err(|walked| match walked {
+                carry::Walked::NotNormal => CheckoutRead::NotACandidate,
+                carry::Walked::Missing | carry::Walked::Unreadable => CheckoutRead::NotAFile,
+                carry::Walked::Linked => CheckoutRead::Linked,
+            })?;
         if !metadata.is_file() {
             return Err(CheckoutRead::NotAFile);
         }
@@ -4843,6 +4837,7 @@ impl Workspace {
             source: self.clone(),
             listed: self.checkouts.clone(),
             session_checkouts: self.session_checkouts.clone(),
+            carried: std::sync::OnceLock::new(),
         }));
         Ok(delegate)
     }
@@ -5563,6 +5558,35 @@ mod tests {
             .change_root(&moved.display().to_string())
             .expect("moved");
         assert!(!found_in(&moved, "bravebot-probe-moved", &recorded()));
+    }
+
+    /// CHECKOUT-23. A name the driver recorded for a write is relative to the root it was written
+    /// under, so moving the working directory forgets it, as it forgets the directories touched.
+    /// Carried under the new root, it would name a file that was never written there.
+    #[test]
+    fn moving_the_working_directory_forgets_the_writes_recorded_under_the_old_one() {
+        let first = crate::testutil::scratch_dir("recorded-writes-first");
+        let second = crate::testutil::scratch_dir("recorded-writes-second");
+        for directory in [&first, &second] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+        let mut workspace = Workspace::new(&first).expect("workspace");
+        workspace.record_write(Some("src/main.rs"));
+        assert!(
+            locked(&workspace.working_writes)
+                .last
+                .contains_key("src/main.rs"),
+            "the write was not recorded, so this is not the case under test"
+        );
+
+        workspace
+            .change_root(&second.display().to_string())
+            .expect("moved");
+
+        assert!(
+            locked(&workspace.working_writes).last.is_empty(),
+            "a name recorded under the old root was kept under the new one"
+        );
     }
 
     /// SANDBOX-28: reach is held by the workspace, in the order it was given and numbered from one,

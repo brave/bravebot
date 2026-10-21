@@ -705,6 +705,152 @@ pub fn remove(git_dir: &Path, target: &Path, id: &str) -> Result<(), Refused> {
     gone(&worktrees.join(id))
 }
 
+/// Why a file was not put into, or taken out of, a checkout by [`carry`] or [`uncarry`]
+/// ([CHECKOUT-23](../../../../docs/specs/checkouts.md#CHECKOUT-23)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Carry {
+    /// A name on the way is one the checkout refuses to hold, as it refuses one in HEAD's tree.
+    Name(Name),
+    /// A link, or a file where a directory has to be, stands on the way, or a directory stands
+    /// where the file goes. Nothing is followed and no directory is replaced.
+    InTheWay,
+    /// The source held more than the limit it was given.
+    TooMuch,
+    /// A file or directory could not be written or removed.
+    Unwritable,
+}
+
+/// What a file is written under, beside its place, before it replaces the one a checkout holds. The
+/// process and a count follow it, so no name a tree holds is the one taken.
+const CARRYING: &str = ".bravebot-carrying";
+
+/// Put what `source` holds, up to `limit` bytes, at `relative` in the checkout at `target`, as a
+/// file readable by its owner alone, and runnable by it where `executable`, and answer how many
+/// bytes that was.
+///
+/// The bytes go from one file to the other and the driver holds none of them. They are written
+/// beside the place and moved into it, so a copy that fails leaves what the checkout had there, and
+/// the directories the copy made are removed again. A file or a link the checkout already holds at
+/// that place is replaced. Each directory on the way is made, at the mode a checkout's directories
+/// have, or found to be a directory and not a link, and every name on the way is held to what a
+/// checkout's own names are held to, before anything is made.
+pub fn carry(
+    target: &Path,
+    relative: &str,
+    source: &mut impl std::io::Read,
+    executable: bool,
+    limit: u64,
+) -> Result<u64, Carry> {
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let parts: Vec<&str> = relative.split('/').collect();
+    let mut at = target.to_path_buf();
+    // The directories on the way that are not there yet, which are made below.
+    let mut missing = Vec::new();
+    for (index, part) in parts.iter().enumerate() {
+        check_name(part.as_bytes(), cfg!(windows)).map_err(Carry::Name)?;
+        at.push(part);
+        let last = index + 1 == parts.len();
+        if !missing.is_empty() {
+            if !last {
+                missing.push(at.clone());
+            }
+            continue;
+        }
+        match std::fs::symlink_metadata(&at) {
+            Ok(found) if last && !found.file_type().is_dir() => {}
+            Ok(found) if !found.file_type().is_dir() || last => return Err(Carry::InTheWay),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !last {
+                    missing.push(at.clone());
+                }
+            }
+            Err(_) => return Err(Carry::Unwritable),
+        }
+    }
+    let mut made = Vec::new();
+    let done = missing
+        .iter()
+        .try_for_each(|directory| create_dir(directory).map(|()| made.push(directory.clone())))
+        .map_err(|_| Carry::Unwritable)
+        .and_then(|()| {
+            let beside = at.with_file_name(format!(
+                "{CARRYING}-{}-{}",
+                std::process::id(),
+                COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            ));
+            let copied = new_file(&beside, executable).and_then(|mut file| {
+                std::io::copy(
+                    &mut std::io::Read::take(&mut *source, limit.saturating_add(1)),
+                    &mut file,
+                )
+            });
+            let moved = match copied {
+                Ok(copied) if copied > limit => Err(Carry::TooMuch),
+                Ok(copied) => std::fs::rename(&beside, &at)
+                    .map(|()| copied)
+                    .map_err(|_| Carry::Unwritable),
+                Err(_) => Err(Carry::Unwritable),
+            };
+            if moved.is_err() {
+                let _ = std::fs::remove_file(&beside);
+            }
+            moved
+        });
+    if done.is_err() {
+        for directory in made.iter().rev() {
+            let _ = std::fs::remove_dir(directory);
+        }
+    }
+    done
+}
+
+/// Take the file or link at `relative` out of the checkout at `target`, and the directories that
+/// leave empty, and say whether there was one.
+///
+/// Nothing is followed: a link on the way, or a directory where the file is, is left alone and
+/// refused. A path the checkout does not hold is not an error, since it is already as asked.
+pub fn uncarry(target: &Path, relative: &str) -> Result<bool, Carry> {
+    let mut at = target.to_path_buf();
+    let mut parts = relative.split('/').peekable();
+    while let Some(part) = parts.next() {
+        check_name(part.as_bytes(), cfg!(windows)).map_err(Carry::Name)?;
+        at.push(part);
+        let last = parts.peek().is_none();
+        match std::fs::symlink_metadata(&at) {
+            Ok(found) if last && !found.file_type().is_dir() => {
+                remove_entry(&at, &found)?;
+                // Directories only this file held go with it, as they would from a working
+                // directory it was deleted from. One that holds anything else stays.
+                let mut above = at.parent();
+                while let Some(directory) = above.filter(|directory| *directory != target) {
+                    if std::fs::remove_dir(directory).is_err() {
+                        break;
+                    }
+                    above = directory.parent();
+                }
+                return Ok(true);
+            }
+            Ok(found) if !found.file_type().is_dir() || last => return Err(Carry::InTheWay),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(_) => return Err(Carry::Unwritable),
+        }
+    }
+    Ok(false)
+}
+
+/// Remove the file or link `found` describes at `path`. A link to a directory is removed as a
+/// directory on Windows, where it is one.
+fn remove_entry(path: &Path, found: &std::fs::Metadata) -> Result<(), Carry> {
+    std::fs::remove_file(path)
+        .or_else(|error| match found.file_type().is_symlink() {
+            true => std::fs::remove_dir(path),
+            false => Err(error),
+        })
+        .map_err(|_| Carry::Unwritable)
+}
+
 /// How long measuring one checkout may take. It holds up the delegate's parent as the delegate
 /// ends. A five-gigabyte build directory of 30,000 files is walked in a fraction of a second with
 /// the file system's cache warm.
@@ -868,13 +1014,17 @@ fn create_dir(path: &Path) -> std::io::Result<()> {
 /// where `executable`, since the owner's execute bit is the one git compares.
 fn create_file(path: &Path, executable: bool, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
+    new_file(path, executable)?.write_all(bytes)
+}
+
+fn new_file(path: &Path, executable: bool) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, if executable { 0o700 } else { 0o600 });
     #[cfg(not(unix))]
     let _ = executable;
-    options.open(path)?.write_all(bytes)
+    options.open(path)
 }
 
 /// A link to `target`, which carries its own path's label, so whether one can be made does not

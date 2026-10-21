@@ -57,7 +57,7 @@ output whatever vouched for the same line without the request, and its `provenan
 
 A delegate the gate approved and its checkout then refused is recorded as a refusal under
 `delegate`, not as a permission. The entry gives the delegate's number, one fixed cause (the
-isolation argument was not `checkout`, a reader asked for one, the run already works in one, the
+isolation argument was neither `checkout` nor `checkout_with_changes`, a reader asked for one, the run already works in one, the
 sandbox mode is `read-only`, no state directory, the checkouts would sit inside the working
 directory, an opened directory holds the working directory, an opened directory holds the checkouts, the directory for checkouts is
 unusable, or the repository was refused), the directory a person opened where that was the cause,

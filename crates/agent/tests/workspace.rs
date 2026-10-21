@@ -11288,6 +11288,302 @@ fn a_checkouts_status_lists_what_changed_there_and_what_was_deleted() {
     );
 }
 
+/// A repository whose working tree and index match its one commit, in a scratch directory with a
+/// state directory beside it, for a test that then changes the working tree.
+fn checked_out_repository(name: &str, files: &[(&str, &str)]) -> (Scratch, Scratch, Workspace) {
+    let (scratch, state, workspace) = repository_with_a_state_directory(name, files);
+    repository::check_out(&scratch.path, files);
+    (scratch, state, workspace)
+}
+
+/// CHECKOUT-23. The changes the working directory's status lists are put into a checkout and the
+/// deletions taken out of it, so the checkout's own status lists the same files, and nothing is
+/// written in the working directory. A file the index lost and the working directory still holds is
+/// carried and not taken out.
+#[test]
+fn the_changes_carried_into_a_checkout_read_as_the_working_directorys_status_does() {
+    use bravebot_agent::workspace::{CarryBound, StatusRead};
+    let committed = [
+        ("README", "hello\n"),
+        ("gone.txt", "bye\n"),
+        ("keep.txt", "kept\n"),
+        ("untouched.txt", "same\n"),
+    ];
+    let (scratch, state, workspace) = repository_with_a_state_directory("carry-status", &committed);
+    // `git rm --cached keep.txt`: the index lost it and the file is still there.
+    repository::check_out(
+        &scratch.path,
+        &[
+            ("README", "hello\n"),
+            ("gone.txt", "bye\n"),
+            ("untouched.txt", "same\n"),
+        ],
+    );
+    std::fs::write(scratch.path.join("keep.txt"), "kept\n").unwrap();
+    std::fs::write(scratch.path.join("README"), "changed\n").unwrap();
+    std::fs::remove_file(scratch.path.join("gone.txt")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("new/dir")).unwrap();
+    std::fs::write(scratch.path.join("new/dir/file.txt"), "fresh\n").unwrap();
+
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let plan = workspace.plan_carry(&mut policy);
+    let carried = workspace.carry_into(&mut policy, &plan, &made, CarryBound::FIXED);
+
+    assert_eq!(carried.status, StatusRead::Complete);
+    assert_eq!(
+        carried.written,
+        ["README", "keep.txt", "new/dir/file.txt"],
+        "{carried:?}"
+    );
+    assert_eq!(carried.removed, ["gone.txt"]);
+    assert!(carried.left.is_empty(), "{:?}", carried.left);
+    let in_checkout = |name: &str| std::fs::read_to_string(made.root().join(name));
+    assert_eq!(in_checkout("README").unwrap(), "changed\n");
+    assert_eq!(in_checkout("new/dir/file.txt").unwrap(), "fresh\n");
+    assert_eq!(
+        in_checkout("keep.txt").unwrap(),
+        "kept\n",
+        "a file the working directory still holds was taken out of the checkout"
+    );
+    assert_eq!(in_checkout("untouched.txt").unwrap(), "same\n");
+    assert!(
+        !made.root().join("gone.txt").exists(),
+        "a file the working directory deleted was left in the checkout"
+    );
+
+    let listed = workspace
+        .checkout_status(&mut policy, "c1")
+        .expect("the checkout's status");
+    assert_eq!(listed.changed, ["README", "new/dir/file.txt"]);
+    assert_eq!(listed.removed, ["gone.txt"]);
+    // The working directory is as the test left it.
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("README")).unwrap(),
+        "changed\n"
+    );
+    assert!(!scratch.path.join("gone.txt").exists());
+    assert!(!scratch.path.join(".git/worktrees/c1/new").exists());
+}
+
+/// CHECKOUT-23. A file is carried with the label its path has in the map at the moment its bytes
+/// are copied: where another run wrote untrusted bytes into the working directory after the
+/// checkout was made and the paths were listed, the checkout's copy is untrusted too.
+#[test]
+fn a_file_distrusted_after_the_checkout_was_made_is_carried_untrusted() {
+    use bravebot_agent::workspace::CarryBound;
+    let (scratch, state, workspace) = checked_out_repository(
+        "carry-label",
+        &[("README", "hello\n"), ("other.txt", "o\n")],
+    );
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let key = made.checkout().unwrap().key().to_string();
+    assert!(authority.is_trusted(&format!("{key}/README")));
+    std::fs::write(scratch.path.join("README"), "poisoned\n").unwrap();
+    std::fs::write(scratch.path.join("other.txt"), "also\n").unwrap();
+    let plan = workspace.plan_carry(&mut policy);
+    assert!(authority.publish(
+        &format!("{}/README", workspace.root().display()),
+        Integrity::Untrusted
+    ));
+
+    let carried = workspace.carry_into(&mut policy, &plan, &made, CarryBound::FIXED);
+
+    assert_eq!(carried.written, ["README", "other.txt"]);
+    assert_eq!(
+        std::fs::read_to_string(made.root().join("README")).unwrap(),
+        "poisoned\n"
+    );
+    assert!(
+        !authority.is_trusted(&format!("{key}/README")),
+        "bytes written untrusted in the working directory were carried as trusted"
+    );
+    assert!(
+        authority.is_trusted(&format!("{key}/other.txt")),
+        "a file nobody distrusted lost its trust"
+    );
+}
+
+/// CHECKOUT-23. A path that cannot be carried is named with the reason and the checkout keeps what
+/// the commit has there: a link, a file past the ceiling on one file, and whatever would take the
+/// checkout past the bound on bytes. A small file after one that did not fit is still carried.
+#[test]
+fn a_path_that_cannot_be_carried_is_named_with_why() {
+    use bravebot_agent::workspace::{CarryBound, NotCarried};
+    let (scratch, state, workspace) =
+        checked_out_repository("carry-left", &[("README", "hello\n")]);
+    std::fs::write(scratch.path.join("a.txt"), "aaaa").unwrap();
+    std::fs::write(scratch.path.join("b.txt"), "bbbbbbbb").unwrap();
+    std::fs::write(scratch.path.join("c.txt"), "c").unwrap();
+    let huge = std::fs::File::create(scratch.path.join("huge.bin")).unwrap();
+    huge.set_len(17 * 1024 * 1024).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("README", scratch.path.join("link")).unwrap();
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let plan = workspace.plan_carry(&mut policy);
+
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let carried = workspace.carry_into(
+        &mut policy,
+        &plan,
+        &made,
+        CarryBound {
+            files: 100,
+            bytes: 6,
+        },
+    );
+
+    // In name order: a.txt (4 bytes) fits, b.txt (8) would pass the bytes, c.txt (1) still fits.
+    assert_eq!(carried.written, ["a.txt", "c.txt"], "{carried:?}");
+    let left: std::collections::BTreeMap<&str, NotCarried> = carried
+        .left
+        .iter()
+        .map(|(path, why)| (path.as_str(), *why))
+        .collect();
+    assert_eq!(left["b.txt"], NotCarried::OverTheBound, "{left:?}");
+    assert_eq!(left["huge.bin"], NotCarried::TooLarge, "{left:?}");
+    #[cfg(unix)]
+    assert_eq!(left["link"], NotCarried::Linked, "{left:?}");
+    assert!(!made.root().join("b.txt").exists());
+    assert!(!made.root().join("huge.bin").exists());
+    assert!(!made.root().join("link").exists());
+}
+
+/// CHECKOUT-23. A checkout is given no more files than its bound, the files taken out of it count
+/// against that bound before any is written, and what is over is named.
+#[test]
+fn a_checkout_is_given_no_more_files_than_its_bound() {
+    use bravebot_agent::workspace::CarryBound;
+    let (scratch, state, workspace) = checked_out_repository(
+        "carry-file-bound",
+        &[("README", "hello\n"), ("gone.txt", "bye\n")],
+    );
+    std::fs::remove_file(scratch.path.join("gone.txt")).unwrap();
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        std::fs::write(scratch.path.join(name), name).unwrap();
+    }
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let plan = workspace.plan_carry(&mut policy);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    let carried = workspace.carry_into(
+        &mut policy,
+        &plan,
+        &made,
+        CarryBound {
+            files: 3,
+            bytes: 1024,
+        },
+    );
+
+    assert_eq!(carried.removed, ["gone.txt"]);
+    assert_eq!(carried.written, ["a.txt", "b.txt"], "{carried:?}");
+    assert_eq!(
+        carried.past_the_bound, 1,
+        "a path past the bound was not counted: {carried:?}"
+    );
+    assert!(carried.left.is_empty(), "{:?}", carried.left);
+    assert!(!made.root().join("c.txt").exists());
+}
+
+/// CHECKOUT-23. A script the working directory holds as runnable by its owner is carried as
+/// runnable by its owner alone, and a file it does not is carried readable by its owner alone.
+#[cfg(unix)]
+#[test]
+fn a_carried_script_is_runnable_by_its_owner_alone_and_nothing_else_is() {
+    use bravebot_agent::workspace::CarryBound;
+    use std::os::unix::fs::PermissionsExt;
+    let (scratch, state, workspace) =
+        checked_out_repository("carry-modes", &[("README", "hello\n")]);
+    std::fs::write(scratch.path.join("run.sh"), "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(
+        scratch.path.join("run.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("notes.txt"), "notes\n").unwrap();
+    std::fs::set_permissions(
+        scratch.path.join("notes.txt"),
+        std::fs::Permissions::from_mode(0o666),
+    )
+    .unwrap();
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let plan = workspace.plan_carry(&mut policy);
+
+    let carried = workspace.carry_into(&mut policy, &plan, &made, CarryBound::FIXED);
+
+    assert_eq!(carried.written, ["notes.txt", "run.sh"], "{carried:?}");
+    let mode = |name: &str| {
+        std::fs::metadata(made.root().join(name))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    assert_eq!(
+        mode("run.sh"),
+        0o700,
+        "a script was not carried as runnable"
+    );
+    assert_eq!(
+        mode("notes.txt"),
+        0o600,
+        "a file that is not a script was carried runnable or readable by others"
+    );
+}
+
+/// CHECKOUT-23. A directory the working directory replaced with a file is carried as that file,
+/// which needs the files the directory held taken out first, and a file it replaced with a
+/// directory is taken out of the checkout.
+#[test]
+fn a_directory_replaced_by_a_file_is_carried_and_a_file_replaced_by_a_directory_is_taken_out() {
+    use bravebot_agent::workspace::CarryBound;
+    let (scratch, state, workspace) = checked_out_repository(
+        "carry-flip",
+        &[("docs/a.md", "a\n"), ("tool", "was a file\n")],
+    );
+    std::fs::remove_dir_all(scratch.path.join("docs")).unwrap();
+    std::fs::write(scratch.path.join("docs"), "now a file\n").unwrap();
+    std::fs::remove_file(scratch.path.join("tool")).unwrap();
+    std::fs::create_dir(scratch.path.join("tool")).unwrap();
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let plan = workspace.plan_carry(&mut policy);
+
+    let carried = workspace.carry_into(&mut policy, &plan, &made, CarryBound::FIXED);
+
+    assert!(carried.left.is_empty(), "{:?}", carried.left);
+    assert_eq!(
+        std::fs::read_to_string(made.root().join("docs")).unwrap(),
+        "now a file\n"
+    );
+    assert!(
+        !made.root().join("tool").exists(),
+        "a file the working directory replaced with a directory was left in the checkout"
+    );
+}
+
 /// CHECKOUT-13. No status is read in a checkout where one path in it is distrusted, since a status
 /// reads every file; a file a rule withholds is not listed and the listing says it is not whole;
 /// and a directory of new files git did not open says the same.

@@ -16149,6 +16149,97 @@ fn a_program_a_delegate_ran_in_its_own_checkout_leaves_the_change_reported_as_ne
     );
 }
 
+/// CHECKOUT-23, TURN-4. A delegate in a checkout given the working directory's changes builds and
+/// tests them, so a program it runs there counts as the turn's own: the planner is not asked why
+/// nothing was run, and the person is not told the change was never built.
+#[test]
+fn a_program_a_delegate_ran_in_a_checkout_holding_the_changes_counts_as_the_turns_own() {
+    let scratch = Scratch::new("checkout-with-changes-delegate-ran");
+    let home = Scratch::new("checkout-with-changes-delegate-ran-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    repository::check_out(&scratch.path, &[("README", "committed\n")]);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received, held) = serve_a_turn_and_its_delegate(
+        (
+            "WRITE-THEN-CHECK-THE-CHANGES",
+            writing_then_delegating(
+                tool_request(
+                    "write_file",
+                    r#"{"path":"notes.txt","contents":"first slice"}"#,
+                ),
+                r#"{"kind":"checker","task":"RUN-THE-CHECKS-ON-THE-CHANGES","isolation":"checkout_with_changes"}"#,
+            ),
+        ),
+        (
+            "RUN-THE-CHECKS-ON-THE-CHANGES",
+            vec![
+                tool_request("run", r#"{"command":"printf checked"}"#),
+                reply_with("the checks pass"),
+            ],
+        ),
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("WRITE-THEN-CHECK-THE-CHANGES").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was answered before its parent waited for it, so the rounds this test counts on may not have happened"
+    );
+    let asked = every_request(&received);
+    assert!(
+        asked
+            .iter()
+            .any(|body| !body.contains("WRITE-THEN-CHECK-THE-CHANGES")
+                && body.contains("Carried in: `notes.txt`")
+                && body.contains("It exited 0.")),
+        "the checker did not run its line in a checkout holding the change, so this is not the case under test"
+    );
+    let parent: Vec<&String> = asked
+        .iter()
+        .filter(|body| body.contains("WRITE-THEN-CHECK-THE-CHANGES"))
+        .collect();
+    assert!(
+        parent.len() > ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 2,
+        "the turn ended before the question would have fallen due, so its absence proves nothing"
+    );
+    assert!(
+        !parent
+            .iter()
+            .any(|body| body.contains("nothing has been run")),
+        "a turn whose checker ran the build of its change was asked why nothing had been run"
+    );
+    assert!(
+        !reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was told the change was never built: {:?}",
+        reporter.narration
+    );
+}
+
 /// The question waits for a delegate still working in the turn's workspace, so a turn whose checker
 /// is part way through the build when the question falls due is not told to start one.
 ///
@@ -40478,6 +40569,383 @@ fn a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory() {
     );
 }
 
+/// CHECKOUT-23. A delegate asked to work in a checkout with the working directory's changes holds
+/// the tree the planner has: the files the planner wrote, the files the person changed that the
+/// planner did not, and the deletions. The working directory is left as it was, and the trail
+/// records that changes were carried.
+#[test]
+fn a_delegate_given_a_checkout_with_changes_holds_the_tree_the_planner_has() {
+    let scratch = Scratch::new("checkout-with-changes");
+    let home = Scratch::new("checkout-with-changes-home");
+    let committed = [
+        ("README", "committed\n"),
+        ("src/lib.rs", "fn old() {}\n"),
+        ("gone.txt", "bye\n"),
+        ("keep.txt", "kept\n"),
+    ];
+    repository::commit_files(&scratch.path, &committed, "first");
+    repository::check_out(&scratch.path, &committed);
+    // The person's own changes, which no tool of the planner wrote.
+    std::fs::write(scratch.path.join("src/lib.rs"), "fn person() {}\n").unwrap();
+    std::fs::write(scratch.path.join("notes.txt"), "not committed\n").unwrap();
+    std::fs::remove_file(scratch.path.join("gone.txt")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "EDIT-THEN-CHECK-APART",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"README","contents":"planner edit"}"#,
+                ),
+                tool_request(
+                    "write_file",
+                    r#"{"path":"src/new.rs","contents":"fn new() {}"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"CHECK-THE-TREE","isolation":"checkout_with_changes"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate checked"),
+            ],
+        ),
+        (
+            "CHECK-THE-TREE",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the delegate"}"#,
+                ),
+                reply_with("checked"),
+            ],
+        ),
+    ]);
+    let (asked, _, trail) = run_in_a_repository_recording(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "EDIT-THEN-CHECK-APART",
+    );
+
+    let made = checkouts_under(&home.path);
+    assert_eq!(
+        made.len(),
+        1,
+        "a delegate that wrote in its checkout keeps it"
+    );
+    let in_checkout = |name: &str| std::fs::read_to_string(made[0].join(name));
+    assert_eq!(in_checkout("README").unwrap(), "planner edit");
+    assert_eq!(in_checkout("src/new.rs").unwrap(), "fn new() {}");
+    assert_eq!(
+        in_checkout("src/lib.rs").unwrap(),
+        "fn person() {}\n",
+        "the change the person made to src/lib.rs, which the planner did not write, was not carried"
+    );
+    assert_eq!(in_checkout("notes.txt").unwrap(), "not committed\n");
+    assert_eq!(in_checkout("keep.txt").unwrap(), "kept\n");
+    assert!(
+        !made[0].join("gone.txt").exists(),
+        "a file deleted in the working directory was left in the checkout"
+    );
+    assert_eq!(in_checkout("out.txt").unwrap(), "from the delegate");
+
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "the delegate wrote in the working directory"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.txt")).unwrap(),
+        "not committed\n"
+    );
+    assert!(!scratch.path.join("gone.txt").exists());
+
+    assert!(
+        asked
+            .iter()
+            .any(|body| !body.contains("EDIT-THEN-CHECK-APART")
+                && body
+                    .contains("Carried in: `README`, `src/new.rs`, `notes.txt` and `src/lib.rs`.")
+                && body.contains(
+                    "Taken out, since the working directory had deleted them: `gone.txt`."
+                )
+                && body.contains("The working directory's status was read.")),
+        "the delegate was not told what was carried"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("EDIT-THEN-CHECK-APART")
+                && body.contains("has started")
+                && body
+                    .contains("tried to carry your working directory's uncommitted changes into")
+                && body
+                    .contains("Carried in: `README`, `src/new.rs`, `notes.txt` and `src/lib.rs`.")),
+        "the planner was not told what was carried"
+    );
+    let events = checkout_events(&trail);
+    let at = made[0].canonicalize().unwrap();
+    assert_eq!(
+        events,
+        [
+            (None, format!("made {}", at.display())),
+            (None, format!("carried changes into {}", at.display())),
+        ]
+    );
+}
+
+/// CHECKOUT-23. Where the status over the working directory is not answered, which is where one
+/// path in it is distrusted, only the files the driver recorded the session writing are carried:
+/// a file the person changed that no tool wrote is left, and both the delegate and the planner are
+/// told the status could not be read.
+#[test]
+fn a_checkout_with_changes_carries_only_recorded_writes_where_the_status_is_not_answered() {
+    let scratch = Scratch::new("checkout-with-changes-no-status");
+    let home = Scratch::new("checkout-with-changes-no-status-home");
+    let committed = [("README", "committed\n"), ("vendor/lib.js", "b\n")];
+    repository::commit_files(&scratch.path, &committed, "first");
+    repository::check_out(&scratch.path, &committed);
+    std::fs::write(scratch.path.join("notes.txt"), "not committed\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "EDIT-THEN-CHECK-UNREAD",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"src/new.rs","contents":"fn new() {}"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"CHECK-THE-UNREAD-TREE","isolation":"checkout_with_changes"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate checked"),
+            ],
+        ),
+        (
+            "CHECK-THE-UNREAD-TREE",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the delegate"}"#,
+                ),
+                reply_with("checked"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("EDIT-THEN-CHECK-UNREAD").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let made = checkouts_under(&home.path);
+    assert_eq!(made.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(made[0].join("src/new.rs")).unwrap(),
+        "fn new() {}",
+        "a write the driver recorded was not carried"
+    );
+    assert!(
+        !made[0].join("notes.txt").exists(),
+        "a file only a status could have listed was carried where no status was read"
+    );
+    let asked = every_request(&received);
+    for (who, from) in [("the delegate", false), ("the planner", true)] {
+        assert!(
+            asked
+                .iter()
+                .any(|body| body.contains("EDIT-THEN-CHECK-UNREAD") == from
+                    && body.contains("Carried in: `src/new.rs`.")
+                    && body.contains("status could not be read")),
+            "{who} was not told the status could not be read"
+        );
+    }
+}
+
+/// CHECKOUT-23. A file a deny rule covers reading is not carried, even where the driver recorded
+/// the planner writing it before the rule existed, and the delegate and the planner are told it
+/// was left and why.
+#[test]
+fn a_checkout_with_changes_leaves_a_file_a_later_rule_covers_and_says_so() {
+    let scratch = Scratch::new("checkout-with-changes-denied");
+    let home = Scratch::new("checkout-with-changes-denied-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    repository::check_out(&scratch.path, &[("README", "committed\n")]);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "WRITE-A-SECRET-FIRST",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"secret.txt","contents":"hunter2"}"#,
+                ),
+                tool_request(
+                    "write_file",
+                    r#"{"path":"src/new.rs","contents":"fn new() {}"}"#,
+                ),
+                reply_with("written"),
+            ],
+        ),
+        (
+            "CHECK-WITH-A-RULE-NOW",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"CHECK-WITHOUT-THE-SECRET","isolation":"checkout_with_changes"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate checked"),
+            ],
+        ),
+        (
+            "CHECK-WITHOUT-THE-SECRET",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the delegate"}"#,
+                ),
+                reply_with("checked"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let turn = |prompt: &str, deny: &[&str]| {
+        let mut sink = RecordingSink::new();
+        let mut confirmer = RecordingConfirmer::approving();
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust(".");
+        let task = Task::new(prompt)
+            .with_home(Some(home.path.clone()))
+            .with_permissions(rules(deny, &[], &[]));
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut confirmer,
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+    };
+    turn("WRITE-A-SECRET-FIRST", &[]);
+    assert!(
+        scratch.path.join("secret.txt").exists(),
+        "the planner's write did not happen, so this is not the case under test"
+    );
+    turn("CHECK-WITH-A-RULE-NOW", &["Read(secret.txt)"]);
+
+    let made = checkouts_under(&home.path);
+    assert_eq!(made.len(), 1);
+    assert!(
+        !made[0].join("secret.txt").exists(),
+        "a file a deny rule covers was copied into the checkout"
+    );
+    assert_eq!(
+        std::fs::read_to_string(made[0].join("src/new.rs")).unwrap(),
+        "fn new() {}",
+        "a file no rule covers was left too"
+    );
+    let asked = every_request(&received);
+    for (who, from) in [("the delegate", false), ("the planner", true)] {
+        assert!(
+            asked
+                .iter()
+                .any(|body| body.contains("CHECK-WITH-A-RULE-NOW") == from
+                    && body.contains("Not carried: `secret.txt` (a deny rule covers it).")),
+            "{who} was not told secret.txt was left"
+        );
+    }
+}
+
+/// CHECKOUT-23. Every delegate a call fans out over is given a checkout carrying the changes, not
+/// only the first.
+#[test]
+fn each_checkout_of_a_fan_out_is_given_the_changes() {
+    let scratch = Scratch::new("checkout-with-changes-fan-out");
+    let home = Scratch::new("checkout-with-changes-fan-out-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    repository::check_out(&scratch.path, &[("README", "committed\n")]);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "EDIT-THEN-FAN-OUT",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"README","contents":"planner edit"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"CHECK-THE-TREE-IN-","each":["FIRST-LANE","SECOND-LANE"],"isolation":"checkout_with_changes"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("both checked"),
+                reply_with("both checked"),
+            ],
+        ),
+        (
+            "FIRST-LANE",
+            vec![
+                tool_request("write_file", r#"{"path":"out.txt","contents":"first"}"#),
+                reply_with("checked"),
+            ],
+        ),
+        (
+            "SECOND-LANE",
+            vec![
+                tool_request("write_file", r#"{"path":"out.txt","contents":"second"}"#),
+                reply_with("checked"),
+            ],
+        ),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "EDIT-THEN-FAN-OUT",
+    );
+
+    let made = checkouts_under(&home.path);
+    assert_eq!(made.len(), 2, "each delegate that wrote keeps its checkout");
+    for checkout in &made {
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("README")).unwrap(),
+            "planner edit",
+            "{} was not given the planner's edit",
+            checkout.display()
+        );
+    }
+    assert!(
+        asked.iter().any(|body| body.contains("EDIT-THEN-FAN-OUT")
+            && body.contains("Each works in a checkout of its own")
+            && body.contains("tried to carry your working directory's uncommitted changes into")),
+        "the planner was not told each checkout carries the changes"
+    );
+}
+
 /// CHECKOUT-11. A write in a checkout asks what the same write in the working directory asks:
 /// the path a person distrusted and the path a permission rule asks about are put to them in
 /// both, and the path nothing asks about is put to them in neither.
@@ -42324,6 +42792,13 @@ fn a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing() {
         (
             "reader",
             r#"{"kind":"reader","task":"NEVER-RUNS","isolation":"checkout"}"#,
+            "a reader writes nothing",
+            "reader-has-no-checkout",
+            1,
+        ),
+        (
+            "reader-with-changes",
+            r#"{"kind":"reader","task":"NEVER-RUNS","isolation":"checkout_with_changes"}"#,
             "a reader writes nothing",
             "reader-has-no-checkout",
             1,

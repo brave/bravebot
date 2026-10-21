@@ -952,7 +952,7 @@ of capabilities, and gets back one report.
 | `each` | optional; starts one delegate per entry, each told `task` followed by its own entry |
 | `mcp_servers` | optional; the [MCP servers](../customize/mcp-servers.md) a `worker` keeps, out of the ones its parent may call. `[]` keeps none |
 | `budget` | optional; the most tokens each delegate may spend, as `500000`, `500k` or `2m`. It can only lower the budget a [definition](../customize/agents.md) sets |
-| `isolation` | optional; `checkout` gives each delegate [a checkout of its own](../customize/agents.md#a-checkout-of-its-own) to work in |
+| `isolation` | optional; `checkout` gives each delegate [a checkout of its own](../customize/agents.md#a-checkout-of-its-own) to work in, and `checkout_with_changes` also copies into it the changes your working tree has now |
 
 | Kind | Holds | For |
 |---|---|---|
@@ -1005,6 +1005,15 @@ Changes you have not committed are not in it, and what it writes stays there unt
 already in a checkout. A delegate in a checkout is not offered [`lsp`](#lsp). Checkouts share
 remote-tracking refs and tags with your working directory and with each other, so the planner is
 told to run a `git fetch` once rather than have each delegate run one.
+
+**`isolation: checkout_with_changes` gives the delegate the tree you have.** It is a checkout as
+above, with the changes in your working tree copied in as they are when the checkout is made: the
+files the session wrote, and the paths `git status` lists as changed where the session trusts the
+whole tree. A file you deleted is deleted there. A file a deny rule covers, a link, a file over
+16 MiB and anything past 1,000 files or 64 MiB is left as the commit has it, and the delegate and the
+planner are told which paths were carried, which were not and why. Nothing is written in your working
+tree, and you are not asked, since the copy goes into the checkout bravebot made. Use it for a
+`checker` that has to build what the planner just wrote.
 
 The delegate cannot see the conversation the task came from, so a task that leaves something out is a
 delegate that never learns it. It cannot come back for more, since there is no channel to ask
