@@ -1635,6 +1635,9 @@ mod tests {
         assert_eq!(found, Some(("image/jpeg", b"jpeg bytes".to_vec())));
     }
 
+    /// A clipboard offering no picture flavour has no picture to send, so Ctrl-V falls through to the
+    /// text on it. A picture reported for a clipboard that holds none would paste an image nobody
+    /// copied in place of the words that were.
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn a_clipboard_holding_no_picture_flavour_yields_none() {
@@ -1745,6 +1748,9 @@ case "$*" in
   *) exit 1 ;;
 esac"#;
 
+    /// A picture copied as a JPEG is a picture on a Wayland desktop too. `wl-paste` is asked for each
+    /// flavour in turn, fails for the ones the clipboard does not hold, and the JPEG it does hold is
+    /// sent as it is, where a reader that asked for PNG alone would paste nothing.
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn a_jpeg_only_clipboard_yields_a_picture_through_wl_paste() {
