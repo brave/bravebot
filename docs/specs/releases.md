@@ -503,8 +503,8 @@ holds a semicolon or a percent sign, a stored value the account cannot write, an
 which directory to add, and do not undo the install. A refused install does not read or change
 either `PATH`.
 
-**Why.** The script already knows the directory, so adding it costs the person nothing there, and a
-search through how Windows keeps a `PATH` anywhere else. The stored value is the person's, and it
+**Why.** The script already knows the directory, so it can add it at no cost to the person. Without
+that, the person has to find out how Windows keeps a `PATH`. The stored value is the person's, and it
 outlives the install, so the script changes the one entry it owns: reading it expanded and writing
 that back replaces every `%NAME%` reference with what it names today and leaves a plain string that
 Windows no longer expands, which changes entries this script has no business with. The comparison
