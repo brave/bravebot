@@ -51113,6 +51113,557 @@ fn a_delegate_that_did_not_finish_still_tells_the_turn_what_its_hooks_said() {
     );
 }
 
+/// A hooks file in the state directory a session makes its checkouts under.
+#[cfg(unix)]
+fn hooks_in_the_state_directory(home: &std::path::Path, entries: &str) {
+    std::fs::write(
+        home.join("hooks.json"),
+        format!("{{\"hooks\": [{entries}]}}"),
+    )
+    .expect("a hooks file");
+}
+
+/// A hooks entry for `moment` that runs `body` as a shell script, with `arguments` as `$1` and on.
+///
+/// Through `/bin/sh -c`, so there is no script to write and nothing for another test to race.
+#[cfg(unix)]
+fn a_shell_hook(moment: &str, body: &str, arguments: &[&str]) -> String {
+    let words: Vec<String> = ["/bin/sh", "-c", body, "hook"]
+        .into_iter()
+        .chain(arguments.iter().copied())
+        .map(|word| format!("{word:?}"))
+        .collect();
+    format!("{{\"on\": \"{moment}\", \"run\": [{}]}}", words.join(", "))
+}
+
+/// HOOK-2, HOOK-4, HOOK-5. The hook for a checkout runs in the checkout the driver wrote for a
+/// delegate, is handed that checkout and the working directory it was made from, and has run by the
+/// time the delegate makes its first call: the delegate's first call finds what the hook wrote.
+#[cfg(unix)]
+#[test]
+fn a_hook_runs_in_the_checkout_made_for_a_delegate_before_its_first_round() {
+    let scratch = Scratch::new("hooks-checkout-made");
+    let home = Scratch::new("hooks-checkout-made-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    hooks_in_the_state_directory(
+        &home.path,
+        &a_shell_hook(
+            "checkout-made",
+            "printf 'SETUP-HAS-RUN\\n%s\\n%s\\n%s\\n' \"$(pwd -P)\" \"$BRAVEBOT_CHECKOUT\" \
+             \"$BRAVEBOT_WORKING_DIRECTORY\" > setup-ran.txt",
+            &[],
+        ),
+    );
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-READ-ITS-SETUP",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"READ-THE-SETUP-NOTE","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate read it"),
+            ],
+        ),
+        (
+            "READ-THE-SETUP-NOTE",
+            vec![
+                tool_request("read_file", r#"{"path":"setup-ran.txt"}"#),
+                reply_with("it was there"),
+            ],
+        ),
+    ]);
+
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "HAVE-A-DELEGATE-READ-ITS-SETUP",
+    );
+
+    let made = checkouts_under(&home.path);
+    assert_eq!(made.len(), 1, "the checkout was not made, or was removed");
+    let wrote = std::fs::read_to_string(made[0].join("setup-ran.txt"))
+        .expect("the hook did not run in the checkout");
+    let lines: Vec<&str> = wrote.lines().collect();
+    assert_eq!(lines.len(), 4, "{wrote:?}");
+    assert_eq!(lines[0], "SETUP-HAS-RUN");
+    let same = |written: &str, expected: &std::path::Path| {
+        std::path::PathBuf::from(written).canonicalize().ok() == expected.canonicalize().ok()
+    };
+    assert!(
+        same(lines[1], &made[0]),
+        "the hook did not run in the checkout's root: {wrote:?}"
+    );
+    assert!(
+        same(lines[2], &made[0]),
+        "the hook was not told which checkout it was for: {wrote:?}"
+    );
+    assert!(
+        same(lines[3], &scratch.path),
+        "the hook was not told which working directory the checkout came from: {wrote:?}"
+    );
+    assert!(
+        !scratch.path.join("setup-ran.txt").exists(),
+        "the hook ran in the working directory"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("READ-THE-SETUP-NOTE") && body.contains("SETUP-HAS-RUN")),
+        "the delegate's first call did not find what the hook wrote, so the hook had not run \
+         before its first round"
+    );
+}
+
+/// CHECKOUT-15, CHECKOUT-17. A checkout the setup hook ran in is kept, because a hook is a program
+/// started there that nothing recorded the writes of, even where the delegate it was made for only
+/// read, and a rewind of the turn says it put back nothing there. The same delegate with no hook
+/// declared leaves nothing behind and no gap.
+#[cfg(unix)]
+#[test]
+fn a_checkout_a_hook_ran_in_is_kept_and_one_nothing_ran_in_is_not() {
+    for hooked in [false, true] {
+        let tag = if hooked { "kept" } else { "removed" };
+        let scratch = Scratch::new(&format!("hooks-checkout-{tag}"));
+        let home = Scratch::new(&format!("hooks-checkout-{tag}-home"));
+        repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        if hooked {
+            hooks_in_the_state_directory(
+                &home.path,
+                &a_shell_hook("checkout-made", "echo set-up > set-up.txt", &[]),
+            );
+        }
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "HAVE-A-DELEGATE-ONLY-LOOK",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"ONLY-LOOK-AT-IT","isolation":"checkout"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("the delegate looked"),
+                ],
+            ),
+            (
+                "ONLY-LOOK-AT-IT",
+                vec![
+                    tool_request("read_file", r#"{"path":"README"}"#),
+                    reply_with("looked"),
+                ],
+            ),
+        ]);
+
+        // Taken before the turn, as a rewind point is: it follows the tracker the turn marks.
+        let coverage = workspace.rewind_coverage();
+        let (asked, _) = run_in_a_repository(
+            &workspace,
+            &home.path,
+            &endpoint,
+            &received,
+            "HAVE-A-DELEGATE-ONLY-LOOK",
+        );
+
+        let made = checkouts_under(&home.path);
+        assert!(
+            asked
+                .iter()
+                .any(|body| body.contains("ONLY-LOOK-AT-IT") && body.contains("committed")),
+            "the delegate did not read its checkout, so this says nothing about it"
+        );
+        let gaps = coverage.gaps();
+        match hooked {
+            true => {
+                assert_eq!(made.len(), 1, "a checkout a hook ran in was removed");
+                assert!(made[0].join("set-up.txt").exists(), "the hook did not run");
+                assert!(
+                    gaps.contains(&bravebot_agent::rewind::CoverageGap::Checkout),
+                    "a rewind was not told a program ran in a checkout: {gaps:?}"
+                );
+            }
+            false => {
+                assert!(
+                    made.is_empty(),
+                    "a checkout nothing ran in was kept, so a kept one proves nothing: {made:?}"
+                );
+                assert!(
+                    gaps.is_empty(),
+                    "a checkout nothing ran in left a gap in the rewind: {gaps:?}"
+                );
+            }
+        }
+    }
+}
+
+/// HOOK-2. The moment is about a checkout the driver wrote, and not about a delegate starting: a
+/// delegate that works in the working directory fires nothing.
+#[cfg(unix)]
+#[test]
+fn a_delegate_given_no_checkout_fires_no_checkout_hook() {
+    let scratch = Scratch::new("hooks-checkout-none");
+    let home = Scratch::new("hooks-checkout-none-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let log = home.path.join("setup.log");
+    hooks_in_the_state_directory(
+        &home.path,
+        &a_shell_hook(
+            "checkout-made",
+            "echo ran >> \"$1\"",
+            &[log.to_str().expect("a path")],
+        ),
+    );
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-WRITE-IN-PLACE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WRITE-OUT-IN-PLACE"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate wrote it"),
+            ],
+        ),
+        (
+            "WRITE-OUT-IN-PLACE",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the delegate"}"#,
+                ),
+                reply_with("wrote it"),
+            ],
+        ),
+    ]);
+
+    run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "HAVE-A-DELEGATE-WRITE-IN-PLACE",
+    );
+
+    assert!(
+        scratch.path.join("out.txt").exists(),
+        "the delegate did not run in the working directory, so this says nothing about it"
+    );
+    assert!(
+        checkouts_under(&home.path).is_empty(),
+        "a checkout was made for a delegate that asked for none"
+    );
+    assert!(
+        !log.exists(),
+        "the hook for a checkout fired for a delegate that works in the working directory"
+    );
+}
+
+/// HOOK-2, HOOK-4, HOOK-5. Two delegates given a checkout each fire the hook twice: once for each
+/// checkout, in that checkout, handed that checkout.
+#[cfg(unix)]
+#[test]
+fn a_fan_out_into_checkouts_fires_the_hook_once_for_each_checkout_and_in_that_one() {
+    let scratch = Scratch::new("hooks-checkout-each");
+    let home = Scratch::new("hooks-checkout-each-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let log = home.path.join("setup.log");
+    hooks_in_the_state_directory(
+        &home.path,
+        &a_shell_hook(
+            "checkout-made",
+            "printf '%s %s\\n' \"$(pwd -P)\" \"$BRAVEBOT_CHECKOUT\" >> \"$1\"",
+            &[log.to_str().expect("a path")],
+        ),
+    );
+    let looks = |name: &str| {
+        vec![
+            tool_request("read_file", r#"{"path":"README"}"#),
+            reply_with(name),
+        ]
+    };
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-TWO-DELEGATES-SET-UP",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"SHARED","each":["LOOK-ONE","LOOK-TWO"],"isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("both looked"),
+            ],
+        ),
+        ("LOOK-ONE", looks("saw one")),
+        ("LOOK-TWO", looks("saw two")),
+    ]);
+
+    run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "HAVE-TWO-DELEGATES-SET-UP",
+    );
+
+    let made: Vec<PathBuf> = checkouts_under(&home.path)
+        .iter()
+        .map(|path| path.canonicalize().expect("a checkout"))
+        .collect();
+    assert_eq!(made.len(), 2, "the two checkouts were not both kept");
+    let written = std::fs::read_to_string(&log).expect("the hook ran");
+    let mut ran_in: Vec<PathBuf> = Vec::new();
+    for line in written.lines() {
+        let (in_dir, told) = line.split_once(' ').expect("two directories on a line");
+        assert_eq!(
+            in_dir, told,
+            "a hook ran in one checkout and was told another"
+        );
+        ran_in.push(PathBuf::from(in_dir).canonicalize().expect("a checkout"));
+    }
+    ran_in.sort();
+    assert_eq!(
+        ran_in, made,
+        "the hook did not fire exactly once for each checkout: {written:?}"
+    );
+}
+
+/// HOOK-2. A delegate a delegate in a checkout starts works in the checkout it was given and does
+/// not make one, so the moment is not fired for it: it is fired once for each checkout.
+#[cfg(unix)]
+#[test]
+fn a_delegate_started_inside_a_checkout_does_not_fire_the_hook_again() {
+    let scratch = Scratch::new("hooks-checkout-shared");
+    let home = Scratch::new("hooks-checkout-shared-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let log = home.path.join("setup.log");
+    hooks_in_the_state_directory(
+        &home.path,
+        &a_shell_hook(
+            "checkout-made",
+            "echo \"$BRAVEBOT_CHECKOUT\" >> \"$1\"",
+            &[log.to_str().expect("a path")],
+        ),
+    );
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "START-A-SHARING-HOOKED-ONE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"MIDDLE-SHARES","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "MIDDLE-SHARES",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"INNER-READS"}"#),
+                tool_request("spawn_agent", r#"{"kind":"worker","task":"INNER-WRITES"}"#),
+                reply_with("started both"),
+                reply_with("finished"),
+            ],
+        ),
+        (
+            "INNER-READS",
+            vec![
+                tool_request("read_file", r#"{"path":"README"}"#),
+                reply_with("read it"),
+            ],
+        ),
+        (
+            "INNER-WRITES",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the inner worker"}"#,
+                ),
+                reply_with("wrote it"),
+            ],
+        ),
+    ]);
+
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "START-A-SHARING-HOOKED-ONE",
+    );
+
+    let made = checkouts_under(&home.path);
+    assert_eq!(made.len(), 1, "a delegate in a checkout made another");
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("INNER-READS") && body.contains("committed")),
+        "the delegates inside the checkout did not run, so this says nothing about them"
+    );
+    assert_eq!(
+        std::fs::read_to_string(made[0].join("out.txt")).expect("written in the checkout"),
+        "from the inner worker"
+    );
+    let written = std::fs::read_to_string(&log).expect("the hook ran");
+    assert_eq!(
+        written.lines().count(),
+        1,
+        "the hook fired for a delegate that shares a checkout it did not make: {written:?}"
+    );
+}
+
+/// HOOK-6, HOOK-7. A setup that fails is said, naming the moment and the program, to the person
+/// watching and in the turn's own account, and the delegate it was for goes on: a hook decides
+/// nothing.
+#[cfg(unix)]
+#[test]
+fn a_checkout_hook_that_fails_is_said_and_its_delegate_still_runs() {
+    let scratch = Scratch::new("hooks-checkout-fails");
+    let home = Scratch::new("hooks-checkout-fails-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    hooks_in_the_state_directory(&home.path, &a_shell_hook("checkout-made", "exit 3", &[]));
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-WRITE-AFTER-A-BAD-SETUP",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WRITE-OUT-ANYWAY","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate wrote it"),
+            ],
+        ),
+        (
+            "WRITE-OUT-ANYWAY",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"out.txt","contents":"from the delegate"}"#,
+                ),
+                reply_with("wrote it"),
+            ],
+        ),
+    ]);
+
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    let outcome = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAVE-A-DELEGATE-WRITE-AFTER-A-BAD-SETUP").with_home(Some(home.path.clone())),
+        &mut RecordingConfirmer::approving(),
+        &mut reporter,
+        &mut sink,
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("a hook that goes wrong does not fail the turn");
+
+    let made = checkouts_under(&home.path);
+    assert_eq!(made.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(made[0].join("out.txt"))
+            .expect("the delegate did not run after its setup failed"),
+        "from the delegate"
+    );
+    let said = |sentences: &[String]| {
+        sentences
+            .iter()
+            .any(|said| said.contains("checkout-made") && said.contains("/bin/sh"))
+    };
+    assert!(
+        said(&reporter.notices),
+        "nobody watching was told the setup failed: {:?}",
+        reporter.notices
+    );
+    assert!(
+        said(&outcome.notices),
+        "a caller with nowhere to draw was not told the setup failed: {:?}",
+        outcome.notices
+    );
+}
+
+/// HOOK-6, HOOK-7, CHECKOUT-22. A setup whose program is not there, and one stopped at its bound,
+/// leave the delegate running in its checkout as a failing one does, and the checkout is kept in
+/// both: it is kept because a hook is declared for the moment, not because one ran to the end.
+#[cfg(unix)]
+#[test]
+fn a_setup_that_cannot_start_or_outstays_its_bound_leaves_the_delegate_running_in_a_kept_checkout()
+{
+    let arms = [
+        (
+            "missing",
+            r#"{"on": "checkout-made", "run": ["/no/such/setup"]}"#,
+        ),
+        (
+            "stopped",
+            r#"{"on": "checkout-made", "run": ["/bin/sh", "-c", "exec sleep 30"], "timeout": 1}"#,
+        ),
+    ];
+    for (tag, entry) in arms {
+        let scratch = Scratch::new(&format!("hooks-checkout-{tag}-setup"));
+        let home = Scratch::new(&format!("hooks-checkout-{tag}-setup-home"));
+        repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        hooks_in_the_state_directory(&home.path, entry);
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "HAVE-A-DELEGATE-LOOK-AFTER-A-SETUP-THAT-WENT-WRONG",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"LOOK-AT-IT-ANYWAY","isolation":"checkout"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("the delegate looked"),
+                ],
+            ),
+            (
+                "LOOK-AT-IT-ANYWAY",
+                vec![
+                    tool_request("read_file", r#"{"path":"README"}"#),
+                    reply_with("looked"),
+                ],
+            ),
+        ]);
+
+        let (asked, _) = run_in_a_repository(
+            &workspace,
+            &home.path,
+            &endpoint,
+            &received,
+            "HAVE-A-DELEGATE-LOOK-AFTER-A-SETUP-THAT-WENT-WRONG",
+        );
+
+        assert!(
+            asked
+                .iter()
+                .any(|body| body.contains("LOOK-AT-IT-ANYWAY") && body.contains("committed")),
+            "the delegate did not run after a setup that went wrong ({tag})"
+        );
+        assert_eq!(
+            checkouts_under(&home.path).len(),
+            1,
+            "the checkout was removed after a setup that went wrong ({tag})"
+        );
+    }
+}
+
 /// HOOK-7: a turn that fails produces no account of itself, so a sentence that reached only the
 /// account would be one nobody could ever have read.
 ///

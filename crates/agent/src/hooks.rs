@@ -30,6 +30,17 @@
 //! credentials do not travel into a program the person attached to a moment any more than they
 //! travel into one the planner asked for. Its `PATH` is reduced as the section below says.
 //!
+//! # What `checkout-made` is handed
+//!
+//! A hook is told the moment and nothing else, with one exception: the hook for a checkout that
+//! has just been written is also given the checkout's directory and the working directory it was
+//! made from, in two variables of its environment ([`Made`]). A setup command copies from the one
+//! to the other, and a path is the whole of what it needs. Neither is a string a model wrote or one
+//! read out of a file: the first is the driver's (the state directory, the workspace's key and the
+//! checkout's number) and the second is the directory the person's session works in. They travel as
+//! the bytes the file system holds, which a JSON line could not do for a directory whose name is
+//! not text.
+//!
 //! # Where a bare name is found
 //!
 //! Not confined does not mean found anywhere. A bare program name is looked up by
@@ -59,6 +70,24 @@ pub const LIMIT: Duration = Duration::from_secs(30);
 
 /// How often the wait looks up to see whether the process is done.
 const TICK: Duration = Duration::from_millis(50);
+
+/// The variable naming the checkout a `checkout-made` hook is run for.
+pub const CHECKOUT_VARIABLE: &str = "BRAVEBOT_CHECKOUT";
+
+/// The variable naming the working directory the checkout was made from.
+pub const WORKING_DIRECTORY_VARIABLE: &str = "BRAVEBOT_WORKING_DIRECTORY";
+
+/// The two directories a `checkout-made` hook is handed beside the moment (HOOK-5).
+///
+/// Only [`fire_checkout_made`] takes them, so no other moment can be fired with them.
+#[derive(Debug, Clone, Copy)]
+pub struct Made<'a> {
+    /// The checkout's root, where the hook runs.
+    pub checkout: &'a Path,
+    /// The directory the checkout was made from, which holds what a checkout does not: the files
+    /// the repository ignores.
+    pub working_directory: &'a Path,
+}
 
 /// What became of one hook.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,12 +165,50 @@ pub enum Watch<'a> {
 /// So that a person can be told what holds the turn while it is held (HOOK-8). The two edges
 /// carry the moment's own word and the program as the person's file spelled it, and nothing a
 /// hook produced: no branch here or in a caller takes a hook's output or status as a reason.
+///
+/// The moment for a new checkout is [`fire_checkout_made`], which also hands its hooks the
+/// directories they are for.
 pub fn fire_watched(
     hooks: &Hooks,
     moment: Moment,
     tool: Option<&str>,
     directory: &Path,
     limit: Duration,
+    watch: &mut dyn FnMut(Watch<'_>),
+) -> Vec<Fired> {
+    fire_each(hooks, moment, tool, directory, limit, None, watch)
+}
+
+/// Run the hooks attached to [`Moment::CheckoutMade`], in the checkout, each handed the two
+/// directories of `made` beside the moment (HOOK-5), telling `watch` as [`fire_watched`] does.
+///
+/// A function of its own rather than a payload [`fire_watched`] takes, so that the directories can
+/// reach this moment's hooks and no other's.
+pub fn fire_checkout_made(
+    hooks: &Hooks,
+    made: Made<'_>,
+    limit: Duration,
+    watch: &mut dyn FnMut(Watch<'_>),
+) -> Vec<Fired> {
+    fire_each(
+        hooks,
+        Moment::CheckoutMade,
+        None,
+        made.checkout,
+        limit,
+        Some(made),
+        watch,
+    )
+}
+
+/// Run each hook `moment` selects, one after the other, handing `made` to each where there is any.
+fn fire_each(
+    hooks: &Hooks,
+    moment: Moment,
+    tool: Option<&str>,
+    directory: &Path,
+    limit: Duration,
+    made: Option<Made<'_>>,
     watch: &mut dyn FnMut(Watch<'_>),
 ) -> Vec<Fired> {
     if hooks.is_empty() {
@@ -156,7 +223,7 @@ pub fn fire_watched(
                 moment: moment.as_str(),
                 program: &program,
             });
-            let trouble = run(hook, &said, directory, limit);
+            let trouble = run(hook, &said, directory, limit, made);
             watch(Watch::Over);
             Fired {
                 program,
@@ -170,8 +237,8 @@ pub fn fire_watched(
 /// The whole of what a hook is told, as one line of JSON.
 ///
 /// Built from the moment's own word, which is a literal of this crate's. Nothing a model wrote and
-/// nothing read out of a file is in it, so there is no question of what a hook is handed: the same
-/// three lines, forever, whatever the turn was doing.
+/// nothing read out of a file is in it, so there is no question of what a hook is told: the same
+/// line for a moment, forever, whatever the turn was doing.
 ///
 /// An object rather than the bare word so the line has somewhere to grow a second key without every
 /// hook that reads the first having to be taught that the shape changed.
@@ -194,7 +261,13 @@ fn program_to_start(program: &str) -> Option<PathBuf> {
 }
 
 /// Start one hook, hand it the line, and wait for it.
-fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<Trouble> {
+fn run(
+    hook: &Hook,
+    said: &str,
+    directory: &Path,
+    default: Duration,
+    made: Option<Made<'_>>,
+) -> Option<Trouble> {
     let limit = hook.timeout().unwrap_or(default);
     let (program, arguments) = hook.run().split_first()?;
     let Some(program) = program_to_start(program) else {
@@ -214,6 +287,17 @@ fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<T
     // The vector, never a string. There is no shell between the file and the process, so an
     // argument holding a space or a semicolon is one argument and arrives as one.
     command.args(arguments).current_dir(directory);
+    // The directories as the bytes the file system holds, so a name that is not text reaches the
+    // hook as it is, and without the `\\?\` Windows puts before a resolved path, which a batch file
+    // or `cmd` does not take.
+    if let Some(made) = made {
+        let spelled = |directory: &Path| {
+            bravebot_sandbox::rules::without_verbatim_prefix(directory.to_path_buf())
+        };
+        command
+            .env(CHECKOUT_VARIABLE, spelled(made.checkout))
+            .env(WORKING_DIRECTORY_VARIABLE, spelled(made.working_directory));
+    }
     command
         .stdin(Stdio::piped())
         // Discarded rather than inherited or collected. Inherited, a hook would draw over the
@@ -273,6 +357,10 @@ mod tests {
         assert_eq!(
             announcement(Moment::TurnFinished),
             "{\"event\":\"turn-finished\"}\n"
+        );
+        assert_eq!(
+            announcement(Moment::CheckoutMade),
+            "{\"event\":\"checkout-made\"}\n"
         );
     }
 

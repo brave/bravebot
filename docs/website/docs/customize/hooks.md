@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Hooks
-description: Run a command of your own when a turn starts, when a tool call finishes, when a turn is over, or when a question is waiting on you.
+description: Run a command of your own when a turn starts, when a tool call finishes, when a turn is over, when a question is waiting on you, or when a checkout is made for a delegate.
 ---
 
 # Hooks
@@ -30,7 +30,7 @@ inside a checkout, so a command named in one would be a command that arrived wit
 }
 ```
 
-## The four moments
+## The five moments
 
 Each entry names one moment in `on`:
 
@@ -40,6 +40,7 @@ Each entry names one moment in `on`:
 | `tool-finished` | after one tool call has finished, whatever came of it |
 | `turn-finished` | when the turn you asked for is over, however it ended |
 | `prompt-shown` | just before a prompt or a question is put to you |
+| `checkout-made` | once a checkout has been made for a delegate, before that delegate's first request |
 
 `turn-finished` fires even when the turn was cancelled or failed on its first request, because the
 commonest thing to attach to it is telling somebody who walked away, and a turn that died is exactly
@@ -63,6 +64,25 @@ you: not in a one-shot run where nobody can be asked, and not for one your permi
 in advance. It cannot answer the prompt, and the hook runs before the prompt is drawn, so a slow one
 delays it up to its timeout.
 
+`checkout-made` is where a [checkout](agents.md#a-checkout-of-its-own) gets what a checkout lacks. A
+checkout holds the last commit's tracked files, so a delegate working in one has no installed
+dependencies and none of the files your repository ignores, such as `.env`. The hook runs once for
+each checkout, in the checkout's root, before its delegate sends anything, and it is declared in your
+own `hooks.json` like every hook, so a project cannot name the command:
+
+```json
+{ "on": "checkout-made", "run": ["/usr/local/bin/set-up-checkout"], "timeout": 300 }
+```
+
+Name the program by an absolute path outside the repository, as above: the command runs unconfined
+with your access, and a relative path would run whatever file the repository holds at that name.
+
+A delegate that works in your working directory fires nothing, and so does one started inside a
+checkout, which works in the checkout it was given. A setup that fails is reported to you and the
+delegate runs in the checkout as it stands. A checkout this hook ran in is kept for you to remove with
+[`/checkouts remove`](../reference/commands.md#checkouts-apply-n--remove-n), as one a delegate ran a
+program in is.
+
 ## A hook is a program and its arguments
 
 `run` is an array: the program first, then each argument as its own string. Nothing joins them into a
@@ -83,6 +103,8 @@ quoting decides what runs.
 ## Where it runs, and what it reaches
 
 A hook runs in the directory the turn is working in, so a relative path in one means what you meant.
+For `checkout-made` that is the checkout's root, which holds the repository's tracked files, so a
+relative path there names a file the repository holds.
 
 It is not confined. Its environment is the one Brave Bot was started from, less this agent's own
 credentials, which are the same names taken off a program the planner asks to
@@ -114,9 +136,18 @@ One line of JSON on standard input, naming the moment and nothing else:
 {"event":"turn-finished"}
 ```
 
-No path, no argument a model wrote, no bytes out of a file, and nothing added to its environment. The
-`tool` on a `tool-finished` entry selects which entries fire and reaches no process. A hook that needs
-to know which tool ran declares one entry per tool.
+No argument a model wrote, no bytes out of a file, and no path, except for `checkout-made`. That
+hook's environment holds two variables, `BRAVEBOT_CHECKOUT`, the checkout it ran for, and
+`BRAVEBOT_WORKING_DIRECTORY`, the directory the checkout was made from, so a setup command can copy
+a file across:
+
+```sh
+cp "$BRAVEBOT_WORKING_DIRECTORY/.env" "$BRAVEBOT_CHECKOUT/.env"
+```
+
+Bravebot adds neither to the environment of any other hook, and adds nothing else to anyone's. The `tool` on a
+`tool-finished` entry selects which entries fire and reaches no process. A hook that needs to know
+which tool ran declares one entry per tool.
 
 ## A hook decides nothing
 
@@ -172,5 +203,12 @@ since you mistyped its path.
 - **Nothing a hook prints is kept.** Debugging one means having it write a file.
 - **A hook runs while the turn waits.** Every hook is time added to the turn, up to 30 seconds each, or the `timeout` the entry sets, at most 600. A
   `tool-finished` hook with no `tool` pays that on every call.
+- **`checkout-made` holds its delegate back while it runs.** The delegate sends nothing until its
+  hook has ended, so a setup that installs dependencies delays the work by as long as it takes. Set
+  a `timeout` for one that needs more than 30 seconds. Stopping the turn does not stop a hook that is
+  running. Delegates given a checkout by one call run their hooks at the same time, and the status
+  line names only one of them.
+- **A hook that reaches its time limit is stopped alone.** The program it started is stopped and the
+  programs that one started keep running.
 - **There is no moment for a session.** Something that should happen once when the program opens fires
   per turn instead.

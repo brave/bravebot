@@ -256,6 +256,17 @@ impl CheckoutInfo {
         &self.made.commit
     }
 
+    /// The delegate the driver made it for, which is the one that starts in it. A delegate that
+    /// shares it, one its own delegate started inside it, is a different one.
+    pub fn made_for(&self) -> bravebot_core::delegate::DelegateId {
+        self.made.delegate
+    }
+
+    /// The working directory it was made from.
+    pub fn working_directory(&self) -> &Path {
+        self.source.root()
+    }
+
     /// The repository-relative paths a deny rule covered, which were not written.
     pub fn left_out(&self) -> &[String] {
         &self.left_out

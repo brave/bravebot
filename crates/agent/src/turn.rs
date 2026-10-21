@@ -2038,6 +2038,57 @@ fn fire_hooks<R: Reporter + ?Sized>(
     workspace: &Workspace,
     reporter: &mut R,
 ) -> Vec<String> {
+    firing_in(hooks, moment, tool, workspace, reporter, |watch| {
+        crate::hooks::fire_watched(
+            hooks,
+            moment,
+            tool,
+            workspace.root(),
+            crate::hooks::LIMIT,
+            watch,
+        )
+    })
+}
+
+/// Run the hooks for the moment a checkout was written for a delegate, in that checkout, and
+/// answer with what went wrong where something did (HOOK-2).
+///
+/// Nothing is fired for a workspace that is not a checkout. The hook is handed two directories
+/// (HOOK-5): the checkout's, which the driver made, and the working directory it was made from,
+/// which the person's session works in. Neither is read from anything a model or a file wrote.
+fn fire_checkout_made<R: Reporter + ?Sized>(
+    hooks: &bravebot_config::hooks::Hooks,
+    workspace: &Workspace,
+    reporter: &mut R,
+) -> Vec<String> {
+    let Some(checkout) = workspace.checkout() else {
+        return Vec::new();
+    };
+    let moment = bravebot_config::hooks::Moment::CheckoutMade;
+    firing_in(hooks, moment, None, workspace, reporter, |watch| {
+        crate::hooks::fire_checkout_made(
+            hooks,
+            crate::hooks::Made {
+                checkout: checkout.path(),
+                working_directory: checkout.working_directory(),
+            },
+            crate::hooks::LIMIT,
+            watch,
+        )
+    })
+}
+
+/// What [`fire_hooks`] and [`fire_checkout_made`] share: the record that a program ran in the
+/// workspace, the display told as each hook starts and ends, and a sentence for each that went
+/// wrong. `fire` runs the hooks, telling the watcher it is given.
+fn firing_in<R: Reporter + ?Sized>(
+    hooks: &bravebot_config::hooks::Hooks,
+    moment: bravebot_config::hooks::Moment,
+    tool: Option<&str>,
+    workspace: &Workspace,
+    reporter: &mut R,
+    fire: impl FnOnce(&mut dyn FnMut(crate::hooks::Watch<'_>)) -> Vec<crate::hooks::Fired>,
+) -> Vec<String> {
     // Hook programs can write files outside the backup journal, regardless of their outcome.
     if hooks.firing(moment, tool).next().is_some() {
         workspace.mark_rewind_gap(crate::rewind::CoverageGap::Hook);
@@ -2045,19 +2096,12 @@ fn fire_hooks<R: Reporter + ?Sized>(
             checkout.mark_worked_in();
         }
     }
-    let fired_all = crate::hooks::fire_watched(
-        hooks,
-        moment,
-        tool,
-        workspace.root(),
-        crate::hooks::LIMIT,
-        &mut |edge| match edge {
-            crate::hooks::Watch::Starting { moment, program } => {
-                reporter.hook_started(moment, program.to_string())
-            }
-            crate::hooks::Watch::Over => reporter.hook_finished(),
-        },
-    );
+    let fired_all = fire(&mut |edge| match edge {
+        crate::hooks::Watch::Starting { moment, program } => {
+            reporter.hook_started(moment, program.to_string())
+        }
+        crate::hooks::Watch::Over => reporter.hook_finished(),
+    });
     let said = trouble_sentences(fired_all);
     for one in &said {
         reporter.notice(one.clone());
@@ -2226,10 +2270,24 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         false => Vec::new(),
     };
 
+    // The driver has written a checkout for this delegate and nothing has run in it: the moment a
+    // person's setup command is for (HOOK-2). A delegate that shares its parent's checkout is not
+    // the one it was made for, so the moment is fired once for each checkout and never again for
+    // a delegate started inside it.
+    let given = task.delegate.as_ref().is_some_and(|spec| {
+        workspace
+            .checkout()
+            .is_some_and(|checkout| checkout.made_for() == spec.id())
+    });
+    let set_up = match given {
+        true => fire_checkout_made(&hooks, workspace, reporter),
+        false => Vec::new(),
+    };
+
     // Where the rounds' own hook sentences land. Held here rather than inside the rounds so that
     // a turn which failed part way through still has them: the outcome that would have carried
-    // them is the thing that did not arrive.
-    let mut fired: Vec<String> = Vec::new();
+    // them is the thing that did not arrive. What a checkout's setup said is the first of them.
+    let mut fired: Vec<String> = set_up;
     let mut taken = 0;
     let mut done = Worked::default();
 
@@ -2275,7 +2333,8 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     };
 
     // The rounds' sentences alone, for the caller that asked: the two ends of the turn never fire
-    // for a delegate, so a call it made is the whole of what one has to hand back.
+    // for a delegate, so what its calls fired and what its checkout's setup said are the whole of
+    // what one has to hand back.
     if let Some(collected) = said_about_hooks {
         collected.clone_from(&fired);
     }
