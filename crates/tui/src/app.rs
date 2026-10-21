@@ -24765,6 +24765,7 @@ mod tests {
     }
 
     /// A loopback model answering every request with `words`, streamed the way the real one is.
+    #[cfg(unix)]
     fn a_model_answering_every_request(words: &'static str) -> String {
         use std::io::{BufRead, BufReader, Read, Write};
 
