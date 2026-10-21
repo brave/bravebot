@@ -388,5 +388,6 @@ line names.
 `verified-by: bravebot_agent::connectors::with_values_are_each_given_once_in_their_form_and_shown_to_the_planner`
 `verified-by: bravebot_agent::connectors::an_act_takes_only_what_an_earlier_fetch_records_and_its_definition_allows`
 `verified-by: bravebot_agent::manifest::an_act_takes_a_recorded_field_as_the_fetch_s_receipt`
+`verified-by: bravebot_agent::manifest::an_act_taking_from_a_fetch_that_returned_no_receipt_is_never_sent`
 `verified-by: bravebot_core::selector::a_take_names_a_slot_and_a_field_for_each_value`
 `verified-by: bravebot_agent::connectors::a_take_names_only_a_slot_a_fetch_filled`
