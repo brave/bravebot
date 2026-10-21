@@ -71,6 +71,25 @@ fn trust_of_the_directory_answers_a_held_line_and_nothing_else() {
     assert_eq!(asked.len(), 1, "a script in the directory ran unasked");
     assert!(!work.join("from-script").exists());
 
+    std::fs::create_dir_all(work.join("scripts")).expect("scripts");
+    std::fs::write(work.join("scripts/set up.sh"), "touch from-spaced\n")
+        .expect("script with a space in its name");
+    for line in [
+        "sh \"scripts/set up.sh\"",
+        "sh 'scripts/set up.sh'",
+        "sh scripts/set\\ up.sh",
+    ] {
+        let asked = a_turn_asking_for(&work, line, RunDecision::reject(), |workspace| {
+            trust_of(workspace, true)
+        });
+        assert_eq!(
+            asked.len(),
+            1,
+            "{line}: a script with a space in its name ran unasked"
+        );
+        assert!(!work.join("from-spaced").exists(), "{line}");
+    }
+
     let asked = a_turn_asking_for(
         &work,
         "git commit --allow-empty -m probe",

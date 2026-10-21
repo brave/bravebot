@@ -563,27 +563,27 @@ impl Confinement {
         }
     }
 
-    /// Whether one of the words of `step`'s arguments names a regular file under a directory the
-    /// plan may write to, where the step is an interpreter or a wrapper, or the file is executable.
+    /// Whether an argument of `step`, or one of the words in it, names a regular file under a
+    /// directory the plan may write to, where the step is an interpreter or a wrapper, or the file
+    /// is executable.
     ///
-    /// An argument is cut into words at white space, shell punctuation and `=`, so `sh -c "./gen.sh
-    /// a"` and `node --require=./hook.js` name the file they run. A word is looked up as spelled,
-    /// under `directory` where it is relative. That reads whether a file exists, what kind it is and
+    /// An argument is looked up whole, since a file name may hold a space or any other character
+    /// the words are cut at, and as the words in it ([`any_name_in`]), so `sh -c "./gen.sh a"` and
+    /// `node --require=./hook.js` name the file they run. A name is looked up as spelled, under
+    /// `directory` where it is relative. That reads whether a file exists, what kind it is and
     /// whether it is executable, never what is in it, and a stage that creates or removes it can
     /// only change whether this asks about the line that names it.
     fn hands_over_a_file_the_plan_could_write(&self, step: &Step, directory: &Path) -> bool {
         let interpreter =
             program_name(&step.resolved).is_some_and(|name| runs_what_it_is_given(&name));
-        step.args
-            .iter()
-            .flat_map(|arg| arg.split(|c: char| c.is_whitespace() || ";&|()<>\"'`$=".contains(c)))
-            .filter(|word| !word.is_empty())
-            .map(|word| directory.join(word))
-            .any(|file| {
+        step.args.iter().any(|arg| {
+            any_name_in(arg, |name| {
+                let file = directory.join(name);
                 file.is_file()
                     && (interpreter || is_executable(&file))
                     && self.writable_by_the_plan(&file)
             })
+        })
     }
 
     /// What the trail records about the network for the stages of one run, or `None` where the
@@ -2803,6 +2803,92 @@ fn runs_what_it_is_given(name: &str) -> bool {
     versioned || WRAPPERS.contains(&name) || INTERPRETERS.contains(&name)
 }
 
+/// Whether `found` accepts one of the names an argument could be a file under: the argument
+/// whole, the pieces left after cutting it at white space, shell punctuation and `=`, and the words
+/// a shell would read in it ([`shell_words`]). The argument and each word is also read as an
+/// option, so what follows each `=` in it is a name, and so is each piece between two.
+///
+/// The whole argument is a name because a file's name may hold any character the others cut at.
+/// The words read with quoting are names because a command string may quote a name that holds
+/// one, as `sh -c "'run script.sh'"` does, and a cut at every quote would split it. A name that is
+/// not a file is looked up and found nothing, so more names only ever ask about more lines. The
+/// names are slices of the text and are offered one at a time, so a long argument is not copied
+/// once for each `=` in it.
+fn any_name_in(arg: &str, mut found: impl FnMut(&str) -> bool) -> bool {
+    let mut found = |name: &str| !name.is_empty() && found(name);
+    if arg
+        .split(|c: char| c.is_whitespace() || ";&|()<>\"'`$=".contains(c))
+        .any(&mut found)
+    {
+        return true;
+    }
+    std::iter::once(arg.to_string())
+        .chain(shell_words(arg))
+        .any(|text| {
+            found(&text)
+                || text
+                    .match_indices('=')
+                    .any(|(at, _)| found(&text[at + 1..]))
+                || text.split('=').any(&mut found)
+        })
+}
+
+/// The words a POSIX shell reads in `text`: cut at unquoted white space and `;&|()<>` and a
+/// backtick, with single quotes holding every character, double quotes holding every character but
+/// `\` before `"`, `\`, `$` or a backtick, and a `\` outside quotes holding the next character. A
+/// `\` before a newline joins the lines. A quote left open runs to the end of the text. Nothing is
+/// expanded, so `$HOME` stays the characters it is spelled with.
+fn shell_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut in_word = false;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                in_word = true;
+                word.extend(chars.by_ref().take_while(|&held| held != '\''));
+            }
+            '"' => {
+                in_word = true;
+                while let Some(held) = chars.next() {
+                    match held {
+                        '"' => break,
+                        '\\' => match chars.next() {
+                            Some(escaped @ ('"' | '\\' | '$' | '`')) => word.push(escaped),
+                            Some('\n') => {}
+                            Some(other) => word.extend(['\\', other]),
+                            None => word.push('\\'),
+                        },
+                        _ => word.push(held),
+                    }
+                }
+            }
+            '\\' => match chars.next() {
+                Some('\n') => {}
+                escaped => {
+                    in_word = true;
+                    word.extend(escaped);
+                }
+            },
+            c if c.is_whitespace() || ";&|()<>`".contains(c) => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            c => {
+                in_word = true;
+                word.push(c);
+            }
+        }
+    }
+    if in_word {
+        words.push(word);
+    }
+    words
+}
+
 /// Whether `file` has an execute bit set for anybody, which is how a program a stage wrote and made
 /// runnable is told from a file it only wrote. False where the platform has no such bit.
 fn is_executable(file: &Path) -> bool {
@@ -3232,6 +3318,148 @@ mod tests {
                 held_here(step("/usr/bin/some-launcher", &["sub/run.sh"])),
                 Containment::Held,
                 "the control: the same launcher given a file that is not executable"
+            );
+        }
+    }
+
+    /// RUN-5: a file whose name holds a character the argument is cut at is looked up as one name,
+    /// so an interpreter handed it, or a program of any kind handed it where it is executable, is
+    /// not held. The regression it rejects: reading an argument only as the pieces left after the
+    /// cut, which never names `run script.sh` and so let `sh "run script.sh"` run unasked. Every
+    /// name that is not there is the control, so a name is not asked about for its characters.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_name_holding_a_separator_is_looked_up_as_one_name() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/confine-held-separator-names");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).expect("scratch root");
+        let root = root.canonicalize().expect("canonical");
+        let confined = Confinement::new(
+            Prelude::MacOs,
+            PathBuf::from("/tmp"),
+            Some(Path::new(HOME)),
+            vec![root.clone()],
+            None,
+        )
+        .with_network(Network::Closed);
+        let held_here = |step: Step| confined.holds(&[&step], &root);
+
+        for separator in [
+            " ", "\t", "\n", ";", "&", "|", "(", ")", "<", ">", "\"", "'", "`", "$", "=",
+        ] {
+            let name = format!("sub/a{separator}b.sh");
+            let absolute = root.join(&name).to_string_lossy().into_owned();
+            for interpreter in ["/bin/sh", "/usr/bin/python3", "/usr/bin/env"] {
+                assert_eq!(
+                    held_here(step(interpreter, &[&name])),
+                    Containment::Held,
+                    "the control: {interpreter} given {name:?} where it is not a file"
+                );
+            }
+            std::fs::write(root.join(&name), "").expect("script");
+            for interpreter in ["/bin/sh", "/usr/bin/python3", "/usr/bin/env"] {
+                for argument in [&name, &absolute] {
+                    assert_eq!(
+                        held_here(step(interpreter, &[argument])),
+                        Containment::Unknown,
+                        "{interpreter} ran {argument:?}, a file the session could have written"
+                    );
+                }
+            }
+            assert_eq!(
+                held_here(step("/usr/bin/cat", &[&name])),
+                Containment::Held,
+                "a program that does not run its operand was refused for naming {name:?}"
+            );
+            use std::os::unix::fs::PermissionsExt;
+            let tool = root.join(format!("sub/tool{separator}x"));
+            std::fs::write(&tool, "").expect("tool");
+            let launched = |mode| {
+                std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(mode))
+                    .expect("mode");
+                held_here(step(
+                    "/usr/bin/some-launcher",
+                    &[&format!("sub/tool{separator}x")],
+                ))
+            };
+            assert_eq!(
+                launched(0o644),
+                Containment::Held,
+                "the control: a launcher given {separator:?} in the name of a file that is \
+                 not executable"
+            );
+            assert_eq!(
+                launched(0o755),
+                Containment::Unknown,
+                "a program this list does not know ran an executable file with \
+                 {separator:?} in its name"
+            );
+        }
+    }
+
+    /// RUN-5: a command string is read with the quoting a shell applies, so a quoted or escaped
+    /// name inside it stays one word, and an option's value, which may hold an `=` itself, is a name
+    /// too. The regressions it rejects: cutting the string at every quote, which turned
+    /// `'sub/run script.sh'` into `sub/run` and `script.sh`, and cutting an option's value at every
+    /// `=`, which never names `key=value run.sh`.
+    #[test]
+    fn a_quoted_name_in_a_command_string_names_the_file_it_runs() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/confine-held-quoted-names");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).expect("scratch root");
+        let root = root.canonicalize().expect("canonical");
+        std::fs::write(root.join("sub/run script.sh"), "").expect("script");
+        std::fs::write(root.join("sub/key=value run.sh"), "").expect("script");
+        std::fs::write(root.join("sub/runscript.sh"), "").expect("script");
+        let confined = Confinement::new(
+            Prelude::MacOs,
+            PathBuf::from("/tmp"),
+            Some(Path::new(HOME)),
+            vec![root.clone()],
+            None,
+        )
+        .with_network(Network::Closed);
+        let held_here = |step: Step| confined.holds(&[&step], &root);
+
+        for (program, args) in [
+            ("/bin/sh", vec!["-c", "'sub/run script.sh'"]),
+            ("/bin/sh", vec!["-c", "\"sub/run script.sh\" --flag"]),
+            ("/bin/sh", vec!["-c", "sub/run\\ script.sh"]),
+            ("/bin/sh", vec!["-c", "echo hi; 'sub/run script.sh'"]),
+            ("/bin/sh", vec!["-c", "true&&\"sub/run script.sh\""]),
+            ("/bin/sh", vec!["-c", "`'sub/run script.sh'`"]),
+            ("/bin/sh", vec!["-c", "sub/run\\\nscript.sh"]),
+            ("/bin/sh", vec!["-c", "\"sub/runscr\\\nipt.sh\""]),
+            (
+                "/usr/bin/node",
+                vec!["--require=sub/run script.sh", "-e", "1"],
+            ),
+            (
+                "/usr/bin/node",
+                vec!["--require='sub/run script.sh'", "-e", "1"],
+            ),
+            (
+                "/usr/bin/node",
+                vec!["--require=sub/key=value run.sh", "-e", "1"],
+            ),
+        ] {
+            assert_eq!(
+                held_here(step(program, &args)),
+                Containment::Unknown,
+                "{program} {args:?} ran a file the session could have written"
+            );
+        }
+        for (program, args) in [
+            ("/bin/sh", vec!["-c", "echo 'sub/run script.sh is a name'"]),
+            ("/bin/sh", vec!["-c", "'sub/run script.sh.bak'"]),
+            ("/bin/sh", vec!["-c", "\"sub/run\" 'script.sh'"]),
+        ] {
+            assert_eq!(
+                held_here(step(program, &args)),
+                Containment::Held,
+                "the control: {program} {args:?} names no file"
             );
         }
     }
