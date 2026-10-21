@@ -556,6 +556,15 @@ impl Task {
         self
     }
 
+    /// Whether a person typed this prompt: no delegate's task, nothing the driver composed or wrote.
+    ///
+    /// What decides whether a word of the prompt may name a skill kept from the planner
+    /// ([`crate::skills::Catalogue::named_in`]), so a kind of turn added later is held back by this
+    /// one question and not by whichever of its parts somebody remembers.
+    pub fn typed_by_a_person(&self) -> bool {
+        self.delegate.is_none() && self.composed.is_none() && !self.driver_wrote_the_prompt
+    }
+
     /// Say that this prompt was composed rather than typed, and what for.
     ///
     /// Only a caller that composed the prompt itself may say so, which is why this is a builder on

@@ -2,9 +2,11 @@
 //! of the MCP servers the session reached.
 //!
 //! Taking one writes `/name` into the line and nothing else: the line is still a prompt, sent as
-//! typed, and the planner is what loads the skill it names. A prompt of a server is a row of the
-//! same kind, and what makes the line run it is the turn that is sent, never the box (CMD-26).
-//! Taking one also writes the names of the arguments it cannot run without, so they are not typed.
+//! typed, and the planner is what loads the skill it names, except one its file keeps from the
+//! planner, which the turn supplies for the line that names it (SKILL-20). A prompt of a server is a
+//! row of the same kind, and what makes the line run it is the turn that is sent, never the box
+//! (CMD-26). Taking one also writes the names of the arguments it cannot run without, so they are
+//! not typed.
 
 use bravebot_agent::Workspace;
 use bravebot_agent::skills::Source;
@@ -40,6 +42,10 @@ pub struct Skill {
     /// What follows the name when it is typed, drawn after it as the line stands ready for it.
     pub argument_hint: Option<String>,
     pub source: Origin,
+    /// Whether the skill's file keeps it from the planner, so only the person's own `/name` loads it
+    /// (SKILL-20). Drawn on the row, since a person choosing a skill to name wants to know it is one
+    /// only they can.
+    pub person_only: bool,
 }
 
 impl Skill {
@@ -63,10 +69,11 @@ impl Skill {
     }
 }
 
-/// The skills a turn starting now would advertise, read the way the turn reads them.
+/// The skills a turn starting now would resolve, read the way the turn reads them.
 ///
 /// An untrusted project's skills are dropped here as they are there, and so is one `permissions`
-/// denies reading, so a name the planner would never be shown is never drawn either.
+/// denies reading, so a name the turn would refuse is never drawn. A skill its file keeps from the
+/// planner is drawn, marked, since the box is where a person finds the name to type (SKILL-20).
 pub fn resolved(workspace: &Workspace, trust: TrustStore, permissions: Permissions) -> Vec<Skill> {
     bravebot_agent::skills::offered(
         workspace,
@@ -81,6 +88,7 @@ pub fn resolved(workspace: &Workspace, trust: TrustStore, permissions: Permissio
         description: skill.description.clone(),
         argument_hint: skill.argument_hint.clone(),
         source: skill.source.into(),
+        person_only: skill.person_only,
     })
     .collect()
 }
@@ -125,6 +133,7 @@ pub fn from_servers(servers: Option<&bravebot_agent::mcp::Session>) -> Vec<Skill
                     .map(|argument| argument.name.clone())
                     .collect(),
             },
+            person_only: false,
         })
         .collect()
 }
@@ -228,6 +237,7 @@ mod tests {
             description: format!("what {name} is for"),
             argument_hint: None,
             source: Source::Home.into(),
+            person_only: false,
         }
     }
 
@@ -257,6 +267,44 @@ mod tests {
         assert_eq!(
             prompt("compare", &["before", "after"]).taken_as(),
             "/compare before= after="
+        );
+    }
+
+    /// The box offers the set a turn would resolve with the mark its file gave each skill, so the row
+    /// can say which ones only the person can have loaded (SKILL-20). A project's skill is there once
+    /// the project is vouched for.
+    #[test]
+    fn a_skill_kept_from_the_planner_is_offered_marked_beside_one_that_is_not() {
+        let project = tempfile::tempdir().expect("project");
+        for (name, extra) in [
+            ("ship-it", "disable-model-invocation: true\n"),
+            ("ship-notes", ""),
+        ] {
+            let at = project.path().join(".bravebot/skills").join(name);
+            std::fs::create_dir_all(&at).expect("skill directory");
+            std::fs::write(
+                at.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: d\n{extra}---\n\nbody\n"),
+            )
+            .expect("write skill");
+        }
+        let workspace = Workspace::new(project.path()).expect("workspace");
+        let mut trust = TrustStore::new(project.path());
+        trust.trust(".");
+
+        let offered = resolved(&workspace, trust, Permissions::new());
+
+        let marked = |name: &str| {
+            offered
+                .iter()
+                .find(|skill| skill.name == name)
+                .unwrap_or_else(|| panic!("{name} was not offered"))
+                .person_only
+        };
+        assert!(marked("ship-it"), "the mark was not carried to the box");
+        assert!(
+            !marked("ship-notes"),
+            "the mark was put on a skill that has none"
         );
     }
 

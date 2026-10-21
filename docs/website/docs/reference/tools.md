@@ -1068,7 +1068,9 @@ Reads one of the skills the planner was listed, or one `search_skills` found.
 
 The name selects from a set fixed before the turn started and **never becomes a path**: a name holding
 `../` matches nothing and the call is refused. A name close to a real one is refused rather than
-guessed at. See [Skills](../customize/skills.md).
+guessed at. A skill whose file says `disable-model-invocation: true` is not in the set, so asking for
+it is refused the same way; you load it by naming it in your own line. See
+[Skills](../customize/skills.md).
 
 Where the skill keeps other files beside its `SKILL.md`, the result ends with the skill's directory
 and their names. Once a skill of your own is loaded, [`read_file`](#read_file) can read those files

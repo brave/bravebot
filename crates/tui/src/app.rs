@@ -19815,6 +19815,7 @@ mod tests {
             description: format!("what {name} is for"),
             argument_hint: None,
             source: source.into(),
+            person_only: false,
         })
         .collect()
     }
@@ -19863,6 +19864,7 @@ mod tests {
                 description: "what pr-fix is for".to_string(),
                 argument_hint: None,
                 source: bravebot_agent::skills::Source::Home.into(),
+                person_only: false,
             }]
         };
         let mut session = Session::new("none");
@@ -19906,6 +19908,7 @@ mod tests {
                 description: "what pr-fix is for".to_string(),
                 argument_hint: None,
                 source: bravebot_agent::skills::Source::Home.into(),
+                person_only: false,
             }]
         };
         let mut session = Session::new("none");

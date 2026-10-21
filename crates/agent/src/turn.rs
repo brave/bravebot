@@ -1238,6 +1238,50 @@ fn adopt(
     said
 }
 
+/// What a turn's rounds are asked to run as, and the skill that moved them off the session's own
+/// choice, borrowed so a skill's request can change them.
+struct Running<'a> {
+    model: &'a mut Option<String>,
+    effort: &'a mut Option<Effort>,
+    /// The skill that last moved the turn onto its own model, and that model as its file wrote it, so
+    /// the answer can be compared with it at the end of the turn (SKILL-15).
+    switched_by: &'a mut Option<(String, String)>,
+}
+
+/// Apply what a skill's file asks the rounds after it to run as and say so, as [`adopt`] describes,
+/// and remember which skill moved the turn onto a model of its own.
+///
+/// Shared by a skill the planner loaded, which takes effect from the round after the call, and one
+/// the person named, which takes effect from the first (SKILL-20), so the notices and the record of
+/// the switch cannot differ between them. `skill` is the skill's name and its `RunsAs`.
+fn adopt_and_say<R: Reporter + ?Sized>(
+    reporter: &mut R,
+    notices: &mut Vec<crate::skills::Notice>,
+    running: Running<'_>,
+    config: &Config,
+    (skill, runs_as): (&str, &crate::skills::RunsAs),
+    pinned_by: Option<&str>,
+) {
+    let before = running.model.clone();
+    for said in adopt(
+        running.model,
+        running.effort,
+        config,
+        skill,
+        runs_as,
+        pinned_by,
+    ) {
+        reporter.notice(said.clone());
+        notices.push(crate::skills::Notice::from_message(said));
+    }
+    if *running.model != before {
+        *running.switched_by = runs_as
+            .model
+            .clone()
+            .map(|written| (skill.to_string(), written));
+    }
+}
+
 /// The path a precommitted routing entry holds, which is trusted by construction.
 fn routing_path<S: Sink>(policy: &Policy<'_, S>, key: &str) -> String {
     policy
@@ -1349,6 +1393,48 @@ fn admit_context_file<S: Sink>(
     }
 
     Ok(())
+}
+
+/// Put a skill the person named as `/name` in front of the planner, as a message after their line.
+///
+/// What a `load_skill` call would have answered with, since the planner was never offered the skill
+/// to call it for. The text is the skill's, shown or held back by the same gate as any other content
+/// and carrying the label it was read with, and the words around it are the driver's own.
+fn admit_named_skill<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    skill: &crate::skills::Skill,
+) -> Result<(), TurnError> {
+    // Recorded here for the reason a context file's is: the turn has seen it from this moment.
+    conversation.observed(policy.context_label());
+    let body = tools::opened_skill(policy, skill);
+    let slot = conversation.next_reference();
+    let presented = policy
+        .present(
+            "load_skill",
+            slot,
+            &skill.origin,
+            &body,
+            conversation.quarantine(),
+        )
+        .map_err(|d| TurnError::Precommit(d.to_string()))?;
+    match &presented {
+        Presentation::Visible(text) => {
+            policy.admit_named_skill(&skill.name, text.chars().count());
+            conversation.push_named_skill(
+                &skill.name,
+                text,
+                Provenance::TrustedFile(skill.origin.clone()),
+            );
+            Ok(())
+        }
+        // A skill reaches the catalogue only through the trusted-content gate, so the gate showing it
+        // is the one answer there is. Another would be a skill the person named that quietly did
+        // nothing, so the turn stops rather than goes on without it.
+        Presentation::Quarantined(_) => Err(TurnError::Precommit(
+            t!(turn_named_skill_not_shown, skill = skill.name.as_str()).to_string(),
+        )),
+    }
 }
 
 /// Whose words a presented result holds, for the view of the request: what the kernel let through
@@ -2891,6 +2977,16 @@ where
         (None, Ok((Some(addressed), _))) => addressed.skills(),
         (None, _) => None,
     };
+    // A skill its file keeps from the planner is supplied only where the person named it as /name in
+    // the line they typed. Matched against the names found above and never read as one: the line is
+    // the person's own prompt, so a delegate's task, a prompt the driver composed and a tool result
+    // name nothing. Taken before a definition's `skills` line narrows the set, because a person naming
+    // a skill is a request that line was not written to refuse. `load_skill` and the system prompt
+    // leave such a skill out whoever named it, so nothing past this point can offer it (SKILL-20).
+    let named_skills = match task.typed_by_a_person() {
+        true => catalogue.named_in(&task.prompt),
+        false => Vec::new(),
+    };
     let catalogue = match named {
         Some(named) => catalogue.only(named),
         None => catalogue,
@@ -3013,7 +3109,7 @@ where
 
     let setup::ModelForTheTurn {
         pinned_by,
-        turn_model,
+        mut turn_model,
         definition_model,
         on_the_plan_model,
     } = setup::model_for_the_turn(
@@ -3027,10 +3123,10 @@ where
     )?;
     // Beside the model and mutable for the same reason. The session's own until a skill names
     // one, and absence is every service keeping its own default.
-    let effort = task.effort;
+    let mut effort = task.effort;
     // The skill that last moved the turn onto its own model, and that model as its file wrote
     // it, so the answer can be compared with it at the end of the turn (SKILL-15).
-    let switched_by: Option<(String, String)> = None;
+    let mut switched_by: Option<(String, String)> = None;
 
     let told_mode = started_in;
     let memory = |keeps: bool, name: &str| match keeps && workspace.checkout().is_none() {
@@ -3253,6 +3349,31 @@ where
         }
         None if has_attachments => conversation.push_from(submitted, Provenance::TypedWithFiles),
         None => conversation.push_from(submitted, Provenance::Typed),
+    }
+
+    // The skills the person named, in front of the planner for this turn in place of a `load_skill`
+    // call it is never offered (SKILL-20). After the line that named them, so a cut that falls in
+    // front of the line takes them too, and before the opening is marked done, so a prompt handed
+    // back to the box takes them out with it.
+    for skill in &named_skills {
+        admit_named_skill(policy, conversation, skill)?;
+        let said = t!(skill_named_by_the_person, skill = skill.name.as_str()).to_string();
+        reporter.notice(said.clone());
+        notices.push(crate::skills::Notice::from_message(said));
+        // In force before the first request goes out, so its model and effort apply from the first
+        // round (SKILL-15).
+        adopt_and_say(
+            reporter,
+            &mut notices,
+            Running {
+                model: &mut turn_model,
+                effort: &mut effort,
+                switched_by: &mut switched_by,
+            },
+            config,
+            (&skill.name, &skill.runs_as),
+            pinned_by.as_deref(),
+        );
     }
 
     // A plain prompt can begin with an internal-note prefix that recounting omits.
@@ -4486,23 +4607,18 @@ where
             // Shown before the next round and kept in the turn's notices (SKILL-11),
             // because the switch decides what that round costs.
             if let Some((skill, runs_as)) = output.loaded.take() {
-                let before = state.turn_model.clone();
-                for said in adopt(
-                    &mut state.turn_model,
-                    &mut state.effort,
+                adopt_and_say(
+                    reporter,
+                    &mut state.notices,
+                    Running {
+                        model: &mut state.turn_model,
+                        effort: &mut state.effort,
+                        switched_by: &mut state.switched_by,
+                    },
                     config,
-                    &skill,
-                    &runs_as,
+                    (&skill, &runs_as),
                     pinned_by.as_deref(),
-                ) {
-                    reporter.notice(said.clone());
-                    state
-                        .notices
-                        .push(crate::skills::Notice::from_message(said));
-                }
-                if state.turn_model != before {
-                    state.switched_by = runs_as.model.map(|written| (skill, written));
-                }
+                );
             }
             // As with a context file: what the turn has seen belongs to the conversation the
             // moment it sees it, not once the turn happens to end well.
@@ -5183,6 +5299,72 @@ mod tests {
         .unwrap();
         config.advisor_model = setting.map(str::to_string);
         config
+    }
+
+    /// LOAD-5 and SKILL-20. Supplying a skill of the person's own that they named opens its directory
+    /// for reading as a load does, and names the files beside it in what the planner is given. The
+    /// directory is the driver's, found before the turn, so the reach is for that skill and no other.
+    #[cfg(unix)]
+    #[test]
+    fn supplying_a_named_skill_of_the_users_own_opens_its_directory_for_reading() {
+        let root = crate::testutil::scratch_dir("bravebot-turn-named-skill-reach");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("h");
+        for skill in ["notes", "other"] {
+            let at = home.join(".bravebot/skills").join(skill);
+            std::fs::create_dir_all(&at).unwrap();
+            std::fs::write(
+                at.join("SKILL.md"),
+                format!(
+                    "---\nname: {skill}\ndescription: d\ndisable-model-invocation: true\n---\n\nbody\n"
+                ),
+            )
+            .unwrap();
+            std::fs::write(at.join("reference.md"), "kept beside it\n").unwrap();
+        }
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_home(Some(home.clone()));
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let catalogue = crate::skills::resolved(
+            &workspace,
+            Some(&home.join(".bravebot")),
+            bravebot_core::trust::TrustStore::new("/work"),
+            bravebot_core::permissions::Permissions::default(),
+            &mut sink,
+        );
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "name a skill");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .unwrap();
+        let mut conversation = Conversation::new();
+
+        admit_named_skill(
+            &mut policy,
+            &mut conversation,
+            catalogue.get("notes").expect("found"),
+        )
+        .expect("supplied");
+
+        assert_eq!(
+            policy.loaded_skill_directories(),
+            [home.join(".bravebot/skills/notes")],
+            "the named skill's directory was not opened, or another one was"
+        );
+        let supplied = conversation.messages().last().expect("a message");
+        assert!(
+            supplied.message.content.text().contains("reference.md"),
+            "the files beside the skill were not named: {:?}",
+            supplied.message.content.text()
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// ADDRESS-8: a turn addressed to a definition arranges no later look and arms no watch, even

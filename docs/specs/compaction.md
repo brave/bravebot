@@ -435,6 +435,12 @@ was made from rather than from a copy of a copy.
 served newest first. The count is four bytes a token, because nothing here has a tokeniser. What is
 left out is said to the planner, with the call that reads the rest.
 
+**A skill the person named.** A skill its file keeps from the planner is put in front of the planner
+for the line that named it, with no call and no result ([SKILL-20](skills.md#SKILL-20)). It is found by
+its tag, as a loaded skill is, and sent again the same way, in its own words and without the driver's
+sentence that introduced it. Where it is cut, the planner is told only the person can have the rest
+loaded and is not told to call `load_skill`, which is refused for such a skill.
+
 **What it does not change.** The words around the skill are the driver's and the skill is the text
 the planner was already shown, so nothing enters the request that was not past the gate
 ([COMPACT-1](#COMPACT-1)). The quarantine, the counter and the integrity are untouched
@@ -469,6 +475,10 @@ following them once the result is replaced, and nothing tells it or the user.
 `verified-by: bravebot_ui_bridge::fork::a_fork_inside_the_archive_leaves_out_the_skills_a_compaction_sent_again`
 `verified-by: bravebot_agent::turn::a_skill_the_planner_was_shown_is_tagged_and_a_refused_load_is_not`
 `verified-by: bravebot_agent::turn::a_skill_loaded_in_a_turn_is_sent_again_when_that_conversation_is_compacted`
+`verified-by: bravebot_agent::conversation::a_skill_the_person_named_is_sent_again_word_for_word_after_a_cut`
+`verified-by: bravebot_agent::conversation::a_skill_the_person_named_survives_being_written_down_and_a_second_cut`
+`verified-by: bravebot_agent::conversation::the_cut_of_a_skill_says_who_can_read_the_rest`
+`verified-by: bravebot_agent::conversation::a_cut_never_falls_in_front_of_a_skill_the_person_named`
 
 <a id="COMPACT-18"></a>
 ### COMPACT-18: old tool results are dropped from the request before a summary is asked for

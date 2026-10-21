@@ -25,7 +25,14 @@ It is promoted the way a read path is, but is more confined than one: the name n
 path component, it only picks from a set the driver enumerated before the turn began. A name
 holding a traversal matches nothing, because there is no lookup for it to reach.
 
+A skill its file keeps from the planner is never selected by a call, whether or not the person named
+it in that turn: a turn whose prompt a person typed `/name` in supplies it without a call
+([SKILL-20](../skills.md#SKILL-20)), and a call for it is answered as for a name that matches
+nothing.
+
 `verified-by: bravebot_agent::turn::loading_a_skill_that_does_not_exist_is_refused_rather_than_guessed`
+`verified-by: bravebot_agent::turn::a_skill_kept_from_the_planner_is_unreachable_in_a_turn_that_does_not_name_it`
+`verified-by: bravebot_agent::turn::a_skill_the_person_named_cannot_also_be_loaded_by_the_planner`
 
 <a id="LOAD-2"></a>
 ### LOAD-2: a name close to a real one is refused, not guessed at
@@ -86,6 +93,9 @@ than from the trust map, which does not govern `~/.bravebot` ([TRUST-11](../trus
 Before the load, and for a skill nobody loaded, the same path is refused as any path outside the
 workspace is.
 
+A skill of the user's own that the person named is given the same reach when the turn supplies it
+([SKILL-20](../skills.md#SKILL-20)), so its files are named and read as they are after a load.
+
 The reach is for reading, in that directory. A write or an edit there is refused as before, a path
 that climbs out of the directory or lands outside it through a link is refused, and a setting that
 keeps the file tools inside the project ([PERM-16](../permissions.md#PERM-16)) is not widened by it.
@@ -103,3 +113,4 @@ gives its body.
 `verified-by: bravebot_agent::tools::a_link_from_a_loaded_skill_into_an_opened_directory_is_refused`
 `verified-by: bravebot_agent::tools::a_load_does_not_widen_a_session_kept_inside_its_project`
 `verified-by: bravebot_agent::tools::a_project_skill_lists_only_the_files_the_trust_map_vouches_for`
+`verified-by: bravebot_agent::turn::supplying_a_named_skill_of_the_users_own_opens_its_directory_for_reading`

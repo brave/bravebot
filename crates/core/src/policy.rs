@@ -395,8 +395,9 @@ pub struct Policy<'sink, S: Sink> {
     /// The directories of the user's own skills that this turn has loaded, spelled as the host
     /// names them.
     ///
-    /// Added only by [`Policy::reach_skill_directory`], one at a time as `load_skill` answers, so a
-    /// directory is here because a skill was loaded out of it this turn and for no other reason.
+    /// Added only by [`Policy::reach_skill_directory`], one at a time as `load_skill` answers or the
+    /// turn supplies a skill the person named, so a directory is here because a skill was loaded out
+    /// of it this turn and for no other reason.
     /// [`Policy::integrity_in_force`] reads it, and the workspace reads it to know where a read
     /// may land outside the project.
     skill_reach: Vec<std::path::PathBuf>,
@@ -1403,8 +1404,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Only for a directory under `~/.bravebot/skills`, which is trusted by provenance. It is never
     /// asked of a project's skill directory, which the trust map governs like any other file of the
-    /// project, and nothing a file or a planner said is the argument: the caller is `load_skill`,
-    /// naming a directory the driver found before the turn began.
+    /// project, and nothing a file or a planner said is the argument: the callers are `load_skill`
+    /// and the turn supplying a skill the person named, each naming a directory the driver found
+    /// before the turn began.
     pub fn reach_skill_directory(&mut self, directory: &std::path::Path) {
         self.allow(
             "provenance",
@@ -1415,6 +1417,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ),
         );
         self.skill_reach.push(directory.to_path_buf());
+    }
+
+    /// Record that a skill only the person may have loaded was named as `/name` in the line they
+    /// typed, and that its instructions were put in front of the planner for the turn.
+    ///
+    /// The trail holds the name the catalogue gave the skill and how many characters of its body
+    /// went, and none of the body. Nothing is routed by it: the skill was matched exactly against
+    /// the names the driver found before the turn, and the body reaches the planner through
+    /// [`Policy::present`] with the label it was read with.
+    ///
+    /// This must only ever be reached from the prompt of a turn a person typed. Never point it at a
+    /// name found in model output, in a file or in anything a tool read: those are content, and this
+    /// would launder them into a request for a skill.
+    pub fn admit_named_skill(&mut self, name: &str, characters: usize) {
+        self.allow(
+            "provenance",
+            format!(
+                "skill {name}, {characters} characters, named by the user as /{name} in the line \
+                 they typed; the planner was not offered it"
+            ),
+        );
     }
 
     /// The directories of the user's own skills loaded this turn, which a read may land in.

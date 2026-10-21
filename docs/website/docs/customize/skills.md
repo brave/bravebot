@@ -112,12 +112,57 @@ type.
 
 The line is still a prompt, sent as you typed it. The planner is told that a prompt naming a skill as
 `/name` is you asking for it, and it loads the skill with `load_skill` the way it loads any other, so
-a skill you named is loaded and recorded exactly as one it picked for itself.
+a skill you named is loaded and recorded exactly as one it picked for itself. A skill that only you
+can load, described [below](#a-skill-only-you-can-load), is the exception: the turn loads it for you.
 
-The list is the set the planner is offered and nothing more: a skill in a project you have not trusted
-is never listed, just as it is never shown to the planner. No skill is a slash command, so one whose
+The list is the set the planner is offered, plus any skill [only you can load](#a-skill-only-you-can-load):
+a skill in a project you have not trusted is never listed, just as it is never shown to the planner. No skill is a slash command, so one whose
 name a command already claims, such as `loop`, is not listed, and nothing is completed after a
 command's own word or in [shell mode](../using/shell-mode.md).
+
+## A skill only you can load
+
+A skill for a step with side effects, such as a release or a deploy, should run only when you ask
+for it. Add `disable-model-invocation: true` to its front matter:
+
+```yaml
+name: release
+description: Tag the release and publish it.
+disable-model-invocation: true
+```
+
+The planner is not told the skill exists. Neither its name nor its description is in the system
+prompt, and a `load_skill` call for it is refused as it is for a name that matches nothing, even in
+a turn where you named it. You load
+it by naming it in the line you type, as in `tag and publish /release`. The turn then hands the
+planner the skill's instructions after your line, with the names of the files beside it, and the
+planner makes no call. The `model` and `effort` the skill names apply from the first request. The
+session tells you the skill was loaded, since no tool call is drawn for it.
+
+Only a word of your own line that is `/release` names the skill, with any quotes, brackets or sentence
+punctuation around it, so `run /release.` and `run (/release)` work and `/Release`, `/releases` and
+`release` do not. A task a delegate was given, a line bravebot composed itself and text inside a file
+or a tool result never name one, and a delegate is never offered such a skill, even where its
+definition's `skills` line names it.
+
+`true`, in any case, keeps the skill from the planner, and `false` leaves it as it was. A trailing
+`# comment` is ignored. Any other value is read as `true` and the session tells you, because a
+misspelling that left a skill with side effects open to the planner would expose the skill the key
+was written to protect. The list after a slash still shows the skill, marked `(only you)`, since it
+is where you find the name to type.
+
+A name works under an addressed definition whatever its `skills` line lists, and in a line you pasted
+text into: the word is compared with the names, not read for what the sentence means. A name works in a
+line you send as a prompt. One typed while a turn is running is read as words by
+the planner and loads nothing, and a loop that names the skill supplies it again on every tick. For
+a skill in `~/.bravebot/skills`, the planner can read the files beside it only in the turn that named
+it, so a later turn that needs one asks you to name the skill again. A
+word `/release` anywhere in the line names the skill, including a line that says not to run it, so
+the instructions reach the planner with the words "Apply them as that line asks" and the session
+tells you the skill was loaded.
+
+If a long conversation is compacted after you named such a skill, the skill is sent again in its own
+words, and a skill too long to be sent whole says that only you can have the rest loaded again.
 
 ## Loading
 

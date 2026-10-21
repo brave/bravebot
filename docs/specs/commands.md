@@ -588,15 +588,20 @@ A slash word at the start of the line is offered the commands it could still bec
 them, the skills whose names start with it, including a word that is a command in full, since a
 longer skill name may extend it (`/pr` lists `pr-fix`). A slash word after other words is offered
 the skills alone, since there a command is a prompt (CMD-2). The skills are the ones a turn starting
-now would advertise to the planner, read the same way, and each row says when to use the skill and
-where it was found: the project, the person's own directory, or this program. They are read when a line
+now would advertise to the planner, read the same way, and those its file keeps from the planner,
+which no turn advertises and which the box lists because it is where a person finds the name to type
+([SKILL-20](skills.md#SKILL-20)). Each row says when to use the skill and where it was found: the
+project, the person's own directory, or this program, and a skill kept from the planner says that too.
+They are read when a line
 first holds a slash word and let go when it holds none (CMD-10 also needs the names of a finished
 word), so a skill written while the box sat idle is offered at the next line with a slash.
 
 Tab, or Enter on a half-typed name, replaces the word with `/name ` and nothing else; Enter on a
 name typed in full sends the line, unless the arrows moved onto another row first. Either way the line is a prompt, sent as it reads. The planner
 is told that a prompt naming a skill as `/name` is the person asking for it, and it loads that
-skill the way it loads any other. The arrows walk down the commands and on into the skills.
+skill the way it loads any other. A skill its file keeps from the planner is the exception: the turn
+supplies it for the line that names it and the planner makes no call ([SKILL-20](skills.md#SKILL-20)).
+The arrows walk down the commands and on into the skills.
 
 Nothing is offered in shell mode, while work runs (the commands alone are, CMD-8), or after the
 word of a command line, which is CMD-3 and CMD-5 holding for skills as they hold for commands. A
@@ -631,6 +636,8 @@ would read them on every letter.
 `verified-by: bravebot_agent::skills::the_set_an_interface_resolves_is_the_one_a_turn_would`
 `verified-by: bravebot_agent::skills::each_skill_records_which_of_the_three_places_it_came_from`
 `verified-by: bravebot_agent::preamble::a_turn_offered_skills_is_told_a_slash_name_is_the_user_asking_for_one`
+`verified-by: bravebot_tui::render::a_skill_row_says_when_only_the_person_can_have_it_loaded`
+`verified-by: bravebot_tui::skills::a_skill_kept_from_the_planner_is_offered_marked_beside_one_that_is_not`
 
 <a id="CMD-10"></a>
 ### CMD-10: a recognised slash word is drawn in its own colour, and shows what it takes

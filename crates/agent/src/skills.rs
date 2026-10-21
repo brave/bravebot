@@ -61,6 +61,11 @@ pub struct Frontmatter {
     /// The word rather than the level, so a word naming no level can be said back to whoever wrote
     /// it. [`runs_as`] is what turns one into a level.
     pub effort: Option<String>,
+    /// What `disable-model-invocation` said, as the file wrote it, or nothing where it said none.
+    ///
+    /// The word rather than a flag, so a value that is neither `true` nor `false` can be said back
+    /// to whoever wrote it. [`keeps_from_the_planner`] is what turns one into an answer.
+    pub disable_model_invocation: Option<String>,
     /// Every key this does not read, in the order a sorted block declares them.
     ///
     /// Carried out rather than dropped: a key nothing reads is a line whose author believes it is
@@ -69,7 +74,14 @@ pub struct Frontmatter {
 }
 
 /// Every key [`parse_frontmatter`] reads. Anything else is carried out on [`Frontmatter::unread`].
-const READ: [&str; 5] = ["name", "description", "argument-hint", "model", "effort"];
+const READ: [&str; 6] = [
+    "name",
+    "description",
+    "argument-hint",
+    "model",
+    "effort",
+    "disable-model-invocation",
+];
 
 /// How a skill asks the rounds that follow it to run.
 ///
@@ -125,6 +137,7 @@ pub fn parse_frontmatter(text: &str) -> Option<Frontmatter> {
         model: declared_word(&declared, "model")
             .filter(|model| !model.eq_ignore_ascii_case("inherit")),
         effort: declared_word(&declared, "effort"),
+        disable_model_invocation: declared_word(&declared, "disable-model-invocation"),
         unread: declared
             .keys()
             .filter(|key| !READ.contains(&key.as_str()))
@@ -176,6 +189,42 @@ fn runs_as(front: &Frontmatter, origin: &str, notices: &mut Vec<Notice>) -> Runs
     RunsAs {
         model: front.model.clone(),
         effort,
+    }
+}
+
+/// Whether a skill is left out of what the planner is told and loads only when the person names it.
+///
+/// `disable-model-invocation: true` says so and `false` says it is not, in any case, quoted or not,
+/// with a trailing `# comment` ignored as a YAML file would ignore it and a value that is only a
+/// comment read as blank. A word that is neither is read as `true` and said back. The key exists to
+/// keep a skill with side effects from being chosen by a model, so a misspelt value that left the
+/// skill advertised would expose the skill the key was written to protect, and the person can still
+/// name it. The notice names the file and the word it wrote, which are safe to print for the reason
+/// [`runs_as`]'s are.
+fn keeps_from_the_planner(front: &Frontmatter, origin: &str, notices: &mut Vec<Notice>) -> bool {
+    let Some(written) = front.disable_model_invocation.as_deref() else {
+        return false;
+    };
+    // A comment is a `#` that opens the value or follows whitespace, so a `#` inside a word is left
+    // alone.
+    let comment = written
+        .char_indices()
+        .find(|&(at, c)| c == '#' && (at == 0 || written[..at].ends_with(char::is_whitespace)));
+    let value = comment.map_or(written, |(at, _)| &written[..at]).trim();
+    if value.is_empty() {
+        return false;
+    }
+    match unquoted(value) {
+        word if word.eq_ignore_ascii_case("true") => true,
+        word if word.eq_ignore_ascii_case("false") => false,
+        _ => {
+            notices.push(Notice::new(t!(
+                skill_person_only_not_a_boolean,
+                skill = origin,
+                value = written
+            )));
+            true
+        }
     }
 }
 
@@ -364,6 +413,10 @@ pub struct Skill {
     pub runs_as: RunsAs,
     /// The keys its file declared that nothing here reads, for a report a person asks for.
     pub unread: Vec<String>,
+    /// Whether the planner is kept from it: neither its name nor its description is advertised, and
+    /// it is loaded only for a turn whose line the person typed `/name` in (SKILL-20). An interface
+    /// listing skills still draws it, saying so.
+    pub person_only: bool,
     /// Where the skill's directory is named to the planner, as `load_skill` says it and a read
     /// spells it, for a skill that has one. A built-in is not a file and has none.
     pub directory: Option<String>,
@@ -607,7 +660,7 @@ impl Catalogue {
         }
         self.entries
             .iter()
-            .filter(|skill| skill.source != Source::BuiltIn)
+            .filter(|skill| skill.source != Source::BuiltIn && !skill.person_only)
             .map(|skill| skill.name.as_str())
             .collect()
     }
@@ -646,6 +699,61 @@ impl Catalogue {
         }
     }
 
+    /// The person-only skills a line the person typed names as `/name`, in the order they were found.
+    ///
+    /// `load_skill` refuses a person-only skill whether or not the person named it, so what this
+    /// selects is supplied by the driver and never loaded by a call (SKILL-20).
+    ///
+    /// A word of the line is matched exactly, slash included, against the names found before the turn
+    /// (LOAD-2), after the quotes, brackets and sentence punctuation around it are taken off, so
+    /// `/name.`, `(/name)` and `` `/name` `` name the skill and `/Name`, `/nam`, `/names` and `name` do
+    /// not. A name holding a space can never be named. What the line holds is compared with names the
+    /// driver enumerated and is never read as one, so no file or tool result decides which skill is
+    /// supplied: the caller passes the person's own line and nothing else
+    /// ([`crate::turn::Task::typed_by_a_person`] says which lines those are).
+    pub fn named_in(&self, line: &str) -> Vec<Skill> {
+        const BEFORE: &[char] = &[
+            '(', '[', '{', '<', '"', '\'', '`', '\u{201c}', '\u{2018}', '\u{ab}',
+        ];
+        const AFTER: &[char] = &[
+            ')', ']', '}', '>', '"', '\'', '`', '.', ',', ';', ':', '!', '?', '\u{201d}',
+            '\u{2019}', '\u{bb}', '\u{2026}',
+        ];
+        // Each word once as written and once without its surroundings, so a name that itself ends in
+        // punctuation is still named as it is spelt.
+        let words: Vec<[&str; 2]> = line
+            .split_whitespace()
+            .map(|word| {
+                [
+                    word,
+                    word.trim_start_matches(BEFORE).trim_end_matches(AFTER),
+                ]
+            })
+            .collect();
+        self.entries
+            .iter()
+            .filter(|skill| skill.person_only)
+            .filter(|skill| {
+                let needle = format!("/{}", skill.name);
+                words.iter().any(|word| word.contains(&needle.as_str()))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The skills the planner may be given a name and description of, listed or found: every one
+    /// but those kept from the planner. The one place that says which they are, so the lists and
+    /// `search_skills` cannot disagree.
+    fn offered(&self) -> impl Iterator<Item = &Skill> {
+        self.entries.iter().filter(|skill| !skill.person_only)
+    }
+
+    /// Whether any skill is offered to the planner, listed or found with `search_skills`, which is
+    /// what decides whether the system prompt has a section for skills at all.
+    pub fn advertises_any(&self) -> bool {
+        self.offered().next().is_some()
+    }
+
     /// The lines that go in the system prompt: name and when to use it, one per skill.
     ///
     /// Never the body. By default only a built-in is listed: a skill of the user's own or the
@@ -656,12 +764,14 @@ impl Catalogue {
     /// [SKILL-18](SKILL-18) exists to get to, and holding it back to built-ins would make a
     /// person wait on `search_skills` to find what their own definition already named.
     ///
+    /// Never a person-only skill either, whose name and description are not the planner's to choose
+    /// from.
+    ///
     /// A description is never cut; [SKILL-18](SKILL-18) says what happens where one is long.
     pub fn describe_for_prompt(&self) -> String {
         let mut out = String::new();
         for skill in self
-            .entries
-            .iter()
+            .offered()
             .filter(|skill| self.curated || skill.source == Source::BuiltIn)
         {
             out.push_str(&prompt_line(&skill.name, &skill.description));
@@ -697,8 +807,7 @@ impl Catalogue {
             return (Vec::new(), 0);
         }
         let matched: Vec<&Skill> = self
-            .entries
-            .iter()
+            .offered()
             .filter(|skill| {
                 let haystack = format!("{} {}", skill.name, skill.description).to_lowercase();
                 words.iter().all(|word| haystack.contains(word.as_str()))
@@ -780,6 +889,8 @@ fn built_in_skill(name: &str, description: &str, body: &str) -> Skill {
         // an effort and no key nothing reads: it runs as the session does.
         runs_as: RunsAs::default(),
         unread: Vec::new(),
+        // Written into this program, so nothing in a file asked for it to be kept from anybody.
+        person_only: false,
     }
 }
 
@@ -940,9 +1051,11 @@ fn discover_listing<S: Sink>(
 /// The set a turn starting now would resolve, for an interface offering the names as they are typed.
 ///
 /// Read the way a turn reads it, through a policy holding only the read, so what the box offers is
-/// what the planner would be advertised: the same gate, the same trust map, the same rules, the same
-/// shadowing. An untrusted project's skills are dropped here exactly as they are there, and so is a
-/// skill `permissions` denies reading, so no name the turn would refuse is ever drawn.
+/// what the planner would be offered: the same gate, the same trust map, the same rules, the same
+/// shadowing. A skill its file keeps from the planner is in the set too and says so, since the box
+/// is where a person finds the name to type (SKILL-20). An untrusted project's skills are dropped
+/// here exactly as they are there, and so is a skill `permissions` denies reading, so no name the
+/// turn would refuse is ever drawn.
 pub fn resolved<S: Sink>(
     workspace: &Workspace,
     home: Option<&Path>,
@@ -1039,6 +1152,7 @@ fn discover_home<S: Sink>(
                     body_after_frontmatter(&whole).to_string()
                 });
                 let runs_as = runs_as(&front, &origin, notices);
+                let person_only = keeps_from_the_planner(&front, &origin, notices);
                 let directory = root.join(&name);
                 // Trusted by provenance like the file beside them (SKILL-3), so only a deny rule
                 // keeps one off the list.
@@ -1062,6 +1176,7 @@ fn discover_home<S: Sink>(
                     source: Source::Home,
                     runs_as,
                     unread: front.unread,
+                    person_only,
                 });
             }
             None => notices.push(Notice::new(format!(
@@ -1277,6 +1392,7 @@ fn discover_workspace_root<S: Sink>(
                     body_after_frontmatter(&whole).to_string()
                 });
                 let runs_as = runs_as(&front, &relative, notices);
+                let person_only = keeps_from_the_planner(&front, &relative, notices);
                 let directory = format!("{skills_root}/{name}");
                 // A file name is content, so each is asked of the rules and of the trust map as the
                 // file itself would be before it is named (SKILL-4).
@@ -1300,6 +1416,7 @@ fn discover_workspace_root<S: Sink>(
                     source: Source::Workspace,
                     runs_as,
                     unread: front.unread,
+                    person_only,
                 });
             }
             None => notices.push(Notice::new(format!(
@@ -1482,6 +1599,7 @@ mod tests {
                 argument_hint: Some("[x]".to_string()),
                 model: None,
                 effort: None,
+                disable_model_invocation: None,
                 unread: vec!["license".to_string()],
             })
         );
@@ -1670,6 +1788,7 @@ mod tests {
             source: Source::Home,
             runs_as: RunsAs::default(),
             unread: Vec::new(),
+            person_only: false,
             body: Labelled::trusted("sign them".to_string()),
         });
 

@@ -927,31 +927,49 @@ fn narrowed(origin: &str, narrowing: &Narrowing) -> String {
     )
 }
 
-/// What to tell whoever wrote a definition naming a skill this turn did not find.
+/// What to tell whoever wrote a definition naming a skill this turn did not find, or one its file
+/// keeps from the planner.
 ///
 /// Such a name selects nothing, as a `tools:` name that is not a tool does, and silence would
-/// leave a misspelt one reading to its author as a skill the delegate is offered. Named, because
-/// the name is the definition's own words and the definition came from a source somebody vouched
-/// for.
+/// leave a misspelt one reading to its author as a skill the delegate is offered. A skill kept from
+/// the planner is found and is still offered to no delegate, whose planner is the one it is kept
+/// from (SKILL-20), so it is said too: a definition naming one would otherwise read as having it.
+/// Named, because the name is the definition's own words and the definition came from a source
+/// somebody vouched for.
 pub fn skills_not_found(definitions: &Definitions, skills: &Catalogue) -> Vec<Notice> {
     definitions
         .iter()
-        .filter_map(|definition| {
+        .flat_map(|definition| {
             let mut missing: Vec<&str> = Vec::new();
-            for name in definition.skills()? {
-                if skills.get(name).is_none() && !missing.contains(&name.as_str()) {
-                    missing.push(name);
+            let mut kept: Vec<&str> = Vec::new();
+            for name in definition.skills().into_iter().flatten() {
+                let listed = match skills.get(name) {
+                    None => &mut missing,
+                    Some(skill) if skill.person_only => &mut kept,
+                    Some(_) => continue,
+                };
+                if !listed.contains(&name.as_str()) {
+                    listed.push(name);
                 }
             }
-            if missing.is_empty() {
-                return None;
+            let mut said = Vec::new();
+            if !missing.is_empty() {
+                said.push(Notice::from_message(t!(
+                    delegate_skills_not_found,
+                    definition = definition.origin(),
+                    count = missing.len(),
+                    skills = missing.join(", ")
+                )));
             }
-            Some(Notice::from_message(t!(
-                delegate_skills_not_found,
-                definition = definition.origin(),
-                count = missing.len(),
-                skills = missing.join(", ")
-            )))
+            if !kept.is_empty() {
+                said.push(Notice::from_message(t!(
+                    delegate_skills_kept_from_the_planner,
+                    definition = definition.origin(),
+                    count = kept.len(),
+                    skills = kept.join(", ")
+                )));
+            }
+            said
         })
         .collect()
 }

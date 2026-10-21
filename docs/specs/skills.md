@@ -27,9 +27,10 @@ Which files are looked for, where, and in what order is a separate question, and
 Both keys are required, and a file missing either is skipped with a note saying so. A key nothing
 here reads stops nothing, so a skill written for another agent works here, and
 [SKILL-16](#SKILL-16) says where such a key is reported rather than left a silent no-op.
-[SKILL-15](#SKILL-15) is the two keys read for how the skill runs. `argument-hint` is read too: an
-interface draws it after the skill's name to say what the skill takes ([commands.md](commands.md)),
-and it is never given to the planner. A file with no frontmatter is not a skill.
+[SKILL-15](#SKILL-15) is the two keys read for how the skill runs, and [SKILL-20](#SKILL-20) is the
+key that keeps a skill from the planner. `argument-hint` is read too: an interface draws it after the
+skill's name to say what the skill takes ([commands.md](commands.md)), and it is never given to the
+planner. A file with no frontmatter is not a skill.
 
 ```markdown
 ---
@@ -55,7 +56,8 @@ Write the subject in the imperative. Explain why in the body, never what.
 Whether a skill is listed in the prompt or found with `search_skills` ([SKILL-18](#SKILL-18)),
 what reaches the planner before `load_skill` is the name and the description, never the body. The
 description is what the planner decides from, so it should say *when* to use the skill rather
-than what it contains.
+than what it contains. A skill kept from the planner ([SKILL-20](#SKILL-20)) is the one exception: of
+that skill not even the name and description reach the planner.
 
 **Why.** A directory of long skills would otherwise crowd out the task.
 
@@ -284,6 +286,11 @@ the one it shadowed was.
 The list draws names, descriptions and argument hints and loads no skill, so it does not list the
 files beside each skill. Everything else it reads is what a turn reads.
 
+A skill kept from the planner ([SKILL-20](#SKILL-20)) is in the list although no turn advertises it,
+and records that it is, so the list can say that only the person can have it loaded. It is the one
+skill the list holds that a turn's planner is not told of, and the list is how a person finds the name
+to type.
+
 **Why.** A list that found skills its own way would sooner or later name one the planner is never
 shown, and a skill in a project nobody trusts is exactly the one [SKILL-6](#SKILL-6) counts rather
 than names. Where it was found is what lets a person tell a skill of their own from one a checkout
@@ -294,6 +301,7 @@ would make the list lag behind the keys.
 `verified-by: bravebot_agent::skills::the_set_the_box_offers_is_the_turns_without_the_files_beside_each_skill`
 `verified-by: bravebot_agent::skills::each_skill_records_which_of_the_three_places_it_came_from`
 `verified-by: bravebot_agent::skills::a_skill_a_deny_rule_covers_is_offered_nowhere_through_a_link_to_it`
+`verified-by: bravebot_agent::skills::the_set_an_interface_resolves_still_holds_a_skill_kept_from_the_planner`
 
 <a id="SKILL-15"></a>
 ### SKILL-15: a skill may name the model its rounds are asked of and the effort they carry
@@ -351,6 +359,8 @@ unless its own definition names one.
 
 An `effort` naming none of the five levels, and a `model` needing a sign-in this machine has not
 made, are each said and the skill is offered anyway, on whatever the session was already running.
+The same holds for a word [SKILL-20](#SKILL-20) cannot read, except that the skill is then kept from
+the planner rather than offered to it.
 The notice names the file and the value as the file wrote it, both of which are the words of a source
 somebody vouched for.
 
@@ -376,7 +386,7 @@ is read.
 `verified-by: bravebot_cli::running::doctor_names_a_projects_unread_key_only_where_the_directory_is_trusted`
 `verified-by: bravebot_agent::turn::a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so`
 
-<a id="SKILL-18"></a>
+<a id="SKILL-20"></a>
 ### SKILL-18: a skill of the user's own is found with `search_skills`, not listed by default
 
 Only a built-in ([SKILL-12](#SKILL-12)) is in the prompt's listing by default. A skill of the
@@ -384,8 +394,9 @@ user's own or the project's is not, however many there are: it is found by calli
 [`search_skills`](tools/search-skills.md) with a word or phrase, which matches it by name or
 description against the whole catalogue, built-ins included, and returns each match in full. A
 skill `search_skills` finds is loaded by `load_skill` the same way a listed one is
-([LOAD-1](tools/load-skill.md#LOAD-1)): nothing is removed from the set `load_skill` selects from,
-so a skill search finds is never a skill `load_skill` then refuses.
+([LOAD-1](tools/load-skill.md#LOAD-1)): a skill search finds is never a skill `load_skill` then
+refuses. A skill kept from the planner ([SKILL-20](#SKILL-20)) is neither found nor loaded by a
+call.
 
 A definition's own `skills:` line ([ADDRESS-1](addressing-a-definition.md#ADDRESS-1),
 [DELEGATE-23](delegation.md#DELEGATE-23)) is the one exception: naming skills there already makes
@@ -445,7 +456,109 @@ full listing would cost on every turn of it.
 `verified-by: bravebot_agent::turn::a_skill_written_in_after_an_empty_first_turn_is_still_named_on_the_next`
 `verified-by: bravebot_agent::turn::the_skills_overview_survives_a_prompt_handed_back_to_the_box`
 
+<a id="SKILL-20"></a>
+### SKILL-20: `disable-model-invocation: true` keeps a skill from the planner, and a person's `/name` loads it
+
+`disable-model-invocation` is read as a sixth key. `true`, in any case, keeps the skill from the
+planner; `false`, a blank value and no key leave the skill as it was. A trailing `# comment` is not
+part of the value. A word that is neither is read as `true` and said back, naming the file and the
+word as it wrote it, per [SKILL-16](#SKILL-16): the key exists to keep a skill with side effects from
+being chosen by a model, so a misspelling that left the skill advertised would expose the skill the
+key was written to protect, and the person can still name it.
+
+**Not advertised.** Neither the name nor the description of such a skill is in the system prompt, and
+the prompt has no section for skills where the catalogue holds no other. `doctor` does not report the
+key as one nothing reads.
+
+**Loaded by the person.** A turn whose prompt a person typed names a skill kept from the planner when
+a word of that prompt is `/name`, once the quotes, brackets and sentence punctuation around it are
+taken off, matched exactly against the names found before the turn
+([LOAD-2](tools/load-skill.md#LOAD-2)): `/name.` and `(/name)` name the skill, and `/Name`, a prefix,
+a longer name and the bare name select nothing.
+The driver then puts the skill's instructions in front of the planner as a message after the line
+that named it, shown through `Policy::present` with the label they were read with, and no
+`load_skill` call is made. The result carries the files beside the skill and the reach into its
+directory that `load_skill`'s does ([LOAD-4](tools/load-skill.md#LOAD-4),
+[LOAD-5](tools/load-skill.md#LOAD-5)). The skill's `model` and `effort` apply from the first round,
+since it is in force before the first request goes out ([SKILL-15](#SKILL-15)), and a model an
+addressed definition named stays in force as it does for a skill the planner loads. The trail records the
+skill by name with the size of what went, and the person is told it was loaded, since no tool call is
+drawn for it ([SKILL-11](#SKILL-11)).
+
+**Under a definition.** An addressed definition's `skills` line limits what its planner may load. It
+does not stop a skill the person names in their own line, which is supplied as in any other turn.
+
+**Refused always.** `load_skill` selects from the set a turn found and never selects a skill kept
+from the planner, whether or not the person named it in that turn: the instructions were supplied for
+the line, so a call is answered as for a name that matches nothing and says nothing about a skill the
+planner was never told of. A delegate is offered none. The prompt of a delegate's task, a prompt the
+driver composed and a name inside a file or a tool result name nothing. The line is the person's own
+prompt and the names are the driver's, so nothing a file or a tool said decides what is supplied.
+
+**Why.** A skill for a step with side effects, such as a release or a deploy, should run only when a
+person asks. The planner chooses from the descriptions it is shown, and a `/name` in a prompt is
+words the planner may honour or not ([CMD-9](commands.md#CMD-9)), so neither keeps a skill to the
+person. The driver compares the person's typed word with names it found before the turn, as it
+compares an `@` mention, and does not branch on untrusted content. A description of a skill the
+planner should never choose is also context spent on it every turn. Other coding agents document the
+same key under the same name.
+
+**What it does not do.** The costs of this design are listed under Known costs: a line typed while a
+turn runs, the files beside a skill in a later turn, a loop's repeated line, a name inside a line that
+says not to run it, and a name that cannot be typed. A definition's
+`skills` line that names such a skill offers it to no delegate, and says so when the session starts.
+
+`verified-by: bravebot_agent::skills::only_a_true_value_keeps_a_skill_from_the_planner`
+`verified-by: bravebot_agent::skills::a_value_that_is_neither_true_nor_false_keeps_the_skill_from_the_planner_and_is_reported`
+`verified-by: bravebot_agent::skills::the_key_is_read_and_not_carried_out_as_unread`
+`verified-by: bravebot_cli::running::doctor_says_nothing_of_a_skill_with_every_key_read_or_one_a_turn_drops`
+`verified-by: bravebot_agent::skills::a_skill_kept_from_the_planner_is_left_out_of_what_the_prompt_advertises`
+`verified-by: bravebot_agent::skills::a_catalogue_of_kept_skills_alone_advertises_nothing`
+`verified-by: bravebot_agent::preamble::a_catalogue_holding_only_a_skill_kept_from_the_planner_has_no_section_of_skills`
+`verified-by: bravebot_agent::skills::a_line_names_a_kept_skill_only_by_its_whole_name_after_a_slash`
+`verified-by: bravebot_agent::skills::a_trailing_comment_is_not_part_of_the_value`
+`verified-by: bravebot_agent::turn::a_skill_the_person_named_cannot_also_be_loaded_by_the_planner`
+`verified-by: bravebot_agent::turn::every_skill_a_line_names_is_supplied_and_no_other`
+`verified-by: bravebot_agent::turn::a_skill_the_person_names_is_supplied_under_a_definition_that_does_not_list_it`
+`verified-by: bravebot_agent::agents::a_definition_naming_a_skill_kept_from_the_planner_is_told_it_is_offered_none`
+`verified-by: bravebot_agent::turn::a_skill_the_person_names_is_supplied_to_the_planner_without_a_load_call`
+`verified-by: bravebot_agent::turn::a_skill_the_person_names_asks_its_model_and_effort_from_the_first_round`
+`verified-by: bravebot_agent::turn::a_skill_kept_from_the_planner_is_unreachable_in_a_turn_that_does_not_name_it`
+`verified-by: bravebot_agent::turn::text_the_person_did_not_type_names_no_skill`
+`verified-by: bravebot_agent::turn::a_delegate_is_given_no_skill_that_is_kept_from_the_planner`
+`verified-by: bravebot_agent::turn::supplying_a_named_skill_of_the_users_own_opens_its_directory_for_reading`
+`verified-by: bravebot_agent::conversation::a_skill_the_person_named_is_sent_again_word_for_word_after_a_cut`
+`verified-by: bravebot_agent::conversation::the_cut_of_a_skill_says_who_can_read_the_rest`
+`verified-by: bravebot_agent::conversation::a_cut_never_falls_in_front_of_a_skill_the_person_named`
+
 ## Known costs
+
+- **A skill kept from the planner is supplied only for a line the person sent as a prompt.** A
+  `/name` typed while a turn runs is an interjection, which reaches the planner as words and brings
+  no skill ([SKILL-20](#SKILL-20)). The planner may call `load_skill` for it and be refused, and the
+  person sends the name in a line of their own once the turn ends. Supplying a skill in the middle of
+  a turn would have to apply its model and effort to rounds already planned.
+
+- **The files beside a skill of the person's own are readable for the turn that named it.** The
+  reach into the directory belongs to the turn ([LOAD-5](tools/load-skill.md#LOAD-5)), and
+  `load_skill` cannot be called to open it again for a skill kept from the planner. A later turn that
+  needs a file beside it asks the person to name the skill again. A project's skill has no such limit,
+  since the trust map decides each of its files.
+
+- **A kept skill whose name holds a space or a control character is never loaded.** No word of a
+  line can equal such a name, so the key leaves the skill with nobody able to load it, and the box
+  does not offer it either ([CMD-9](commands.md#CMD-9)).
+
+- **Each turn that names the skill supplies it again.** A loop resends the line the person typed, so
+  one that names a skill carries a copy of its instructions for every tick until a compaction sends
+  the newest alone ([COMPACT-17](compaction.md#COMPACT-17)).
+
+- **A `/name` anywhere in the line names the skill, including a line that says not to run it and
+  text the person pasted into it.** The driver compares words with names and reads no sentence, since
+  reading what the line means is the judgment it does not make, and a pasted word is not told apart
+  from a typed one. The instructions are introduced with "Apply them as that line asks",
+  and the person is told the skill was loaded, so the planner can follow a line that refuses it and
+  the person sees what happened.
 
 - **A skill downloaded into `~/.bravebot/skills` is trusted exactly as far as a config file the
   user pasted is.** The name, the description and the body all go to the model as instructions.

@@ -37,7 +37,9 @@ simply add a word to than one it has to escape or quote.
 ### FINDSKILL-2: the search runs over every skill the turn found, not only the ones listed
 
 A built-in, a skill of the user's own and a project's own are all searched, whether or not
-[SKILL-18](../skills.md#SKILL-18) lists any of them by default. Every entry here already passed
+[SKILL-18](../skills.md#SKILL-18) lists any of them by default. A skill kept from the planner
+([SKILL-20](../skills.md#SKILL-20)) is the one exception: it matches no query, so its name and
+description reach the planner by no route. Every entry here already passed
 the trust gate [SKILL-5](../skills.md#SKILL-5) requires before the catalogue held it, so matching
 one reads no untrusted content and nothing a directory wrote decides what matches: only the
 length and the position of a word the planner typed against a name and a description the trust
@@ -50,6 +52,7 @@ from the prompt.
 
 `verified-by: bravebot_agent::turn::a_skill_body_stays_out_of_the_context_until_search_finds_it_and_load_skill_is_asked`
 `verified-by: bravebot_agent::skills::a_curated_catalogues_search_does_not_reach_a_skill_outside_its_list`
+`verified-by: bravebot_agent::skills::a_skill_kept_from_the_planner_is_left_out_of_what_the_prompt_advertises`
 
 <a id="FINDSKILL-3"></a>
 ### FINDSKILL-3: a match's description is returned in full, never cut
