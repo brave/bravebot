@@ -811,6 +811,7 @@ permission-rule-empty = is empty
 permission-rule-unclosed-bracket = is missing its closing bracket
 permission-rule-unknown-family = names no family of tools this agent has; use Read, Edit, Bash, WebFetch or Mcp
 permission-rule-empty-brackets = has empty brackets; drop them to mean every use
+permission-rule-whitespace-at-an-end = has whitespace at the start or end of its path, which would be part of a file's name; remove it, or use a * in its place, which also covers other names
 permission-rule-unanchored = needs a home directory or a settings directory to say where it points
 permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:example.com)
 permission-rule-no-domain-named = names no domain after 'domain:'
