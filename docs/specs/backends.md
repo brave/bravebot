@@ -2360,6 +2360,8 @@ request back in its error body is quoted without the header.
 `verified-by: bravebot_aichat::lib::a_google_vertex_request_carries_its_key_in_x_goog_api_key_and_no_authorization_header`
 `verified-by: bravebot_aichat::lib::another_gateway_still_sends_its_token_as_a_bearer`
 `verified-by: bravebot_aichat::client::a_refused_google_vertex_request_does_not_repeat_the_key`
+`verified-by: bravebot_aichat::client::a_vertex_key_is_in_no_error_and_no_recorded_event_on_either_path_for_any_refusal`
+`verified-by: bravebot_aichat::client::a_refused_google_vertex_request_does_not_repeat_the_key`
 `verified-by: bravebot_config::provider::a_google_vertex_key_is_sent_in_its_own_header`
 
 <a id="BACKEND-52"></a>
