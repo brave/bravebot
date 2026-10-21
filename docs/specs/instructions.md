@@ -315,12 +315,14 @@ it is the planner's.
 `verified-by: bravebot_agent::turn::the_road_for_a_github_url_goes_out_with_the_fact_it_rests_on`
 
 <a id="INSTR-10"></a>
-### INSTR-10: words from the command line are the last standing source, and a replacement reaches the opening alone
+### INSTR-10: words from the command line have the last word on precedence, and a replacement reaches the opening alone
 
 `--append-system-prompt` ([CLI-19](cli.md#CLI-19)) adds its words to the standing instructions under
 the heading "From the command line", after the project's instructions, so the order of INSTR-4
-continues one place further and the words have the last word. They are trimmed, and they are in the
-text a delegate reads as well as the one a person's turn does.
+continues one place further and the words have the last word on precedence. A rule file a touched
+file brings in is appended after them ([INSTR-16](#INSTR-16)), so it comes later in the prompt and
+the words stand where it disagrees. They are trimmed, and they are in the text a delegate reads as
+well as the one a person's turn does.
 
 `--system-prompt` replaces the opening of the system prompt, which is the paragraph saying what kind
 of assistant this is, and leaves the rest of the prompt as it is: the instructions for reading a
@@ -338,7 +340,7 @@ workspace may be added to them. This is also why a file's bytes passed in with
 about the file.
 
 **Why.** A standing instruction a person wants for one run should not have to be written into a file
-in the project first. Last place is the most specific source, as INSTR-4 orders them. Only the
+in the project first. Last place among the sources INSTR-4 orders is the most specific. Only the
 opening is replaceable because what follows it is what the other clauses rely on.
 
 `verified-by: bravebot_agent::preamble::words_from_the_command_line_follow_the_projects_file_in_what_a_delegate_reads`

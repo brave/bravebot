@@ -634,7 +634,9 @@ struct Touched {
 }
 
 impl Touched {
-    /// Keep `relative` as a file, unless the record is full or has it.
+    /// Keep `relative` as a file, unless the record is full or has it. A full record drops the new
+    /// name and keeps the old ones: a caller that has compared the first `n` files asks for those
+    /// from the `n`th on ([`Workspace::touched_files_from`]), and removing one would shift them.
     fn insert_file(&mut self, relative: String) {
         if self.files.len() < TOUCHED_FILES_LIMIT && self.file_names.insert(relative.clone()) {
             self.files.push(relative);
