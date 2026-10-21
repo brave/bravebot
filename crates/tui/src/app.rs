@@ -13518,6 +13518,96 @@ mod tests {
         assert!(!session.is_quitting());
     }
 
+    /// Other terminal agents leave on a lone `exit` or `quit`, so a person who types one may expect
+    /// to leave. Here it is a prompt like any other: the first Enter sends it, in whatever case and
+    /// with whatever spaces, and the session neither ends nor waits for a second press (CMD-2).
+    #[test]
+    fn a_lone_leave_word_is_sent_at_the_first_enter() {
+        for line in ["exit", "quit", "Exit", "QUIT", "  exit  ", "qUiT "] {
+            let mut session = Session::new("none");
+            type_line(&mut session, line);
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.trim().to_string()),
+                "{line:?} was not sent at the first Enter"
+            );
+            assert!(session.a_turn_is_running(), "{line:?} began no turn");
+            assert!(!session.is_quitting(), "{line:?} left");
+            assert!(session.leave_word_sent, "{line:?} was sent with no mark");
+        }
+    }
+
+    /// Only the whole line is the word, so asking about leaving, or any sentence that contains it,
+    /// is sent as the prompt it is and with no mark on it (CMD-2).
+    #[test]
+    fn a_line_that_holds_more_than_a_leave_word_is_sent_without_the_mark() {
+        for line in [
+            "exit now",
+            "how do I exit",
+            "exits",
+            "quit?",
+            "exit quit",
+            "e xit",
+        ] {
+            let mut session = Session::new("none");
+            type_line(&mut session, line);
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string()),
+                "{line:?} was not sent"
+            );
+            assert!(!session.leave_word_sent, "{line:?} was sent with a mark");
+        }
+    }
+
+    /// The note says Ctrl-C stops the turn and `/exit` leaves, so a person who follows it has to find
+    /// that is what happens: the first Ctrl-C stops the turn the word began and does not leave
+    /// (INPUT-4), and `/exit` at rest ends the session on the first Enter.
+    #[test]
+    fn the_keys_the_note_on_a_sent_leave_word_names_stop_the_turn_and_leave() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "exit");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("exit".to_string())
+        );
+
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Cancel);
+        assert!(!session.is_quitting(), "the first Ctrl-C left");
+
+        session.complete("done", Vec::new(), 0);
+        type_line(&mut session, EXIT_COMMAND);
+        assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::Quit);
+    }
+
+    /// The slash command still leaves on the first press and says nothing of a prompt, since a person
+    /// who typed the command meant it and nothing was sent to the model.
+    #[test]
+    fn the_exit_command_leaves_on_the_first_enter_and_marks_nothing() {
+        let mut session = Session::new("none");
+        type_line(&mut session, EXIT_COMMAND);
+
+        assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::Quit);
+        assert!(!session.leave_word_sent, "the command was marked");
+    }
+
+    /// In shell mode the line is a command line and nothing else (CMD-3), and `exit` is a word a
+    /// shell has. It runs at the first Enter and no turn begins, so there is nothing to say under
+    /// the box about a prompt.
+    #[test]
+    fn a_bare_leave_word_in_shell_mode_is_run_as_the_command_line_it_is() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "!exit");
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Run("exit".to_string())
+        );
+        assert!(!session.leave_word_sent, "a command line was marked");
+    }
+
     /// A command, not a prompt: asking for the picker must not also ask the planner about models.
     #[test]
     fn typing_the_model_command_opens_the_picker() {

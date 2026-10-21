@@ -723,6 +723,11 @@ interface that draws is not exposed to this because bracketed paste tells it whe
 and ends, which is one of the modes this mode does not take: reading the queue ahead of a question
 needs the terminal put in a state a session in lines does not put it in.
 
+**A known cost.** A line that is only `exit` or `quit` is sent as a prompt and starts a turn, where
+the interface that draws says so in the row under the box while the turn runs
+([CMD-2](commands.md#CMD-2)). This mode has no slash commands and no row, and the end of the input
+is its only way out.
+
 `verified-by: bravebot_cli::plain::a_session_in_lines_asks_the_terminal_for_nothing`
 `verified-by: bravebot_cli::plain::the_reply_is_the_only_thing_on_the_reply_stream`
 `verified-by: bravebot_cli::plain::the_end_of_the_input_ends_the_session`

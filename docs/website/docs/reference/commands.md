@@ -69,6 +69,10 @@ for.
 A command typed in full is drawn in the prompt's colour, and once a space follows it, the argument
 it takes appears dimly after the cursor until you start typing one.
 
+`exit` and `quit` typed without the slash are prompts, not commands. A line that is only one of them
+is sent at the first Enter like any other prompt, and while the turn it starts runs, the row under
+the box says that it was sent as a prompt, that Ctrl-C stops it and that `/exit` leaves.
+
 ## `/status`
 
 Reports everything the session knows about itself:

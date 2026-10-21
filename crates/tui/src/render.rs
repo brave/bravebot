@@ -4858,6 +4858,95 @@ mod tests {
         assert!(hint.contains("ctrl-c again to exit"), "{hint}");
     }
 
+    /// A person who typed `exit` to leave is looking at a turn starting, and nothing on the screen
+    /// says the line went to the model as a prompt. The row under the box is where they are already
+    /// looking, and it names the keys that stop the turn and leave, for as long as that turn runs.
+    #[test]
+    fn the_row_under_the_box_says_a_sent_leave_word_went_to_the_model_as_a_prompt() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let said = "Sent as a prompt; ctrl-c stops it, /exit leaves";
+        let mut session = typed("exit");
+        let before = hint_row_at(&session, 90, 24);
+        assert!(!before.contains(said), "said before any Enter: {before}");
+
+        crate::app::handle_key(
+            &mut session,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert!(session.a_turn_is_running(), "the line did not start a turn");
+        let sent = hint_row_at(&session, 90, 24);
+        assert!(sent.contains(said), "{sent}");
+
+        session.complete("done", Vec::new(), 0);
+        let after = hint_row_at(&session, 90, 24);
+        assert!(!after.contains(said), "left up after the turn: {after}");
+    }
+
+    /// The note is about a lone `exit` or `quit` and no other line: a prompt that merely contains
+    /// the word is a question like any other, and a note saying it was a leave word would be wrong.
+    #[test]
+    fn the_row_under_the_box_says_nothing_of_a_prompt_that_is_more_than_a_leave_word() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut session = typed("how do I exit");
+        crate::app::handle_key(
+            &mut session,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert!(session.a_turn_is_running(), "the line did not start a turn");
+
+        let hint = hint_row_at(&session, 90, 24);
+        assert!(!hint.contains("Sent as a prompt"), "{hint}");
+    }
+
+    /// The note takes its room ahead of the parts of the line, and the permission mode is the part
+    /// given up last because it decides whether the next write stops to ask. A note too wide for
+    /// eighty columns clears the whole left side, so the person reading it is told how to leave and
+    /// not told that every write is going through.
+    #[test]
+    fn the_note_on_a_sent_leave_word_leaves_the_permission_mode_on_an_eighty_column_row() {
+        use bravebot_agent::PermissionMode;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        for (mode, vi) in [
+            (PermissionMode::Bypass, false),
+            (PermissionMode::AcceptEdits, true),
+            (PermissionMode::Plan, true),
+        ] {
+            let mut session = Session::new("kernel-enforced").starting_in_bypass();
+            while session.permission_mode() != mode {
+                session.cycle_permission_mode();
+            }
+            if vi {
+                session.choose_editing(crate::vim::Editing::Vi);
+            }
+            for c in "exit".chars() {
+                session.type_char(c);
+            }
+            crate::app::handle_key(
+                &mut session,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            );
+            assert!(session.a_turn_is_running(), "the line did not start a turn");
+
+            let hint = hint_row_at(&session, 80, 24);
+            assert!(
+                hint.contains("Sent as a prompt; ctrl-c stops it, /exit leaves"),
+                "{mode:?}: {hint}"
+            );
+            let named =
+                crate::status::named_mode(mode, true).expect("every mode but asking is named");
+            assert!(
+                hint.contains(named),
+                "{mode:?} (vi: {vi}) was cleared by the note: {hint}"
+            );
+            if vi {
+                assert!(hint.contains("INSERT"), "{mode:?} lost the vi mode: {hint}");
+            }
+        }
+    }
+
     /// Rubbing the marker out is the only way a person has to change their mind about a file, and
     /// the row under the box is the only place they can see whether it worked. Left drawn, it says
     /// a file is going that is not.
