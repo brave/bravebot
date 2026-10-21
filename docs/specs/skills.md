@@ -386,7 +386,7 @@ is read.
 `verified-by: bravebot_cli::running::doctor_names_a_projects_unread_key_only_where_the_directory_is_trusted`
 `verified-by: bravebot_agent::turn::a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so`
 
-<a id="SKILL-20"></a>
+<a id="SKILL-18"></a>
 ### SKILL-18: a skill of the user's own is found with `search_skills`, not listed by default
 
 Only a built-in ([SKILL-12](#SKILL-12)) is in the prompt's listing by default. A skill of the
