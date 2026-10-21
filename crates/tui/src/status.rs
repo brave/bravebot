@@ -14,7 +14,7 @@
 //! are workspace-relative names shown to the person who owns the workspace, and the counts are this
 //! program's own arithmetic. No model reads any of it.
 
-use bravebot_agent::servers::{Access, EffectivePolicy, PolicyEgress};
+use bravebot_agent::servers::EffectivePolicy;
 use bravebot_agent::watch;
 use bravebot_config::Config;
 use bravebot_core::label::Integrity;
@@ -1134,58 +1134,12 @@ fn server_policy_lines(servers: &[(String, EffectivePolicy)]) -> Vec<Line> {
             t!(status_server_policy),
             bravebot_agent::mcp::shown(alias),
         ));
-        lines.push(Line::new(
-            t!(status_server_policy_egress),
-            match policy.egress {
-                PolicyEgress::Closed => t!(status_server_policy_egress_closed),
-                PolicyEgress::Loopback => t!(status_server_policy_egress_loopback),
-                PolicyEgress::Open => t!(status_server_policy_egress_open),
-                PolicyEgress::Hosts => t!(status_server_policy_egress_hosts),
-            },
-        ));
-        lines.push(Line::new(
-            t!(status_server_policy_subprocesses),
-            match policy.children {
-                true => t!(status_server_policy_subprocesses_allowed),
-                false => t!(status_server_policy_subprocesses_refused),
-            },
-        ));
-        if let Some(directory) = &policy.starts_in {
-            lines.push(Line::new(
-                t!(status_server_policy_starts_in),
-                bravebot_agent::confirm::shown_path(directory),
-            ));
-        }
-        if policy.git_held_back {
-            lines.push(Line::new(
-                t!(status_server_policy_git),
-                t!(status_server_policy_git_held_back),
-            ));
-        }
-        for row in &policy.rows {
-            lines.push(Line::new(
-                match row.access {
-                    Access::Read => t!(status_server_policy_read),
-                    Access::Write => t!(status_server_policy_write),
-                    Access::ReadWrite => t!(status_server_policy_read_write),
-                },
-                bravebot_agent::confirm::shown_path(&row.path),
-            ));
-        }
-        if !policy.left_out.is_empty() {
-            let paths: Vec<String> = policy
-                .left_out
-                .iter()
-                .map(|path| bravebot_agent::confirm::shown_path(path))
-                .collect();
-            lines.extend(rows(
-                Line::new(
-                    t!(status_server_policy_left_out),
-                    t!(status_server_policy_left_out_reason),
-                ),
-                &paths,
-            ));
-        }
+        lines.extend(
+            policy
+                .described()
+                .into_iter()
+                .map(|(label, value)| Line::new(&label, value)),
+        );
     }
     lines
 }
@@ -1332,6 +1286,7 @@ pub(crate) fn offering(servers: &[(String, bravebot_agent::mcp::Offering)]) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_agent::servers::{Access, PolicyEgress};
     use bravebot_config::DEFAULT_MODEL;
 
     fn config_for(endpoint: &str, premium: Option<&str>) -> Config {

@@ -1283,6 +1283,11 @@ mcp-list-declared-in = declared in { $path }
 mcp-approved = approved
 mcp-unapproved = unapproved
 mcp-unapproved-run-approve = unapproved: run bravebot mcp approve { $alias }
+# The heading `get` puts over the policy a session would start a local server under, which the lines
+# beneath it spell out with the labels /status uses.
+mcp-get-policy = a session here would confine it to:
+mcp-get-policy-home = home
+mcp-get-policy-home-throwaway = a new directory in the temporary directory, made when it starts
 mcp-refused-by-managed = not started: { $reason }
 mcp-cannot-be-used = cannot be used: { $problem }
 mcp-unusable = { $alias } cannot be used: { $problem }
