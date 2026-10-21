@@ -2060,7 +2060,7 @@ function Card({
               binary rather than the word. */}
           {request.plan && <p className="permission-scope" data-deciding="all"><strong>Execution plan:</strong> <code>{request.plan}</code></p>}
           {request.stdin && <p className="permission-scope" data-deciding="all"><strong>Standard input:</strong> <code>{request.stdin}</code></p>}
-          {!!request.writes?.length && <div className="permission-scope" data-deciding="all"><strong>Files created or modified:</strong><ul>{request.writes.map(path => <li key={path}><code>{path}</code></li>)}</ul></div>}
+          {!!request.shownWrites?.length && <div className="permission-scope" data-deciding="all"><strong>Files created or modified:</strong><ul>{request.shownWrites.map((path, index) => <li key={index}><code>{path}</code></li>)}</ul></div>}
           <ol className="stages" data-deciding="all">
             {request.stages.map((stage, index) => (
               <li key={index}>
@@ -2079,7 +2079,7 @@ function Card({
           {request.confinement && (
             <div className="permission-scope" data-test="confinement" data-deciding="all">
               <p>{request.confinement.heading}</p>
-              {!!request.confinement.directories.length && <ul>{request.confinement.directories.map((directory) => <li key={directory}><code>{directory}</code></li>)}</ul>}
+              {!!request.confinement.shownDirectories.length && <ul>{request.confinement.shownDirectories.map((directory, index) => <li key={index}><code>{directory}</code></li>)}</ul>}
               {request.confinement.sentences.map((sentence, index) => <p key={index}>{sentence}</p>)}
             </div>
           )}

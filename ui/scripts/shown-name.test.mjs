@@ -66,6 +66,15 @@ const vouch = (overrides = {}) =>
     preview: 'a line', truncated: false, ...overrides,
   })
 
+const run = (overrides = {}) =>
+  t.askedRun({
+    request: 4, stages: [{ program: 'tee', resolved: '/usr/bin/tee', args: [], display: 'tee' }],
+    directory: '/work', releasesPrivate: false, canBeRemembered: false, line: '', plan: 'tee',
+    writes: ['note.md'], shownWrites: ['note.md'], ambient: [], vouches: [], summary: 'write it',
+    confinement: { heading: 'confined to:', directories: ['/work'], shownDirectories: ['/work'], sentences: [] },
+    ...overrides,
+  })
+
 const spelled = { path: WRITTEN, shownPath: SPELLED }
 
 test('a write card draws the name as spelled, and does not draw the name as written', () => {
@@ -90,6 +99,18 @@ test('a vouch card that has been answered still folds to the name as spelled', (
   const markup = draw({ ...vouch(spelled), decision: 'approve' })
   assert.ok(markup.includes(SPELLED_MARKUP), markup)
   assert.ok(!markup.includes(`${WRITTEN}</code>`), markup)
+})
+
+test('a run card draws each file the line writes and each directory it is confined to as spelled', () => {
+  const markup = draw(run({
+    writes: [WRITTEN],
+    shownWrites: [SPELLED],
+    confinement: { heading: 'confined to:', directories: ['/work '], shownDirectories: ['"/work␣"'], sentences: [] },
+  }))
+  assert.ok(markup.includes(`<code>${SPELLED_MARKUP}</code>`), markup)
+  assert.ok(markup.includes('<code>&quot;/work␣&quot;</code>'), markup)
+  assert.ok(!markup.includes(`<code>${WRITTEN}</code>`), markup)
+  assert.ok(!markup.includes('<code>/work </code>'), markup)
 })
 
 test('the permissions list draws each rule as spelled, and the root as the project root', () => {

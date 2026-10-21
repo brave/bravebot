@@ -105,6 +105,7 @@ test('a confined run card names what the programs are held to and does not call 
     asked('wc -l *.txt', {
       heading: 'zzconfined to these directories:',
       directories: ['/home/someone/project', '/tmp/zzscratch'],
+      shownDirectories: ['/home/someone/project', '/tmp/zzscratch'],
       sentences: ['zzeach stage brings no credentials'],
     }),
   )

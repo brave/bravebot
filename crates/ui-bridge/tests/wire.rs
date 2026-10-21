@@ -1084,6 +1084,52 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
     assert_eq!(value["canBeRemembered"], json!(false));
 }
 
+/// PROMPT-1: the desktop is handed the files a line writes and the directories it is confined to
+/// already spelled, beside the raw ones, so a card that draws them draws what the other front ends
+/// draw. A name that needs no spelling is sent as it is.
+#[test]
+fn a_run_request_carries_the_written_files_and_directories_spelled_for_a_person() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Pipeline, Stage};
+    let run = |written: &str, directory: &str| {
+        let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w");
+        request.plan.writes = vec![written.into()];
+        request.confined = Some(bravebot_agent::Confined {
+            reads_the_machine: false,
+            directories: vec![directory.into()],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: Vec::new(),
+            writes_git_directories: false,
+        });
+        wire::run_request(1, &request)
+    };
+    let plain = run("note.md", "/work");
+    assert_eq!(plain["writes"], json!(["note.md"]));
+    assert_eq!(plain["shownWrites"], json!(["note.md"]));
+    assert_eq!(plain["confinement"]["directories"], json!(["/work"]));
+    assert_eq!(plain["confinement"]["shownDirectories"], json!(["/work"]));
+
+    let trailing = run("note.md ", "/work ");
+    assert_eq!(trailing["writes"], json!(["note.md "]));
+    assert_eq!(trailing["shownWrites"], json!(["\"note.md\u{2423}\""]));
+    assert_eq!(trailing["confinement"]["directories"], json!(["/work "]));
+    assert_eq!(
+        trailing["confinement"]["shownDirectories"],
+        json!(["\"/work\u{2423}\""])
+    );
+
+    let bidi = run("a\u{202e}b", "/wo\u{202e}rk");
+    assert_eq!(bidi["shownWrites"], json!(["\"a\\u{202e}b\""]));
+    assert_eq!(
+        bidi["confinement"]["shownDirectories"],
+        json!(["\"/wo\\u{202e}rk\""])
+    );
+}
+
 /// SANDBOX-26: the desktop draws no `confined`, so the names a line asked for cross as their own
 /// field, or the desktop would approve a grant it never showed. Empty is sent for a line that
 /// asked for nothing, in the test above, so a missing field means an old build.

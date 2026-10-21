@@ -1078,7 +1078,7 @@ fn opening_trust<R: BufRead, W: Write>(
             t!(trust_directory_remember_explained).to_string(),
             t!(trust_directory_remember_exact).to_string(),
             t!(cli_plain_trust_remember_where).to_string(),
-            store.path().display().to_string(),
+            bravebot_agent::confirm::shown_path(store.path()),
         ]),
         None => lines.push(t!(trust_directory_not_remembered).to_string()),
     }
@@ -2327,6 +2327,45 @@ mod tests {
         (trust, said)
     }
 
+    /// PROMPT-1: the question in lines draws the file a yes is kept in with a name that would draw
+    /// as nothing, or as another name, quoted and spelled, so the file a person reads is the file
+    /// that is written. A state directory with an ordinary name is drawn as it is.
+    #[test]
+    fn the_question_in_lines_spells_the_file_a_yes_is_kept_in() {
+        let scratch = Remembering::new("plain-kept-row-name");
+        let odd = scratch.base.join("sta\u{202e}te");
+        std::fs::create_dir_all(&odd).expect("create the state directory");
+        let odd = odd.canonicalize().expect("canonical state directory");
+        let asked = |home: &std::path::Path| {
+            opening_keeping_in(
+                "n\n",
+                &scratch.root,
+                |_| None,
+                |root| bravebot_agent::trusted::record_for(Some(home), None, root),
+            )
+            .1
+        };
+        let record = |home: &std::path::Path| {
+            bravebot_agent::trusted::Store::new(home, &scratch.root)
+                .path()
+                .to_path_buf()
+        };
+
+        let plain = asked(&scratch.home);
+        let plain_row = record(&scratch.home).display().to_string();
+        assert!(plain.contains(&plain_row), "{plain}");
+        assert!(!plain.contains(&format!("\"{plain_row}")), "{plain}");
+
+        let drawn = asked(&odd);
+        let spelled = bravebot_agent::confirm::shown_path(&record(&odd));
+        assert!(
+            spelled.starts_with('"') && spelled.contains("\\u{202e}"),
+            "{spelled}"
+        );
+        assert!(drawn.contains(&spelled), "{drawn}");
+        assert!(!drawn.contains('\u{202e}'), "{drawn}");
+    }
+
     /// The startup question with this input, the record found where a session here finds it.
     fn opening_with_a_record(
         answer: &str,
@@ -2897,6 +2936,45 @@ mod tests {
             !lines.contains(t!(run_spends_authority)),
             "a line reaching no ambient authority was said to spend one: {lines}"
         );
+    }
+
+    /// PROMPT-1: the plain question for a run spells a file the line writes and a directory it is
+    /// confined to when the name would draw as nothing, or as another name, so a yes to `note.md `
+    /// cannot be read as one to `note.md`.
+    #[test]
+    fn a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another() {
+        let drawn =
+            |written: &str, directory: &str| {
+                let pipeline = bravebot_core::command::Pipeline::new(vec![
+                    bravebot_core::command::Stage::new("tee", Vec::new()),
+                ]);
+                let mut request =
+                    RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".to_string()], "/work");
+                request.plan.writes = vec![written.into()];
+                request.confined = Some(bravebot_agent::Confined {
+                    reads_the_machine: false,
+                    directories: vec![directory.into()],
+                    network: bravebot_sandbox::network::Network::Open,
+                    filesystem: Default::default(),
+                    requested: Vec::new(),
+                    requested_reaches: Vec::new(),
+                    carried: Vec::new(),
+                    writes_git_directories: false,
+                });
+                program(&request)
+            };
+        let plain = drawn("note.md", "/work");
+        assert!(plain.contains(&"  note.md".to_string()), "{plain:?}");
+        assert!(plain.contains(&"  /work".to_string()), "{plain:?}");
+        for (name, spelled) in UNSEEN_NAMES {
+            for lines in [drawn(name, "/work"), drawn("note.md", name)] {
+                assert!(
+                    lines.contains(&format!("  {spelled}")),
+                    "{name:?}: {lines:?}"
+                );
+                assert!(!lines.contains(&format!("  {name}")), "{name:?}: {lines:?}");
+            }
+        }
     }
 
     /// The plain question tells the same two stories as the panel: a run the turn confines is
