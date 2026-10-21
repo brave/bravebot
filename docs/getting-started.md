@@ -193,8 +193,9 @@ and the models to offer:
 }
 ```
 
-`openrouter` and `openai` need no endpoint written down, their own being compiled in. Any other
-gateway names one in `options.baseURL`, and a gateway naming no models at all is asked what it
+`openrouter` and `openai` need no endpoint written down, their own being compiled in, and neither
+does `anthropic`, which reaches Claude with an Anthropic API key in Anthropic's own protocol. Any
+other gateway names one in `options.baseURL`, and a gateway naming no models at all is asked what it
 serves. The block is read in the shape another tool already reads, so one copied out of that tool's
 configuration works here unedited.
 

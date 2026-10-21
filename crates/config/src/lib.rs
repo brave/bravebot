@@ -1342,7 +1342,8 @@ impl Config {
             bedrock::Bedrock::from_lookup(&lookup).map(|it| it.with_output_budget(output_budget));
         let providers: Vec<provider::Provider> = providers
             .into_iter()
-            .map(|mut entry| {
+            .map(|entry| {
+                let mut entry = entry.with_output_budget(output_budget);
                 entry.bedrock = entry
                     .bedrock
                     .map(|account| account.with_output_budget(output_budget));

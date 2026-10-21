@@ -779,6 +779,33 @@ mod tests {
         assert_eq!(request.messages[0].role, "user");
     }
 
+    /// Converse refuses a text block with no word in it and takes nothing but an object as a call's
+    /// arguments, and the walk that builds these requests is shared with another service that refuses
+    /// the same. Blank lines another model wrote before a call are no block, and a call recorded with
+    /// `null` or a list is kept with an empty object so the result that answers it still has a call.
+    #[test]
+    fn text_with_no_word_in_it_and_arguments_that_are_not_an_object_are_not_sent_as_written() {
+        let tools = offered();
+        let request = request_from(
+            &[
+                Message::user("go"),
+                Message::assistant_calling(
+                    "\n\n",
+                    vec![call("a", "read", "null"), call("b", "read", "[1]")],
+                ),
+                Message::tool_result("a", "one"),
+                Message::tool_result("b", "two"),
+            ],
+            Some(&tools),
+        );
+        let json = body_of(&request);
+        let assistant = json["messages"][1]["content"].as_array().expect("blocks");
+        assert_eq!(assistant.len(), 2, "{assistant:?}");
+        for block in assistant {
+            assert_eq!(block["toolUse"]["input"], json!({}), "{block}");
+        }
+    }
+
     /// A build nobody has asked for a level must send the body it always sent, or adding the
     /// field would change every request to an account that has never seen it.
     #[test]

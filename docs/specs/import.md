@@ -153,7 +153,7 @@ A proxy the environment names carries this request as it carries every other
 | Claude Code | `env.AWS_REGION` or `env.AWS_PROFILE` in the settings file | the same names under `env` |
 | Claude Code | `env.ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` in the settings file | the same names under `env` |
 | Claude Code | `env.ANTHROPIC_MODEL` or `model` is `opus`, `sonnet` or `haiku`, and that tier names a model | `model` |
-| opencode | a `provider` entry bravebot's own reading keeps, whose `npm` is absent, `@ai-sdk/openai-compatible`, `@openrouter/ai-sdk-provider` for `openrouter`, or `@ai-sdk/amazon-bedrock` for `amazon-bedrock`, or `@ai-sdk/google-vertex` for `google-vertex` | that entry under `provider`, holding only the fields bravebot reads: `name`, `env`, `models`, `options.baseURL`, `options.region`, `options.profile`, `options.project`, `options.location`, and the credential as [IMPORT-6](#IMPORT-6) says |
+| opencode | a `provider` entry bravebot's own reading keeps, whose `npm` is absent, `@ai-sdk/openai-compatible`, `@openrouter/ai-sdk-provider` for `openrouter`, `@ai-sdk/amazon-bedrock` for `amazon-bedrock`, `@ai-sdk/google-vertex` for `google-vertex`, or `@ai-sdk/anthropic` for `anthropic` | that entry under `provider`, holding only the fields bravebot reads: `name`, `env`, `models`, `options.baseURL`, `options.region`, `options.profile`, `options.project`, `options.location`, and the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | an `auth.json` entry of `type: "api"` for an id whose endpoint is compiled in, with no config entry for that id | a `provider` entry for that id, with the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | a top-level `model` of the form `provider/model`, where the import writes that provider's entry | `model`, in the form that names the gateway; for `amazon-bedrock`, the model's own id, added to that entry's `models` |
 | Ollama | a server answering [IMPORT-10](#IMPORT-10)'s request with a model it can serve | `provider.ollama`: `{"name": "Ollama (local)", "options": {"baseURL": "<address>/v1"}}`, with `"contextWindow": <tokens>` added to `options` where [IMPORT-5](#IMPORT-5) says, and `model: "ollama/<name>"` for the model [IMPORT-10](#IMPORT-10) chooses |
@@ -164,10 +164,20 @@ A proxy the environment names carries this request as it carries every other
 one of opencode's `{env:...}` substitutions, is not offered, because this program makes no
 substitution and would send its requests nowhere. It is listed as left ([IMPORT-4](#IMPORT-4)).
 
-**An entry with no `npm` is read as opencode reads it.** opencode serves `anthropic`, `azure`,
-`cohere`, `google`, `google-vertex` and `google-vertex-anthropic` through their own SDKs when the
-entry names none, so an entry for one of those ids is left as naming another SDK
-([IMPORT-4](#IMPORT-4)). Any other id with no `npm` is OpenAI-compatible.
+**An entry with no `npm` is read as opencode reads it.** opencode serves `azure`, `cohere`, `google`,
+`google-vertex` and `google-vertex-anthropic` through their own SDKs when the entry names none, and
+`anthropic` through the Anthropic one. An entry for one of the first five is left as naming another
+SDK ([IMPORT-4](#IMPORT-4)). Any other id with no `npm` is OpenAI-compatible, except `anthropic`.
+
+**An `anthropic` entry is reached through the Messages API** ([BACKEND-57](backends.md#BACKEND-57)),
+whether it names no `npm` or `@ai-sdk/anthropic`, and is offered at `https://api.anthropic.com/v1`
+where it states no `baseURL`. An entry that names `@ai-sdk/anthropic` under any other id is left as
+naming another SDK, since only the `anthropic` id is reached in that protocol, and so is an
+`anthropic` entry that names `@ai-sdk/openai-compatible`, which is a gateway under that name and
+would be read as Anthropic's once written without the field. An entry that names no
+variable is written with `ANTHROPIC_API_KEY`, the variable opencode reads for this id, and an
+`auth.json` key of `type: "api"` for the id is offered as an entry of its own. An `oauth` sign-in for
+the id is still left ([IMPORT-4](#IMPORT-4)).
 
 **An `openai` entry is OpenAI-compatible when it names no `npm`**, and is offered at
 `https://api.openai.com/v1`. One naming `@ai-sdk/openai` is left as another SDK
@@ -210,8 +220,8 @@ there at run time, so it is not written to the file.
 **Why.** Checking against what bravebot's own reading of a `provider` block keeps gives one
 definition of "supported", so a gateway added to the compiled-in endpoints widens the import with no
 change here. The `npm` check is on top, because that reading ignores the field: an
-`@ai-sdk/anthropic` entry with a `baseURL` would be kept and then sent requests in a protocol it
-does not speak. Only the fields bravebot reads are written, so the question shows everything that
+`@ai-sdk/anthropic` entry under another id, with a `baseURL`, would be kept and then sent requests in
+a protocol that id is not reached by. Only the fields bravebot reads are written, so the question shows everything that
 is written, and an unknown field copied today cannot come to mean something unapproved once a later
 build reads it.
 
@@ -223,6 +233,11 @@ build reads it.
 `verified-by: bravebot_config::import::an_auth_json_key_for_a_known_id_is_a_provider`
 `verified-by: bravebot_config::import::an_openai_entry_naming_no_sdk_is_offered_at_openais_endpoint`
 `verified-by: bravebot_config::import::an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk`
+`verified-by: bravebot_config::import::an_anthropic_entry_naming_no_sdk_is_offered_at_anthropics_endpoint`
+`verified-by: bravebot_config::import::an_anthropic_entry_naming_its_own_sdk_keeps_the_endpoint_it_states`
+`verified-by: bravebot_config::import::an_anthropic_entry_naming_the_openai_compatible_sdk_is_left_as_another_sdk`
+`verified-by: bravebot_config::import::an_anthropic_sdk_entry_under_another_id_is_left_as_another_sdk`
+`verified-by: bravebot_config::import::an_auth_json_key_for_anthropic_is_a_provider_and_its_sign_in_is_not`
 `verified-by: bravebot_config::import::an_auth_json_key_for_openai_is_a_provider`
 `verified-by: bravebot_config::import::only_the_fields_bravebot_reads_are_written`
 `verified-by: bravebot_config::import::a_top_level_model_is_copied_where_its_provider_is`
@@ -245,8 +260,9 @@ build reads it.
 **Found but not importable.** These are listed after what is importable, one line each with the
 reason:
 
-- Claude Code's `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL`: Anthropic's
-  own wire format, which no service here speaks;
+- Claude Code's `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL`: settings for
+  Anthropic's own API, which an `anthropic` entry reaches ([BACKEND-57](backends.md#BACKEND-57)) and
+  which this import does not write from them, so the line says to add one;
 - `CLAUDE_CODE_USE_VERTEX`, which serves Claude models through Google Cloud credentials, and an
   opencode `google-vertex` entry naming no project, which the service's endpoint cannot be built
   without ([IMPORT-3](#IMPORT-3));
@@ -689,8 +705,8 @@ the owner's decision.
 - **A plaintext key.** A key approved under [IMPORT-6](#IMPORT-6) sits in plain text in
   `~/.bravebot/settings.json`, reached only by a question.
 - **Unsupported setups still get the three routes,** with the [IMPORT-4](#IMPORT-4) lines first:
-  a Claude Code user on a claude.ai subscription or an Anthropic API key, and an opencode user on a
-  provider SDK other than an OpenAI-compatible one.
+  a Claude Code user on a claude.ai subscription or an Anthropic API key in Claude Code's settings,
+  and an opencode user on a provider SDK other than an OpenAI-compatible one.
 - **A program that can write the other tool's files can name a host**, which the import then shows
   for approval. Such a program could equally write `~/.bravebot/settings.json`, so the import gives
   it no new reach. What the import adds is that the host is shown before anything is sent to it.

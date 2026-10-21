@@ -12,8 +12,9 @@
 //! - Arguments cross as a JSON object where the agent carries a string holding one.
 //! - A request offering no tools sends each call and each result as text, because both services
 //!   refuse a call or result block in a request that declares no tool.
-//! - Nothing is sent that cannot be matched or read: a result with no call id is dropped, empty text
-//!   is no block, and an attachment is a block only where it is a `data:` URI the wire takes.
+//! - Nothing is sent that cannot be matched or read: a result with no call id is dropped, text with
+//!   no word in it is no block, a call's arguments are an object whatever the model wrote, and an
+//!   attachment is a block only where it is a `data:` URI the wire takes.
 //!
 //! Nothing here inspects content to make a decision. Text is moved between shapes and handed on with
 //! whatever label it arrived under.
@@ -29,7 +30,8 @@ pub trait Spelling {
     /// One block of a turn, as the wire represents it.
     type Block;
 
-    /// A block of words. Never called with empty text, which neither service takes.
+    /// A block of words. Never called with text that is empty or only whitespace, which neither
+    /// service takes.
     fn text(&self, text: &str) -> Self::Block;
 
     /// A block for an attachment, or `None` for a media type the wire does not take.
@@ -169,21 +171,25 @@ fn assistant_blocks<W: Spelling>(
             )));
             continue;
         }
-        // Arguments cross as a string in the agent's protocol and as an object here. An
-        // unparseable string becomes an empty object: the call is preserved so it can still be
-        // answered, which keeps the conversation well-formed.
-        let input = serde_json::from_str(&call.function.arguments).unwrap_or_else(|_| json!({}));
+        // Arguments cross as a string in the agent's protocol and as an object here. A string
+        // that is not an object, whether it is not JSON or is `null` or a list, becomes an empty
+        // object: both services take nothing else there, and the call is preserved so it can still
+        // be answered, which keeps the conversation well-formed.
+        let input = serde_json::from_str::<Value>(&call.function.arguments)
+            .ok()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
         blocks.push(spelling.call(&call.id, &call.function.name, input));
     }
     blocks
 }
 
-/// A text block, or nothing at all for empty text.
+/// A text block, or nothing at all for text with no word in it.
 ///
-/// The services reject an empty text block, and an assistant turn that only asked for tools has no
-/// text.
+/// The services reject a text block that is empty or only whitespace, and an assistant turn that
+/// only asked for tools has no text, or has the blank lines another model wrote before a call.
 fn text_block<W: Spelling>(spelling: &W, text: &str) -> Vec<W::Block> {
-    if text.is_empty() {
+    if text.trim().is_empty() {
         Vec::new()
     } else {
         vec![spelling.text(text)]
@@ -363,6 +369,44 @@ mod tests {
         );
         assert_eq!(walked.turns.len(), 1);
         assert_eq!(walked.turns[0].blocks, ["text:hello"]);
+    }
+
+    /// Neither service takes a text block with no word in it. Another model's blank lines before a
+    /// call, a command that printed one empty line, and a part holding only spaces are all text
+    /// that is not empty and still refused, and one of them in the history is a request refused
+    /// again on every later round.
+    #[test]
+    fn text_with_no_word_in_it_is_no_block() {
+        let walked = walked(
+            &[
+                Message::user("hello"),
+                Message::assistant("\n\n"),
+                Message::user_parts(vec![Part::Text {
+                    text: "   ".to_string(),
+                }]),
+                Message::user("again"),
+            ],
+            true,
+        );
+        assert_eq!(walked.turns.len(), 1);
+        assert_eq!(walked.turns[0].blocks, ["text:hello", "text:again"]);
+    }
+
+    /// Both services take nothing but an object as a call's arguments. A call recorded with `null`,
+    /// a list, a number or a string is still a call the model made and a result still answers, so
+    /// it is kept with an empty object, as one whose arguments were not JSON at all is.
+    #[test]
+    fn arguments_that_are_not_an_object_become_an_empty_object() {
+        for arguments in ["null", "[]", "[1]", "3", r#""text""#, "true"] {
+            let walked = walked(
+                &[Message::assistant_calling(
+                    "",
+                    vec![calling("a", "f", arguments)],
+                )],
+                true,
+            );
+            assert_eq!(walked.turns[0].blocks, ["call:a:f:{}"], "{arguments}");
+        }
     }
 
     /// Only a `data:` URI with something in it is an attachment, and the wire decides whether it

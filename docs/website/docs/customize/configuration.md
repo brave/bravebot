@@ -1950,6 +1950,11 @@ OpenAI is reached with an API key by a block keyed `openai` naming `OPENAI_API_K
 needs no `baseURL`. [OpenAI](providers/openai-compatible.md#openai) has the details, including which
 models `/model` offers.
 
+Claude is reached with an Anthropic API key by a block keyed `anthropic` naming `ANTHROPIC_API_KEY` in
+`env`, and needs no `baseURL`. It is spoken to in Anthropic's own Messages protocol, not the
+OpenAI-compatible one. [Anthropic](providers/anthropic.md) has the details, including the reply
+ceiling and which models `/model` offers.
+
 Google Vertex AI is reached by a block keyed `google-vertex`, or with no block by exporting
 `GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT`. It has no model listing a key can call, so `/model`
 offers a short list of Gemini models built into bravebot, and a block that lists `models` is offered

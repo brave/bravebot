@@ -1,7 +1,8 @@
 //! Which backend a request goes to.
 //!
-//! Three exist: the aichat endpoint Brave runs, AWS Bedrock, and an OpenAI-compatible gateway
-//! somebody configured. The choice is made from configuration, once, here, so the turn loop and
+//! Three exist: the aichat endpoint Brave runs, AWS Bedrock, and a gateway somebody configured,
+//! which speaks the OpenAI-compatible protocol or, for Anthropic's own API, the Messages one. The
+//! choice is made from configuration, once, here, so the turn loop and
 //! everything beside it asks the same question of whichever one is in use rather than branching on
 //! the backend at every call.
 //!
@@ -10,13 +11,15 @@
 //! reach it.
 
 use crate::outcome::{Category, Diagnosis};
+use bravebot_aichat::anthropic::AnthropicClient;
+use bravebot_aichat::anthropic::protocol::Failure;
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{AichatClient, ChatError, Completion, CutOff, Progress, Subscription};
 pub use bravebot_bedrock::credentials::CredentialError;
 use bravebot_bedrock::{BedrockClient, BedrockError};
 use bravebot_config::Config;
 use bravebot_config::ModelRefusal;
-use bravebot_config::provider::Credential;
+use bravebot_config::provider::{Credential, Protocol};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
@@ -141,6 +144,23 @@ impl BackendError {
                 ChatError::Subscription(_) => Category::Unauthorized,
                 ChatError::Decode { .. } | ChatError::NoContent => Category::Undecodable,
                 ChatError::Incomplete => Category::Incomplete,
+                ChatError::Reported { failure } => match failure {
+                    Failure::InvalidRequest
+                    | Failure::RequestTooLarge
+                    | Failure::NotFound
+                    | Failure::Refusal
+                    | Failure::ContextFull => Category::Refused,
+                    Failure::Authentication | Failure::Permission | Failure::Billing => {
+                        Category::Unauthorized
+                    }
+                    Failure::RateLimit => Category::RateLimited,
+                    Failure::Api | Failure::Overloaded | Failure::Timeout => Category::Unavailable,
+                    // Unknown protocol names must not enter the diagnosis.
+                    Failure::Unknown => Category::Incomplete,
+                },
+                ChatError::TooLong(cut_off) => {
+                    return Diagnosis::of(Category::TooLong).at_ceiling(cut_off.ceiling);
+                }
                 ChatError::Egress(egress) => return of_egress(egress),
             },
             Self::Bedrock(error) => match error {
@@ -195,7 +215,8 @@ impl BackendError {
     /// can be copied anywhere. The name is the request's own spelling of a tool it offered.
     pub fn cut_off(&self) -> Option<&CutOff> {
         match self {
-            Self::Bedrock(BedrockError::TooLong(cut_off)) => Some(cut_off),
+            Self::Bedrock(BedrockError::TooLong(cut_off))
+            | Self::Aichat(ChatError::TooLong(cut_off)) => Some(cut_off),
             Self::Attempted { cause, .. } => cause.cut_off(),
             _ => None,
         }
@@ -215,6 +236,12 @@ impl BackendError {
             | Self::Bedrock(BedrockError::Egress(EgressError::Status { status, .. })) => {
                 matches!(status, 400 | 422)
             }
+            // The conversation filled the model's window part way through the reply. The
+            // service's own words for it are one of a closed set, and the remedy is the same as
+            // for a prompt it refused as too long: a shorter conversation.
+            Self::Aichat(ChatError::Reported {
+                failure: Failure::ContextFull,
+            }) => true,
             Self::Attempted { cause, .. } => cause.refused_the_body(),
             _ => false,
         }
@@ -368,11 +395,13 @@ pub enum Backend<'a> {
         egress: &'a Egress,
         cancel: Option<Cancel>,
     },
-    /// A configured OpenAI-compatible gateway.
+    /// A configured gateway.
     ///
     /// Speaks the same protocol as the aichat backend and is sent by the same client, differing in
-    /// host and credential. A separate variant regardless, because which service a request went to is
-    /// the thing worth being able to read at a dispatch site.
+    /// host and credential, unless the provider is Anthropic's, whose Messages protocol has a client
+    /// of its own ([`Provider::protocol`](bravebot_config::provider::Provider::protocol)). A
+    /// separate variant regardless, because which service a request went to is the thing worth being
+    /// able to read at a dispatch site.
     Gateway {
         config: &'a Config,
         provider: &'a bravebot_config::provider::Provider,
@@ -448,7 +477,7 @@ pub fn refused_a_level(config: &Config, model: &str) -> bool {
     }
     match config.provider_for(model) {
         Some((provider, wire_model)) => {
-            !bravebot_aichat::reads_effort(&provider.chat_completions_url(), wire_model)
+            !bravebot_aichat::reads_effort(&provider.completion_url(), wire_model)
         }
         None => !bravebot_aichat::reads_effort(&config.chat_completions_url(), model),
     }
@@ -952,13 +981,7 @@ impl<'a> Backend<'a> {
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
-                client.complete(policy, request).map_err(|error| {
-                    BackendError::from(error).counted(
-                        client.attempts(),
-                        client.completed_usage(),
-                        client.last_request_tokens(),
-                    )
-                })
+                client.complete(policy, request)
             }
         }
     }
@@ -1028,21 +1051,13 @@ impl<'a> Backend<'a> {
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
-                client
-                    .complete_streaming(policy, request, progress)
-                    .map_err(|error| {
-                        BackendError::from(error).counted(
-                            client.attempts(),
-                            client.completed_usage(),
-                            client.last_request_tokens(),
-                        )
-                    })
+                client.complete_streaming(policy, request, progress)
             }
         }
     }
 }
 
-/// A client pointed at `provider`, with its token resolved.
+/// A client pointed at `provider`, with its token resolved, in the protocol the provider speaks.
 ///
 /// The token is read here rather than held on the variant, because it is read from the process
 /// environment at the point a request needs signing: a value read once at startup would go stale in a
@@ -1052,9 +1067,75 @@ fn gateway_client<'a>(
     provider: &'a bravebot_config::provider::Provider,
     wire_model: &str,
     egress: &'a Egress,
-) -> Result<AichatClient<'a>, BackendError> {
+) -> Result<GatewayClient<'a>, BackendError> {
     let token = gateway_token(provider, |name| std::env::var(name).ok())?;
-    Ok(AichatClient::new(config, egress).for_gateway(provider, wire_model, token))
+    Ok(match provider.protocol() {
+        Protocol::ChatCompletions => GatewayClient::Chat(
+            AichatClient::new(config, egress).for_gateway(provider, wire_model, token),
+        ),
+        Protocol::Messages => GatewayClient::Messages(AnthropicClient::new(
+            config, egress, provider, wire_model, token,
+        )),
+    })
+}
+
+/// A client for a configured gateway, whichever protocol it speaks.
+///
+/// Both clients answer the same questions and fail the same way, so this holds the one place that
+/// asks either of them and says what a failed call cost.
+enum GatewayClient<'a> {
+    Chat(AichatClient<'a>),
+    Messages(AnthropicClient<'a>),
+}
+
+/// The failure of a call to `client`, with the requests it took and what they cost.
+macro_rules! counted {
+    ($client:expr, $result:expr) => {
+        $result.map_err(|error| {
+            BackendError::from(error).counted(
+                $client.attempts(),
+                $client.completed_usage(),
+                $client.last_request_tokens(),
+            )
+        })
+    };
+}
+
+impl GatewayClient<'_> {
+    /// Stop reading a streamed reply as soon as `stop` says to.
+    fn with_cancel(self, stop: Cancel) -> Self {
+        match self {
+            Self::Chat(client) => Self::Chat(client.with_cancel(stop)),
+            Self::Messages(client) => Self::Messages(client.with_cancel(stop)),
+        }
+    }
+
+    fn complete<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        request: &ChatRequest,
+    ) -> Result<Completion, BackendError> {
+        match self {
+            Self::Chat(client) => counted!(client, client.complete(policy, request)),
+            Self::Messages(client) => counted!(client, client.complete(policy, request)),
+        }
+    }
+
+    fn complete_streaming<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        request: &ChatRequest,
+        progress: impl FnMut(Progress),
+    ) -> Result<Completion, BackendError> {
+        match self {
+            Self::Chat(client) => {
+                counted!(client, client.complete_streaming(policy, request, progress))
+            }
+            Self::Messages(client) => {
+                counted!(client, client.complete_streaming(policy, request, progress))
+            }
+        }
+    }
 }
 
 /// What to attach to `provider`'s requests, or the refusal its block earned.
@@ -1610,6 +1691,214 @@ mod tests {
                 Backend::reports_the_model_it_was_asked_for(&config, model),
                 "{model} was not compared with the name that came back"
             );
+        }
+    }
+
+    /// An `anthropic` entry is a gateway by selection and speaks the Messages protocol, and the name
+    /// a request carries says which service is meant while the part after the id is what that
+    /// service knows the model by. A gateway beside it is still chat completions.
+    #[test]
+    fn an_anthropic_model_selects_the_gateway_backend_in_the_messages_protocol() {
+        let config = with_providers(
+            r#"{"provider": {
+                "anthropic": {"env": ["A_TOKEN_VARIABLE"]},
+                "openrouter": {
+                    "env": ["A_TOKEN_VARIABLE"],
+                    "options": {"baseURL": "https://openrouter.example.invalid/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            }}"#,
+        );
+        let egress = Egress::new();
+
+        let Backend::Gateway {
+            provider,
+            wire_model,
+            ..
+        } = Backend::select(&config, &egress, "anthropic/claude-opus-5-5")
+        else {
+            panic!("an anthropic model did not select a gateway");
+        };
+        assert_eq!(provider.protocol(), Protocol::Messages);
+        assert_eq!(wire_model, "claude-opus-5-5");
+
+        let Backend::Gateway { provider, .. } = Backend::select(&config, &egress, "z-ai/glm-4.6")
+        else {
+            panic!("a gateway model did not select a gateway");
+        };
+        assert_eq!(provider.protocol(), Protocol::ChatCompletions);
+    }
+
+    /// Anthropic names a model by an alias and answers with the dated model behind it, so the name
+    /// that comes back differing is the alias working. Another gateway beside it is still compared.
+    #[test]
+    fn an_anthropic_alias_is_not_expected_to_be_the_name_that_comes_back() {
+        let config = with_providers(
+            r#"{"provider": {
+                "anthropic": {"env": ["A_TOKEN_VARIABLE"], "models": {"claude-haiku-4-5": {}}},
+                "openrouter": {
+                    "env": ["A_TOKEN_VARIABLE"],
+                    "options": {"baseURL": "https://openrouter.example.invalid/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            }}"#,
+        );
+        for model in [
+            "anthropic/claude-haiku-4-5",
+            "claude-haiku-4-5",
+            "anthropic/claude-not-listed",
+        ] {
+            assert!(
+                !Backend::reports_the_model_it_was_asked_for(&config, model),
+                "{model} was expected to come back under its own name"
+            );
+        }
+        assert!(Backend::reports_the_model_it_was_asked_for(
+            &config,
+            "z-ai/glm-4.6"
+        ));
+    }
+
+    /// The request line and the headers one request carried, names in lower case.
+    type Received = (String, Vec<(String, String)>);
+
+    /// A reply that filled the model's window part way through is answered by a shorter conversation,
+    /// as a prompt the service refused as too long is, so the turn is told to cut it. The service's
+    /// other stops, a refusal among them, are not cured by cutting anything.
+    #[test]
+    fn a_window_filled_mid_reply_is_a_refused_body_and_a_refusal_is_not() {
+        let reported = |failure| BackendError::from(ChatError::Reported { failure });
+        assert!(reported(Failure::ContextFull).refused_the_body());
+        assert!(
+            reported(Failure::ContextFull)
+                .counted(1, None, None)
+                .refused_the_body()
+        );
+        for failure in [
+            Failure::Refusal,
+            Failure::Overloaded,
+            Failure::InvalidRequest,
+        ] {
+            assert!(!reported(failure).refused_the_body(), "{failure}");
+        }
+    }
+
+    /// One request answered with `reply`, with what it carried handed back.
+    fn answer_once(reply: &'static str) -> (String, std::sync::mpsc::Receiver<Received>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("address").port();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("request line");
+            let mut headers = Vec::new();
+            let mut length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':') {
+                    if name.trim().eq_ignore_ascii_case("content-length") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    headers.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
+                }
+            }
+            let mut body = vec![0u8; length];
+            reader.read_exact(&mut body).expect("body");
+            let _ = sender.send((line.trim().to_string(), headers));
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                )
+                .as_bytes(),
+            );
+        });
+        (format!("http://127.0.0.1:{port}"), receiver)
+    }
+
+    /// A request for a model an `anthropic` entry names goes to the Messages route with its key in
+    /// `x-api-key`, and one for a gateway beside it goes to chat completions with a bearer token.
+    /// Selecting the backend is not enough: the dispatch has to build the client that speaks the
+    /// protocol, or the key reaches a route that does not exist.
+    #[test]
+    fn a_request_reaches_the_route_and_header_its_providers_protocol_states() {
+        const ANTHROPIC: &str = r#"{"model":"claude-test-20260101",
+            "content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn",
+            "usage":{"input_tokens":3,"output_tokens":1}}"#;
+        const OPENAI: &str =
+            r#"{"model":"served","choices":[{"message":{"role":"assistant","content":"hi"}}]}"#;
+
+        for (provider, reply, route, header, value) in [
+            (
+                "anthropic",
+                ANTHROPIC,
+                "POST /v1/messages HTTP/1.1",
+                "x-api-key",
+                "a-key",
+            ),
+            (
+                "elsewhere",
+                OPENAI,
+                "POST /v1/chat/completions HTTP/1.1",
+                "authorization",
+                "Bearer a-key",
+            ),
+        ] {
+            let (endpoint, received) = answer_once(reply);
+            let block = format!(
+                r#"{{"provider": {{"{provider}": {{
+                    "options": {{"baseURL": "{endpoint}/v1", "apiKey": "a-key"}},
+                    "models": {{"a-model": {{}}}}
+                }}}}}}"#
+            );
+            let config = with_providers(&block);
+            let egress = Egress::new();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = bravebot_core::policy::Policy::begin(
+                {
+                    let mut routing = bravebot_core::policy::Routing::new();
+                    routing.insert_trusted("task", "say hello");
+                    routing
+                },
+                bravebot_core::policy::ReleasePlan::new(),
+                bravebot_core::capability::CapabilitySet::from_iter([
+                    bravebot_core::capability::Capability::WebFetch,
+                ]),
+                &mut sink,
+            )
+            .expect("policy");
+            let model = format!("{provider}/a-model");
+
+            Backend::select(&config, &egress, &model)
+                .complete(
+                    &mut policy,
+                    &ChatRequest::new(
+                        model.as_str(),
+                        vec![bravebot_aichat::protocol::Message::user("hi")],
+                    ),
+                )
+                .expect("the reply was read");
+
+            let (line, headers) = received.recv().expect("the request arrived");
+            assert_eq!(line, route, "{provider}");
+            let sent = |name: &str| {
+                headers
+                    .iter()
+                    .find(|(sent, _)| sent == name)
+                    .map(|(_, value)| value.as_str())
+            };
+            assert_eq!(sent(header), Some(value), "{provider}");
+            if provider == "anthropic" {
+                assert_eq!(sent("authorization"), None);
+                assert_eq!(sent("anthropic-version"), Some("2023-06-01"));
+            }
         }
     }
 

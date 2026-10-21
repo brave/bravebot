@@ -3567,3 +3567,1343 @@ fn a_gateway_on_this_machine_is_waited_on_through_silence_whatever_gap_was_state
     assert_eq!(completion.model, "served-model");
     assert_eq!(client.attempts(), 1);
 }
+
+// Anthropic's Messages API.
+//
+// The service is reached by a stated `baseURL` pointing at a server on this machine, which is the
+// one way to reach anything but Anthropic from an `anthropic` entry. Nothing here has been sent to
+// api.anthropic.com: the bodies and the frames are what its reference states, and what a reply
+// does there is something only a request with a key can show.
+
+use bravebot_aichat::anthropic::AnthropicClient;
+use bravebot_aichat::anthropic::protocol::Failure;
+use bravebot_aichat::protocol::Tool;
+
+const ANTHROPIC_KEY: &str = "sk-ant-placeholder-5d1f9a";
+
+/// An `anthropic` entry naming where its key lives, pointed at the local server. `extra` is more of
+/// the entry's own block, such as the models it lists.
+fn anthropic_with(endpoint: &str, extra: &str) -> bravebot_config::provider::Provider {
+    let text = format!(
+        r#"{{"provider": {{"anthropic": {{"env": ["ANTHROPIC_API_KEY"],
+            "options": {{"baseURL": "{endpoint}/v1"}}{extra}}}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+fn anthropic_at(endpoint: &str) -> bravebot_config::provider::Provider {
+    anthropic_with(endpoint, "")
+}
+
+fn open_policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
+    Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        sink,
+    )
+    .expect("policy")
+}
+
+/// One server-sent event as Anthropic writes it: a named line, then the data line.
+fn event(name: &str, payload: serde_json::Value) -> String {
+    format!("event: {name}\ndata: {payload}\n\n")
+}
+
+fn message_start(input: u64, cache_read: u64, cache_written: u64) -> String {
+    event(
+        "message_start",
+        serde_json::json!({"type": "message_start", "message": {
+            "id": "msg_1", "type": "message", "role": "assistant", "content": [],
+            "model": "claude-test-20260101", "stop_reason": null,
+            "usage": {"input_tokens": input, "output_tokens": 1,
+                      "cache_read_input_tokens": cache_read,
+                      "cache_creation_input_tokens": cache_written}
+        }}),
+    )
+}
+
+fn text_block(index: u64, pieces: &[&str]) -> Vec<String> {
+    let mut frames = vec![event(
+        "content_block_start",
+        serde_json::json!({"type": "content_block_start", "index": index,
+            "content_block": {"type": "text", "text": ""}}),
+    )];
+    for piece in pieces {
+        frames.push(event(
+            "content_block_delta",
+            serde_json::json!({"type": "content_block_delta", "index": index,
+                "delta": {"type": "text_delta", "text": piece}}),
+        ));
+    }
+    frames.push(event(
+        "content_block_stop",
+        serde_json::json!({"type": "content_block_stop", "index": index}),
+    ));
+    frames
+}
+
+fn call_block(index: u64, id: &str, name: &str, fragments: &[&str]) -> Vec<String> {
+    let mut frames = vec![event(
+        "content_block_start",
+        serde_json::json!({"type": "content_block_start", "index": index,
+            "content_block": {"type": "tool_use", "id": id, "name": name, "input": {}}}),
+    )];
+    for fragment in fragments {
+        frames.push(event(
+            "content_block_delta",
+            serde_json::json!({"type": "content_block_delta", "index": index,
+                "delta": {"type": "input_json_delta", "partial_json": fragment}}),
+        ));
+    }
+    frames.push(event(
+        "content_block_stop",
+        serde_json::json!({"type": "content_block_stop", "index": index}),
+    ));
+    frames
+}
+
+fn message_end(stop_reason: &str, output: u64) -> Vec<String> {
+    vec![
+        event(
+            "message_delta",
+            serde_json::json!({"type": "message_delta",
+                "delta": {"stop_reason": stop_reason, "stop_sequence": null},
+                "usage": {"output_tokens": output}}),
+        ),
+        event("message_stop", serde_json::json!({"type": "message_stop"})),
+    ]
+}
+
+/// A whole reply as the reference shows one, with the figures a cache hit reports.
+const MESSAGES_REPLY: &str = r#"{"id":"msg_1","type":"message","role":"assistant",
+    "model":"claude-test-20260101",
+    "content":[{"type":"text","text":"I will read it."},
+               {"type":"tool_use","id":"toolu_1","name":"read_file","input":{"path":"x"}}],
+    "stop_reason":"tool_use","stop_sequence":null,
+    "usage":{"input_tokens":12,"output_tokens":7,
+             "cache_creation_input_tokens":300,"cache_read_input_tokens":4000}}"#;
+
+fn reading_tool() -> Vec<Tool> {
+    vec![Tool::function(
+        "read_file",
+        "Read a file",
+        serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+    )]
+}
+
+fn json_of(captured: &Captured) -> serde_json::Value {
+    serde_json::from_str(&captured.body).expect("the body is JSON")
+}
+
+/// The key goes in `x-api-key` with the version of the API beside it, to the Messages route, and
+/// nowhere else: not as a bearer token, not in the body. The model is the name the service knows,
+/// without the id that says which service was meant.
+#[test]
+fn an_anthropic_request_carries_its_key_in_x_api_key_and_nowhere_else() {
+    let (endpoint, received) = serve(MESSAGES_REPLY);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let mut client = AnthropicClient::new(
+        &config,
+        &egress,
+        &provider,
+        "claude-test",
+        Some(bravebot_config::Secret::new(ANTHROPIC_KEY)),
+    );
+    client
+        .complete(
+            &mut policy,
+            &ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")]),
+        )
+        .expect("the reply was read");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(sent.request_line, "POST /v1/messages HTTP/1.1");
+    assert_eq!(sent.header("x-api-key"), Some(ANTHROPIC_KEY));
+    assert_eq!(sent.header("anthropic-version"), Some("2023-06-01"));
+    assert_eq!(sent.header("authorization"), None);
+    assert_eq!(sent.header("content-type"), Some("application/json"));
+    assert!(
+        !sent.body.contains(ANTHROPIC_KEY),
+        "the key is in the body: {}",
+        sent.body
+    );
+    let body = json_of(&sent);
+    assert_eq!(body["model"], "claude-test");
+    assert!(
+        body["max_tokens"]
+            .as_u64()
+            .is_some_and(|ceiling| ceiling > 0)
+    );
+}
+
+/// A block that names nowhere for a key to live is somebody saying none is needed, so none is sent:
+/// not a header with nothing in it, and not whatever an exported variable meant for another tool
+/// holds.
+#[test]
+fn an_anthropic_block_naming_no_key_sends_none() {
+    let (endpoint, received) = serve(MESSAGES_REPLY);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+        .complete(
+            &mut policy,
+            &ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")]),
+        )
+        .expect("the reply was read");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(sent.header("x-api-key"), None);
+    assert_eq!(sent.header("authorization"), None);
+    // The version is not a credential, and the service refuses a request without it.
+    assert_eq!(sent.header("anthropic-version"), Some("2023-06-01"));
+}
+
+/// A reply the service refused is reported without the key it was sent with, since the error is
+/// what gets pasted into an issue.
+#[test]
+fn a_refused_anthropic_request_does_not_repeat_the_key() {
+    for streaming in [false, true] {
+        let (endpoint, received) = serve_attempts(vec![Attempt::Status(401)]);
+        let config = config_for(&endpoint);
+        let provider = anthropic_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let request = ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")]);
+        let mut client = AnthropicClient::new(
+            &config,
+            &egress,
+            &provider,
+            "claude-test",
+            Some(bravebot_config::Secret::new(ANTHROPIC_KEY)),
+        );
+
+        let error = if streaming {
+            client.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            client.complete(&mut policy, &request)
+        }
+        .expect_err("the service refused");
+
+        let sent = received.recv().expect("the request arrived");
+        assert_eq!(
+            sent.header("x-api-key"),
+            Some(ANTHROPIC_KEY),
+            "streaming={streaming}"
+        );
+        for said in [error.to_string(), format!("{error:?}")] {
+            assert!(
+                !said.contains(ANTHROPIC_KEY),
+                "streaming={streaming}: the key is in {said}"
+            );
+        }
+    }
+}
+
+/// A whole reply is read into text, the call the model made with its arguments as the string the
+/// rest of the agent carries, the dated model that answered, and a prompt that counts what the cache
+/// supplied as well as what it did not.
+#[test]
+fn a_whole_anthropic_reply_is_read_into_text_calls_model_and_cost() {
+    let (endpoint, _received) = serve(MESSAGES_REPLY);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test", None);
+    let completion = client
+        .complete(
+            &mut policy,
+            &ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")])
+                .with_tools(reading_tool()),
+        )
+        .expect("the reply was read");
+
+    assert_eq!(client.attempts(), 1);
+    assert_eq!(completion.model, "claude-test-20260101");
+    assert_eq!(completion.content.label(), Label::untrusted_public());
+    assert_eq!(completion.calls.len(), 1);
+    assert_eq!(completion.calls[0].id.as_deref(), Some("toolu_1"));
+    assert_eq!(completion.calls[0].function.name, "read_file");
+    assert_eq!(
+        completion.calls[0].function.arguments.as_deref(),
+        Some(r#"{"path":"x"}"#)
+    );
+    assert_eq!(completion.usage.prompt_tokens, 12 + 300 + 4000);
+    assert_eq!(completion.usage.completion_tokens, 7);
+    assert_eq!(completion.usage.cached.read_tokens, 4000);
+    assert_eq!(completion.usage.cached.written_tokens, 300);
+    assert_eq!(completion.context_tokens, 12 + 300 + 4000);
+    assert!(completion.cut_off.is_none());
+}
+
+/// A stream is assembled from its events: text in order, a call whose arguments arrive in pieces,
+/// reasoning left out, the prompt from the first event and the reply's count from the last. The
+/// request asked for a stream, and for the arguments as they are written, which is a field of the
+/// tool and not the beta header Bedrock is asked with.
+#[test]
+fn an_anthropic_stream_is_assembled_from_its_events_and_asks_for_arguments_as_written() {
+    let mut frames = vec![message_start(25, 90, 10)];
+    frames.push(event(
+        "content_block_start",
+        serde_json::json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""}}),
+    ));
+    frames.push(event(
+        "content_block_delta",
+        serde_json::json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "private thoughts"}}),
+    ));
+    frames.push(event("ping", serde_json::json!({"type": "ping"})));
+    frames.extend(text_block(1, &["I will ", "read it."]));
+    frames.extend(call_block(
+        2,
+        "toolu_1",
+        "read_file",
+        &["", "{\"pa", "th\": \"x\"}"],
+    ));
+    frames.extend(message_end("tool_use", 41));
+    let (endpoint, received) = serve_stream(frames);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let shown = policy.authorise_display_release("the reply as the model writes it");
+
+    let mut written = String::new();
+    let mut calling = Vec::new();
+    let mut counted = Vec::new();
+    let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test", None);
+    let completion = client
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")])
+                .with_tools(reading_tool()),
+            |progress| {
+                written.push_str(progress.written.declassify(&shown));
+                if let Some(name) = progress.calling {
+                    calling.push(name.declassify(&shown).to_string());
+                }
+                counted.push(progress.counted_by_server);
+            },
+        )
+        .expect("the stream was read");
+
+    let sent = received.recv().expect("the request arrived");
+    let body = json_of(&sent);
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["tools"][0]["eager_input_streaming"], true);
+    assert!(body.get("anthropic_beta").is_none());
+    assert_eq!(sent.header("anthropic-beta"), None);
+    assert_eq!(sent.header("accept"), Some("text/event-stream"));
+
+    assert_eq!(written, "I will read it.");
+    assert_eq!(completion.content.label(), Label::untrusted_public());
+    assert_eq!(completion.model, "claude-test-20260101");
+    assert_eq!(completion.calls.len(), 1);
+    assert_eq!(completion.calls[0].id.as_deref(), Some("toolu_1"));
+    assert_eq!(
+        completion.calls[0].function.arguments.as_deref(),
+        Some(r#"{"path": "x"}"#)
+    );
+    assert_eq!(completion.usage.prompt_tokens, 25 + 90 + 10);
+    assert_eq!(completion.usage.completion_tokens, 41);
+    assert_eq!(completion.usage.cached.read_tokens, 90);
+    assert_eq!(completion.usage.cached.written_tokens, 10);
+    assert!(
+        calling.iter().any(|name| name == "read_file"),
+        "the call was never named while it was written: {calling:?}"
+    );
+    assert_eq!(
+        counted.last(),
+        Some(&true),
+        "the service's own count never arrived"
+    );
+}
+
+/// A request that is not streamed asks for neither a stream nor the arguments as written, which
+/// would give up the service's own check that an argument parses and buy nothing for a reply that
+/// arrives whole.
+#[test]
+fn a_whole_anthropic_request_asks_for_neither_a_stream_nor_arguments_as_written() {
+    let (endpoint, received) = serve(MESSAGES_REPLY);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+        .complete(
+            &mut policy,
+            &ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")])
+                .with_tools(reading_tool()),
+        )
+        .expect("the reply was read");
+
+    let body = json_of(&received.recv().expect("the request arrived"));
+    assert!(body.get("stream").is_none());
+    assert!(body["tools"][0].get("eager_input_streaming").is_none());
+}
+
+/// A model's own options reach the body as written, which is how a block copied from opencode asks
+/// for thinking by budget, and the options cannot replace what the turn built.
+#[test]
+fn a_models_options_reach_the_anthropic_body_and_cannot_overwrite_what_the_turn_built() {
+    let (endpoint, received) = serve(MESSAGES_REPLY);
+    let config = config_for(&endpoint);
+    let provider = anthropic_with(
+        &endpoint,
+        r#", "models": {"claude-test": {"options": {
+            "thinking": {"type": "enabled", "budget_tokens": 16000},
+            "max_tokens": 1,
+            "model": "somebody-elses"
+        }}}"#,
+    );
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+        .complete(
+            &mut policy,
+            &ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")]),
+        )
+        .expect("the reply was read");
+
+    let body = json_of(&received.recv().expect("the request arrived"));
+    assert_eq!(
+        body["thinking"],
+        serde_json::json!({"type": "enabled", "budget_tokens": 16000})
+    );
+    assert_eq!(body["model"], "claude-test");
+    assert_eq!(body["max_tokens"], 32_000);
+}
+
+/// A request carrying a system prompt, so it has a breakpoint, and a level, which is the pair of
+/// things a model may refuse that nobody asked for.
+fn asking_with_a_prompt(model: &str) -> ChatRequest {
+    ChatRequest::new(
+        model,
+        vec![Message::system("be brief"), Message::user("hello")],
+    )
+    .with_effort(Some(Effort::Xhigh))
+}
+
+fn carries_a_breakpoint(body: &serde_json::Value) -> bool {
+    body.to_string().contains("cache_control")
+}
+
+/// A model that refuses what a request carried is asked again without it, one thing at a time, in the
+/// order this API is likeliest to refuse them: the level before the ceiling, and both before the cache,
+/// which every model reads. What answered is remembered, so the next request to that model does not
+/// spend a refused one finding out again, and the cache is not blamed for a field it had nothing to do
+/// with.
+#[test]
+fn an_anthropic_request_refused_on_its_contents_is_asked_again_without_what_nobody_asked_for() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Json(MESSAGES_REPLY.into()),
+        Attempt::Json(MESSAGES_REPLY.into()),
+    ]);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let request = asking_with_a_prompt("anthropic/claude-test");
+
+    let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test", None);
+    client
+        .complete(&mut policy, &request)
+        .expect("the third request answered");
+    assert_eq!(client.attempts(), 3);
+
+    // The next request to the model starts from what it refused.
+    let mut later = AnthropicClient::new(&config, &egress, &provider, "claude-test", None);
+    later
+        .complete(&mut policy, &request)
+        .expect("the remembered shape answered");
+    assert_eq!(later.attempts(), 1);
+
+    let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
+    // (a level, the assumed ceiling, a breakpoint) on each request in turn.
+    let carried = |body: &serde_json::Value| {
+        (
+            body.get("output_config").is_some(),
+            body["max_tokens"].as_u64().expect("a ceiling"),
+            carries_a_breakpoint(body),
+        )
+    };
+    assert_eq!(
+        bodies.iter().map(carried).collect::<Vec<_>>(),
+        [
+            (true, 32_000, true),
+            (false, 32_000, true),
+            (false, 8_192, true),
+            (false, 8_192, true),
+        ]
+    );
+    assert!(!bravebot_aichat::reads_effort(
+        &provider.completion_url(),
+        "claude-test"
+    ));
+}
+
+/// A request can be refused for reasons that have nothing to do with the fields it carried, and a
+/// session that gave the cache up for one of them would pay full price for it every round after.
+/// Nothing is remembered from probes that all failed.
+#[test]
+fn a_probe_that_failed_as_well_leaves_what_was_known_alone() {
+    let (endpoint, received) = serve_attempts((0..8).map(|_| Attempt::Status(400)).collect());
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let request = asking_with_a_prompt("anthropic/claude-test");
+
+    for _ in 0..2 {
+        AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+            .complete(&mut policy, &request)
+            .expect_err("every request was refused");
+    }
+
+    let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
+    // The first and the fifth are the first request of each call.
+    assert_eq!(bodies.len(), 8);
+    assert_eq!(bodies[0], bodies[4], "the second call started from a probe");
+    assert!(carries_a_breakpoint(&bodies[4]));
+    assert!(bravebot_aichat::reads_effort(
+        &provider.completion_url(),
+        "claude-test"
+    ));
+}
+
+/// A ceiling nobody stated is a guess, so a model that refuses it is asked again with a lower one, with
+/// its cache left alone. One somebody stated is theirs to see refused, and is never lowered for them.
+#[test]
+fn an_assumed_ceiling_a_model_refuses_is_stepped_down_and_a_stated_one_never_is() {
+    let assumed = |body: &serde_json::Value| body["max_tokens"].as_u64().expect("a ceiling");
+
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Json(MESSAGES_REPLY.into()),
+    ]);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+        .complete(
+            &mut policy,
+            &ChatRequest::new(
+                "anthropic/claude-test",
+                vec![Message::system("be brief"), Message::user("hello")],
+            ),
+        )
+        .expect("the lowered ceiling answered");
+    let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
+    assert_eq!(
+        bodies.iter().map(assumed).collect::<Vec<_>>(),
+        [32_000, 8_192]
+    );
+    assert!(
+        bodies.iter().all(carries_a_breakpoint),
+        "the cache was given up for a ceiling it had nothing to do with"
+    );
+
+    let (endpoint, received) = serve_attempts(vec![Attempt::Status(400), Attempt::Status(400)]);
+    let config = config_for(&endpoint);
+    let provider = anthropic_with(
+        &endpoint,
+        r#", "models": {"claude-stated": {"limit": {"context": 200000, "output": 64000}}}"#,
+    );
+    let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-stated", None);
+    client
+        .complete(
+            &mut policy,
+            &ChatRequest::new(
+                "anthropic/claude-stated",
+                vec![Message::system("be brief"), Message::user("hello")],
+            ),
+        )
+        .expect_err("the stated ceiling was refused");
+    let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
+    assert_eq!(client.attempts(), 2);
+    assert_eq!(
+        bodies.iter().map(assumed).collect::<Vec<_>>(),
+        [64_000, 64_000]
+    );
+}
+
+/// An exported budget outranks the figure a model's own block states, as it does for an account of
+/// AWS.
+#[test]
+fn an_exported_reply_ceiling_is_the_one_an_anthropic_request_carries() {
+    let (endpoint, received) = serve(MESSAGES_REPLY);
+    let config = config_for(&endpoint);
+    let provider = anthropic_with(
+        &endpoint,
+        r#", "models": {"claude-test": {"limit": {"context": 200000, "output": 64000}}}"#,
+    )
+    .with_output_budget(Some(48_000));
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+        .complete(
+            &mut policy,
+            &ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")]),
+        )
+        .expect("the reply was read");
+
+    assert_eq!(
+        json_of(&received.recv().expect("the request arrived"))["max_tokens"],
+        48_000
+    );
+}
+
+/// A reply the ceiling stopped is kept for what it said and never for what it asked: whatever call
+/// it was part way through is not a call the model finished choosing. What it was doing goes with
+/// it, named from the request's own list of tools.
+#[test]
+fn a_reply_the_ceiling_stopped_keeps_its_text_and_asks_for_no_tools() {
+    let whole = r#"{"model":"claude-test-20260101",
+        "content":[{"type":"text","text":"Here is the start"},
+                   {"type":"tool_use","id":"toolu_1","name":"read_file","input":{"path":"x"}}],
+        "stop_reason":"max_tokens",
+        "usage":{"input_tokens":10,"output_tokens":32000}}"#;
+    let mut streamed = vec![message_start(10, 0, 0)];
+    streamed.extend(text_block(0, &["Here is the start"]));
+    streamed.extend(call_block(
+        1,
+        "toolu_1",
+        "read_file",
+        &["{\"path\": \"half"],
+    ));
+    streamed.extend(message_end("max_tokens", 32_000));
+
+    for stream in [false, true] {
+        let (endpoint, _received) = if stream {
+            serve_stream(streamed.clone())
+        } else {
+            serve(whole)
+        };
+        let config = config_for(&endpoint);
+        let provider = anthropic_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let request = ChatRequest::new("anthropic/claude-test", vec![Message::user("go")])
+            .with_tools(reading_tool());
+
+        let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test", None);
+        let completion = if stream {
+            client.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            client.complete(&mut policy, &request)
+        }
+        .expect("what it wrote is kept");
+
+        assert!(completion.calls.is_empty(), "stream={stream}");
+        let cut = completion.cut_off.expect("it says it was cut off");
+        assert_eq!(cut.ceiling, 32_000);
+        let call = cut.call.expect("it was part way through a call");
+        assert_eq!(call.tool.as_deref(), Some("read_file"));
+        assert!(call.arguments > 0);
+        assert!(!cut.thought);
+        assert_eq!(completion.usage.completion_tokens, 32_000);
+        let proof = policy.authorise_display_release("test reads the reply");
+        assert_eq!(completion.content.declassify(&proof), "Here is the start");
+    }
+}
+
+/// A reply the ceiling stopped having written nothing is a failure that names the ceiling, since a
+/// person told only that a limit was reached has nothing to act on.
+#[test]
+fn a_reply_the_ceiling_stopped_before_it_wrote_anything_names_the_ceiling() {
+    let mut frames = vec![message_start(10, 0, 0)];
+    frames.push(event(
+        "content_block_start",
+        serde_json::json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""}}),
+    ));
+    frames.push(event(
+        "content_block_delta",
+        serde_json::json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "hmm"}}),
+    ));
+    frames.extend(message_end("max_tokens", 32_000));
+    let (endpoint, _received) = serve_stream(frames);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let error = AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new("anthropic/claude-test", vec![Message::user("go")]),
+            |_| {},
+        )
+        .expect_err("nothing was written");
+
+    let ChatError::TooLong(cut) = &error else {
+        panic!("not named as too long: {error:?}");
+    };
+    assert_eq!(cut.ceiling, 32_000);
+    assert!(cut.thought);
+    assert!(error.to_string().contains("32000"), "{error}");
+}
+
+/// A failure the service reports part way through is asked for again only where a second attempt
+/// could get past it. A busy service is. A request it refuses on its contents is refused the same
+/// way every time.
+#[test]
+fn a_failure_reported_mid_stream_is_asked_again_only_where_a_second_attempt_could_pass_it() {
+    let failing = |kind: &str| {
+        let mut frames = vec![message_start(10, 0, 0)];
+        frames.extend(text_block(0, &["partial"]));
+        frames.push(event(
+            "error",
+            serde_json::json!({"type": "error", "error": {"type": kind, "message": "x"}}),
+        ));
+        frames
+    };
+    let mut answered = vec![message_start(10, 0, 0)];
+    answered.extend(text_block(0, &["whole"]));
+    answered.extend(message_end("end_turn", 3));
+
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    // Each kind a second attempt could get past, one service apiece so no attempt is counted twice.
+    for kind in [
+        "overloaded_error",
+        "api_error",
+        "timeout_error",
+        "rate_limit_error",
+    ] {
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::Frames(failing(kind)),
+            Attempt::Frames(answered.clone()),
+        ]);
+        let config = config_for(&endpoint);
+        let provider = anthropic_at(&endpoint);
+        let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+            .with_backoff(Duration::from_millis(1));
+        client
+            .complete_streaming(
+                &mut policy,
+                &ChatRequest::new("anthropic/claude-test", vec![Message::user("go")]),
+                |_| {},
+            )
+            .unwrap_or_else(|error| panic!("{kind}: the second attempt did not answer: {error:?}"));
+        assert_eq!(client.attempts(), 2, "{kind}");
+        assert_eq!(received.try_iter().count(), 2, "{kind}");
+    }
+
+    let (endpoint, received) =
+        serve_attempts(vec![Attempt::Frames(failing("invalid_request_error"))]);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test-2", None)
+        .with_backoff(Duration::from_millis(1));
+    let error = client
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new("anthropic/claude-test-2", vec![Message::user("go")]),
+            |_| {},
+        )
+        .expect_err("a refused request is not asked again");
+    assert!(
+        matches!(
+            error,
+            ChatError::Reported {
+                failure: Failure::InvalidRequest
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(client.attempts(), 1);
+    assert_eq!(received.try_iter().count(), 1);
+}
+
+/// A service that hangs up mid-reply leaves the same end of input as one that finished, so without
+/// the closing event a cut-off answer would be returned as a whole one and the call being written
+/// would vanish.
+#[test]
+fn an_anthropic_stream_that_never_says_it_finished_is_asked_again_and_then_reported() {
+    let mut cut = vec![message_start(10, 0, 0)];
+    cut.extend(text_block(0, &["half an ans"]));
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Frames(cut.clone()),
+        Attempt::Frames(cut.clone()),
+        Attempt::Frames(cut),
+    ]);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+        .with_backoff(Duration::from_millis(1));
+
+    let error = client
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new("anthropic/claude-test", vec![Message::user("go")]),
+            |_| {},
+        )
+        .expect_err("a reply that stopped is not a reply");
+
+    assert!(matches!(error, ChatError::Incomplete), "{error:?}");
+    assert_eq!(client.attempts(), 3);
+    assert_eq!(received.try_iter().count(), 3);
+}
+
+/// A reply the service declined to write has nothing to keep, sending it again says the same, and
+/// what it cost is still counted.
+#[test]
+fn a_refusal_is_reported_without_being_asked_again_and_keeps_its_cost() {
+    let whole = r#"{"model":"claude-test","content":[],"stop_reason":"refusal",
+        "usage":{"input_tokens":50,"output_tokens":0}}"#;
+    let (endpoint, received) = serve(whole);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test", None);
+
+    let error = client
+        .complete(
+            &mut policy,
+            &ChatRequest::new("anthropic/claude-test", vec![Message::user("go")]),
+        )
+        .expect_err("the service declined");
+
+    assert!(
+        matches!(
+            error,
+            ChatError::Reported {
+                failure: Failure::Refusal
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(client.attempts(), 1);
+    assert_eq!(received.try_iter().count(), 1);
+    assert_eq!(
+        client.completed_usage().map(|usage| usage.prompt_tokens),
+        Some(50)
+    );
+}
+
+/// A stop that lands before a request is built sends nothing: spending a key on a reply nobody
+/// wants is worse than slow.
+#[test]
+fn a_stop_before_an_anthropic_request_is_sent_sends_nothing() {
+    let (endpoint, received) = serve(MESSAGES_REPLY);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let cancel = Cancel::new();
+    cancel.cancel();
+    let mut client =
+        AnthropicClient::new(&config, &egress, &provider, "claude-test", None).with_cancel(cancel);
+
+    for stream in [false, true] {
+        let request = ChatRequest::new("anthropic/claude-test", vec![Message::user("go")]);
+        let error = if stream {
+            client
+                .complete_streaming(&mut policy, &request, |_| {})
+                .expect_err("stopped")
+        } else {
+            client.complete(&mut policy, &request).expect_err("stopped")
+        };
+        assert!(matches!(error, ChatError::Cancelled), "{error:?}");
+        assert_eq!(client.attempts(), 0);
+    }
+    assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
+}
+
+/// What the listing at `/v1/models` holds for each model, as its reference gives it, with the
+/// pagination fields beside the rows.
+const ANTHROPIC_LISTING: &str = r#"{"data":[
+    {"type":"model","id":"claude-opus-5-5","display_name":"Claude Opus 5.5",
+     "created_at":"2026-09-21T00:00:00Z","max_input_tokens":1000000,"max_tokens":128000,
+     "capabilities":{"effort":{"supported":true}}},
+    {"type":"model","id":"claude-haiku-4-5","display_name":"Claude Haiku 4.5",
+     "created_at":"2025-10-01T00:00:00Z","max_input_tokens":200000,"max_tokens":64000,
+     "capabilities":{"effort":{"supported":false}}}
+],"has_more":false,"first_id":"claude-opus-5-5","last_id":"claude-haiku-4-5"}"#;
+
+/// The roster is one request for a whole page, to the route Anthropic has and not the account route
+/// the gateways have, with the key in the header the service reads and the version beside it. Its
+/// rows are qualified so a pick names the service, and carry the window and the level each states.
+#[test]
+fn an_anthropic_listing_is_asked_for_once_as_a_whole_page_with_the_key_in_its_header() {
+    let (endpoint, received) = serve(ANTHROPIC_LISTING);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let models = bravebot_aichat::models::list_from_gateway(
+        &mut policy,
+        &provider,
+        Some(ANTHROPIC_KEY),
+        &egress,
+    )
+    .expect("the roster was fetched");
+
+    let asked: Vec<_> = received.try_iter().collect();
+    assert_eq!(asked.len(), 1, "the account route was asked as well");
+    assert_eq!(asked[0].request_line, "GET /v1/models?limit=1000 HTTP/1.1");
+    assert_eq!(asked[0].header("x-api-key"), Some(ANTHROPIC_KEY));
+    assert_eq!(asked[0].header("anthropic-version"), Some("2023-06-01"));
+    assert_eq!(asked[0].header("authorization"), None);
+
+    let rows: Vec<(&str, Option<u64>, bool)> = models
+        .iter()
+        .map(|model| {
+            (
+                model.key.as_str(),
+                model.conversation_tokens,
+                model.reads_effort,
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("anthropic/claude-opus-5-5", Some(1_000_000), true),
+            ("anthropic/claude-haiku-4-5", Some(200_000), false),
+        ]
+    );
+}
+
+/// A model that reads a breakpoint and refuses a lifetime on it keeps its caching at its own default,
+/// where the other order would give up the caching for the sake of a lifetime. The lifetime goes
+/// first, and what that found is remembered.
+#[test]
+fn an_anthropic_refused_lifetime_is_given_up_before_the_breakpoints() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Json(MESSAGES_REPLY.into()),
+        Attempt::Json(MESSAGES_REPLY.into()),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.prompt_cache_ttl = Some(bravebot_config::CacheTtl::OneHour);
+    // A stated ceiling, so the lifetime is the first thing left to be refused.
+    let provider = anthropic_with(
+        &endpoint,
+        r#", "models": {"claude-test": {"limit": {"context": 200000, "output": 64000}}}"#,
+    );
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let request = ChatRequest::new(
+        "anthropic/claude-test",
+        vec![Message::system("be brief"), Message::user("hello")],
+    );
+
+    let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test", None);
+    client
+        .complete(&mut policy, &request)
+        .expect("the second request answered");
+    assert_eq!(client.attempts(), 2);
+    let mut later = AnthropicClient::new(&config, &egress, &provider, "claude-test", None);
+    later
+        .complete(&mut policy, &request)
+        .expect("the remembered shape answered");
+    assert_eq!(later.attempts(), 1);
+
+    let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
+    assert_eq!(bodies.len(), 3);
+    let hour = serde_json::json!({"type": "ephemeral", "ttl": "1h"});
+    let default = serde_json::json!({"type": "ephemeral"});
+    assert_eq!(bodies[0]["system"][0]["cache_control"], hour);
+    for refused in &bodies[1..] {
+        assert_eq!(
+            refused["system"][0]["cache_control"], default,
+            "the breakpoint went with the lifetime: {refused}"
+        );
+    }
+}
+
+/// The ask for arguments as they are written is the last thing a refusal can be about, because
+/// giving it up costs a model every long argument written into a silence and giving up the ceiling
+/// or the cache does not. A request refused on its contents loses the ceiling, then the cache, then
+/// the ask.
+#[test]
+fn an_anthropic_stream_refused_on_its_contents_gives_up_the_ask_for_arguments_last() {
+    let mut answered = vec![message_start(10, 0, 0)];
+    answered.extend(text_block(0, &["done"]));
+    answered.extend(message_end("end_turn", 3));
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Frames(answered),
+    ]);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test", None);
+    client
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")])
+                .with_tools(reading_tool()),
+            |_| {},
+        )
+        .expect("the fourth request answered");
+    assert_eq!(client.attempts(), 4);
+
+    let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
+    let shape = |body: &serde_json::Value| {
+        (
+            carries_a_breakpoint(body),
+            body["max_tokens"].as_u64().expect("a ceiling"),
+            body["tools"][0].get("eager_input_streaming").is_some(),
+        )
+    };
+    assert_eq!(
+        bodies.iter().map(shape).collect::<Vec<_>>(),
+        [
+            (true, 32_000, true),
+            (true, 8_192, true),
+            (false, 8_192, true),
+            (false, 8_192, false),
+        ]
+    );
+}
+
+/// The count an entry states is how many times a request is sent again, and zero sends it once. Both
+/// paths have a loop of their own, so both are asked.
+#[test]
+fn an_anthropic_entry_stating_no_retries_is_asked_once() {
+    for streaming in [false, true] {
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::Status(503),
+            Attempt::Json(MESSAGES_REPLY.into()),
+        ]);
+        let config = config_for(&endpoint);
+        let text = format!(
+            r#"{{"provider": {{"anthropic": {{"env": ["ANTHROPIC_API_KEY"],
+                "options": {{"baseURL": "{endpoint}/v1", "maxRetries": 0}}}}}}}}"#
+        );
+        let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+            panic!("not an object");
+        };
+        let provider = bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider");
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let request = ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")]);
+        let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+            .with_backoff(Duration::from_millis(1));
+
+        let result = if streaming {
+            client.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            client.complete(&mut policy, &request)
+        };
+
+        assert_eq!(client.attempts(), 1, "streaming {streaming}: {result:?}");
+        assert_eq!(received.try_iter().count(), 1, "streaming {streaming}");
+        assert!(
+            matches!(
+                result,
+                Err(ChatError::Egress(bravebot_net::EgressError::Status {
+                    status: 503,
+                    ..
+                }))
+            ),
+            "streaming {streaming}: {result:?}"
+        );
+    }
+}
+
+/// A rate limit that lifts in a moment is waited out for as long as the service asked, on both
+/// paths, and not sent again after the short pause a failure with no such request gets.
+#[test]
+fn an_anthropic_rate_limit_the_service_asked_to_wait_out_is_waited_for() {
+    for streaming in [false, true] {
+        let mut answered = vec![message_start(10, 0, 0)];
+        answered.extend(text_block(0, &["done"]));
+        answered.extend(message_end("end_turn", 3));
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::StatusAfter(429, "1"),
+            if streaming {
+                Attempt::Frames(answered)
+            } else {
+                Attempt::Json(MESSAGES_REPLY.into())
+            },
+        ]);
+        let config = config_for(&endpoint);
+        let provider = anthropic_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let request = ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")]);
+        let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+            .with_backoff(Duration::from_millis(1));
+
+        let started = std::time::Instant::now();
+        let result = if streaming {
+            client.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            client.complete(&mut policy, &request)
+        };
+        let waited = started.elapsed();
+
+        assert!(result.is_ok(), "streaming {streaming}: {result:?}");
+        assert_eq!(client.attempts(), 2, "streaming {streaming}");
+        assert!(
+            waited >= Duration::from_secs(1),
+            "streaming {streaming}: it asked again after {waited:?}, before the second the service asked for"
+        );
+        assert_eq!(received.try_iter().count(), 2);
+    }
+}
+
+/// The service answers 529 when it is busy for everybody, which is its commonest failure and a
+/// reason to ask again. A refused credential is not: asking again says the same, and is billed again.
+#[test]
+fn an_overloaded_anthropic_service_is_asked_again_and_a_refused_key_is_not() {
+    for streaming in [false, true] {
+        let mut answered = vec![message_start(10, 0, 0)];
+        answered.extend(text_block(0, &["done"]));
+        answered.extend(message_end("end_turn", 3));
+        let reply = |status: u16| {
+            let (endpoint, received) = serve_attempts(vec![
+                Attempt::Status(status),
+                if streaming {
+                    Attempt::Frames(answered.clone())
+                } else {
+                    Attempt::Json(MESSAGES_REPLY.into())
+                },
+            ]);
+            let config = config_for(&endpoint);
+            let provider = anthropic_at(&endpoint);
+            let egress = Egress::new();
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let request = ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")]);
+            let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+                .with_backoff(Duration::from_millis(1));
+            let result = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            };
+            (result, client.attempts(), received.try_iter().count())
+        };
+
+        let (result, attempts, sent) = reply(529);
+        assert!(result.is_ok(), "streaming {streaming}: {result:?}");
+        assert_eq!((attempts, sent), (2, 2), "streaming {streaming}");
+
+        let (result, attempts, sent) = reply(401);
+        assert!(result.is_err(), "streaming {streaming}");
+        assert_eq!((attempts, sent), (1, 1), "streaming {streaming}");
+    }
+}
+
+/// A reply that stopped because the conversation filled the model's window is a failure of its own,
+/// not a reply to keep: what it wrote was cut wherever the window ended, and asking again unchanged
+/// fills it again. What it cost is still counted, and it is not asked for again.
+#[test]
+fn a_reply_that_filled_the_models_window_is_reported_for_a_shorter_conversation_to_answer() {
+    let whole = r#"{"model":"claude-test","content":[{"type":"text","text":"cut"}],
+        "stop_reason":"model_context_window_exceeded",
+        "usage":{"input_tokens":190000,"output_tokens":9000}}"#;
+    let mut streamed = vec![message_start(190_000, 0, 0)];
+    streamed.extend(text_block(0, &["cut"]));
+    streamed.extend(message_end("model_context_window_exceeded", 9_000));
+
+    for stream in [false, true] {
+        let (endpoint, received) = if stream {
+            serve_stream(streamed.clone())
+        } else {
+            serve(whole)
+        };
+        let config = config_for(&endpoint);
+        let provider = anthropic_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let request = ChatRequest::new("anthropic/claude-test", vec![Message::user("go")]);
+        let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-test", None);
+
+        let error = if stream {
+            client.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            client.complete(&mut policy, &request)
+        }
+        .expect_err("a reply cut at the window is not a reply");
+
+        assert!(
+            matches!(
+                error,
+                ChatError::Reported {
+                    failure: Failure::ContextFull
+                }
+            ),
+            "stream={stream}: {error:?}"
+        );
+        assert_eq!(client.attempts(), 1, "stream={stream}");
+        assert_eq!(received.try_iter().count(), 1, "stream={stream}");
+        assert_eq!(
+            client.completed_usage().map(|usage| usage.prompt_tokens),
+            Some(190_000),
+            "stream={stream}"
+        );
+    }
+}
+
+/// A server that answers with a redirect to `location`, for as many requests as come.
+fn serve_redirect(location: String) -> (String, mpsc::Receiver<Captured>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut request_line = String::new();
+            let _ = reader.read_line(&mut request_line);
+            let mut headers = Vec::new();
+            let mut length = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.trim().eq_ignore_ascii_case("content-length") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    headers.push((name.trim().to_string(), value.trim().to_string()));
+                }
+            }
+            let mut body = vec![0u8; length];
+            let _ = reader.read_exact(&mut body);
+            let _ = sender.send(Captured {
+                request_line: request_line.trim().to_string(),
+                headers,
+                body: String::from_utf8_lossy(&body).to_string(),
+            });
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// An endpoint that redirects to another host receives the request again, whole, and a key sent
+/// there is a key given to whoever the redirect named. The key stays with the socket the request was
+/// addressed to, for a reply and for the listing alike. The version header is not a credential and
+/// goes on.
+#[test]
+fn an_anthropic_key_does_not_follow_a_redirect_to_another_host() {
+    let (elsewhere, landed) = serve(MESSAGES_REPLY);
+    let (endpoint, redirected) = serve_redirect(format!("{elsewhere}/v1/messages"));
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    AnthropicClient::new(
+        &config,
+        &egress,
+        &provider,
+        "claude-test",
+        Some(bravebot_config::Secret::new(ANTHROPIC_KEY)),
+    )
+    .complete(
+        &mut policy,
+        &ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")]),
+    )
+    .expect("the redirected request was answered");
+
+    let first = redirected
+        .recv()
+        .expect("the request arrived where it was addressed");
+    assert_eq!(first.header("x-api-key"), Some(ANTHROPIC_KEY));
+    let second = landed
+        .recv()
+        .expect("the request was sent again where it was redirected");
+    assert_eq!(
+        second.header("x-api-key"),
+        None,
+        "the key followed the redirect"
+    );
+    assert_eq!(second.header("authorization"), None);
+    assert_eq!(second.header("anthropic-version"), Some("2023-06-01"));
+    assert!(!second.body.contains(ANTHROPIC_KEY));
+
+    let (elsewhere, landed) = serve(ANTHROPIC_LISTING);
+    let (endpoint, redirected) = serve_redirect(format!("{elsewhere}/v1/models?limit=1000"));
+    let provider = anthropic_at(&endpoint);
+    bravebot_aichat::models::list_from_gateway(
+        &mut policy,
+        &provider,
+        Some(ANTHROPIC_KEY),
+        &egress,
+    )
+    .expect("the redirected listing was answered");
+    assert_eq!(
+        redirected
+            .recv()
+            .expect("the listing was asked for")
+            .header("x-api-key"),
+        Some(ANTHROPIC_KEY)
+    );
+    assert_eq!(
+        landed
+            .recv()
+            .expect("the listing was asked for again")
+            .header("x-api-key"),
+        None,
+        "the key followed the redirect"
+    );
+}

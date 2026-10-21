@@ -427,6 +427,8 @@ because its body is read to the end and a stop pressed meanwhile is not acted on
   whole request, which on those connections means the `authorization` header the aichat and gateway
   backends carry (`x-goog-api-key` for a Google Vertex service), the `authorization` and `x-amz-security-token` pair a Bedrock request is signed
   with, the `mcp-session-id` an HTTP MCP server issued, and a body holding the conversation. The
+  `x-api-key` an Anthropic service takes is not among them: it is attached as a socket header, so a
+  hop that leaves the endpoint's own scheme, host and port is sent the conversation and not the key. The
   per-hop check there is the capability and nothing more, for the reason NET-2 gives, so an endpoint
   somebody configured can name any https host in a `Location` header and be sent all of it. NET-9
   bounds what a downgrade costs, not where a hop may land. What stands in front of this is that the
