@@ -1428,8 +1428,9 @@ Still open:
   diagnostic text is not sent as a turn error.
 - `hooks.inspect` reports the hooks file as the agent reads it: `path`, its `text` (null for a
   file this could not read at all), the `hooks` it declares as `{ on, tool, run, timeout, firesForNothing }`,
-  `timeoutSeconds` as `{ min, max }`, the whole numbers of seconds the reader accepts for an
-  entry's `timeout` (an entry with any other `timeout` is dropped), and `entire`, false where the
+  `timeoutSeconds` as `{ min, max, defaultFor }`, the whole numbers of seconds the reader accepts for an
+  entry's `timeout` (an entry with any other `timeout` is dropped) and, for each moment word, the
+  seconds an entry on it that states none is held to, and `entire`, false where the
   reader passed over part of the file, so that composing it back
   from `hooks` alone would drop what it did not read. An editor that offers a form refuses one for
   such a file. `no_home` where the platform names no state directory. Nothing else parses the

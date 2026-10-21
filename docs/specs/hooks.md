@@ -167,6 +167,7 @@ and a turn that died is exactly when they want telling.
 `verified-by: bravebot_agent::turn::a_summary_that_could_not_be_made_fires_no_hook`
 `verified-by: bravebot_agent::turn::a_delegate_s_compaction_fires_no_compacted_hook`
 `verified-by: bravebot_tui::app::the_thread_that_summarises_fires_the_hooks_in_the_sessions_directory`
+`verified-by: bravebot_config::hooks::the_list_of_moments_names_each_once_in_a_spelling_a_file_accepts`
 `verified-by: bravebot_config::hooks::a_session_moment_fires_only_the_hooks_written_for_it`
 `verified-by: bravebot_config::hooks::a_tool_named_on_a_session_moment_fires_for_nothing`
 
@@ -348,6 +349,8 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_config::hooks::a_hooks_file_is_read_up_to_64_kb_and_not_a_byte_past_it`
 `verified-by: bravebot_agent::hooks::the_default_bound_is_thirty_seconds`
 `verified-by: bravebot_agent::hooks::the_default_bound_of_a_session_end_is_five_seconds`
+`verified-by: bravebot_agent::hooks::only_a_session_end_has_a_shorter_default_bound_than_thirty_seconds`
+`verified-by: bravebot_agent::hooks::a_session_begins_holding_its_end_to_the_bound_that_moment_has`
 `verified-by: bravebot_agent::hooks::a_session_end_hook_is_stopped_at_the_bound_the_end_has`
 `verified-by: bravebot_agent::hooks::a_session_end_hook_that_states_a_timeout_keeps_it`
 `verified-by: bravebot_agent::hooks::a_session_hook_that_goes_wrong_is_said_naming_the_moment_and_program`
@@ -358,11 +361,12 @@ by hand, and the failure it most often has is a typo.
 
 The declarations are read in one place. A surface offering somebody their own hooks is told what that
 reader made of the file rather than reading the text itself: the entries, which of them names a call
-that does not happen at its moment, and whether anything in the file was passed over. A surface
-composing the file back from the entries it was given does that only where it was told the whole file
-was read, and otherwise says so and leaves the file to be edited by hand. It may decline to send a
-field somebody left empty, and decides nothing else about what a hook is: a form that wrote an entry
-this reader takes nothing from would have written a file it then refuses to edit.
+that does not happen at its moment, the bound each moment holds an entry to when it states no
+`timeout`, and whether anything in the file was passed over. A surface composing the file back from
+the entries it was given does that only where it was told the whole file was read, and otherwise says
+so and leaves the file to be edited by hand. It may decline to send a field somebody left empty, and
+decides nothing else about what a hook is: a form that wrote an entry this reader takes nothing from
+would have written a file it then refuses to edit.
 
 **Why.** The rules above are lenient deliberately, and [HOOK-7](#HOOK-7) is why: an unknown moment,
 a key this build does not read and an unusable entry are each that much of the file not applying,
@@ -383,9 +387,10 @@ turn would fire.
 `verified-by: bravebot_config::hooks::a_file_that_is_not_there_is_wholly_read_and_one_too_large_is_not`
 `verified-by: bravebot_config::hooks::an_entry_says_whether_it_fires_for_nothing`
 `verified-by: bravebot_ui_bridge::hooks::a_front_end_is_told_the_entries_the_agent_read`
+`verified-by: bravebot_ui_bridge::hooks::a_front_end_is_told_the_bound_each_moment_holds_an_entry_to_when_it_states_none`
 `verified-by: bravebot_ui_bridge::hooks::a_file_the_agent_did_not_wholly_read_says_so`
 `verified-by: bravebot_ui_bridge::dispatch::the_hooks_file_is_read_through_the_bridge`
-`verified-by: by-construction (the desktop interface parses no hooks file: ui/src/shared/agent-settings.ts composes one out of the entries the agent reported and reads none, its main process offers a save channel and no read channel, and the helper binary that writes the file answers no read operation for it, which its own test asserts; ui/scripts/drive-agent-settings.mjs drives the panel against a file the agent reports it did not wholly read and asserts the form refuses it, and ui/scripts/drive-manual-walkthrough.mjs edits, fires and removes a real hook through that panel under CI)`
+`verified-by: by-construction (the desktop interface parses no hooks file: ui/src/shared/agent-settings.ts composes one out of the entries the agent reported and reads none, its main process offers a save channel and no read channel, and the helper binary that writes the file answers no read operation for it, which its own test asserts; ui/scripts/drive-agent-settings.mjs drives the panel against a file the agent reports it did not wholly read and asserts the form refuses it and that the timeout field shows the bound the agent reported for the entry's moment, and ui/scripts/drive-manual-walkthrough.mjs edits, fires and removes a real hook through that panel under CI)`
 
 <a id="HOOK-9"></a>
 ### HOOK-9: a hook holding the turn is said to be running, by moment and program, while it runs
@@ -478,6 +483,10 @@ path in the hook that ends a session is the path its twin started from, whatever
 `verified-by: bravebot_cli::running::a_safe_run_fires_no_session_moment`
 `verified-by: bravebot_cli::running::a_background_session_fires_turn_moments_and_neither_session_moment`
 `verified-by: bravebot_agent::hooks::an_interface_is_told_whether_a_start_hook_will_run`
+`verified-by: bravebot_tui::session_moments_tests::the_opening_screen_is_drawn_before_a_start_hook_holds_the_first_prompt_back`
+`verified-by: bravebot_tui::session_moments_tests::no_early_frame_is_drawn_where_no_start_hook_will_run`
+`verified-by: bravebot_tui::session_moments_tests::a_start_hook_that_could_not_run_is_noted_once_however_many_conversations_open`
+`verified-by: bravebot_cli::main::leaving_the_interface_ends_the_session_except_for_a_hand_over_to_the_background`
 
 ## The file
 

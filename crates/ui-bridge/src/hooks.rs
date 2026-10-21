@@ -6,8 +6,11 @@
 //! two parsers being kept in step.
 
 use crate::protocol::{ErrorCode, Failure};
-use bravebot_config::hooks::{self, Declarations, MAX_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS};
-use serde_json::{Value, json};
+use bravebot_agent::hooks::default_limit;
+use bravebot_config::hooks::{
+    self, Declarations, MAX_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, Moment,
+};
+use serde_json::{Map, Value, json};
 use std::path::Path;
 
 /// Where the declarations live, what they say, and whether all of the file was read.
@@ -31,8 +34,16 @@ fn report(path: &Path, read: &Declarations) -> Value {
         "text": read.text(),
         "entire": read.entire(),
         // The range the reader accepts for a `timeout`, so a form refuses what the reader would
-        // drop without holding a second copy of the bounds.
-        "timeoutSeconds": {"min": MIN_TIMEOUT_SECONDS, "max": MAX_TIMEOUT_SECONDS},
+        // drop without holding a second copy of the bounds, and the bound each moment holds an entry
+        // to when it states none, so a form shows the agent's figure rather than one of its own.
+        "timeoutSeconds": {
+            "min": MIN_TIMEOUT_SECONDS,
+            "max": MAX_TIMEOUT_SECONDS,
+            "defaultFor": Moment::ALL
+                .iter()
+                .map(|moment| (moment.as_str().to_string(), json!(default_limit(*moment).as_secs())))
+                .collect::<Map<String, Value>>(),
+        },
         "hooks": read.hooks().declared().iter().map(|hook| json!({
             "on": hook.moment().as_str(),
             "tool": hook.tool(),
@@ -76,16 +87,35 @@ mod tests {
             json!(hooks::hooks_file(home.path()).display().to_string())
         );
         assert_eq!(report["entire"], json!(true));
-        assert_eq!(
-            report["timeoutSeconds"],
-            json!({"min": MIN_TIMEOUT_SECONDS, "max": MAX_TIMEOUT_SECONDS})
-        );
+        assert_eq!(report["timeoutSeconds"]["min"], json!(MIN_TIMEOUT_SECONDS));
+        assert_eq!(report["timeoutSeconds"]["max"], json!(MAX_TIMEOUT_SECONDS));
         assert_eq!(
             report["hooks"],
             json!([
                 {"on": "tool-finished", "tool": "write_file", "run": ["fmt", "a b"], "timeout": 120, "firesForNothing": false},
                 {"on": "turn-started", "tool": "write_file", "run": ["begin"], "timeout": null, "firesForNothing": true},
             ])
+        );
+    }
+
+    /// HOOK-7, HOOK-8: a front end is told the bound each moment holds an entry to when it states
+    /// no `timeout`, so a form shows the agent's figure and holds none of its own. The regressions
+    /// it rejects are one figure for every moment, which shows 30 seconds on a `session-ended`
+    /// entry the agent stops after 5, and a moment missing from the answer.
+    #[test]
+    fn a_front_end_is_told_the_bound_each_moment_holds_an_entry_to_when_it_states_none() {
+        let (_home, report) = scratch(r#"{"hooks": []}"#);
+
+        assert_eq!(
+            report["timeoutSeconds"]["defaultFor"],
+            json!({
+                "turn-started": 30,
+                "tool-finished": 30,
+                "turn-finished": 30,
+                "prompt-shown": 30,
+                "session-started": 30,
+                "session-ended": 5,
+            })
         );
     }
 

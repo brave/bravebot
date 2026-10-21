@@ -76,6 +76,21 @@ pub const LIMIT: Duration = Duration::from_secs(30);
 /// `timeout` keeps it, since that is a bound the person wrote (HOOK-7).
 pub const SESSION_END_LIMIT: Duration = Duration::from_secs(5);
 
+/// How long a hook on `moment` that states no `timeout` may run before it is stopped.
+///
+/// The one place that says, so what a front end shows an entry as being held to is what is applied.
+/// Matched without a wildcard, so a moment added to the vocabulary has to say which bound it has.
+pub fn default_limit(moment: Moment) -> Duration {
+    match moment {
+        Moment::SessionEnded => SESSION_END_LIMIT,
+        Moment::TurnStarted
+        | Moment::ToolFinished
+        | Moment::TurnFinished
+        | Moment::PromptShown
+        | Moment::SessionStarted => LIMIT,
+    }
+}
+
 /// How often the wait looks up to see whether the process is done.
 const TICK: Duration = Duration::from_millis(50);
 
@@ -136,16 +151,15 @@ pub enum Trouble {
 /// for in an order they wrote down, and a formatter racing a commit would be this deciding that
 /// the order did not matter.
 pub fn fire(hooks: &Hooks, moment: Moment, tool: Option<&str>, directory: &Path) -> Vec<Fired> {
-    fire_within(hooks, moment, tool, directory, LIMIT)
+    fire_within(hooks, moment, tool, directory, default_limit(moment))
 }
 
-/// [`fire`], for a stated default bound rather than the one a turn uses. A hook that declared its
-/// own `timeout` keeps it.
+/// [`fire`], for a stated default bound rather than the one [`default_limit`] gives the moment. A
+/// hook that declared its own `timeout` keeps it.
 ///
 /// So that a test of what happens to a hook that outstays its welcome does not have to wait the
-/// real bound out. Nothing else states one but [`SessionMoments`], whose `session-ended` has a
-/// shorter default: how long a turn will wait on a hook is this module's decision and the file's,
-/// not a caller's.
+/// real bound out. Nothing else states one but [`SessionMoments`], for the same reason: how long a
+/// turn will wait on a hook is this module's decision and the file's, not a caller's.
 pub fn fire_within(
     hooks: &Hooks,
     moment: Moment,
@@ -194,7 +208,7 @@ impl SessionMoments {
         Self {
             hooks: in_force(home),
             directory: directory.to_path_buf(),
-            end_limit: SESSION_END_LIMIT,
+            end_limit: default_limit(Moment::SessionEnded),
             started: false,
             ended: false,
         }
@@ -481,6 +495,18 @@ mod tests {
             announcement(Moment::SessionEnded),
             "{\"event\":\"session-ended\"}\n"
         );
+    }
+
+    /// HOOK-7, HOOK-10: a session begins holding its end to the bound that moment has by default,
+    /// five seconds, which is the bound a front end is told. The regression it rejects is a bound
+    /// of its own at the start of a session, which the tests that pass a short one in its place
+    /// would not see.
+    #[test]
+    fn a_session_begins_holding_its_end_to_the_bound_that_moment_has() {
+        let moments = SessionMoments::read(None, Path::new("."));
+
+        assert_eq!(moments.end_limit, default_limit(Moment::SessionEnded));
+        assert_eq!(moments.end_limit, Duration::from_secs(5));
     }
 
     /// SANDBOX-30: a hook's bare program name is looked up as every program started unconfined is,

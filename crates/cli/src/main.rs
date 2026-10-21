@@ -3086,12 +3086,8 @@ fn interactive(
         &mut moments,
     );
     // After the terminal is handed back, so what a hook that went wrong said survives on the screen
-    // the person is left looking at. Nothing is fired for a session that never began, nor for one
-    // handed to a background process, which goes on without the interface (HOOK-10).
-    let closed = match &ended {
-        Ok(bravebot_tui::app::Ended::Background { .. }) => Vec::new(),
-        _ => moments.ended(),
-    };
+    // the person is left looking at.
+    let closed = end_the_session(&mut moments, &ended);
     say_notices(&mut std::io::stderr().lock(), &closed);
     match ended {
         // Printed after the terminal is handed back, so it survives on the screen the person is
@@ -3119,6 +3115,22 @@ fn interactive(
         // same name (CLI-17).
         Ok(bravebot_tui::app::Ended::Refused(refused)) => fail(Ending::Argument, refused),
         Err(err) => fail(Ending::Failed, t!(cli_interface_problem, problem = err)),
+    }
+}
+
+/// Fire `session-ended` for the full-screen interface that has just been left, and return the
+/// sentences for a hook that went wrong, for the caller to say (HOOK-10).
+///
+/// However the interface was left, including by a failure, except for a session handed to a
+/// background process, which goes on without the interface and whose process fires neither moment.
+/// Nothing for a session that never began, which `moments` knows.
+fn end_the_session(
+    moments: &mut bravebot_agent::hooks::SessionMoments,
+    ended: &std::io::Result<bravebot_tui::app::Ended>,
+) -> Vec<String> {
+    match ended {
+        Ok(bravebot_tui::app::Ended::Background { .. }) => Vec::new(),
+        _ => moments.ended(),
     }
 }
 
@@ -3232,6 +3244,84 @@ mod tests {
             hint.contains("/other"),
             "the line does not say where the session went: {hint}"
         );
+    }
+
+    /// HOOK-10: leaving the full-screen interface fires `session-ended`, whether the person left or
+    /// the interface failed, and a session handed to a background process does not end, since it
+    /// goes on in another process, nor does one that was refused before it began. The regressions it
+    /// rejects are an end fired for `/bg`, which stops a service the background session is still
+    /// using, one skipped for a failure, which leaves a service a person opened the session to run,
+    /// and one fired for a refusal, which stops a service nothing started.
+    #[cfg(unix)]
+    #[test]
+    fn leaving_the_interface_ends_the_session_except_for_a_hand_over_to_the_background() {
+        use bravebot_tui::app::Ended;
+
+        let scratch = Scratch::new("cli-main-session-end");
+        let state = scratch.directory("state");
+        let log = scratch.path.join("log");
+        std::fs::write(
+            state.join("hooks.json"),
+            serde_json::json!({"hooks": [{
+                "on": "session-ended",
+                "run": ["/bin/sh", "-c", "echo ended >> \"$1\"", "sh", log.display().to_string()],
+            }]})
+            .to_string(),
+        )
+        .expect("a hooks file");
+        let left = || Resumable {
+            id: "abc".to_string(),
+            directory: PathBuf::from("/work"),
+        };
+        let endings: [(&str, bool, std::io::Result<Ended>, bool); 5] = [
+            ("the person left", true, Ok(Ended::Left(None)), true),
+            (
+                "the person left a session to resume",
+                true,
+                Ok(Ended::Left(Some(left()))),
+                true,
+            ),
+            (
+                "the interface failed",
+                true,
+                Err(std::io::Error::other("the terminal went away")),
+                true,
+            ),
+            (
+                "the session went to the background",
+                true,
+                Ok(Ended::Background {
+                    left: left(),
+                    mode: bravebot_session::jobs::Mode::Ask,
+                }),
+                false,
+            ),
+            (
+                "the session was refused before it began",
+                false,
+                Ok(Ended::Refused("the definition was refused".to_string())),
+                false,
+            ),
+        ];
+
+        for (how, began, ended, fires) in endings {
+            let _ = std::fs::remove_file(&log);
+            let mut moments =
+                bravebot_agent::hooks::SessionMoments::read(Some(&state), &scratch.path);
+            if began {
+                assert!(moments.started().is_empty());
+            }
+
+            let said = end_the_session(&mut moments, &ended);
+
+            assert!(said.is_empty(), "{how}: {said:?}");
+            assert_eq!(
+                log.exists(),
+                fires,
+                "{how}: the end of the session {} fire",
+                if fires { "did not" } else { "did" }
+            );
+        }
     }
 
     /// The flag is taken out wherever it was typed, with its word, and a word that is not a level

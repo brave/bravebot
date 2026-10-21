@@ -2272,7 +2272,7 @@ fn fire_hooks<R: Reporter + ?Sized>(
             moment,
             tool,
             workspace.root(),
-            crate::hooks::LIMIT,
+            crate::hooks::default_limit(moment),
             watch,
         )
     })
@@ -2300,7 +2300,7 @@ fn fire_checkout_made<R: Reporter + ?Sized>(
                 checkout: checkout.path(),
                 working_directory: checkout.working_directory(),
             },
-            crate::hooks::LIMIT,
+            crate::hooks::default_limit(moment),
             watch,
         )
     })

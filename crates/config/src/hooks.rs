@@ -89,6 +89,18 @@ pub enum Moment {
 }
 
 impl Moment {
+    /// Every moment a hook can be written for, in the order the specification lists them.
+    pub const ALL: [Self; 8] = [
+        Self::TurnStarted,
+        Self::ToolFinished,
+        Self::TurnFinished,
+        Self::PromptShown,
+        Self::CheckoutMade,
+        Self::Compacted,
+        Self::SessionStarted,
+        Self::SessionEnded,
+    ];
+
     /// The word a file spells it with, or `None` for a word this build does not fire.
     ///
     /// An unrecognised moment is an entry that never runs rather than an error: a file written for
@@ -411,6 +423,21 @@ mod tests {
             .firing(moment, tool)
             .map(|hook| hook.run().to_vec())
             .collect()
+    }
+
+    /// HOOK-2: the list of moments names each of them once, in a spelling a file accepts, which is
+    /// what a front end that reports a bound for each of them reads. The regression it rejects is a
+    /// moment listed twice in the place of another, which a front end then reports twice and the
+    /// other never. A moment left out of the list altogether is not something a test can see; the
+    /// list sits beside the enum and its two matches for that reason.
+    #[test]
+    fn the_list_of_moments_names_each_once_in_a_spelling_a_file_accepts() {
+        let words: std::collections::BTreeSet<&str> =
+            Moment::ALL.iter().map(|moment| moment.as_str()).collect();
+        assert_eq!(words.len(), Moment::ALL.len(), "{:?}", Moment::ALL);
+        for moment in Moment::ALL {
+            assert_eq!(Moment::parse(moment.as_str()), Some(moment));
+        }
     }
 
     /// HOOK-2: the eight moments are the vocabulary, and each is spelled the way the file spells it.

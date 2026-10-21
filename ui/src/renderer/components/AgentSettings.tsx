@@ -67,7 +67,7 @@ export function AgentSettings({ session, onChanged, onDirty }: {
   const inspectHooks = async (): Promise<HooksDocument> => {
     const result = await window.bravebot.request<HooksDocument>('hooks.inspect')
     if (result.error) throw new Error(result.error.message)
-    if (!result.ok || !Array.isArray(result.ok.hooks) || typeof result.ok.entire !== 'boolean' || typeof result.ok.timeoutSeconds?.min !== 'number' || typeof result.ok.timeoutSeconds?.max !== 'number') throw new Error('This agent did not return its hooks file. Rebuild or reinstall the app, then retry.')
+    if (!result.ok || !Array.isArray(result.ok.hooks) || typeof result.ok.entire !== 'boolean' || typeof result.ok.timeoutSeconds?.min !== 'number' || typeof result.ok.timeoutSeconds?.max !== 'number' || !result.ok.timeoutSeconds?.defaultFor || typeof result.ok.timeoutSeconds.defaultFor !== 'object') throw new Error('This agent did not return its hooks file. Rebuild or reinstall the app, then retry.')
     return result.ok
   }
   const loadHooks = async () => {
@@ -174,7 +174,7 @@ export function AgentSettings({ session, onChanged, onDirty }: {
           {(hook.on === 'session-started' || hook.on === 'session-ended') && <Alert type="info">The desktop app does not fire this moment yet. The terminal does.</Alert>}
           <Input value={hook.run[0]} placeholder="/path/to/program" disabled={busy || !editable} data-test={`hook-program-${index}`}
             onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, run: [value, ...hook.run.slice(1)] }) }}>Program</Input>
-          <Input type="number" min={document?.timeoutSeconds.min} max={document?.timeoutSeconds.max} step={1} value={hook.timeout === null || hook.timeout === undefined ? '' : String(hook.timeout)} placeholder={hook.on === 'session-ended' ? '5' : '30'} disabled={busy || !editable} data-test={`hook-timeout-${index}`}
+          <Input type="number" min={document?.timeoutSeconds.min} max={document?.timeoutSeconds.max} step={1} value={hook.timeout === null || hook.timeout === undefined ? '' : String(hook.timeout)} placeholder={String(document?.timeoutSeconds.defaultFor[hook.on] ?? '')} disabled={busy || !editable} data-test={`hook-timeout-${index}`}
             onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, timeout: value.trim() === '' ? null : Number(value) }) }}>{document ? `Timeout in seconds (optional, ${document.timeoutSeconds.min} to ${document.timeoutSeconds.max})` : 'Timeout in seconds (optional)'}</Input>
           {hook.run.slice(1).map((argument, i) => <div key={i} className="hook-argument">
             <Input value={argument} disabled={busy || !editable} onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, run: hook.run.map((word, j) => j === i + 1 ? value : word) }) }}>{`Argument ${i + 1}`}</Input>

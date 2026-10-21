@@ -980,6 +980,30 @@ fn the_default_bound_of_a_session_end_is_five_seconds() {
     assert!(hooks::SESSION_END_LIMIT < hooks::LIMIT);
 }
 
+/// HOOK-7: the bound a hook that states no `timeout` is held to is chosen per moment in one place,
+/// and only a session end has a shorter one. The regression it rejects is a moment given the
+/// session end's bound or the turn's, which a front end that asks this function would then report as
+/// what is applied.
+#[test]
+fn only_a_session_end_has_a_shorter_default_bound_than_thirty_seconds() {
+    for moment in Moment::ALL {
+        let expected = Duration::from_secs(match moment {
+            Moment::SessionEnded => 5,
+            Moment::TurnStarted
+            | Moment::ToolFinished
+            | Moment::TurnFinished
+            | Moment::PromptShown
+            | Moment::SessionStarted => 30,
+        });
+        assert_eq!(
+            hooks::default_limit(moment),
+            expected,
+            "{}",
+            moment.as_str()
+        );
+    }
+}
+
 /// HOOK-7, HOOK-10: a `session-ended` hook is stopped at the bound the end has, and not at the
 /// thirty seconds every other moment's default is, and a `session-started` hook is not held to the
 /// end's. The regressions it rejects are the end using the turn's default, which holds a person
