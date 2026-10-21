@@ -58,6 +58,14 @@ const UNDO_DEPTH: usize = 1000;
 /// ask about.
 const GIVE_WAY_AFTER: Duration = Duration::from_secs(10);
 
+/// How many of the last lines a running command printed are kept to draw, and how many bytes of them.
+///
+/// A frame draws all of what is kept, and a command can print without end, or print one line that
+/// never ends. The end is what a person watching a command wants to see, and the whole of it is
+/// drawn when the command ends.
+pub const COMMAND_LINES: usize = 200;
+pub const COMMAND_BYTES: usize = 32 * 1024;
+
 /// How many rows one mouse wheel event moves the view by where nothing says otherwise.
 ///
 /// Three is what a terminal's own scrollback moves for a notch, so the transcript moves the way the
@@ -1156,6 +1164,16 @@ pub struct Session {
     /// Held as it arrived. What is drawn from it is [`Session::reply_so_far`], since a model
     /// that has nowhere else to put its working writes it in here.
     streaming: String,
+    /// What the command running right now has printed, as far as it has got and as far back as is
+    /// kept (SHELL-7).
+    ///
+    /// Apart from the transcript for the reason `streaming` is: it is drawn at the tail and replaced
+    /// by the entry the command's result makes, so the handover draws nothing twice. The end of it
+    /// only, since a command can print without end and every frame draws what is held. Held as it
+    /// arrived, and drawn through the same step as the entry that replaces it.
+    command_output: String,
+    /// How many lines of what the command printed came before the first of `command_output`.
+    command_earlier: usize,
     /// Where in the transcript the commands carried out during the turn in flight put what they
     /// said, oldest first.
     ///
@@ -1471,6 +1489,8 @@ impl Session {
             pending: crate::remote_confirm::Interjections::new(),
             held: std::collections::VecDeque::new(),
             streaming: String::new(),
+            command_output: String::new(),
+            command_earlier: 0,
             said_while_working: Vec::new(),
             composing: None,
             attributed_to: None,
@@ -3123,13 +3143,102 @@ impl Session {
     pub fn begin_command(&mut self) {
         self.status = Status::Running;
         self.started = Some(Instant::now());
+        self.command_output.clear();
+        self.command_earlier = 0;
         self.back_to_the_tail();
     }
 
     /// Note that it finished, whatever came of it.
+    ///
+    /// What it printed so far goes with it. What the command's result releases is drawn by
+    /// [`Session::printed`] in its place, and a command that released nothing leaves nothing of it.
     pub fn finish_command(&mut self) {
         self.status = Status::Idle;
         self.started = None;
+        self.command_output.clear();
+        self.command_earlier = 0;
+    }
+
+    /// Note that it ended because it was stopped or ran out of time, and keep what it had printed.
+    ///
+    /// The rows become an entry, since a person stops a command from what it has printed and would
+    /// lose the reason with them. The entry is for the screen alone: the command released nothing,
+    /// so nothing of it is recorded in the conversation (SHELL-7). Where the rows held only the end
+    /// of it, the entry begins with the line saying how many came before. Whether anything was
+    /// kept, so the caller can say it was not sent.
+    pub fn finish_stopped_command(&mut self) -> bool {
+        let kept = self
+            .command_so_far()
+            .map(|(text, earlier)| (text.trim_end().to_string(), earlier))
+            .filter(|(text, _)| !text.is_empty());
+        self.finish_command();
+        let Some((text, earlier)) = kept else {
+            return false;
+        };
+        let text = match earlier {
+            0 => text,
+            count => format!("{}\n{text}", t!(transcript_earlier_lines, count = count)),
+        };
+        self.transcript.push(Entry::output(text));
+        self.back_to_the_tail();
+        true
+    }
+
+    /// Add what the running command has printed since the last frame to what is drawn of it.
+    ///
+    /// The view does not move for it, as it does not for [`Session::streaming`]: a chunk lands
+    /// several times a second for as long as the command prints, and putting the view back for each
+    /// would leave nobody able to scroll back while it runs. A view at the tail follows what
+    /// arrives, since `scroll` is 0 there.
+    ///
+    /// Only the end is kept, [`COMMAND_LINES`] lines and [`COMMAND_BYTES`] bytes of it, a last line
+    /// with no newline yet being one of the lines. The lines before it are counted so the drawing
+    /// can say so. The released text that replaces it when the command ends is whole.
+    ///
+    /// Looked at from the end, and a piece that fills what is kept alone is cut before anything is
+    /// looked at in it: this runs between frames, and a command that prints faster than they are
+    /// drawn hands it a great deal at once.
+    pub fn command_printing(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let mut text = text;
+        if text.len() > COMMAND_BYTES {
+            let mut from = text.len() - COMMAND_BYTES;
+            while !text.is_char_boundary(from) {
+                from += 1;
+            }
+            self.command_earlier +=
+                self.command_output.matches('\n').count() + text[..from].matches('\n').count();
+            self.command_output.clear();
+            text = &text[from..];
+        }
+        self.command_output.push_str(text);
+
+        let newlines_kept = match self.command_output.ends_with('\n') {
+            true => COMMAND_LINES,
+            false => COMMAND_LINES - 1,
+        };
+        let mut cut = self
+            .command_output
+            .rmatch_indices('\n')
+            .nth(newlines_kept)
+            .map_or(0, |(at, _)| at + 1);
+        let over = (self.command_output.len() - cut).saturating_sub(COMMAND_BYTES);
+        if over > 0 {
+            cut += over;
+            while !self.command_output.is_char_boundary(cut) {
+                cut += 1;
+            }
+        }
+        self.command_earlier += self.command_output[..cut].matches('\n').count();
+        self.command_output.drain(..cut);
+    }
+
+    /// What the running command has printed, and how many lines came before it, or `None` while it
+    /// has printed nothing.
+    pub fn command_so_far(&self) -> Option<(&str, usize)> {
+        (!self.command_output.is_empty()).then_some((&self.command_output, self.command_earlier))
     }
 
     /// Show what a command printed, or that it printed nothing.

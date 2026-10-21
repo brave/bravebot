@@ -4058,6 +4058,10 @@ fn command_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
 /// it on the thread that owns the terminal would freeze the interface for the duration and make a
 /// slow build indistinguishable from a hang. Escape cancels, which kills it.
 ///
+/// What it prints is drawn as it prints it (SHELL-7), so a person can tell a slow build from a hang
+/// and decide to stop it from what it has printed so far. The pieces reach the screen alone: what
+/// the conversation is given is what [`settle_command`] releases when the command has ended.
+///
 /// No approval is asked for. The prompt a run normally goes through exists so a person endorses argv
 /// the *planner* chose, and here the person typed it themselves: asking would be asking them to
 /// confirm their own keystroke. What it printed goes into the conversation, labelled from that same
@@ -4081,14 +4085,16 @@ fn run_command(
     // Only the process goes to the worker. The conversation stays here, because handing it over
     // means taking it back, and a panicked thread hands back nothing: substituting a fresh one would
     // reset context integrity to trusted, which is an upgrade and never allowed.
-    let worker =
-        thread::spawn(move || bravebot_agent::shell::run(&worker_line, &directory, &worker_cancel));
+    let (live, printing) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        bravebot_agent::shell::run_live(&worker_line, &directory, &worker_cancel, &live)
+    });
 
     // Drawn while it runs so the command appears in the transcript immediately and Escape has
     // somewhere to be pressed. The spinner is the turn indicator's, without the token counters,
     // which measure something no command spends.
     session.begin_command();
-    while !worker.is_finished() {
+    while_the_command_runs(session, &worker, &printing, |session| {
         redraw(terminal, session)?;
 
         while input::poll(Duration::ZERO)? {
@@ -4108,20 +4114,72 @@ fn run_command(
                 _ => {}
             }
         }
-
-        std::thread::sleep(FRAME.min(Duration::from_millis(50)));
-    }
+        Ok(())
+    })?;
 
     let ran = worker.join().unwrap_or_else(|_| {
         Err(bravebot_agent::shell::ShellError::Io(
             t!(command_thread_stopped).to_string(),
         ))
     });
-    session.finish_command();
+    Ok(settle_command(session, line, ran, conversation, private))
+}
 
-    // The labelling happens here, on the thread that owns the conversation, and its trail is
-    // returned so the decision reaches the audit file and Ctrl-T. Trusting a command's output is the
-    // most consequential thing this feature does, so it must not be the one thing left unrecorded.
+/// Keep a frame drawn until the command ends, with what it has printed by then.
+///
+/// Each pass takes what the command has printed since the last one onto the session and then runs
+/// `step`, which draws the frame and answers the keys. A command that prints nothing for minutes
+/// still gets a frame every pass, for the spinner and for the key that stops it. All that is queued
+/// is taken at once, in one call: a command printing faster than frames are drawn sends many pieces
+/// between two, and the session looks only at the end of them.
+///
+/// Once more when the command has ended, so what it printed after the last pass is not lost with
+/// the channel: a stopped command keeps what it had printed (SHELL-7).
+fn while_the_command_runs<T>(
+    session: &mut Session,
+    worker: &thread::JoinHandle<T>,
+    printing: &mpsc::Receiver<String>,
+    mut step: impl FnMut(&mut Session) -> io::Result<()>,
+) -> io::Result<()> {
+    while !worker.is_finished() {
+        session.command_printing(&printing.try_iter().collect::<String>());
+        step(session)?;
+        std::thread::sleep(FRAME.min(Duration::from_millis(50)));
+    }
+    session.command_printing(&printing.try_iter().collect::<String>());
+    Ok(())
+}
+
+/// What a command that has ended leaves: the text the gate released drawn in place of what was
+/// drawn while it ran, or a note saying why nothing was released, and the trail of what was decided.
+///
+/// What was drawn while it ran goes with the result. A command that was stopped or ran too long
+/// released nothing, and what it had printed stays on the screen as an entry above the note, since
+/// that is what the person stopped it from, with a second note saying the model was not sent it. It
+/// is never put in the conversation (SHELL-3). Where the gate refused the output or it could not be
+/// read, none of it stays.
+///
+/// The labelling happens here, on the thread that owns the conversation, and its trail is returned
+/// so the decision reaches the audit file and Ctrl-T. Trusting a command's output is the most
+/// consequential thing this feature does, so it must not be the one thing left unrecorded.
+fn settle_command(
+    session: &mut Session,
+    line: &str,
+    ran: Result<bravebot_agent::shell::Ran, bravebot_agent::shell::ShellError>,
+    conversation: &mut Conversation,
+    private: bool,
+) -> Vec<Stamped> {
+    let kept = match &ran {
+        Err(
+            bravebot_agent::shell::ShellError::Cancelled
+            | bravebot_agent::shell::ShellError::TookTooLong { .. },
+        ) => session.finish_stopped_command(),
+        _ => {
+            session.finish_command();
+            false
+        }
+    };
+
     let mut sink = Trail::new();
     match ran {
         Ok(ran) => match shell_result(line, &ran, conversation, &mut sink, private) {
@@ -4136,10 +4194,15 @@ fn run_command(
             }
             Err(error) => session.note(format!("{error}")),
         },
-        Err(error) => session.note(format!("{error}")),
+        Err(error) => {
+            session.note(format!("{error}"));
+            if kept {
+                session.note(t!(shell_stopped_not_sent));
+            }
+        }
     }
 
-    Ok(sink.events().to_vec())
+    sink.events().to_vec()
 }
 
 /// Release what a command printed, into the conversation unless the person typed it `!!`.
@@ -8449,6 +8512,47 @@ mod tests {
                 "the view was not on a delegate when the command began"
             );
             (session, Cancel::new())
+        }
+
+        /// SHELL-7: the rows of a running command belong to the transcript the command is in. A
+        /// delegate's own view is another sequence, so a command printing under it is not drawn
+        /// there, and is drawn again once the view is closed.
+        ///
+        /// Rejects: the rows being drawn at the end of whatever view is open.
+        #[test]
+        fn the_view_left_open_under_a_running_command_does_not_draw_what_it_prints() {
+            use ratatui::Terminal;
+            use ratatui::backend::TestBackend;
+            let drawn = |session: &Session| -> String {
+                let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        render::draw(frame, session);
+                    })
+                    .expect("draw");
+                let buffer = terminal.backend().buffer().clone();
+                (0..30)
+                    .map(|y| {
+                        (0..100)
+                            .map(|x| buffer[(x, y)].symbol().to_string())
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+
+            let (mut session, _cancel) = watched_under_a_running_command();
+            session.command_printing("rows of the running command\n");
+            assert!(
+                !drawn(&session).contains("rows of the running command"),
+                "the command's rows were drawn in a delegate's view"
+            );
+
+            session.stop_watching();
+            assert!(
+                drawn(&session).contains("rows of the running command"),
+                "the rows were not drawn once the view closed"
+            );
         }
 
         /// The two keys that close the view from either level close it from a delegate with a
@@ -13191,6 +13295,262 @@ mod tests {
         )
         .expect("recorded");
         assert_eq!(recorded.messages().len(), 1);
+    }
+
+    /// SHELL-7: a frame drawn while a command runs carries what it has printed so far. The command
+    /// here cannot end until a frame has carried its first line, so a loop that takes the output only
+    /// once the command has ended never lets it end, and the bound turns that into a failure.
+    ///
+    /// Rejects: output taken onto the session only when the command is over, which is what drew a
+    /// slow build as a spinner until it finished.
+    #[test]
+    fn a_frame_drawn_while_a_command_runs_shows_what_it_has_printed() {
+        /// Removes the scratch directory when the test ends, however it ends.
+        struct Scratch(std::path::PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let scratch = Scratch(
+            std::env::temp_dir().join(format!("bravebot-live-frame-{}", std::process::id())),
+        );
+        let directory = scratch.0.clone();
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch directory");
+
+        let (live, printing) = mpsc::channel();
+        let (worker_directory, worker_cancel) = (directory.clone(), Cancel::new());
+        let worker = thread::spawn(move || {
+            bravebot_agent::shell::run_live(
+                "sh -c 'echo early; n=0; while [ ! -e release ] && [ $n -lt 400 ]; do sleep 0.05; n=$((n+1)); done; echo late'",
+                &worker_directory,
+                &worker_cancel,
+                &live,
+            )
+        });
+
+        let mut session = Session::new("none");
+        session.begin_command();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut shown_while_running = None;
+        while_the_command_runs(&mut session, &worker, &printing, |session| {
+            if let Some((text, _)) = session.command_so_far() {
+                shown_while_running.get_or_insert_with(|| text.to_string());
+                std::fs::write(directory.join("release"), "").expect("release the command");
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no frame carried what the command had printed"
+            );
+            Ok(())
+        })
+        .expect("the frames are drawn");
+
+        let ran = worker.join().expect("the worker ends").expect("it runs");
+        assert_eq!(shown_while_running.as_deref(), Some("early\n"));
+        assert_eq!(ran.stdout, "early\nlate\n");
+    }
+
+    /// SHELL-7: a command that was stopped or ran past the limit released nothing, so what it had
+    /// printed stays on the screen, above the note saying why it ended, and none of it reaches the
+    /// conversation. A person stops a build from the error it printed, and the error is what they
+    /// would be left without if the rows went with the command.
+    ///
+    /// Rejects: the rows going with the command, and what a stopped command printed being recorded
+    /// as though it were a result.
+    #[test]
+    fn a_stopped_command_keeps_what_it_printed_on_the_screen_and_out_of_the_conversation() {
+        use crate::state::Speaker;
+        use bravebot_agent::shell::ShellError;
+        for ended in [
+            ShellError::Cancelled,
+            ShellError::TookTooLong {
+                after: Duration::from_secs(600),
+            },
+        ] {
+            let mut session = Session::new("none");
+            session.begin_command();
+            session.command_printing("error: the build broke\n\n");
+            let mut conversation = Conversation::new();
+            let said = format!("{ended}");
+
+            let events = settle_command(&mut session, "make", Err(ended), &mut conversation, false);
+
+            assert!(session.command_so_far().is_none(), "the rows stayed up");
+            let speakers: Vec<(Speaker, &str)> = session
+                .transcript
+                .iter()
+                .map(|entry| (entry.speaker, entry.text.as_str()))
+                .collect();
+            let not_sent = t!(shell_stopped_not_sent).to_string();
+            assert_eq!(
+                speakers,
+                [
+                    (Speaker::Output, "error: the build broke"),
+                    (Speaker::System, said.as_str()),
+                    (Speaker::System, not_sent.as_str())
+                ]
+            );
+            assert!(conversation.messages().is_empty(), "{said}");
+            assert!(events.is_empty());
+        }
+    }
+
+    /// A command stopped before it printed anything has nothing to keep and nothing to say was not
+    /// sent, so only the note saying it stopped is left.
+    ///
+    /// Rejects: the second note being said whether or not anything was kept.
+    #[test]
+    fn a_command_stopped_before_it_printed_says_only_that_it_stopped() {
+        let mut session = Session::new("none");
+        session.begin_command();
+        let mut conversation = Conversation::new();
+
+        settle_command(
+            &mut session,
+            "sleep 30",
+            Err(bravebot_agent::shell::ShellError::Cancelled),
+            &mut conversation,
+            false,
+        );
+
+        let notes: Vec<&str> = session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert_eq!(notes, ["stopped"]);
+    }
+
+    /// SHELL-7: what a command printed after the last frame was drawn is taken when it ends, so a
+    /// stopped command keeps its last lines. The piece is already queued when the command is found
+    /// to have ended, which is the case a loop that stops looking when the command ends loses.
+    ///
+    /// Rejects: the pieces still queued when the command ends being dropped with the channel.
+    #[test]
+    fn what_a_command_printed_after_the_last_frame_is_taken_when_it_ends() {
+        let (live, printing) = mpsc::channel();
+        live.send("the last line\n".to_string()).expect("queued");
+        let worker = thread::spawn(|| ());
+        while !worker.is_finished() {
+            thread::yield_now();
+        }
+        let mut session = Session::new("none");
+        session.begin_command();
+
+        while_the_command_runs(&mut session, &worker, &printing, |_| Ok(())).expect("ends");
+
+        assert_eq!(
+            session.command_so_far().map(|(text, _)| text),
+            Some("the last line\n")
+        );
+    }
+
+    /// The gate refusing what a command printed, or the bytes not being readable, leaves none of
+    /// what was drawn while it ran: the bytes were refused, and an entry made of them would put on
+    /// the screen what the gate kept off it.
+    ///
+    /// Rejects: every command that ends without a result keeping its rows, which keeps a refusal's.
+    #[test]
+    fn a_command_whose_output_was_refused_leaves_none_of_it_on_the_screen() {
+        use crate::state::Speaker;
+        let mut session = Session::new("none");
+        session.begin_command();
+        session.command_printing("what the gate refused\n");
+        let mut conversation = Conversation::new();
+
+        settle_command(
+            &mut session,
+            "cat notes",
+            Err(bravebot_agent::shell::ShellError::Io("refused".to_string())),
+            &mut conversation,
+            false,
+        );
+
+        assert!(session.command_so_far().is_none(), "the rows stayed up");
+        assert!(
+            session
+                .transcript
+                .iter()
+                .all(|entry| entry.speaker != Speaker::Output),
+            "what it printed was kept as an entry"
+        );
+        assert!(conversation.messages().is_empty());
+    }
+
+    /// SHELL-6 and SHELL-7: a private command is drawn while it runs like any other, and when it ends
+    /// the entry is what the gate released with the line saying it was not sent, and nothing is
+    /// recorded.
+    ///
+    /// Rejects: the private form keeping its rows, and a private command's output reaching the
+    /// conversation through the new path.
+    #[test]
+    fn a_private_command_that_ended_is_drawn_as_released_and_says_it_was_not_sent() {
+        use crate::state::Speaker;
+        let mut session = Session::new("none");
+        session.begin_command();
+        session.command_printing("SECRET=1\n");
+        let ran = bravebot_agent::shell::Ran {
+            stdout: "SECRET=1\nSECOND=2\n".to_string(),
+            stderr: String::new(),
+            code: Some(0),
+        };
+        let mut conversation = Conversation::new();
+
+        settle_command(&mut session, "cat .env", Ok(ran), &mut conversation, true);
+
+        assert!(session.command_so_far().is_none(), "the rows stayed up");
+        let drawn: Vec<(Speaker, &str)> = session
+            .transcript
+            .iter()
+            .map(|entry| (entry.speaker, entry.text.as_str()))
+            .collect();
+        assert_eq!(drawn.len(), 2, "{drawn:?}");
+        assert_eq!(drawn[0], (Speaker::Output, "SECRET=1\nSECOND=2"));
+        assert!(drawn[1].1.contains("not sent"), "{drawn:?}");
+        assert!(
+            conversation.messages().is_empty(),
+            "a private command was recorded"
+        );
+    }
+
+    /// SHELL-7: when a command ends, the entry is the text the gate released and the rows drawn
+    /// while it ran are gone, so nothing is drawn twice. The fixture releases a line the rows never
+    /// held, which tells an entry built from the released text from one kept from the pieces.
+    ///
+    /// Rejects: the rows outliving the command, and the entry being built from what was drawn while
+    /// it ran instead of from what the gate released.
+    #[test]
+    fn a_command_that_ended_is_drawn_as_the_text_the_gate_released() {
+        use crate::state::Speaker;
+        let mut session = Session::new("none");
+        session.begin_command();
+        session.command_printing("a\n");
+        let ran = bravebot_agent::shell::Ran {
+            stdout: "a\nb\n".to_string(),
+            stderr: String::new(),
+            code: Some(0),
+        };
+        let mut conversation = Conversation::new();
+
+        settle_command(
+            &mut session,
+            "echo a; echo b",
+            Ok(ran),
+            &mut conversation,
+            false,
+        );
+
+        assert!(session.command_so_far().is_none(), "the rows stayed up");
+        let outputs: Vec<&str> = session
+            .transcript
+            .iter()
+            .filter(|entry| entry.speaker == Speaker::Output)
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert_eq!(outputs, ["a\nb"]);
+        assert_eq!(conversation.messages().len(), 1);
     }
 
     /// A running turn or command is what the title marks as working, and anything else is the box
