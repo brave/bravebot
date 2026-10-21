@@ -1042,6 +1042,41 @@ mod tests {
             );
         }
 
+        /// WATCH-8: what the delegate was asked stands above its lines, so a reader who was not
+        /// told the task can tell what the lines were for.
+        #[test]
+        fn a_delegates_view_opens_on_what_it_was_asked_above_its_lines() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "FIND-THE-PARSER-ENTRY");
+            session.start_activity(Activity::running("Read", "PECULIAR-FILE-NAME"));
+            session.watch();
+
+            let screen = rendered(&session);
+            let asked = screen
+                .find("FIND-THE-PARSER-ENTRY")
+                .unwrap_or_else(|| panic!("the task was not drawn: {screen}"));
+            let work = screen
+                .find("PECULIAR-FILE-NAME")
+                .unwrap_or_else(|| panic!("the work was not drawn: {screen}"));
+            assert!(asked < work, "the task was drawn below the lines: {screen}");
+        }
+
+        /// WATCH-5: a delegate that has finished still has its lines to open.
+        #[test]
+        fn a_finished_delegates_lines_are_still_there_to_be_opened() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "reader", "find the parser");
+            session.start_activity(Activity::running("Read", "PECULIAR-FILE-NAME"));
+            session.delegate_finished(id, "answered".to_string(), false, None);
+            session.watch();
+
+            let screen = rendered(&session);
+            assert!(
+                screen.contains("PECULIAR-FILE-NAME"),
+                "a finished delegate's lines were cleared: {screen}"
+            );
+        }
+
         fn ran(session: &mut Session, command: &str, read: bool, lines: &[&str], total: usize) {
             printed(
                 session,
@@ -7184,6 +7219,50 @@ mod tests {
             output.contains("4.2k"),
             "what the turn cost was not reported: {output}"
         );
+    }
+
+    /// VIEW-13: a finished turn's row carries what it cost and how long it took, and the other two
+    /// endings carry neither, since they produced no answer to price.
+    #[test]
+    fn only_a_finished_turns_row_carries_its_cost_and_duration() {
+        let ended = |ending| {
+            let mut session = Session::new("partial");
+            session.type_char('a');
+            session.submit();
+            session.complete("done", Vec::new(), 0);
+            session.finished = Some(crate::state::Finished {
+                turn: 1,
+                tokens: 4_200,
+                took: std::time::Duration::from_secs(75),
+                ending,
+            });
+            rendered(&session)
+        };
+
+        let done = ended(bravebot_agent::Ending::Done);
+        assert!(done.contains("turn 1 done"), "{done}");
+        assert!(done.contains("4.2k"), "no cost: {done}");
+        assert!(done.contains("1m 15s"), "no duration: {done}");
+
+        for (word, ending) in [
+            (
+                "turn 1 cancelled",
+                bravebot_agent::Ending::Stopped { attempts: None },
+            ),
+            (
+                "turn 1 failed",
+                bravebot_agent::Ending::Failed(bravebot_agent::Diagnosis::of(
+                    bravebot_agent::Category::Transport,
+                )),
+            ),
+        ] {
+            let row = ended(ending);
+            assert!(row.contains(word), "{word} not reported: {row}");
+            assert!(
+                !row.contains("4.2k") && !row.contains("1m 15s"),
+                "{word} carried a cost or a duration: {row}"
+            );
+        }
     }
 
     /// A tick beside a turn that did not finish would say the wrong thing about it.

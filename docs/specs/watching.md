@@ -135,6 +135,7 @@ report is the only thing on the screen that says what the run was for: a delegat
 file says which one there and nowhere else, and a round count in its place leaves a person with a
 number for work done in a directory they own.
 
+`verified-by: bravebot_tui::render::a_finished_delegates_lines_are_still_there_to_be_opened`
 `verified-by: bravebot_tui::state::what_a_delegate_ended_with_closes_its_block`
 `verified-by: bravebot_tui::render::a_finished_delegate_collapses_to_what_the_turn_was_told`
 `verified-by: bravebot_tui::render::a_finished_delegate_says_what_it_reported`
@@ -212,6 +213,7 @@ at the last one and know that it is the last.
 `verified-by: bravebot_tui::state::the_turns_view_is_not_dragged_by_reading_through_a_delegate`
 `verified-by: bravebot_tui::render::a_delegates_view_draws_its_own_lines_and_not_the_turns`
 `verified-by: bravebot_tui::render::a_finished_delegates_view_ends_on_what_the_turn_was_told`
+`verified-by: bravebot_tui::render::a_delegates_view_opens_on_what_it_was_asked_above_its_lines`
 `verified-by: bravebot_tui::render::a_delegates_view_ends_on_what_it_reported`
 `verified-by: bravebot_tui::render::a_delegates_view_does_not_open_on_the_mark`
 `verified-by: bravebot_tui::app::n_and_p_move_between_delegates`

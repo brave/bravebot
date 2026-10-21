@@ -8793,6 +8793,24 @@ mod tests {
         assert!(!finished.failed());
     }
 
+    /// VIEW-13: the row says how long the turn took, so the figure is the session's clock at the
+    /// turn's end and not a placeholder.
+    #[test]
+    fn a_completed_turn_is_reported_with_how_long_it_took() {
+        let mut s = Session::new("none");
+        s.set_input("do the thing".to_string());
+        s.submit();
+        s.started = Some(Instant::now() - Duration::from_secs(75));
+        s.complete("done", Vec::new(), 4_200);
+
+        let finished = s.finished.expect("a finished turn");
+        assert!(
+            finished.took >= Duration::from_secs(75),
+            "the turn's duration was lost: {:?}",
+            finished.took
+        );
+    }
+
     /// A tick beside a turn that did not finish would be the wrong thing to say about it.
     #[test]
     fn a_failed_turn_is_reported_as_failed() {
