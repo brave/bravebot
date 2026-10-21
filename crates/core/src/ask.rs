@@ -110,6 +110,14 @@ impl Series {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Asking {
     pub prompts: Vec<Prompt>,
+    /// Whether an interface may close these questions with [`Answer::TimedOut`] when nobody
+    /// answers within the time the person's settings allow (ASK-9).
+    ///
+    /// False unless the driver says otherwise, and it says otherwise for the questions the planner
+    /// puts with `ask_user` and for nothing else. A plan to approve, a spend limit and a repeated
+    /// call are asked of a person who has to be there, and closing one on a clock would answer it
+    /// for them. A driver-set fact, so nothing in a question decides it.
+    pub closes_when_idle: bool,
 }
 
 /// What the person did.
@@ -125,6 +133,12 @@ pub enum Answer {
     Typed(String),
     /// No answer. The default wherever nobody can be asked.
     Declined,
+    /// The question sat on the screen for as long as the person's settings allow with no key
+    /// pressed, and was closed without an answer (ASK-9).
+    ///
+    /// Apart from [`Answer::Declined`] because nobody refused: a person who is away has said
+    /// nothing, and the planner reads the two differently.
+    TimedOut,
 }
 
 /// One option, shaped for a screen.
@@ -239,6 +253,7 @@ pub fn canonical(question: &Question) -> String {
 pub fn asking(series: &Series) -> Asking {
     Asking {
         prompts: series.questions.iter().map(prompt).collect(),
+        closes_when_idle: false,
     }
 }
 
@@ -323,6 +338,7 @@ fn describe(question: &Question, answer: &Answer) -> String {
         }
         Answer::Typed(text) => format!("The user answered: {text}"),
         Answer::Declined => declined(),
+        Answer::TimedOut => timed_out(),
     }
 }
 
@@ -383,6 +399,7 @@ impl AnswerMemo {
                 .filter(|(_, earlier)| earlier.is_none())
                 .map(|(prompt, _)| prompt.clone())
                 .collect(),
+            closes_when_idle: asking.closes_when_idle,
         };
         Settled {
             asking,
@@ -441,9 +458,15 @@ impl<'a> Settled<'a> {
     /// Only what `fresh` carries is remembered. A question the person was not asked, or that the
     /// interface left unanswered, stays unsettled and is put again. In the series it is a decline,
     /// since that is how the planner is told a question went unanswered.
+    ///
+    /// A question closed on the clock ([`Answer::TimedOut`], ASK-9) is not remembered either. A
+    /// person who was away has said nothing, so putting it again is putting it to them for the
+    /// first time. The planner is still told it closed.
     pub fn finish(self, memo: &mut AnswerMemo, fresh: Vec<Answer>) -> Vec<Answer> {
         for (prompt, answer) in self.outstanding.prompts.iter().zip(&fresh) {
-            memo.remember(prompt.key.clone(), answer.clone());
+            if !matches!(answer, Answer::TimedOut) {
+                memo.remember(prompt.key.clone(), answer.clone());
+            }
         }
         in_order(self.known, fresh)
     }
@@ -463,6 +486,16 @@ fn in_order(known: Vec<Option<Answer>>, fresh: Vec<Answer>) -> Vec<Answer> {
         .into_iter()
         .map(|earlier| earlier.or_else(|| fresh.next()).unwrap_or(Answer::Declined))
         .collect()
+}
+
+/// What the planner is told when a question closed on the clock.
+///
+/// Written here, from nothing the person or the question said, so the planner is not told the
+/// person declined and is not handed a reply nobody gave.
+fn timed_out() -> String {
+    "No answer was given in the time allowed, and the user may be away. Proceed on your own \
+     judgment where you can, and ask again later if you still need it."
+        .to_string()
 }
 
 #[cfg(test)]
@@ -805,6 +838,24 @@ mod tests {
         );
     }
 
+    /// ASK-9: a question closed on the clock is no answer, and it is reported as that. The planner
+    /// must not be told the person declined, since nobody did: they may simply be away, and a
+    /// planner told they refused would not ask again later. The answer given before it is kept.
+    #[test]
+    fn a_question_that_timed_out_is_reported_as_no_answer_and_not_as_a_decline() {
+        let text = describe_series(&series(), &[Answer::Chosen(vec![0]), Answer::TimedOut]);
+        assert!(
+            text.contains("Which cache layer?\nThe user chose: HTTP"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Which platforms?\nNo answer was given in the time allowed"),
+            "{text}"
+        );
+        assert!(text.contains("may be away"), "{text}");
+        assert!(!text.contains("declined"), "{text}");
+    }
+
     /// An interface that answered fewer questions than were asked did not answer the rest, and
     /// saying so is better than shifting the answers it did give onto the wrong questions.
     #[test]
@@ -960,6 +1011,40 @@ mod tests {
         let again = memo.read(&both);
         assert_eq!(again.outstanding().prompts, vec![both.prompts[1].clone()]);
         assert_eq!(memo.recall(&both.prompts[1].key), None);
+    }
+
+    /// ASK-8, ASK-9: a question closed on the clock is told to the planner as it was and is not
+    /// remembered, where the answer beside it is. Rejects: a remembered `TimedOut` handed back in
+    /// place of the person the next time the planner asks.
+    #[test]
+    fn a_question_closed_on_the_clock_is_not_remembered_and_the_one_beside_it_is() {
+        let both = asking(&series());
+        let mut memo = AnswerMemo::default();
+        let read = memo.read(&both);
+        let given = read.finish(&mut memo, vec![Answer::Chosen(vec![0]), Answer::TimedOut]);
+        assert_eq!(given, vec![Answer::Chosen(vec![0]), Answer::TimedOut]);
+
+        assert_eq!(
+            memo.recall(&both.prompts[0].key),
+            Some(Answer::Chosen(vec![0]))
+        );
+        assert_eq!(memo.recall(&both.prompts[1].key), None);
+        let again = memo.read(&both);
+        assert_eq!(again.outstanding().prompts, vec![both.prompts[1].clone()]);
+    }
+
+    /// A series the clock closed carries the flag the driver set on it into what is put for the
+    /// questions left, so the interface still closes those on the clock.
+    #[test]
+    fn what_is_left_to_put_keeps_the_flag_that_lets_it_close_on_the_clock() {
+        let planners = Asking {
+            closes_when_idle: true,
+            ..asking(&series())
+        };
+        let mut memo = AnswerMemo::default();
+        memo.remember(planners.prompts[0].key.clone(), Answer::Declined);
+        assert!(memo.read(&planners).outstanding().closes_when_idle);
+        assert!(!memo.read(&asking(&series())).outstanding().closes_when_idle);
     }
 
     /// The weave the clients depend on. Fresh answers fill the gaps the remembered ones left,

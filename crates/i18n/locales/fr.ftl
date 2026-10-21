@@ -545,6 +545,9 @@ doctor-settings-language-ignored =
     language dans { $path } n'est pas appliqué : il n'est lu que depuis ~/.bravebot/settings.json
 doctor-settings-language-unmatched =
     language { $language } dans ~/.bravebot/settings.json ne désigne aucun catalogue, il choisit donc { $reference } ; les catalogues sont { $available }
+doctor-settings-ask-idle-ignored =
+    askIdleSeconds dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-references-ignored =
     references dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
@@ -2572,6 +2575,10 @@ session-offered-tools =
     }
 session-stands-for-tool = { $tool } appelé sans demander dans ce projet
 session-answered-already = déjà répondu : { $question }
+session-question-timed-out = { $seconds ->
+    [one] une question a été fermée après { $seconds } seconde sans touche pressée, et le planificateur a été informé que vous êtes peut-être absent
+   *[other] une question a été fermée après { $seconds } secondes sans touche pressée, et le planificateur a été informé que vous êtes peut-être absent
+    }
 session-something-was-refused =
     un contrôle de la politique a refusé quelque chose pendant ce tour
 session-refusals-left =

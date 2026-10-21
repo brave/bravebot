@@ -142,6 +142,7 @@ const PERMISSIONS_BLOCK: &str = "permissions";
 const READ_KEYS: &[&str] = &[
     "advisorModel",
     "agent",
+    "askIdleSeconds",
     "attribution",
     "awaySummaryEnabled",
     "awaySummaryIdleSeconds",
@@ -320,6 +321,18 @@ pub struct Settings {
     /// `None` is the built-in idle time, which belongs to the interface that decides when a recap
     /// is owed, for the reason [`Settings::wheel_rows`] gives about its own count.
     away_summary_idle_seconds: Option<u64>,
+    /// What the top-level `askIdleSeconds` key said, if it said a whole positive count.
+    ///
+    /// `None` is a question that waits for as long as it takes, which is what a session does when
+    /// nobody has said otherwise (ASK-9). It is read from the layers entitled to say it only: see
+    /// `ask_idle_ignored`.
+    ask_idle_seconds: Option<u64>,
+    /// The layers that named `askIdleSeconds` and were not obeyed, weakest first.
+    ///
+    /// Kept because a question closed on a clock is one the person was not asked, which is what
+    /// `vetting.auto` is kept from a checkout for: a file that arrived with a clone does not get to
+    /// answer for the person.
+    ask_idle_ignored: Vec<PathBuf>,
     /// What the top-level `maxRunningDelegates` key said, if it said a whole positive count.
     ///
     /// `None` is the built-in bound, which belongs to the kernel that holds a turn's tree of
@@ -964,6 +977,7 @@ impl Settings {
         let mut agent_ignored = Vec::new();
         let mut style_ignored = Vec::new();
         let mut language_ignored = Vec::new();
+        let mut ask_idle_ignored = Vec::new();
         let mut references_ignored = Vec::new();
         let mut attribution_ignored = Vec::new();
         let mut misshapen = Vec::new();
@@ -1068,6 +1082,11 @@ impl Settings {
             // planner's standing instructions, so a checkout's file cannot put it there.
             if !granting && root.remove("attribution") {
                 attribution_ignored.push(path.clone());
+            }
+            // The same entitlement, for the reason `vetting.auto` has it: a clock that closes the
+            // person's questions is theirs to set, and not the checkout's.
+            if !granting && root.remove("askIdleSeconds") {
+                ask_idle_ignored.push(path.clone());
             }
             if root.contains_key(VETTING_BLOCK) {
                 match own {
@@ -1314,6 +1333,7 @@ impl Settings {
         settings.agent_ignored = agent_ignored;
         settings.style_ignored = style_ignored;
         settings.language_ignored = language_ignored;
+        settings.ask_idle_ignored = ask_idle_ignored;
         settings.references_ignored = references_ignored;
         settings.attribution_ignored = attribution_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
@@ -1418,6 +1438,11 @@ impl Settings {
                 .get("awaySummaryIdleSeconds")
                 .and_then(serde_json::Value::as_u64)
                 .filter(|seconds| *seconds > 0),
+            ask_idle_seconds: root
+                .get("askIdleSeconds")
+                .and_then(serde_json::Value::as_u64)
+                .filter(|seconds| *seconds > 0),
+            ask_idle_ignored: Vec::new(),
             // A count past what a `u32` holds is more delegates than a turn could start, which is
             // no bound at all, so it is read as the largest the kernel counts rather than dropped.
             max_running_delegates: root
@@ -2181,6 +2206,8 @@ impl Settings {
             && self.style.is_none()
             && self.language_ignored.is_empty()
             && self.language.is_none()
+            && self.ask_idle_ignored.is_empty()
+            && self.ask_idle_seconds.is_none()
             && self.references_ignored.is_empty()
             && self.attribution_ignored.is_empty()
     }
@@ -2256,6 +2283,22 @@ impl Settings {
     /// The files that named `language` from a layer other than the person's own, weakest first.
     pub fn language_ignored(&self) -> impl Iterator<Item = &Path> {
         self.language_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// How many seconds a question the planner puts waits with no key pressed before it is closed
+    /// without an answer, if the settings in force said (ASK-9).
+    ///
+    /// `None` where nobody named a usable count, which is a question that waits for as long as it
+    /// takes. Zero would close every question before it could be read, so it is absence, and so is
+    /// anything that is not a whole count. A checkout's file is never obeyed: see
+    /// [`Settings::ask_idle_ignored`].
+    pub fn ask_idle_seconds(&self) -> Option<u64> {
+        self.ask_idle_seconds
+    }
+
+    /// The files that named `askIdleSeconds` from a layer not entitled to, weakest first.
+    pub fn ask_idle_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.ask_idle_ignored.iter().map(PathBuf::as_path)
     }
 
     /// The files that named `agent` from a layer not entitled to, weakest first.
@@ -2355,6 +2398,7 @@ impl Settings {
             .chain(self.agent.is_some().then_some("agent"))
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.style.is_some().then_some("style"))
+            .chain(self.ask_idle_seconds.is_some().then_some("askIdleSeconds"))
             .chain(self.language.is_some().then_some("language"))
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
@@ -7793,6 +7837,66 @@ mod tests {
             .read();
         assert_eq!(named.agent(), Some("named-reviewer"));
         assert_eq!(named.agent_ignored().count(), 0);
+    }
+
+    /// ASK-9: the time is a whole positive count of seconds. Zero would close every question before
+    /// it could be read, so it and anything that is not a whole count leave a question waiting for
+    /// as long as it takes.
+    #[test]
+    fn a_settings_file_names_how_long_a_question_waits() {
+        let settings = Settings::parse(r#"{"askIdleSeconds": 300}"#);
+        assert_eq!(settings.ask_idle_seconds(), Some(300));
+        assert!(!settings.is_empty());
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["askIdleSeconds"]);
+
+        for text in [
+            r#"{"askIdleSeconds": 0}"#,
+            r#"{"askIdleSeconds": -5}"#,
+            r#"{"askIdleSeconds": 1.5}"#,
+            r#"{"askIdleSeconds": "300"}"#,
+            r#"{"askIdleSeconds": null}"#,
+            r#"{"tui": {"askIdleSeconds": 300}}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).ask_idle_seconds(),
+                None,
+                "{text:?} named a time"
+            );
+        }
+    }
+
+    /// ASK-9: a question closed on a clock is one the person was not asked, so a checkout's layers
+    /// cannot set the clock and each is reported; the home layer and a named file outside the
+    /// workspace can.
+    #[test]
+    fn a_checkout_layer_cannot_set_how_long_a_question_waits() {
+        let settings = Layers::new("ask-idle-layers")
+            .global(r#"{"askIdleSeconds": 600}"#)
+            .project(r#"{"askIdleSeconds": 5}"#)
+            .local(r#"{"askIdleSeconds": 7}"#)
+            .read();
+        assert_eq!(settings.ask_idle_seconds(), Some(600));
+        assert_eq!(settings.ask_idle_ignored().count(), 2);
+
+        let only_project = Layers::new("ask-idle-only-project")
+            .project(r#"{"askIdleSeconds": 5}"#)
+            .read();
+        assert_eq!(only_project.ask_idle_seconds(), None);
+        assert_eq!(only_project.ask_idle_ignored().count(), 1);
+
+        let named = Layers::new("ask-idle-named")
+            .global(r#"{"askIdleSeconds": 600}"#)
+            .named(r#"{"askIdleSeconds": 120}"#)
+            .read();
+        assert_eq!(named.ask_idle_seconds(), Some(120));
+        assert_eq!(named.ask_idle_ignored().count(), 0);
+
+        let inside = Layers::new("ask-idle-named-inside")
+            .named_inside_the_workspace(r#"{"askIdleSeconds": 5}"#)
+            .read();
+        assert_eq!(inside.ask_idle_seconds(), None);
+        assert_eq!(inside.ask_idle_ignored().count(), 1);
     }
 
     /// INSTR-12: a style opens the system prompt, so a checkout's layers cannot pick one.

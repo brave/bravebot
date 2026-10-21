@@ -10630,7 +10630,12 @@ fn ask_user<S: Sink, C: Confirmer>(
     // text decides what the person is shown the existence of.
     let shaped = policy.render_in_place("ask_user", &series, |s| ask::asking(&s));
     let proof = policy.authorise_display_release("questions for the user");
-    let answers = confirmer.ask_user(&shaped.declassify(&proof));
+    let mut asking = shaped.declassify(&proof);
+    // The one kind of question an interface may close on a clock: this is the planner asking for
+    // something only the person knows, where a permission or an approval is the person's to give.
+    // Set here, by the driver, so nothing a question says decides it (ASK-9).
+    asking.closes_when_idle = true;
+    let answers = confirmer.ask_user(&asking);
 
     // The kernel puts the replies into words and lines them up against the questions, so nothing
     // here branches on what the person said or counts what they answered.
@@ -15683,6 +15688,16 @@ mod tests {
             );
         }
 
+        /// ASK-9: the planner's own questions are the ones an interface may close when nobody
+        /// answers. Rejects: a call that leaves the flag off, so the person's `askIdleSeconds`
+        /// would change nothing.
+        #[test]
+        fn the_planners_questions_may_be_closed_when_nobody_answers() {
+            let mut confirmer = Watching::default();
+            call(&mut confirmer, three_questions());
+            assert!(confirmer.seen[0].closes_when_idle);
+        }
+
         /// The limit is four and four is inside it: a bound that refused the fourth question
         /// would pass the test above and leave a series of the size the clause allows unaskable.
         #[test]
@@ -15945,6 +15960,16 @@ mod tests {
                 first[0].prompts[0].key,
                 bravebot_core::ask::canonical(&plan)
             );
+        }
+
+        /// ASK-9: a plan is a permission to change mode, so the question that carries it waits for
+        /// the person. Rejects: a flag set on every question the driver puts, which would close the
+        /// plan prompt on a clock and report to the planner that the person may be away.
+        #[test]
+        fn a_plan_put_for_approval_is_never_closed_when_nobody_answers() {
+            use crate::PermissionMode::Plan;
+            let (_, _, seen) = proposed(Plan, false, vec![Answer::Chosen(vec![0])]);
+            assert!(!seen[0].closes_when_idle);
         }
 
         /// MODE-14: anything but an approving choice leaves the session planning.

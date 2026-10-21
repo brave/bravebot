@@ -1,5 +1,6 @@
 ## [0.17.0](https://github.com/brave/bravebot/releases/tag/v0.17.0)
 
+ - Added the `askIdleSeconds` setting, which closes a question from the agent that sits that long with no key pressed and tells the agent no answer was given and you may be away. Without it a question waits for as long as it takes. ([#1444](https://github.com/brave/bravebot/issues/1444))
  - Added a terminal notice, an OSC 9 sequence or the bell, when a turn ends or a question is waiting while the terminal is not in front. The `notificationMethod` and `notificationCondition` settings choose how and when. ([#1493](https://github.com/brave/bravebot/issues/1493))
  - Added messaging between background sessions: a session can send a message to another live session by name with `message_session`, after you approve the target and the text. Received messages are drawn as their own block. ([#1551](https://github.com/brave/bravebot/issues/1551))
  - Added attaching dropped files and pasted pictures in the desktop window, as the terminal does. Each shows as a numbered marker in the message and a chip above the box.

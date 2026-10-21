@@ -619,6 +619,8 @@ doctor-settings-language-ignored =
     language in { $path } is not obeyed: it is read from ~/.bravebot/settings.json only
 doctor-settings-language-unmatched =
     language { $language } in ~/.bravebot/settings.json names no catalog, so it chooses { $reference }; the catalogs are { $available }
+doctor-settings-ask-idle-ignored =
+    askIdleSeconds in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-references-ignored =
     references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-attribution-ignored =
@@ -3084,6 +3086,13 @@ session-offered-tools =
 # Said when a person answers that a server's tool may be called without asking, in this project.
 session-stands-for-tool = calling { $tool } without asking in this project
 session-answered-already = answered already: { $question }
+# Said when a question was closed because no key was pressed for the time askIdleSeconds names. The
+# planner was told no answer was given and the person may be away; this is what the person finds when
+# they come back to a conversation that went on without them.
+session-question-timed-out = { $seconds ->
+    [one] a question was closed after { $seconds } second with no key pressed, and the planner was told you may be away
+   *[other] a question was closed after { $seconds } seconds with no key pressed, and the planner was told you may be away
+    }
 session-something-was-refused = a policy gate refused something during that turn
 # Said under a finished turn for refusals that no later call to the same tool got past. A refusal
 # a later call got past is left to the audit trail.

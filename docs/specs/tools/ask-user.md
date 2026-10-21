@@ -145,7 +145,8 @@ given before do not carry into it. The desktop application keeps them the same w
 session, across its turns, and a session opened, resumed or forked there begins with none. The
 turn's notices name each question it did not put. The terminal and the desktop application
 remember only an answer the person gave, so a question that nobody could be asked, or that the
-interface returned no answer for, is put again. A session in lines reads the end of its input as a
+interface returned no answer for, is put again, as is one closed on a clock
+([ASK-9](#ASK-9)), which nobody answered. A session in lines reads the end of its input as a
 decline and remembers it, as it does a line left empty. The plan put by `propose_plan` is not one
 of these questions: it is a permission to change mode, and it is put under a key of its own every
 time, so a plan proposed again is asked again ([MODE-14](../permission-modes.md#MODE-14)).
@@ -167,6 +168,8 @@ time, so a plan proposed again is asked again ([MODE-14](../permission-modes.md#
 `verified-by: bravebot_tui::ask::a_question_the_person_answered_is_not_drawn_again`
 `verified-by: bravebot_tui::ask::a_series_with_some_questions_settled_draws_only_the_rest`
 `verified-by: bravebot_tui::ask::a_question_the_picker_left_unanswered_is_drawn_again`
+`verified-by: bravebot_core::ask::a_question_closed_on_the_clock_is_not_remembered_and_the_one_beside_it_is`
+`verified-by: bravebot_tui::ask::a_question_closed_on_the_clock_is_asked_again_and_the_one_beside_it_is_remembered`
 `verified-by: bravebot_tui::state::clearing_the_conversation_forgets_the_answers_to_the_planners_questions`
 `verified-by: bravebot_cli::plain::a_question_asked_again_in_a_session_in_lines_is_answered_from_memory`
 `verified-by: bravebot_cli::plain::a_series_with_some_questions_settled_puts_only_the_rest`
@@ -181,3 +184,62 @@ time, so a plan proposed again is asked again ([MODE-14](../permission-modes.md#
 `verified-by: bravebot_ui_bridge::remembered_answers::a_question_that_differs_only_in_its_tag_is_put_again`
 `verified-by: bravebot_ui_bridge::remembered_answers::another_session_is_not_answered_from_the_first_ones_memory`
 `verified-by: bravebot_ui_bridge::remembered_answers::a_turn_that_fails_after_a_remembered_answer_still_names_the_question_it_did_not_put`
+
+<a id="ASK-9"></a>
+### ASK-9: a question nobody answers in the time the person set closes with no answer
+
+The `askIdleSeconds` setting is a whole positive count of seconds. Left unset, or set to zero or to
+anything that is not a whole count, a question waits for as long as it takes. Where it is set and no
+key has been pressed for that long, the terminal closes the question on screen and every question
+behind it with `TimedOut`, which is neither an answer nor a decline. The planner is told, in words
+the driver writes, that no answer was given in the time allowed and that the person may be away, so
+it can go on with its own judgment and ask again later. Answers already given in the series are
+kept. A mark or half-typed text the person had not confirmed is not one, since reporting it would
+be a reply nobody gave ([ASK-7](#ASK-7)). Any key press starts the time again, for each question of
+a series in turn, and a release, the pointer or a change of size does not. The transcript says that
+a question was closed, and the question is not remembered ([ASK-8](#ASK-8)).
+
+Only the questions the planner puts with `ask_user` close this way. A plan to approve, a spend limit
+and a repeated call are the driver's own questions, asked of a person who has to be there, and they
+wait for as long as it takes whatever the setting says. The setting is read from the person's own
+settings file and a `--settings` file outside the project, and a file that arrived with a checkout
+is ignored and named by `doctor`.
+
+**Why.** A question with nobody at the keyboard blocks the turn for good, and a person who starts a
+long task and leaves finds it stopped at a question. The decision is a clock and a setting the person
+wrote, so nothing a question or an answer says reaches it. A checkout does not get to set the clock:
+a question closed on it is one the person was not asked, which is why `vetting.auto` is read from the
+person's file alone as well.
+
+`verified-by: bravebot_core::ask::a_question_that_timed_out_is_reported_as_no_answer_and_not_as_a_decline`
+`verified-by: bravebot_agent::turn::a_question_closed_on_the_clock_comes_back_as_no_answer_beside_the_rest`
+`verified-by: bravebot_tui::ask::a_series_left_alone_closes_from_the_question_on_screen_and_keeps_what_was_answered`
+`verified-by: bravebot_tui::ask::a_key_that_answers_nothing_still_restarts_the_time`
+`verified-by: bravebot_tui::ask::an_event_that_is_not_a_key_press_does_not_restart_the_time`
+`verified-by: bravebot_tui::ask::with_no_time_set_a_question_waits_for_as_long_as_it_takes`
+`verified-by: bravebot_tui::ask::marks_and_half_typed_words_are_not_an_answer_when_the_time_runs_out`
+`verified-by: bravebot_tui::ask::a_key_arriving_as_the_time_is_up_is_still_an_answer`
+`verified-by: bravebot_tui::ask::a_key_waiting_when_the_loop_runs_late_is_still_an_answer`
+`verified-by: bravebot_core::ask::a_question_closed_on_the_clock_is_not_remembered_and_the_one_beside_it_is`
+`verified-by: bravebot_core::ask::what_is_left_to_put_keeps_the_flag_that_lets_it_close_on_the_clock`
+`verified-by: bravebot_tui::ask::a_question_closed_on_the_clock_is_asked_again_and_the_one_beside_it_is_remembered`
+`verified-by: bravebot_tui::app::adopting_settings_puts_the_question_idle_time_in_force`
+`verified-by: bravebot_tui::state::only_the_planners_own_questions_are_closed_on_the_clock`
+`verified-by: bravebot_config::settings::a_settings_file_names_how_long_a_question_waits`
+`verified-by: bravebot_config::settings::a_checkout_layer_cannot_set_how_long_a_question_waits`
+`verified-by: bravebot_agent::tools::the_planners_questions_may_be_closed_when_nobody_answers`
+`verified-by: bravebot_agent::tools::a_plan_put_for_approval_is_never_closed_when_nobody_answers`
+`verified-by: bravebot_agent::spend_limit::the_spend_limit_question_is_never_closed_when_nobody_answers`
+`verified-by: bravebot_agent::repeated_call::the_repeated_call_question_is_never_closed_when_nobody_answers`
+
+## Known costs
+
+- The setting applies to the terminal interface's picker alone. A session in lines (`--plain`) reads
+  its answers from its input and has no picker whose quiet time the interface measures, so a question
+  there waits for as long as it takes.
+- A background session holds a question until a client attaches, so nobody has yet been present and
+  not answering, and the clock does not run on it.
+- The desktop app draws its own question and has no setting for closing one, so a question there
+  waits for as long as it takes.
+- The clock does not consult whether the terminal has focus. A person reading the question in
+  another window for longer than the time set has it closed under them.
