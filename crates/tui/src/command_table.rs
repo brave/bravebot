@@ -1001,6 +1001,7 @@ mod tests {
             (INIT_COMMAND, false, true),
             (REVIEW_COMMAND, false, true),
             (COMMIT_MESSAGE_COMMAND, false, true),
+            (HELP_COMMAND, false, true),
             (UNDO_COMMAND, false, false),
             (REWIND_COMMAND, false, false),
             (HUNKS_COMMAND, false, false),
