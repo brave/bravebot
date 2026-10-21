@@ -138,23 +138,38 @@ reference rather than sending the fragment.
 `verified-by: bravebot_tui::state::a_recalled_prompt_returns_the_cursor_to_the_top`
 
 <a id="NAME-8"></a>
-### NAME-8: a backslash before a space keeps the space in the name
+### NAME-8: a backslash keeps the whitespace or backslash after it in the name
 
-`@My\ Documents/notes.md` names the file `My Documents/notes.md`: a space written after a backslash
-belongs to the reference, and any other whitespace ends it. A backslash anywhere else is an ordinary
-character, so prose containing one still names nothing. Completing an entry whose name holds a space
-writes the escaped form, so the line reads back as the path that was chosen. NAME-5 applies to the
-unescaped path.
+`@My\ Documents/notes.md` names the file `My Documents/notes.md`: a whitespace character written
+after a backslash belongs to the reference, and any whitespace written without one ends it. A
+backslash written after a backslash is one backslash of the name, so a name ending in a backslash is
+written with two. A backslash before anything else, a line break included, is an ordinary character,
+so prose containing one still names nothing and a line ending in a backslash does not take the first
+word of the next line into its reference. Completing an entry whose name holds whitespace or a
+backslash writes each behind a backslash, so the line reads back as the path that was chosen. NAME-5
+applies to the unescaped path.
 
-**Why.** Without the escaped form, a file whose name holds a space cannot be named, and the picker
-would offer an entry that completes to text naming a different path. Where a reference ends is
-decided from the line the user typed, not from file contents.
+The list does not offer a name the line cannot carry to the turn: a file or directory whose name
+holds a line break (U+000A, U+000D, U+2028 or U+2029), and a file whose name ends in whitespace or
+U+FEFF, because a line is trimmed when it is sent and the name would lose its end. `--file` names
+such a file.
+
+**Why.** Without the escaped form, a file whose name holds whitespace cannot be named, and the
+picker would offer an entry that completes to text naming a different path. An entry no line can
+write has the same result, so it is left out. Where a reference ends is decided from the line the
+user typed, not from file contents.
 
 `verified-by: bravebot_mentions::lib::a_backslash_before_a_space_continues_a_reference`
+`verified-by: bravebot_mentions::lib::a_backslash_before_whitespace_or_a_backslash_keeps_it_in_the_name`
 `verified-by: bravebot_mentions::lib::an_escaped_path_reads_back_unchanged`
 `verified-by: bravebot_mentions::lib::a_name_with_a_space_is_listed_and_finished`
 `verified-by: bravebot_mentions::lib::every_awkward_name_is_offered_and_read_back_as_the_file_it_is`
+`verified-by: bravebot_mentions::lib::a_pick_among_names_that_look_alike_names_the_one_picked`
+`verified-by: bravebot_mentions::lib::a_name_a_line_cannot_carry_is_not_offered`
 `verified-by: bravebot_tui::references::a_name_with_a_space_completes_to_a_reference_that_names_it`
+`verified-by: bravebot_tui::references::a_name_with_a_no_break_space_completes_to_a_reference_that_names_it`
+`verified-by: bravebot_tui::references::a_name_ending_in_a_backslash_completes_to_a_reference_that_names_it`
+`verified-by: bravebot_tui::references::a_name_ending_in_a_no_break_space_is_not_offered_beside_the_name_it_looks_like`
 `verified-by: bravebot_tui::references::enter_completes_a_half_typed_reference_past_an_escaped_space`
 
 <a id="NAME-9"></a>
@@ -165,19 +180,20 @@ because both front ends call the same `bravebot-mentions` code: the same list (N
 names found below it (NAME-11), `..`, an absolute path and a link leading out of the workspace
 refused (NAME-5), a name ending in `/`, a bare `@` and an address in a sentence naming nothing
 (NAME-6), and Enter completing a half-typed name and sending a finished one (NAME-7), and a
-backslash before a space keeping the space in a name (NAME-8). The bridge reads the names back out
-of the prompt at `turn.send` rather than taking a list from the window, so the files that go are the
-ones the sent line names. Each is surveyed by the read the turn will make, and a name that would
-fail it (outside the workspace, missing, a directory, or not text) refuses the send before a turn
-starts, where the terminal would end the turn. The project is the folder the conversation runs in,
-which for a bot's conversation is the bot's home folder or the project chosen for it. A prompt the
-app composes itself names no file.
+backslash before whitespace or a backslash keeping it in a name (NAME-8). The bridge reads the names
+back out of the prompt at `turn.send` rather than taking a list from the window, so the files that
+go are the ones the sent line names. Each is surveyed by the read the turn will make, and a name that
+would fail it (outside the workspace, missing, a directory, or not text) refuses the send before a
+turn starts, where the terminal would end the turn. The project is the folder the conversation runs
+in, which for a bot's conversation is the bot's home folder or the project chosen for it. A prompt
+the app composes itself names no file.
 
 **Why.** One person names files in both front ends, and a name the window treated differently from
 the terminal would send a file nobody chose or drop one somebody did.
 
 `verified-by: bravebot_ui_bridge::mentions::the_window_is_offered_the_terminals_list_of_the_project`
 `verified-by: bravebot_ui_bridge::mentions::an_entry_with_a_space_is_offered_escaped_over_the_whole_word`
+`verified-by: bravebot_ui_bridge::mentions::an_entry_holding_a_no_break_space_is_written_so_the_prompt_names_it`
 `verified-by: bravebot_ui_bridge::mentions::a_fragment_is_offered_the_file_below_it_and_enter_completes_it`
 `verified-by: bravebot_ui_bridge::mentions::a_prompt_names_only_text_files_inside_the_project`
 `verified-by: bravebot_ui_bridge::mentions::a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn`
@@ -298,3 +314,8 @@ letters in the path of most of a large tree, and the terminal draws every row un
 - **Rows found below come before the sessions NAME-10 offers.** A word that is part of a session's
   title also matches file names, so the session rows follow those. `@session:` narrows to the
   sessions.
+- **A file whose name holds a line break or ends in whitespace cannot be named with `@`.** The list
+  leaves it out (NAME-8), so naming it takes `--file`. A line cannot hold the break, and the trim
+  made of a line when it is sent would take the end of the name. A name typed by hand with its
+  trailing whitespace escaped is read as written, and the trim leaves the backslash, so the line
+  names the name with a backslash at its end.

@@ -380,7 +380,8 @@ impl Session {
                 }
                 let kept = self.input[..start].to_string();
                 let trailing = if entry.is_directory { "" } else { " " };
-                // Escaped, so a name holding a space is still one word when the line is read back.
+                // Escaped, so a name holding whitespace or a backslash is still one word, and the
+                // same name, when the line is read back.
                 let path = bravebot_mentions::escape(&entry.path);
                 self.put_in_the_box(format!("{kept}@{path}{trailing}"));
             }
