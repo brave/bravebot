@@ -2974,6 +2974,30 @@ impl Session {
         self.handoff = true;
     }
 
+    /// Put the commit message `/commit-message` drafted in the box for the person to read, edit and
+    /// send (CMD-23).
+    ///
+    /// A line already in the box is kept as the draft Up brings back, so a draft arriving after the
+    /// person started typing something else costs them nothing. The text goes in after the leading
+    /// words the driver wrote, and with what a terminal draws as nothing taken out, as a paste's is
+    /// (PASTE-10): the draft was written about files nobody may have vouched for. Enter on it is an
+    /// ordinary press, so nothing here sends and nothing here runs.
+    pub fn propose_commit_message(&mut self, message: &str) {
+        if self.status != Status::Idle {
+            return;
+        }
+        let (message, removed) = crate::invisible::without_invisible(&normalised(message));
+        if removed > 0 {
+            self.note(t!(paste_invisible_removed, count = removed));
+        }
+        if !self.input.trim().is_empty() {
+            self.history.keep_draft(self.input.clone());
+        }
+        self.history.leave();
+        self.set_input(crate::commit_message_command::box_text(&message));
+        self.shell = false;
+    }
+
     /// Whether Enter on the box starts a new session from it.
     pub fn handoff_pending(&self) -> bool {
         self.handoff && !self.input.trim().is_empty()

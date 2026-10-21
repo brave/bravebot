@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/core/src/processor.rs
   - crates/core/src/policy.rs
+  - crates/agent/src/commit_message.rs
 guards:
   - symbol: ProcessorSpec::new
   - symbol: Policy::before_processor
@@ -284,6 +285,31 @@ bytes ([PROC-12](#PROC-12)).
 `verified-by: bravebot_agent::turn::a_processor_model_needing_a_sign_in_sends_nothing_and_says_so`
 `verified-by: bravebot_agent::turn::a_processor_answered_by_another_model_than_the_configured_one_says_so`
 `verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_processor_model_that_is_not_obeyed`
+
+<a id="PROC-14"></a>
+### PROC-14: a command may run a processor over a diff the driver read, and release the draft to the person's box alone
+
+`/commit-message` ([CMD-23](commands.md#CMD-23)) is a processor call that no planner asked for. The
+driver reads a diff with the `read_git` reader under a policy of its own that holds `FileRead` and
+the network, puts it in one slot at the label the read gave it, fixes the spec with
+[`Policy::before_processor`](#PROC-2), and runs it. Everything PROC-1 to PROC-3 say holds: no tool,
+no memory, one request, and an output labelled by taint over the diff. The instruction is the
+driver's own fixed words and the format the person typed after the command, both public.
+
+What differs from a call a planner makes is where the output goes. The document is released by the
+display gate to the person's input box, and the remark is never released. The driver reads two
+counts of the reader's own answer, whether it showed no file and whether it stopped at a cap, and
+nothing of the diff or the draft. A diff that holds what looks like a credential is not given to the
+processor, since nobody is at a prompt to agree to it as for a planner's read
+([CRED-15](credential-protection.md#CRED-15)).
+
+**Why.** The diff and the draft stay out of both contexts, as they do for a processor a planner
+starts, and the person is the only reader of the draft before they decide what to send.
+
+`verified-by: bravebot_agent::commit_message::a_range_is_drafted_from_its_diff_and_the_request_holds_no_tool`
+`verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
+`verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
+`verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
 
 ## Known costs
 

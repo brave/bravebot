@@ -18,6 +18,7 @@ pub mod attached;
 pub mod backend;
 mod calendar;
 pub mod cmdline;
+pub mod commit_message;
 pub mod compact;
 pub mod confine;
 pub mod confirm;

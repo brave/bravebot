@@ -591,6 +591,17 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
             }
         };
     }
+    // Sends nothing: the draft goes in the box and the person's own Enter sends it as a prompt
+    // (CMD-23). A source that names nothing usable is a usage note and no request.
+    if let Some(argument) = argument_to(line, COMMIT_MESSAGE_COMMAND) {
+        return match crate::commit_message_command::parse(argument) {
+            Some(asked) => Action::CommitMessage(asked),
+            None => {
+                session.note(t!(commit_message_usage));
+                Action::Redraw
+            }
+        };
+    }
     // Carried unparsed, because which names exist is read from the workspace and the trust map,
     // both of which the loop owns.
     if let Some(argument) = argument_to(line, AGENT_COMMAND) {
@@ -2744,6 +2755,7 @@ fn event_loop(
                 held.aside(terminal, config, &question, &pasted, &attached)?
             }
             Action::Recap => held.recap(terminal, config)?,
+            Action::CommitMessage(asked) => held.commit_message(terminal, config, &asked)?,
             Action::Manifest(task, pasted, attached) => {
                 held.manifest(terminal, config, &task, &pasted, &attached)?
             }
@@ -4562,6 +4574,118 @@ fn ask_animated(
     });
 
     Ok((done, sink.events().to_vec()))
+}
+
+/// Draft a commit message from changes, redrawing while it is answered.
+///
+/// The same shape as [`ask_animated`], and for the same reasons: one request, off the thread that
+/// owns the terminal, with the loop below drawing so a slow answer does not read as a hang. What
+/// differs is what crosses to the worker. No conversation does, since the draft is not about the
+/// exchange and nothing it makes is for it, so there is no path by which the diff or the draft
+/// reaches a later turn except the line the person sends (CMD-23).
+///
+/// Hands back what came of it and leaves what that means to the caller. A stop key walks away from
+/// the request and comes back as [`Unanswered::Stopped`] (INPUT-4).
+fn commit_message_animated(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
+    config: &Config,
+    trust: &TrustStore,
+    asked: &crate::commit_message_command::Asked,
+    workspace: &Workspace,
+) -> io::Result<(
+    Result<bravebot_agent::commit_message::Drafted, Unanswered>,
+    Vec<Stamped>,
+)> {
+    sign_in_if_needed(terminal, session, config)?;
+
+    let (to_main, from_worker) = mpsc::channel::<crate::remote_confirm::ToMain>();
+
+    let worker_config = config.clone();
+    let worker_trust = trust.clone();
+    let worker_workspace = workspace.clone();
+    let asked = asked.clone();
+    let model = session.model().map(str::to_string);
+    let cancel = Cancel::new();
+    let worker_cancel = cancel.clone();
+    session.begin_aside();
+
+    let worker = thread::spawn(move || {
+        let mut sink = Trail::new();
+        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
+        let egress = Egress::new();
+        // Reduced to what a person can be told before it crosses back, since the error types are
+        // the kernel's and this thread is the only place they mean anything.
+        let done = turn::commit_message(
+            &worker_config,
+            &egress,
+            &worker_workspace,
+            &asked.source,
+            asked.format.as_deref(),
+            model.as_deref(),
+            &mut reporter,
+            &mut sink,
+            worker_trust,
+            &worker_cancel,
+        )
+        .map_err(|e| e.to_string());
+        (done, sink)
+    });
+
+    loop {
+        session.keep_awake();
+        redraw(terminal, session)?;
+        pump_terminal(terminal, session, |session, key| {
+            one_request_key(session, key, &cancel);
+        })?;
+        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
+            aside_reported(session, message);
+        });
+        if !carrying_on {
+            break;
+        }
+    }
+
+    let (done, sink) = worker
+        .join()
+        .unwrap_or_else(|_| (Err(t!(btw_ended_unexpectedly).to_string()), Trail::new()));
+    let done = done.map_err(|message| {
+        if cancel.is_cancelled() {
+            Unanswered::Stopped
+        } else {
+            Unanswered::Failed(message)
+        }
+    });
+    Ok((done, sink.events().to_vec()))
+}
+
+/// Take what the request for a commit message came back with.
+///
+/// CMD-23: a draft is put in the box and nowhere else, for the person to read and edit, and a
+/// refusal or a stop leaves the box as it was. Apart from [`commit_message_animated`] so a test can
+/// call it without a backend.
+fn commit_message_answered(
+    session: &mut Session,
+    done: Result<bravebot_agent::commit_message::Drafted, Unanswered>,
+) {
+    match done {
+        Ok(drafted) => {
+            session.end_aside(drafted.usage.total());
+            session.propose_commit_message(&drafted.message);
+            if drafted.partial {
+                session.note(t!(commit_message_partial));
+            }
+            session.note(t!(commit_message_ready));
+        }
+        Err(Unanswered::Stopped) => {
+            session.end_aside(0);
+            session.note(t!(commit_message_stopped));
+        }
+        Err(Unanswered::Failed(message)) => {
+            session.end_aside(0);
+            session.note(t!(commit_message_failed, problem = message));
+        }
+    }
 }
 
 /// Why `/handoff` asks for nothing, as the line to tell the person, where it does not.
@@ -14080,6 +14204,150 @@ mod tests {
             .find(|c| c.name == REVIEW_COMMAND)
             .expect("in the table");
         assert!(matches!(row.mid_turn, MidTurn::Waits));
+    }
+
+    /// CMD-23, CMD-4: `/commit-message` is a request of its own, and neither the typed line nor
+    /// anything else of it enters the conversation.
+    #[test]
+    fn the_commit_message_command_carries_its_source_and_is_not_sent_as_a_prompt() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            enter_line(
+                &mut session,
+                "/commit-message --range main..HEAD one line only"
+            ),
+            Action::CommitMessage(crate::commit_message_command::Asked {
+                source: bravebot_agent::commit_message::Source::Range("main..HEAD".to_string()),
+                format: Some("one line only".to_string()),
+            })
+        );
+        assert_eq!(session.turns, 0, "a turn began");
+        assert!(
+            session.transcript.is_empty(),
+            "the line joined the transcript"
+        );
+    }
+
+    /// CMD-23: a source that names nothing usable says how to write one, and asks nothing.
+    #[test]
+    fn the_commit_message_command_starts_no_request_for_a_range_it_cannot_use() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            enter_line(&mut session, "/commit-message --range --output=x"),
+            Action::Redraw
+        );
+        assert_eq!(
+            session.transcript.last().expect("a note").text,
+            t!(commit_message_usage)
+        );
+    }
+
+    /// CMD-2: a longer word starting with the command's name is a prompt.
+    #[test]
+    fn a_prompt_containing_the_commit_message_command_or_a_longer_word_is_still_a_prompt() {
+        for line in ["/commit-messages please", "/commit-message-style"] {
+            let mut session = Session::new("none");
+            assert_eq!(
+                enter_line(&mut session, line),
+                Action::Submit(line.to_string())
+            );
+        }
+    }
+
+    /// CMD-8: typed during a turn it waits, so it neither reads the index while the turn writes
+    /// it nor puts a draft in a box the turn is using.
+    #[test]
+    fn the_commit_message_command_waits_for_a_running_turn() {
+        let row = commands()
+            .into_iter()
+            .find(|c| c.name == COMMIT_MESSAGE_COMMAND)
+            .expect("in the table");
+        assert!(matches!(row.mid_turn, MidTurn::Waits));
+    }
+
+    fn drafted(message: &str) -> bravebot_agent::commit_message::Drafted {
+        bravebot_agent::commit_message::Drafted {
+            message: message.to_string(),
+            partial: false,
+            substituted: None,
+            usage: bravebot_aichat::protocol::Usage::default(),
+        }
+    }
+
+    /// CMD-23, CMD-1: a draft that is itself a command is put in the box after the driver's words,
+    /// so Enter on it sends a prompt and carries out nothing. A draft that began the line would be
+    /// dispatched as the command it spells.
+    #[test]
+    fn a_draft_that_spells_a_command_is_sent_as_a_prompt_and_not_carried_out() {
+        let mut session = Session::new("none");
+        commit_message_answered(&mut session, Ok(drafted("/clear")));
+        let line = session.input().to_string();
+        assert!(
+            line.starts_with(crate::commit_message_command::LEAD) && line.ends_with("/clear"),
+            "{line:?}"
+        );
+        assert_eq!(session.turns, 0, "the draft was sent without a press");
+
+        let Action::Submit(sent) = handle_key(&mut session, key(KeyCode::Enter)) else {
+            panic!("Enter on a draft did not send it as a prompt");
+        };
+        assert_eq!(sent, line);
+    }
+
+    /// CMD-23: what a terminal draws as nothing is taken out of a draft written about files nobody
+    /// may have vouched for, and the person is told how many.
+    #[test]
+    fn a_draft_has_the_characters_a_terminal_draws_as_nothing_taken_out() {
+        let mut session = Session::new("none");
+        commit_message_answered(&mut session, Ok(drafted("Fix the\u{200b}parser")));
+        assert!(
+            session.input().ends_with("Fix theparser"),
+            "{:?}",
+            session.input()
+        );
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(paste_invisible_removed, count = 1)),
+            "the person was not told"
+        );
+    }
+
+    /// CMD-23: a draft arriving over something the person had started to type keeps it, as the
+    /// draft Up brings back.
+    #[test]
+    fn a_draft_arriving_over_typed_text_keeps_the_text_as_a_draft() {
+        let mut session = Session::new("none");
+        for c in "half a thought".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        commit_message_answered(&mut session, Ok(drafted("Fix it")));
+        // The draft is three lines, so Up walks the caret to the first of them before it recalls.
+        for _ in 0..4 {
+            handle_key(&mut session, key(KeyCode::Up));
+        }
+        assert_eq!(session.input(), "half a thought");
+    }
+
+    /// CMD-23: a stopped or failed request leaves the box as it was and says so.
+    #[test]
+    fn a_stopped_or_failed_draft_leaves_the_box_alone() {
+        for (why, said) in [
+            (Unanswered::Stopped, t!(commit_message_stopped).to_string()),
+            (
+                Unanswered::Failed("no network".to_string()),
+                t!(commit_message_failed, problem = "no network").to_string(),
+            ),
+        ] {
+            let mut session = Session::new("none");
+            for c in "typing".chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            commit_message_answered(&mut session, Err(why));
+            assert_eq!(session.input(), "typing");
+            assert_eq!(session.transcript.last().expect("a note").text, said);
+        }
     }
 
     /// `/request` opens the last request built, and nothing else: no turn starts and no prompt is

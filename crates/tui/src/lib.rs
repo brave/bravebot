@@ -27,6 +27,7 @@ pub mod checkouts_command;
 pub mod clipboard;
 pub mod colour_codes;
 pub mod command_table;
+pub mod commit_message_command;
 pub mod config_prompt;
 pub mod confirm;
 pub mod dropped;

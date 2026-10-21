@@ -80,6 +80,10 @@ pub enum Action {
     ),
     /// Recap the session so far, over a copy of the conversation, in the way an aside is answered.
     Recap,
+    /// Draft a commit message from changes and put it in the box. Needs the workspace, the trust
+    /// map and the network, which the loop owns, and gives the conversation nothing and takes
+    /// nothing from it.
+    CommitMessage(crate::commit_message_command::Asked),
     /// Plan this task in full and then walk it. Needs the workspace, the trust map and the
     /// network, which the loop owns, and gives the conversation nothing back.
     ///

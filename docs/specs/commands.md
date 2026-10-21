@@ -15,6 +15,7 @@ governs:
   - crates/tui/src/away.rs
   - crates/tui/src/init_command.rs
   - crates/tui/src/review_command.rs
+  - crates/tui/src/commit_message_command.rs
   - crates/tui/src/prompt_files.rs
 guards:
   - symbol: commands
@@ -1075,6 +1076,65 @@ apart from the parser drifts from it.
 `verified-by: bravebot_tui::app::the_sandbox_hint_lists_every_mode_and_the_list_stays_short`
 `verified-by: bravebot_tui::app::the_limit_review_and_reach_hints_show_forms_their_parsers_take`
 `verified-by: bravebot_tui::app::tab_finishes_a_mode_started_after_the_sandbox_command`
+
+<a id="CMD-23"></a>
+### CMD-23: `/commit-message` puts a draft in the box, and the diff and the draft reach no planner
+
+`/commit-message [--staged | --range <a>..<b>] [format]` reads the changes named and has a model
+write one commit message for them. No argument and `--staged` are what is in the index and not in
+`HEAD`, and `--range` is the changes between two commits, written `a..b` or `a...b`
+([GIT-15](tools/read-git.md#GIT-15)). Each name is a branch, tag, hash or `HEAD~2`, with no leading
+`-` and no `..` inside it. The two flags count only as the first word, so `/commit-message use
+Conventional Commits` is the staged changes in that format. Words after the source are the person's
+own and go to the processor as the format they want. A range that is not two such names is a usage
+note and nothing is read or sent.
+
+The driver reads the diff with the reader `read_git` uses, under a policy of its own that holds
+`FileRead` and the network and no conversation, and hands it to a processor
+([PROC-14](processors.md#PROC-14)). It is not a turn: nothing joins the transcript, the
+conversation is neither read nor written, and the request carries no tool.
+
+The draft goes to one place, the input box, as text the person reads, edits and sends. What is put
+in the box is a fixed line, a blank line and the draft, so the line the person sends starts with a
+word the driver wrote and a draft that spells `/clear` is a prompt like any other sentence
+([CMD-1](#CMD-1)). Characters a terminal draws as nothing are taken out of the draft first, and the
+number is said ([PASTE-10](pasting.md#PASTE-10)). Whatever was in the box is kept as the draft that
+Up brings back. Nothing runs on the draft: the next Enter sends it as an ordinary prompt, so the
+planner reads it only as words the person chose to send, and a commit follows only from the planner
+being asked for one, through `run`, with the person asked about it as for any program.
+
+Nothing is drafted, and the line says which of these held, where the repository is not one
+`read_git` opens ([GIT-2](tools/read-git.md#GIT-2)), where the reader shows no file, where the diff
+holds what looks like a credential ([CRED-15](credential-protection.md#CRED-15)), where the model
+could not be used ([PROC-13](processors.md#PROC-13)) or where the answer marks no message. A diff cut
+at the reader's cap is drafted from what was read and the line says so. Typed during a turn the
+line waits for the turn to end (CMD-8).
+
+**Why.** A message is written from a diff the planner may not be allowed to read, and the answer to
+that elsewhere is a processor. The draft is derived from that diff, so its integrity is the diff's,
+and the one place it is released is a surface the person edits and a key the person presses. A
+credential in a diff is refused where the planner's own read would ask, because nobody is at a
+prompt to agree.
+
+`verified-by: bravebot_tui::app::the_commit_message_command_carries_its_source_and_is_not_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::the_commit_message_command_starts_no_request_for_a_range_it_cannot_use`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_commit_message_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::the_commit_message_command_waits_for_a_running_turn`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::a_draft_that_spells_a_command_is_sent_as_a_prompt_and_not_carried_out`
+`verified-by: bravebot_tui::app::a_draft_has_the_characters_a_terminal_draws_as_nothing_taken_out`
+`verified-by: bravebot_tui::app::a_draft_arriving_over_typed_text_keeps_the_text_as_a_draft`
+`verified-by: bravebot_tui::app::a_stopped_or_failed_draft_leaves_the_box_alone`
+`verified-by: bravebot_tui::commit_message_command::a_bare_command_drafts_from_the_staged_changes`
+`verified-by: bravebot_tui::commit_message_command::a_range_names_its_source_and_the_rest_is_the_format`
+`verified-by: bravebot_tui::commit_message_command::a_flag_only_counts_as_the_first_word`
+`verified-by: bravebot_tui::commit_message_command::a_range_that_is_not_two_plain_revisions_is_refused`
+`verified-by: bravebot_tui::commit_message_command::the_box_begins_with_the_leading_words_whatever_the_draft_says`
+`verified-by: bravebot_agent::commit_message::a_range_is_drafted_from_its_diff_and_the_request_holds_no_tool`
+`verified-by: bravebot_agent::commit_message::an_index_that_matches_head_sends_nothing`
+`verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
+`verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
+`verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
 
 ## Known costs
 

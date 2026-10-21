@@ -17,7 +17,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [routing.md](routing.md) | `ROUTE` | 8 | where an effect may land and what may decide it |
 | [trust-map.md](trust-map.md) | `TRUST` | 25 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
 | [permissions.md](permissions.md) | `PERM` | 20 | rules written in advance about what to ask about and what to refuse |
-| [processors.md](processors.md) | `PROC` | 13 | the one component that reads untrusted content, and what it may do with it |
+| [processors.md](processors.md) | `PROC` | 14 | the one component that reads untrusted content, and what it may do with it |
 | [vetting.md](vetting.md) | `CHECK` | 15 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
 | [delegation.md](delegation.md) | `DELEGATE` | 30 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 13 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
@@ -38,7 +38,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [cli.md](cli.md) | `CLI` | 33 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
 | [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 46 | what the user types into: the box, the keys, and where a terminal's own limits show through |
-| [commands.md](commands.md) | `CMD` | 22 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, what `/sandbox`, `/limit`, `/review` and `/reach` show after the word, and how a prompt file is expanded |
+| [commands.md](commands.md) | `CMD` | 23 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, what `/sandbox`, `/limit`, `/review` and `/reach` show after the word, and how a prompt file is expanded |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 30 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
 | [session-view.md](session-view.md) | `RPCVIEW` | 8 | the opt-in shared Rust view for fresh local bridge sessions, the stdio TypeScript client that applies it, and the anonymous channel they speak over |
 | [local-host.md](local-host.md) | `HOST` | 11 | the process that keeps a bridge's sessions while the programs that drive it come and go: who starts it, what a client may ask, where its records are, and when a session is closed |
@@ -87,7 +87,7 @@ the routing-versus-content split they share.
 | [tools/list-files.md](tools/list-files.md) | `LIST` | 5 | `list_files` |
 | [tools/search.md](tools/search.md) | `SEARCH` | 12 | `search` |
 | [tools/repo-map.md](tools/repo-map.md) | `MAP` | 5 | `repo_map` |
-| [tools/read-git.md](tools/read-git.md) | `GIT` | 14 | `read_git` |
+| [tools/read-git.md](tools/read-git.md) | `GIT` | 15 | `read_git` |
 | [tools/lsp.md](tools/lsp.md) | `LSP` | 13 | `lsp` |
 | [tools/write-file.md](tools/write-file.md) | `WRITE` | 6 | `write_file` |
 | [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 7 | `edit_file` |
