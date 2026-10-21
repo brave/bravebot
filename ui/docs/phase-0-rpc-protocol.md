@@ -720,8 +720,11 @@ covers the race where the question is registered just after the stop request.
 
 Sends words into the turn that is running, for the planner to read at the turn's next round
 boundary, after the round's calls have run (INPUT-10, INPUT-46). The words are the person's own,
-read under the routing the turn began with, and carry no file: a front-end writes a dropped file as
-its name before sending. `target` is optional and names the turn as in `turn.cancel`; absent, the
+read under the routing the turn began with, and carry no file. A marker in `prompt` stands for a
+dropped file or a pasted picture: optional `files` (a list of `{ "marker", "name" }`) and `pictures`
+(a list of markers) say which, and the bridge writes a file as its name and a picture as a sentence
+saying it cannot be shown, as the terminal does (DROP-8). A malformed list is `bad_request`.
+`target` is optional and names the turn as in `turn.cancel`; absent, the
 line is for whatever is running.
 
 `accepted` is `true` when a running turn took it in, and `false` when nothing is running, the turn is

@@ -230,6 +230,18 @@ struct Running {
 
 impl Running {
     fn start(name: &str) -> Self {
+        let mut idle = Self::open(name);
+        let session = idle.session.clone();
+        let started = idle.call(
+            "turn.send",
+            json!({"session": session, "prompt": "look around"}),
+        );
+        assert!(started["ok"]["target"].is_u64(), "no turn began: {started}");
+        idle
+    }
+
+    /// The same window with a trusted session and nothing running in it.
+    fn open(name: &str) -> Self {
         let scratch = Scratch::new(name);
         let service = stub_service();
         let mut window = front_end(&scratch.home(), &service.endpoint);
@@ -252,20 +264,12 @@ impl Running {
             json!({"session": session, "trusted": true}),
         );
         until(&said, |message| message["id"] == 2);
-        send(
-            &mut window,
-            3,
-            "turn.send",
-            json!({"session": session, "prompt": "look around"}),
-        );
-        let started = until(&said, |message| message["id"] == 3);
-        assert!(started["ok"]["target"].is_u64(), "no turn began: {started}");
         Self {
             window,
             said,
             session,
             service,
-            next: 4,
+            next: 3,
             _scratch: scratch,
         }
     }
@@ -406,4 +410,65 @@ fn a_blank_line_and_an_unknown_session_are_refused() {
     );
     assert_eq!(stranger["error"]["code"], "no_such_session", "{stranger}");
     turn.release_the_first_answer();
+}
+
+/// A marker in the line becomes what the terminal would give the planner for it, in Rust, so the
+/// window sends markers and names and no wording of its own (DROP-8, SHARE-001).
+#[test]
+fn markers_in_a_line_become_a_name_and_a_sentence_in_the_bridge() {
+    let mut turn = Running::start("interject-markers");
+
+    let session = turn.session.clone();
+    let accepted = turn.call(
+        "turn.interject",
+        json!({"session": session, "prompt": "see [File #1] and [Image #2]",
+            "files": [{"marker": "[File #1]", "name": "src/a.rs"}],
+            "pictures": ["[Image #2]"]}),
+    );
+    assert_eq!(accepted["ok"]["accepted"], true, "{accepted}");
+    turn.release_the_first_answer();
+
+    let read = until(&turn.said, |message| message["event"] == "turn.interjected");
+    assert_eq!(
+        read["data"]["prompt"],
+        bravebot_filetype::markers::put_back_to_words(
+            "see src/a.rs and [Image #2]",
+            ["[Image #2]"],
+            "a picture cannot join a turn that is already running",
+        )
+    );
+}
+
+/// A malformed marker list is refused rather than sent as the line it was written as.
+#[test]
+fn a_malformed_marker_list_is_refused() {
+    let mut turn = Running::start("interject-bad-markers");
+
+    let session = turn.session.clone();
+    let refused = turn.call(
+        "turn.interject",
+        json!({"session": session, "prompt": "see [File #1]", "files": [{"marker": "[File #1]"}]}),
+    );
+    assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
+    turn.release_the_first_answer();
+}
+
+/// A plan run asks nothing between rounds, so it never takes a line (INPUT-46): the window is told
+/// so and makes a turn of it.
+#[test]
+fn a_plan_run_does_not_take_a_line() {
+    let mut run = Running::open("interject-plan-run");
+
+    let session = run.session.clone();
+    let began = run.call(
+        "manifest.run",
+        json!({"session": session, "task": "do the work"}),
+    );
+    assert!(began.get("ok").is_some(), "the run did not start: {began}");
+    let refused = run.interject("while the plan runs");
+    assert_eq!(
+        refused["ok"]["accepted"], false,
+        "a plan run took a line nothing will read: {refused}"
+    );
+    run.release_the_first_answer();
 }

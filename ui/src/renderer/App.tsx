@@ -52,7 +52,7 @@ import { Unconfigurable, METHOD, call, callBot } from './rpc'
 import { RewindConfirm } from './components/Rewind'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
-import { declined, inWords, mayGo, sentInto } from './interjecting'
+import { declined, markersOf, mayGo, route, sentInto } from './interjecting'
 import { type Interjection, type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft } from './live'
 
 export function App(): React.JSX.Element {
@@ -498,8 +498,8 @@ export function App(): React.JSX.Element {
    * the bridge does not accept is one nothing will read: no turn is running, it is being stopped, or
    * it is a plan run. It becomes a turn of its own.
    */
-  const interject = useCallback(async (handle: string, line: Interjection, said: string) => {
-    const accepted = await call<{ accepted: boolean }>('turn.interject', { session: handle, prompt: said })
+  const interject = useCallback(async (handle: string, line: Interjection) => {
+    const accepted = await call<{ accepted: boolean }>('turn.interject', { session: handle, prompt: line.prompt, ...markersOf(line.staged) })
       .then((answer) => answer.accepted === true, () => false)
     if (!accepted) {
       updateSession(handle, (old) => old ? declined(old, line.id) : old)
@@ -1178,14 +1178,12 @@ export function App(): React.JSX.Element {
           const handle = handleRef.current
           const text = draft.trim()
           if (!handle || !text || !live) return
-          // A file chosen with the paperclip is a grant the running turn cannot be handed, and a
-          // bot's memory update reads nothing from the person: both wait for the turn to end.
-          if (live.consolidating || live.attachments?.length) { queueDraft(); return }
+          if (route(live) === 'queue') { queueDraft(); return }
           const staged = named(live.staging, draft)
           const line = { id: crypto.randomUUID(), prompt: text, attachments: [], staged }
           updateSession(handle, (old) => old ? sentInto(old, line) : old)
           setDraft('')
-          void interject(handle, line, inWords(text, staged))
+          void interject(handle, line)
         }}
         onQueue={queueDraft}
         interjected={live?.interjected?.map((line) => line.prompt) ?? []}

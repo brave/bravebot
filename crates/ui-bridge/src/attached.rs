@@ -89,6 +89,49 @@ fn too_large(size: usize) -> Failure {
     ))
 }
 
+/// A line typed into a running turn, with each marker in it replaced by what the turn can be given
+/// (DROP-8).
+///
+/// `files` is a list of `{ marker, name }`, a dropped file standing for its name, and `pictures` a
+/// list of markers, each standing for a sentence saying it cannot be shown. Both are optional. The
+/// words are the ones the terminal uses, from `bravebot_filetype::markers`, so the two front ends
+/// hand the planner the same line.
+pub fn in_words(request: &Request, line: &str) -> Result<String, Failure> {
+    let refused = |what: &str| Failure::bad_request(format!("`{what}` is malformed"));
+    let mut named = Vec::new();
+    match request.params.get("files") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(files)) => {
+            for file in files {
+                let (Some(marker), Some(name)) = (
+                    file.get("marker").and_then(Value::as_str),
+                    file.get("name").and_then(Value::as_str),
+                ) else {
+                    return Err(refused("files"));
+                };
+                named.push((marker, name));
+            }
+        }
+        Some(_) => return Err(refused("files")),
+    }
+    let mut pictures = Vec::new();
+    match request.params.get("pictures") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(markers)) => {
+            for marker in markers {
+                pictures.push(marker.as_str().ok_or_else(|| refused("pictures"))?);
+            }
+        }
+        Some(_) => return Err(refused("pictures")),
+    }
+    let line = bravebot_filetype::markers::put_back_to_names(line, named);
+    Ok(bravebot_filetype::markers::put_back_to_words(
+        &line,
+        pictures,
+        "a picture cannot join a turn that is already running",
+    ))
+}
+
 /// The pictures and PDFs a person dropped onto this prompt, each with the media type its
 /// extension names (DROP-10).
 ///

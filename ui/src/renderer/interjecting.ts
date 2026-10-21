@@ -12,25 +12,27 @@ import type { Interjection, Live, Queued } from './live'
 import { sent, type Staged } from './staging'
 
 /**
- * What goes to the turn in place of what the person sees (DROP-8).
+ * What the bridge needs to put a line into words for the turn (DROP-8).
  *
- * A turn already running fixed the shape of its context before it read anything, so it cannot be
- * handed a file or a picture. A dropped file becomes its name, which the planner can go and read
- * through the gate any file is read through. A picture has no such recourse and becomes a sentence
- * saying so. The box and the transcript keep the marker, because that is what was on the screen.
- *
- * Not from the message catalog: the planner reads this, so it is part of what the model is given
- * and not something a person is being told.
+ * The words themselves are the bridge's, from the one Rust implementation the terminal shares
+ * (SHARE-001): a dropped file becomes its name and a pasted picture a sentence saying it cannot be
+ * shown. The window sends the line as it was written and says which marker stands for which.
  */
-export function inWords(draft: string, staged: Staged[]): string {
-  let words = draft
-  for (const item of staged) {
-    const stands = item.via === 'drop'
-      ? item.file.name
-      : `(${item.marker} was pasted here, but it cannot be shown to you: a picture cannot join a turn that is already running. Ask for it again if you need to see it.)`
-    words = words.split(item.marker).join(stands)
+export function markersOf(staged: Staged[]): { files: { marker: string; name: string }[]; pictures: string[] } {
+  return {
+    files: staged.flatMap((item) => (item.via === 'drop' ? [{ marker: item.marker, name: item.file.name }] : [])),
+    pictures: staged.flatMap((item) => (item.via === 'paste' ? [item.marker] : [])),
   }
-  return words
+}
+
+/**
+ * Where Enter sends a line while a turn runs (INPUT-46).
+ *
+ * A file chosen with the paperclip is a grant the running turn cannot be handed, and the bot's
+ * memory update reads nothing from the person: both wait for the turn to end.
+ */
+export function route(live: Pick<Live, 'consolidating' | 'attachments'>): 'interject' | 'queue' {
+  return live.consolidating || live.attachments?.length ? 'queue' : 'interject'
 }
 
 /** Draw `line` as sent into the turn, and take off the composer what it named. */

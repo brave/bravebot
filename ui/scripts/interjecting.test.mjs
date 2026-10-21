@@ -89,22 +89,30 @@ test('a paused queue holds what a person queued', () => {
   assert.equal(lines.mayGo({ queuePaused: false, queued: [] }), false)
 })
 
-test('a dropped file becomes its name and a picture becomes a sentence, and the line otherwise is untouched', () => {
+test('the window names each marker and writes no words of its own', () => {
   const staged = [
     { marker: '[File #1]', via: 'drop', file: { id: 'a', name: 'notes.md', kind: 'text', noun: 'File' } },
     { marker: '[Image #2]', via: 'paste', picture: { id: 'p', noun: 'Image' } },
   ]
-  assert.equal(lines.inWords('no, read [File #1] first', staged), 'no, read notes.md first')
-  const picture = lines.inWords('look at [Image #2]', staged)
-  assert.match(picture, /^look at \(\[Image #2\] was pasted here, but it cannot be shown to you/)
-  assert.doesNotMatch(lines.inWords('plain words', staged), /pasted/)
-  assert.equal(lines.inWords('keep [Image #9] as typed', staged), 'keep [Image #9] as typed')
+  assert.deepEqual(lines.markersOf(staged), { files: [{ marker: '[File #1]', name: 'notes.md' }], pictures: ['[Image #2]'] })
+  assert.equal(lines.inWords, undefined, 'the transform belongs to the bridge (SHARE-001)')
 })
 
-test('only the words of a line reach the bridge, whatever else the window sent', () => {
+test('a file chosen with the paperclip and the memory update queue the line instead of sending it', () => {
+  assert.equal(lines.route({}), 'interject')
+  assert.equal(lines.route({ attachments: [] }), 'interject')
+  assert.equal(lines.route({ attachments: [{ path: '/p/a.png' }] }), 'queue')
+  assert.equal(lines.route({ consolidating: true }), 'queue')
+})
+
+test('only the words of a line and the names of its markers reach the bridge, whatever else the window sent', () => {
   const forwarded = main.sanitised('turn.interject', {
     session: 's1', prompt: 'hello', target: 4,
-    files: ['/etc/passwd'], dropped: ['/etc/passwd'], images: ['AAAA'], definition: 'x', recall: false,
+    files: [{ marker: '[File #1]', name: 'a.md', path: '/etc/passwd' }], pictures: ['[Image #2]'],
+    dropped: ['/etc/passwd'], images: ['AAAA'], definition: 'x', recall: false,
   })
-  assert.deepEqual(forwarded, { session: 's1', target: 4, prompt: 'hello' })
+  assert.deepEqual(forwarded, {
+    session: 's1', target: 4, prompt: 'hello',
+    files: [{ marker: '[File #1]', name: 'a.md' }], pictures: ['[Image #2]'],
+  })
 })

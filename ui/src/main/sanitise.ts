@@ -57,10 +57,13 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
     return rest
   }
   // Words typed into a turn that is running. The turn is already running with the reach it began
-  // with, so a line carries no file under any key: the three fields it reads are all that is
-  // forwarded, and the window has already put any marker into words (DROP-8).
+  // with, so a line carries no file under any key. What is forwarded is the line and the names
+  // and markers the bridge puts into words (DROP-8): a name is only text, never a path it opens.
   if (method === 'turn.interject') {
-    return { session: held.session, target: held.target, prompt: held.prompt }
+    const files = Array.isArray(held.files)
+      ? held.files.map((file: { marker?: unknown; name?: unknown }) => ({ marker: file?.marker, name: file?.name }))
+      : undefined
+    return { session: held.session, target: held.target, prompt: held.prompt, files, pictures: held.pictures }
   }
   if (method !== 'turn.send') return held
   // `recall` and `definition` join the lists for a smaller reason than theirs. `recall` decides

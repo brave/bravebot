@@ -1540,7 +1540,8 @@ impl Bridge {
     /// not read, and the absence of `turn.interjected` for it is how a front end learns that.
     ///
     /// Text only. A turn that is running fixed the shape of its context before it read anything, so
-    /// the window turns a marker into words before sending (DROP-8) and nothing here names a file.
+    /// a marker in the line becomes the dropped file's name or a sentence about the pasted picture
+    /// here (DROP-8), through the same words the terminal uses, and nothing here reads a file.
     fn interject_turn(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let prompt = request.string("prompt")?;
@@ -1549,6 +1550,7 @@ impl Bridge {
                 "an interjection needs something to say",
             ));
         }
+        let prompt = crate::attached::in_words(request, &prompt)?;
         if self.emitter.has_view(&handle) {
             return Err(Failure::bad_request(
                 "session view version 1 does not support interjections",
