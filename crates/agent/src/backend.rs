@@ -1783,8 +1783,11 @@ mod tests {
         }
     }
 
-    /// One request answered with `reply`, with what it carried handed back.
-    fn answer_once(reply: &'static str) -> (String, std::sync::mpsc::Receiver<Received>) {
+    /// One request answered with `reply` as `content_type`, with what it carried handed back.
+    fn answer_once(
+        reply: &'static str,
+        content_type: &'static str,
+    ) -> (String, std::sync::mpsc::Receiver<Received>) {
         use std::io::{BufRead, BufReader, Read, Write};
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -1814,7 +1817,7 @@ mod tests {
             let _ = sender.send((line.trim().to_string(), headers));
             let _ = stream.write_all(
                 format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
                     reply.len()
                 )
                 .as_bytes(),
@@ -1823,82 +1826,194 @@ mod tests {
         (format!("http://127.0.0.1:{port}"), receiver)
     }
 
+    /// One request for a model `provider` names, whole or streamed, sent to a server that answers
+    /// `reply` as `content_type`, with what the call came to and what the server received.
+    fn call_once(
+        provider: &str,
+        reply: &'static str,
+        content_type: &'static str,
+        streamed: bool,
+    ) -> (Result<Completion, BackendError>, Received) {
+        let (endpoint, received) = answer_once(reply, content_type);
+        let block = format!(
+            r#"{{"provider": {{"{provider}": {{
+                "options": {{"baseURL": "{endpoint}/v1", "apiKey": "a-key"}},
+                "models": {{"a-model": {{}}}}
+            }}}}}}"#
+        );
+        let config = with_providers(&block);
+        let egress = Egress::new();
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = bravebot_core::policy::Policy::begin(
+            {
+                let mut routing = bravebot_core::policy::Routing::new();
+                routing.insert_trusted("task", "say hello");
+                routing
+            },
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy");
+        let model = format!("{provider}/a-model");
+        let request = ChatRequest::new(
+            model.as_str(),
+            vec![bravebot_aichat::protocol::Message::user("hi")],
+        );
+
+        let mut backend = Backend::select(&config, &egress, &model);
+        let outcome = if streamed {
+            backend.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            backend.complete(&mut policy, &request)
+        };
+        (outcome, received.recv().expect("the request arrived"))
+    }
+
+    /// The value of the header `name` in what a server received.
+    fn header<'a>(received: &'a Received, name: &str) -> Option<&'a str> {
+        received
+            .1
+            .iter()
+            .find(|(sent, _)| sent == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    const ANTHROPIC_WHOLE: &str = r#"{"model":"claude-test-20260101",
+        "content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn",
+        "usage":{"input_tokens":3,"output_tokens":1}}"#;
+    const ANTHROPIC_STREAM: &str = concat!(
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",",
+        "\"type\":\"message\",\"role\":\"assistant\",\"content\":[],",
+        "\"model\":\"claude-test-20260101\",\"stop_reason\":null,",
+        "\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}}\n\n",
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,",
+        "\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,",
+        "\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n",
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_delta\ndata: {\"type\":\"message_delta\",",
+        "\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},",
+        "\"usage\":{\"output_tokens\":2}}\n\n",
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    );
+    const OPENAI_WHOLE: &str =
+        r#"{"model":"served","choices":[{"message":{"role":"assistant","content":"hi"}}]}"#;
+    const OPENAI_STREAM: &str = concat!(
+        "data: {\"model\":\"served\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+
     /// A request for a model an `anthropic` entry names goes to the Messages route with its key in
-    /// `x-api-key`, and one for a gateway beside it goes to chat completions with a bearer token.
-    /// Selecting the backend is not enough: the dispatch has to build the client that speaks the
-    /// protocol, or the key reaches a route that does not exist.
+    /// `x-api-key`, and one for a gateway beside it goes to chat completions with a bearer token,
+    /// whether the reply is read whole or as it arrives. Selecting the backend is not enough: the
+    /// dispatch has to build the client that speaks the protocol, or the key reaches a route that
+    /// does not exist, and the whole and streamed calls are dispatched separately.
     #[test]
     fn a_request_reaches_the_route_and_header_its_providers_protocol_states() {
-        const ANTHROPIC: &str = r#"{"model":"claude-test-20260101",
-            "content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn",
-            "usage":{"input_tokens":3,"output_tokens":1}}"#;
-        const OPENAI: &str =
-            r#"{"model":"served","choices":[{"message":{"role":"assistant","content":"hi"}}]}"#;
+        for streamed in [false, true] {
+            for (provider, reply, content_type, route, name, value) in [
+                (
+                    "anthropic",
+                    if streamed {
+                        ANTHROPIC_STREAM
+                    } else {
+                        ANTHROPIC_WHOLE
+                    },
+                    if streamed {
+                        "text/event-stream"
+                    } else {
+                        "application/json"
+                    },
+                    "POST /v1/messages HTTP/1.1",
+                    "x-api-key",
+                    "a-key",
+                ),
+                (
+                    "elsewhere",
+                    if streamed {
+                        OPENAI_STREAM
+                    } else {
+                        OPENAI_WHOLE
+                    },
+                    if streamed {
+                        "text/event-stream"
+                    } else {
+                        "application/json"
+                    },
+                    "POST /v1/chat/completions HTTP/1.1",
+                    "authorization",
+                    "Bearer a-key",
+                ),
+            ] {
+                let (outcome, received) = call_once(provider, reply, content_type, streamed);
 
-        for (provider, reply, route, header, value) in [
-            (
-                "anthropic",
-                ANTHROPIC,
-                "POST /v1/messages HTTP/1.1",
-                "x-api-key",
-                "a-key",
-            ),
-            (
-                "elsewhere",
-                OPENAI,
-                "POST /v1/chat/completions HTTP/1.1",
-                "authorization",
-                "Bearer a-key",
-            ),
-        ] {
-            let (endpoint, received) = answer_once(reply);
-            let block = format!(
-                r#"{{"provider": {{"{provider}": {{
-                    "options": {{"baseURL": "{endpoint}/v1", "apiKey": "a-key"}},
-                    "models": {{"a-model": {{}}}}
-                }}}}}}"#
-            );
-            let config = with_providers(&block);
-            let egress = Egress::new();
-            let mut sink = bravebot_core::event::RecordingSink::new();
-            let mut policy = bravebot_core::policy::Policy::begin(
-                {
-                    let mut routing = bravebot_core::policy::Routing::new();
-                    routing.insert_trusted("task", "say hello");
-                    routing
-                },
-                bravebot_core::policy::ReleasePlan::new(),
-                bravebot_core::capability::CapabilitySet::from_iter([
-                    bravebot_core::capability::Capability::WebFetch,
-                ]),
-                &mut sink,
-            )
-            .expect("policy");
-            let model = format!("{provider}/a-model");
-
-            Backend::select(&config, &egress, &model)
-                .complete(
-                    &mut policy,
-                    &ChatRequest::new(
-                        model.as_str(),
-                        vec![bravebot_aichat::protocol::Message::user("hi")],
-                    ),
-                )
-                .expect("the reply was read");
-
-            let (line, headers) = received.recv().expect("the request arrived");
-            assert_eq!(line, route, "{provider}");
-            let sent = |name: &str| {
-                headers
-                    .iter()
-                    .find(|(sent, _)| sent == name)
-                    .map(|(_, value)| value.as_str())
-            };
-            assert_eq!(sent(header), Some(value), "{provider}");
-            if provider == "anthropic" {
-                assert_eq!(sent("authorization"), None);
-                assert_eq!(sent("anthropic-version"), Some("2023-06-01"));
+                outcome.expect("the reply was read");
+                let said = format!("{provider}, streamed: {streamed}");
+                assert_eq!(received.0, route, "{said}");
+                assert_eq!(header(&received, name), Some(value), "{said}");
+                if provider == "anthropic" {
+                    assert_eq!(header(&received, "authorization"), None, "{said}");
+                    assert_eq!(
+                        header(&received, "anthropic-version"),
+                        Some("2023-06-01"),
+                        "{said}"
+                    );
+                }
             }
+        }
+    }
+
+    /// A Messages call the service answered with a refusal fails, and the failure carries the one
+    /// request it took and the prompt size the service reported, whether the reply was read whole
+    /// or as it arrived. The turn spends and records its usage from that, so a path that returned
+    /// the bare error would charge nothing for a request that was sent.
+    #[test]
+    fn a_failed_messages_call_keeps_its_attempts_and_what_the_service_counted() {
+        const WHOLE: &str = r#"{"model":"claude-test","content":[],"stop_reason":"refusal",
+            "usage":{"input_tokens":50,"output_tokens":0}}"#;
+        const STREAM: &str = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",",
+            "\"type\":\"message\",\"role\":\"assistant\",\"content\":[],",
+            "\"model\":\"claude-test\",\"stop_reason\":null,",
+            "\"usage\":{\"input_tokens\":50,\"output_tokens\":0}}}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",",
+            "\"delta\":{\"stop_reason\":\"refusal\",\"stop_sequence\":null},",
+            "\"usage\":{\"output_tokens\":0}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        for (streamed, reply, content_type) in [
+            (false, WHOLE, "application/json"),
+            (true, STREAM, "text/event-stream"),
+        ] {
+            let (outcome, _) = call_once("anthropic", reply, content_type, streamed);
+
+            let error = outcome.expect_err("the service declined");
+            let said = format!("streamed: {streamed}: {error:?}");
+            let BackendError::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                cause,
+            } = &error
+            else {
+                panic!("the failure carries no count: {said}");
+            };
+            assert_eq!(*attempts, 1, "{said}");
+            assert_eq!(usage.map(|usage| usage.prompt_tokens), Some(50), "{said}");
+            assert_eq!(*context_tokens, Some(50), "{said}");
+            assert!(
+                matches!(
+                    **cause,
+                    BackendError::Aichat(ChatError::Reported {
+                        failure: Failure::Refusal
+                    })
+                ),
+                "{said}"
+            );
         }
     }
 

@@ -30,13 +30,15 @@ const CLAUDE_MODEL: &str = "ANTHROPIC_MODEL";
 /// The Bedrock API key Claude Code can sign in with, which bravebot does not: it signs through the
 /// AWS credential chain.
 const BEDROCK_BEARER: &str = "AWS_BEARER_TOKEN_BEDROCK";
-/// What Claude Code reaches Anthropic's own API with. An `anthropic` provider block reaches the same
-/// API, but these are values in Claude Code's settings and are not carried into one.
-const ANTHROPIC_NAMES: [&str; 3] = [
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_BASE_URL",
-];
+/// The key Claude Code reaches Anthropic's own API with, which an `anthropic` provider block sends in
+/// the header that API reads it from.
+const ANTHROPIC_KEY: &str = "ANTHROPIC_API_KEY";
+/// The host Claude Code sends it to instead of Anthropic's.
+const ANTHROPIC_BASE_URL: &str = "ANTHROPIC_BASE_URL";
+/// What else Claude Code reaches Anthropic's own API with. The first is sent as a bearer token and
+/// the second is a host written without the route this program appends, so neither is carried into
+/// a `provider` block.
+const ANTHROPIC_NAMES: [&str; 2] = ["ANTHROPIC_AUTH_TOKEN", ANTHROPIC_BASE_URL];
 /// The names a Claude Code Bedrock setup states that bravebot reads under the same spelling.
 const BEDROCK_NAMES: [&str; 5] = [
     env_var::AWS_REGION,
@@ -504,7 +506,8 @@ pub struct Left {
 /// Why something found is not imported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reason {
-    /// A setting for Anthropic's own API, which this import does not carry into a `provider` block.
+    /// A setting for Anthropic's own API that this import does not carry into a `provider` block: a
+    /// bearer token, a host, or a key stated for that host.
     AnthropicApi,
     /// Google Vertex AI with no usable project, or through Google Cloud credentials: neither is
     /// reached by a service here.
@@ -889,6 +892,26 @@ fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Opt
         .or_else(|| string(root.and_then(|root| root.get("model"))))
         .filter(|word| bedrock && Tier::from_alias(word).is_some_and(reached));
 
+    // A key stated beside a host was issued for that host, and the entry written here would send it
+    // to Anthropic's, so both are left.
+    let mut gateways = Vec::new();
+    let proxied = stated(ANTHROPIC_BASE_URL).is_some();
+    match (
+        stated(ANTHROPIC_KEY),
+        provider::known_endpoint(ANTHROPIC_ID),
+    ) {
+        (Some(key), Some(endpoint)) if !proxied => gateways.push(Gateway {
+            id: ANTHROPIC_ID.to_string(),
+            endpoint: endpoint.to_string(),
+            entry: Map::new(),
+            key: Key::Held(Secret::new(key)),
+        }),
+        (Some(_), _) => left.push(Left {
+            name: ANTHROPIC_KEY.to_string(),
+            reason: Reason::AnthropicApi,
+        }),
+        (None, _) => {}
+    }
     for name in ANTHROPIC_NAMES {
         if stated(name).is_some() {
             left.push(Left {
@@ -918,7 +941,7 @@ fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Opt
         env,
         model,
         model_gateway: None,
-        gateways: Vec::new(),
+        gateways,
         left,
     };
     (found.importable() || !found.left.is_empty()).then_some(found)
@@ -2384,6 +2407,64 @@ mod tests {
         for value in ["sk-ant-secret", "proxy.invalid", "bedrock-secret"] {
             assert!(!said.contains(value), "{value} is in {said}");
         }
+    }
+
+    /// IMPORT-3: a key Claude Code reaches Anthropic's API with is an `anthropic` entry at the
+    /// endpoint compiled in, holding the key for its own question, and is not also said as left.
+    #[test]
+    fn a_claude_code_anthropic_key_is_an_anthropic_provider() {
+        let home = Scratch::new("import-claude-anthropic-key");
+        home.write(
+            ".claude/settings.json",
+            r#"{"env": {"ANTHROPIC_API_KEY": "sk-ant-secret"}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::ClaudeCode);
+
+        assert!(found.importable());
+        assert_eq!(ids(&found), ["anthropic"]);
+        let anthropic = gateway(&found, "anthropic");
+        assert_eq!(anthropic.endpoint, "https://api.anthropic.com/v1");
+        match &anthropic.key {
+            Key::Held(key) => assert_eq!(key.expose(), "sk-ant-secret"),
+            other => panic!("the key was not held: {other:?}"),
+        }
+        assert_eq!(anthropic.fallback(), Some("ANTHROPIC_API_KEY"));
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+        assert!(!anthropic.shown().contains("sk-ant-secret"));
+    }
+
+    /// IMPORT-4: a key stated beside a host was issued for that host. Written as an entry it would be
+    /// sent to Anthropic's, so the key and the host are both left, and so is a bearer token, which
+    /// the header this API reads a key from does not carry.
+    #[test]
+    fn a_claude_code_anthropic_key_for_another_host_or_a_bearer_token_is_left() {
+        let home = Scratch::new("import-claude-anthropic-proxy");
+        home.write(
+            ".claude/settings.json",
+            r#"{"env": {"ANTHROPIC_API_KEY": "sk-ant-secret",
+                        "ANTHROPIC_BASE_URL": "https://proxy.invalid"}}"#,
+        );
+        let found = one(&home.path, &[], Source::ClaudeCode);
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(
+            left(&found),
+            [
+                ("ANTHROPIC_API_KEY", Reason::AnthropicApi),
+                ("ANTHROPIC_BASE_URL", Reason::AnthropicApi),
+            ]
+        );
+
+        home.write(
+            ".claude/settings.json",
+            r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "a-bearer-token"}}"#,
+        );
+        let found = one(&home.path, &[], Source::ClaudeCode);
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(
+            left(&found),
+            [("ANTHROPIC_AUTH_TOKEN", Reason::AnthropicApi)]
+        );
     }
 
     /// IMPORT-6: `{env:VAR}` is opencode's substitution, and bravebot makes none, so copied as it is

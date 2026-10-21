@@ -118,6 +118,8 @@ uses, as opencode does, and is reached as any other gateway is:
 ## Importing it
 
 `bravebot import` offers an opencode `anthropic` entry that names no SDK or names `@ai-sdk/anthropic`,
-and an opencode `auth.json` key for the id, as a block like the first one above. An entry for another
-id that names `@ai-sdk/anthropic`, an `anthropic` entry that names `@ai-sdk/openai-compatible`, and a
-Claude Code `ANTHROPIC_API_KEY` are left: add the block by hand and name the variable.
+an opencode `auth.json` key for the id, and the `ANTHROPIC_API_KEY` in Claude Code's settings file,
+as a block like the first one above. An entry for another id that names `@ai-sdk/anthropic`, an
+`anthropic` entry that names `@ai-sdk/openai-compatible`, a Claude Code `ANTHROPIC_AUTH_TOKEN`, and a
+Claude Code `ANTHROPIC_BASE_URL` with the key that was stated for it are left: add the block by hand
+and name the variable.

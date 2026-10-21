@@ -1903,7 +1903,8 @@ earlier answer already wrote is not offered again.
 named. An opencode `provider` entry reached through an OpenAI-compatible SDK, with only the fields
 bravebot reads, and an `auth.json` API key for a gateway whose endpoint bravebot knows. An `openai` entry that names
 no SDK, or an `auth.json` key for `openai`, imports; one naming `@ai-sdk/openai` is left as another
-SDK's. opencode's
+SDK's. The `ANTHROPIC_API_KEY` in Claude Code's settings file imports as an `anthropic` entry,
+unless a Claude Code `ANTHROPIC_BASE_URL` is stated beside it. opencode's
 `disabled_providers` and `enabled_providers` are honoured, and a name already set in your settings file,
 or pinned by an administrator, is left as it is. A model opencode's `amazon-bedrock` entry lists that
 one of your Bedrock tiers already names, such as the Claude Code import's
@@ -1917,7 +1918,7 @@ A `{file:path}` key is not followed, and neither is a substitution inside a long
 `Bearer {env:TOKEN}`: that entry is named as left.
 
 **What is never imported**: commands, permissions, hooks and MCP servers. What was found and cannot be
-used, such as an Anthropic API key or a Vertex AI setup, is named with the reason before the routes,
+used, such as an Anthropic bearer token or a Vertex AI setup, is named with the reason before the routes,
 and its value is never shown.
 
 A run that cannot ask (`-p`, `--json`, a pipe or a redirect, `doctor`) imports nothing, and its

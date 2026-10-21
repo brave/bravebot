@@ -1977,6 +1977,7 @@ the ones a `provider` block already named.
 `verified-by: bravebot_config::provider::a_limit_missing_either_half_states_no_window`
 `verified-by: bravebot_config::lib::an_exported_reply_ceiling_outranks_every_stated_one`
 `verified-by: bravebot_config::lib::a_reply_ceiling_that_is_not_a_figure_leaves_the_stated_one_standing`
+`verified-by: bravebot_config::lib::an_exported_reply_ceiling_reaches_an_anthropic_entry_ahead_of_its_models_own`
 `verified-by: bravebot_bedrock::lib::a_request_carries_the_ceiling_its_own_model_states`
 `verified-by: bravebot_bedrock::lib::an_assumed_ceiling_a_model_refuses_is_stepped_down_and_remembered`
 `verified-by: bravebot_bedrock::lib::a_stated_ceiling_is_never_stepped_down`
@@ -2795,6 +2796,7 @@ turning prompt caching off for the rest of the session.
 `verified-by: bravebot_bedrock::protocol::consecutive_tool_results_merge_into_one_turn`
 `verified-by: bravebot_config::provider::an_anthropic_entry_is_reached_through_the_messages_api_at_anthropics_host`
 `verified-by: bravebot_agent::backend::a_request_reaches_the_route_and_header_its_providers_protocol_states`
+`verified-by: bravebot_agent::backend::a_failed_messages_call_keeps_its_attempts_and_what_the_service_counted`
 `verified-by: bravebot_agent::failure_categories::a_failure_anthropic_reports_keeps_its_actionable_category`
 
 ## Known costs
@@ -3217,10 +3219,10 @@ turning prompt caching off for the rest of the session.
   refusing the level as well, which went first, and is sent neither for the rest of the session. The
   order the concessions go in (above) is what keeps this from falling on the cache.
 
-- **A block keyed `anthropic` that names no SDK is reached in Anthropic's protocol, whatever it was
-  before.** The id was an ordinary name for a gateway before it was known, so a block that gave it an
-  OpenAI-compatible endpoint and named no SDK is now sent Messages requests, which that endpoint
-  answers with a refusal. Naming `@ai-sdk/openai-compatible` in the block keeps the earlier reading
+- **A block keyed `anthropic` that names no SDK is reached in Anthropic's protocol, whatever its
+  endpoint speaks.** A block that gives the id an OpenAI-compatible endpoint and names no SDK is sent
+  Messages requests, which that endpoint answers with a refusal. Naming
+  `@ai-sdk/openai-compatible` in the block makes it a gateway speaking chat completions
   (BACKEND-17). Telling the two blocks apart by the endpoint is not done, since a proxy in front of
   Anthropic's API is also a block with an endpoint and no SDK, and is what opencode reads that block
   as.
