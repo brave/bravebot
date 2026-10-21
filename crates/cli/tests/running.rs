@@ -5307,6 +5307,76 @@ fn a_service_that_refuses_the_level_it_advertised_is_reported_as_reading_none() 
     );
 }
 
+/// TURN-13 in a session in lines, which runs its turns on a conversation of its own: a turn the
+/// service refused leaves the planner a note that it failed, in front of the next prompt, so a
+/// question about what happened reaches a model that can answer it.
+///
+/// The faults this rejects: a failure said to the person and never put in the conversation, and a
+/// note that follows the next prompt instead of coming before it.
+///
+/// `script(1)` supplies the terminal a session in lines refuses to run without, in util-linux's
+/// argument form.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_tells_the_planner_that_the_turn_before_it_failed() {
+    let gateway = a_gateway(r#"["tools"]"#, |body| {
+        match body.contains("what happened?") {
+            true => streamed("it failed"),
+            false => http(401, r#"{"error": {"message": "nothing here answers"}}"#),
+        }
+    });
+    let scratch = Scratch::new("cli-running-failed-turn-note-in-lines")
+        .with_settings(&settings_for(&gateway));
+
+    let mut session = Command::new("/usr/bin/script")
+        .env_clear()
+        .env("HOME", &scratch.path)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .envs(AT_A_GATEWAY.iter().copied())
+        .args([
+            "-qec",
+            &format!("{} --plain", env!("CARGO_BIN_EXE_bravebot")),
+            "/dev/null",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("a terminal for a session in lines");
+
+    // The startup trust question answered no, then the prompt the service refuses, then the
+    // question the failure leaves the planner nothing to answer.
+    session
+        .stdin
+        .take()
+        .expect("the session's input")
+        .write_all(b"n\nsay something\nwhat happened?\n")
+        .expect("write the script");
+    let output = session.wait_with_output().expect("the session ends");
+
+    let (said_to_the_person, _) = said(&output);
+    assert!(
+        said_to_the_person.contains("it failed"),
+        "the question after the failure was not answered: {said_to_the_person}"
+    );
+    let asked: Vec<String> = gateway.asked.try_iter().collect();
+    let next = asked
+        .iter()
+        .find(|body| body.contains("what happened?"))
+        .unwrap_or_else(|| panic!("the question never reached the gateway: {asked:?}"));
+    let note = "The previous turn failed and ended before it finished";
+    assert!(
+        !asked[0].contains(note),
+        "the note was sent before any turn had failed: {}",
+        asked[0]
+    );
+    let (noted, question) = (next.find(note), next.find("what happened?"));
+    assert!(
+        noted.is_some() && noted < question,
+        "the request after the failure does not carry the note in front of the question: {next}"
+    );
+}
+
 /// The declaration a test writes for the weather server, and the entry `mcp.json` holds for it.
 fn weather() -> (bravebot_config::mcp::Declaration, &'static str) {
     let declaration = bravebot_config::mcp::Declaration::stdio(

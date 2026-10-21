@@ -682,7 +682,8 @@ pub struct CompletedTurn {
 ///
 /// The conversation is borrowed rather than returned because a turn that fails has still had
 /// one: what it asked, what it read, and what it was told are the very things the next turn
-/// needs in order to be told "try that again".
+/// needs in order to be told "try that again". A turn that fails after adding to it leaves a note
+/// of the failure as its last message (TURN-13).
 ///
 /// `servers` is borrowed for the same reason, and LSP-8 is why a caller running more than one turn
 /// has to own it: a server is started on the first question that needs one and kept for the
@@ -705,6 +706,7 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
     cancel: &Cancel,
 ) -> CompletedTurn {
     let mut decisions = Decisions::initial(task, trust.clone(), programs.clone());
+    let given = conversation.given();
     let outcome = run_inner(
         config,
         egress,
@@ -721,6 +723,16 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         Some(&mut decisions),
         Handback::default(),
     );
+    // A turn that answered, and one the person stopped, leave the conversation as the turn made
+    // it. One that failed leaves its tool results and nothing that says why they stop, so the
+    // driver says so before the next prompt arrives. A turn that failed before it put anything in
+    // the conversation has nothing for the planner to account for (TURN-13).
+    if let Err(error) = &outcome
+        && let crate::outcome::Ending::Failed(diagnosis) = error.ending()
+        && conversation.given() > given
+    {
+        conversation.note_failed_turn(diagnosis);
+    }
     CompletedTurn { outcome, decisions }
 }
 

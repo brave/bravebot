@@ -989,7 +989,8 @@ planner message of its own needed to hold them. A recorded failure carries only 
 interface composed, never a message from the backend. A prompt handed back to the editor on
 cancellation stays out of the transcript on resume while that turn's spend and timing stay with its
 number; whether those words remain available to recall is SESSION-6, and the two are independent of
-each other. None of this is sent to the planner.
+each other. None of this is sent to the planner. What the planner is told of a failure is the note
+of [TURN-13](turns.md#TURN-13), which holds no more than the category and the request count.
 Accepted corrections remain within the cancelled turn through reload, export and later turns.
 
 **Why.** Turn boundaries cannot be recovered from the conversation afterwards, because a

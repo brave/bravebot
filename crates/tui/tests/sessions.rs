@@ -2383,6 +2383,45 @@ mod completed_usage {
         });
         (endpoint, receiver)
     }
+    /// An endpoint that answers `script` in order and then refuses every request with a 401, so a
+    /// turn fails at the request the test chose and fails the same way on every run.
+    pub(super) fn endpoint_refusing_after(script: Vec<String>) -> (String, mpsc::Receiver<String>) {
+        use std::io::{BufRead, Read};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let mut script = script.into_iter();
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = std::io::BufReader::new(&mut stream);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let _ = sender.send(String::from_utf8_lossy(&body).into_owned());
+                let answer = match script.next() {
+                    Some(frames) => format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                        frames.len()
+                    ),
+                    None => "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .to_string(),
+                };
+                let _ = stream.write_all(answer.as_bytes());
+            }
+        });
+        (endpoint, receiver)
+    }
+
     /// A rejected reply is charged once through the real reporter and stored session.
     #[test]
     fn malformed_completed_usage_survives_turn_storage_and_resume() {
@@ -4423,6 +4462,94 @@ mod preserved_history {
         assert!(request.contains("next prompt"));
         assert!(!request.contains("SAFE_DISPLAY_DIAGNOSTIC"));
         assert!(!request.contains("DISPLAY_ONLY_PROMPT"));
+    }
+
+    /// A turn that fails after a tool call leaves the planner a note that it failed (TURN-13). The
+    /// transcript does not draw the note and the turn's boundaries do not count it (SESSION-23), and
+    /// the next prompt, sent after the session was saved and reopened, carries it.
+    ///
+    /// The faults this rejects: a failure recorded for the interface and never put in the
+    /// conversation, so the planner is asked "what happened?" with nothing to answer from; a note
+    /// the saved conversation leaves out, so a resume loses it; and a note the reopened transcript
+    /// draws as something a person said.
+    #[test]
+    fn a_failed_turn_leaves_a_note_the_transcript_does_not_draw_and_a_resume_still_sends() {
+        let scratch = Scratch::new("failed-turn-note-tui");
+        std::fs::write(scratch.project.join("a.txt"), "a file").unwrap();
+        // The service answers the first request with a tool call and refuses the second, so the turn
+        // fails after the call's result is in the conversation.
+        let (refusing, first_requests) =
+            super::completed_usage::endpoint_refusing_after(vec![tool_reply(
+                "read_file",
+                r#"{"path":"a.txt"}"#,
+                10,
+            )]);
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        run_task(
+            &mut session,
+            &mut conversation,
+            &scratch.project,
+            &config_for(&refusing),
+            &bravebot_agent::Task::new("read a.txt"),
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        assert!(session.finished.unwrap().failed());
+        assert!(
+            first_requests.try_iter().count() >= 2,
+            "the service refused nothing"
+        );
+        let drawn_without_the_note = conversation.recounted();
+
+        let record = save(&scratch.project, &session, &conversation);
+        let mut session = reopen(&scratch.project, &record);
+        let export = bravebot_tui::render::as_markdown(&session, "test");
+        assert!(export.contains("**Outcome:** failed"), "{export}");
+        assert!(
+            !export.contains(bravebot_agent::conversation::FAILED_TURN),
+            "the note was drawn: {export}"
+        );
+        let first = &session.turn_history()[0];
+        assert_eq!(
+            first.end,
+            drawn_without_the_note.len(),
+            "the turn's range counts a message nobody said"
+        );
+
+        let (endpoint, requests) = super::completed_usage::an_endpoint(vec![answer_reply()]);
+        let mut conversation = Conversation::restored(record.conversation);
+        assert_eq!(conversation.recounted(), drawn_without_the_note);
+        run_task(
+            &mut session,
+            &mut conversation,
+            &scratch.project,
+            &config_for(&endpoint),
+            &bravebot_agent::Task::new("what happened?"),
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        let next = requests
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let (noted, asked) = (
+            next.find(bravebot_agent::conversation::FAILED_TURN),
+            next.find("what happened?"),
+        );
+        assert!(
+            noted.is_some() && asked.is_some() && noted < asked,
+            "the request after the resume does not carry the note in front of the prompt: {next}"
+        );
+        assert!(
+            next.contains("Failure category: unauthorized. Requests sent for the failed call: 1."),
+            "{next}"
+        );
+        assert!(
+            !next.contains("401"),
+            "the status of the reply was sent: {next}"
+        );
+        assert!(
+            next.contains(r#""role":"tool""#),
+            "the completed round was dropped: {next}"
+        );
     }
 
     /// A stop inside a processor must stay cancelled through reporting, saving and export.
