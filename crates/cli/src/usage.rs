@@ -168,6 +168,7 @@ pub(crate) fn print_help() {
         ("--json", t!(cli_option_json)),
         ("--json-stream", t!(cli_option_json_stream)),
         ("--output-schema <path>", t!(cli_option_output_schema)),
+        ("--goal <condition>", t!(cli_option_goal)),
         ("--incognito", t!(cli_option_incognito)),
         ("--safe", t!(cli_option_safe)),
         ("--locked", t!(cli_option_locked)),

@@ -543,6 +543,8 @@ hundred and fifty turns nobody read. `/loop stop` ends one.
 Keeps the session working until a condition you wrote is judged met. When a turn ends the condition
 is put to a judge, and where it is not met yet the work goes back for another turn with the reason.
 
+A one-shot run takes the same condition with [`--goal`](cli.md#--goal-condition).
+
 ```
 /goal cargo test exits 0 and the diff is committed
 /goal                              # say what the condition is, and how it is going

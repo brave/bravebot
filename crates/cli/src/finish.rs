@@ -1,6 +1,7 @@
 //! How a finished turn, or a run stopped before one, is written out.
 
 use crate::exit::{Ending, fail};
+use crate::goal_run::Unmet;
 use crate::json;
 use crate::usage::print_help;
 use bravebot_core::delegate::DelegateId;
@@ -168,6 +169,44 @@ pub(crate) fn failure_of_a_turn(ending: Ending, not_served: Option<&str>) -> Opt
         Ending::Refused => Some(t!(cli_something_was_refused)),
         _ => not_served,
     }
+}
+
+/// How a run that worked towards a condition ends, given how its turns did (CLI-35).
+///
+/// An unmet condition is what a status 0 cannot say, so it decides only where the turns would have
+/// ended well. A refusal or a substituted model outranks it, being what a person has to deal with
+/// first, and [`say_the_goal_unmet`] still says the condition was not met.
+pub(crate) fn ending_with_the_goal(turns: Ending, unmet: Option<&Unmet>) -> Ending {
+    match (turns, unmet) {
+        (Ending::Done, Some(why)) => why.ending(),
+        _ => turns,
+    }
+}
+
+/// The sentence a result object explains a run's failure with: why its turns failed, if they did,
+/// and then why its condition went unmet, if it did.
+pub(crate) fn failure_with_the_goal(
+    failure: Option<&str>,
+    unmet: Option<&Unmet>,
+) -> Option<String> {
+    match (failure, unmet) {
+        (Some(failure), Some(why)) => Some(format!("{failure}\n{}", why.said())),
+        (Some(failure), None) => Some(failure.to_string()),
+        (None, Some(why)) => Some(why.said()),
+        (None, None) => None,
+    }
+}
+
+/// Say why a goal run's condition went unmet, beside the reply.
+///
+/// With the identifier of the status where that is the reason the run ended on it, and plainly where
+/// another failure outranked it, as the complaint about a substituted model is.
+pub(crate) fn say_the_goal_unmet(beside: &mut impl Write, ending: Ending, why: &Unmet) {
+    let said = why.said();
+    let _ = match ending == why.ending() {
+        true => writeln!(beside, "{}", ending.told(said)),
+        false => writeln!(beside, "{said}"),
+    };
 }
 
 /// Every refusal the trail holds, as a result object lists them.

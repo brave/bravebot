@@ -178,6 +178,7 @@ cli-option-trace = Afficher le journal d'audit
 cli-option-json = Afficher un objet de résultat sur stdout au lieu de la réponse
 cli-option-json-stream = Afficher un événement par ligne sur stdout pendant l'exécution, puis l'objet de résultat
 cli-option-output-schema = Exiger que la réponse respecte le schéma JSON de ce fichier ; avec --json, la valeur est dans « structured »
+cli-option-goal = Travailler vers cette condition : après chaque tour, un juge dit si elle est remplie, et le travail est renvoyé jusqu'à ce qu'elle le soit ; termine avec le statut 7 si elle ne l'est jamais
 cli-option-incognito = Ne rien écrire dans ~/.bravebot : ni historique, ni session, ni préférence
 cli-option-safe =
     Ne charger ni hooks, ni skills, ni définitions, ni serveurs MCP, ni AGENTS.md. La connexion, le modèle et les permissions s'appliquent toujours
@@ -284,6 +285,16 @@ cli-sandbox-refused-network-file =
     un programme lancé sans bac à sable n'est pas tenu à cela. Modifiez-le là, ou retirez-le.
 cli-mode-needs-a-name = --mode demande l'un de : { $names }
 cli-model-needs-a-name = --model demande le nom d'un modèle
+cli-goal-needs-a-condition = --goal demande la condition vers laquelle travailler
+cli-goal-not-with-a-manifest = --goal est incompatible avec --mode manifest, qui exécute son plan une fois et n'a aucune conversation où renvoyer le travail
+cli-goal-impossible = l'objectif ne peut pas être atteint : { $reason }
+cli-goal-unreadable = la vérification n'a pas répondu par un verdict : il n'y a donc rien sur quoi agir et l'exécution s'arrête
+cli-goal-quarantined =
+    cette conversation a rencontré du contenu non fiable ; un verdict à son sujet n'est donc pas
+    quelque chose sur quoi ce programme a le droit d'agir, et l'exécution s'arrête
+cli-goal-stalled =
+    l'objectif a renvoyé le travail sans qu'un tour fasse d'appel d'outil, et a cessé de le renvoyer
+cli-goal-failed = l'objectif n'a pas pu être vérifié : { $problem }
 cli-output-schema-needs-a-path = --output-schema demande le chemin d'un fichier de schéma JSON
 cli-output-schema-not-with-a-manifest = --output-schema est incompatible avec --mode manifest, qui donne une réponse par étape et aucune pour l'exécution
 cli-output-schema-not-served = --output-schema est incompatible avec { $model }, auquel on ne peut pas demander une réponse conforme à un schéma
