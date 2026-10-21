@@ -59,8 +59,9 @@ working directory, and a checkout is always one a delegate was given.
 
 Part of this file is built. It is a design, written to be agreed before the work starts, and each
 clause says how much of it is built. A spawn can ask for a checkout ([CHECKOUT-1](#CHECKOUT-1)),
-the driver makes it ([CHECKOUT-4](#CHECKOUT-4), [CHECKOUT-5](#CHECKOUT-5)), the delegate works in
-it ([CHECKOUT-7](#CHECKOUT-7)), and a checkout nothing was done in is removed
+the driver makes it ([CHECKOUT-4](#CHECKOUT-4), [CHECKOUT-5](#CHECKOUT-5)), a person's own setup
+command runs in it ([CHECKOUT-22](#CHECKOUT-22)), the delegate works in it
+([CHECKOUT-7](#CHECKOUT-7)), and a checkout nothing was done in is removed
 ([CHECKOUT-15](#CHECKOUT-15)), and a definition can ask for one ([CHECKOUT-2](#CHECKOUT-2)).
 The driver records what was written in a checkout, and beside the report names the paths the
 planner typed and counts the writes made through a reference ([CHECKOUT-13](#CHECKOUT-13),
@@ -1012,6 +1013,40 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
 `verified-by: bravebot_tui::status::each_checkout_the_session_has_is_a_line_of_its_own`
 `verified-by: bravebot_tui::status::a_session_with_no_checkout_reports_none`
 
+<a id="CHECKOUT-22"></a>
+### CHECKOUT-22: a person's own setup command runs in each checkout as it is made
+
+The `checkout-made` moment ([HOOK-2](hooks.md#HOOK-2)) fires the hooks a person declared for it in
+their own `hooks.json` ([HOOK-1](hooks.md#HOOK-1)), once for each checkout the driver writes for a
+delegate. It fires from that delegate's run, in the checkout's root, before the delegate's first
+request, and the hook is handed the checkout's directory and the working directory it was made from
+([HOOK-5](hooks.md#HOOK-5)). A checkout holds HEAD's tracked files and nothing the repository
+ignores, so a setup command is where dependencies are installed there and a file such as `.env` is
+copied in from the working directory. No file in a checkout or in the working directory declares
+one, so a project cannot supply the command. A relative name in the person's own declaration is
+looked up in the checkout all the same ([HOOK-4](hooks.md#HOOK-4)).
+
+A setup that goes wrong is said to the person ([HOOK-7](hooks.md#HOOK-7)) and decides nothing
+([HOOK-6](hooks.md#HOOK-6)): the delegate runs in the checkout as it stands. A hook is a program
+started in the checkout whose writes the file tools do not record, so a checkout it ran in is kept
+as one a delegate started a program in is ([CHECKOUT-15](#CHECKOUT-15)), and a rewind records the gap
+([CHECKOUT-17](#CHECKOUT-17)). A delegate started inside a checkout works in the checkout its parent
+was given ([CHECKOUT-3](#CHECKOUT-3)), which is not made again, so it runs no setup.
+
+**Why a person's declaration and not the project's.** A setup command read from a file in the
+repository would be a program that arrived with a clone, run unconfined with the person's access
+([HOOK-1](hooks.md#HOOK-1), [HOOK-4](hooks.md#HOOK-4)).
+
+Built.
+
+`verified-by: bravebot_agent::turn::a_hook_runs_in_the_checkout_made_for_a_delegate_before_its_first_round`
+`verified-by: bravebot_agent::turn::a_delegate_given_no_checkout_fires_no_checkout_hook`
+`verified-by: bravebot_agent::turn::a_fan_out_into_checkouts_fires_the_hook_once_for_each_checkout_and_in_that_one`
+`verified-by: bravebot_agent::turn::a_delegate_started_inside_a_checkout_does_not_fire_the_hook_again`
+`verified-by: bravebot_agent::turn::a_checkout_a_hook_ran_in_is_kept_and_one_nothing_ran_in_is_not`
+`verified-by: bravebot_agent::turn::a_checkout_hook_that_fails_is_said_and_its_delegate_still_runs`
+`verified-by: bravebot_agent::turn::a_setup_that_cannot_start_or_outstays_its_bound_leaves_the_delegate_running_in_a_kept_checkout`
+
 ## Roads not taken
 
 - **The driver runs `git worktree add`.** git runs the programs the repository names
@@ -1032,6 +1067,12 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
   program in a checkout can run, and `git pull`, `git remote update` or a build script move the
   same refs. A lock on the command's name would cover one way of spelling it, and the working
   directory's refs would still move ([CHECKOUT-5](#CHECKOUT-5)).
+- **A setup command read from a file in the repository.** The command would arrive with a clone
+  ([CHECKOUT-22](#CHECKOUT-22)).
+- **A declared list of ignored files to copy into each checkout.** The driver would write bytes from
+  the working directory into the checkout, so it would have to give them the label of the source
+  path and apply the credential rules to that path first. That is the open question below, which a
+  setup command leaves to the person's own command.
 - **`run` refuses `git stash` in a checkout.** `git rebase --autostash`, `git pull --autostash`, an
   alias or a script stash as well, so a refusal on the command's name would cover one way of
   spelling it ([CHECKOUT-5](#CHECKOUT-5)).
@@ -1052,6 +1093,11 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
 - **A session whose working directory is a linked worktree.** [GIT-8](tools/read-git.md#GIT-8)
   declines it, so it gets no checkout. Opening a linked worktree from the common directory would
   answer that, and [CHECKOUT-12](#CHECKOUT-12) builds half of it.
+- **The label of an ignored file copied into a checkout.** A file a setup command copies in, such as
+  `.env`, is read under the rule its path has in the checkout ([CHECKOUT-8](#CHECKOUT-8)), which is
+  the working directory's rule for that path and not a label carried from the file it was copied
+  from. Whether a copy keeps its source's label, and whether the credential rules apply to a path
+  they were not asked about when it was written, is not settled.
 - **Removals on apply.** Bringing back a removal needs a removal under the write gate, which no tool
   has.
 - **Whether a desktop session gives checkouts before it can show them.** It gives them and keeps
@@ -1075,7 +1121,8 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
 - **A repository with a filter or an end-of-line conversion gets no checkout**, and that includes
   every repository using LFS.
 - **A worker's first build is asked about.** A command vouched for in the working directory is not
-  vouched for in a checkout ([CHECKOUT-10](#CHECKOUT-10)).
+  vouched for in a checkout ([CHECKOUT-10](#CHECKOUT-10)). A setup command installs what the build
+  needs and does not vouch for the build ([CHECKOUT-22](#CHECKOUT-22)).
 - **A write is asked about twice**, once in the checkout and once as it comes back.
 - **A global or system `core.autocrlf` on Unix goes unseen.** It is not read
   ([CHECKOUT-4](#CHECKOUT-4)), so where one is set the checkout holds a file's bytes as stored where
@@ -1101,5 +1148,16 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
   brought back.
 - **A checker that ran a program keeps its checkout**, since it started a program there
   ([CHECKOUT-15](#CHECKOUT-15)), and a person removes it.
+- **A checkout whose setup hook is declared is always kept**, since the hook is a program started
+  there ([CHECKOUT-22](#CHECKOUT-22)), and a person removes it, though the delegate wrote nothing.
+  It is kept where the hook could not be started as well: the checkout is marked as worked in when
+  a hook is declared for the moment, and not when one starts.
+- **A file a setup hook wrote is not recorded, and is trusted as the path is.** A hook that fetches
+  code writes bytes nobody vouched for under the label the path has, as any file a program drops
+  into a trusted directory has ([TRUST-2](trust-map.md#TRUST-2)).
+- **A file a setup hook wrote that git does not ignore is a candidate to bring back** where the
+  status is read, since the status lists every untracked file ([CHECKOUT-13](#CHECKOUT-13)). A hook
+  that writes a directory of files git does not ignore adds each one to what a person is asked about
+  ([CHECKOUT-14](#CHECKOUT-14)).
 - **On Windows a killed session's checkouts stay** until a person removes them
   ([CHECKOUT-16](#CHECKOUT-16)).

@@ -83,6 +83,12 @@ fn fire_within(
     hooks::fire_within(hooks, moment, tool, at, limit)
 }
 
+/// Fire the hooks for a new checkout, under the gate [`STARTING`] describes.
+fn fire_checkout_made(hooks: &Hooks, made: hooks::Made<'_>) -> Vec<Fired> {
+    let _held = starting();
+    hooks::fire_checkout_made(hooks, made, Duration::from_secs(30), &mut |_| {})
+}
+
 /// HOOK-4: a hook attached to a moment runs when the moment comes.
 #[test]
 fn a_hook_runs_the_program_the_file_named() {
@@ -159,6 +165,162 @@ fn a_hook_is_given_no_environment_of_its_own() {
         );
     }
     assert!(!seen.is_empty(), "the hook saw no environment at all");
+}
+
+/// HOOK-4, HOOK-5: the hook for a checkout that was just written runs in it, is given the checkout
+/// and the working directory it was made from by name in its environment, and its standard input
+/// is still the moment alone. A hook that is not told which is which would copy from the wrong one.
+#[test]
+fn a_checkout_hook_is_handed_the_checkout_and_the_working_directory_it_was_made_from() {
+    let scratch = Scratch::new("checkout-handed");
+    let program = script(
+        &scratch.path,
+        "keep-both",
+        "#!/bin/sh\nprintf '%s' \"$BRAVEBOT_CHECKOUT\" > checkout.txt\n\
+         printf '%s' \"$BRAVEBOT_WORKING_DIRECTORY\" > working.txt\ncat > told.json\n",
+    );
+    let hooks = declaring("checkout-made", &[program.to_str().expect("a path")]);
+
+    let fired = fire_checkout_made(
+        &hooks,
+        hooks::Made {
+            checkout: &scratch.path,
+            working_directory: Path::new("/people/their/project"),
+        },
+    );
+
+    assert_eq!(fired.len(), 1);
+    assert_eq!(fired[0].trouble, None);
+    assert_eq!(fired[0].moment, "checkout-made");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("checkout.txt"))
+            .expect("the hook did not run in the checkout"),
+        scratch.path.to_str().expect("a path"),
+        "the hook was not told which checkout it was for"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("working.txt")).expect("the hook ran"),
+        "/people/their/project"
+    );
+    let told = std::fs::read_to_string(scratch.path.join("told.json")).expect("the hook was told");
+    assert_eq!(
+        told.trim(),
+        r#"{"event":"checkout-made"}"#,
+        "a directory reached the hook on standard input"
+    );
+}
+
+/// HOOK-5, PATH-003: a directory reaches the hook as the bytes the file system holds. A working
+/// directory whose name is not text is passed on as it is, and the name its replacement-character
+/// rendering spells is passed on as that, so a lossy spelling would hand the hook the second for
+/// the first.
+#[cfg(unix)]
+#[test]
+fn a_checkout_hook_is_handed_a_directory_whose_name_is_not_text_as_it_is() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let scratch = Scratch::new("checkout-bytes");
+    let program = script(
+        &scratch.path,
+        "keep-bytes",
+        "#!/bin/sh\nprintf '%s' \"$BRAVEBOT_WORKING_DIRECTORY\" > working.bin\n",
+    );
+    let hooks = declaring("checkout-made", &[program.to_str().expect("a path")]);
+    let not_text = Path::new(OsStr::from_bytes(b"/people/caf\xe9/project"));
+    let lookalike = Path::new("/people/caf\u{FFFD}/project");
+
+    for working_directory in [not_text, lookalike] {
+        let _ = std::fs::remove_file(scratch.path.join("working.bin"));
+
+        fire_checkout_made(
+            &hooks,
+            hooks::Made {
+                checkout: &scratch.path,
+                working_directory,
+            },
+        );
+
+        assert_eq!(
+            std::fs::read(scratch.path.join("working.bin")).expect("the hook ran"),
+            working_directory.as_os_str().as_bytes(),
+            "the hook was told another directory than {working_directory:?}"
+        );
+    }
+}
+
+/// HOOK-4, HOOK-5, PATH-003: a hook runs in a checkout whose name is not text and is told that
+/// name as the bytes the file system holds. The directory its replacement-character rendering
+/// spells exists beside it, so a lossy spelling would run the hook in the wrong one or tell it the
+/// wrong one. Linux only: other hosts' file systems cannot hold the name.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_checkout_hook_runs_in_a_checkout_whose_name_is_not_text_and_is_told_it_as_it_is() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let scratch = Scratch::new("checkout-named-bytes");
+    let program = script(
+        &scratch.path,
+        "keep-checkout",
+        "#!/bin/sh\nprintf '%s' \"$BRAVEBOT_CHECKOUT\" > checkout.bin\n",
+    );
+    let hooks = declaring("checkout-made", &[program.to_str().expect("a path")]);
+    let not_text = scratch.path.join(OsStr::from_bytes(b"checkout-\xe9"));
+    let lookalike = scratch.path.join("checkout-\u{FFFD}");
+    std::fs::create_dir(&not_text).expect("a checkout whose name is not text");
+    std::fs::create_dir(&lookalike).expect("its lossy lookalike");
+
+    for checkout in [&not_text, &lookalike] {
+        let fired = fire_checkout_made(
+            &hooks,
+            hooks::Made {
+                checkout,
+                working_directory: Path::new("/people/their/project"),
+            },
+        );
+
+        assert_eq!(
+            fired[0].trouble, None,
+            "the hook did not run in {checkout:?}"
+        );
+        assert_eq!(
+            std::fs::read(checkout.join("checkout.bin")).expect("the hook ran in the checkout"),
+            checkout.as_os_str().as_bytes(),
+            "the hook was told another directory than the one it ran in"
+        );
+    }
+}
+
+/// HOOK-5: only the hook for a checkout is given the directories. The hook for any other moment is
+/// told the moment and given neither, whichever moment it is.
+#[test]
+fn a_hook_for_any_other_moment_is_given_neither_directory() {
+    let scratch = Scratch::new("checkout-not-handed");
+    let program = script(
+        &scratch.path,
+        "dump-env",
+        "#!/bin/sh\nexec env > seen.env\n",
+    );
+    for (word, moment, tool) in [
+        ("turn-started", Moment::TurnStarted, None),
+        ("tool-finished", Moment::ToolFinished, Some("write_file")),
+        ("turn-finished", Moment::TurnFinished, None),
+        ("prompt-shown", Moment::PromptShown, None),
+    ] {
+        let _ = std::fs::remove_file(scratch.path.join("seen.env"));
+        let hooks = declaring(word, &[program.to_str().expect("a path")]);
+
+        fire(&hooks, moment, tool, &scratch.path);
+
+        let seen = std::fs::read_to_string(scratch.path.join("seen.env")).expect("the hook ran");
+        assert!(
+            !seen.is_empty(),
+            "the {word} hook saw no environment at all"
+        );
+        assert!(
+            !seen.contains("BRAVEBOT_CHECKOUT=") && !seen.contains("BRAVEBOT_WORKING_DIRECTORY="),
+            "the {word} hook was given a directory of a checkout"
+        );
+    }
 }
 
 /// HOOK-3: the words in the file are an argument vector. One holding a space and a semicolon is

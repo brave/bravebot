@@ -63,9 +63,9 @@ pub fn hooks_file(directory: &Path) -> PathBuf {
 /// A moment a hook can be attached to, in a person's terms.
 ///
 /// Deliberately short. Each is something somebody can point at in a session that has happened:
-/// the turn began, a call finished, the turn is over, a question is waiting on them. The audit
-/// trail's events are a different vocabulary answering a different question, and a person writing a
-/// hook should not have to learn what a gate or a slot is.
+/// the turn began, a call finished, the turn is over, a question is waiting on them, a checkout was
+/// made for a delegate. The audit trail's events are a different vocabulary answering a different
+/// question, and a person writing a hook should not have to learn what a gate or a slot is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Moment {
     /// The turn a person asked for has begun, before anything is sent.
@@ -76,6 +76,8 @@ pub enum Moment {
     TurnFinished,
     /// A prompt or a question is about to be put to a person who can answer it.
     PromptShown,
+    /// The driver has written a checkout for a delegate, which has not yet made its first request.
+    CheckoutMade,
 }
 
 impl Moment {
@@ -89,6 +91,7 @@ impl Moment {
             "tool-finished" => Some(Self::ToolFinished),
             "turn-finished" => Some(Self::TurnFinished),
             "prompt-shown" => Some(Self::PromptShown),
+            "checkout-made" => Some(Self::CheckoutMade),
             _ => None,
         }
     }
@@ -100,6 +103,7 @@ impl Moment {
             Self::ToolFinished => "tool-finished",
             Self::TurnFinished => "turn-finished",
             Self::PromptShown => "prompt-shown",
+            Self::CheckoutMade => "checkout-made",
         }
     }
 }
@@ -395,7 +399,7 @@ mod tests {
             .collect()
     }
 
-    /// HOOK-2: the four moments are the vocabulary, and each is spelled the way the file spells it.
+    /// HOOK-2: the five moments are the vocabulary, and each is spelled the way the file spells it.
     #[test]
     fn each_moment_is_named_by_the_word_a_file_spells_it_with() {
         for moment in [
@@ -403,9 +407,11 @@ mod tests {
             Moment::ToolFinished,
             Moment::TurnFinished,
             Moment::PromptShown,
+            Moment::CheckoutMade,
         ] {
             assert_eq!(Moment::parse(moment.as_str()), Some(moment));
         }
+        assert_eq!(Moment::CheckoutMade.as_str(), "checkout-made");
     }
 
     /// HOOK-2: a file written for a build that fires more moments than this one leaves the hooks
@@ -494,6 +500,48 @@ mod tests {
             r#"{"hooks": [{"on": "turn-started", "tool": "write_file", "run": ["fmt"]}]}"#,
         );
         assert!(programs(&hooks, Moment::TurnStarted, None).is_empty());
+    }
+
+    /// HOOK-2: a checkout is made by the driver and not by a call, so an entry naming a tool on
+    /// `checkout-made` is about a call that does not happen there, as it is on a turn moment.
+    #[test]
+    fn a_tool_named_on_the_checkout_moment_fires_for_nothing() {
+        let hooks = Hooks::parse(
+            r#"{"hooks": [{"on": "checkout-made", "tool": "spawn_agent", "run": ["setup"]}]}"#,
+        );
+        assert!(programs(&hooks, Moment::CheckoutMade, None).is_empty());
+        assert!(hooks.declared()[0].fires_for_nothing());
+    }
+
+    /// HOOK-2: a setup command for a new checkout is not run at the end of a turn or after a call,
+    /// and a command written for those is not run when a checkout is made.
+    #[test]
+    fn a_checkout_hook_fires_at_that_moment_alone() {
+        let hooks = Hooks::parse(
+            r#"{"hooks": [
+                {"on": "checkout-made", "run": ["setup"]},
+                {"on": "tool-finished", "run": ["log"]},
+                {"on": "turn-finished", "run": ["end"]}
+            ]}"#,
+        );
+        assert_eq!(
+            programs(&hooks, Moment::CheckoutMade, None),
+            vec![vec!["setup".to_string()]]
+        );
+        for moment in [
+            Moment::TurnStarted,
+            Moment::TurnFinished,
+            Moment::PromptShown,
+        ] {
+            assert!(
+                !programs(&hooks, moment, None).contains(&vec!["setup".to_string()]),
+                "{moment:?}"
+            );
+        }
+        assert!(
+            !programs(&hooks, Moment::ToolFinished, Some("run"))
+                .contains(&vec!["setup".to_string()])
+        );
     }
 
     /// HOOK-2: a moment fires the hooks written for it and nothing written for another.

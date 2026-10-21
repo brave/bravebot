@@ -281,6 +281,11 @@ have the fetch done once rather than by each delegate.
 A delegate in a checkout is not offered the `lsp` tool, because the session's language servers are
 rooted at your working directory. The answer to the spawn says so.
 
+A checkout holds tracked files only, so a delegate in one finds no installed dependencies and none
+of the files your repository ignores. A [`checkout-made` hook](hooks.md#the-five-moments) in your own
+`hooks.json` runs a command of yours in each new checkout before its delegate starts, and is told
+the checkout and your working directory so it can install and copy. A checkout it ran in is kept.
+
 A checkout a delegate wrote in is kept, and the agent's reply names it by number with the paths the
 delegate typed for what it wrote. The agent brings those files back with
 [`apply_checkout`](../reference/tools.md#apply_checkout), and you are asked about each one, shown

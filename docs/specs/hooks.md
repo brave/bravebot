@@ -66,7 +66,7 @@ learn.
 `verified-by: by-construction (one path is ever built, by joining the file name onto the state directory the caller was given; nothing reads a hooks file from a working directory or an ancestor of one)`
 
 <a id="HOOK-2"></a>
-### HOOK-2: four moments, and each fires the hooks written for it
+### HOOK-2: five moments, and each fires the hooks written for it
 
 A declaration names one moment. These are the moments:
 
@@ -76,6 +76,7 @@ A declaration names one moment. These are the moments:
 | `tool-finished` | after one tool call has finished, whatever came of it |
 | `turn-finished` | when the turn a person asked for is over, however it ended |
 | `prompt-shown` | just before a prompt or an `ask_user` question is put to a person who can answer it |
+| `checkout-made` | once the driver has written a checkout for a delegate, before that delegate's first request |
 
 A `tool-finished` entry may name a `tool`, and then fires for calls of that name alone; one that
 names none fires for every call. A tool named on any of the other moments is about a call
@@ -93,6 +94,15 @@ and not where a permission mode answered in advance ([permission-modes.md](permi
 delegate's question reaches the same person through the same confirmer and fires it once. It fires
 before the question is drawn, so a notifier attached to it calls somebody back while the turn is
 waiting on them, and the question is the same whatever the hook does (HOOK-6).
+
+`checkout-made` is about a checkout and not about a delegate starting, so it fires once for each
+checkout the driver writes for a delegate ([CHECKOUT-5](checkouts.md#CHECKOUT-5)), as that delegate
+begins its run, before its first request. A delegate that works in the working directory fires
+nothing, and so does one started inside a checkout, which works in the checkout its parent was given
+([CHECKOUT-3](checkouts.md#CHECKOUT-3)). It fires from the delegate's own run, so a hook holds that
+delegate and neither the planner nor the other delegates of the call, and a call that gives several
+delegates a checkout runs their hooks at the same time. A person's setup command for a new checkout
+is what it is for ([CHECKOUT-22](checkouts.md#CHECKOUT-22)).
 
 **Why.** A short vocabulary in a person's own terms, rather than the events the audit trail
 records: those say which gate decided what, and somebody wanting their formatter to run should not
@@ -122,6 +132,12 @@ and a turn that died is exactly when they want telling.
 `verified-by: bravebot_agent::permission_mode::no_alert_comes_before_a_question_the_inner_confirmer_refuses_unasked`
 `verified-by: bravebot_cli::main::a_one_shot_run_alerts_for_a_plan_it_puts_and_not_for_a_write_it_refuses`
 `verified-by: bravebot_agent::turn::a_delegate_s_question_fires_prompt_shown_once`
+`verified-by: bravebot_config::hooks::a_checkout_hook_fires_at_that_moment_alone`
+`verified-by: bravebot_config::hooks::a_tool_named_on_the_checkout_moment_fires_for_nothing`
+`verified-by: bravebot_agent::turn::a_hook_runs_in_the_checkout_made_for_a_delegate_before_its_first_round`
+`verified-by: bravebot_agent::turn::a_delegate_given_no_checkout_fires_no_checkout_hook`
+`verified-by: bravebot_agent::turn::a_fan_out_into_checkouts_fires_the_hook_once_for_each_checkout_and_in_that_one`
+`verified-by: bravebot_agent::turn::a_delegate_started_inside_a_checkout_does_not_fire_the_hook_again`
 
 <a id="HOOK-3"></a>
 ### HOOK-3: a hook is a program and its arguments, never a line a shell parses
@@ -150,10 +166,10 @@ Copying the spelling means copying the parse.
 ### HOOK-4: a hook runs where the work is, with the access the person's own shell would give it
 
 A hook runs in the directory the turn is working in, so a relative path in one means what the
-person who wrote it meant. It is not confined, and its environment is the one it was started from
-less this agent's own credentials, which are the same names taken off a program the planner asked
-for, a gateway's token variables included ([RUN-12](tools/run.md#RUN-12)), and with its `PATH`
-reduced as described below.
+person who wrote it meant. For `checkout-made` that is the checkout's root. It is not confined, and
+its environment is the one it was started from less this agent's own credentials, which are the
+same names taken off a program the planner asked for, a gateway's token variables included
+([RUN-12](tools/run.md#RUN-12)), and with its `PATH` reduced as described below.
 
 A bare program name is the one exception to "the person's own shell would give it": it is looked up
 as every program bravebot starts unconfined is ([SANDBOX-30](sandboxing.md#SANDBOX-30)), so a
@@ -178,6 +194,7 @@ A hook has no more use for one than a formatter has.
 
 `verified-by: bravebot_agent::hooks::a_hook_runs_the_program_the_file_named`
 `verified-by: bravebot_agent::hooks::a_hook_runs_in_the_directory_the_turn_is_working_in`
+`verified-by: bravebot_agent::turn::a_hook_runs_in_the_checkout_made_for_a_delegate_before_its_first_round`
 `verified-by: bravebot_agent::hooks::a_hook_is_not_handed_this_agent_s_own_credentials`
 `verified-by: bravebot_agent::hooks::a_hook_is_not_handed_a_gateways_environment_token`
 `verified-by: bravebot_agent::hooks::two_hooks_on_one_moment_run_in_the_order_the_file_listed_them`
@@ -186,21 +203,39 @@ A hook has no more use for one than a formatter has.
 `verified-by: bravebot_agent::hooks::a_hook_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 
 <a id="HOOK-5"></a>
-### HOOK-5: a hook is told which moment fired, and nothing else
+### HOOK-5: a hook is told which moment fired, and a checkout's hook which two directories
 
 A hook is given one line on its standard input: a JSON object whose `event` is the moment's own
-word. No path, no argument a model wrote, no bytes out of a file, and nothing added to its
-environment. The tool a `tool-finished` entry names selects which entries fire and reaches no
-process.
+word. No argument a model wrote, no bytes out of a file, and no path, with one exception: the hook
+for `checkout-made` is given two directories in its environment. `BRAVEBOT_CHECKOUT` is the
+checkout it was fired for and `BRAVEBOT_WORKING_DIRECTORY` is the working directory the checkout was
+made from. They are the whole of what a hook is handed besides the moment, they are not on standard
+input, and bravebot adds neither to the environment of the hook for any other moment. The tool a
+`tool-finished` entry names selects which entries fire and reaches no process.
 
-**Why.** There is then nothing to work out about what a hook is handed: the same three lines,
+**Why.** There is then nothing to work out about what a hook is handed: the same line for a moment,
 whatever the turn was doing. A path would be a string the model chose, and while a path a tool acts
 on is trusted for deciding where that effect lands, handing one to a program on somebody's machine
 is a wider claim than that. A hook that needs to know which tool ran declares one entry per tool.
 
+A setup command for a new checkout has one question the moment cannot answer: where the files a
+checkout lacks are, which is the directory it was made from. Neither directory is a string a model
+wrote or one read out of a file. The checkout's is built from the state directory, the workspace's
+key and the checkout's number, which are the driver's, and the working directory is the one the
+person's session works in. Two are handed and no more, since a copy needs a source and a
+destination. The destination is also the hook's own directory (HOOK-4), and the variable names it
+for a command that has changed directory. They are variables rather than a field of the line
+because a variable holds the bytes the file system holds, and a directory whose name is not text
+would reach a hook as another directory through a line of JSON.
+
 `verified-by: bravebot_agent::hooks::a_hook_is_told_the_moment_and_nothing_else`
 `verified-by: bravebot_agent::hooks::the_line_a_hook_is_told_is_built_from_the_moment_alone`
 `verified-by: bravebot_agent::hooks::a_hook_is_given_no_environment_of_its_own`
+`verified-by: bravebot_agent::hooks::a_checkout_hook_is_handed_the_checkout_and_the_working_directory_it_was_made_from`
+`verified-by: bravebot_agent::hooks::a_checkout_hook_is_handed_a_directory_whose_name_is_not_text_as_it_is`
+`verified-by: bravebot_agent::hooks::a_checkout_hook_runs_in_a_checkout_whose_name_is_not_text_and_is_told_it_as_it_is`
+`verified-by: bravebot_agent::hooks::a_hook_for_any_other_moment_is_given_neither_directory`
+`verified-by: bravebot_agent::turn::a_hook_runs_in_the_checkout_made_for_a_delegate_before_its_first_round`
 
 <a id="HOOK-6"></a>
 ### HOOK-6: a hook decides nothing
@@ -222,6 +257,8 @@ decision is taken from something a person wrote rather than from something a pro
 
 `verified-by: bravebot_agent::turn::a_turn_whose_hook_failed_still_answers`
 `verified-by: bravebot_agent::turn::a_failing_prompt_hook_leaves_the_question_alone`
+`verified-by: bravebot_agent::turn::a_checkout_hook_that_fails_is_said_and_its_delegate_still_runs`
+`verified-by: bravebot_agent::turn::a_setup_that_cannot_start_or_outstays_its_bound_leaves_the_delegate_running_in_a_kept_checkout`
 `verified-by: by-construction (a hook's standard output and standard error are discarded at the spawn and read by nothing; its status reaches one sentence said to the person and no branch)`
 
 <a id="HOOK-7"></a>
@@ -267,6 +304,7 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_ui_bridge::reporting::what_the_turn_said_is_kept_for_the_event_that_ends_it`
 `verified-by: bravebot_agent::turn::a_hook_that_went_wrong_on_a_delegate_s_call_reaches_the_turn_s_notices`
 `verified-by: bravebot_agent::turn::a_delegate_that_did_not_finish_still_tells_the_turn_what_its_hooks_said`
+`verified-by: bravebot_agent::turn::a_checkout_hook_that_fails_is_said_and_its_delegate_still_runs`
 `verified-by: bravebot_agent::hooks::a_file_that_declared_nothing_fires_nothing`
 `verified-by: bravebot_config::hooks::an_unusable_entry_leaves_the_others_firing`
 `verified-by: bravebot_config::hooks::an_unparseable_file_declares_no_hooks`
@@ -373,7 +411,10 @@ somewhere to say it, which is the end of the call the question came up in.
   `run` may write, so `./scripts/format.sh` runs, unconfined and with the person's access, whatever a
   confined stage left at that name. Looking such a name up as a bare name is would refuse the
   person's own script in their own project. A hook that must not run a file a stage could write
-  names its program by an absolute path outside the session's directories.
+  names its program by an absolute path outside the session's directories. A `checkout-made` hook
+  runs in a checkout of HEAD, so there `./scripts/setup.sh` runs the repository's own file at that
+  name, which is a command that arrived with a clone, and a hook that must not do that names its
+  program by an absolute path outside the repository.
 - **A tool a hook starts by name is found only among the entries bravebot searches.** A hook that is
   a script with an `env` shebang, or a launcher that starts another program by name, has that name
   looked up in the `PATH` entries a confined stage may not write (HOOK-4), as they stand when the
@@ -391,6 +432,16 @@ somewhere to say it, which is the end of the call the question came up in.
   one-shot run's for everything but a plan, fires it for nothing it refuses. A channel that
   closed during the turn is found closed only when a question fails to send, so the question that
   finds it closed fires it once.
+- **`checkout-made` holds its delegate back while it runs.** The delegate makes no request until its
+  hook has ended, up to the bound in HOOK-7, so a setup that installs dependencies delays the work
+  by as long as it takes, and one that needs longer than 30 seconds states a `timeout`. Stopping
+  the turn or the delegate does not reach a hook that is running, which ends or reaches its bound.
+  A call that gives several delegates a checkout runs the hooks at the same time, so they share the
+  machine and a package manager's cache, and the status that names a running hook (HOOK-9) names
+  the one that began last and clears when the first of them ends.
+- **A hook stopped at its bound is stopped alone.** The program it started is killed and the
+  programs that one started are not, so a setup script stopped in the middle of an install leaves
+  the install running while the delegate starts.
 - **There is no moment for a session.** A session is many turns, and something that should happen
   once when the program opens fires per turn instead. The interactive interface is where a session
   begins and ends, and nothing there fires a hook yet.

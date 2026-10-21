@@ -436,8 +436,9 @@ pub struct Ended {
     /// that came back only on the success path would leave the next run asking about the build
     /// this one was already told it could run.
     pub vouched: Vouched,
-    /// What a hook that went wrong on one of its calls had to say, and what the driver said about
-    /// the model the definition named, for the parent to fold into its own account of itself.
+    /// What a hook that went wrong on one of its calls or on its checkout's setup had to say, and
+    /// what the driver said about the model the definition named, for the parent to fold into its
+    /// own account of itself.
     ///
     /// Outside the result and unconditional for the same reasons as the record above. A hook
     /// fires on a call finishing, so a delegate whose next request failed has still had one go
@@ -660,7 +661,7 @@ pub fn run(
 
     // Where the hook sentences get to, on both of the ways the run can end. A delegate is not a
     // turn a person asked for, so the moments at the two ends of one never fire here and what
-    // lands is what the calls it made fired.
+    // lands is what the calls it made fired, and what the setup of its checkout said.
     let mut notices = Vec::new();
 
     let mut rounds = 0;
