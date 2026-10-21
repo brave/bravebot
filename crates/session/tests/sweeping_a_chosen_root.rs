@@ -41,7 +41,7 @@ fn old_file(path: &Path) {
 fn a_root_the_process_was_told_to_keep_its_records_in_is_not_swept() {
     let state = scratch("retention-chosen-root-state");
     let chosen = scratch("retention-chosen-root-chosen");
-    let theirs = chosen.join("app").join("package.json");
+    let theirs = chosen.join("app").join("keep-me.json");
     old_file(&theirs);
     let ours = state
         .join("sessions")
