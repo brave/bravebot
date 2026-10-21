@@ -87,26 +87,26 @@ stay a question. Prefix matching would have made `/add-dirs are useful` open a d
 `s are useful`.
 
 **`exit` and `quit` typed with no slash are not commands, and a line that is only one of them is
-held once.** The line is a prompt, so the first Enter on a trimmed line equal to either word in any
-case leaves it in the box and sends nothing. The row under the box says that Enter again sends it as
-a prompt and that Ctrl-C leaves. A second Enter with no other input between sends the line as it
-would any other prompt. Any other input withdraws the hold, whether a key, a paste, a mouse report,
-a resize or a change of focus, and so does a turn that begins with no press, such as a loop's tick,
-so the word is held again wherever it is next sent. A line with anything else in it is sent at the
-first Enter. The hold is on the Enter that sends a line at rest; where Enter queues a line behind a
-running turn, the word is queued as any prompt is (see Known costs). In shell mode the line is a
-command line (CMD-3) and runs at the first Enter. The row names Ctrl-C and not `/exit` or Ctrl-D,
-because the line is still in the box: Ctrl-C clears it and a second press leaves
-([terminal-input.md](terminal-input.md)), `/exit` typed after it is part of the same line, and
-Ctrl-D leaves only an empty box. The row is short enough that any one permission mode name is still
+sent as the prompt it is, with a note under the box.** The first Enter on a trimmed line equal to
+either word in any case sends it as it would any other prompt, and asks nothing of the person first.
+While the turn it begins runs, the row under the box says that the line was sent as a prompt, that
+Ctrl-C stops it and that `/exit` leaves. The note is drawn for a line the person typed in the box,
+sent at once or queued behind a running turn and sent when that turn ends. A turn that a loop's tick,
+a watch, a goal or a command begins carries no note, and neither does a line with anything else in it,
+which includes two of these words sent together by Ctrl-Enter. In shell mode the line is a command
+line (CMD-3) and runs at the first Enter, with no turn to say anything under. The row names Ctrl-C
+first because a turn is running and the first press stops it ([INPUT-4](terminal-input.md#INPUT-4)).
+`/exit` typed while the turn runs waits for the turn to end like every command in the second row of
+the table in [CMD-8](#CMD-8). The row is short enough that any one permission mode name is still
 drawn beside it on a terminal eighty columns wide.
 
-**Why.** Other terminal agents leave on the bare word, so a person who types it expects to leave,
-and sending it starts a paid turn on a word that meant to end the session. Claiming the word would
-take it out of the language a person can use to talk to the planner, and a question about leaving
-would stop being a question, so it is held and not claimed. The second Enter keeps the word
-sendable. The line is the text of the person's own box, and what it decides is only whether a
-second press is asked for.
+**Why.** Other terminal agents leave on the bare word, so a person who types it may expect to leave,
+and a turn that starts with nothing on the screen saying the line went to the model reads as an
+interface that did not understand. Claiming the word would take it out of the language a person can
+use to talk to the planner, and a question about leaving would stop being a question, so it stays a
+prompt and the row says so. Holding the first Enter would add a step in front of a line that sends
+at once, which no other prompt has. The line is the text of the person's own box, and what it
+decides is only whether the note is drawn.
 
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_the_command_is_a_prompt`
 `verified-by: bravebot_tui::app::an_argument_is_taken_only_after_the_whole_command_word`
@@ -140,18 +140,19 @@ second press is asked for.
 `verified-by: bravebot_tui::app::a_prompt_containing_the_caffeinate_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_caffeinate_is_a_prompt`
 `verified-by: bravebot_tui::app::init_with_words_after_it_is_a_prompt`
-`verified-by: bravebot_tui::app::the_first_enter_on_a_bare_leave_word_is_held_and_the_second_sends_it`
-`verified-by: bravebot_tui::app::a_bare_leave_word_is_held_in_any_case_and_with_spaces_around_it`
-`verified-by: bravebot_tui::app::a_line_that_holds_more_than_a_leave_word_is_sent_at_the_first_enter`
-`verified-by: bravebot_tui::app::any_other_input_withdraws_the_hold_on_a_bare_leave_word`
-`verified-by: bravebot_tui::app::letting_go_of_enter_leaves_the_hold_on_a_bare_leave_word_up`
-`verified-by: bravebot_tui::app::two_presses_of_ctrl_c_leave_from_a_held_leave_word`
-`verified-by: bravebot_tui::app::a_held_leave_word_that_is_edited_and_sent_again_is_held_again`
-`verified-by: bravebot_tui::state::a_turn_that_begins_without_a_press_takes_down_the_hold_on_a_leave_word`
-`verified-by: bravebot_tui::app::the_hold_on_a_bare_leave_word_does_not_slow_the_exit_command`
+`verified-by: bravebot_tui::app::a_lone_leave_word_is_sent_at_the_first_enter`
+`verified-by: bravebot_tui::app::a_line_that_holds_more_than_a_leave_word_is_sent_without_the_mark`
+`verified-by: bravebot_tui::app::the_keys_the_note_on_a_sent_leave_word_names_stop_the_turn_and_leave`
+`verified-by: bravebot_tui::app::the_exit_command_leaves_on_the_first_enter_and_marks_nothing`
 `verified-by: bravebot_tui::app::a_bare_leave_word_in_shell_mode_is_run_as_the_command_line_it_is`
-`verified-by: bravebot_tui::render::the_row_under_the_box_says_a_held_leave_word_goes_to_the_model_as_a_prompt`
-`verified-by: bravebot_tui::render::the_note_on_a_held_leave_word_leaves_the_permission_mode_on_an_eighty_column_row`
+`verified-by: bravebot_tui::state::a_turn_begun_on_a_lone_leave_word_is_marked_and_one_on_any_other_line_is_not`
+`verified-by: bravebot_tui::state::the_prompt_after_a_marked_turn_does_not_inherit_the_mark`
+`verified-by: bravebot_tui::state::a_turn_that_begins_without_a_line_from_the_box_takes_down_the_mark`
+`verified-by: bravebot_tui::state::a_lone_leave_word_that_waited_in_the_queue_is_marked_when_its_turn_begins`
+`verified-by: bravebot_tui::state::leave_words_hurried_together_are_not_marked_and_one_hurried_alone_is`
+`verified-by: bravebot_tui::render::the_row_under_the_box_says_a_sent_leave_word_went_to_the_model_as_a_prompt`
+`verified-by: bravebot_tui::render::the_row_under_the_box_says_nothing_of_a_prompt_that_is_more_than_a_leave_word`
+`verified-by: bravebot_tui::render::the_note_on_a_sent_leave_word_leaves_the_permission_mode_on_an_eighty_column_row`
 
 
 <a id="CMD-3"></a>
@@ -1087,17 +1088,16 @@ apart from the parser drifts from it.
   typeable in full, and typing a letter or two narrows the list back onto the screen; what a
   short terminal costs is the discovery the list exists for. Bounding it would mean a window that
   scrolls with the cursor, which is a second scroller beside the transcript's.
-- **A lone `exit` or `quit` typed while a turn runs is queued as a prompt with no hold (CMD-2).**
-  The hold is on the Enter that sends a line at rest, which starts a turn on it. Where Enter queues
-  the line behind a running turn, nothing starts, the line is drawn above the box as waiting, and the
-  person can stop the turn with Ctrl-C. A hold there would also have to say that a first Ctrl-C stops
-  the turn and does not leave, so the row would need a second sentence for that state.
-- **The row for a held `exit` or `quit` is 47 columns, and a terminal narrower than that cuts it at
+- **A lone `exit` or `quit` typed while a turn runs is queued as a prompt, and the note under the
+  box is drawn only when a turn begins on it (CMD-2).** Where Enter queues the line behind a running
+  turn, nothing starts on it yet, the line is drawn above the box as waiting, and the person can stop
+  the turn with Ctrl-C. A line the running turn takes in as an interjection begins no turn of its own,
+  so it has no note.
+- **The row for a sent `exit` or `quit` is 47 columns, and a terminal narrower than that cuts it at
   the last column, which loses the way out (CMD-2).** It is the row's right-hand note, and the parts
   of the line are fitted against the width it leaves. On a row eighty columns wide that is 31
   columns, which holds the longest permission mode name alone and a shorter one beside a vi mode.
   Where the parts do not fit, the whole left side is cleared while the note is up.
-- **The row for a held `exit` or `quit` is drawn again only by the next frame where the input that
-  withdrew it answers with no action (CMD-2).** A right click or a change of focus withdraws the
-  hold, so the next Enter holds the line again, and the note stays on the screen until something
-  else is drawn. `ctrl-c again to exit` is withdrawn and drawn the same way.
+- **The row for a sent `exit` or `quit` is up only while the turn runs (CMD-2).** A turn that
+  answers at once takes the note down with it, and a person who looked away has nothing under the
+  box to say the word was a prompt. The transcript still shows the line and the reply.

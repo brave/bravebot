@@ -59,8 +59,7 @@ transcript, and the box stays beneath the list.
 Ctrl-J does the same thing everywhere and needs no terminal configuration, because most terminals
 send the same byte for Enter whichever modifier was held. Both work while a turn runs and in shell
 mode. A newline lands at the caret, does not arm shell mode, and Enter still sends a paragraph
-written this way. Enter on an empty line does nothing. At rest, a line that is only `exit` or
-`quit` is held at the first Enter ([CMD-2](commands.md#CMD-2)).
+written this way. Enter on an empty line does nothing.
 
 `verified-by: bravebot_tui::app::shift_enter_starts_a_line_instead_of_sending`
 `verified-by: bravebot_tui::app::ctrl_j_starts_a_line_too`

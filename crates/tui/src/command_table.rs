@@ -162,8 +162,8 @@ pub(crate) const EXIT_COMMAND: &str = "/exit";
 /// The words other terminal agents leave on when they are typed alone, with no slash.
 ///
 /// Not commands: [`EXIT_COMMAND`] is the only line that leaves, so a question about leaving stays a
-/// question (CMD-2). A line that is only one of these is held once before it is sent as the prompt it
-/// is.
+/// question (CMD-2). A line that is only one of these is sent as the prompt it is, and the row under
+/// the box says so while the turn it begins runs.
 pub(crate) const LEAVE_WORDS: [&str; 2] = ["exit", "quit"];
 
 /// Whether the line is only one of [`LEAVE_WORDS`], in any case and with spaces around it.

@@ -985,12 +985,14 @@ pub struct Session {
     /// press is what reads it. Cleared by any key that is not itself an interrupt, so a person who
     /// went off and did something else is asked again rather than leaving on one press later.
     pub offered_to_leave: bool,
-    /// Whether the last Enter was held because the line is only `exit` or `quit` (CMD-2).
+    /// Whether the turn in flight began on a line the person typed that is only `exit` or `quit`
+    /// (CMD-2).
     ///
-    /// The row under the box says the line goes to the model on a second Enter, and which way leaves.
-    /// The second Enter and that row are what read it, and any other input withdraws it, as does a
-    /// turn beginning, so a line edited and then sent as another bare word is held again.
-    pub leave_word_held: bool,
+    /// Those words leave in other terminal agents and are a prompt here, so the row under the box
+    /// says the line went to the model and which keys stop the turn and leave. Set from the person's
+    /// own line by the two calls that take one from the box or the queue, and cleared by every turn
+    /// that begins, so the next one is judged on its own. Read only while the turn runs.
+    pub leave_word_sent: bool,
     /// Whether the key being answered arrived on its own rather than in a run with others.
     ///
     /// Set from the reader before each key is dispatched, and `true` on a session nobody has read
@@ -1455,7 +1457,7 @@ impl Session {
             cleared_by_interrupt: false,
             expandable_lines: 0,
             offered_to_leave: false,
-            leave_word_held: false,
+            leave_word_sent: false,
             key_arrived_alone: true,
             image_on_clipboard: false,
             written: 0,
@@ -3193,7 +3195,11 @@ impl Session {
         // nowhere. Pictures settle the same way and at the same moment, since a marker rubbed out
         // means the same thing whether the thing behind it was dropped or pasted.
         let taken = self.take_line(&typed);
-        Some(self.begin_turn(prompt, taken, vec![recall]))
+        let begun = self.begin_turn(prompt, taken, vec![recall]);
+        // Read from the line as the box held it, which the person typed, and it decides only whether
+        // the row under the box says the word went to the model (CMD-2).
+        self.leave_word_sent = crate::command_table::is_a_lone_leave_word(&typed);
+        Some(begun)
     }
 
     /// Take the current line as a command to carry out now.
@@ -3556,7 +3562,14 @@ impl Session {
                 self.pending.push(copy);
             }
         }
-        Some(self.begin_turn(prompts.join("\n"), (attached, pasted), recall))
+        // A line sent together with others is no longer a lone word, so only one prompt can be.
+        let lone = matches!(
+            prompts.as_slice(),
+            [only] if crate::command_table::is_a_lone_leave_word(only)
+        );
+        let begun = self.begin_turn(prompts.join("\n"), (attached, pasted), recall);
+        self.leave_word_sent = lone;
+        Some(begun)
     }
 
     /// Take the command waiting longest, if the session is free to carry one out.
@@ -4263,11 +4276,10 @@ impl Session {
         self.hunks_listed = None;
         self.prompt_at = None;
         self.said_while_working.clear();
-        // The hold answers a press at rest over the line it was put up for. A tick, a watch or a
-        // queued prompt begins a turn with nobody pressing, so left up it would go on saying Enter
-        // sends the line over a turn already running, and count the next Enter after the turn as
-        // the second press.
-        self.leave_word_held = false;
+        // Set again by the call that took a line from the box, after this returns. A tick, a watch,
+        // a goal sending the work back and a command's own prompt are not a lone word the person
+        // typed, so the mark left by the last turn must not describe them.
+        self.leave_word_sent = false;
         self.recall = recall;
         (self.sent, self.sent_pasted) = taken;
         self.turn_places
@@ -9896,22 +9908,115 @@ mod tests {
         );
     }
 
-    /// A tick starts a turn with nobody pressing anything, so input cannot be what takes down the
-    /// hold on a lone `exit`. Left up, the row goes on saying Enter sends the line over a turn
-    /// that is already running, and the first Enter after the turn counts as the second press and
-    /// sends the word with no note.
+    /// CMD-2. Only a line that is the word and nothing else is told it went to the model as a prompt:
+    /// in any case and with spaces around it, since `Exit ` means what `exit` does, and not a
+    /// question about leaving, which a note saying the word was a prompt would misdescribe. A mark
+    /// taken from a line that merely contains the word shows the note on ordinary prompts.
     #[test]
-    fn a_turn_that_begins_without_a_press_takes_down_the_hold_on_a_leave_word() {
+    fn a_turn_begun_on_a_lone_leave_word_is_marked_and_one_on_any_other_line_is_not() {
+        for line in ["exit", "quit", "Exit", "QUIT", "  exit  ", "qUiT "] {
+            let mut s = session();
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            assert_eq!(s.submit().as_deref(), Some(line.trim()));
+            assert!(s.leave_word_sent, "{line:?} began a turn with no mark");
+        }
+        for line in [
+            "exit now",
+            "how do I exit",
+            "exits",
+            "quit?",
+            "exit quit",
+            "e xit",
+        ] {
+            let mut s = session();
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            assert_eq!(s.submit().as_deref(), Some(line));
+            assert!(!s.leave_word_sent, "{line:?} began a turn with a mark");
+        }
+    }
+
+    /// The mark belongs to the turn the word began, so the prompt after it is judged on its own. Left
+    /// set, the row would go on saying a prompt that is no leave word went to the model as one.
+    #[test]
+    fn the_prompt_after_a_marked_turn_does_not_inherit_the_mark() {
+        let mut s = session();
+        for c in "exit".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        assert!(s.leave_word_sent, "the word was not marked");
+        s.complete("done", Vec::new(), 0);
+
+        for c in "list the files".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+
+        assert!(!s.leave_word_sent, "the next prompt inherited the mark");
+    }
+
+    /// A tick starts a turn on a prompt nobody typed in the box. The mark from the turn before is
+    /// not about it, and nothing a person typed sets one for it.
+    #[test]
+    fn a_turn_that_begins_without_a_line_from_the_box_takes_down_the_mark() {
         let mut s = session();
         s.looping = Some(a_loop_that_is_due());
         for c in "exit".chars() {
             s.type_char(c);
         }
-        s.leave_word_held = true;
+        s.submit().expect("submitted");
+        assert!(s.leave_word_sent, "the word was not marked");
+        s.complete("done", Vec::new(), 0);
 
         assert!(s.loop_tick().is_some(), "the due tick was not sent");
 
-        assert!(!s.leave_word_held, "the hold outlived the line it was for");
+        assert!(!s.leave_word_sent, "the tick's turn kept the word's mark");
+    }
+
+    /// A word typed while a turn runs is queued and sent when that turn ends, with nobody pressing
+    /// Enter for it, and the person who typed `quit` is owed the same note as one who sent it at
+    /// rest. It is not owed one while the turn it waits behind is the one running.
+    #[test]
+    fn a_lone_leave_word_that_waited_in_the_queue_is_marked_when_its_turn_begins() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_lines(&mut s, &["quit"]);
+        assert!(
+            !s.leave_word_sent,
+            "the running turn took the mark of a waiting line"
+        );
+        s.complete("done", Vec::new(), 0);
+
+        assert_eq!(s.send_queued().as_deref(), Some("quit"));
+
+        assert!(
+            s.leave_word_sent,
+            "the queued word began a turn with no mark"
+        );
+    }
+
+    /// Hurried prompts go as one turn, one to a line, so two leave words sent together are a line
+    /// that holds more than the word and a note about one word would misdescribe it. A single hurried
+    /// word is still the word.
+    #[test]
+    fn leave_words_hurried_together_are_not_marked_and_one_hurried_alone_is() {
+        for (lines, marked) in [(&["quit", "exit"][..], false), (&["quit"][..], true)] {
+            let mut s = session();
+            s.type_char('a');
+            s.submit().expect("submitted");
+            queue_lines(&mut s, lines);
+            assert!(s.hurry(), "there was a turn to stop and something waiting");
+            stop(&mut s, "a");
+
+            s.send_queued().expect("the hurried prompts were not sent");
+
+            assert_eq!(s.leave_word_sent, marked, "{lines:?}");
+        }
     }
 
     fn caffeinated() -> Session {

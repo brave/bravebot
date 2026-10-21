@@ -4858,30 +4858,46 @@ mod tests {
         assert!(hint.contains("ctrl-c again to exit"), "{hint}");
     }
 
-    /// An Enter that sends nothing has to say why, or it reads as an interface that stopped
-    /// answering. The row under the box is where a person who typed `exit` is already looking, and
-    /// it names what a second Enter does and the way that leaves with the line still in the box.
+    /// A person who typed `exit` to leave is looking at a turn starting, and nothing on the screen
+    /// says the line went to the model as a prompt. The row under the box is where they are already
+    /// looking, and it names the keys that stop the turn and leave, for as long as that turn runs.
     #[test]
-    fn the_row_under_the_box_says_a_held_leave_word_goes_to_the_model_as_a_prompt() {
+    fn the_row_under_the_box_says_a_sent_leave_word_went_to_the_model_as_a_prompt() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+        let said = "Sent as a prompt; ctrl-c stops it, /exit leaves";
         let mut session = typed("exit");
         let before = hint_row_at(&session, 90, 24);
-        assert!(
-            !before.contains("Enter again"),
-            "said before any Enter: {before}"
-        );
+        assert!(!before.contains(said), "said before any Enter: {before}");
 
         crate::app::handle_key(
             &mut session,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         );
+        assert!(session.a_turn_is_running(), "the line did not start a turn");
+        let sent = hint_row_at(&session, 90, 24);
+        assert!(sent.contains(said), "{sent}");
+
+        session.complete("done", Vec::new(), 0);
+        let after = hint_row_at(&session, 90, 24);
+        assert!(!after.contains(said), "left up after the turn: {after}");
+    }
+
+    /// The note is about a lone `exit` or `quit` and no other line: a prompt that merely contains
+    /// the word is a question like any other, and a note saying it was a leave word would be wrong.
+    #[test]
+    fn the_row_under_the_box_says_nothing_of_a_prompt_that_is_more_than_a_leave_word() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut session = typed("how do I exit");
+        crate::app::handle_key(
+            &mut session,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert!(session.a_turn_is_running(), "the line did not start a turn");
 
         let hint = hint_row_at(&session, 90, 24);
-        assert!(
-            hint.contains("Enter again sends it as a prompt; ctrl-c leaves"),
-            "{hint}"
-        );
+        assert!(!hint.contains("Sent as a prompt"), "{hint}");
     }
 
     /// The note takes its room ahead of the parts of the line, and the permission mode is the part
@@ -4889,7 +4905,7 @@ mod tests {
     /// eighty columns clears the whole left side, so the person reading it is told how to leave and
     /// not told that every write is going through.
     #[test]
-    fn the_note_on_a_held_leave_word_leaves_the_permission_mode_on_an_eighty_column_row() {
+    fn the_note_on_a_sent_leave_word_leaves_the_permission_mode_on_an_eighty_column_row() {
         use bravebot_agent::PermissionMode;
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -4912,10 +4928,11 @@ mod tests {
                 &mut session,
                 KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             );
+            assert!(session.a_turn_is_running(), "the line did not start a turn");
 
             let hint = hint_row_at(&session, 80, 24);
             assert!(
-                hint.contains("Enter again sends it as a prompt; ctrl-c leaves"),
+                hint.contains("Sent as a prompt; ctrl-c stops it, /exit leaves"),
                 "{mode:?}: {hint}"
             );
             let named =

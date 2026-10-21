@@ -3329,12 +3329,12 @@ return-not-pressed =
     that return arrived with other keys, so it was not a press: press Enter to send this line, or Escape to clear it
 leave-not-pressed =
     that arrived with other keys, so it was not a press: press it again to leave
-# Said under the box where Enter was pressed on the bare word exit or quit, which other terminal
-# agents leave on and which here is a prompt for the model. The line stays in the box, so the way
-# out it names is the one that clears the line first. Drawn at the right of the hint row, where the
-# parts of the line are fitted to the room it leaves: kept short enough that any one permission mode
-# name still fits beside it on a row eighty columns wide.
-leave-word-held = Enter again sends it as a prompt; ctrl-c leaves
+# Said under the box while the turn runs that the bare word exit or quit began, which other terminal
+# agents leave on and which here is a prompt for the model. A turn is running, so the first way out
+# it names is the one that stops it. Drawn at the right of the hint row, where the parts of the line
+# are fitted to the room it leaves: kept short enough that any one permission mode name still fits
+# beside it on a row eighty columns wide.
+leave-word-sent = Sent as a prompt; ctrl-c stops it, /exit leaves
 prompt-file-unreadable =
     /{ $name } is a prompt file that could not be read as text, so the line was not sent: { $path }
 prompt-file-too-large =

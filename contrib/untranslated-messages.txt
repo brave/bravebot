@@ -23,7 +23,7 @@ fr:cli-usage-sessions-purge
 fr:colour-codes-not-drawn
 fr:command-hunks
 fr:diff-no-final-newline
-fr:leave-word-held
+fr:leave-word-sent
 fr:session-hunk-added
 fr:session-hunk-changed
 fr:session-hunk-failed
