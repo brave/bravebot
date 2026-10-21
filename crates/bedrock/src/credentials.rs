@@ -82,16 +82,13 @@ fn absent(command: &Command) -> bool {
 }
 
 fn command_for(program: &Path) -> Command {
-    let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
-    );
-    for name in bravebot_config::scrub::own_credentials() {
-        command.env_remove(name);
-    }
     // The names the CLI starts itself (an `env` shebang, a `credential_process` command) search
     // only the entries the lookup above searches (SANDBOX-30).
-    bravebot_sandbox::programs::restrict_path(&mut command);
-    command
+    bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
+        bravebot_sandbox::programs::SearchPath::Reduced,
+    )
 }
 
 /// The export, as a command, so what it is handed can be read without running it.

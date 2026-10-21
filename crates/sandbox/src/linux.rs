@@ -420,7 +420,11 @@ impl LandlockSandbox {
         })?;
         let policy = trimmed.as_ref().unwrap_or(policy);
 
-        let mut command = crate::programs::start(&crate::programs::Resolved::to_confine(program));
+        let mut command = crate::programs::start(
+            &crate::programs::Resolved::to_confine(program),
+            crate::programs::Inherits::All,
+            crate::programs::SearchPath::Inherited,
+        );
         command.args(args);
         if let Some(directory) = &policy.starting_in {
             command.current_dir(directory);

@@ -582,6 +582,68 @@ fn no_stage_of_a_pipeline_sees_a_gateways_environment_token() {
     );
 }
 
+/// RUN-12: an assignment in front of a program does not bring a withheld name back. The line is
+/// the planner's, so a name it assigns is not one the person chose to hand over, whether the name
+/// is the one this process holds or another the block lists. The regression it rejects: removing
+/// the names before the line's assignments are applied, which hands the assigned value on.
+#[cfg(unix)]
+#[test]
+fn a_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step() {
+    let scratch = Scratch::new("scrub-gateway-assigned");
+    let _guard = with_a_gateway_token(&scratch);
+
+    let ran = line(
+        "ACME_GATEWAY_TOKEN=the-lines-own ACME_GATEWAY_FALLBACK=also env",
+        &scratch.path,
+    );
+
+    assert!(ran.succeeded(), "{}", ran.stdout);
+    for name in ["ACME_GATEWAY_TOKEN", "ACME_GATEWAY_FALLBACK"] {
+        assert_eq!(
+            value_of(&ran.stdout, name),
+            None,
+            "an assignment of {name} reached the program: {}",
+            ran.stdout
+        );
+    }
+    assert!(
+        !ran.stdout.contains("a-live-gateway-token"),
+        "the value this process holds reached the program"
+    );
+}
+
+/// The same for a background job, which starts its own commands.
+#[cfg(unix)]
+#[test]
+fn a_background_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step() {
+    let scratch = Scratch::new("scrub-gateway-background-assigned");
+    let _guard = with_a_gateway_token(&scratch);
+    let resolved = script(&scratch.path, "show-env", "#!/bin/sh\nenv\n");
+    let pipeline = Pipeline::new(vec![Stage::new("show-env", Vec::new())]);
+    let mut steps = pipelines::steps_of(&pipeline, &[resolved]).expect("the steps");
+    steps[0].environment = vec![("ACME_GATEWAY_TOKEN".into(), "the-lines-own".into())];
+
+    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+        .expect("it starts");
+    for _ in 0..100 {
+        if job.ended() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let printed = job.printed();
+    assert!(
+        printed.contains("PATH="),
+        "the job printed no environment at all: {printed}"
+    );
+    assert_eq!(
+        value_of(&printed, "ACME_GATEWAY_TOKEN"),
+        None,
+        "an assignment of a withheld name reached a background job: {printed}"
+    );
+}
+
 /// The background path starts its own command, so the foreground test says nothing about it.
 #[cfg(unix)]
 #[test]

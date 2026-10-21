@@ -128,8 +128,9 @@ pub fn start_program(program: &str, arguments: &[OsString]) -> io::Result<Held> 
         .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
     let mut command = bravebot_sandbox::programs::start(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Reduced,
     );
-    bravebot_sandbox::programs::restrict_path(&mut command);
     let child = command
         .args(arguments)
         .stdin(Stdio::piped())

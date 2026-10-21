@@ -139,20 +139,20 @@ pub fn run(line: &str, directory: &std::path::Path, cancel: &Cancel) -> Result<R
         return Err(ShellError::Io("there was no command to run".to_string()));
     }
 
+    use bravebot_sandbox::programs::{Inherits, Resolved, SearchPath};
     let shell = shell();
+    let program = Resolved::named_by_person(&shell);
     let mut child = match bravebot_sandbox::process::starting_a_program(|| {
-        bravebot_sandbox::programs::start(&bravebot_sandbox::programs::Resolved::named_by_person(
-            &shell,
-        ))
-        .arg("-c")
-        .arg(line)
-        .current_dir(directory)
-        // Nothing is typed at a command bravebot started: the terminal belongs to the TUI, which is
-        // still drawing. A program that reads stdin gets nothing rather than fighting for the keys.
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        bravebot_sandbox::programs::start(&program, Inherits::All, SearchPath::Inherited)
+            .arg("-c")
+            .arg(line)
+            .current_dir(directory)
+            // Nothing is typed at a command bravebot started: the terminal belongs to the TUI, which is
+            // still drawing. A program that reads stdin gets nothing rather than fighting for the keys.
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
     }) {
         Ok(child) => child,
         Err(e) => {

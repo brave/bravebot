@@ -26,7 +26,7 @@
 //!
 //! # Nothing from the environment that a run would not get
 //!
-//! The environment is inherited less the names [`crate::scrub`] takes off, so this agent's own
+//! The environment is inherited less the names [`bravebot_config::scrub::withheld`], so this agent's own
 //! credentials do not travel into a program the person attached to a moment any more than they
 //! travel into one the planner asked for. Its `PATH` is reduced as the section below says.
 //!
@@ -39,8 +39,8 @@
 //!
 //! The same holds for the names the hook looks up itself: a script with an `env` shebang, or a
 //! launcher that starts another program by name. The hook is started with bravebot's `PATH` reduced
-//! by [`bravebot_sandbox::programs::restrict_path`] to the entries that lookup searches, so a stage
-//! cannot choose what runs by writing a file under its interpreter's name either.
+//! by [`bravebot_sandbox::programs::SearchPath::Reduced`] to the entries that lookup searches, so a
+//! stage cannot choose what runs by writing a file under its interpreter's name either.
 
 use bravebot_config::hooks::{Hook, Hooks, Moment};
 use std::ffi::OsStr;
@@ -202,8 +202,14 @@ fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<T
             std::io::Error::from(std::io::ErrorKind::NotFound).to_string(),
         ));
     };
+    // Without this agent's own credentials, and with the names the hook starts itself (an `env`
+    // shebang, a launcher) searching only the entries the lookup above searches, whether it was
+    // named bare or by a path (SANDBOX-30).
+    let withheld = bravebot_config::scrub::withheld();
     let mut command = bravebot_sandbox::programs::start(
         &bravebot_sandbox::programs::Resolved::named_by_person(program),
+        bravebot_sandbox::programs::Inherits::Without(&withheld),
+        bravebot_sandbox::programs::SearchPath::Reduced,
     );
     // The vector, never a string. There is no shell between the file and the process, so an
     // argument holding a space or a semicolon is one argument and arrives as one.
@@ -215,10 +221,6 @@ fn run(hook: &Hook, said: &str, directory: &Path, default: Duration) -> Option<T
         // A hook with something to say says it the way any other program on the machine does.
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    crate::scrub::apply(&mut command);
-    // The names the hook starts itself (an `env` shebang, a launcher) search only the entries the
-    // lookup above searches, whether it was named bare or by a path (SANDBOX-30).
-    bravebot_sandbox::programs::restrict_path(&mut command);
 
     let mut child = match bravebot_sandbox::process::starting_a_program(|| command.spawn()) {
         Ok(child) => child,

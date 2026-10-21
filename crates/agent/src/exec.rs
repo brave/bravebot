@@ -47,7 +47,8 @@
 //!
 //! # This agent's own credentials are not handed on
 //!
-//! The environment is inherited, less the names in [`scrub`]. A person approving a run reads the
+//! The environment is inherited, less the names in [`bravebot_config::scrub::withheld`], which
+//! [`bravebot_sandbox::programs::start`] removes. A person approving a run reads the
 //! binary, the argv and the directory, so a credential travelling alongside those is something they
 //! were never shown and could not have endorsed. The signing key has no use in a subprocess anyway:
 //! a program the planner chose is doing what somebody approved, not authenticating as this agent.
@@ -615,8 +616,16 @@ impl<'a> Running<'a> {
             // Started by the path the name was found by, which some programs read
             // ([`Step::started_as`]). A second lookup here would let a `$PATH` changed since the
             // question decide what runs.
+            //
+            // Every step, not only the first, is started without this agent's own credentials. One
+            // is as reachable from the middle of a pipeline as from the front, and one step spared
+            // would be the whole of the hole.
+            let withheld = bravebot_config::scrub::withheld();
+            let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
             let mut command = bravebot_sandbox::programs::start(
                 &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
+                inherits,
+                bravebot_sandbox::programs::SearchPath::Inherited,
             );
             // The vector, never a string. Nothing here builds a command line, so nothing has to
             // unbuild one.
@@ -637,9 +646,9 @@ impl<'a> Running<'a> {
             for (name, value) in &step.environment {
                 command.env(name, value);
             }
-            // Every step, not only the first. A credential is as reachable from the middle of a
-            // pipeline as from the front, and one step spared would be the whole of the hole.
-            crate::scrub::apply(&mut command);
+            // Withheld again, since the line is the planner's and a name it assigns is not the
+            // person's own: `run.scrubEnv` lists what their commands may not be handed.
+            inherits.withhold(&mut command);
             // Decided before a redirection's file is opened, so a step the platform will not
             // confine is refused ahead of every effect its line has.
             let launching = crate::confine::begin(self.confinement, command, step, self.directory)?;
@@ -1592,8 +1601,15 @@ pub fn start_steps(
             environment: _,
             routes: _,
         } = step;
+        // Without this agent's own credentials on every step, as in the foreground: one is as
+        // reachable from the middle of a pipeline as from the front, and one spared would be the
+        // whole of the hole.
+        let withheld = bravebot_config::scrub::withheld();
+        let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
         let mut command = bravebot_sandbox::programs::start(
             &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
+            inherits,
+            bravebot_sandbox::programs::SearchPath::Inherited,
         );
         command.args(&step.args).current_dir(directory);
         // In front of the step's own assignments, as in the foreground.
@@ -1606,9 +1622,8 @@ pub fn start_steps(
         for (name, value) in &step.environment {
             command.env(name, value);
         }
-        // Every step, as in the foreground: a credential is as reachable from the middle of a
-        // pipeline as from the front, and one spared would be the whole of the hole.
-        crate::scrub::apply(&mut command);
+        // Withheld again after the line's own assignments, as in the foreground.
+        inherits.withhold(&mut command);
         let launching = match crate::confine::begin(confinement, command, step, directory) {
             Ok(launching) => launching,
             Err(error) => {

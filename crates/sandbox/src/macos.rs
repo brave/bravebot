@@ -329,6 +329,8 @@ pub fn developer_directory() -> Option<std::path::PathBuf> {
         .get_or_init(|| {
             let mut command = crate::programs::start(
                 &crate::programs::Resolved::written_in_source("/usr/bin/xcode-select"),
+                crate::programs::Inherits::All,
+                crate::programs::SearchPath::Inherited,
             );
             command
                 .arg("-p")
@@ -498,12 +500,13 @@ impl SeatbeltSandbox {
             });
         }
 
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "the program is `SANDBOX_EXEC`, an absolute path written here; the program \
-                      it confines is an argument the caller chose"
-        )]
-        let mut wrapped = Command::new(SANDBOX_EXEC);
+        // The program is `SANDBOX_EXEC`, an absolute path written here. The program it confines is
+        // an argument the caller chose, and runs under the profile.
+        let mut wrapped = crate::programs::start(
+            &crate::programs::Resolved::written_in_source(SANDBOX_EXEC),
+            crate::programs::Inherits::All,
+            crate::programs::SearchPath::Inherited,
+        );
         wrapped.arg("-p").arg(Self::profile(policy));
         wrapped.args(confined_argv(
             program,
