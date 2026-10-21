@@ -15,6 +15,13 @@ Type `@` and a picker opens over the workspace. Directories come first, a prefix
 slash descends into a directory, and Tab completes without disturbing the rest of the sentence.
 Version-control and build directories are not offered.
 
+A fragment of a name finds it in any directory below, so `@mainrs` offers `crates/cli/src/main.rs`
+without a walk through `crates` and `cli`. The letters have to appear in the name in that order and
+case does not matter. Names that match come before paths that match, and the closer match comes
+first. What the directory you are typing in offers stays at the top of the list, followed by at most
+ten names found this way. The search covers the workspace only, skips the directories above, does
+not follow links, and reads at most 10,000 names, starting from the root.
+
 ```
 > why does @crates/cli/src/main.rs read stdin before checking the prompt?
 ```
