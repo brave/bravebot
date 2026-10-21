@@ -42,7 +42,7 @@ irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
 ```
 
 That puts `bravebot.exe` in `%LOCALAPPDATA%\Programs\bravebot`, takes `INSTALL_DIR` for somewhere
-else, and leaves your `PATH` alone.
+else, and adds the directory to your user `PATH` unless `BRAVEBOT_NO_MODIFY_PATH` is set.
 
 Either way, run `bravebot` in a repository afterwards. The installers verify the release
 checksum and the signature on the binary (see "Check a download by hand" in the

@@ -37,8 +37,10 @@ irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
 
 It checks the release against the published checksum and the binary's Authenticode signature, and
 puts `bravebot.exe` in `%LOCALAPPDATA%\Programs\bravebot`. `INSTALL_DIR` puts it somewhere else. It
-does not change your PATH, so when that directory is not on it the script says so and you add it.
-Running the line again updates the copy the last run installed.
+adds that directory to the end of your user PATH, and to the PowerShell session it ran in, so
+`bravebot` runs by name. Set `BRAVEBOT_NO_MODIFY_PATH` to anything first and it leaves your PATH
+alone and names the directory to add. Running the line again updates the copy the last run
+installed.
 
 To build from source instead, see [development/README.md](development/README.md).
 

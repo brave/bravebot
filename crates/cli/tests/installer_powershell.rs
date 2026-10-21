@@ -4,15 +4,18 @@
 //! [UPDATE-10] and [STATE-2].
 //!
 //! The script is run as it is published, with no hook for a test in it. The commands that reach the
-//! network or the operating system are `Invoke-RestMethod`, `Invoke-WebRequest` and
-//! `Get-AuthenticodeSignature`, and a function of the same name defined where the script is called
+//! network or the operating system are `Invoke-RestMethod`, `Invoke-WebRequest`,
+//! `Get-AuthenticodeSignature` and, for the person's stored `Path`, `Get-Item` and
+//! `Set-ItemProperty`, and a function of the same name defined where the script is called
 //! from is found before the command, so the stand-ins live in a harness that runs the script and
 //! the script is not told. `Invoke-WebRequest` answers from a directory by the last segment of the
 //! URL, as `install.sh`'s `curl` does here. `Get-AuthenticodeSignature` answers for the file it is
 //! given, from marker lines in it, as `codesign` does in `installer_signature.rs`: a stand-in that
 //! answered from the environment would say the same thing about whichever file the script asked
 //! about. What the real command says about Brave's binaries has not been observed on Windows, which
-//! `docs/specs/releases.md` records under RELEASE-15.
+//! `docs/specs/releases.md` records under RELEASE-15. The stored `Path` is a file named for the
+//! registry value, read and written through the same calls the script makes of the registry, and
+//! what the script leaves in it and in the session's `PATH` is what [RELEASE-20] holds.
 //!
 //! Skipped where `pwsh` or a SHA-256 tool is not on `PATH`, or on an architecture the script has no
 //! asset for, and says so, except on the Linux job in CI, where a missing one fails the test. PowerShell on Linux and macOS has no `Get-AuthenticodeSignature`, so a
@@ -21,6 +24,7 @@
 //! [RELEASE-9]: ../../../docs/specs/releases.md
 //! [RELEASE-13]: ../../../docs/specs/releases.md
 //! [RELEASE-15]: ../../../docs/specs/releases.md
+//! [RELEASE-20]: ../../../docs/specs/releases.md
 //! [UPDATE-10]: ../../../docs/specs/updates.md
 //! [STATE-2]: ../../../docs/specs/state-directory.md
 
@@ -76,7 +80,43 @@ if ($env:SIGNATURE_TOOL -eq '1') {
     }
 }
 
-try { & $script @arguments } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
+# The user's stored PATH, kept in a file named for the registry value. Reading it without
+# `DoNotExpandEnvironmentNames` expands `%NAME%` as the real registry does, so a script that asks
+# for the expanded text and writes it back changes what the person had.
+function Get-Item {
+    [CmdletBinding()] param([Parameter(Mandatory)][string]$LiteralPath)
+    if ($LiteralPath -ne 'HKCU:\Environment') { throw "no stand-in for $LiteralPath" }
+    [pscustomobject]@{} | Add-Member -MemberType ScriptMethod -Name GetValue -PassThru -Value {
+        param($name, $default, $options)
+        Add-Content -LiteralPath $env:REGISTRY_LOG -Value "read $name $options"
+        $file = Join-Path $env:REGISTRY $name
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $default }
+        $stored = [System.IO.File]::ReadAllText($file)
+        if ("$options" -eq 'DoNotExpandEnvironmentNames') { return $stored }
+        [Environment]::ExpandEnvironmentVariables($stored)
+    }
+}
+
+function Set-ItemProperty {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$LiteralPath, [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Value, [Parameter(Mandatory)][string]$Type)
+    if ($LiteralPath -ne 'HKCU:\Environment') { throw "no stand-in for $LiteralPath" }
+    if ($env:REGISTRY_WRITE -eq 'denied') { throw 'Requested registry access is not allowed.' }
+    Add-Content -LiteralPath $env:REGISTRY_LOG -Value "write $Name"
+    [System.IO.File]::WriteAllText((Join-Path $env:REGISTRY $Name), $Value)
+    [System.IO.File]::WriteAllText((Join-Path $env:REGISTRY "$Name.kind"), $Type)
+}
+
+# `pwsh` puts its own directory on the PATH it starts, so what the script is compared against is what
+# the session had when the script began and not what the test gave the process.
+[System.IO.File]::WriteAllText("$($env:SESSION_PATH).start", [string]$env:PATH)
+$failed = $false
+try { & $script @arguments } catch { [Console]::Error.WriteLine($_.Exception.Message); $failed = $true }
+# What a person's session is left with, which is what `bravebot` is looked up in next.
+[System.IO.File]::WriteAllText($env:SESSION_PATH, [string]$env:PATH)
+if ($failed) { exit 1 }
 "#;
 
 /// The signer Brave's Windows binaries carry.
@@ -222,6 +262,11 @@ struct Install<'a> {
     install_dir: Option<PathBuf>,
     /// Whether `PATH` names the directory the executable goes to.
     on_path: bool,
+    /// What the user's stored `Path` holds when the run starts, or `None` for a profile with no
+    /// such value.
+    stored_path: Option<String>,
+    /// Whether the stand-in for writing the registry refuses.
+    registry_write_denied: bool,
     /// Whether this run made the directories and removes them when it is done.
     owned: bool,
 }
@@ -238,13 +283,24 @@ struct Outcome {
     asked: Vec<String>,
     /// Whatever the script left in the directory it was started in.
     in_working_directory: Vec<PathBuf>,
+    /// Every read and write the script made of the user's stored environment, in order, each as
+    /// `read <name> <options>` or `write <name>`.
+    registry: Vec<String>,
+    /// The user's stored `Path` after the run, and the kind it was last written as.
+    stored_path_after: Option<String>,
+    stored_kind: Option<String>,
+    /// The `PATH` the person's session has when the script starts, and is left with.
+    session_path_before: String,
+    session_path: String,
 }
 
 impl<'a> Install<'a> {
     fn new(tools: &'a Tools, name: &str) -> Self {
         let root = scratch_root().join(name);
         fresh(&root);
-        for directory in ["served", "tmp", "home", "bin", "cwd", "log", "profile"] {
+        for directory in [
+            "served", "tmp", "home", "bin", "cwd", "log", "profile", "registry",
+        ] {
             std::fs::create_dir_all(root.join(directory)).expect("create a scratch directory");
         }
         Self::at(tools, &root, true)
@@ -262,6 +318,8 @@ impl<'a> Install<'a> {
             signature_tool: true,
             profile: Profile::Home,
             on_path: true,
+            stored_path: None,
+            registry_write_denied: false,
             owned,
         }
     }
@@ -299,6 +357,26 @@ impl<'a> Install<'a> {
         self
     }
 
+    fn with_stored_path(mut self, stored: &str) -> Self {
+        self.stored_path = Some(stored.to_owned());
+        self
+    }
+
+    fn with_registry_write_denied(mut self) -> Self {
+        self.registry_write_denied = true;
+        self
+    }
+
+    /// The `PATH` the session starts with, which is the directory the executable goes to when
+    /// `on_path` and somewhere that is not otherwise.
+    fn session_path_at_start(&self) -> PathBuf {
+        if self.on_path {
+            self.bin()
+        } else {
+            self.root.join("elsewhere")
+        }
+    }
+
     fn bin(&self) -> PathBuf {
         self.root.join("bin")
     }
@@ -332,12 +410,13 @@ impl<'a> Install<'a> {
         let requests = self.root.join("log").join("requests");
         let asked = self.root.join("log").join("asked");
         let working = self.root.join("cwd");
-        let bin = self.bin();
-        let path = if self.on_path {
-            bin.clone()
-        } else {
-            self.root.join("elsewhere")
-        };
+        let path = self.session_path_at_start();
+        let registry = self.root.join("registry");
+        let registry_log = self.root.join("log").join("registry");
+        let session_path = self.root.join("log").join("session-path");
+        if let Some(stored) = &self.stored_path {
+            std::fs::write(registry.join("Path"), stored).expect("store a user path");
+        }
 
         let mut command = Command::new(&self.tools.pwsh);
         command
@@ -352,6 +431,17 @@ impl<'a> Install<'a> {
             .env("SERVED", &served)
             .env("REQUESTS", &requests)
             .env("ASKED", &asked)
+            .env("REGISTRY", &registry)
+            .env("REGISTRY_LOG", &registry_log)
+            .env("SESSION_PATH", &session_path)
+            .env(
+                "REGISTRY_WRITE",
+                if self.registry_write_denied {
+                    "denied"
+                } else {
+                    "allowed"
+                },
+            )
             .env(
                 "SIGNATURE_TOOL",
                 if self.signature_tool { "1" } else { "0" },
@@ -415,6 +505,15 @@ impl<'a> Install<'a> {
             requests: lines(&requests),
             asked: lines(&asked),
             in_working_directory: entries(&working),
+            registry: lines(&registry_log),
+            stored_path_after: std::fs::read_to_string(registry.join("Path")).ok(),
+            stored_kind: std::fs::read_to_string(registry.join("Path.kind")).ok(),
+            session_path_before: std::fs::read_to_string(format!(
+                "{}.start",
+                session_path.display()
+            ))
+            .unwrap_or_default(),
+            session_path: std::fs::read_to_string(&session_path).unwrap_or_default(),
         }
     }
 
@@ -496,6 +595,11 @@ fn assert_refused(install: &Install, outcome: &Outcome, because: &str) {
         outcome.in_working_directory,
         Vec::<PathBuf>::new(),
         "something was written where the script was started"
+    );
+    assert_eq!(
+        outcome.registry,
+        Vec::<String>::new(),
+        "a refused install read or changed the stored environment"
     );
 }
 
@@ -980,6 +1084,7 @@ fn nothing_the_environment_names_chooses_where_the_script_downloads_from() {
         "HOME",
         "USERPROFILE",
         "INSTALL_DIR",
+        "BRAVEBOT_NO_MODIFY_PATH",
         "LOCALAPPDATA",
         "PATH",
         "PROCESSOR_ARCHITEW6432",
@@ -1016,16 +1121,32 @@ fn nothing_the_environment_names_chooses_where_the_script_downloads_from() {
     );
 }
 
-/// The last line tells the person whether `bravebot` runs by name. A directory on `PATH` says to
-/// run it, and one that is not says so and names it, so the install is not taken for having done
-/// nothing when the command is not found.
+/// The writes the script made to the user's stored environment.
+fn registry_writes(outcome: &Outcome) -> Vec<&str> {
+    outcome
+        .registry
+        .iter()
+        .map(String::as_str)
+        .filter(|line| line.starts_with("write "))
+        .collect()
+}
+
+/// `PATH` as a session that had `before` and gained `directory` has it.
+fn path_with(before: &str, directory: &Path) -> String {
+    format!("{before}:{}", directory.display())
+}
+
+/// A directory the session already finds is left where it is: nothing is read from or written to
+/// the person's stored `Path`, and the session's own `PATH` is not extended with a second copy. A
+/// script that wrote on every run would put the directory in the stored value once for each
+/// update.
 #[test]
-fn it_says_when_the_directory_is_not_on_the_path() {
+fn a_directory_the_session_already_finds_is_left_alone() {
     let Some(tools) = setup() else {
         return;
     };
-    let release = brave("path");
-    let install = Install::new(tools, "on-path");
+    let release = brave("found");
+    let install = Install::new(tools, "path-found").with_stored_path("/opt/one");
     let outcome = install.run_release(&release);
     assert_installed(&install, &outcome, &release);
     assert!(
@@ -1033,19 +1154,163 @@ fn it_says_when_the_directory_is_not_on_the_path() {
         "{}",
         outcome.output
     );
+    assert_eq!(outcome.registry, Vec::<String>::new());
+    assert_eq!(outcome.stored_path_after.as_deref(), Some("/opt/one"));
+    assert_eq!(outcome.session_path, outcome.session_path_before);
+}
+
+/// A directory that is not on `PATH` is put at the end of the user's stored `Path` and the
+/// session's, and says so, so that `bravebot` runs by name without the person finding out how
+/// Windows keeps a `PATH` first ([USE-001]).
+///
+/// The stored value holds a `%NAME%` reference, and what has to come back is the text the person
+/// had with the directory after it, written as an expandable string: reading it expanded and
+/// writing that back replaces the reference with what it names today, and writing it as a plain
+/// string stops Windows expanding the rest. The directory goes last, so it never takes a name from
+/// a program already on the `PATH`.
+///
+/// [USE-001]: ../../../docs/best-practices/usability.md
+#[test]
+fn the_directory_is_appended_to_the_users_path_and_to_the_session() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let release = brave("appended");
+    let stored = "/opt/one;%BRAVEBOT_TEST_TOOLS%/two";
+    let install = Install::new(tools, "path-appended")
+        .off_path()
+        .with_stored_path(stored)
+        .with_environment("BRAVEBOT_TEST_TOOLS", "/opt/tools");
+    let outcome = install.run_release(&release);
+    assert_installed(&install, &outcome, &release);
+
+    assert_eq!(
+        outcome.stored_path_after,
+        Some(format!("{stored};{}", install.bin().display()))
+    );
+    assert_eq!(outcome.stored_kind.as_deref(), Some("ExpandString"));
+    assert_eq!(registry_writes(&outcome), ["write Path"]);
+    assert_eq!(
+        outcome.session_path,
+        path_with(&outcome.session_path_before, &install.bin())
+    );
     assert!(
-        !outcome.output.contains("not on your PATH"),
+        outcome.output.contains(&format!(
+            "Added {} to your user PATH.",
+            install.bin().display()
+        )),
         "{}",
         outcome.output
     );
+    assert!(
+        outcome.output.contains("Run: bravebot --help"),
+        "{}",
+        outcome.output
+    );
+}
 
-    let install = Install::new(tools, "off-path").off_path();
+/// A directory already in the stored `Path` is not added a second time, whichever way the entry is
+/// spelled: with other letters in the case, with a separator after it, or as a `%NAME%` reference
+/// to it. The session still gains it, since it is the session that was started before the entry
+/// was there. An entry compared as text would add the directory again, once per run.
+#[test]
+fn a_directory_already_on_the_users_path_is_not_added_again() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let release = brave("present");
+    let bin = scratch_root().join("path-present").join("bin");
+    let spellings = [
+        ("exactly", bin.display().to_string()),
+        ("in other case", bin.display().to_string().to_uppercase()),
+        ("with a separator after it", format!("{}/", bin.display())),
+        ("as a reference", "%BRAVEBOT_TEST_BIN%".to_owned()),
+    ];
+    for (how, entry) in spellings {
+        let stored = format!("/opt/one;{entry};/opt/two");
+        let install = Install::new(tools, "path-present")
+            .off_path()
+            .with_stored_path(&stored)
+            .with_environment("BRAVEBOT_TEST_BIN", &bin.display().to_string());
+        let outcome = install.run_release(&release);
+        assert_installed(&install, &outcome, &release);
+
+        assert_eq!(registry_writes(&outcome), Vec::<&str>::new(), "{how}");
+        assert_eq!(
+            outcome.stored_path_after.as_deref(),
+            Some(stored.as_str()),
+            "{how}"
+        );
+        assert_eq!(
+            outcome.session_path,
+            path_with(&outcome.session_path_before, &install.bin()),
+            "{how}"
+        );
+        assert!(
+            outcome.output.contains("Run: bravebot --help") && !outcome.output.contains("Added"),
+            "{how}: {}",
+            outcome.output
+        );
+    }
+}
+
+/// A stored `Path` that is missing or empty becomes the directory alone, and one that ends in a
+/// separator does not gain a second. Joining with a separator whatever came before leaves an empty
+/// entry, which Windows reads as the current directory.
+#[test]
+fn an_empty_or_unterminated_users_path_is_joined_without_an_empty_entry() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let release = brave("joined");
+    let cases: [(&str, Option<&str>); 3] = [
+        ("path-missing", None),
+        ("path-empty", Some("")),
+        ("path-terminated", Some("/opt/one;")),
+    ];
+    for (name, stored) in cases {
+        let mut install = Install::new(tools, name).off_path();
+        if let Some(stored) = stored {
+            install = install.with_stored_path(stored);
+        }
+        let outcome = install.run_release(&release);
+        assert_installed(&install, &outcome, &release);
+        let bin = install.bin().display().to_string();
+        let expected = match stored {
+            Some(stored) if !stored.is_empty() => format!("{stored}{bin}"),
+            _ => bin,
+        };
+        assert_eq!(
+            outcome.stored_path_after,
+            Some(expected),
+            "stored {stored:?}"
+        );
+    }
+}
+
+/// BRAVEBOT_NO_MODIFY_PATH, set to anything, keeps the script from touching the person's `Path` or
+/// the session's. The install still happens, and the last line names the directory to add.
+#[test]
+fn a_person_who_opts_out_keeps_their_path_as_it_is() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let release = brave("opted-out");
+    let install = Install::new(tools, "path-opted-out")
+        .off_path()
+        .with_stored_path("/opt/one")
+        .with_environment("BRAVEBOT_NO_MODIFY_PATH", "1");
     let outcome = install.run_release(&release);
     assert_installed(&install, &outcome, &release);
+
+    assert_eq!(outcome.registry, Vec::<String>::new());
+    assert_eq!(outcome.stored_path_after.as_deref(), Some("/opt/one"));
+    assert_eq!(outcome.session_path, outcome.session_path_before);
     assert!(
         outcome
             .output
-            .contains(&format!("{} is not on your PATH", install.bin().display())),
+            .contains(&format!("{} is not on your PATH", install.bin().display()))
+            && outcome.output.contains("BRAVEBOT_NO_MODIFY_PATH"),
         "{}",
         outcome.output
     );
@@ -1054,4 +1319,97 @@ fn it_says_when_the_directory_is_not_on_the_path() {
         "{}",
         outcome.output
     );
+}
+
+/// A stored `Path` the person's account cannot change does not undo the install: the binary is in
+/// place and recorded, and the script says it could not add the directory and which to add. Saying
+/// it was added would send the person to a command that is not found.
+#[test]
+fn a_refused_registry_write_leaves_the_install_and_says_what_is_left() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let release = brave("denied");
+    let install = Install::new(tools, "path-denied")
+        .off_path()
+        .with_stored_path("/opt/one")
+        .with_registry_write_denied();
+    let outcome = install.run_release(&release);
+    assert_installed(&install, &outcome, &release);
+
+    assert_eq!(outcome.stored_path_after.as_deref(), Some("/opt/one"));
+    assert!(
+        outcome.output.contains(&format!(
+            "could not add {} to your user PATH",
+            install.bin().display()
+        )) && outcome.output.contains("Requested registry access"),
+        "{}",
+        outcome.output
+    );
+    assert!(
+        !outcome.output.contains("Added") && !outcome.output.contains("Run: bravebot"),
+        "{}",
+        outcome.output
+    );
+    assert_eq!(outcome.session_path, outcome.session_path_before);
+}
+
+/// A directory with a semicolon in its name cannot be one entry of a `PATH`, which a semicolon
+/// divides, so it is not written to the stored value and the script says so. The install is
+/// still in place.
+#[test]
+fn a_directory_with_a_semicolon_in_its_name_is_not_put_on_the_path() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let release = brave("semicolon");
+    let root = scratch_root().join("path-semicolon");
+    let directory = root.join("bin;two");
+    let install = Install::new(tools, "path-semicolon")
+        .off_path()
+        .with_stored_path("/opt/one")
+        .installing_to(Some(directory.clone()));
+    let outcome = install.run_release(&release);
+
+    assert!(outcome.succeeded, "{}", outcome.output);
+    assert_eq!(read(&directory.join(BINARY)).as_deref(), Some(&release[..]));
+    assert_eq!(registry_writes(&outcome), Vec::<&str>::new());
+    assert_eq!(outcome.stored_path_after.as_deref(), Some("/opt/one"));
+    assert!(
+        outcome.output.contains("could not add") && outcome.output.contains("semicolon"),
+        "{}",
+        outcome.output
+    );
+}
+
+/// An install that is refused changes nothing about the person's `Path`, since the directory it
+/// would add holds no program. The directory is off the session's `PATH` and the stored value is
+/// present, so a script that put the directory on the `PATH` before it checked what it had
+/// downloaded would write it here.
+#[test]
+fn a_refused_install_leaves_the_users_path_alone() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let published = brave("published");
+    let substitute = brave("substitute");
+    let install = Install::new(tools, "path-refused")
+        .off_path()
+        .with_stored_path("/opt/one");
+    let outcome = install.run(&[
+        (&install.asset(), &substitute),
+        (
+            &format!("{}.sha256", install.asset()),
+            &checksum(tools, &published),
+        ),
+    ]);
+    assert_refused(&install, &outcome, "checksum mismatch");
+    assert_eq!(outcome.stored_path_after.as_deref(), Some("/opt/one"));
+
+    let install = Install::new(tools, "path-refused-signer")
+        .off_path()
+        .with_stored_path("/opt/one");
+    let outcome = install.run_release(&binary(Some("Valid"), Some("Someone Else")));
+    assert_refused(&install, &outcome, "not signed by");
+    assert_eq!(outcome.stored_path_after.as_deref(), Some("/opt/one"));
 }

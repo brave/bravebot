@@ -3,6 +3,7 @@
 #   irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1))) 1.2.3
 #   $env:INSTALL_DIR = "$HOME\bin"; irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
+#   $env:BRAVEBOT_NO_MODIFY_PATH = "1"; irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
 #
 # It needs no Administrator and no Node. The checksum check is not optional: without it a
 # network-fetched executable would run on the strength of TLS alone, and a substituted release asset
@@ -11,6 +12,9 @@
 # signature has to be valid and made by Brave. Running this again is also how an install made this
 # way is updated, so it writes down where the binary went: that is what lets bravebot name the
 # command that updates this copy, and what puts a later run in the same place rather than beside it.
+#
+# Once the binary is in place the directory is added to the end of the user's PATH, and to the PATH of
+# the session this runs in, unless BRAVEBOT_NO_MODIFY_PATH is set. Nothing else in the user's PATH changes.
 
 param([Parameter(Position = 0)][string]$Version = "")
 
@@ -243,24 +247,73 @@ param([Parameter(Position = 0)][string]$Version = "")
 
     Write-Host "Installed bravebot $tag to $destination"
 
-    $onPath = $false
-    if ($env:PATH) {
-        $wantedEntry = $installDir.TrimEnd("\", "/")
-        foreach ($entry in $env:PATH.Split([System.IO.Path]::PathSeparator)) {
+    # Whether a PATH-shaped list names a directory, each entry compared as a full path with no trailing
+    # separator and without regard to case, as Windows compares them. An entry that is not a path is skipped.
+    # `%NAME%` in a stored list is a reference the system expands when it builds the environment, so it is
+    # expanded here to what it will name.
+    function Test-OnPath([string]$List, [char]$Separator, [string]$Directory) {
+        $wanted = $Directory.TrimEnd("\", "/")
+        foreach ($entry in $List.Split($Separator)) {
             try {
-                $full = [System.IO.Path]::GetFullPath($entry).TrimEnd("\", "/")
+                $full = [System.IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($entry)).TrimEnd("\", "/")
             } catch {
                 continue
             }
-            if ($full -ieq $wantedEntry) {
-                $onPath = $true
-                break
+            if ($full -ieq $wanted) {
+                return $true
             }
         }
+        return $false
     }
-    if ($onPath) {
+
+    # Appends the directory to the person's own PATH, the one stored under HKCU\Environment, unless it is
+    # already in it. Nothing else in the value changes: the stored text is read with its `%NAME%` references
+    # unexpanded and written back as an expandable string, since reading it expanded and writing that back
+    # would replace each reference with what it names today and leave the value a plain string. It goes on
+    # the end, so it never takes a name from a program that is already on the PATH. Returns whether the
+    # stored value was written.
+    function Add-ToUserPath([string]$Directory) {
+        if ($Directory.Contains(";")) {
+            throw "the directory's name contains a semicolon, which would split it into two PATH entries"
+        }
+        $stored = [string](Get-Item -LiteralPath "HKCU:\Environment").GetValue("Path", "", "DoNotExpandEnvironmentNames")
+        if (Test-OnPath $stored ([char]";") $Directory) {
+            return $false
+        }
+        $kept = $stored.TrimEnd(";")
+        $value = if ($kept.Trim()) { "$kept;$Directory" } else { $Directory }
+        Set-ItemProperty -LiteralPath "HKCU:\Environment" -Name Path -Value $value -Type ExpandString
+        # The registry write does not tell the programs that are running. Changing a user variable through
+        # .NET does, as part of the call, and removing one that is not there changes nothing else.
+        try {
+            [Environment]::SetEnvironmentVariable("BRAVEBOT_INSTALL_PATH_CHANGED", $null, "User")
+        } catch {
+            $null = $_
+        }
+        return $true
+    }
+
+    # The directory goes on the person's PATH, so that `bravebot` runs by name: a person who installed it
+    # to run it should not have to find out how Windows keeps a PATH first. A person who does not want that
+    # sets BRAVEBOT_NO_MODIFY_PATH to anything, and is told which directory to add. The session this was
+    # run in gets the directory too, so it works without opening a terminal. A directory the session
+    # already finds, whichever list it came from, is left alone.
+    $separator = [System.IO.Path]::PathSeparator
+    if (Test-OnPath ([string]$env:PATH) $separator $installDir) {
         Write-Host "Run: bravebot --help"
+    } elseif ($env:BRAVEBOT_NO_MODIFY_PATH) {
+        Write-Host "note: $installDir is not on your PATH and BRAVEBOT_NO_MODIFY_PATH is set, so it was left as it is; add it to your user PATH to run bravebot by name, then open a new terminal."
     } else {
-        Write-Host "note: $installDir is not on your PATH; add it to your user PATH to run bravebot by name, then open a new terminal."
+        try {
+            $wrote = Add-ToUserPath $installDir
+            $current = ([string]$env:PATH).TrimEnd($separator)
+            $env:PATH = if ($current) { "$current$separator$installDir" } else { $installDir }
+            if ($wrote) {
+                Write-Host "Added $installDir to your user PATH."
+            }
+            Write-Host "Run: bravebot --help"
+        } catch {
+            Write-Host "note: could not add $installDir to your user PATH ($($_.Exception.Message)); add it yourself to run bravebot by name, then open a new terminal."
+        }
     }
 } -Requested $Version -Given ($PSBoundParameters.ContainsKey("Version"))

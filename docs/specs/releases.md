@@ -484,6 +484,45 @@ download rather than writing a package for a version nobody can fetch.
 
 `verified-by: by-construction (the target requires TAG on the command line and has no step that pushes, tags or opens a pull request; gh release download fails before the script runs when the release or a checksum asset does not exist)`
 
+<a id="RELEASE-20"></a>
+### RELEASE-20: `install.ps1` puts its directory on the user's `PATH`, and changes nothing else in it
+
+Once the binary is in place, `install.ps1` adds the directory it installed to the end of the
+person's own `PATH`, the one stored for their account, and to the `PATH` of the session it ran in.
+A directory the session already finds is left alone, and so is one the stored value already
+names, whether the entry differs in case, has a separator after it, or is a `%NAME%` reference to
+it. Every other entry is written back as it was: the stored value is read with its `%NAME%`
+references unexpanded and written as an expandable string, and a value that is missing, empty or
+ends in a separator gains no empty entry. A directory whose name holds a semicolon, a stored value
+the account cannot write, and `BRAVEBOT_NO_MODIFY_PATH` set to anything leave the stored value and
+the session as they were, say which directory to add, and do not undo the install. A refused
+install does not read or change the `PATH`.
+
+**Why.** The script already knows the directory, so adding it costs the person nothing there, and
+a search through how Windows keeps a `PATH` anywhere else. The stored value is the
+person's, and it outlives the install, so the script changes the one entry it owns: reading it
+expanded and writing that back replaces every `%NAME%` reference with what it names today and leaves
+a plain string that Windows no longer expands, which changes entries this script has no business
+with. The directory goes last because a directory put first decides which program runs under a name
+the `PATH` already resolved, and `bravebot.exe` is no reason to move any other. A semicolon divides a
+`PATH`, so a directory holding one would be written as two entries, neither of them the directory.
+An install that was refused has put nothing where the `PATH` would lead, so there is nothing to add.
+The variable is the way out for a person who manages their `PATH` themselves, and it works through
+`irm | iex`, which cannot take an argument.
+
+**Note.** The tests replace the calls that read and write the registry with files, so they hold the
+script to what it asks and what it writes, and not to what Windows does with it. What Windows does is
+in Known costs.
+
+`verified-by: bravebot_cli::installer_powershell::a_directory_the_session_already_finds_is_left_alone`
+`verified-by: bravebot_cli::installer_powershell::the_directory_is_appended_to_the_users_path_and_to_the_session`
+`verified-by: bravebot_cli::installer_powershell::a_directory_already_on_the_users_path_is_not_added_again`
+`verified-by: bravebot_cli::installer_powershell::an_empty_or_unterminated_users_path_is_joined_without_an_empty_entry`
+`verified-by: bravebot_cli::installer_powershell::a_person_who_opts_out_keeps_their_path_as_it_is`
+`verified-by: bravebot_cli::installer_powershell::a_refused_registry_write_leaves_the_install_and_says_what_is_left`
+`verified-by: bravebot_cli::installer_powershell::a_directory_with_a_semicolon_in_its_name_is_not_put_on_the_path`
+`verified-by: bravebot_cli::installer_powershell::a_refused_install_leaves_the_users_path_alone`
+
 ## Known costs
 
 - **The signature checks are pinned by a Rust test, and the package script and launcher by Node
@@ -507,16 +546,19 @@ download rather than writing a package for a version nobody can fetch.
   reaches the package script alone, and the shell script beside it is read by nothing. It does not
   run `publish-npm.yml`, whose platform jobs run for the first time at a release.
 
-- **`install.ps1` does not change the `PATH`.** It installs under `%LOCALAPPDATA%\Programs\bravebot`
-  unless `INSTALL_DIR` or an earlier run's record names another directory, and when that directory is
-  not on the `PATH` it says so and leaves adding it to the person. It does not say which `bravebot`
-  runs when another, an npm copy's shim for one, comes first on the `PATH`.
+- **`install.ps1` appends, so another `bravebot` can still be the one that runs.** It installs under
+  `%LOCALAPPDATA%\Programs\bravebot` unless `INSTALL_DIR` or an earlier run's record names another
+  directory, and adds that directory to the end of the `PATH` ([RELEASE-20](#RELEASE-20)). It does not
+  say which `bravebot` runs when another, an npm copy's shim for one, comes first on the `PATH`.
+  A terminal that is already open keeps the `PATH` it started with: the session the script ran in
+  gets the directory, and one opened afterwards reads the stored value.
 
 - **`install.ps1` has not run on Windows.** Its tests run it under PowerShell 7 on macOS and Linux,
   with the network and `Get-AuthenticodeSignature` replaced by functions. What Windows PowerShell
   5.1 does with it, including the TLS setting it adds for that edition, the architecture an emulated
-  PowerShell reports, and what `Get-AuthenticodeSignature` says about Brave's binary, are first seen
-  by the person who runs it. A command it needs that is missing is a refusal that writes nothing, so
+  PowerShell reports, what `Get-AuthenticodeSignature` says about Brave's binary, and what the
+  registry does with the `PATH` write and the call after it that tells running programs of the change,
+  are first seen by the person who runs it. A command it needs that is missing is a refusal that writes nothing, so
   the failure is an install that does not happen.
 
 - **On Windows the update line may not be able to replace a copy that is running.** The startup

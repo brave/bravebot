@@ -67,8 +67,15 @@ Software, Inc.`. It writes nothing if either check fails. It puts `bravebot.exe`
 $env:INSTALL_DIR = "$HOME\bin"; irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
 ```
 
-It does not change your `PATH`. When the directory is not on it, the script says so, and you add it
-to your user `PATH` and open a new terminal to run `bravebot` by name.
+It adds the directory to the end of your user `PATH`, keeping every other entry as it was, and to
+the PowerShell session it ran in, so `bravebot` runs by name there at once and in terminals you open
+afterwards. A directory already on your `PATH` is not added again. To keep your `PATH` as it is, set
+`BRAVEBOT_NO_MODIFY_PATH` to anything before the line, and the script names the directory for you to
+add yourself:
+
+```powershell
+$env:BRAVEBOT_NO_MODIFY_PATH = "1"; irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
+```
 
 To install a release other than the newest, run the script as a script block and give it a version.
 It takes three numbers, with or without a leading `v`, and checks that release exactly as it checks
@@ -216,8 +223,8 @@ Get-Content "$env:USERPROFILE\.bravebot\installed-by-powershell"
 The file is under the directory `HOME` names where that is set, which is where bravebot keeps its
 state directory too, so use `$env:HOME` in its place there. It holds the full path of `bravebot.exe`, which is under `%LOCALAPPDATA%\Programs\bravebot`
 unless `INSTALL_DIR` named somewhere else. Remove `bravebot.exe` at that path, and the directory
-that held it if nothing else is in it. If you added the directory to your `PATH`, remove that entry
-too.
+that held it if nothing else is in it. The script added that directory to your user `PATH` unless
+`BRAVEBOT_NO_MODIFY_PATH` was set, so remove that entry too.
 
 No route touches `~/.bravebot`. It holds your settings, prompt history, session records, themes,
 MCP declarations and any imported subscription, so removing the binary leaves all of that for a later
