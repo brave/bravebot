@@ -334,11 +334,22 @@ typed unless a line waiting ahead of it could change what it acts on, and otherw
 that line, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
 session `/clear` leaves, `/forget-trust` ahead of a waiting `/cd` would forget the directory `/cd`
 leaves, and `/effort` ahead of a waiting prompt would change the level that prompt was typed under.
-A waiting `/sandbox` line in any form sets the mode the next turn is built with and nothing else
+Which lines could change what a command acts on depends on the command. A waiting `/sandbox` line in
+any form sets the mode the next turn is built with and nothing else
 ([SANDBOX-22](sandboxing.md#SANDBOX-22)), so it holds back no command but another `/sandbox`:
 `/note` typed behind a waiting `/sandbox off` is carried out as it is typed, and `/sandbox strict`
-typed behind it waits, since the mode typed last is the one the person means to end in. Every other
-waiting line holds these commands back, whether it is a command, a prompt or a command line. A
+typed behind it waits, since the mode typed last is the one the person means to end in. `/issue` and
+`/pr` act on the link the record holds ([PANEL-12](info-panel.md#PANEL-12)), which only a line that
+starts another record, switches to one or leaves this one changes: `/clear`, `/handoff`, `/branch`,
+`/resume`, `/bg` and `/exit`. Behind any other waiting line, a prompt and a command line included,
+they are carried out as they are typed. `/model`, `/effort` and `/advisor` act on what a request is
+built with. A prompt reads it, and so does every command that sends a request or leaves for another
+session, and the three hold one another back, since the level a model reads depends on the model. A
+command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`, `/reach`, `/branch`, `/add-dir`,
+`/cd` and `/mcp` read none of it and change none of it, nor does a waiting `/rename`, `/note`,
+`/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox`, so behind any of those the three are
+carried out as they are typed. Every other waiting line holds `/rename`, `/note`, `/forget-trust`,
+`/style` and `/sandbox` back, whether it is a command, a prompt or a command line. A
 command carried out as it is typed comes off the box and is not remembered, as at rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
 entries and the rest of the history, and it stays there once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
 and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.
@@ -496,6 +507,13 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_note_typed_behind_a_waiting_sandbox_off_is_carried_out_when_typed`
 `verified-by: bravebot_tui::app::every_settings_command_but_sandbox_is_carried_out_behind_a_waiting_sandbox_off`
 `verified-by: bravebot_tui::app::a_sandbox_mode_typed_behind_a_waiting_sandbox_off_waits_behind_it`
+`verified-by: bravebot_tui::app::a_link_typed_behind_a_line_that_keeps_the_record_is_set_when_typed`
+`verified-by: bravebot_tui::app::a_link_typed_behind_a_line_that_replaces_the_record_waits_behind_it`
+`verified-by: bravebot_tui::app::a_model_level_or_advisor_typed_behind_a_line_that_builds_no_request_is_set_when_typed`
+`verified-by: bravebot_tui::app::a_model_level_or_advisor_typed_behind_a_line_that_builds_a_request_waits_behind_it`
+`verified-by: bravebot_tui::app::a_choice_names_the_first_waiting_line_that_could_change_it`
+`verified-by: bravebot_tui::command_table::every_command_that_can_wait_is_placed_against_the_record_and_the_choice`
+`verified-by: bravebot_tui::app::a_name_a_note_a_style_or_a_forgotten_answer_waits_behind_a_prompt_and_a_command_line`
 `verified-by: bravebot_tui::app::a_theme_or_config_typed_behind_a_waiting_line_is_carried_out_when_typed`
 `verified-by: bravebot_tui::render::a_command_waiting_behind_a_line_names_that_line_on_its_mark`
 `verified-by: bravebot_tui::render::a_command_that_waits_for_the_turn_does_not_name_the_line_ahead_of_it`

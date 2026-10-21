@@ -305,7 +305,9 @@ pub enum MidTurn {
     /// does not hold, but a line waiting ahead of it may replace that: `/clear` begins another
     /// session, `/cd` moves to another directory and a prompt starts a turn built with what it
     /// finds, and a change made first would land on the one being left or the turn begun under it.
-    /// A waiting `/sandbox` line changes the mode and nothing else, so it holds none of them back.
+    /// What each acts on, and so which lines could change it, is `Acts`: a waiting `/sandbox`
+    /// line holds none of them back, and `/issue`, `/pr`, `/model`, `/effort` and `/advisor` are
+    /// held back by fewer lines than the others.
     ///
     /// Where the bare word opens a picker, the picker is held as a mode of the session while the
     /// turn runs, so the turn's own questions are still drawn over it.
@@ -750,13 +752,95 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
     }
 }
 
-/// Whether a waiting line is a `/sandbox` one, which moves the mode the next turn is built with and
-/// writes nothing else (SANDBOX-22). The mode is read where a turn is built, by `/resume` and
-/// `/status`, and when the transcript is drawn, and by no command that changes something, so
-/// each of those gives the same result before it as after it. `/sandbox` itself is held back by
-/// the rule for a line of the same command.
-fn only_moves_the_sandbox(waiting: &str) -> bool {
-    command_typed(waiting) == Some(SANDBOX_COMMAND)
+/// What a command that changes something acts on, which is what decides the lines waiting ahead of
+/// it that could change it (CMD-8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Acts {
+    /// The link `/issue` or `/pr` sets on the session's record. Only a command that starts another
+    /// record, switches to one or leaves this one changes which record that is.
+    Link,
+    /// The model, the level or the advisor a request is built with: `/model`, `/effort` and
+    /// `/advisor`. A prompt or a command that sends a request reads them, and a command that
+    /// switches the session or leaves it replaces them.
+    Choice,
+    /// The name, the notes, the style, the answer kept about the directory and the sandbox mode:
+    /// `/rename`, `/note`, `/style`, `/forget-trust` and `/sandbox`. Every waiting line could change
+    /// these but a waiting `/sandbox`, which moves the mode the next turn is built with and writes
+    /// nothing else (SANDBOX-22). The mode is read where a turn is built, by `/resume` and
+    /// `/status`, and when the transcript is drawn, and by no command that changes something, so
+    /// each of those gives the same result before it as after it. `/sandbox` itself is held back by
+    /// the rule for a line of the same command.
+    Other,
+}
+
+/// What the command acts on.
+fn acts_on(command: &str) -> Acts {
+    match command {
+        ISSUE_COMMAND | PR_COMMAND => Acts::Link,
+        MODEL_COMMAND | EFFORT_COMMAND | ADVISOR_COMMAND => Acts::Choice,
+        _ => Acts::Other,
+    }
+}
+
+/// The commands that start a new record, switch to another or leave this one, so a link set
+/// before one lands on the record it leaves and a link set after one lands on the record it
+/// opens.
+///
+/// A command added to the table is placed against this list by
+/// `every_command_that_can_wait_is_placed_against_the_record_and_the_choice`.
+const REPLACES_THE_RECORD: &[&str] = &[
+    CLEAR_COMMAND,
+    HANDOFF_COMMAND,
+    BRANCH_COMMAND,
+    RESUME_COMMAND,
+    BACKGROUND_COMMAND,
+    EXIT_COMMAND,
+];
+
+/// The commands that neither build a request nor change the model, the level or the advisor, and
+/// that take none of them from another record. A command not named here holds `/model`, `/effort`
+/// and `/advisor` back.
+///
+/// `/model`, `/effort` and `/advisor` are not named: the level a model reads depends on the model,
+/// so each of them reads what the others set. `/style`, `/rename`, `/note`, `/issue`, `/pr`,
+/// `/forget-trust` and `/sandbox` write the session's own settings and the record, and none of
+/// the three. A command added to the table is placed against this list by
+/// `every_command_that_can_wait_is_placed_against_the_record_and_the_choice`.
+const LEAVES_THE_CHOICE_ALONE: &[&str] = &[
+    CLEAR_COMMAND,
+    UNDO_COMMAND,
+    REWIND_COMMAND,
+    HUNKS_COMMAND,
+    MEMORY_COMMAND,
+    REACH_COMMAND,
+    BRANCH_COMMAND,
+    ADD_DIR_COMMAND,
+    CD_COMMAND,
+    MCP_COMMAND,
+    RENAME_COMMAND,
+    NOTE_COMMAND,
+    STYLE_COMMAND,
+    FORGET_TRUST_COMMAND,
+    ISSUE_COMMAND,
+    PR_COMMAND,
+    SANDBOX_COMMAND,
+];
+
+/// Whether a waiting line could change what a command that acts on `acts` acts on. `goes` is where
+/// the line is going, and `waiting` the command it is, where it is one.
+fn could_change(goes: Bound, waiting: Option<&str>, acts: Acts) -> bool {
+    match acts {
+        Acts::Other => waiting != Some(SANDBOX_COMMAND),
+        Acts::Link => waiting.is_some_and(|word| REPLACES_THE_RECORD.contains(&word)),
+        Acts::Choice => match goes {
+            // The line runs a program in the working directory and says what it printed.
+            Bound::Run => false,
+            Bound::CarriedOut => {
+                !waiting.is_some_and(|word| LEAVES_THE_CHOICE_ALONE.contains(&word))
+            }
+            Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn => true,
+        },
+    }
 }
 
 /// The line, among those waiting ahead of position `at` in the queue, that a command carried out
@@ -768,7 +852,7 @@ fn only_moves_the_sandbox(waiting: &str) -> bool {
 /// command that changes something waits behind a line that could change what it acts on, so it
 /// lands where it was typed: `/rename` ahead of a waiting `/clear` would name the session being
 /// left, and `/effort` ahead of a waiting prompt would change the level that prompt was typed
-/// under. Every line could, but a waiting `/sandbox` ([`only_moves_the_sandbox`]).
+/// under. What each acts on, and so which lines could change it, is [`Acts`].
 pub(crate) fn held_back_by<'a>(
     session: &'a Session,
     at: usize,
@@ -779,12 +863,13 @@ pub(crate) fn held_back_by<'a>(
         command.mid_turn,
         MidTurn::Changes | MidTurn::ChangesUnlessItAsks
     );
-    session.queued_ahead(at).find(|(goes, waiting)| match goes {
-        Bound::CarriedOut => {
-            command_typed(waiting) == Some(command.name)
-                || (changes && !only_moves_the_sandbox(waiting))
-        }
-        Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn | Bound::Run => changes,
+    let acts = acts_on(command.name);
+    session.queued_ahead(at).find(|&(goes, waiting)| {
+        let word = match goes {
+            Bound::CarriedOut => command_typed(waiting),
+            Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn | Bound::Run => None,
+        };
+        word == Some(command.name) || (changes && could_change(goes, word, acts))
     })
 }
 
@@ -827,4 +912,86 @@ pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
     } else {
         t!(command_waits_for_the_turn, command = word).to_string()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every command that can wait is placed against what a waiting line could change in the commands
+    /// that act on a record's link and on the choice a request is built with (CMD-8). The two rules
+    /// name commands in lists, and a command added to the table that is in neither would be carried
+    /// out ahead of a line it could change, or wait behind one it could not. The rows are written
+    /// out here rather than read from the lists, so a command is placed by deciding it twice. The
+    /// regression it rejects is a command added to the table and left out of the rules.
+    #[test]
+    fn every_command_that_can_wait_is_placed_against_the_record_and_the_choice() {
+        // The command, whether it starts another record, switches to one or leaves this one, and
+        // whether it sends a request, reads or changes the model, the level or the advisor, or
+        // leaves for another session.
+        const PLACED: &[(&str, bool, bool)] = &[
+            (ADD_DIR_COMMAND, false, false),
+            (CD_COMMAND, false, false),
+            (COMPACT_COMMAND, false, true),
+            (BTW_COMMAND, false, true),
+            (RECAP_COMMAND, false, true),
+            (CLEAR_COMMAND, true, false),
+            (HANDOFF_COMMAND, true, true),
+            (BRANCH_COMMAND, true, false),
+            (RESUME_COMMAND, true, true),
+            (BACKGROUND_COMMAND, true, true),
+            (REACH_COMMAND, false, false),
+            (CHECKOUTS_COMMAND, false, true),
+            (PLAN_COMMAND, false, true),
+            (MANIFEST_COMMAND, false, true),
+            (AGENT_COMMAND, false, true),
+            (MEMORY_COMMAND, false, false),
+            (INIT_COMMAND, false, true),
+            (REVIEW_COMMAND, false, true),
+            (UNDO_COMMAND, false, false),
+            (REWIND_COMMAND, false, false),
+            (HUNKS_COMMAND, false, false),
+            (EXIT_COMMAND, true, true),
+            (MCP_COMMAND, false, false),
+            (LOOP_COMMAND, false, true),
+            (GOAL_COMMAND, false, true),
+            (MODEL_COMMAND, false, true),
+            (EFFORT_COMMAND, false, true),
+            (ADVISOR_COMMAND, false, true),
+            (RENAME_COMMAND, false, false),
+            (NOTE_COMMAND, false, false),
+            (STYLE_COMMAND, false, false),
+            (FORGET_TRUST_COMMAND, false, false),
+            (ISSUE_COMMAND, false, false),
+            (PR_COMMAND, false, false),
+            (SANDBOX_COMMAND, false, false),
+        ];
+        for command in commands() {
+            // A command that is carried out as it is typed waits only behind a line of its own.
+            if command.mid_turn == MidTurn::Runs {
+                continue;
+            }
+            assert!(
+                PLACED.iter().any(|(name, ..)| *name == command.name),
+                "{} can wait and is not placed against the rules for a link and for the choice",
+                command.name
+            );
+        }
+        for &(name, replaces_the_record, builds_a_request) in PLACED {
+            assert!(
+                commands().iter().any(|command| command.name == name),
+                "{name} is placed and is not in the table"
+            );
+            assert_eq!(
+                could_change(Bound::CarriedOut, Some(name), Acts::Link),
+                replaces_the_record,
+                "{name} and a link"
+            );
+            assert_eq!(
+                could_change(Bound::CarriedOut, Some(name), Acts::Choice),
+                builds_a_request,
+                "{name} and the choice"
+            );
+        }
+    }
 }

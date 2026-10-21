@@ -22248,6 +22248,371 @@ mod tests {
         );
     }
 
+    /// A line waiting for the turn to end, as `line` would have become had the turn been running
+    /// when it was typed behind others: a command line when it starts with `!`, a command that
+    /// waits whatever it is when it starts with a slash, and a prompt otherwise.
+    fn wait_as(session: &mut Session, line: &str) {
+        if let Some(command_line) = line.strip_prefix('!') {
+            session.shell = true;
+            type_while_working(session, command_line);
+            return;
+        }
+        if !line.starts_with('/') {
+            type_while_working(session, line);
+            return;
+        }
+        for c in line.chars() {
+            handle_key_while_working(session, key(KeyCode::Char(c)));
+        }
+        assert!(session.queue_command(), "{line} was not queued");
+    }
+
+    /// A record for a command carried out mid-turn to write to.
+    fn a_record_to_write_a_link_to() -> bravebot_session::sessions::Handle {
+        bravebot_session::sessions::Handle::begin(
+            std::path::Path::new("/work"),
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        )
+    }
+
+    /// `line` typed and sent during a turn, carried out on `stored`.
+    fn typed_on_a_record(
+        session: &mut Session,
+        stored: &mut bravebot_session::sessions::Handle,
+        line: &str,
+    ) {
+        typed_during_a_turn(
+            session,
+            line,
+            key(KeyCode::Enter),
+            &mut Beside {
+                managed: &bravebot_config::Managed::default(),
+                stored,
+                root: std::path::Path::new("/work"),
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut a_config_needing_no_sign_in(),
+            },
+        );
+    }
+
+    /// `/issue` and `/pr` act on the link the record holds, and a line waiting ahead changes which
+    /// record that is only by starting another, switching to one or leaving this one. Behind any
+    /// other line the link is set when it is typed, the line stays where it was, and the link is
+    /// said under the turn. The regression it rejects is every line holding a link back, which leaves
+    /// one typed behind a prompt, a command line or a command that keeps the record unset until the
+    /// turn ends.
+    #[test]
+    fn a_link_typed_behind_a_line_that_keeps_the_record_is_set_when_typed() {
+        use bravebot_session::sessions::Link;
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/2688";
+        const PULL: &str = "https://github.com/brave/bravebot/pull/2884";
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for waiting in [
+            "second",
+            "!make",
+            "/add-dir ../other",
+            "/cd crates/tui",
+            "/compact",
+            "/btw what is this",
+            "/recap",
+            "/reach",
+            "/loop 5m check the deploy",
+            "/goal the tests pass",
+            "/checkouts",
+            "/plan the task",
+            "/manifest the task",
+            "/agent reviewer the task",
+            "/memory",
+            "/init",
+            "/review",
+            "/undo",
+            "/rewind",
+            "/hunks",
+            "/mcp",
+            "/rename deploy watch",
+            "/note a thought",
+            "/style off",
+            "/forget-trust",
+            "/sandbox off",
+            "/model",
+            "/effort high",
+            "/advisor off",
+        ] {
+            let mut session = a_turn_running_on("first");
+            wait_as(&mut session, waiting);
+            let mut stored = a_record_to_write_a_link_to();
+
+            typed_on_a_record(&mut session, &mut stored, &format!("/issue {ISSUE}"));
+            typed_on_a_record(&mut session, &mut stored, &format!("/pr {PULL}"));
+
+            assert_eq!(
+                stored.link(Link::Issue),
+                Some(ISSUE),
+                "/issue waited behind {waiting}"
+            );
+            assert_eq!(
+                stored.link(Link::PullRequest),
+                Some(PULL),
+                "/pr waited behind {waiting}"
+            );
+            assert_eq!(
+                said_under_the_turn(&session)
+                    .into_iter()
+                    .rev()
+                    .take(2)
+                    .collect::<Vec<_>>(),
+                vec![
+                    t!(session_pull_request_set, url = PULL).as_str(),
+                    t!(session_issue_set, url = ISSUE).as_str()
+                ],
+                "behind {waiting}"
+            );
+            assert_eq!(
+                waiting_prompts(&session),
+                vec![waiting.trim_start_matches('!')]
+            );
+        }
+    }
+
+    /// A line that starts another record, switches to one or leaves this one changes which record a
+    /// link set before it lands on, so `/issue` and `/pr` wait behind it and name it. The regression
+    /// it rejects is a link carried out ahead of one of them: it would land on the record the
+    /// command leaves, and the record the person goes on in would hold none.
+    #[test]
+    fn a_link_typed_behind_a_line_that_replaces_the_record_waits_behind_it() {
+        use bravebot_session::sessions::Link;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for waiting in [
+            CLEAR_COMMAND,
+            "/handoff the next goal",
+            "/branch",
+            "/resume",
+            BACKGROUND_COMMAND,
+            EXIT_COMMAND,
+        ] {
+            for line in [
+                "/issue https://github.com/brave/bravebot/issues/2688",
+                "/pr https://github.com/brave/bravebot/pull/2884",
+            ] {
+                let mut session = a_turn_running_on("first");
+                wait_as(&mut session, waiting);
+                let before = said_under_the_turn(&session).len();
+                let mut stored = a_record_to_write_a_link_to();
+
+                typed_on_a_record(&mut session, &mut stored, line);
+
+                let said = said_under_the_turn(&session);
+                assert!(
+                    said.len() == before + 1
+                        && said[before].ends_with(&format!("behind {waiting}.")),
+                    "{line} was carried out ahead of a waiting {waiting}: {said:?}"
+                );
+                assert_eq!(stored.link(Link::Issue), None, "{line} behind {waiting}");
+                assert_eq!(
+                    stored.link(Link::PullRequest),
+                    None,
+                    "{line} behind {waiting}"
+                );
+                assert_eq!(waiting_prompts(&session), vec![waiting, line]);
+            }
+        }
+    }
+
+    /// `/model`, `/effort` and `/advisor` act on the choice a request is built with, which a command
+    /// line, a command that rewrites only the conversation, the directories, the record or the
+    /// session's other settings, and a command that only lists or reports, leave as it is. Behind
+    /// one the choice is made when it is typed. The regression it rejects is every line holding the
+    /// choice back, which leaves a level typed behind a `/clear` unset until the turn ends.
+    #[test]
+    fn a_model_level_or_advisor_typed_behind_a_line_that_builds_no_request_is_set_when_typed() {
+        use crate::picking::Picking;
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for waiting in [
+            "!make",
+            CLEAR_COMMAND,
+            "/undo",
+            "/rewind",
+            "/hunks",
+            "/memory",
+            "/reach",
+            "/branch",
+            "/add-dir ../other",
+            "/cd crates/tui",
+            "/mcp",
+            "/rename deploy watch",
+            "/note a thought",
+            "/style off",
+            FORGET_TRUST_COMMAND,
+            "/issue https://github.com/brave/bravebot/issues/2688",
+            "/pr https://github.com/brave/bravebot/pull/2884",
+            "/sandbox off",
+        ] {
+            let mut session = a_turn_running_on("first");
+            wait_as(&mut session, waiting);
+            let before = said_under_the_turn(&session).len();
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, "/effort high", key(KeyCode::Enter), beside)
+            });
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, "/advisor off", key(KeyCode::Enter), beside)
+            });
+            beside_holding(&mut a_config_offering_three_tiers(), |beside| {
+                typed_during_a_turn(&mut session, MODEL_COMMAND, key(KeyCode::Enter), beside)
+            });
+
+            assert_eq!(
+                session.effort(),
+                Some(Effort::High),
+                "/effort waited behind {waiting}"
+            );
+            assert!(
+                said_under_the_turn(&session)[before..]
+                    .iter()
+                    .any(|said| *said == t!(session_advisor_dropped)),
+                "/advisor waited behind {waiting}"
+            );
+            assert!(
+                matches!(session.picking(), Some(Picking::Model(_))),
+                "/model waited behind {waiting}"
+            );
+            assert_eq!(
+                waiting_prompts(&session),
+                vec![waiting.trim_start_matches('!')]
+            );
+        }
+    }
+
+    /// A prompt, a command that sends a request, a command that switches the session or leaves it,
+    /// and another of the three read or replace the choice a request is built with, so `/model`,
+    /// `/effort` and `/advisor` wait behind them and name them. The regression it rejects is the
+    /// choice carried out ahead of a line that was typed under the old one: the compaction, the
+    /// aside or the turn would run on a level its person set after asking for it.
+    #[test]
+    fn a_model_level_or_advisor_typed_behind_a_line_that_builds_a_request_waits_behind_it() {
+        for waiting in [
+            "second",
+            "/compact",
+            "/btw what is this",
+            "/recap",
+            "/handoff the next goal",
+            "/init",
+            "/review",
+            "/plan the task",
+            "/manifest the task",
+            "/agent reviewer the task",
+            "/loop 5m check the deploy",
+            "/goal the tests pass",
+            "/checkouts",
+            "/resume",
+            BACKGROUND_COMMAND,
+            EXIT_COMMAND,
+            MODEL_COMMAND,
+            "/effort low",
+            "/advisor off",
+        ] {
+            for then in ["/effort high", "/advisor off", MODEL_COMMAND] {
+                let mut session = a_turn_running_on("first");
+                wait_as(&mut session, waiting);
+                let before = said_under_the_turn(&session).len();
+
+                nothing_beside(|beside| {
+                    typed_during_a_turn(&mut session, then, key(KeyCode::Enter), beside)
+                });
+
+                let behind = if waiting.starts_with('/') {
+                    waiting
+                } else {
+                    t!(queued_a_prompt)
+                };
+                let said = said_under_the_turn(&session);
+                assert!(
+                    said.len() == before + 1
+                        && said[before].ends_with(&format!("behind {behind}.")),
+                    "{then} was carried out ahead of a waiting {waiting}: {said:?}"
+                );
+                assert_eq!(session.effort(), None, "{then} behind {waiting}");
+                assert!(session.picking().is_none(), "{then} behind {waiting}");
+                assert_eq!(waiting_prompts(&session), vec![waiting, then]);
+            }
+        }
+    }
+
+    /// The line a choice waits behind is the first one waiting that could change it. A `/clear` and
+    /// a `/cd` ahead of it leave the choice alone and are not the line named.
+    #[test]
+    fn a_choice_names_the_first_waiting_line_that_could_change_it() {
+        let mut session = a_turn_running_on("first");
+        for line in [
+            CLEAR_COMMAND,
+            "/cd crates/tui",
+            COMPACT_COMMAND,
+            "/btw what is this",
+        ] {
+            wait_as(&mut session, line);
+        }
+        let before = said_under_the_turn(&session).len();
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/effort high", key(KeyCode::Enter), beside)
+        });
+
+        let said = said_under_the_turn(&session);
+        assert!(
+            said.len() == before + 1 && said[before].ends_with("behind /compact."),
+            "{said:?}"
+        );
+    }
+
+    /// The name, the notes, the style and the answer kept about the directory have not been read
+    /// against the lines that could change them, so every line but a waiting `/sandbox` holds
+    /// them back: a prompt and a command line as well as a command. The regression it rejects is
+    /// the reach of `/issue`, `/pr`, `/model`, `/effort` and `/advisor` extended to these: a note
+    /// stamped with the turn it was typed in would be written ahead of the prompt that opens the
+    /// next.
+    #[test]
+    fn a_name_a_note_a_style_or_a_forgotten_answer_waits_behind_a_prompt_and_a_command_line() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for waiting in ["second", "!make", "/compact"] {
+            for then in [
+                "/rename deploy watch",
+                "/note a thought",
+                "/style off",
+                FORGET_TRUST_COMMAND,
+            ] {
+                let mut session = a_turn_running_on("first");
+                wait_as(&mut session, waiting);
+                let before = said_under_the_turn(&session).len();
+
+                nothing_beside(|beside| {
+                    typed_during_a_turn(&mut session, then, key(KeyCode::Enter), beside)
+                });
+
+                let said = said_under_the_turn(&session);
+                assert!(
+                    said.len() == before + 1 && said[before].contains("behind"),
+                    "{then} was carried out ahead of a waiting {waiting}: {said:?}"
+                );
+                assert_eq!(
+                    waiting_prompts(&session),
+                    vec![waiting.trim_start_matches('!'), then]
+                );
+            }
+        }
+    }
+
     /// A waiting `/sandbox off` moves the mode the next turn is built with and writes nothing else,
     /// so a command that changes something else gives the same result before it as after it, and is
     /// carried out as it is typed. The regression it rejects is every command waiting behind it,
