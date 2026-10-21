@@ -563,10 +563,24 @@ pub(super) fn build_request<R: Reporter>(
     request
 }
 
+/// What a compaction a turn made fires: the hooks, where they run, and where what they say goes.
+///
+/// Given for the turn a person asked for and not for a delegate, whose conversation is its own and
+/// not the session's.
+pub(super) struct AfterCompacting<'a> {
+    pub hooks: &'a bravebot_config::hooks::Hooks,
+    pub workspace: &'a Workspace,
+    /// The sentences the hooks said went wrong, for the turn's account of itself (HOOK-7).
+    pub said: &'a mut Vec<String>,
+}
+
 /// Shorten the conversation before a request when it is past the budget, or when the service
 /// refused the last one and there may be something to cut.
 ///
 /// Decided from token counts and the turn's own flags.
+///
+/// Once a summary has been adopted, the hooks declared for `compacted` run (HOOK-2). They read
+/// nothing of the summary and decide nothing about the turn, which goes on as it would have.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
     config: &Config,
@@ -582,6 +596,7 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
     spent: &mut Elapsed,
     may_compact: &mut bool,
     retries: &mut Retries,
+    afterwards: Option<AfterCompacting<'_>>,
 ) -> Result<(), TurnError> {
     // Before the request rather than after the reply that overflowed. The figure being
     // compared is the last round's, so this is one round late by construction, which is why
@@ -638,6 +653,15 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
          summarised and the last {} kept as they are",
                     done.summarised, done.kept
                 ));
+                if let Some(after) = afterwards {
+                    after.said.extend(super::fire_hooks(
+                        after.hooks,
+                        bravebot_config::hooks::Moment::Compacted,
+                        None,
+                        after.workspace,
+                        reporter,
+                    ));
+                }
             }
             // Nothing to shorten yet, which is the ordinary answer and not worth a word.
             // Nothing was sent, so asking again next round is free, and a round or two later

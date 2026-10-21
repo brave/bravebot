@@ -18968,6 +18968,7 @@ fn a_skill_loaded_in_a_turn_is_sent_again_when_that_conversation_is_compacted() 
         bravebot_core::trust::TrustStore::new("/work"),
         None,
         &bravebot_core::cancel::Cancel::new(),
+        None,
     )
     .expect("compacting runs")
     .expect("there is something to summarise");
@@ -19044,6 +19045,7 @@ fn a_skill_from_an_untrusted_project_is_not_sent_again_when_the_conversation_is_
         bravebot_core::trust::TrustStore::new(workspace.root()),
         None,
         &bravebot_core::cancel::Cancel::new(),
+        None,
     )
     .expect("compacting runs")
     .expect("there is something to summarise");
@@ -33348,6 +33350,7 @@ fn the_summariser_asks_for_no_cache_of_the_exchange_it_gives_up() {
         bravebot_core::trust::TrustStore::new("/work"),
         None,
         &bravebot_core::cancel::Cancel::new(),
+        None,
     )
     .expect("compacting runs")
     .expect("a long conversation has something to summarise");
@@ -33539,6 +33542,7 @@ fn compacting_on_request_an_untrusted_conversation_is_refused_and_leaves_no_line
         bravebot_core::trust::TrustStore::new("/work"),
         None,
         &bravebot_core::cancel::Cancel::new(),
+        None,
     );
 
     let error = outcome
@@ -33799,6 +33803,7 @@ fn compacting_on_request_reaches_the_model_and_shortens_the_conversation() {
         bravebot_core::trust::TrustStore::new("/work"),
         None,
         &bravebot_core::cancel::Cancel::new(),
+        None,
     )
     .expect("compacting on request must not be refused")
     .expect("a long conversation has something to summarise");
@@ -33842,6 +33847,7 @@ fn a_stop_pressed_during_a_summary_reaches_the_request_and_leaves_the_conversati
         bravebot_core::trust::TrustStore::new("/work"),
         None,
         &cancel,
+        None,
     )
     .err()
     .expect("a stopped summary produces none");
@@ -33902,6 +33908,7 @@ fn a_stop_pressed_while_a_summary_is_out_walks_away_from_the_request() {
         bravebot_core::trust::TrustStore::new("/work"),
         None,
         &cancel,
+        None,
     );
     let waited = started.elapsed();
     let _ = release.send(());
@@ -33945,6 +33952,7 @@ fn the_trail_says_what_a_compaction_gave_up_and_what_it_cost() {
         bravebot_core::trust::TrustStore::new("/work"),
         None,
         &bravebot_core::cancel::Cancel::new(),
+        None,
     )
     .expect("compacting runs")
     .expect("a long conversation has something to summarise");
@@ -34004,6 +34012,7 @@ fn a_focus_typed_after_compact_reaches_the_summariser_after_the_exchange() {
         bravebot_core::trust::TrustStore::new("/work"),
         Some("keep the lexer benchmarks"),
         &bravebot_core::cancel::Cancel::new(),
+        None,
     )
     .expect("compacting runs")
     .expect("a long conversation has something to summarise");
@@ -34043,6 +34052,7 @@ fn the_trail_records_that_a_focus_was_given_and_never_its_words() {
             bravebot_core::trust::TrustStore::new("/work"),
             focus,
             &bravebot_core::cancel::Cancel::new(),
+            None,
         )
         .expect("compacting runs")
         .expect("a long conversation has something to summarise");
@@ -34130,6 +34140,7 @@ fn a_compaction_runs_on_the_summary_model_the_settings_name() {
         bravebot_core::trust::TrustStore::new("/work"),
         None,
         &bravebot_core::cancel::Cancel::new(),
+        None,
     )
     .expect("compacting must not be refused")
     .expect("a long conversation has something to summarise");
@@ -34163,6 +34174,7 @@ fn a_compaction_with_no_summary_model_runs_on_the_sessions_own() {
         bravebot_core::trust::TrustStore::new("/work"),
         None,
         &bravebot_core::cancel::Cancel::new(),
+        None,
     )
     .expect("compacting must not be refused")
     .expect("a long conversation has something to summarise");
@@ -34216,6 +34228,7 @@ fn a_summary_model_needing_a_sign_in_refuses_the_compaction_and_leaves_the_conve
         bravebot_core::trust::TrustStore::new("/work"),
         None,
         &bravebot_core::cancel::Cancel::new(),
+        None,
     );
 
     let failure = match refused {
@@ -34267,6 +34280,7 @@ fn a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_co
         bravebot_core::trust::TrustStore::new("/work"),
         None,
         &bravebot_core::cancel::Cancel::new(),
+        None,
     );
 
     let failure = match refused {
@@ -34304,6 +34318,7 @@ fn a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_co
         bravebot_core::trust::TrustStore::new("/work"),
         None,
         &bravebot_core::cancel::Cancel::new(),
+        None,
     )
     .expect("a model the layer does not exclude summarises")
     .expect("a long conversation has something to summarise");
@@ -35097,6 +35112,7 @@ fn compacting_on_request_grants_itself_nothing_but_reaching_the_model() {
         bravebot_core::trust::TrustStore::new("/work"),
         None,
         &bravebot_core::cancel::Cancel::new(),
+        None,
     )
     .expect("compacting runs");
 
@@ -51552,6 +51568,534 @@ fn a_turn_whose_hook_failed_still_answers() {
         outcome.notices.iter().any(|said| said.contains("no")),
         "a caller with nowhere to draw was not told the hook failed: {:?}",
         outcome.notices
+    );
+}
+
+/// A state directory whose hooks file declares one hook for `compacted`, which writes what it is
+/// told to `fired.txt` in the directory it runs in.
+#[cfg(unix)]
+fn a_home_hooked_on_compaction(at: &std::path::Path) -> PathBuf {
+    let note = a_hook_script(at, "note", "#!/bin/sh\ncat >> fired.txt\n");
+    a_home_declaring(at, &format!("{{\"on\": \"compacted\", \"run\": [{note}]}}"))
+}
+
+/// What the hook above was told, or `None` where it never ran.
+#[cfg(unix)]
+fn what_the_compaction_hook_was_told(at: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(at.join("fired.txt")).ok()
+}
+
+/// HOOK-2, HOOK-5: a summary the budget forced is a moment. The hook runs once, in the workspace,
+/// and is told the moment and no word of the summary or of what it replaced.
+#[cfg(unix)]
+#[test]
+fn a_hook_fires_when_the_budget_forces_a_compaction() {
+    let scratch = Scratch::new("hooks-compacted-forced");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let home = a_home_hooked_on_compaction(&scratch.path);
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("they are porting the parser and widened the error type"),
+        reply_with("done"),
+    ]);
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut conversation = a_long_conversation();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it").with_home(Some(home)),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies
+            .last()
+            .is_some_and(|planning| planning.contains("widened the error type")),
+        "no summary was adopted, so this says nothing about one: {bodies:#?}"
+    );
+    assert_eq!(
+        what_the_compaction_hook_was_told(&scratch.path).as_deref(),
+        Some("{\"event\":\"compacted\"}\n"),
+        "the hook did not run once, in the workspace, told the moment alone"
+    );
+}
+
+/// HOOK-2: `/compact` runs the same hooks once its summary is adopted, and a program ran beside the
+/// session's files, so a rewind says it cannot undo what that program wrote.
+#[cfg(unix)]
+#[test]
+fn a_hook_fires_when_a_person_compacts_the_conversation() {
+    let scratch = Scratch::new("hooks-compacted-asked-for");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let home = a_home_hooked_on_compaction(&scratch.path);
+    let coverage = workspace.rewind_coverage();
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let config = config_for(&endpoint);
+    let mut conversation = a_long_conversation();
+    let before = conversation.len();
+
+    turn::compact(
+        &config,
+        &bravebot_net::Egress::new(),
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+        Some(turn::Hooked {
+            home: Some(&home),
+            workspace: &workspace,
+        }),
+    )
+    .expect("compacting runs")
+    .expect("a long conversation has something to summarise");
+
+    assert!(conversation.len() < before, "nothing was given up");
+    assert_eq!(
+        what_the_compaction_hook_was_told(&scratch.path).as_deref(),
+        Some("{\"event\":\"compacted\"}\n")
+    );
+    assert!(
+        coverage
+            .gaps()
+            .contains(&bravebot_agent::rewind::CoverageGap::Hook),
+        "a hook ran and the session's rewind was not told it cannot undo what it wrote"
+    );
+}
+
+/// HOOK-2: a compaction that no `compacted` entry is written for runs no program beside the
+/// session's files, and the other entries stay quiet.
+#[cfg(unix)]
+#[test]
+fn a_compaction_runs_no_hook_that_was_written_for_another_moment() {
+    let scratch = Scratch::new("hooks-compacted-other-moments");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(&scratch.path, "note", "#!/bin/sh\ncat >> fired.txt\n");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            "{{\"on\": \"turn-started\", \"run\": [{note}]}},
+             {{\"on\": \"turn-finished\", \"run\": [{note}]}},
+             {{\"on\": \"compacted\", \"tool\": \"write_file\", \"run\": [{note}]}}"
+        ),
+    );
+    let coverage = workspace.rewind_coverage();
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let config = config_for(&endpoint);
+    let mut conversation = a_long_conversation();
+
+    turn::compact(
+        &config,
+        &bravebot_net::Egress::new(),
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+        Some(turn::Hooked {
+            home: Some(&home),
+            workspace: &workspace,
+        }),
+    )
+    .expect("compacting runs")
+    .expect("a long conversation has something to summarise");
+
+    assert_eq!(what_the_compaction_hook_was_told(&scratch.path), None);
+    assert!(
+        coverage.is_complete(),
+        "no hook ran, yet the rewind was marked: {:?}",
+        coverage.gaps()
+    );
+}
+
+/// HOOK-2, COMPACT-14: a request the service refused as written is answered with one compaction,
+/// and that summary is a compaction like any other. The budget is far above the conversation, so the
+/// refusal alone is what makes the turn summarise.
+#[cfg(unix)]
+#[test]
+fn a_hook_fires_when_a_refused_request_is_answered_by_a_compaction() {
+    let scratch = Scratch::new("hooks-compacted-after-refusal");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let home = a_home_hooked_on_compaction(&scratch.path);
+
+    let (endpoint, received) = serve_script(vec![
+        Served::Status(400),
+        Served::Status(400),
+        Served::Reply(reply_with(
+            "they are porting the parser and widened the error type",
+        )),
+        Served::Reply(reply_with("done")),
+    ]);
+    let config = config_with_budget(&endpoint, 1_000_000);
+    let mut conversation = a_long_conversation();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it").with_home(Some(home)),
+    )
+    .expect("the retried request is answered");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies.len() == 4 && bodies[2].contains(A_SUMMARY_ASKING),
+        "the refusal did not make the turn summarise: {bodies:#?}"
+    );
+    assert_eq!(
+        what_the_compaction_hook_was_told(&scratch.path).as_deref(),
+        Some("{\"event\":\"compacted\"}\n")
+    );
+}
+
+/// HOOK-2, COMPACT-1: a summary refused because the context went untrusted is not a compaction, so
+/// the budget's route fires nothing and the turn goes on with the history it had.
+#[cfg(unix)]
+#[test]
+fn a_summary_the_budget_forced_and_the_gate_refused_fires_no_hook() {
+    let scratch = Scratch::new("hooks-compacted-forced-refused");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let home = a_home_hooked_on_compaction(&scratch.path);
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("a summary"), reply_with("done")]);
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut snapshot = a_long_conversation().snapshot();
+    snapshot.context = "untrusted".to_string();
+    let mut conversation = bravebot_agent::Conversation::restored(snapshot);
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it").with_home(Some(home)),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies.iter().any(|body| body.contains(A_SUMMARY_ASKING))
+            && bodies
+                .last()
+                .is_some_and(|planning| planning.contains("port the parser to the new lexer")),
+        "a summary was not asked for and refused, so this says nothing about one: {bodies:#?}"
+    );
+    assert_eq!(what_the_compaction_hook_was_told(&scratch.path), None);
+}
+
+/// HOOK-2, COMPACT-1: the same for `/compact`, which builds a policy of its own.
+#[cfg(unix)]
+#[test]
+fn a_summary_a_person_asked_for_and_the_gate_refused_fires_no_hook() {
+    let scratch = Scratch::new("hooks-compacted-asked-for-refused");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let home = a_home_hooked_on_compaction(&scratch.path);
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let config = config_for(&endpoint);
+    let mut snapshot = a_long_conversation().snapshot();
+    snapshot.context = "untrusted".to_string();
+    let mut conversation = bravebot_agent::Conversation::restored(snapshot);
+
+    let outcome = turn::compact(
+        &config,
+        &bravebot_net::Egress::new(),
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+        Some(turn::Hooked {
+            home: Some(&home),
+            workspace: &workspace,
+        }),
+    );
+
+    assert!(
+        matches!(
+            outcome.err(),
+            Some(bravebot_agent::compact::CompactError::Denied(_))
+        ),
+        "the summary was not refused, so this says nothing about a refused one"
+    );
+    assert_eq!(what_the_compaction_hook_was_told(&scratch.path), None);
+}
+
+/// HOOK-2: a compaction asked for where there is nothing worth cutting is not made, so no hook is
+/// told one was, on either route.
+#[cfg(unix)]
+#[test]
+fn a_conversation_with_nothing_to_cut_fires_no_hook() {
+    let scratch = Scratch::new("hooks-compacted-nothing-to-cut");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let home = a_home_hooked_on_compaction(&scratch.path);
+    let short = || {
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("port the parser"));
+        conversation.push(bravebot_aichat::protocol::Message::assistant("started"));
+        conversation.measured(50_000);
+        conversation
+    };
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut asked_for = short();
+    let outcome = turn::compact(
+        &config,
+        &bravebot_net::Egress::new(),
+        &mut asked_for,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+        Some(turn::Hooked {
+            home: Some(&home),
+            workspace: &workspace,
+        }),
+    )
+    .expect("compacting runs");
+    assert!(outcome.is_none(), "there was something to cut");
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut short(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("carry on").with_home(Some(home)),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies.iter().all(|body| !body.contains(A_SUMMARY_ASKING)),
+        "a summary was asked for: {bodies:#?}"
+    );
+    assert_eq!(what_the_compaction_hook_was_told(&scratch.path), None);
+}
+
+/// HOOK-2, COMPACT-8: a summariser that failed made no compaction. The turn goes on with the history
+/// it had, and no hook is told it was shortened.
+#[cfg(unix)]
+#[test]
+fn a_summary_that_could_not_be_made_fires_no_hook() {
+    let scratch = Scratch::new("hooks-compacted-failed-summary");
+    for n in 1..=4 {
+        std::fs::write(scratch.path.join(format!("f{n}.txt")), format!("value {n}")).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let home = a_home_hooked_on_compaction(&scratch.path);
+
+    let (endpoint, received) = serve_a_long_turn(4, |_| reply_with(""));
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut conversation = a_long_conversation();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("read f1.txt through f4.txt, one at a time").with_home(Some(home)),
+    )
+    .expect("a summary that could not be made does not fail the turn");
+
+    let asked = received
+        .try_iter()
+        .filter(|body| body.contains(A_SUMMARY_ASKING))
+        .count();
+    assert_eq!(asked, 1, "the summariser was not asked, or asked again");
+    assert_eq!(what_the_compaction_hook_was_told(&scratch.path), None);
+}
+
+/// HOOK-6, HOOK-7: a `compacted` hook that ends badly is said out loud and undoes nothing. The
+/// request after it carries the summary, and the turn still answers.
+#[cfg(unix)]
+#[test]
+fn a_failing_hook_does_not_undo_the_compaction_the_budget_forced() {
+    let scratch = Scratch::new("hooks-compacted-forced-failing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let failing = a_hook_script(&scratch.path, "no", "#!/bin/sh\nexit 3\n");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"compacted\", \"run\": [{failing}]}}"),
+    );
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("they are porting the parser and widened the error type"),
+        reply_with("the answer"),
+    ]);
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut conversation = a_long_conversation();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("finish it").with_home(Some(home)),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("a failing hook does not fail the turn");
+
+    assert_eq!(outcome.reply_for_display(), "the answer");
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies
+            .last()
+            .is_some_and(|planning| planning.contains("widened the error type")),
+        "the compaction was undone: {bodies:#?}"
+    );
+    for said in [&reporter.notices, &outcome.notices] {
+        assert!(
+            said.iter().any(|one| one.contains("compacted hook")),
+            "nobody was told the hook failed: {said:?}"
+        );
+    }
+}
+
+/// HOOK-6, HOOK-7: the same for `/compact`. The conversation is shorter, the summary is returned,
+/// and the live display is told the hook failed.
+#[cfg(unix)]
+#[test]
+fn a_failing_hook_does_not_undo_a_compaction_a_person_asked_for() {
+    let scratch = Scratch::new("hooks-compacted-asked-for-failing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let failing = a_hook_script(&scratch.path, "no", "#!/bin/sh\nexit 3\n");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!("{{\"on\": \"compacted\", \"run\": [{failing}]}}"),
+    );
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut conversation = a_long_conversation();
+    let before = conversation.len();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let done = turn::compact(
+        &config,
+        &bravebot_net::Egress::new(),
+        &mut conversation,
+        None,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+        Some(turn::Hooked {
+            home: Some(&home),
+            workspace: &workspace,
+        }),
+    )
+    .expect("a failing hook does not fail the compaction");
+
+    assert!(done.is_some(), "the summary was not reported as adopted");
+    assert!(conversation.len() < before, "the compaction was undone");
+    assert!(
+        reporter
+            .notices
+            .iter()
+            .any(|one| one.contains("compacted hook")),
+        "nobody was told the hook failed: {:?}",
+        reporter.notices
+    );
+}
+
+/// HOOK-2: a delegate summarises a conversation of its own, which the person never held. The turn
+/// they asked for fires its own moments and the delegate's compaction fires no `compacted` hook.
+#[cfg(unix)]
+#[test]
+fn a_delegate_s_compaction_fires_no_compacted_hook() {
+    let scratch = Scratch::new("hooks-compacted-delegate");
+    for n in 1..=15 {
+        std::fs::write(scratch.path.join(format!("f{n}.txt")), format!("value {n}")).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(&scratch.path, "note", "#!/bin/sh\ncat >> fired.txt\n");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            "{{\"on\": \"compacted\", \"run\": [{note}]}},
+             {{\"on\": \"turn-finished\", \"run\": [{note}]}}"
+        ),
+    );
+
+    let mut parent = vec![
+        tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+        reply_with("waiting"),
+        reply_with("done"),
+    ]
+    .into_iter();
+    let mut delegate = (1..=15)
+        .map(|n| {
+            tool_request_with_usage(
+                "read_file",
+                &format!(r#"{{"path":"f{n}.txt"}}"#),
+                50_000,
+                10,
+            )
+        })
+        .chain(std::iter::once(reply_with_usage(
+            "read them all",
+            50_000,
+            10,
+        )));
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
+        if body.contains(A_SUMMARY_ASKING) {
+            return Some(Some(reply_with("they have been reading f1.txt onwards")));
+        }
+        match body.contains("DELEGATE-THE-WORK") {
+            true => parent.next().map(Some),
+            false => delegate.next().map(Some),
+        }
+    });
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK").with_home(Some(home)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        !reporter.delegated.is_empty(),
+        "no delegate ran, so this says nothing about one"
+    );
+    let summaries = received
+        .try_iter()
+        .filter(|body| body.contains(A_SUMMARY_ASKING))
+        .count();
+    assert!(
+        summaries >= 1,
+        "the delegate never compacted, so this says nothing about a compaction"
+    );
+    assert_eq!(
+        what_the_compaction_hook_was_told(&scratch.path).as_deref(),
+        Some("{\"event\":\"turn-finished\"}\n"),
+        "a compaction in the delegate's conversation fired a hook, or the hooks did not run at all"
     );
 }
 

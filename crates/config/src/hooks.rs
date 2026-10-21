@@ -64,8 +64,9 @@ pub fn hooks_file(directory: &Path) -> PathBuf {
 ///
 /// Deliberately short. Each is something somebody can point at in a session that has happened:
 /// the turn began, a call finished, the turn is over, a question is waiting on them, a checkout was
-/// made for a delegate. The audit trail's events are a different vocabulary answering a different
-/// question, and a person writing a hook should not have to learn what a gate or a slot is.
+/// made for a delegate, the conversation was shortened. The audit trail's events are a different
+/// vocabulary answering a different question, and a person writing a hook should not have to learn
+/// what a gate or a slot is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Moment {
     /// The turn a person asked for has begun, before anything is sent.
@@ -78,6 +79,9 @@ pub enum Moment {
     PromptShown,
     /// The driver has written a checkout for a delegate, which has not yet made its first request.
     CheckoutMade,
+    /// A summary has replaced the older part of the conversation in the request, whether the budget
+    /// forced it or the person asked for it.
+    Compacted,
 }
 
 impl Moment {
@@ -92,6 +96,7 @@ impl Moment {
             "turn-finished" => Some(Self::TurnFinished),
             "prompt-shown" => Some(Self::PromptShown),
             "checkout-made" => Some(Self::CheckoutMade),
+            "compacted" => Some(Self::Compacted),
             _ => None,
         }
     }
@@ -104,6 +109,7 @@ impl Moment {
             Self::TurnFinished => "turn-finished",
             Self::PromptShown => "prompt-shown",
             Self::CheckoutMade => "checkout-made",
+            Self::Compacted => "compacted",
         }
     }
 }
@@ -399,19 +405,20 @@ mod tests {
             .collect()
     }
 
-    /// HOOK-2: the five moments are the vocabulary, and each is spelled the way the file spells it.
+    /// HOOK-2: the six moments are the vocabulary, and each is spelled the way the file spells it.
     #[test]
     fn each_moment_is_named_by_the_word_a_file_spells_it_with() {
-        for moment in [
-            Moment::TurnStarted,
-            Moment::ToolFinished,
-            Moment::TurnFinished,
-            Moment::PromptShown,
-            Moment::CheckoutMade,
+        for (moment, word) in [
+            (Moment::TurnStarted, "turn-started"),
+            (Moment::ToolFinished, "tool-finished"),
+            (Moment::TurnFinished, "turn-finished"),
+            (Moment::PromptShown, "prompt-shown"),
+            (Moment::CheckoutMade, "checkout-made"),
+            (Moment::Compacted, "compacted"),
         ] {
-            assert_eq!(Moment::parse(moment.as_str()), Some(moment));
+            assert_eq!(Moment::parse(word), Some(moment));
+            assert_eq!(moment.as_str(), word);
         }
-        assert_eq!(Moment::CheckoutMade.as_str(), "checkout-made");
     }
 
     /// HOOK-2: a file written for a build that fires more moments than this one leaves the hooks
@@ -550,7 +557,8 @@ mod tests {
         let hooks = Hooks::parse(
             r#"{"hooks": [
                 {"on": "turn-started", "run": ["begin"]},
-                {"on": "turn-finished", "run": ["end"]}
+                {"on": "turn-finished", "run": ["end"]},
+                {"on": "compacted", "run": ["shrunk"]}
             ]}"#,
         );
         assert_eq!(
@@ -560,6 +568,10 @@ mod tests {
         assert_eq!(
             programs(&hooks, Moment::TurnFinished, None),
             vec![vec!["end".to_string()]]
+        );
+        assert_eq!(
+            programs(&hooks, Moment::Compacted, None),
+            vec![vec!["shrunk".to_string()]]
         );
     }
 
@@ -706,7 +718,8 @@ mod tests {
             r#"{"hooks": [
                 {"on": "turn-started", "tool": "write_file", "run": ["a"]},
                 {"on": "tool-finished", "tool": "write_file", "run": ["b"]},
-                {"on": "turn-finished", "run": ["c"]}
+                {"on": "turn-finished", "run": ["c"]},
+                {"on": "compacted", "tool": "write_file", "run": ["d"]}
             ]}"#,
         );
         let fires_for_nothing: Vec<bool> = hooks
@@ -714,7 +727,8 @@ mod tests {
             .iter()
             .map(Hook::fires_for_nothing)
             .collect();
-        assert_eq!(fires_for_nothing, vec![true, false, false]);
+        assert_eq!(fires_for_nothing, vec![true, false, false, true]);
+        assert!(programs(&hooks, Moment::Compacted, None).is_empty());
     }
 
     /// HOOK-7: an entry may state its own bound, in whole seconds, and one that states none has
