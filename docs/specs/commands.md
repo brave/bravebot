@@ -16,6 +16,7 @@ governs:
   - crates/tui/src/init_command.rs
   - crates/tui/src/review_command.rs
   - crates/tui/src/commit_message_command.rs
+  - crates/tui/src/help_command.rs
   - crates/tui/src/prompt_files.rs
 guards:
   - symbol: commands
@@ -36,7 +37,9 @@ conversation never sees, and where its answer is drawn is [watching.md](watching
 a different surface entirely and is [shell-mode.md](shell-mode.md). `/copy` has no other spec to
 belong to, so what it copies is CMD-11, and neither has `/caffeinate`, so what it holds is CMD-12. `/init` starts an ordinary turn, but the words that turn is given and
 when it is refused are CMD-13. `/review` is the same kind of turn, and what it is given and what
-it may not do are CMD-18. `/request` shows the request a turn built, which is
+it may not do are CMD-18. `/help` is the same kind of turn, given a question and
+the name of the skill that carries the documentation, which is CMD-24, and `/changelog` shows text
+this program carries and starts no turn, which is CMD-25. `/request` shows the request a turn built, which is
 [TRACE-9](trace.md#TRACE-9)'s, and `/context` divides what it measured, which is CMD-19.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
@@ -321,7 +324,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/changelog`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/sandbox off`, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
@@ -1160,6 +1163,86 @@ prompt to agree.
 `verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
 `verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
 
+## Answering from what this program carries
+
+<a id="CMD-24"></a>
+### CMD-24: `/help` asks the planner to answer a question from the documentation this program carries
+
+`/help <question>` starts an ordinary turn whose prompt is a fixed text written in this program
+around the question: load the built-in skill `bravebot-help` with `load_skill` and answer from the
+pages it lists, not from memory ([SKILL-17](skills.md#SKILL-17)). The question is the argument as
+CMD-5 takes it and is carried into the prompt as typed. The prompt is what the transcript shows as
+sent, and typed during a turn the line waits (CMD-8).
+
+With no question the command says what it takes and no turn starts. `/help` followed by words is
+the command, a longer word that starts with it is a prompt, and so is a sentence that mentions it
+(CMD-2).
+
+The fixed words of the prompt name no path with `@`, so sending them vouches for nothing. The
+question is the person's own line, so an `@` in it is read as it is in any line they type
+([NAME-1](naming-files.md#NAME-1)). The turn is marked as one the driver wrote the prompt of, so it is
+not offered a later look at its own line ([SCHED-6](tools/schedule-next.md#SCHED-6)). The pages are
+this program's own text and are trusted for that reason ([SKILL-12](skills.md#SKILL-12)). The turn
+reads what any turn may read and the prompt adds no reach. Nothing the driver does branches on the
+question or on the answer. A skill named `bravebot-help` that a turn would offer from another source
+shadows the built-in ([SKILL-12](skills.md#SKILL-12)), and the turn then loads that one. A prompt file
+or skill named `help` is shadowed by the command (CMD-17).
+
+**Why.** The planner loads the skill on its own when the description fits the question
+([SKILL-13](skills.md#SKILL-13)), and a person's wording may not fit it. The command names the
+skill in the prompt, so the question is answered from the documentation of the running version
+whatever the wording. The question goes into the driver's sentence and not the other way round, so
+the typed line itself is never sent (CMD-4).
+
+`verified-by: bravebot_tui::app::the_help_command_starts_a_turn_with_the_drivers_own_prompt_around_the_question`
+`verified-by: bravebot_tui::app::the_help_command_with_no_question_says_what_it_takes_and_starts_no_turn`
+`verified-by: bravebot_tui::app::a_help_question_typed_while_a_turn_runs_waits_and_then_starts_its_own_turn`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_help_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::a_help_turn_is_the_drivers_prompt_and_is_offered_no_later_look`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::help_command::the_prompt_names_the_help_skill_and_carries_the_question_as_typed`
+`verified-by: bravebot_tui::help_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
+`verified-by: by-construction (the command returns Action::Submit like any typed line, and the one place a submitted line is run reads it as the person's; nothing in the command marks the question as anything else)`
+
+<a id="CMD-25"></a>
+### CMD-25: `/changelog` shows the release notes this program carries, and starts no turn
+
+`/changelog` puts the notes of the version that is running in the transcript, from the changelog
+compiled into this program. Nothing is read, fetched or sent, and no turn starts. The notes are the
+lines under that version's heading, each markdown link drawn as its text, under a heading that names
+the version.
+
+Where the changelog has no heading for the running version, the notes shown are the newest
+release's and the heading says whose they are and which version runs, so they are not taken for the
+running version's. A version matches only as a whole, so `0.1` is not the release `0.17.0`. A program
+that carries no release says so.
+
+The command takes no argument, so `/changelog` followed by words is a prompt (CMD-2). It touches
+nothing a running turn holds, so typed during one it is carried out as it is typed (CMD-8). A prompt
+file or skill named `changelog` is shadowed by the command (CMD-17).
+
+**Why.** The release notes are written for the people who run a version, and the version that
+runs is what a person asking has in mind. The text is carried in the program, so the notes match
+the build with no network and no checkout, and a model is not needed to read out a file.
+
+`verified-by: bravebot_tui::app::the_changelog_command_shows_notes_and_starts_no_turn`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_changelog_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::the_changelog_command_is_carried_out_while_a_turn_runs`
+`verified-by: bravebot_tui::state::the_changelog_is_headed_by_the_running_version_and_has_its_links_written_as_text`
+`verified-by: bravebot_tui::state::the_changelog_of_a_build_with_no_notes_of_its_own_says_whose_notes_it_shows`
+`verified-by: bravebot_tui::state::a_changelog_with_no_release_says_so`
+`verified-by: bravebot_tui::help_command::a_link_is_drawn_as_its_text_and_the_rest_of_the_line_is_untouched`
+`verified-by: bravebot_tui::help_command::brackets_that_are_not_a_link_are_kept`
+`verified-by: bravebot_tui::help_command::an_address_that_is_not_closed_takes_nothing_after_it`
+`verified-by: bravebot_tui::help_command::a_backtick_left_open_does_not_hide_the_links_on_the_next_line`
+`verified-by: bravebot_tui::help_command::an_address_with_parentheses_of_its_own_is_one_address`
+`verified-by: bravebot_tui::help_command::an_image_and_a_link_in_a_code_span_are_kept_and_a_link_after_them_is_not`
+`verified-by: bravebot_tui::help_command::a_release_is_the_lines_under_its_heading_up_to_the_next_heading`
+`verified-by: bravebot_tui::help_command::only_a_line_that_begins_with_the_heading_mark_starts_a_release`
+`verified-by: bravebot_tui::help_command::a_release_is_found_by_its_whole_version_and_else_the_newest_is_given`
+`verified-by: bravebot_tui::help_command::the_carried_changelog_lists_releases_newest_first_and_the_newest_has_notes`
+
 ## Known costs
 
 - **The list is one row per command and per skill, and a screen with no room for it loses the
@@ -1185,3 +1268,12 @@ prompt to agree.
 - **The row for a sent `exit` or `quit` is up only while the turn runs (CMD-2).** A turn that
   answers at once takes the note down with it, and a person who looked away has nothing under the
   box to say the word was a prompt. The transcript still shows the line and the reply.
+- **`/changelog` shows one release, and a long release scrolls its heading off the screen
+  (CMD-25).** The release is the running version's, or the newest where this build has none of its
+  own. Between releases the top section holds the notes of changes not yet released, headed with the
+  last release's version, so a build made from the commits after a release shows them under that
+  version's number. The notes are rows of the transcript, which shows its end, so a
+  release with more rows than the terminal has leaves the heading above the rows drawn and a person
+  scrolls up to it. The program
+  carries every earlier release's notes and no command shows one, so a person upgrading across several
+  versions reads the earlier ones on the releases page.

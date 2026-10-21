@@ -262,8 +262,10 @@ a path ([SKILL-8](#SKILL-8)), and a page is trusted for the reason the skill is:
 program's own text ([SKILL-12](#SKILL-12)). A skill of the user's own named `bravebot-help` shadows
 the built-in, and the pages go with it.
 
-**What this clause does not do.** The clause headings of `docs/specs/` are not carried, and there
-is no `/help` command: the planner decides from the description when to load the skill.
+[CMD-24](commands.md#CMD-24) is the command that asks for the skill by name. Without it the planner
+decides from the description when to load the skill.
+
+**What this clause does not do.** The clause headings of `docs/specs/` are not carried.
 
 `verified-by: bravebot_agent::skills::the_help_skill_is_offered_everywhere_for_a_question_about_bravebot_and_nothing_else`
 `verified-by: bravebot_agent::help::every_published_page_is_carried_in_the_binary`

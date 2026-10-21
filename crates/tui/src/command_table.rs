@@ -236,6 +236,19 @@ pub(crate) const REVIEW_COMMAND: &str = "/review";
 /// Sends nothing to the planner. See [`crate::commit_message_command`] and CMD-23.
 pub(crate) const COMMIT_MESSAGE_COMMAND: &str = "/commit-message";
 
+/// The line that has the planner answer a question about bravebot from the documentation this
+/// program carries.
+///
+/// Starts an ordinary turn with words the driver wrote around the person's question. See
+/// [`crate::help_command`] and CMD-24.
+pub(crate) const HELP_COMMAND: &str = "/help";
+
+/// The line that shows the release notes this program carries, taking no argument.
+///
+/// Carried out by the driver from its own text and starts no turn. See [`crate::help_command`] and
+/// CMD-25.
+pub(crate) const CHANGELOG_COMMAND: &str = "/changelog";
+
 /// The line that sets plan mode, and with a task starts a turn on it.
 ///
 /// The same endorsement as the key that cycles to plan mode (MODE-12): it only narrows what is
@@ -342,7 +355,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 50] {
+pub fn commands() -> [Command; 52] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -432,6 +445,18 @@ pub fn commands() -> [Command; 50] {
             name: LANGUAGE_COMMAND,
             argument: "[tag | auto]",
             description: t!(command_language),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: HELP_COMMAND,
+            argument: "<question>",
+            description: t!(command_help),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: CHANGELOG_COMMAND,
+            argument: "",
+            description: t!(command_changelog),
             mid_turn: MidTurn::Runs,
         },
         Command {
@@ -976,6 +1001,7 @@ mod tests {
             (INIT_COMMAND, false, true),
             (REVIEW_COMMAND, false, true),
             (COMMIT_MESSAGE_COMMAND, false, true),
+            (HELP_COMMAND, false, true),
             (UNDO_COMMAND, false, false),
             (REWIND_COMMAND, false, false),
             (HUNKS_COMMAND, false, false),

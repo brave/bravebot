@@ -26,6 +26,8 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
 | `/limit` | `[<amount> \| off]` | Show the session's spend limit, set it in tokens or credits, or remove it |
 | `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
+| `/help` | `<question>` | Ask a question about bravebot, answered from its own documentation |
+| `/changelog` | | Show what changed in this version |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/recap` | | Recap where this session stands, without putting it in the conversation |
@@ -891,6 +893,42 @@ that holds what looks like a credential, and the line says which. A diff longer 
 drafted from the part that was read, and the line says so. The model is the one `processorModel` names,
 or the session's. Typed while a turn runs it waits for the turn to end.
 
+## `/help <question>`
+
+Asks the planner to answer a question about using bravebot from the documentation carried inside
+the program, so the answer comes from the version you are running and not from a checkout or the
+website: `/help how do I stop a background job`. The request names the built-in `bravebot-help`
+skill, whose pages the planner loads one at a time, only the ones the question needs. If the pages it
+loaded do not answer the question, it says so. Without the command, the planner loads the same skill
+on its own when a question is about using bravebot.
+
+The question is sent as you typed it, inside a sentence the program wrote, and the line you typed is
+not sent. It is a line you typed, so a file you name in it with `@` is read as it is in any prompt.
+A picture pasted or a file dropped into it is written as words, as for every command that does not
+send them on.
+
+With no question, `/help` says what it takes and nothing starts. A longer word such as `/helpful`,
+and a sentence that mentions the word, is a prompt. Typed while a turn runs, the line waits for the
+turn to end.
+
+A skill named `bravebot-help` of your own, or one in a project you trusted, replaces the built-in and
+its pages, and `/help` then loads that one. A prompt file or skill named `help` is shadowed by the
+command.
+
+## `/changelog`
+
+Shows the release notes of the version you are running: a heading naming the version, then its
+entries, each link written as its text. The notes are carried inside the program, so nothing is
+fetched and no turn starts. Where the notes carry no heading for the version you run, the heading says
+it is showing the newest release's, and which version runs. Between releases the top section holds
+the notes of changes not yet released, headed with the last release's version, so a build made from
+the commits after a release shows them under that version's number.
+
+Only that one release is shown, and it is drawn in the transcript, so a release longer than the screen
+shows its end and the heading is above it. The word takes no argument: `/changelog` followed by words is a
+prompt. It touches nothing a running turn holds, so typed while a turn runs it is carried out at once.
+A prompt file or skill named `changelog` is shadowed by the command.
+
 ## `/agent <name> <task>`
 
 Runs one of your [delegate definitions](../customize/agents.md) on a task yourself, rather than
@@ -1310,7 +1348,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/panel`, `/caffeinate`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/panel`, `/caffeinate`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so
