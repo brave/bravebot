@@ -568,7 +568,8 @@ struct State {
     asked: Option<Asked>,
     answered: Option<Vec<Answer>>,
     questions: u64,
-    /// Whether the input has ended.
+    /// `next_prompt` and `ask` both wake on it, so a run never waits for a line that can no longer
+    /// arrive.
     closed: bool,
 }
 
@@ -661,7 +662,9 @@ impl Channel {
             .line(line);
     }
 
-    /// Whether the lines are the person's own words (CLI-35).
+    /// How the run hands a `prompt` line to its turn: as the turn's own prompt where a person
+    /// vouched for the channel, and as piped input, which the planner is given a reference to,
+    /// where nobody did (CLI-35).
     pub(crate) fn vouched(&self) -> bool {
         self.shared.vouched
     }
@@ -787,7 +790,9 @@ impl Channel {
         self.shared.changed.notify_all();
     }
 
-    /// The next steer for the running turn, if one has arrived.
+    /// The turn asks for these through [`bravebot_agent::Confirmer::interjection`] at a round
+    /// boundary, one call for each steer until none is left, so a steer is read between steps and
+    /// not while one runs.
     pub(crate) fn steer(&self) -> Option<String> {
         let mut state = self.lock();
         let words = state.steers.pop_front()?;
