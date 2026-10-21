@@ -278,7 +278,7 @@ not touch UPDATE-5. It governs only this check: the installer's checksum and sig
   version npm does not serve yet. Each installation asks the registry it came from, so neither is
   offered a command that cannot work.
 
-- **Nothing runs `install.sh`.** UPDATE-10 is by-construction for it for the reason every clause in
+- **Nothing runs `install.sh`.** For `install.sh`, UPDATE-10 is by-construction, for the reason every clause in
   [releases.md](releases.md) is: it is shell a person fetches over the network, and a test that
   ran it would install something. `install.ps1` is run, with the network and the signature check
   replaced by stand-ins, by `crates/cli/tests/installer_powershell.rs`.
