@@ -554,6 +554,27 @@ impl Session {
         self.panel_drag
     }
 
+    /// Record where a mouse report put the pointer. Every kind of report says, so the position is
+    /// as current as the last thing the terminal sent.
+    pub(crate) fn note_pointer(&mut self, row: u16, column: u16) {
+        self.pointer = Some((row, column));
+    }
+
+    /// The shape the pointer should have: the one for a border that can be dragged while it is over
+    /// the panel's border or such a drag is held, and the terminal's own otherwise. Read against the
+    /// layout as it is now, so a border that moved or a panel that closed under a pointer at rest
+    /// is not where the pointer still is.
+    pub(crate) fn pointer_shape(&self) -> crate::pointer::Shape {
+        let over = self
+            .pointer
+            .is_some_and(|(row, column)| self.on_panel_border(row, column));
+        if over || self.panel_drag {
+            crate::pointer::Shape::ResizeColumns
+        } else {
+            crate::pointer::Shape::Default
+        }
+    }
+
     /// Move the border to `column`: the panel is whatever is to its right.
     pub fn drag_panel_to(&mut self, column: u16) {
         let columns = self.laid.columns;

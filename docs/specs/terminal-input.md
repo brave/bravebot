@@ -1036,6 +1036,12 @@ and readline from disagreeing about what was last taken.
   modifier the chord arrives as Enter and only queues the line (INPUT-5). The offer beside the queue,
   which is where somebody reaches for it, is left off there; the list is drawn from one table for
   every terminal, as it is for Shift-Enter.
+- **Where the pointer's movement is reported, moving it between the two presses of Ctrl-C withdraws
+  the offer to leave.** A movement is a mouse report, and a mouse report withdraws the offer
+  ([INPUT-4](#INPUT-4)), so the second press offers again and a third leaves. That is the terminals
+  asked for a pointer shape ([PANEL-6](info-panel.md#PANEL-6)); elsewhere only the wheel and a click
+  withdraw it. A movement is not exempted, because the offer would then stand through input another
+  program can write, which is what withdrawing it is for.
 
 <a id="INPUT-19"></a>
 ### INPUT-19: Ctrl-R searches every prompt sent, and what is chosen goes into the box
@@ -2219,8 +2225,10 @@ screen of its own, so what was in the terminal beforehand is untouched and is ba
 afterwards. A session in lines ([cli.md](cli.md)) takes none of what follows, and this
 clause is about the one that draws. With that screen the
 session asks for mouse reporting, narrowed to the buttons, the wheel and motion while a button is
-held; bracketed paste; focus reporting; and, only where the terminal says it understands the
-request, disambiguated keys.
+held, except in a terminal that draws the pointer shape it is asked for
+([PANEL-6](info-panel.md#PANEL-6)), which is told of motion with no button held as well; bracketed
+paste; focus reporting; and, only where the terminal says it understands the request,
+disambiguated keys.
 
 Every one of those is given back when the session ends, including when it ends by failing rather
 than by being left, and again around each handover of the terminal to another program: the editor
@@ -2230,7 +2238,9 @@ found, and the same set is taken again on the way back.
 **Why.** Each mode is asked for because something here cannot work without it. The wheel scrolls
 the transcript only while the mouse is reported, and all-motion reporting is narrowed away because
 a pointer merely crossing the window is an event and a redraw per pixel of travel, for a gesture
-nothing here reads. Bracketed paste is what stops a pasted prompt sending itself, since without it
+nothing here reads. The exception is a terminal that draws the pointer shape on request: where the
+pointer is over the info panel's border is what the shape follows, so that terminal is not narrowed
+and no other is. Bracketed paste is what stops a pasted prompt sending itself, since without it
 the newline most clipboards carry arrives as Enter; it is also the only thing that says a paste came
 off a clipboard at all, so where a terminal does not send those markers a paste arrives as bare keys
 and nothing downstream can tell it from what a program wrote. Focus reporting is what makes the
@@ -2250,6 +2260,7 @@ person than whatever error put it there.
 `verified-by: bravebot_tui::app::every_mode_a_session_asks_for_is_given_back`
 `verified-by: bravebot_tui::app::a_pushed_keyboard_mode_is_popped_and_an_unpushed_one_is_not`
 `verified-by: bravebot_tui::app::the_session_reads_a_drag_and_not_every_pointer_movement`
+`verified-by: bravebot_tui::app::a_terminal_that_draws_the_pointer_shape_reports_every_movement`
 
 <a id="INPUT-34"></a>
 ### INPUT-34: what arrived together is not two presses

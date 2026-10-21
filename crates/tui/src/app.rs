@@ -1144,6 +1144,8 @@ fn redraw(
     // Every frame, so a turn started or ended by any path reaches the title; an unchanged state
     // writes nothing.
     crate::title::mark(terminal.backend_mut(), run_state(session.status))?;
+    // And the pointer's, because the border can move under a pointer at rest without a report of it.
+    crate::pointer::show(terminal.backend_mut(), session.pointer_shape())?;
     Ok(())
 }
 
@@ -2576,6 +2578,9 @@ fn event_loop(
         // nobody listed here (a first save, `/rename`, a resume, a rewind, `/clear`) still reaches
         // the title. An unchanged name writes nothing.
         crate::title::show(terminal.backend_mut(), stored.title())?;
+        // The pointer's shape follows a report of the pointer, which asks for no frame, so it is
+        // looked at here as well as when one is drawn.
+        crate::pointer::show(terminal.backend_mut(), session.pointer_shape())?;
 
         if session.is_quitting() {
             return Ok(left_behind(&stored));
@@ -6626,8 +6631,14 @@ mod tests {
     }
 
     fn asked_for(enhanced: bool) -> String {
+        asked_for_on(enhanced, false)
+    }
+
+    /// What is asked of a terminal that draws the pointer shape it is asked for, when `hover`, and
+    /// of one that does not otherwise.
+    fn asked_for_on(enhanced: bool, hover: bool) -> String {
         let mut written = Vec::new();
-        ask_for_modes(&mut written, enhanced, true).expect("ask");
+        ask_for_modes(&mut written, enhanced, true, hover).expect("ask");
         String::from_utf8(written).expect("utf8")
     }
 
@@ -6639,25 +6650,32 @@ mod tests {
 
     /// MOUSE-4: with `tui.mouse` off the interface never asks the terminal to report the mouse, so
     /// the terminal's own selection and wheel keep working, and the rest of the takeover is
-    /// unchanged. Capture is 1000, 1002 and 1006 left on (1003 is turned back off either way).
+    /// unchanged. Capture is 1000, 1002 and 1006 left on (1003 is turned back off unless the
+    /// terminal draws the pointer shape it is asked for, and with the mouse off it is not asked for
+    /// at all).
     #[test]
     fn a_session_with_the_mouse_off_never_asks_for_mouse_reporting() {
-        let mut off = Vec::new();
-        ask_for_modes(&mut off, false, false).expect("ask");
-        let off = String::from_utf8(off).expect("utf8");
-        let left_on = modes_left_on(&off);
-        for mode in ["1000", "1002", "1003", "1006"] {
-            assert!(
-                !off.contains(&format!("\x1b[?{mode}h")),
-                "mode {mode} asked for"
-            );
-            assert!(!left_on.contains(mode), "mode {mode} left on");
-        }
-        for mode in ["1049", "2004"] {
-            assert!(
-                left_on.contains(mode),
-                "mode {mode} was dropped with the mouse"
-            );
+        for hover in [false, true] {
+            let mut off = Vec::new();
+            ask_for_modes(&mut off, false, false, hover).expect("ask");
+            let off = String::from_utf8(off).expect("utf8");
+            let left_on = modes_left_on(&off);
+            for mode in ["1000", "1002", "1003", "1006"] {
+                assert!(
+                    !off.contains(&format!("\x1b[?{mode}h")),
+                    "mode {mode} asked for (hover {hover})"
+                );
+                assert!(
+                    !left_on.contains(mode),
+                    "mode {mode} left on (hover {hover})"
+                );
+            }
+            for mode in ["1049", "2004"] {
+                assert!(
+                    left_on.contains(mode),
+                    "mode {mode} was dropped with the mouse (hover {hover})"
+                );
+            }
         }
 
         let on = modes_left_on(&asked_for(false));
@@ -6698,14 +6716,14 @@ mod tests {
     /// markers into whatever they type next.
     #[test]
     fn every_mode_a_session_asks_for_is_given_back() {
-        for enhanced in [false, true] {
-            let asked = modes_left_on(&asked_for(enhanced));
+        for (enhanced, hover) in [(false, false), (true, false), (false, true), (true, true)] {
+            let asked = modes_left_on(&asked_for_on(enhanced, hover));
             let handed_back = modes_left_on(&given_back(enhanced));
             assert!(!asked.is_empty(), "nothing was asked for");
             for mode in &asked {
                 assert!(
                     !handed_back.contains(mode),
-                    "mode {mode} is left on: asked {asked:?}, handed back {handed_back:?}"
+                    "mode {mode} is left on (hover {hover}): asked {asked:?}, handed back {handed_back:?}"
                 );
             }
         }
@@ -6732,6 +6750,33 @@ mod tests {
         assert!(on.contains("1000"), "buttons are not reported: {on:?}");
         assert!(on.contains("1002"), "a drag is not reported: {on:?}");
         assert!(!on.contains("1003"), "all motion is reported: {on:?}");
+    }
+
+    /// A terminal that draws the pointer shape it is asked for is also asked to report the pointer
+    /// without a button held, since that report is how the border is found. The last tracking mode
+    /// requested is the one a terminal that keeps a single tracking state ends in, so it has to be
+    /// the one that reports every movement, or such a terminal reports none of them.
+    #[test]
+    fn a_terminal_that_draws_the_pointer_shape_reports_every_movement() {
+        let asked = asked_for_on(false, true);
+        let on = modes_left_on(&asked);
+        for mode in ["1000", "1002", "1003", "1006"] {
+            assert!(on.contains(mode), "mode {mode} is not on: {on:?}");
+        }
+        let last_tracking = asked
+            .split("\x1b[?")
+            .skip(1)
+            .filter(|request| {
+                ["1000h", "1002h", "1003h"]
+                    .iter()
+                    .any(|mode| request.starts_with(mode))
+            })
+            .last()
+            .expect("a tracking mode was asked for");
+        assert!(
+            last_tracking.starts_with("1003h"),
+            "the last tracking mode asked for is not all motion: {last_tracking:?}"
+        );
     }
 
     fn listed(key: &str, window: Option<u64>) -> bravebot_aichat::models::Model {
@@ -11441,6 +11486,14 @@ mod tests {
         for taken in [
             TermEvent::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollUp,
+                column: 1,
+                row: 1,
+                modifiers: KeyModifiers::NONE,
+            }),
+            // Reported on terminals that draw the pointer shape they are asked for, so a pointer
+            // that twitches between two presses of Ctrl-C is input like any other.
+            TermEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
                 column: 1,
                 row: 1,
                 modifiers: KeyModifiers::NONE,

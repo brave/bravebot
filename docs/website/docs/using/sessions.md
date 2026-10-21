@@ -277,7 +277,8 @@ again for that note.
 
 The title says which session a terminal holds. The info panel says the rest: press Ctrl-X, or type
 `/panel`, and a column 36 wide opens on the right of the screen. Drag the border between it and the transcript to give
-it more room or less; it keeps at least 24 columns and leaves the transcript at least 64. It holds
+it more room or less; it keeps at least 24 columns and leaves the transcript at least 64. Kitty,
+Ghostty and foot change the pointer to a resize arrow over the border. It holds
 
 - the session's name, with a GitHub pull request or issue address in it shown as
   `brave/bravebot#1975` and still a link to the address in a terminal that supports links,

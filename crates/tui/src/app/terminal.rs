@@ -40,15 +40,21 @@ pub(super) fn take_over_terminal<W: Write>(out: &mut W, mouse: bool) -> io::Resu
     // alternate screen, so the query is not painted into the session.
     crate::theme::sense(out);
     crate::theme::restore_saved();
-    ask_for_modes(out, enhanced_keys(), mouse)
+    ask_for_modes(out, enhanced_keys(), mouse, crate::pointer::is_asked())
 }
 
 /// Ask the terminal for every mode the interface draws and reads in.
 ///
 /// Separate from raw mode, and told rather than asked whether the terminal understands
 /// disambiguated keys, because both of those are properties of a real tty: what is left here is
-/// bytes, so a test can read back what was asked for and what was given up.
-pub(super) fn ask_for_modes<W: Write>(out: &mut W, enhanced: bool, mouse: bool) -> io::Result<()> {
+/// bytes, so a test can read back what was asked for and what was given up. `hover` is whether the
+/// terminal draws the pointer shape it is asked for ([`crate::pointer::is_asked`]).
+pub(super) fn ask_for_modes<W: Write>(
+    out: &mut W,
+    enhanced: bool,
+    mouse: bool,
+    hover: bool,
+) -> io::Result<()> {
     execute!(out, EnterAlternateScreen)?;
     if mouse {
         execute!(out, EnableMouseCapture)?;
@@ -73,7 +79,11 @@ pub(super) fn ask_for_modes<W: Write>(out: &mut W, enhanced: bool, mouse: bool) 
     // of events for a pointer merely crossing the window and a redraw for each one. Only the
     // drag matters here, so all-motion reporting goes back off: what stays on reports the
     // buttons, the wheel, and motion while a button is held, which is the gesture being read.
-    if mouse {
+    // Except where the terminal draws a pointer shape on request: finding the border to draw it
+    // over takes the pointer's position without a button, so all motion stays on there. Capture
+    // asks for it last of the three tracking modes, which is the one a terminal that keeps a single
+    // tracking state ends in.
+    if mouse && !hover {
         write!(out, "{TRACK_MOTION_ONLY_WHILE_DRAGGING}")?;
     }
     out.flush()
@@ -82,6 +92,9 @@ pub(super) fn ask_for_modes<W: Write>(out: &mut W, enhanced: bool, mouse: bool) 
 /// Put the terminal back the way it was found.
 pub(super) fn hand_back_terminal<W: Write>(out: &mut W) -> io::Result<()> {
     disable_raw_mode()?;
+    // Before the screen is left: a terminal that keeps a pointer shape for each screen applies the
+    // reset to the one it is on, and the shape was asked for on this one.
+    crate::pointer::give_back(out)?;
     give_back_modes(out, enhanced_keys())?;
     crate::title::give_back(out)
 }

@@ -746,6 +746,8 @@ pub struct Session {
     panel_width: u16,
     /// Whether a drag that began on the panel's border is still held (PANEL-6).
     panel_drag: bool,
+    /// Where the last mouse report put the pointer, as a row and a column.
+    pointer: Option<(u16, u16)>,
     /// Whether `/caffeinate` is on, and the hold it keeps while work is pending.
     pub(crate) caffeinate: crate::caffeinate::KeepAwake,
     /// When a recap is owed to a person who has been away (CMD-20).
@@ -1389,6 +1391,7 @@ impl Session {
             panel: false,
             panel_width: crate::panel::WIDTH,
             panel_drag: false,
+            pointer: None,
             caffeinate: Default::default(),
             away: Default::default(),
             prompt_files: None,

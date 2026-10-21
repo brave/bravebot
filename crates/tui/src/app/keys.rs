@@ -1540,6 +1540,7 @@ fn queued(session: &mut Session, key: KeyEvent) -> Action {
 /// away, so the drag that would have highlighted a line arrives here instead, and answering it
 /// is the only way a user gets to copy anything.
 pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
+    session.note_pointer(mouse.row, mouse.column);
     match mouse.kind {
         // While the scroller is open the wheel is one of its keys, so it stops at the first row
         // and the last the way every other movement in that mode does. It takes no count, so it

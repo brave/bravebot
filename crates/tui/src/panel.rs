@@ -2093,4 +2093,80 @@ mod tests {
         );
         assert_eq!(actions.last(), Some(&Action::Copy));
     }
+
+    /// Move the pointer to `row` and `column` with no button held, as a terminal reports it, and
+    /// say what shape the session then asks for.
+    fn shape_at(session: &mut Session, row: u16, column: u16) -> crate::pointer::Shape {
+        let moved = mouse(
+            ratatui::crossterm::event::MouseEventKind::Moved,
+            row,
+            column,
+        );
+        crate::app::handle_mouse(session, moved);
+        session.pointer_shape()
+    }
+
+    /// The border is the panel's left column from its first row to its last, so a pointer one
+    /// column to either side, or on the hint line under it, is not told it can drag.
+    #[test]
+    fn the_resize_pointer_is_over_the_border_column_and_nowhere_else() {
+        use crate::pointer::Shape::{Default, ResizeColumns};
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        let panel = session.laid.panes.last().expect("panel").1;
+        let (first, last, below) = (panel.top(), panel.bottom() - 1, panel.bottom());
+        let border = panel.left();
+        assert_eq!(shape_at(&mut session, first, border), ResizeColumns);
+        assert_eq!(shape_at(&mut session, last, border), ResizeColumns);
+        assert_eq!(shape_at(&mut session, below, border), Default, "below it");
+        assert_eq!(shape_at(&mut session, 5, border - 1), Default, "left of it");
+        assert_eq!(
+            shape_at(&mut session, 5, border + 1),
+            Default,
+            "right of it"
+        );
+    }
+
+    /// A drag keeps the resize pointer while the pointer is nowhere near where the border was when
+    /// the frame was drawn, and when it ends the pointer is the resize one only if it rests on the
+    /// border where the next frame put it. A shape taken from hovering alone drops in the first, and
+    /// one taken from the drag alone is wrong in the second.
+    #[test]
+    fn a_drag_holds_the_resize_pointer_and_its_end_follows_the_border() {
+        use crate::pointer::Shape::{Default, ResizeColumns};
+        use ratatui::crossterm::event::{MouseButton::Left, MouseEventKind::*};
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        let step = |session: &mut Session, kind, column| {
+            crate::app::handle_mouse(session, mouse(kind, 5, column));
+            session.pointer_shape()
+        };
+        assert_eq!(step(&mut session, Down(Left), 84), ResizeColumns);
+        assert_eq!(
+            step(&mut session, Drag(Left), 70),
+            ResizeColumns,
+            "the drag ended the shape before the border had been drawn where the pointer is"
+        );
+        screen(&mut session, 120, 30);
+        assert_eq!(
+            step(&mut session, Up(Left), 70),
+            ResizeColumns,
+            "at rest on the border"
+        );
+        assert_eq!(step(&mut session, Moved, 40), Default, "moved off it");
+    }
+
+    /// A panel closed while the pointer rests on its border leaves the pointer over nothing, with
+    /// no report of the pointer to say so.
+    #[test]
+    fn a_panel_closed_under_the_pointer_gives_the_resize_pointer_back() {
+        use crate::pointer::Shape::{Default, ResizeColumns};
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        let border = session.laid.panes.last().expect("panel").1.left();
+        assert_eq!(shape_at(&mut session, 5, border), ResizeColumns);
+        session.toggle_panel();
+        screen(&mut session, 120, 30);
+        assert_eq!(session.pointer_shape(), Default);
+    }
 }
