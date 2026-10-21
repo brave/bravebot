@@ -855,8 +855,8 @@ arrives at all.
     words, as does a byte order mark. A slot is filled from text that is UTF-8 as it stands.
   - **Choose how the bytes are split into lines** for a page of the file that is read through a
     manifest step. A mark makes the units two or four bytes, and an invalid byte makes one
-    character. The line and byte counts the planner is told for a quarantined page were the
-    attacker's to set already ([LABEL-3](#LABEL-3)).
+    character. The line and byte counts the planner is told for a quarantined page are already the
+    attacker's to set ([LABEL-3](#LABEL-3)).
 
   What is **not** on the list: the label, which depends on the path alone, any destination, any
   argument of a later call, and any byte of the file. The size the planner is told is the file's own
