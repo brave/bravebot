@@ -16100,10 +16100,16 @@ const PAST_THE_UNWATCHED_BOUND: usize = bravebot_agent::turn::MAX_TOOL_ROUNDS + 
 /// times in a row is held and put to a person (TURN-9), and a session in lines has no one to
 /// answer.
 fn a_gateway_that_lists_until(rounds: usize) -> Gateway {
+    a_gateway_that_lists_until_reporting(rounds, None)
+}
+
+/// The same, with every reply reporting `usage` as the tokens it cost in and out, so the total a run
+/// has spent is a number the test can state.
+fn a_gateway_that_lists_until_reporting(rounds: usize, usage: Option<(u64, u64)>) -> Gateway {
     a_gateway(r#"["tools"]"#, move |body| {
         let given = body.matches(r#""role":"tool""#).count();
         let directory = if given.is_multiple_of(2) { "." } else { "./" };
-        let frame = match given >= rounds {
+        let mut frame = match given >= rounds {
             true => serde_json::json!({"model":"reasons-only","choices":[{
                 "index":0,"delta":{"role":"assistant","content":"done"},
                 "finish_reason":"stop"}]}),
@@ -16114,6 +16120,10 @@ fn a_gateway_that_lists_until(rounds: usize) -> Gateway {
                         "arguments":serde_json::json!({"directory": directory}).to_string()}}]},
                 "finish_reason":"tool_calls"}]}),
         };
+        if let Some((prompt, completion)) = usage {
+            frame["usage"] =
+                serde_json::json!({"prompt_tokens": prompt, "completion_tokens": completion});
+        }
         let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
         format!(
             "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -16151,6 +16161,235 @@ fn a_one_shot_run_is_held_to_the_default_bound() {
         !bodies.last().expect("a last request").contains("\"tools\""),
         "the last request of a bounded run still offered tools"
     );
+}
+
+/// A one-shot run under `limit_flags` against `gateway`, asking for `--json`.
+fn limited_run(name: &str, gateway: &Gateway, limit_flags: &[&str]) -> (Output, serde_json::Value) {
+    let scratch = Scratch::new(name).with_settings(&settings_for(gateway));
+    let mut arguments = limit_flags.to_vec();
+    arguments.extend(["--json", "-p", "keep looking"]);
+    let output = bravebot_started_in(&scratch.path, &scratch.path, AT_A_GATEWAY, &arguments);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let result = serde_json::from_str(stdout.trim()).unwrap_or(serde_json::Value::Null);
+    (output, result)
+}
+
+/// CLI-35, TURN-13: a run whose planner asks for a round past `--max-rounds` ends on status 7, with
+/// the rounds it made in the result object and no round run after the limit.
+///
+/// The model asks for a listing for ever. Three rounds are allowed, so the gateway is sent four
+/// requests: the three that were answered with a listing, and the one that asked for a fourth. A
+/// run stopped a round early shows two calls and three requests, and one that let the fourth round
+/// through shows four calls.
+#[test]
+fn a_run_asking_for_a_round_past_max_rounds_ends_on_status_seven() {
+    let gateway = a_gateway_that_lists_until(10);
+    let (output, result) = limited_run("cli-running-max-rounds", &gateway, &["--max-rounds", "3"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(7), "{stdout} {stderr}");
+    assert!(stderr.contains("BB1007: "), "{stderr}");
+    assert!(
+        stderr.contains("limit on rounds of tool calls (3)"),
+        "{stderr}"
+    );
+    assert_eq!(result["ok"], false, "{stdout}");
+    assert_eq!(result["status"], 7);
+    assert_eq!(result["reason"], "limit");
+    assert_eq!(result["identifier"], "BB1007");
+    assert_eq!(result["steps"], 3, "{stdout}");
+    assert_eq!(result["reply"], "");
+    assert_eq!(
+        result["calls"].as_array().map(Vec::len),
+        Some(3),
+        "{stdout}"
+    );
+    assert_eq!(gateway.asked.try_iter().count(), 4);
+}
+
+/// CLI-35: the largest `--max-rounds` is the one just below the built-in bound, and a run holding to
+/// it is stopped by the limit, with the status 7. At the bound itself the built-in bound would take
+/// the tools away first and the run would answer, which is why that value is refused.
+#[test]
+fn a_run_asking_for_a_round_past_the_largest_max_rounds_ends_on_status_seven() {
+    let most = bravebot_agent::turn::MAX_TOOL_ROUNDS - 1;
+    let gateway = a_gateway_that_lists_until(PAST_THE_UNWATCHED_BOUND);
+    let (output, result) = limited_run(
+        "cli-running-max-rounds-largest",
+        &gateway,
+        &["--max-rounds", &most.to_string()],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(7), "{stdout} {stderr}");
+    assert_eq!(result["steps"], most, "{stdout}");
+    assert_eq!(gateway.asked.try_iter().count(), most + 1);
+}
+
+/// CLI-35, CLI-5: without `--json` a run stopped at its limit writes nothing to stdout and says the
+/// identifier and what was reached on stderr, as any other failure does.
+#[test]
+fn a_run_stopped_at_max_rounds_writes_nothing_to_stdout() {
+    let gateway = a_gateway_that_lists_until(10);
+    let scratch =
+        Scratch::new("cli-running-max-rounds-prose").with_settings(&settings_for(&gateway));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--max-rounds", "2", "-p", "keep looking"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(7), "{stderr}");
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("BB1007: stopped at the limit"), "{stderr}");
+}
+
+/// CLI-35: a run that finishes within `--max-rounds` is not touched by it. The planner answers
+/// right after the last round it was allowed, which is the case a limit that stopped at the count
+/// would get wrong, and the status is the one a run with no limit has.
+#[test]
+fn a_run_that_finishes_within_max_rounds_ends_as_it_would_without_it() {
+    let gateway = a_gateway_that_lists_until(3);
+    let (output, result) = limited_run(
+        "cli-running-max-rounds-within",
+        &gateway,
+        &["--max-rounds", "3"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout} {stderr}");
+    assert_eq!(result["ok"], true, "{stdout}");
+    assert_eq!(result["status"], 0);
+    assert_eq!(result["steps"], 3);
+    assert_eq!(result["reply"], "done");
+    assert_eq!(gateway.asked.try_iter().count(), 4);
+}
+
+/// CLI-35, TURN-13: `--max-tokens` ends the run before the request that would follow the one that
+/// reached it, and the result object says what was spent.
+///
+/// Each reply reports 60 tokens in and 40 out. A limit of 250 is reached by the third request,
+/// which brings the total to 300, so a fourth request is not sent. Only the sum reaches 250 there:
+/// the output alone is 120 and the prompt alone 180, and a run counting either would have sent
+/// two more.
+#[test]
+fn a_run_that_has_spent_max_tokens_sends_no_further_request_and_ends_on_status_seven() {
+    let gateway = a_gateway_that_lists_until_reporting(10, Some((60, 40)));
+    let (output, result) =
+        limited_run("cli-running-max-tokens", &gateway, &["--max-tokens", "250"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(7), "{stdout} {stderr}");
+    assert!(stderr.contains("BB1007: "), "{stderr}");
+    assert!(stderr.contains("limit on tokens (250)"), "{stderr}");
+    assert_eq!(result["status"], 7, "{stdout}");
+    assert_eq!(result["reason"], "limit");
+    assert_eq!(result["steps"], 3);
+    assert_eq!(result["tokens"]["total"], 300);
+    assert_eq!(result["tokens"]["output"], 120);
+    assert_eq!(gateway.asked.try_iter().count(), 3);
+}
+
+/// CLI-35: an answer that carries the total past `--max-tokens` is the run's answer. The limit
+/// stops a request being sent; with none left to send, the run ends as it would without it and the
+/// result object reports what it spent.
+#[test]
+fn an_answer_that_passes_max_tokens_is_still_written() {
+    let gateway = a_gateway_that_lists_until_reporting(1, Some((60, 40)));
+    let (output, result) = limited_run(
+        "cli-running-max-tokens-last",
+        &gateway,
+        &["--max-tokens", "150"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout} {stderr}");
+    assert_eq!(result["reply"], "done");
+    assert_eq!(result["tokens"]["total"], 200);
+}
+
+/// CLI-35, CLI-30: `--trace` shows the line that says which limit ended the run, the round it was
+/// reached on and what the run had spent against it, with no content in it.
+#[test]
+fn the_trail_of_a_run_stopped_at_its_limit_says_which_limit_it_was() {
+    let gateway = a_gateway_that_lists_until(10);
+    let scratch =
+        Scratch::new("cli-running-max-rounds-trail").with_settings(&settings_for(&gateway));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--max-rounds", "2", "--trace", "-p", "keep looking"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(7), "{stderr}");
+    assert!(
+        stderr.contains("run_limit: round 2: 2 rounds against a limit of 2; the run ended"),
+        "{stderr}"
+    );
+}
+
+/// CLI-35, CLI-6: a value that names no limit is refused with the argument status, and the
+/// refusal comes before anything is sent. Run as a limit of nothing, `0` would stop a run before its
+/// first request, and a bound at or above the built-in one would be reached by that bound first and
+/// answer with status 0 where the script expects 7.
+#[test]
+fn a_limit_that_names_no_count_is_refused_before_anything_is_sent() {
+    let at_the_bound = bravebot_agent::turn::MAX_TOOL_ROUNDS.to_string();
+    let past_the_bound = (bravebot_agent::turn::MAX_TOOL_ROUNDS + 1).to_string();
+    let gateway = a_gateway_that_lists_until(10);
+    let scratch = Scratch::new("cli-running-limit-refused").with_settings(&settings_for(&gateway));
+
+    for typed in [
+        &["--max-rounds", "0"][..],
+        &["--max-rounds", "-3"],
+        &["--max-rounds", "three"],
+        &["--max-rounds", at_the_bound.as_str()],
+        &["--max-rounds", past_the_bound.as_str()],
+        &["--max-rounds"],
+        &["--max-tokens", "0"],
+        &["--max-tokens", "1.5"],
+        &["--max-tokens", ""],
+        &["--max-tokens"],
+    ] {
+        let mut arguments = typed.to_vec();
+        arguments.extend(["--json", "-p", "keep looking"]);
+        let output = bravebot_started_in(&scratch.path, &scratch.path, AT_A_GATEWAY, &arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{typed:?}: {stderr}");
+        assert!(stderr.contains("BB1002: "), "{typed:?}: {stderr}");
+        assert!(stderr.contains(typed[0]), "{typed:?}: {stderr}");
+        let result: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+        assert_eq!(result["status"], 2, "{typed:?}: {stdout}");
+    }
+    assert_eq!(gateway.asked.try_iter().count(), 0, "a request went out");
+}
+
+/// CLI-35: a manifest run has no rounds of tool calls to count, so it refuses both flags by name
+/// with the argument status and sends nothing.
+#[test]
+fn a_manifest_run_refuses_a_limit_and_sends_nothing() {
+    let gateway = a_gateway_that_lists_until(10);
+    let scratch = Scratch::new("cli-running-limit-manifest").with_settings(&settings_for(&gateway));
+
+    for flag in [["--max-rounds", "3"], ["--max-tokens", "1000"]] {
+        let output = bravebot_started_in(
+            &scratch.path,
+            &scratch.path,
+            AT_A_GATEWAY,
+            &[flag[0], flag[1], "--mode", "manifest", "-p", "keep looking"],
+        );
+        let (_, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{flag:?}: {stderr}");
+        assert!(stderr.contains(flag[0]), "{flag:?}: {stderr}");
+        assert!(stderr.contains("--mode manifest"), "{flag:?}: {stderr}");
+    }
+    assert_eq!(gateway.asked.try_iter().count(), 0, "a request went out");
 }
 
 /// TURN-2: a session in lines passes no bound, because a person is watching it.

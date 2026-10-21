@@ -18358,6 +18358,400 @@ fn calls_made_after_the_budget_is_spent_are_not_run() {
     );
 }
 
+/// The run limits a person gave a task (TURN-13).
+mod run_limits {
+    use super::*;
+    use bravebot_agent::TurnError;
+    use bravebot_agent::turn::{LimitReached, RunLimits};
+
+    /// What a run given `limits` came to, with the requests the backend received, the marker file
+    /// the rounds wrote and the lines of the trail about the limit.
+    struct Ran {
+        ended: Result<bravebot_agent::turn::Outcome, TurnError>,
+        requests: usize,
+        marker: String,
+        trail: Vec<String>,
+    }
+
+    /// Runs `replies` under `limits`. Every round the planner asks for overwrites `marker.txt` with
+    /// its own number, so what the file says afterwards is the last round that ran: a round the run
+    /// went on to run when it should have stopped leaves its number there.
+    fn run(name: &str, limits: RunLimits, replies: Vec<String>) -> Ran {
+        let scratch = Scratch::new(name);
+        std::fs::write(scratch.path.join("marker.txt"), "before").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(replies);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let task = Task::new("keep going").with_run_limits(limits);
+        let ended = turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+        );
+        let trail = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed { gate, detail } if *gate == "run_limit" => Some(detail.clone()),
+                _ => None,
+            })
+            .collect();
+        Ran {
+            ended,
+            requests: received.try_iter().count(),
+            marker: std::fs::read_to_string(scratch.path.join("marker.txt")).unwrap(),
+            trail,
+        }
+    }
+
+    /// A round that writes its own number, costing `prompt` and `completion` tokens.
+    fn round(number: usize, prompt: u64, completion: u64) -> String {
+        tool_request_with_usage(
+            "write_file",
+            &format!(r#"{{"path":"marker.txt","contents":"round {number}"}}"#),
+            prompt,
+            completion,
+        )
+    }
+
+    fn rounds_of(limit: usize) -> RunLimits {
+        RunLimits {
+            rounds: Some(limit),
+            tokens: None,
+        }
+    }
+
+    fn tokens_of(limit: u64) -> RunLimits {
+        RunLimits {
+            rounds: None,
+            tokens: Some(limit),
+        }
+    }
+
+    /// The planner asks for a third round under a limit of two. That round is not run, and the
+    /// request that carried it was the last one sent.
+    ///
+    /// The marker tells the off-by-ones apart: a run that let the third round through leaves
+    /// `round 2`, and one that stopped a round early leaves `round 0`. Taking the tools away and
+    /// asking for an answer, which is what the built-in bound does, would end in an answer and not
+    /// in the limit.
+    #[test]
+    fn a_planner_that_asks_for_a_round_past_the_limit_ends_the_run_before_it_runs() {
+        let replies = (0..4).map(|number| round(number, 10, 5)).collect();
+        let ran = run("run-limit-rounds", rounds_of(2), replies);
+
+        assert!(
+            matches!(
+                ran.ended,
+                Err(TurnError::LimitReached(LimitReached::Rounds { most: 2 }))
+            ),
+            "{:?}",
+            ran.ended.map(|outcome| outcome.steps)
+        );
+        assert_eq!(
+            ran.requests, 3,
+            "two rounds, and the request asking for a third"
+        );
+        assert_eq!(
+            ran.marker, "round 1",
+            "the round past the limit was run, or the run stopped short of the limit"
+        );
+        assert_eq!(
+            ran.trail,
+            ["round 2: 2 rounds against a limit of 2; the run ended before it went past it"]
+        );
+    }
+
+    /// A planner that answers once its last allowed round has run has asked for no further round,
+    /// so it has reached nothing: the run ends as an answer, and the trail says nothing.
+    ///
+    /// A limit that stopped the run when the count reached it, without waiting to see whether
+    /// another round was asked for, would end this one as stopped.
+    #[test]
+    fn a_planner_that_answers_after_its_last_allowed_round_reaches_no_limit() {
+        let replies = vec![
+            round(0, 10, 5),
+            round(1, 10, 5),
+            reply_with("both rounds ran"),
+        ];
+        let ran = run("run-limit-answers", rounds_of(2), replies);
+
+        let outcome = ran.ended.expect("the run finished");
+        assert_eq!(outcome.steps, 2);
+        assert_eq!(outcome.reply_for_display(), "both rounds ran");
+        assert_eq!(ran.requests, 3);
+        assert!(ran.trail.is_empty(), "{:?}", ran.trail);
+    }
+
+    /// With each request costing 100 tokens, a limit of 250 is passed by the third. The fourth is
+    /// not sent.
+    ///
+    /// The costs are split 60 in and 40 out so the sum is the only thing that reaches 250 at the
+    /// third request: counting only what the model wrote reaches it at the seventh, and counting
+    /// only what it was sent at the fifth.
+    #[test]
+    fn a_run_that_has_spent_its_token_limit_sends_no_further_request() {
+        let replies = (0..6).map(|number| round(number, 60, 40)).collect();
+        let ran = run("run-limit-tokens", tokens_of(250), replies);
+
+        assert!(
+            matches!(
+                ran.ended,
+                Err(TurnError::LimitReached(LimitReached::Tokens {
+                    most: 250,
+                    spent: 300,
+                    rounds: 3,
+                }))
+            ),
+            "{:?}",
+            ran.ended.map(|outcome| outcome.tokens)
+        );
+        assert_eq!(
+            ran.requests, 3,
+            "a request was sent after the limit was spent"
+        );
+        assert_eq!(
+            ran.marker, "round 2",
+            "the three rounds the run paid for ran"
+        );
+        assert_eq!(
+            ran.trail,
+            ["round 3: 300 tokens against a limit of 250; the run ended before it went past it"]
+        );
+    }
+
+    /// Spending exactly the limit reaches it. A comparison that needed the total to pass it would
+    /// send a fourth request.
+    #[test]
+    fn spending_exactly_the_token_limit_reaches_it() {
+        let replies = (0..6).map(|number| round(number, 60, 40)).collect();
+        let ran = run("run-limit-tokens-exact", tokens_of(300), replies);
+
+        assert!(
+            matches!(
+                ran.ended,
+                Err(TurnError::LimitReached(LimitReached::Tokens {
+                    spent: 300,
+                    ..
+                }))
+            ),
+            "{:?}",
+            ran.ended.map(|outcome| outcome.tokens)
+        );
+        assert_eq!(ran.requests, 3);
+    }
+
+    /// An answer that carries the total past the limit is still the run's answer. The limit stops
+    /// a request from being sent, and there is none left to stop, so the run ends as it would
+    /// without it and the result reports what it spent.
+    ///
+    /// A limit read once the run has finished would turn this answer into a failure after all of
+    /// the cost was paid.
+    #[test]
+    fn an_answer_that_carries_the_total_past_the_token_limit_is_still_an_answer() {
+        let replies = vec![round(0, 60, 40), reply_with_usage("done", 60, 40)];
+        let ran = run("run-limit-tokens-last", tokens_of(150), replies);
+
+        let outcome = ran.ended.expect("the run finished");
+        assert_eq!(outcome.reply_for_display(), "done");
+        assert_eq!(outcome.tokens, 200);
+        assert_eq!(ran.requests, 2);
+        assert!(ran.trail.is_empty(), "{:?}", ran.trail);
+    }
+
+    /// With both limits given, whichever is reached first ends the run, and the error says which.
+    #[test]
+    fn the_limit_reached_first_is_the_one_that_ends_the_run() {
+        let limits = RunLimits {
+            rounds: Some(5),
+            tokens: Some(150),
+        };
+        let replies = (0..6).map(|number| round(number, 60, 40)).collect();
+        let ran = run("run-limit-both", limits, replies);
+
+        assert!(
+            matches!(
+                ran.ended,
+                Err(TurnError::LimitReached(LimitReached::Tokens {
+                    rounds: 2,
+                    ..
+                }))
+            ),
+            "{:?}",
+            ran.ended.map(|outcome| outcome.tokens)
+        );
+        assert_eq!(ran.requests, 2);
+    }
+
+    /// A summary that a compaction asks for spends tokens of its own. When it takes the run to its
+    /// limit, the planner request that would follow it is not sent.
+    ///
+    /// The check before the summary alone passes here, since nothing has been spent when it is made.
+    /// A run that checked only there would send the planner request and pay for it too.
+    #[test]
+    fn a_compaction_that_spends_the_token_limit_is_not_followed_by_a_planner_request() {
+        let scratch = Scratch::new("run-limit-compaction");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![
+            reply_with_usage("they were porting the parser", 600, 100),
+            reply_with("never asked for"),
+        ]);
+        let config = config_with_budget(&endpoint, 1_000);
+        let mut conversation = a_long_conversation();
+        let task = Task::new("carry on").with_run_limits(tokens_of(500));
+
+        let completed = turn::resume(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task,
+            &mut conversation,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::IgnoreReports,
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new(workspace.root()),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+
+        assert!(
+            matches!(
+                completed.outcome,
+                Err(TurnError::LimitReached(LimitReached::Tokens {
+                    most: 500,
+                    spent: 700,
+                    rounds: 0,
+                }))
+            ),
+            "{:?}",
+            completed.outcome.map(|outcome| outcome.tokens)
+        );
+        let sent: Vec<String> = received.try_iter().collect();
+        assert_eq!(sent.len(), 1, "a planner request followed the summary");
+        assert!(sent[0].contains(A_SUMMARY_ASKING), "{}", sent[0]);
+    }
+
+    /// What a delegate spends is part of the run's total once the turn has collected it, so a run
+    /// whose planner spent little is held back by a delegate that spent a lot.
+    ///
+    /// The planner answers while the delegate works, which makes the turn wait for it and then go
+    /// round again. The planner's own two requests cost 30 tokens against a limit of 300, and the
+    /// delegate's one costs 500: only a run that counts the delegate stops before a third request.
+    #[test]
+    fn what_a_delegate_spent_counts_towards_the_token_limit() {
+        let scratch = Scratch::new("run-limit-delegate");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received, _) = serve_by_marker_in(
+            vec![
+                (
+                    "LIMIT-WITH-A-DELEGATE",
+                    vec![
+                        tool_request_with_usage(
+                            "spawn_agent",
+                            r#"{"kind":"reader","task":"COSTS-A-LOT"}"#,
+                            10,
+                            5,
+                        ),
+                        reply_with_usage("waiting for it", 10, 5),
+                        reply_with("never asked for"),
+                    ],
+                ),
+                (
+                    "COSTS-A-LOT",
+                    vec![reply_with_usage("what the delegate found", 400, 100)],
+                ),
+            ],
+            Order::After {
+                held: "COSTS-A-LOT",
+                after: "LIMIT-WITH-A-DELEGATE",
+                asked: 2,
+            },
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let task = Task::new("LIMIT-WITH-A-DELEGATE").with_run_limits(tokens_of(300));
+
+        let ended = turns::run_cancellable(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut Watched::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        );
+
+        assert!(
+            matches!(
+                ended,
+                Err(TurnError::LimitReached(LimitReached::Tokens {
+                    most: 300,
+                    spent: 530,
+                    rounds: 1,
+                }))
+            ),
+            "{:?}",
+            ended.map(|outcome| outcome.tokens)
+        );
+        assert_eq!(
+            every_request(&received).len(),
+            3,
+            "the planner was asked a third time after the delegate took the total past the limit"
+        );
+    }
+
+    /// A task given no limit runs as it always has, including past a number of rounds a limit
+    /// might have been given. The built-in bound is the only one.
+    #[test]
+    fn a_task_with_no_limit_of_its_own_is_not_stopped_by_one() {
+        let mut replies: Vec<String> = (0..6).map(|number| round(number, 60, 40)).collect();
+        replies.push(reply_with("done"));
+        let ran = run("run-limit-none", RunLimits::default(), replies);
+
+        assert_eq!(ran.ended.expect("the run finished").steps, 6);
+        assert!(ran.trail.is_empty(), "{:?}", ran.trail);
+    }
+
+    /// The stop is a stop and not a failure, so a caller classifying by ending reads it as the
+    /// person's own, and the sentence names what was reached.
+    #[test]
+    fn a_limit_is_a_stop_and_says_which_limit_it_was() {
+        let rounds = TurnError::LimitReached(LimitReached::Rounds { most: 4 });
+        let tokens = TurnError::LimitReached(LimitReached::Tokens {
+            most: 1000,
+            spent: 1024,
+            rounds: 3,
+        });
+
+        assert!(matches!(
+            rounds.ending(),
+            bravebot_agent::outcome::Ending::Stopped { attempts: Some(0) }
+        ));
+        assert!(
+            rounds.to_string().contains("rounds of tool calls (4)"),
+            "{rounds}"
+        );
+        assert!(tokens.to_string().contains("tokens (1000)"), "{tokens}");
+        assert!(tokens.to_string().contains("1024"), "{tokens}");
+        assert_eq!(rounds.limit_reached().map(LimitReached::rounds), Some(4));
+        assert_eq!(tokens.limit_reached().map(LimitReached::rounds), Some(3));
+        assert!(
+            TurnError::Cancelled { attempts: None }
+                .limit_reached()
+                .is_none()
+        );
+    }
+}
+
 /// Reading a file the planner may not see costs nothing but the reference.
 ///
 /// The point of the whole arrangement is that nobody reads quarantined content until something

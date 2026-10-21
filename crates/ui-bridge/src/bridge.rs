@@ -2740,7 +2740,9 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         _ => diagnosis.and_then(|d| d.attempts),
     };
     let kind = match error {
-        TurnError::Cancelled { .. } => "cancelled",
+        // Only a one-shot run gives a turn a limit of its own (TURN-13), so the bridge never sees
+        // this one, and a stop is what it would be: the ending says `Stopped`.
+        TurnError::Cancelled { .. } | TurnError::LimitReached(_) => "cancelled",
         TurnError::Precommit(_) => "precommit",
         TurnError::Workspace(_) => "workspace",
         TurnError::Chat(_) => "chat",

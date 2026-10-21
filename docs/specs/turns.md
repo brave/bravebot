@@ -30,7 +30,7 @@ into its output ceiling. What a session does when it has spent as many tokens as
 it may. What a turn does when the planner asks for the same call three times running. How the reads of one
 round are run when the planner asks for several together. What the note under a finished turn says
 about refusals. What a turn that answers with tasks still open in the planner's list does about
-them. What the planner is told when a turn ends in a failure.
+them. What the planner is told when a turn ends in a failure. What a limit a person gave a run does to it.
 
 ## Clauses
 
@@ -682,3 +682,64 @@ it, so a session that fails repeatedly holds one for each failure. A note is abo
 `verified-by: bravebot_tui::sessions::a_failed_turn_leaves_a_note_the_transcript_does_not_draw_and_a_resume_still_sends`
 `verified-by: bravebot_ui_bridge::history::a_failed_turn_leaves_the_planner_a_note_in_the_saved_conversation`
 `verified-by: bravebot_cli::running::a_session_in_lines_tells_the_planner_that_the_turn_before_it_failed`
+
+<a id="TURN-14"></a>
+### TURN-14: a limit a person gave a run ends it before it goes past
+
+A task may carry limits from the person who started it: the most rounds of tool calls the run may
+make and the most tokens it may spend. `--max-rounds` and `--max-tokens` set them for a one-shot run
+([CLI-35](cli.md#CLI-35)), and nothing else does. A run that reaches one ends there. The turn returns
+which limit it was and the rounds the run made. The tokens it spent are reported as for any turn
+that stops ([TURN-5](#TURN-5)).
+
+**Rounds.** When the planner asks for a round of tool calls and the run has made the most it may,
+the calls are not run. The request that carried them was sent and is counted. A planner that answers
+after its last allowed round asked for no further round, so it reached nothing and the turn ends on
+its answer.
+
+**Tokens.** Before a request is sent, the tokens the run has spent are compared with the limit. That
+is the total [TURN-5](#TURN-5) reports, delegates that were collected and the tool lists of servers
+included. At or over the limit the request is not sent. The comparison is made before a compaction
+and again after it, since the summary spends tokens of its own and the planner request that follows
+is the one held back. An answer that carries the total past the limit is the turn's answer, since no
+request is left to stop.
+
+**It ends the turn where [TURN-1](#TURN-1) takes the tools.** The bound of TURN-1 has the planner
+answer with what it has, so the run ends on an answer. A person who set a limit has a script that
+needs to tell a run that was cut short from one that finished, and an answer written to a limit
+looks like the second. Both may be in force. `--max-rounds` is below that bound, so the limit is
+the one reached.
+
+**Nobody is asked.** The question of [TURN-8](#TURN-8) is not put. A run given limits has nobody to
+put it to, and a higher limit is the same task run again.
+
+**The figures are counts and the stop depends on no content.** Rounds are counted by the driver and
+tokens are the usage the backends reported ([BACKEND-31](backends.md#BACKEND-31)), so no reply and
+no tool result decides it. A request that reports nothing adds nothing, so a backend that reports no
+usage never stops a run at a limit in tokens, as it never stops a session at one ([TURN-8](#TURN-8)).
+
+**Only a caller with a flag to read them from sets them.** The terminal session, the desktop window,
+a manifest run and a delegate carry none. A delegate's spend reaches the run's total when it is
+collected, and a delegate still running when the run ends is collected first, as for any stop
+([TURN-5](#TURN-5)).
+
+**Recorded.** The trail gets a line with the round, what the run had spent against the limit, what
+the limit counts and the limit, which carries no content ([TRACE-2](trace.md#TRACE-2)).
+
+**Known costs.** The check comes before a request, so a limit in tokens is passed by the request that
+reached it. A delegate still running when the run ends is waited for and not stopped, so what it
+spends before it finishes is in the total and is not held to the limit. A backend that reports no
+usage never reaches a limit in tokens. A run that ends on a limit writes no session record, so
+`--resume` cannot carry it on, and the files it changed stay changed.
+
+`verified-by: bravebot_agent::turn::a_planner_that_asks_for_a_round_past_the_limit_ends_the_run_before_it_runs`
+`verified-by: bravebot_agent::turn::a_planner_that_answers_after_its_last_allowed_round_reaches_no_limit`
+`verified-by: bravebot_agent::turn::a_run_that_has_spent_its_token_limit_sends_no_further_request`
+`verified-by: bravebot_agent::turn::a_compaction_that_spends_the_token_limit_is_not_followed_by_a_planner_request`
+`verified-by: bravebot_agent::turn::what_a_delegate_spent_counts_towards_the_token_limit`
+`verified-by: bravebot_agent::turn::spending_exactly_the_token_limit_reaches_it`
+`verified-by: bravebot_agent::turn::an_answer_that_carries_the_total_past_the_token_limit_is_still_an_answer`
+`verified-by: bravebot_agent::turn::the_limit_reached_first_is_the_one_that_ends_the_run`
+`verified-by: bravebot_agent::turn::a_task_with_no_limit_of_its_own_is_not_stopped_by_one`
+`verified-by: bravebot_agent::turn::a_limit_is_a_stop_and_says_which_limit_it_was`
+`verified-by: bravebot_cli::running::the_trail_of_a_run_stopped_at_its_limit_says_which_limit_it_was`

@@ -2902,6 +2902,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that a run reached a limit its person gave it, and ended there (TURN-13).
+    ///
+    /// Counts and a fixed word for what they count, so the line carries no content (TRACE-2). A
+    /// run that stops leaves nothing else saying which of its limits did it, or how far the run
+    /// had got.
+    pub fn record_run_limit(&mut self, round: usize, counts: &'static str, made: u64, limit: u64) {
+        self.allow(
+            "run_limit",
+            format!(
+                "round {round}: {made} {counts} against a limit of {limit}; the run ended before \
+                 it went past it"
+            ),
+        );
+    }
+
     /// Record a call held for being the same as the ones before it, and what came of it (TURN-9).
     ///
     /// The round and the count only. The call's name and arguments are the planner's own and stay

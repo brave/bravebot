@@ -40,6 +40,21 @@ pub struct SystemPrompts {
     pub appending: Option<String>,
 }
 
+/// What the person who started a run said it may spend before it stops (TURN-13, CLI-35).
+///
+/// Counts the driver keeps itself, rounds made and tokens the backends reported, so reaching one
+/// depends on no reply and no tool result. `None` is no limit of the person's, which leaves the run
+/// to [`Task::rounds`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RunLimits {
+    /// The most rounds of tool calls the run may make. A planner that asks for another round after
+    /// that many ends the run, and the round it asked for is not run.
+    pub rounds: Option<usize>,
+    /// The most tokens the run may have spent when it is about to send a request. A request already
+    /// sent is paid for whatever it came to, so the total passes this by the round that reached it.
+    pub tokens: Option<u64>,
+}
+
 /// What a turn is asked to do.
 #[derive(Debug, Clone)]
 pub struct Task {
@@ -218,6 +233,13 @@ pub struct Task {
     /// fine. So the interface passes `None`, and an unattended run passes
     /// [`MAX_TOOL_ROUNDS`], where nothing else can end a loop.
     pub rounds: Option<usize>,
+    /// What the person who started this run said it may spend, which ends the run where
+    /// [`Task::rounds`] takes its tools away (TURN-13).
+    ///
+    /// Empty unless a caller says otherwise, and only a caller with a flag to read them from does.
+    /// A delegate carries none: its bounds are its definition's, and what it spends reaches the
+    /// run's total when it is collected.
+    pub limits: RunLimits,
     /// The session's spend limit, which the turn asks about before a request that would go past it
     /// (TURN-8). Empty unless a caller with a person in front of it sets one, for the reason
     /// `rounds` is the caller's: only that caller can put the question.
@@ -513,6 +535,7 @@ impl Task {
             // and a default cannot know whether anybody is, so the default is the one that is
             // wrong in the cheaper direction.
             rounds: Some(MAX_TOOL_ROUNDS),
+            limits: RunLimits::default(),
             spend_limit: crate::spend_limit::SpendLimit::default(),
             spent_before: 0,
             stop: None,
@@ -750,6 +773,12 @@ impl Task {
     /// [`Task::rounds`].
     pub fn with_rounds(mut self, rounds: Option<usize>) -> Self {
         self.rounds = rounds;
+        self
+    }
+
+    /// End the run where the person who started it said it may not go on. See [`Task::limits`].
+    pub fn with_run_limits(mut self, limits: RunLimits) -> Self {
+        self.limits = limits;
         self
     }
 

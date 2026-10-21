@@ -258,9 +258,14 @@ pub(crate) fn with_declined(
 /// failed part way through still says what it had done by then: the calls are what a caller needs
 /// to know which of them to undo, and the notices are what it was told on the way, there being no
 /// outcome left to carry them (HOOK-7).
+///
+/// `steps` is the rounds of tool calls the run made where it knows them, which is a run stopped at
+/// a limit (CLI-35), and zero for every other run with no outcome: a count the run has not got is
+/// not invented.
 pub(crate) fn what_ran(
     ending: Ending,
     message: &str,
+    steps: usize,
     spent: bravebot_agent::Spent,
     calls: &[json::Call],
     refusals: &[json::Refusal],
@@ -273,7 +278,7 @@ pub(crate) fn what_ran(
         model: "",
         agent: None,
         session: None,
-        steps: 0,
+        steps,
         tokens: json::Tokens {
             total: spent.tokens,
             output: spent.output_tokens,
@@ -309,6 +314,7 @@ pub(crate) fn stopped_before_the_turn(
         say_the_result(&what_ran(
             ending,
             &message,
+            0,
             Default::default(),
             &[],
             &[],

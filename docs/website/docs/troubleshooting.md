@@ -172,7 +172,8 @@ or lower `BRAVEBOT_CONTEXT_BUDGET`, if the window your model advertises is large
 **It stopped calling tools and just answered.** A bounded turn reached its round limit: the planner
 is told it has no tools left, so it answers with what it has. Ask again with a narrower task. An
 interactive turn carries no such limit, so this is a one-shot or manifest run, where the default is
-200 rounds.
+200 rounds. A one-shot run given `--max-rounds` or `--max-tokens` does not answer when it reaches
+one: it stops and exits with status 7.
 
 ## Sessions
 
