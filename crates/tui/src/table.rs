@@ -19,6 +19,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthChar;
 
+use crate::issue_link;
 use crate::markdown;
 use crate::theme;
 use crate::wrap::display_width;
@@ -204,8 +205,8 @@ struct Cell {
 /// Measuring the source instead would be wrong by the length of every marker: `**x**` is six
 /// columns in the file and one on screen, and a column budgeted from the file leaves the rule
 /// five columns adrift on that row alone.
-fn cell(text: &str, style: Style) -> Cell {
-    let spans = markdown::spans(text, style);
+fn cell(text: &str, style: Style, references: bool) -> Cell {
+    let spans = markdown::spans(text, style, references);
     let width = spans.iter().map(|span| display_width(&span.content)).sum();
     Cell { spans, width }
 }
@@ -256,8 +257,41 @@ fn fold(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
         }
     }
     rows.push(row);
+    unmark_split_numbers(&mut rows);
 
     rows.into_iter().map(coalesce).collect()
+}
+
+/// Take the mark [`issue_link::MARK`] off a number a hard break cut between two rows.
+///
+/// The mark is what makes a number a link once drawn, and neither half of a cut number names it: a
+/// link on the half that begins `#123` would open issue 123 for a number written `#123456`.
+fn unmark_split_numbers(rows: &mut [Vec<(char, Style)>]) {
+    let marked = |style: &Style| style.add_modifier.contains(issue_link::MARK);
+    let unmarked = |style: Style| Style {
+        add_modifier: style.add_modifier - issue_link::MARK,
+        ..style
+    };
+    for at in 1..rows.len() {
+        let (before, after) = rows.split_at_mut(at);
+        let (above, below) = (&mut before[at - 1], &mut after[0]);
+        let cut = above.last().is_some_and(|(_, style)| marked(style))
+            && below
+                .first()
+                .is_some_and(|(c, style)| marked(style) && c.is_ascii_digit());
+        if cut {
+            for (_, style) in above
+                .iter_mut()
+                .rev()
+                .take_while(|(_, style)| marked(style))
+            {
+                *style = unmarked(*style);
+            }
+            for (_, style) in below.iter_mut().take_while(|(_, style)| marked(style)) {
+                *style = unmarked(*style);
+            }
+        }
+    }
 }
 
 /// Gather styled characters back into spans, dropping the trailing spaces a fold leaves behind.
@@ -380,18 +414,25 @@ fn row(cells: &[Cell], widths: &[usize], aligns: &[Align]) -> Vec<Vec<Span<'stat
 ///
 /// `None` means the caller must draw the source lines the way it always has: either the text is
 /// not a table, or there is not enough of the terminal left to draw one legibly.
-pub fn table(lines: &[&str], room: usize, base: Style) -> Option<Laid> {
+///
+/// `references` is [`markdown::spans`]'s, applied to the text of every cell.
+pub fn table(lines: &[&str], room: usize, base: Style, references: bool) -> Option<Laid> {
     let parsed = parse(lines)?;
 
     let header: Vec<Cell> = parsed
         .header
         .iter()
-        .map(|text| cell(text, base.add_modifier(Modifier::BOLD)))
+        .map(|text| cell(text, base.add_modifier(Modifier::BOLD), references))
         .collect();
     let body: Vec<Vec<Cell>> = parsed
         .body
         .iter()
-        .map(|cells| cells.iter().map(|text| cell(text, base)).collect())
+        .map(|cells| {
+            cells
+                .iter()
+                .map(|text| cell(text, base, references))
+                .collect()
+        })
         .collect();
 
     let natural: Vec<usize> = (0..header.len())
@@ -532,7 +573,7 @@ mod tests {
     /// wider than another looks broken in a way raw pipes do not.
     fn laid(text: &str, room: usize) -> Laid {
         let lines: Vec<&str> = text.lines().collect();
-        table(&lines, room, Style::default()).expect("a table")
+        table(&lines, room, Style::default(), false).expect("a table")
     }
 
     fn drawn(text: &str, room: usize) -> Vec<String> {
@@ -618,7 +659,7 @@ mod tests {
         let lines: Vec<&str> = source.lines().collect();
         for room in [0, 1, 20] {
             assert!(
-                table(&lines, room, Style::default()).is_none(),
+                table(&lines, room, Style::default(), false).is_none(),
                 "drew a table in {room} columns"
             );
         }
@@ -655,8 +696,35 @@ mod tests {
         assert!(cells("|").is_none());
         assert!(parsed("日本 | 語\n--- | ---\n☃ | x").is_some());
         assert!(cells("| unclosed `code | here |").is_some());
-        assert!(table(&[], 40, Style::default()).is_none());
+        assert!(table(&[], 40, Style::default(), false).is_none());
         // A column of nothing is still a column, and must not divide by its own emptiness.
         assert!(drawn("|  |\n| --- |\n|  |", 40).len() == 3);
+    }
+    /// A number the column is too narrow for is cut across two rows, and a link on the first half
+    /// would open another issue than the one written. The marks come off both halves, and a number
+    /// the column holds whole keeps its own.
+    #[test]
+    fn a_number_cut_across_rows_is_not_marked_and_a_whole_one_is() {
+        let source = "| issue | other |\n| --- | --- |\n| #123456 | #12 |";
+        let lines: Vec<&str> = source.lines().collect();
+        let laid = table(&lines, 10, Style::default(), true).expect("a table");
+        let text: Vec<String> = laid
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|span| span.content.as_ref()).collect())
+            .collect();
+        assert!(
+            text.iter().any(|row| row.starts_with("#123 "))
+                && text.iter().any(|row| row.starts_with("456 ")),
+            "the number was not cut, so the case is not exercised: {text:?}"
+        );
+        let marked: Vec<String> = laid
+            .rows
+            .iter()
+            .flatten()
+            .filter(|span| span.style.add_modifier.contains(issue_link::MARK))
+            .map(|span| span.content.to_string())
+            .collect();
+        assert_eq!(marked, ["#12"]);
     }
 }

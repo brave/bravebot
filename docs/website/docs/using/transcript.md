@@ -90,6 +90,14 @@ the sender, and the sender draws each message it sent with the target's name and
 resumed session draws both again. Control characters in a name or in the text are replaced by visible
 ones.
 
+**A `#<number>` in a reply is a link to that issue or pull request** when the checkout you are in has
+an `origin` remote on `github.com`. The number is underlined, and in a terminal that draws links it
+opens `https://github.com/{owner}/{repository}/issues/{number}` with the owner and the repository of
+the remote, which GitHub sends to the pull request where the number is one. `C#1`, `page#12`, a
+number in backticks and a number in a quarantined block are left as text, and so is every number where
+`origin` is not on `github.com`. Selecting a linked number copies the number. The desktop window draws
+a number as text.
+
 ## The end of a turn
 
 A finished turn gets a row of its own: which turn it was, what it cost, and how long it took. The row

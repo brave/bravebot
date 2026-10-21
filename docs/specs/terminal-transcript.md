@@ -7,7 +7,9 @@ governs:
   - crates/tui/src/blocks.rs
   - crates/tui/src/colour_codes.rs
   - crates/tui/src/indicator.rs
+  - crates/tui/src/issue_link.rs
   - crates/tui/src/logo.rs
+  - crates/tui/src/markdown.rs
   - crates/tui/src/notify.rs
   - crates/tui/src/preview.rs
   - crates/tui/src/reasoning.rs
@@ -925,6 +927,89 @@ to write it, and the notice needs no setup.
 `verified-by: bravebot_config::settings::a_settings_file_names_how_and_when_the_terminal_is_notified`
 
 
+<a id="VIEW-32"></a>
+### VIEW-32: `#<number>` in an assistant's words links to that issue or pull request on the origin remote's repository
+
+Where the checkout holding the session's directory has an `origin` remote on `github.com`, each
+`#<number>` in an assistant's words is underlined and is a terminal link (OSC 8) to
+`https://github.com/{owner}/{repository}/issues/{number}`, with the owner and the repository taken
+from the remote's address. GitHub sends `/issues/{number}` to `/pull/{number}` where the number is a
+pull request, so one address covers both. A terminal that does not draw links shows the underlined
+number. Where there is no such remote, a number is drawn as the text it is, with no underline and no
+link.
+
+A number is a `#` followed by one to nine digits, the first not a zero. The `#` does not follow a
+letter, a digit, `_`, `&` or `/`, and the digits are not followed by a letter, a digit or `_`, so
+`C#1`, `page#12`, `&#39;`, `https://example.com/docs/#12`, `#12abc` and `#0` are text. A number in a
+code span is text. A line that is a heading is a heading and holds a number as any other line does,
+and `#12` at the start of a line is a number and not a heading.
+
+The assistant's words are the reply in the transcript, the reply still arriving, a cell of a table in
+either, and the answer an aside shows. A number is matched in each and linked after the screen has
+been drawn: the widget that wraps the lines decides which cells a number lands in, so the cells that
+carry the underline and read `#` and digits are the ones linked, wherever the wrapping put them. A
+number cut across two rows is not linked: in a table the cut number is not underlined, and in the
+transcript a run of digits that ends at the right edge of the area above a row that begins with an
+underlined digit is left alone. What a person typed, a note, a program's
+output and the content of a quarantine block ([VIEW-3](#VIEW-3)) are not the assistant's words, are
+not matched and get no link. A selection over a linked number copies the number and none of the
+sequences that make it a link.
+
+The remote is read from the checkout's own configuration, which is workspace content, once where the
+session opens and again where it moves to another directory. The address is that of `remote.origin.url`
+in the `config` file of the git directory the checkout names, or of the repository a linked worktree
+was made from, read as the file is written and with no program started. A value written with a quote,
+a backslash, `#` or `;` is not read, and neither is a configuration with an `include` or `includeIf`
+section, since the file it names can set another remote, or one larger than a megabyte. The address is used to choose
+what is shown and decides nothing: nothing in the driver reads it or a number, and a number is carried
+to the screen as styling only. The host has to be `github.com`, compared as a whole, in the
+`https://`, `http://`, `ssh://`, `git://` and `user@github.com:{owner}/{repository}` spellings.
+The owner holds only ASCII letters, digits and `-`, and the repository only those and `_` and `.`,
+and is not `.` or `..`. Any other address names no repository. A hostile configuration can therefore
+choose which `github.com` repository a number opens, and cannot make it open anything else, since
+the link is built from the host, the validated names and the digits of the match alone.
+
+**Why.** A reply names issues and pull requests by number, and a number is a thing a person wants to
+open. Underlining only where a link will exist keeps an underline from reading as a link that is
+broken. The configuration is the checkout's own file, so the host is fixed and the names are held to
+the characters GitHub allows in them, which leaves a configuration choosing among `github.com`
+repositories and nothing else. Reading the file and not asking git keeps the checkout's own settings
+from naming a program to start, as [GIT-1](tools/read-git.md#GIT-1) does for the history.
+
+`verified-by: bravebot_tui::markdown::a_number_is_marked_wherever_a_reply_may_put_one`
+`verified-by: bravebot_tui::markdown::a_hash_that_is_part_of_something_else_is_not_marked`
+`verified-by: bravebot_tui::markdown::a_number_in_a_code_span_is_not_marked`
+`verified-by: bravebot_tui::markdown::a_heading_is_not_a_number_and_a_number_at_the_head_of_a_line_is_not_a_heading`
+`verified-by: bravebot_tui::markdown::with_references_off_a_number_is_plain_text`
+`verified-by: bravebot_tui::markdown::long_runs_of_hashes_and_digits_terminate`
+`verified-by: bravebot_tui::issue_link::each_spelling_of_a_github_remote_names_the_repository`
+`verified-by: bravebot_tui::issue_link::only_the_host_github_com_names_a_repository`
+`verified-by: bravebot_tui::issue_link::an_owner_or_name_outside_the_characters_github_allows_names_nothing`
+`verified-by: bravebot_tui::issue_link::an_address_is_made_for_a_number_and_for_nothing_else`
+`verified-by: bravebot_tui::issue_link::a_marked_number_is_linked_wherever_it_was_drawn`
+`verified-by: bravebot_tui::issue_link::a_number_the_matcher_did_not_mark_is_not_linked`
+`verified-by: bravebot_tui::issue_link::a_number_split_across_two_rows_is_not_linked`
+`verified-by: bravebot_tui::issue_link::a_number_outside_the_area_is_not_linked`
+`verified-by: bravebot_tui::issue_link::a_run_of_digits_longer_than_a_number_is_not_linked`
+`verified-by: bravebot_tui::table::a_number_cut_across_rows_is_not_marked_and_a_whole_one_is`
+`verified-by: bravebot_tui::issue_links::a_number_in_a_reply_links_to_the_issue_on_the_origin_repository`
+`verified-by: bravebot_tui::issue_links::a_number_on_a_wrapped_row_is_linked_where_it_is_drawn_whichever_way_the_transcript_is_drawn`
+`verified-by: bravebot_tui::issue_links::a_number_in_a_reply_still_arriving_is_linked`
+`verified-by: bravebot_tui::issue_links::a_number_in_a_table_cell_is_linked`
+`verified-by: bravebot_tui::issue_links::a_number_in_an_asides_answer_is_linked`
+`verified-by: bravebot_tui::issue_links::a_hash_that_is_not_a_reference_is_drawn_as_text`
+`verified-by: bravebot_tui::issue_links::without_a_github_origin_a_number_is_plain_text`
+`verified-by: bravebot_tui::issue_links::a_session_that_leaves_its_repository_stops_linking`
+`verified-by: bravebot_tui::issue_links::a_number_in_quarantined_content_is_not_linked`
+`verified-by: bravebot_tui::issue_links::a_number_in_words_that_are_not_the_assistants_is_not_linked`
+`verified-by: bravebot_tui::issue_links::a_selection_over_a_linked_number_copies_the_text`
+`verified-by: bravebot_tui::app::moving_to_another_checkout_changes_the_repository_numbers_link_into`
+`verified-by: bravebot_session::sessions::the_origin_is_read_out_of_the_checkout_configuration`
+`verified-by: bravebot_session::sessions::a_linked_worktree_reads_the_configuration_of_the_repository_it_was_made_from`
+`verified-by: bravebot_session::sessions::an_origin_not_written_plainly_is_not_read`
+`verified-by: bravebot_session::sessions::a_checkout_with_no_configuration_has_no_origin`
+`verified-by: bravebot_session::sessions::a_configuration_past_the_limit_is_not_read`
+
 ## Known costs
 
 - **The trust question asked when the interface opens is not noticed.** The terminal has not reported
@@ -940,3 +1025,20 @@ to write it, and the notice needs no setup.
   person whose terminal sends none is taken to be looking, so one who walks away learns nothing
   unless `notificationCondition` is `always`, which writes the notice to a person who is looking
   as well.
+- **A number is linked only where the checkout's own `origin` names it.** A remote set in an
+  `include`d file (a configuration with an `include` is not read at all), a host other than
+  `github.com` (an enterprise server among them), and a repository reached through a
+  `url.<base>.insteadOf` rewrite are not read as git would read them, so a session in such a checkout
+  draws numbers as text. A number written as `{owner}/{repository}#N` is a word of its own and is not
+  linked.
+- **A checkout whose `origin` is a fork links numbers into the fork.** A number in a reply may name
+  an issue of the repository the fork was made from, and the link opens the fork's issue of that
+  number, or none.
+- **A `#` and digits written for another purpose is linked as a number.** A colour written as
+  `#336699` or a rank written as `#3`, outside a code span, is underlined and opens that issue.
+- **A number cut across the last row of the transcript is linked by the digits shown.** The row it
+  continues on is below the screen, so the check for a cut has nothing to look at. A number is cut
+  only where the transcript is narrower than the word that holds it, which for a number alone is at
+  most ten columns.
+- **The desktop application draws `#<number>` as text.** Its renderer is not the terminal's, and it
+  has no link for a number.

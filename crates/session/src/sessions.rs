@@ -2739,6 +2739,81 @@ pub fn branch_of(directory: &Path) -> Option<String> {
     Some(branch.to_string())
 }
 
+/// The most of a git file this reads: a configuration is a few lines, so a larger one is not read.
+const GIT_FILE_LIMIT: u64 = 1 << 20;
+
+/// What `origin` is set to in the checkout holding `directory`, as its configuration spells it.
+///
+/// Read out of the file for the reason [`branch_of`] reads `HEAD`: it is one line, and starting
+/// git for it would run whatever the repository's own configuration names. A linked worktree
+/// keeps no configuration of its own, so it is read from the repository its `commondir` names.
+/// `None` where there is no such remote, or where its value is not written plainly: a comment, a
+/// quote or an escape in it is left unread rather than interpreted. A configuration larger than
+/// [`GIT_FILE_LIMIT`] is not read, and neither is one with an `include` or `includeIf`, since the
+/// file it names can set another remote.
+///
+/// The text is the checkout's own and is workspace content, so it is for choosing what to show
+/// the person and for nothing that decides what the agent does.
+pub fn origin_of(directory: &Path) -> Option<String> {
+    let git = find_git(directory)?;
+    let common = match read_git_file(&git.join("commondir")) {
+        Some(named) => git.join(named.trim()),
+        None => git,
+    };
+    remote_url(&read_git_file(&common.join("config"))?, "origin")
+}
+
+/// A file under a git directory as text, or `None` for one larger than [`GIT_FILE_LIMIT`].
+fn read_git_file(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(GIT_FILE_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > GIT_FILE_LIMIT {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// The `url` of the remote called `remote` in a git configuration, the last one where several are
+/// given, as `git config --get` answers.
+///
+/// Only the plain spelling is read: `[remote "name"]` on a line of its own and `url = value` with
+/// no quote, backslash, `#` or `;` in the value, since each of those changes what git takes the
+/// value to be. A line that is not plain, and an `include` section anywhere, make the answer
+/// `None`, never a guess.
+fn remote_url(config: &str, remote: &str) -> Option<String> {
+    let mut inside = false;
+    let mut found = None;
+    for line in config.lines().map(str::trim) {
+        if let Some(header) = line.strip_prefix('[') {
+            let section = header.split(|c: char| c == ']' || c == '"' || c.is_whitespace());
+            if section.into_iter().next().is_some_and(|name| {
+                matches!(name.to_ascii_lowercase().as_str(), "include" | "includeif")
+            }) {
+                return None;
+            }
+            inside = header
+                .strip_suffix(']')
+                .and_then(|header| header.split_once(char::is_whitespace))
+                .is_some_and(|(section, name)| {
+                    section.eq_ignore_ascii_case("remote") && name.trim() == format!("\"{remote}\"")
+                });
+        } else if inside
+            && let Some((key, value)) = line.split_once('=')
+            && key.trim().eq_ignore_ascii_case("url")
+        {
+            let value = value.trim();
+            found = (!value.is_empty() && !value.contains(['"', '\\', '#', ';']))
+                .then(|| value.to_string());
+        }
+    }
+    found
+}
+
 /// The git directory for a checkout, walking up from `directory`.
 fn find_git(directory: &Path) -> Option<PathBuf> {
     for candidate in directory.ancestors() {
@@ -3367,6 +3442,142 @@ mod tests {
         let inside = root.join("crates").join("tui");
         std::fs::create_dir_all(&inside).expect("create");
         assert_eq!(branch_of(&inside), Some("main".to_string()));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A checkout's `origin` is the remote a link in a reply names, so another remote listed before
+    /// it, or after it, must not be taken for it.
+    #[test]
+    fn the_origin_is_read_out_of_the_checkout_configuration() {
+        let root = fake_checkout("origin", "ref: refs/heads/main\n");
+        std::fs::write(
+            root.join(".git").join("config"),
+            "[core]\n\turl = not-a-remote\n\
+             [remote \"upstream\"]\n\turl = git@github.com:brave/bravebot.git\n\
+             [remote \"origin\"]\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n\
+             \turl = https://github.com/netzenbot/bravebot.git\n\
+             [remote \"mirror\"]\n\turl = git@github.com:mirror/bravebot.git\n",
+        )
+        .expect("write config");
+        let wanted = Some("https://github.com/netzenbot/bravebot.git".to_string());
+        assert_eq!(origin_of(&root), wanted);
+
+        let inside = root.join("crates").join("tui");
+        std::fs::create_dir_all(&inside).expect("create");
+        assert_eq!(origin_of(&inside), wanted);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A worktree's own git directory holds no `config`, so a reader that stopped there would show
+    /// no remote for a checkout made with `git worktree add`, which is where a story is worked.
+    #[test]
+    fn a_linked_worktree_reads_the_configuration_of_the_repository_it_was_made_from() {
+        let root = fake_checkout("origin-worktree", "ref: refs/heads/main\n");
+        std::fs::write(
+            root.join(".git").join("config"),
+            "[remote \"origin\"]\n\turl = git@github.com:brave/bravebot.git\n",
+        )
+        .expect("write config");
+        let admin = root.join(".git").join("worktrees").join("story");
+        std::fs::create_dir_all(&admin).expect("create admin");
+        std::fs::write(admin.join("commondir"), "../..\n").expect("write commondir");
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/story\n").expect("write HEAD");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("create worktree");
+        std::fs::write(work.join(".git"), format!("gitdir: {}\n", admin.display()))
+            .expect("write .git file");
+
+        assert_eq!(branch_of(&work), Some("story".to_string()));
+        assert_eq!(
+            origin_of(&work),
+            Some("git@github.com:brave/bravebot.git".to_string())
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// What a value holds beyond its characters changes what git reads it as, and a wrong
+    /// repository named in a link is worse than none.
+    #[test]
+    fn an_origin_not_written_plainly_is_not_read() {
+        let plain = "https://github.com/a/b";
+        for (config, wanted) in [
+            // The ordinary spelling, with the section and key in any case.
+            (format!("[remote \"origin\"]\nurl={plain}\n"), Some(plain)),
+            (format!("[Remote \"origin\"]\nURL = {plain}\n"), Some(plain)),
+            // The last of several is the one `git config --get` answers.
+            (
+                format!("[remote \"origin\"]\n\turl = https://x.test/a/b\n\turl = {plain}\n"),
+                Some(plain),
+            ),
+            // Not the remote asked for: the name of a subsection is case sensitive.
+            (format!("[remote \"Origin\"]\n\turl = {plain}\n"), None),
+            (format!("[remote \"origin-2\"]\n\turl = {plain}\n"), None),
+            (format!("[remote]\n\turl = {plain}\n"), None),
+            (format!("[remote \"upstream\"]\n\turl = {plain}\n"), None),
+            // Written so that git reads something other than the text after the `=`.
+            (
+                format!("[remote \"origin\"]\n\turl = {plain} # mine\n"),
+                None,
+            ),
+            (
+                format!("[remote \"origin\"]\n\turl = {plain}; mine\n"),
+                None,
+            ),
+            (format!("[remote \"origin\"]\n\turl = \"{plain}\"\n"), None),
+            (
+                format!("[remote \"origin\"]\n\turl = {plain}\\\n/c\n"),
+                None,
+            ),
+            // A later value that is not plain replaces the earlier one in git, so none is left.
+            (
+                format!("[remote \"origin\"]\n\turl = {plain}\n\turl = {plain} # mine\n"),
+                None,
+            ),
+            // A header with a key after it on the same line is not read.
+            (format!("[remote \"origin\"] url = {plain}\n"), None),
+            // The file an include names can set another remote, in either order.
+            (
+                format!("[include]\n\tpath = other\n[remote \"origin\"]\n\turl = {plain}\n"),
+                None,
+            ),
+            (
+                format!(
+                    "[remote \"origin\"]\n\turl = {plain}\n[includeIf \"gitdir:/x/\"]\n\tpath = y\n"
+                ),
+                None,
+            ),
+            (String::new(), None),
+        ] {
+            assert_eq!(
+                remote_url(&config, "origin").as_deref(),
+                wanted,
+                "{config:?}"
+            );
+        }
+    }
+
+    /// Not every checkout names a remote, and a directory outside any is not a failure.
+    #[test]
+    fn a_checkout_with_no_configuration_has_no_origin() {
+        let root = fake_checkout("origin-none", "ref: refs/heads/main\n");
+        assert_eq!(origin_of(&root), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The file is the checkout's own, so how much of it is read is not left to its author, and a
+    /// prefix is not the file: a later line could set the remote to something else.
+    #[test]
+    fn a_configuration_past_the_limit_is_not_read() {
+        let root = fake_checkout("origin-huge", "ref: refs/heads/main\n");
+        let huge = format!(
+            "[remote \"origin\"]\n\turl = https://github.com/a/b\n{}",
+            "\t# padding\n".repeat(GIT_FILE_LIMIT as usize / 8)
+        );
+        std::fs::write(root.join(".git").join("config"), huge).expect("write config");
+        assert_eq!(origin_of(&root), None, "a prefix of the file was read");
 
         let _ = std::fs::remove_dir_all(&root);
     }

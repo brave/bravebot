@@ -27,7 +27,10 @@ use super::{
 /// Used for a finished turn in the transcript and for the reply still arriving beneath it, which
 /// is what makes the handover invisible: the same words in the same shape in the same place, so
 /// the moment a round ends nothing on the screen moves.
-pub(super) fn assistant_lines(text: &str, width: u16) -> Vec<Line<'static>> {
+///
+/// `references` underlines each `#<number>`, for the caller to link once the lines are drawn
+/// (VIEW-32).
+pub(super) fn assistant_lines(text: &str, width: u16, references: bool) -> Vec<Line<'static>> {
     let source: Vec<&str> = text.lines().collect();
     let room = (width as usize).saturating_sub(LEAD);
     let lead = |at: usize| {
@@ -44,7 +47,7 @@ pub(super) fn assistant_lines(text: &str, width: u16) -> Vec<Line<'static>> {
         // A table is several source lines drawn as one block, so it is tried first and the lines
         // it consumed are skipped. Anything that is not one falls through to the styling every
         // other line gets.
-        match table::table(&source[at..], room, Style::default()) {
+        match table::table(&source[at..], room, Style::default(), references) {
             Some(laid) => {
                 for (index, row) in laid.rows.into_iter().enumerate() {
                     let mut spans = vec![lead(at + index)];
@@ -55,7 +58,7 @@ pub(super) fn assistant_lines(text: &str, width: u16) -> Vec<Line<'static>> {
             }
             None => {
                 let mut spans = vec![lead(at)];
-                spans.extend(markdown::spans(source[at], Style::default()));
+                spans.extend(markdown::spans(source[at], Style::default(), references));
                 lines.push(Line::from(spans));
                 at += 1;
             }
@@ -205,7 +208,11 @@ fn speaker_lines(session: &Session, entry: &Entry, width: u16) -> Vec<Line<'stat
                     Style::default().add_modifier(Modifier::BOLD),
                 )));
             }
-            lines.extend(assistant_lines(&entry.text, width))
+            lines.extend(assistant_lines(
+                &entry.text,
+                width,
+                session.repository().is_some(),
+            ))
         }
         // The session in its own voice, indented to the column the rest of the transcript's
         // text starts in. Not behind the detail marker: that says the line belongs to the
@@ -644,7 +651,7 @@ pub(crate) fn rows_of(line: &Line<'_>, width: u16) -> u16 {
 /// Drawing the entries is the expensive half of a frame: markdown, tables and diffs for every one
 /// of them. None of it depends on what is being typed, so a keystroke that touches no entry reuses
 /// the lines instead of making them again. It is kept against everything it was made from: the
-/// entries' stamp, the width, the palette, and the two flags that change how an entry is drawn.
+/// entries' stamp, the width, the palette, and the flags that change how an entry is drawn.
 #[derive(Debug)]
 pub(crate) struct EntryLines {
     stamp: u64,
@@ -652,6 +659,8 @@ pub(crate) struct EntryLines {
     palette: Palette,
     show_trail: bool,
     scrolling: bool,
+    /// Whether a number is underlined for [`link_references`](crate::issue_link::link_references).
+    linking: bool,
     lines: Vec<Line<'static>>,
     prompts: Vec<usize>,
     calls: Vec<(usize, usize, usize)>,
@@ -685,19 +694,27 @@ pub(crate) struct ReplyLines {
     text: String,
     width: u16,
     palette: Palette,
+    linking: bool,
     lines: Vec<Line<'static>>,
 }
 
 fn reply_lines(session: &Session, width: u16) -> Arc<ReplyLines> {
     let text = session.reply_so_far();
     let palette = theme::palette();
+    let linking = session.repository().is_some();
     session.reply_layout.get(
-        |kept| kept.text == text && kept.width == width && kept.palette == palette,
+        |kept| {
+            kept.text == text
+                && kept.width == width
+                && kept.palette == palette
+                && kept.linking == linking
+        },
         || ReplyLines {
             text: text.to_string(),
             width,
-            lines: assistant_lines(text, width),
+            lines: assistant_lines(text, width, linking),
             palette: palette.clone(),
+            linking,
         },
     )
 }
@@ -712,6 +729,7 @@ fn is_the_transcript(session: &Session, viewed: &[Entry]) -> bool {
 fn cached_entries(session: &Session, width: u16) -> Arc<EntryLines> {
     let palette = theme::palette();
     let scrolling = session.scrolling();
+    let linking = session.repository().is_some();
     session.layout.get(
         |kept| {
             kept.stamp == session.transcript.stamp()
@@ -719,6 +737,7 @@ fn cached_entries(session: &Session, width: u16) -> Arc<EntryLines> {
                 && kept.palette == palette
                 && kept.show_trail == session.show_trail
                 && kept.scrolling == scrolling
+                && kept.linking == linking
         },
         || {
             let (mut lines, mut prompts, mut calls) = (Vec::new(), Vec::new(), Vec::new());
@@ -736,6 +755,7 @@ fn cached_entries(session: &Session, width: u16) -> Arc<EntryLines> {
                 palette: palette.clone(),
                 show_trail: session.show_trail,
                 scrolling,
+                linking,
                 lines,
                 prompts,
                 calls,
@@ -808,6 +828,7 @@ fn draw_kept(frame: &mut Frame, area: Rect, session: &Session) -> Option<Laid> {
         .wrap(Wrap { trim: false })
         .scroll((skip as u16, 0));
     frame.render_widget(paragraph, area);
+    link_references(frame, area, session);
 
     Some(Laid {
         width,
@@ -815,6 +836,17 @@ fn draw_kept(frame: &mut Frame, area: Rect, session: &Session) -> Option<Laid> {
         rows: total.min(usize::from(u16::MAX)) as u16,
         ..Laid::default()
     })
+}
+
+/// Link each `#<number>` drawn in `area` to the issue or pull request it names (VIEW-32), where the
+/// session's checkout has a GitHub `origin`.
+///
+/// Called after the widget has wrapped the lines, since only then is it known which cells a
+/// number landed in. Every path that draws the transcript or an assistant's words calls it.
+pub(super) fn link_references(frame: &mut Frame, area: Rect, session: &Session) {
+    if let Some(repository) = session.repository() {
+        crate::issue_link::link_references(frame.buffer_mut(), area, repository);
+    }
 }
 
 /// The transcript laid out at a width: the lines to draw, and where the rows worth reaching are.
@@ -888,6 +920,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) 
     };
 
     frame.render_widget(paragraph.scroll((offset, 0)), area);
+    link_references(frame, area, session);
 
     // The paragraph's own count rather than the sum of the rows measured line by line, so what a
     // key is answered against is the number the view was actually drawn with.
