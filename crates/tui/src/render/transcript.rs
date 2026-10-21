@@ -409,6 +409,26 @@ fn push_entries(
     }
 }
 
+/// How many of the end's lines of the model's thinking are drawn.
+const THINKING_ROWS: usize = 8;
+
+/// The model's thinking, dimmed and italic under a heading, the last few lines of it.
+fn thinking_lines(text: &str, lines: &mut Vec<Line<'static>>) {
+    let style = dim().add_modifier(Modifier::ITALIC);
+    lines.push(Line::from(Span::styled(
+        format!("  {}", t!(transcript_thinking)),
+        dim(),
+    )));
+    let all: Vec<&str> = text.lines().collect();
+    let from = all.len().saturating_sub(THINKING_ROWS);
+    for line in &all[from..] {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", printable(line)),
+            style,
+        )));
+    }
+}
+
 /// What follows the entries: the reply still arriving, what a command that is running has printed,
 /// what a command typed during the turn answered, the invitation on the opening screen, and the
 /// close of a delegate's view.
@@ -416,6 +436,15 @@ fn push_entries(
 /// Drawn from the session's live state rather than from entries, so it is built afresh on every
 /// frame and is as long as one reply, never as long as the conversation.
 fn push_tail(session: &Session, width: u16, opening: bool, lines: &mut Vec<Line<'static>>) {
+    // The model's thinking above the reply, where it came first, while a person has asked to see
+    // it. Plain text under a heading of its own and never markdown, so what the model wrote cannot
+    // draw as structure, and gone when the round ends: the reply replaces it, and nothing recorded
+    // held it.
+    if !session.thinking_so_far().is_empty() && !session.watching_a_delegate() {
+        thinking_lines(session.thinking_so_far(), lines);
+        lines.push(Line::raw(""));
+    }
+
     // The reply being written right now, under everything that has already happened. Drawn from
     // the session rather than from the transcript because it is not an entry yet: when the round
     // ends the same words arrive as one, in this same place and this same shape, and the tail is

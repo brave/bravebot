@@ -2384,6 +2384,7 @@ command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter un
 command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
 command-files = Lister les fichiers écrits par la session et afficher chaque modification de celui qui est sélectionné
 command-caffeinate = Garder l'ordinateur éveillé tant qu'un tour ou une boucle est en attente
+command-thinking = Afficher ou masquer la réflexion du modèle à mesure qu'elle arrive
 command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
 command-plan = Passer en mode plan, et commencer une tâche si vous en donnez une
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
@@ -3238,6 +3239,11 @@ caffeinate-explained =
 # Laissé dans la transcription quand /caffeinate s'active, et quand il se désactive.
 caffeinate-on = l'ordinateur reste éveillé pendant qu'un tour s'exécute ou qu'une boucle attend
 caffeinate-off = l'ordinateur peut de nouveau se mettre en veille
+# Laissé dans la transcription quand /thinking s'active, et quand il se désactive.
+thinking-on = la réflexion du modèle s'affiche à mesure qu'elle arrive, pour cette session seulement
+thinking-off = la réflexion du modèle est masquée
+# Le titre au-dessus de la réflexion du modèle pendant qu'elle arrive.
+transcript-thinking = réflexion
 # Laissé dans la transcription quand le programme qui empêche la veille n'a pas pu démarrer, ce qui
 # désactive /caffeinate.
 caffeinate-unavailable = /caffeinate est indisponible : `{ $program }` n'a pas pu être démarré ({ $reason })

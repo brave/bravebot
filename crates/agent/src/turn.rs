@@ -4185,6 +4185,9 @@ where
                 // asking would be a question about untrusted text, and the interface is the side
                 // allowed to ask that one.
                 reporter.streaming(progress.written.declassify(&as_written).to_string());
+                // The model's thinking, through the same gate and to the same screen, and kept out
+                // of the reply: it is no part of `written`, so nothing recorded or sent on holds it.
+                reporter.thinking(progress.thinking.declassify(&as_written).to_string());
                 // Through the same gate, for the same screen, and as a word from a
                 // fixed table rather than as the model spelt it. Whether there is a call
                 // is a fact about which events arrived, not about what they said. Sent

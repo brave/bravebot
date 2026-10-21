@@ -143,6 +143,8 @@ pub enum ToMain {
     Notice(String),
     /// What the model has written since the last frame. No reply.
     Streaming(String),
+    /// What the model has thought since the last frame. No reply.
+    Thinking(String),
     /// The call the model is writing, by the word its row will start with, or none once the
     /// attempt writing it was thrown away. No reply.
     Composing(Option<&'static str>),
@@ -434,6 +436,10 @@ impl Reporter for RemoteReporter {
 
     fn streaming(&mut self, text: String) {
         let _ = self.outbound.send(ToMain::Streaming(text));
+    }
+
+    fn thinking(&mut self, text: String) {
+        let _ = self.outbound.send(ToMain::Thinking(text));
     }
 
     fn composing(&mut self, call: Option<&'static str>) {
@@ -1178,6 +1184,7 @@ mod tests {
                     ToMain::Narration(_) => seen.push("narration"),
                     ToMain::Notice(_) => seen.push("notice"),
                     ToMain::Streaming(_) => seen.push("streaming"),
+                    ToMain::Thinking(_) => seen.push("thinking"),
                     ToMain::Composing(_) => seen.push("composing"),
                     ToMain::Started(_) => seen.push("started"),
                     ToMain::Finished(_) => seen.push("finished"),

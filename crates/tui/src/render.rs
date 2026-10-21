@@ -4198,6 +4198,45 @@ mod tests {
             );
         }
 
+        /// The model's thinking is drawn only while a person asked to see it, as plain text under a
+        /// heading of its own above the reply, with nothing in it able to act on the terminal, and
+        /// it is gone once the round's words replace the tail.
+        #[test]
+        fn the_models_thinking_is_drawn_only_when_asked_for_and_inert() {
+            let mut arriving = working();
+            arriving.thinking("the user wants **a file**\u{1b}[31m red");
+            arriving.streaming("Looking at it");
+            assert!(
+                !rendered(&arriving).contains("the user wants"),
+                "the thinking was drawn without being asked for"
+            );
+
+            arriving.toggle_thinking();
+            let output = rendered(&arriving);
+            assert!(output.contains("thinking"), "no heading: {output}");
+            assert!(
+                output.contains("the user wants **a file**"),
+                "markdown was read in the thinking: {output}"
+            );
+            assert!(
+                output.contains("\u{241b}[31m"),
+                "an escape reached the screen as one: {output}"
+            );
+            assert!(!output.contains('\u{1b}'));
+            assert!(
+                output.find("the user wants").unwrap() < output.find("Looking at it").unwrap(),
+                "the thinking was not above the reply: {output}"
+            );
+
+            arriving.narrate("Looking at it");
+            let output = rendered(&arriving);
+            assert!(output.contains("Looking at it"));
+            assert!(
+                !output.contains("the user wants"),
+                "the thinking outlived its round: {output}"
+            );
+        }
+
         #[test]
         fn a_finished_call_shows_what_came_of_it() {
             let mut session = working();

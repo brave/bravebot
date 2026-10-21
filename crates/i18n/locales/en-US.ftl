@@ -2728,6 +2728,11 @@ caffeinate-explained =
 # Left in the transcript when /caffeinate turns on, and when it turns off.
 caffeinate-on = the computer is kept awake while a turn runs or a loop waits
 caffeinate-off = the computer may sleep again
+# Left in the transcript when /thinking turns on, and when it turns off.
+thinking-on = the model's thinking is shown as it arrives, for this session only
+thinking-off = the model's thinking is hidden
+# The heading over the model's thinking while it arrives.
+transcript-thinking = thinking
 # Left in the transcript when the program that holds off sleep would not start, which turns
 # /caffeinate off.
 caffeinate-unavailable = /caffeinate is unavailable: `{ $program }` could not be started ({ $reason })
@@ -2866,6 +2871,7 @@ command-jobs = List this turn's background jobs, and stop one by its name
 command-panel = Show or hide the info panel beside the transcript
 command-files = List the files the session wrote and show every edit to the one highlighted
 command-caffeinate = Keep the computer awake while a turn or loop is pending
+command-thinking = Show or hide the model's thinking as it arrives
 command-checkouts = List kept checkouts, bring their files back, or remove one
 command-plan = Enter plan mode, and start on a task if you give one
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned

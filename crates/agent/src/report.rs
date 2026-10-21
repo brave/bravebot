@@ -743,6 +743,16 @@ pub trait Reporter {
     /// it drew when the round's finished text arrives, so nothing is said twice.
     fn streaming(&mut self, _text: String) {}
 
+    /// What the model thought since the last call, for a service that sends its thinking as it
+    /// goes (BACKEND-46).
+    ///
+    /// Released for a screen and nowhere else, through the gate [`Reporter::streaming`] passes,
+    /// and sent whether or not it is empty for the same reason. It is no part of the reply: it is
+    /// never written into the conversation or the session record and never reaches a later
+    /// request, so a caller that draws it draws it only while it is wanted and drops it when the
+    /// round ends. A service that sends no thinking never calls this with anything in it.
+    fn thinking(&mut self, _text: String) {}
+
     /// The tool call the model is writing, by the word its row will start with, or `None` once
     /// there is no longer one.
     ///
@@ -954,6 +964,8 @@ pub struct RecordingReporter {
     pub narration: Vec<String>,
     /// Every fragment of a reply as it arrived, in order.
     pub streamed: Vec<String>,
+    /// Every fragment of the model's thinking as it arrived, in order.
+    pub thought: Vec<String>,
     /// The call being written, each time it changed.
     pub composing: Vec<Option<&'static str>>,
     /// What loaded and what did not, in order.
@@ -1019,6 +1031,10 @@ impl Reporter for RecordingReporter {
 
     fn streaming(&mut self, text: String) {
         self.streamed.push(text);
+    }
+
+    fn thinking(&mut self, text: String) {
+        self.thought.push(text);
     }
 
     fn composing(&mut self, call: Option<&'static str>) {

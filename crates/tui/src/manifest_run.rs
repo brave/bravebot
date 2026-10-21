@@ -55,6 +55,7 @@ impl Run {
             ToMain::Narration(text) => session.narrate(text),
             ToMain::Notice(text) => session.note_once(text),
             ToMain::Streaming(text) => session.streaming(&text),
+            ToMain::Thinking(text) => session.thinking(&text),
             ToMain::Composing(call) => session.composing(call),
             ToMain::Started(activity) => session.start_activity(activity),
             ToMain::Finished(activity) => session.finish_activity(activity),

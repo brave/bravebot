@@ -47,6 +47,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/panel` | | Show or hide the info panel beside the transcript |
 | `/files` | | List the files the session wrote and show every edit to the highlighted one |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
+| `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
 | `/issue` | `[<url> \| clear]` | Say which issue this session is for, show it, or clear it |
 | `/checkouts` | `[apply <n> \| remove <n>]` | List kept checkouts, bring their files back, or remove one |
@@ -745,6 +746,15 @@ It runs `/usr/bin/caffeinate` on macOS, `systemd-inhibit` on Linux and PowerShel
 write. If there is no such `cat`, or the program cannot be started, or stops by itself, the transcript
 says so and `/caffeinate` turns off.
 
+## `/thinking`
+
+Shows the model's thinking as it arrives, and typed again hides it. It is off when a session opens
+and applies to this session only. While it is on, the last few lines of what the model has thought
+this round are drawn dimmed, under a heading, above the reply as it is written, and they go when the
+round's words arrive. Only a service that sends its thinking shows any; today that is Bedrock. The
+thinking is for the screen alone: it is not saved to the session, not exported, and not sent in a
+later request, and turning it on changes nothing the model is asked.
+
 ## `/checkouts [apply <n> | remove <n>]`
 
 Lists the checkouts this session keeps for its delegates, brings the files written in one back into your working directory, and removes one by its number.
@@ -1359,7 +1369,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/panel`, `/files`, `/caffeinate`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/panel`, `/files`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so

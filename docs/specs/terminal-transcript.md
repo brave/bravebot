@@ -447,7 +447,8 @@ Where a reply opens with a reasoning block and closes it before answering, the b
 drawn, arriving or arrived, and what reaches the transcript is what follows it. Only a block the
 reply opens with counts: a reply that mentions the tags further down keeps every word. A block
 opened and never closed is drawn whole once the reply is finished, and drawn as nothing while it
-is still being written, as is a part-written opening.
+is still being written, as is a part-written opening. The thinking a service sends in a channel of
+its own is not the answer either, and is drawn only as [VIEW-33](#VIEW-33) says.
 
 **Why.** A model with a channel of its own for its working keeps it out of the reply, and this
 never arises. A model without one writes the same words into the reply instead, where they land
@@ -1009,6 +1010,40 @@ from naming a program to start, as [GIT-1](tools/read-git.md#GIT-1) does for the
 `verified-by: bravebot_session::sessions::an_origin_not_written_plainly_is_not_read`
 `verified-by: bravebot_session::sessions::a_checkout_with_no_configuration_has_no_origin`
 `verified-by: bravebot_session::sessions::a_configuration_past_the_limit_is_not_read`
+
+
+<a id="VIEW-33"></a>
+### VIEW-33: `/thinking` shows the model's thinking as it arrives, for the screen only
+
+`/thinking` turns on drawing the thinking a service sends as it goes ([BACKEND-46](backends.md#BACKEND-46)),
+and typed again turns it off. It is off when a session opens, is a setting of that session alone, and
+says in the transcript which way it went. It is carried out as typed, while a turn runs as well. While
+it is on, the end of what the model has thought in the round now being written is drawn at the tail,
+above the reply taking shape ([VIEW-6](#VIEW-6)): under a heading of its own, dimmed and in italics,
+the last eight lines of it, as plain text and never as markdown. A control character in it is drawn
+as its visible picture, as [VIEW-4](#VIEW-4) does for any text. It goes where the reply's tail goes, when
+the round's words arrive, the round ends, the turn ends or is stopped, or the request is sent again,
+and a delegate's thinking is not drawn. Only the last 4,096 bytes of it are kept, so a model that
+thinks for minutes costs the screen what a short think does. A service that sends no thinking, or a
+session with the toggle off, draws nothing.
+
+It is no part of the conversation: it is not written to the session record, an export or a resume,
+and no later request carries it, so the request and the model's answer are the same with the toggle
+on as off. Turning it on mid-round shows what has come so far.
+
+**Why.** A long round shows a token count and a spinner and nothing of what the model is working on.
+Claude Code, Codex, OpenCode and Gemini CLI each let a person show the reasoning, and each keeps it
+off the default screen, since most rounds do not need it.
+
+The thinking is model output, so in a session that has observed untrusted content it is untrusted
+bytes released for a screen through the gate that releases the reply taking shape, on the same
+footing. The driver carries it to the interface and does not branch on it; the side that draws decides
+what to show, and it decides only by the toggle and the byte count, never by what the text says.
+
+`verified-by: bravebot_tui::state::thinking_is_held_shown_on_request_and_ends_with_the_round`
+`verified-by: bravebot_tui::state::a_delegates_thinking_is_not_the_turns`
+`verified-by: bravebot_tui::render::the_models_thinking_is_drawn_only_when_asked_for_and_inert`
+`verified-by: bravebot_tui::app::the_thinking_command_toggles_what_is_drawn_and_runs_mid_turn`
 
 ## Known costs
 

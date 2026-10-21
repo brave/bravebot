@@ -2184,8 +2184,10 @@ figure costs a person, which is a question about the estimate and not about the 
 A streamed Bedrock request asks for the model's thinking to be sent as it thinks, in the field that
 service hands to the model without reading, saying how thinking is shown and never whether the model
 thinks, which stays the model's own default. A whole-reply request does not ask. The thinking that
-arrives is read past: none of it becomes the reply's words or its record in the conversation, and a
-reply that carried it is as readable as one that did not. A model that refuses a request carrying
+arrives is handed to the caller as it arrives, for a screen to draw on request
+([VIEW-33](terminal-transcript.md#VIEW-33)) and for nothing else: none of it becomes the reply's
+words or its record in the conversation, and a reply that carried it is as readable as one that did
+not. A model that refuses a request carrying
 the ask is asked again without it, and no later request carries it to that model, on the terms
 [BACKEND-22](#BACKEND-22) gives the level, that clause stating the order the concessions go in.
 
@@ -2203,6 +2205,7 @@ was thought.
 `verified-by: bravebot_bedrock::protocol::the_level_and_the_ask_for_arguments_as_written_travel_together`
 `verified-by: bravebot_bedrock::lib::only_a_streamed_request_asks_to_show_thinking`
 `verified-by: bravebot_bedrock::lib::thinking_that_arrives_stays_out_of_the_reply`
+`verified-by: bravebot_bedrock::lib::thinking_reaches_progress_and_never_the_reply`
 `verified-by: bravebot_bedrock::lib::the_ask_to_show_thinking_is_given_up_before_the_level`
 `verified-by: bravebot_bedrock::lib::a_refused_ask_for_arguments_as_written_is_given_up_and_remembered`
 `verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_leaves_what_was_known`
