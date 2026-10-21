@@ -7,6 +7,9 @@ governs:
   - crates/tui/src/ask.rs
   - crates/cli/src/plain.rs
   - crates/ui-bridge/src/turn.rs
+  - ui/src/renderer/asking.ts
+  - ui/scripts/asking.test.mjs
+  - ui/scripts/drive-manual-walkthrough.mjs
 guards:
   - symbol: Policy::record_answers
 documented-by: docs/website/docs/reference/tools.md
@@ -110,11 +113,22 @@ them.
 <a id="ASK-6"></a>
 ### ASK-6: skipping answers a question, and questions are put one at a time
 
-Questions are put one at a time with the position shown. For each, the user may pick an option,
-pick several where allowed, answer in their own words, or skip. Skipping moves to the next
-question rather than abandoning the rest, and the planner is told, question by question, what was
-answered and what was passed over.
+Questions are put one at a time with the position shown, in the terminal picker, the line-by-line
+interface and the desktop window alike. A series of one has no position to show. For each question,
+the user may pick an option, pick several where allowed, answer in their own words, or skip.
+Skipping moves to the next question rather than abandoning the rest, and the planner is told,
+question by question, what was answered and what was passed over.
 
+`verified-by: bravebot_tui::ask::the_position_in_the_series_is_shown`
+`verified-by: bravebot_tui::ask::a_lone_question_is_not_labelled_one_of_one`
+`verified-by: bravebot_tui::ask::a_question_is_placed_among_those_put_and_a_lone_one_is_not`
+`verified-by: bravebot_tui::ask::answering_one_question_moves_on_to_the_next`
+`verified-by: bravebot_tui::ask::skipping_a_question_moves_on_rather_than_abandoning_the_series`
+`verified-by: bravebot_tui::ask::skipping_the_last_question_still_ends_the_series`
+`verified-by: bravebot_cli::plain::each_question_in_a_series_is_put_under_its_position`
+`verified-by: bravebot_cli::plain::the_position_counts_the_questions_put_and_not_those_remembered`
+`verified-by: bravebot_cli::plain::a_lone_question_is_put_without_a_position`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/asking.test.mjs, which asserts that a series ends on the count of its questions whether the last was answered or skipped, that the answers keep the order the questions were put in with a skip as an empty answer, that the card draws the first question of a series with its position and none of the others, and that a lone question carries no position, that progress kept for a series comes back for that series and no other, and by the walkthrough in ui/scripts/drive-manual-walkthrough.mjs, which drives a real window and bridge through a series of three: each question alone on screen under its position, nothing picked or typed leaving the answer shut, a skip moving on to the next question, the card drawn again at the same question with its pick after another conversation was opened, and the planner reading one paragraph per question with the skipped one as a decline; make check-ui runs both, and the governs list above holds the files to existing)`
 `verified-by: bravebot_core::ask::a_skipped_question_is_reported_as_declined_beside_its_answered_siblings`
 `verified-by: bravebot_core::ask::a_series_is_reported_question_by_question`
 `verified-by: bravebot_core::policy::declining_is_an_answer_rather_than_a_refusal`

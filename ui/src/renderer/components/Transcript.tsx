@@ -8,6 +8,7 @@ import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
 import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SandboxMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
+import * as asking from '../asking'
 import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
 import type { ExportFormat } from '../../shared/export'
@@ -1174,8 +1175,10 @@ const ToolRun = memo(function ToolRun({ entries, active }: { entries: t.Entry[];
  * A series of questions the planner is putting to the person.
  *
  * The one question in the interface that is not a yes or a no, so it holds its own state
- * until it is sent: several questions arrive together and are answered together, in one
- * reply, because the turn is blocked on the series rather than on any one of them.
+ * until it is sent. The questions are put one at a time with their position, and the answers
+ * are sent in one reply once the last is settled, because the turn is blocked on the series
+ * rather than on any one of them. Skipping a question moves on to the next, and the last one
+ * ends the series however it was settled (ASK-6).
  *
  * A question with no rows is not a mistake — it can only be answered in the person's own
  * words — and every question keeps a free-text box for the same reason: the model's options
@@ -1189,43 +1192,30 @@ function Questions({
   request: t.Entry & { kind: 'ask' }
   answers: AskAnswer[] | null
   onAnswer: AnswerQuestions
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const prompts = request.request.prompts
-  const [picked, setPicked] = useState<number[][]>(() => prompts.map(() => []))
-  const [typed, setTyped] = useState<string[]>(() => prompts.map(() => ''))
-
-  const choose = (question: number, index: number, multiple: boolean): void => {
-    setPicked((old) =>
-      old.map((chosen, at) => {
-        if (at !== question) return chosen
-        if (!multiple) return chosen.includes(index) ? [] : [index]
-        return chosen.includes(index)
-          ? chosen.filter((one) => one !== index)
-          : [...chosen, index].sort((a, b) => a - b)
-      }),
-    )
-  }
-
-  /**
-   * What each question would be answered with.
-   *
-   * Typed words win over a selection, matching what the agent does with a reply that
-   * carries both: they are the more specific thing to have done. An empty answer is sent as
-   * an empty object, which is how declining is said.
-   */
-  const collected = (): AskAnswer[] =>
-    prompts.map((_, at) => {
-      const words = typed[at]?.trim() ?? ''
-      if (words) return { typed: words }
-      const chosen = picked[at] ?? []
-      return chosen.length > 0 ? { chosen } : {}
-    })
-
-  const blank = collected().filter((answer) => !answer.typed && !answer.chosen).length
+  const [step, setStep] = useState(() => asking.recall(request.id).step)
+  const [chosen, setChosen] = useState(() => asking.recall(request.id).chosen)
+  const [typed, setTyped] = useState(() => asking.recall(request.id).typed)
+  const over = Boolean(answers) || Boolean(request.interrupted)
+  useEffect(() => {
+    if (over) asking.release(request.id)
+    else asking.keep(request.id, { step, chosen, typed })
+  }, [request.id, over, step, chosen, typed])
+  // Next and Skip are pressed on the question they leave, and the button that was pressed is shut
+  // by the time the next one is drawn, which drops focus on the page. Put it on the question that
+  // took its place, so a person at the keyboard carries on from there.
+  const card = useRef<HTMLDivElement>(null)
+  const was = useRef(step.at)
+  useEffect(() => {
+    if (was.current === step.at) return
+    was.current = step.at
+    card.current?.querySelector<HTMLElement>('.choice, .typed')?.focus()
+  }, [step.at])
 
   // Answered, or ended before it could be: either way the questions are a record rather than a
   // form, so they are drawn as text with no choices to press.
-  if (answers || request.interrupted) {
+  if (over) {
     return (
       <div className="confirm ask">
         <CardHead icon="message-bubble" intent="Asked" subject={<span className="path">{prompts.length} question{prompts.length === 1 ? '' : 's'}</span>} />
@@ -1244,12 +1234,39 @@ function Questions({
     )
   }
 
-  return (
-    <div className="confirm ask">
-      <CardHead icon="message-bubble" intent="Asked" subject={<span className="path">{prompts.length} question{prompts.length === 1 ? '' : 's'}</span>} />
+  const prompt = prompts[step.at]
+  if (!prompt) return null
+  const given = asking.answerOf(chosen, typed)
+  // Nothing picked or typed is not an answer, and passing the question over is what Skip says.
+  const blank = !given.typed && !given.chosen
+  const last = step.at === prompts.length - 1
 
-      {prompts.map((prompt, at) => (
-        <fieldset className="ask-question" key={at}>
+  const choose = (index: number): void => {
+    setChosen((old) => {
+      if (!prompt.multiple) return old.includes(index) ? [] : [index]
+      return old.includes(index) ? old.filter((one) => one !== index) : [...old, index].sort((a, b) => a - b)
+    })
+  }
+
+  const settle = (answer: AskAnswer): void => {
+    const next = asking.settle(step, answer, prompts.length)
+    if ('answers' in next) {
+      onAnswer(request.request.request, next.answers)
+      return
+    }
+    setStep(next.step)
+    setChosen([])
+    setTyped('')
+  }
+
+  return (
+    <div className="confirm ask" ref={card}>
+      <CardHead icon="message-bubble" intent="Asked" subject={<span className="path">{asking.position(step.at, prompts.length) ?? '1 question'}</span>} />
+
+      {/* Said again when the next question replaces this one, so a person using a screen reader
+          learns that it did. */}
+      <div aria-live="polite">
+        <fieldset className="ask-question" key={step.at}>
           <legend>
             <span className="header">{prompt.header}</span>
             {prompt.multiple && <span className="any">pick any</span>}
@@ -1258,13 +1275,13 @@ function Questions({
 
           <ul className="choices">
             {prompt.rows.map((row) => {
-              const on = (picked[at] ?? []).includes(row.index)
+              const on = chosen.includes(row.index)
               return (
                 <li key={row.index}>
                   <button
                     className={`choice ${on ? 'picked' : ''}`}
                     aria-pressed={on}
-                    onClick={() => choose(at, row.index, prompt.multiple)}
+                    onClick={() => choose(row.index)}
                   >
                     <Icon className="choice-mark" name={prompt.multiple ? (on ? 'checkbox-checked' : 'checkbox-unchecked') : (on ? 'radio-checked' : 'radio-unchecked')} />
                     <span className="choice-text">
@@ -1280,28 +1297,23 @@ function Questions({
           <Input
             className="typed"
             size="small"
-            value={typed[at] ?? ''}
+            value={typed}
             aria-label={`Your own answer to: ${prompt.question}`}
             placeholder={prompt.rows.length > 0 ? 'Or say something else…' : 'Your answer…'}
-            onInput={({ value }) => setTyped((old) => old.map((text, index) => (index === at ? value : text)))}
+            onInput={({ value }) => setTyped(value)}
           />
         </fieldset>
-      ))}
+      </div>
 
       <div className="confirm-actions">
-        {/* Declining every question is a real answer and the turn continues, so it is a
-            button here rather than something a person has to leave blank and guess at. */}
-        <Button kind="plain-faint" size="small" className="reject" onClick={() => onAnswer(request.request.request, prompts.map(() => ({})))}>
-          Decline
+        {/* Skipping is a real answer and the turn continues, so it is a button here rather than
+            something a person has to leave blank and guess at. It moves on to the next question
+            and leaves the rest of the series to be answered. */}
+        <Button kind="plain-faint" size="small" className="reject" onClick={() => settle({})}>
+          Skip
         </Button>
-        <Button kind="filled" size="small" className="approve" onClick={() => onAnswer(request.request.request, collected())}>
-          Answer
-          {/* Leaving a question blank declines it, which is legitimate but should not be a
-              surprise — with several questions on screen it is easy to answer two of three
-              and not notice. Said on the button rather than after the fact. */}
-          {blank > 0 && prompts.length > 1 && (
-            <span className="aside"> · {blank} declined</span>
-          )}
+        <Button kind="filled" size="small" className="approve" isDisabled={blank} onClick={() => settle(given)}>
+          {last ? 'Answer' : 'Next'}
         </Button>
       </div>
     </div>

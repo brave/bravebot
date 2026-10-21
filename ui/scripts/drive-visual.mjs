@@ -191,6 +191,10 @@ try {
     ] })
     await page.locator('.confirm.ask').last().scrollIntoViewIfNeeded()
     await variants('09-ask')
+    // One question at a time: the second is drawn after the first is answered, and a skip on it ends the series.
+    await page.locator('.confirm.ask .choice').last().click()
+    await page.locator('.confirm.ask .approve').last().click()
+    await variants('09-ask-second')
     await page.locator('.confirm.ask .reject').last().click()
   })
 

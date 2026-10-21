@@ -612,17 +612,9 @@ impl<'a> Picker<'a> {
         if let Some(named) = &self.named {
             return format!(" {named} ");
         }
-        if self.asking.prompts.len() == 1 {
-            return format!(" {} ", t!(ask_title));
-        }
-        format!(
-            " {} ",
-            t!(
-                ask_title_numbered,
-                at = self.at + 1,
-                total = self.asking.prompts.len()
-            )
-        )
+        let said =
+            place(self.at, self.asking.prompts.len()).unwrap_or_else(|| t!(ask_title).to_string());
+        format!(" {said} ")
     }
 
     fn keys(&self) -> Vec<Span<'static>> {
@@ -753,6 +745,15 @@ impl<'a> Picker<'a> {
         }
         self.here.offset = self.here.offset.max(earliest);
     }
+}
+
+/// Where the question at `at` (counted from zero) stands among the `total` being put, in the
+/// words the picker's title uses, or nothing for a lone question.
+///
+/// One place, so the picker and the line-by-line interface say it the same way. `total` is the
+/// number of questions put to the person: one a remembered answer settled is not among them.
+pub fn place(at: usize, total: usize) -> Option<String> {
+    (total > 1).then(|| t!(ask_title_numbered, at = at + 1, total = total).to_string())
 }
 
 /// Put a series to the person, asking only what the session has not been answered already.
@@ -1164,6 +1165,15 @@ mod tests {
             later.iter().any(|row| row.contains("(2 of 2)")),
             "the second question did not say where it sat: {later:?}"
         );
+    }
+
+    /// The picker and the line-by-line interface say where a question stands in the same words,
+    /// counted from one, and a lone question is placed nowhere.
+    #[test]
+    fn a_question_is_placed_among_those_put_and_a_lone_one_is_not() {
+        assert_eq!(place(0, 1), None, "a lone question counted itself");
+        assert!(place(0, 3).expect("the first of three").contains("1 of 3"));
+        assert!(place(2, 3).expect("the last of three").contains("3 of 3"));
     }
 
     /// A lone question cannot be anywhere else in anything, so counting it is noise.

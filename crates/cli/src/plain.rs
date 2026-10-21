@@ -1627,9 +1627,15 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             ));
         }
 
+        let outstanding = &settled.outstanding().prompts;
         let mut fresh = Vec::new();
-        for prompt in &settled.outstanding().prompts {
-            let mut lines = vec![shown(&prompt.header), shown(&prompt.question)];
+        for (at, prompt) in outstanding.iter().enumerate() {
+            // The position among the questions put, as the picker's title says it (ASK-6).
+            let mut lines: Vec<String> = bravebot_tui::ask::place(at, outstanding.len())
+                .into_iter()
+                .collect();
+            lines.push(shown(&prompt.header));
+            lines.push(shown(&prompt.question));
             for row in &prompt.rows {
                 lines.push(format!("  {}", shown(&row.label)));
                 if let Some(detail) = &row.detail {
@@ -3133,6 +3139,87 @@ mod tests {
         assert!(
             !later.contains("Region"),
             "the settled question was put again: {later}"
+        );
+    }
+
+    /// Questions are put one at a time with the position shown (ASK-6). The position is the line
+    /// directly above the question it belongs to, so a person reading down the screen never has
+    /// to match a count to a question.
+    #[test]
+    fn each_question_in_a_series_is_put_under_its_position() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"one\ntwo\nthree\n".to_vec())),
+            Vec::new(),
+        );
+        let answers = asking.ask_user(&series_of(&[
+            ("Colour", "Which colour?"),
+            ("Size", "Which size?"),
+            ("Shape", "Which shape?"),
+        ]));
+
+        assert_eq!(
+            answers,
+            vec![
+                Answer::Typed("one".to_string()),
+                Answer::Typed("two".to_string()),
+                Answer::Typed("three".to_string())
+            ]
+        );
+        let said = String::from_utf8(asking.output).expect("text");
+        for (position, header, question) in [
+            ("(1 of 3)", "Colour", "Which colour?"),
+            ("(2 of 3)", "Size", "Which size?"),
+            ("(3 of 3)", "Shape", "Which shape?"),
+        ] {
+            let at = said
+                .find(position)
+                .unwrap_or_else(|| panic!("{position} was not said: {said}"));
+            let under: Vec<&str> = said[at..].lines().skip(1).take(2).collect();
+            assert_eq!(
+                under,
+                [header, question],
+                "{position} is not directly above its question: {said}"
+            );
+        }
+    }
+
+    /// The count is of the questions put to the person. One that a remembered answer settled is
+    /// not put, so counting it would number the questions 1 and 3 of 3 with no 2 to be seen.
+    #[test]
+    fn the_position_counts_the_questions_put_and_not_those_remembered() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"east\nblue\nlarge\n".to_vec())),
+            Vec::new(),
+        );
+        asking.ask_user(&series_of(&[("Region", "Which region?")]));
+
+        let before = asking.output.len();
+        asking.ask_user(&series_of(&[
+            ("Colour", "Which colour?"),
+            ("Region", "Which region?"),
+            ("Size", "Which size?"),
+        ]));
+
+        let later = String::from_utf8(asking.output[before..].to_vec()).expect("text");
+        assert!(later.contains("(1 of 2)"), "{later}");
+        assert!(later.contains("(2 of 2)"), "{later}");
+        assert!(!later.contains("of 3"), "{later}");
+    }
+
+    /// A lone question has nowhere else in anything to be, so it carries no position.
+    #[test]
+    fn a_lone_question_is_put_without_a_position() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"east\n".to_vec())),
+            Vec::new(),
+        );
+        asking.ask_user(&series_of(&[("Region", "Which region?")]));
+
+        let said = String::from_utf8(asking.output).expect("text");
+        assert!(said.contains("Which region?"), "{said}");
+        assert!(
+            !said.contains(" of "),
+            "a single question counted itself: {said}"
         );
     }
 
