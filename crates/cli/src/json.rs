@@ -229,7 +229,7 @@ pub fn usage_event(tokens: &Tokens) -> String {
     event("usage", vec![("tokens", token_fields(tokens))])
 }
 
-/// A question the planner asked, put to whatever sends the input lines (CLI-34).
+/// A question the planner asked, put to whatever sends the input lines (CLI-35).
 ///
 /// The one event that carries words the result object does not hold: the header, the question and
 /// the choices as the kernel released them to be put to somebody, which are the words a session
@@ -256,7 +256,7 @@ pub fn question_event(id: u64, asking: &Asking) -> String {
     )
 }
 
-/// A line of the input stream was not taken (CLI-34).
+/// A line of the input stream was not taken (CLI-35).
 ///
 /// Names the line by its number and the cause by a fixed word, and nothing of what the line said:
 /// the line is the launching program's, so it is not echoed back into a stream another program

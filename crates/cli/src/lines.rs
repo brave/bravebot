@@ -1,4 +1,4 @@
-//! The lines a run given `--input-format lines` reads from stdin, and what becomes of each (CLI-34).
+//! The lines a run given `--input-format lines` reads from stdin, and what becomes of each (CLI-35).
 //!
 //! One process serves several turns: a `prompt` line starts one, a `steer` line reaches the one
 //! running, an `answer` line replies to a question the planner asked, and a `stop` line ends the
@@ -651,7 +651,7 @@ impl Channel {
             .line(line);
     }
 
-    /// Whether the lines are the person's own words (CLI-34).
+    /// Whether the lines are the person's own words (CLI-35).
     pub(crate) fn vouched(&self) -> bool {
         self.shared.vouched
     }
