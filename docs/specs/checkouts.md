@@ -262,7 +262,9 @@ carried file as changed. Nothing is asked of the person and nothing is written i
 directory: every byte comes from a file the session may already read and goes to a checkout the
 driver made. The trail records the carry beside the checkout's making
 ([CHECKOUT-19](#CHECKOUT-19)). A program the delegate runs in the checkout counts as run against the
-turn's changes ([TURN-4](turns.md#TURN-4)).
+turn's changes ([TURN-4](turns.md#TURN-4)) where the carry put a file into the checkout or took one
+out of it, and counts in full however many paths were left as HEAD has them. Where the carry changed
+nothing, the checkout holds what `checkout` gives and a program run there does not count.
 
 The delegate is told which paths were carried, which were taken out, which were not and why, and
 whether the status was read, left something out or was not answered, in the driver's words.
@@ -306,6 +308,7 @@ each checkout, and the carry holds one capture across copying the rules and the 
 `verified-by: bravebot_agent::workspace::carry::a_file_put_in_the_place_since_the_walk_is_not_read`
 `verified-by: bravebot_agent::workspace::carry::a_walk_refuses_a_link_wherever_it_stands`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_a_checkout_holding_the_changes_counts_as_the_turns_own`
+`verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_a_checkout_given_none_of_the_changes_leaves_the_change_reported_as_never_built`
 `verified-by: bravebot_agent::workspace::a_directory_replaced_by_a_file_is_carried_and_a_file_replaced_by_a_directory_is_taken_out`
 `verified-by: bravebot_agent::git::a_carried_file_replaces_the_checkouts_and_is_owner_only`
 `verified-by: bravebot_agent::git::a_carried_file_is_refused_where_something_else_stands_in_its_way`
@@ -1248,8 +1251,8 @@ Built.
   left something out, is not carried ([CHECKOUT-23](#CHECKOUT-23)). The delegate and the planner are
   told how the status answered.
 - **A run in a checkout counts for the whole turn.** A program a delegate runs in a checkout that was
-  given changes counts as run against the turn's changes ([TURN-4](turns.md#TURN-4)), including a
-  change the checkout was not given or the planner wrote after it was made
+  given at least one change counts as run against the turn's changes ([TURN-4](turns.md#TURN-4)),
+  including a change the checkout was not given or the planner wrote after it was made
   ([CHECKOUT-23](#CHECKOUT-23)).
 - **The first 1,000 files by name are carried.** A status that lists more than that, which is a tree
   with a build directory nobody ignored, leaves the rest, and the status does not say which of its

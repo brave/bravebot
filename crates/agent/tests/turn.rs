@@ -16240,6 +16240,105 @@ fn a_program_a_delegate_ran_in_a_checkout_holding_the_changes_counts_as_the_turn
     );
 }
 
+/// CHECKOUT-22, TURN-4. A checkout the carry put nothing into holds the commit, so a program a
+/// delegate runs there leaves the turn's change reported as never built, as one in a checkout made
+/// without changes does.
+///
+/// The turn's only write is in a directory beside the working directory, which the carry does not
+/// read, so the checker is given a checkout holding none of it.
+#[test]
+fn a_program_a_delegate_ran_in_a_checkout_given_none_of_the_changes_leaves_the_change_reported_as_never_built()
+ {
+    let scratch = Scratch::new("checkout-with-no-changes-delegate-ran");
+    let beside = Scratch::new("checkout-with-no-changes-delegate-ran-beside");
+    let home = Scratch::new("checkout-with-no-changes-delegate-ran-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    repository::check_out(&scratch.path, &[("README", "committed\n")]);
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    workspace
+        .add_directory(beside.path.to_str().expect("utf-8 path"))
+        .expect("a directory beside the working directory is added");
+    let written = beside.path.join("notes.txt");
+
+    let (endpoint, received, held) = serve_a_turn_and_its_delegate(
+        (
+            "WRITE-BESIDE-THEN-CHECK-THE-COMMIT",
+            writing_then_delegating(
+                tool_request(
+                    "write_file",
+                    &json!({ "path": written.display().to_string(), "contents": "first slice" })
+                        .to_string(),
+                ),
+                r#"{"kind":"checker","task":"RUN-THE-CHECKS-ON-THE-COMMIT","isolation":"checkout_with_changes"}"#,
+            ),
+        ),
+        (
+            "RUN-THE-CHECKS-ON-THE-COMMIT",
+            vec![
+                tool_request("run", r#"{"command":"printf checked"}"#),
+                reply_with("the checks pass"),
+            ],
+        ),
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("WRITE-BESIDE-THEN-CHECK-THE-COMMIT").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes(),
+        &mut reporter,
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was answered before its parent waited for it, so the rounds this test counts on may not have happened"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&written).ok(),
+        Some("first slice".to_string()),
+        "the planner's write did not land, so this is not the case under test"
+    );
+    let asked = every_request(&received);
+    assert!(
+        asked
+            .iter()
+            .any(|body| !body.contains("WRITE-BESIDE-THEN-CHECK-THE-COMMIT")
+                && body.contains("Nothing was carried in.")
+                && body.contains("It exited 0.")),
+        "the checker did not run its line in a checkout given nothing, so this is not the case under test"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("WRITE-BESIDE-THEN-CHECK-THE-COMMIT")
+                && body.contains("nothing has been run")),
+        "a program run in a checkout given none of the changes was counted as run against them"
+    );
+    assert!(
+        reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was not told the turn's change was never built: {:?}",
+        reporter.narration
+    );
+}
+
 /// The question waits for a delegate still working in the turn's workspace, so a turn whose checker
 /// is part way through the build when the question falls due is not told to start one.
 ///
