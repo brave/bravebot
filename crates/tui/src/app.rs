@@ -233,7 +233,12 @@ struct Beside<'a> {
 /// A command the key handler carried out as it was typed, but which needs more than the session to
 /// finish, is finished here, and what it says goes into the transcript as the key handler's own
 /// does (CMD-8).
-fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut Beside<'_>) {
+fn turn_key(
+    session: &mut Session,
+    key: KeyEvent,
+    cancel: &Cancel,
+    beside: &mut Beside<'_>,
+) -> Action {
     let action = handle_key_while_working(session, key);
     carry_out_held_pick(session, beside.config);
     match action {
@@ -299,8 +304,9 @@ fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel, beside: &mut 
         Action::ChooseTheme => open_theme_picker(session),
         Action::ChooseEffort => open_effort_picker(session),
         Action::ChooseEditing => open_editing_picker(session),
-        action => act_while_working(session, action, crate::clipboard::paste),
+        action => return act_while_working(session, action, crate::clipboard::paste),
     }
+    Action::None
 }
 
 /// Carry out the row a picker was left on, if it was left on one.
@@ -1020,9 +1026,11 @@ pub fn handle_paste_while_working(session: &mut Session, text: &str) -> Action {
 
 /// Carry out what a key or a paste answered with while a turn is running.
 ///
-/// [`Action::Paste`] is the only answer either of the mid-turn handlers gives that the session
+/// [`Action::Paste`] is the one answer either of the mid-turn handlers gives that the session
 /// cannot carry out itself, since reading the clipboard runs the platform's own tools. Everything
-/// else they return is a redraw the loops do every frame regardless.
+/// else they return is a redraw the loops do every frame regardless, bar [`Action::Suspend`], which
+/// needs the terminal that only [`pump_terminal`] holds. That one is handed back, and the closure
+/// that read the key returns it to the pump (INPUT-47).
 ///
 /// Every working loop goes through here, by way of [`pump_terminal`], rather than answering the
 /// event and dropping what came back. Four of them did exactly that, so Ctrl-V mid-turn reached its arm, produced the right
@@ -1032,14 +1040,20 @@ pub fn handle_paste_while_working(session: &mut Session, text: &str) -> Action {
 /// The read arrives as an argument for the reason [`take_from_clipboard`] takes one: a test can
 /// then say what the clipboard held and watch the picture land in the box, rather than assert only
 /// that the answer came back, which is what left the discard invisible.
+#[must_use = "a suspension has to reach the pump, which holds the terminal"]
 fn act_while_working(
     session: &mut Session,
     action: Action,
     read: impl FnOnce() -> crate::clipboard::Pasted,
-) {
+) -> Action {
     if action == Action::Paste {
         take_from_clipboard(session, read());
     }
+    #[cfg(unix)]
+    if action == Action::Suspend {
+        return Action::Suspend;
+    }
+    Action::None
 }
 
 /// Wait for the terminal for a frame, and handle everything that has arrived.
@@ -1051,21 +1065,33 @@ fn act_while_working(
 ///
 /// A key goes to `on_key`, which is the one part that differs between the loops. A paste and the
 /// mouse are the same in all of them, so they are answered here, and a paste reaches
-/// [`act_while_working`] so the clipboard is read for it.
+/// [`act_while_working`] so the clipboard is read for it. What `on_key` answers with is carried out
+/// here when it needs the terminal, which no loop's own closure holds: [`Action::Suspend`] gives
+/// the terminal back, stops, and takes it again, and the loop carries on afterwards (INPUT-47).
 fn pump_terminal(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
-    mut on_key: impl FnMut(&mut Session, KeyEvent),
+    mut on_key: impl FnMut(&mut Session, KeyEvent) -> Action,
 ) -> io::Result<()> {
     if input::poll(FRAME)? {
         while input::poll(Duration::ZERO)? {
             let taken = input::read()?;
             took_input(session, &taken);
             match taken {
-                TermEvent::Key(key) => on_key(session, key),
+                TermEvent::Key(key) => {
+                    let answered = on_key(session, key);
+                    // The turn stops with the process and goes on after it.
+                    #[cfg(unix)]
+                    if answered == Action::Suspend {
+                        suspend_session(terminal, session)?;
+                    }
+                    #[cfg(not(unix))]
+                    let _ = answered;
+                }
                 TermEvent::Paste(text) => {
                     let action = handle_paste_while_working(session, &text);
-                    act_while_working(session, action, crate::clipboard::paste);
+                    // A paste never asks for a stop, so there is nothing to hand on.
+                    let _ = act_while_working(session, action, crate::clipboard::paste);
                 }
                 TermEvent::Mouse(mouse) => {
                     // Bound rather than tested inline, because handling the event scrolls and
@@ -2757,6 +2783,8 @@ fn event_loop(
             Action::CopyReply(text) => copy_reply(held.session, &text, crate::clipboard::copy),
             Action::Paste => take_from_clipboard(held.session, crate::clipboard::paste()),
             Action::Edit => edit_prompt(terminal, held.session)?,
+            #[cfg(unix)]
+            Action::Suspend => suspend_session(terminal, held.session)?,
             Action::Export(path) => {
                 export_session(
                     held.session,
@@ -4117,12 +4145,13 @@ fn command_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
     if key.kind == KeyEventKind::Release {
         return;
     }
+    // A mode's key never asks for a stop, so what the two read in return is not handed on.
     if session.watching().is_some() {
         let action = watching_key(session, key);
-        act_while_working(session, action, crate::clipboard::paste);
+        let _ = act_while_working(session, action, crate::clipboard::paste);
     } else if session.scrolling() {
         let action = scroller_key(session, key);
-        act_while_working(session, action, crate::clipboard::paste);
+        let _ = act_while_working(session, action, crate::clipboard::paste);
     } else if session.picking().is_some() {
         session.press_in_picking(key.code, key.modifiers);
     } else if stops_a_command(session, key) {
@@ -4307,21 +4336,21 @@ fn shell_result(
 /// a view or a search opened while the request was out answers the press and the press that reaches
 /// the request behind it is the next one. Without that, the key that closes those modes everywhere
 /// else stopped the request from inside them.
-fn one_request_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
+fn one_request_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) -> Action {
     // Presses only, for the reason the outer loop ignores releases, and for one this function
     // brings with it: the press that closes a mode leaves nothing open, so its own release would
     // read as a second press and stop a request the first never reached.
     if key.kind == KeyEventKind::Release {
-        return;
+        return Action::None;
     }
 
     if !stops_the_turn(session, key) {
         let action = handle_key_while_working(session, key);
-        act_while_working(session, action, crate::clipboard::paste);
-        return;
+        return act_while_working(session, action, crate::clipboard::paste);
     }
 
     stop_what_is_running(session, cancel);
+    Action::None
 }
 
 /// What a compaction won back, in tokens.
@@ -4408,7 +4437,7 @@ fn compact_animated(
         pump_terminal(terminal, session, |session, key| {
             // Which of a mode standing over the session and the request a stop key is asking
             // about is that function's to say.
-            one_request_key(session, key, &cancel);
+            one_request_key(session, key, &cancel)
         })?;
 
         // Drained for the same reason the turn's own loop drains, and waiting on the terminal
@@ -4723,7 +4752,7 @@ fn ask_animated(
         // rather than queueing behind the worker.
         pump_terminal(terminal, session, |session, key| {
             // The same shape as a summary's keys, and the same function reads them.
-            one_request_key(session, key, &cancel);
+            one_request_key(session, key, &cancel)
         })?;
 
         let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
@@ -4823,7 +4852,7 @@ fn commit_message_animated(
         session.keep_awake();
         redraw(terminal, session)?;
         pump_terminal(terminal, session, |session, key| {
-            one_request_key(session, key, &cancel);
+            one_request_key(session, key, &cancel)
         })?;
         let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
             aside_reported(session, message);
@@ -5115,16 +5144,17 @@ fn manifest_animated(
         // interface deaf, and the frame's waiting is done here so a key press wakes the loop.
         pump_terminal(terminal, session, |session, key| {
             if key.kind == KeyEventKind::Release {
-                return;
+                return Action::None;
             }
             // Both keys stop the run and neither leaves, exactly as in a turn. A person
             // watching a plan go wrong is asking for the plan to stop; the next press, at
             // the box, is the one that leaves.
             if stops_the_turn(session, key) {
                 stop_what_is_running(session, &cancel);
+                Action::None
             } else {
                 let action = handle_key_while_working(session, key);
-                act_while_working(session, action, crate::clipboard::paste);
+                act_while_working(session, action, crate::clipboard::paste)
             }
         })?;
 
@@ -5287,23 +5317,23 @@ fn was_stopped(
 /// is the thing a person watching this actually wants off: without that, the key pressed at the
 /// ninth round would stop only the request and the tenth would go out anyway. With the goal
 /// already off there is only the request left to stop, and no press here leaves.
-fn goal_check_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
+fn goal_check_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) -> Action {
     // Presses only, as in [`one_request_key`]: the release of the press that closed a mode arrives
     // with nothing open and would clear the goal the press was never about.
     if key.kind == KeyEventKind::Release {
-        return;
+        return Action::None;
     }
 
     if !stops_the_turn(session, key) {
         let action = handle_key_while_working(session, key);
-        act_while_working(session, action, crate::clipboard::paste);
-        return;
+        return act_while_working(session, action, crate::clipboard::paste);
     }
 
     if session.goal().is_some() {
         session.clear_goal();
     }
     stop_what_is_running(session, cancel);
+    Action::None
 }
 
 /// Whether a queued command line ends the goal, or sets, pauses or clears one: `/exit`, `/clear`
@@ -5425,7 +5455,7 @@ fn goal_check_animated(
         pump_terminal(terminal, session, |session, key| {
             // Which of the goal, a mode over the session, and the request a stop key is asking
             // about is that function's to say.
-            goal_check_key(session, key, &cancel);
+            goal_check_key(session, key, &cancel)
         })?;
 
         let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| match message {
@@ -5800,7 +5830,7 @@ fn run_turn_animated(
             // for a press would type every character twice, and cancel the turn on the way up
             // from the Escape that already cancelled it.
             if key.kind == KeyEventKind::Release {
-                return;
+                return Action::None;
             }
             // Both keys stop the turn and neither leaves. Ctrl-C is the way out of the
             // program, but there is a turn to stop first, and a person watching an answer
@@ -5813,8 +5843,9 @@ fn run_turn_animated(
             // that stands still that long reads as a press nobody heard.
             if stops_the_turn(session, key) {
                 stop_what_is_running(session, &cancel);
+                Action::None
             } else {
-                turn_key(session, key, &cancel, &mut beside);
+                turn_key(session, key, &cancel, &mut beside)
             }
         })?;
         carry_out_held_pick(session, beside.config);
@@ -10403,7 +10434,7 @@ mod tests {
 
             let action = handle_key_while_working(&mut session, ctrl('v'));
             assert_eq!(action, Action::Paste);
-            act_while_working(&mut session, action, || picture(b"pixels".to_vec()));
+            let _ = act_while_working(&mut session, action, || picture(b"pixels".to_vec()));
 
             assert_eq!(
                 session.input(),
@@ -10426,7 +10457,7 @@ mod tests {
                 session.transcript[0].text.contains("ctrl-v"),
                 "the note did not name the key that works"
             );
-            act_while_working(&mut session, action, || picture(b"pixels".to_vec()));
+            let _ = act_while_working(&mut session, action, || picture(b"pixels".to_vec()));
 
             assert_eq!(
                 session.input(),
@@ -10445,7 +10476,7 @@ mod tests {
 
             let action = handle_paste_while_working(&mut session, "some words");
             assert_eq!(action, Action::Redraw);
-            act_while_working(&mut session, action, || {
+            let _ = act_while_working(&mut session, action, || {
                 panic!("the clipboard was read for a paste that carried text")
             });
 
@@ -10680,7 +10711,7 @@ mod tests {
             let mut session = Session::new("kernel-enforced");
             session.status = Status::Working;
 
-            act_while_working(&mut session, Action::Paste, || Pasted::Files(paths));
+            let _ = act_while_working(&mut session, Action::Paste, || Pasted::Files(paths));
 
             assert_eq!(session.input(), "[Image #1] ");
             assert_eq!(session.attached().len(), 1);
@@ -26812,6 +26843,29 @@ mod tests {
         assert_eq!(session.input(), "one two");
     }
 
+    /// The turn's own key reader hands the stop back to the pump that holds the terminal, with the
+    /// turn still running and the box as it was, for a key that is not one of the two that stop it
+    /// (INPUT-47). The other working loops are read through [`act_while_working`], which the
+    /// tests of the suspension cover.
+    #[cfg(unix)]
+    #[test]
+    fn the_turns_key_reader_hands_ctrl_z_back_and_leaves_the_turn_running() {
+        let mut session = Session::new("kernel-enforced");
+        for c in "one two".chars() {
+            session.type_char(c);
+        }
+        session.status = Status::Working;
+        let cancel = Cancel::new();
+
+        assert!(!stops_the_turn(&session, ctrl('z')));
+        let answer = nothing_beside(|beside| turn_key(&mut session, ctrl('z'), &cancel, beside));
+
+        assert_eq!(answer, Action::Suspend);
+        assert_eq!(session.status, Status::Working);
+        assert!(!cancel.is_cancelled(), "the key stopped the turn");
+        assert_eq!(session.input(), "one two");
+    }
+
     /// Kills in one direction join, and a change of direction starts a new buffer.
     #[test]
     fn consecutive_kills_join_in_the_direction_they_went() {
@@ -33220,3 +33274,7 @@ mod credential_mode_tests;
 #[cfg(all(test, unix))]
 #[path = "kept_jobs_tests.rs"]
 mod kept_jobs_tests;
+
+#[cfg(all(test, unix))]
+#[path = "suspend_tests.rs"]
+mod suspend_tests;

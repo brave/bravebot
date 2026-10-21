@@ -207,3 +207,100 @@ pub(super) fn edit_body(
 
     edited.map_err(|failure| failure.to_string())
 }
+
+/// Stop this process the way the terminal would have on Ctrl-Z, and return once it is continued.
+///
+/// The session holds the terminal in raw mode, so the driver never turns the key into `SIGTSTP`
+/// and this sends it instead (INPUT-47). It goes to the whole process group, as the driver sends
+/// it: a session started in a pipeline or by a wrapper has other members, and a shell reports a job
+/// stopped only when every member of its group has, so one left running would leave the shell
+/// waiting on a job it cannot tell is not done. A command a turn started leads a group of its own
+/// (RUN-11) and is not reached.
+///
+/// Sent from the thread that reads the terminal, which leads the process, so the signal is
+/// delivered before the call returns and what follows it runs only after `SIGCONT`.
+#[cfg(unix)]
+pub(super) fn stop_until_continued() -> io::Result<()> {
+    rustix::process::kill_current_process_group(rustix::process::Signal::TSTP)
+        .map_err(io::Error::from)
+}
+
+/// Run `stop` with the terminal given away: given back before it, taken again after it.
+///
+/// The order is the whole of what a stop owes the shell (INPUT-47): a stop sent while the screen of
+/// its own and raw mode are still on leaves the shell drawing under a mouse it does not know is
+/// reported, and a session that does not take the terminal again is a screen nobody draws on. So
+/// the terminal is not stopped over when it could not be given back, and it is taken again whatever
+/// the stop did. What the stop reports is the caller's to say, which is why it is not a result.
+///
+/// Generic in what it holds so the order can be watched without a terminal, which a test does not
+/// have.
+#[cfg(unix)]
+pub(super) fn around_a_stop<T>(
+    held: &mut T,
+    give_back: impl FnOnce(&mut T) -> io::Result<()>,
+    stop: impl FnOnce(),
+    take_again: impl FnOnce(&mut T) -> io::Result<()>,
+) -> io::Result<()> {
+    give_back(held)?;
+    stop();
+    take_again(held)
+}
+
+/// Make `attempt` again for as long as it reports that a signal interrupted it.
+///
+/// A session the shell continues with `bg` is outside the terminal's foreground group, and a
+/// process there is stopped by the terminal at the first mode it sets (INPUT-47). The call that was
+/// stopped reports itself interrupted when `fg` continues the session, and the same call made again
+/// is the one that works. Every pass either succeeds or stops the process again, so this does not
+/// spin, and any other failure is returned as it came.
+#[cfg(unix)]
+pub(super) fn until_not_interrupted<T>(
+    mut attempt: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    loop {
+        match attempt() {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            settled => return settled,
+        }
+    }
+}
+
+/// Give the terminal to the shell, stop until the shell continues the session, and take it back.
+///
+/// The terminal is given up and taken again as it is for an editor, through the same two functions,
+/// so the modes the session asks for are the ones it gives back (INPUT-33). The session is not
+/// touched: the line, the caret and what is attached are where they were when the key was pressed.
+///
+/// The screen is cleared on the way back for the reason an editor's is. The alternate screen is
+/// empty, and the interface holds the frame it drew before leaving, so a redraw that sent only what
+/// changed would paint over nothing.
+#[cfg(unix)]
+pub(super) fn suspend_session(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
+) -> io::Result<()> {
+    let mouse = session.mouse_captured();
+    let mut failure = None;
+
+    let taken_again = around_a_stop(
+        terminal,
+        |terminal| {
+            hand_back_terminal(terminal.backend_mut())?;
+            terminal.show_cursor()
+        },
+        || failure = stop_until_continued().err(),
+        |terminal| {
+            until_not_interrupted(|| take_over_terminal(terminal.backend_mut(), mouse))?;
+            terminal.clear()
+        },
+    );
+
+    // Said rather than swallowed, for the reason an editor that will not start is: a key that
+    // does nothing and explains nothing reads as an interface that has stopped answering. Before
+    // the terminal's own failure is returned, which ends the session and takes the note with it.
+    if let Some(failure) = failure {
+        session.note(t!(suspend_failed, reason = failure.to_string()));
+    }
+    taken_again
+}

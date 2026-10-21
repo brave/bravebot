@@ -25,6 +25,7 @@ growing further. It keeps growing while a turn runs.
 | Ctrl-S | put the line away, bring back the one you put away, or search this workspace |
 | Escape | discard a half-typed prompt, keeping it for Up, or stop a running turn (with vi editing, from NORMAL mode) |
 | Ctrl-C | stop the nearest thing there is to stop, and leave when there is nothing left |
+| Ctrl-Z | [suspend to the shell](#suspending-to-the-shell), and `fg` brings the session back. Not on Windows |
 | Up / Down | walk back through every prompt you have sent in any session, starting with a line you cleared |
 | Ctrl-N | on a prompt recalled with Up, cycle between every prompt, this project's and this session's. It stays where you put it, and a scope with nothing in it is skipped |
 | Ctrl-R | search every prompt you have sent |
@@ -43,7 +44,7 @@ works**, in every terminal and in shell mode too.
 With [vi editing](#editing-the-way-vi-does) chosen, Escape enters NORMAL mode instead of discarding
 the line, and the letters do what they do in vi.
 
-Eleven of these chords can be [moved to keys of your own](#moving-a-key). Every chord named on this
+Twelve of these chords can be [moved to keys of your own](#moving-a-key), eleven on Windows. Every chord named on this
 page, and every one the interface names on your screen, is the default.
 
 ## Undoing an edit
@@ -57,7 +58,29 @@ editing style and recalling an earlier prompt leave nothing to undo.
 
 Some terminals report the same key as Ctrl-7, Ctrl-Shift-_, Ctrl-/ or Ctrl-Shift-/. While `undo` is on its default
 those answer too, except one that you moved another action onto. Ctrl-Z is not used, because it
-suspends the process in a terminal that has job control on.
+[suspends the session](#suspending-to-the-shell).
+
+## Suspending to the shell
+
+Ctrl-Z stops the session and gives the terminal back to the shell that started it. Run `fg` there to
+bring it back. The screen you left is as it was: the line you were writing, the caret, what is attached
+to it, and what is waiting in the queue are all still there, and the session is drawn again.
+
+It works at rest and while a turn runs, in either editing style and in shell mode. A turn stops with
+the session and carries on when you continue it. A command it started is not stopped: it keeps
+running, and what it prints waits until the session is back. A command is still held to its time limit,
+which a long stop can use up. A request to the model that was waiting for its answer may have been
+closed by the server by then, and the turn fails as any request does that the network ended.
+
+If you continue the session with `bg`, the terminal stops it again as soon as it tries to take the
+screen back, and the shell reports it as stopped for terminal output. `fg` carries it on from there.
+
+The scroller, the prompt search, a picker, the delegate view and the questions the session asks do not
+answer Ctrl-Z. A Ctrl-Z that arrives in the same read as other keys suspends nothing, and the row beneath
+says so, for the reason an Enter that arrives that way does not send. In a session that is not in a
+process group of its shell, such as the first process of a container, the stop has no effect.
+
+Windows has no suspend, so Ctrl-Z does nothing there and the `?` list does not name it.
 
 ## Editing the way vi does
 
@@ -75,7 +98,7 @@ objects, VISUAL selection and REPLACE mode, and how each treats a [marker](#mark
 
 A `keybindings` block in [`settings.json`](../customize/configuration.md) names an action and the
 chord you want to answer it. Write a chord as `ctrl-x`, `alt-o` or `ctrl+x`. The block layers per
-action the way `env` does, so a project file moving one action says nothing about the other ten.
+action the way `env` does, so a project file moving one action says nothing about the others.
 
 ```json
 {
@@ -86,7 +109,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 }
 ```
 
-**Eleven actions can be moved, and nothing else can:**
+**Twelve actions can be moved, and nothing else can** (eleven on Windows, which has no `suspend`):
 
 | Action | Default | What it does |
 |---|---|---|
@@ -100,6 +123,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](sessions.md#telling-sessions-apart) |
 | `scope` | `ctrl-n` | cycle Up between every stored prompt, this project's and this session's |
+| `suspend` | `ctrl-z` | [suspend the session to the shell](#suspending-to-the-shell) |
 | `undo` | `ctrl-_` | put back the last edit to the line ([below](#undoing-an-edit)) |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is typed,

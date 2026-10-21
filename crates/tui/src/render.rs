@@ -6356,6 +6356,27 @@ mod tests {
         assert!(!listed.contains("ctrl-n"), "{listed}");
     }
 
+    /// The `?` list has a row for the key that stops the session, on its default and on a moved
+    /// chord, so the key is written down in the one place that lists the keys (INPUT-47).
+    #[cfg(unix)]
+    #[test]
+    fn the_shortcut_list_names_the_suspend_chord() {
+        let mut session = Session::new("none");
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("ctrl-z"), "{listed}");
+        assert!(listed.contains("suspend to the shell"), "{listed}");
+
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("suspend".to_string(), "alt-z".to_string());
+        session.adopt_keybindings(&moved);
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("alt-z"), "{listed}");
+        assert!(!listed.contains("ctrl-z"), "{listed}");
+    }
+
     /// When stash is customized, the stashed line reminder names the customized chord.
     #[test]
     fn the_stashed_line_names_the_custom_stash_chord() {
