@@ -564,7 +564,7 @@ fn lines<R: BufRead + Send, W: Write + Send, T: Turns<Prompting<R, W>>>(
                 reply: &said.reply,
                 notices: &said.notices,
                 attempt: None,
-                trail: None,
+                model: None,
                 clean: said.clean,
                 ending: crate::finish::ending_of_a_turn(
                     said.clean,

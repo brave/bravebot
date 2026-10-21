@@ -241,11 +241,18 @@ BLOCK   confine: read_file.path: '/etc/hosts' resolves outside the workspace; re
 one gate that ran: what it checked, the label it saw, and what it allowed. It is the fastest way to
 find out why something was refused.
 
+On a one-shot run each line is written to stderr as the gate takes the decision, not after the
+run ends, so a run that is slow or stuck shows what it had decided so far. The trail is not
+written a second time at the end. The sink writes the gate names, labels, paths and slot ids the
+event carries and branches on none of them, and a failed write to stderr is dropped.
+
 `verified-by: bravebot_tui::app::ctrl_t_toggles_the_trail`
 `verified-by: bravebot_tui::render::the_trail_is_hidden_by_default`
 `verified-by: bravebot_tui::render::a_blocked_gate_is_shown_in_the_trail`
 `verified-by: bravebot_cli::main::the_trail_renders_a_line_for_every_event`
 `verified-by: bravebot_cli::running::a_one_shot_run_that_failed_prints_its_trail_under_trace`
+`verified-by: bravebot_cli::running::a_traced_run_writes_its_decisions_to_stderr_while_it_is_still_going`
+`verified-by: bravebot_cli::json::a_decision_is_traced_when_the_gate_takes_it`
 
 <a id="TRACE-6"></a>
 ### TRACE-6: each planning call is recorded, like any other gate
