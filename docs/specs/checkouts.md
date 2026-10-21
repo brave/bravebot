@@ -230,7 +230,10 @@ are the ones only the status listed. Moving the working directory forgets the re
 are relative to the root they were written under. A path the status lists as deleted that the
 working directory no longer holds as a file is taken out of the checkout. One it lists as deleted
 that the working directory still holds, as `git rm --cached` leaves one, is carried. Where the
-status is not answered only the recorded paths are carried.
+status is not answered only the recorded paths are carried. A name that is not UTF-8 is never
+carried: the status leaves it out and says it left something out, and a recorded name is text because
+the planner typed it. The file whose name is the lossy rendering of such a name is another file, and
+is carried as itself.
 
 No path is chosen by comparing bytes, and no file is read for what it holds: each goes from the
 working directory's file to the checkout's as bytes the driver does not hold. A file is opened
@@ -296,6 +299,7 @@ each checkout, and the carry holds one capture across copying the rules and the 
 `verified-by: bravebot_agent::workspace::the_changes_carried_into_a_checkout_read_as_the_working_directorys_status_does`
 `verified-by: bravebot_agent::workspace::a_file_distrusted_after_the_checkout_was_made_is_carried_untrusted`
 `verified-by: bravebot_agent::workspace::a_path_that_cannot_be_carried_is_named_with_why`
+`verified-by: bravebot_agent::workspace::a_file_whose_name_is_not_text_is_left_out_and_its_lossy_lookalike_is_carried_as_itself`
 `verified-by: bravebot_agent::workspace::a_checkout_is_given_no_more_files_than_its_bound`
 `verified-by: bravebot_agent::workspace::a_carried_script_is_runnable_by_its_owner_alone_and_nothing_else_is`
 `verified-by: bravebot_agent::workspace::moving_the_working_directory_forgets_the_writes_recorded_under_the_old_one`

@@ -11460,6 +11460,63 @@ fn a_path_that_cannot_be_carried_is_named_with_why() {
     assert!(!made.root().join("link").exists());
 }
 
+/// CHECKOUT-23, PATH-003. A file whose name is not UTF-8 is left out, and the file whose name is
+/// the lossy rendering of it is carried as itself. The status says it left a name out, and a name
+/// with no lookalike leaves no path to carry or to report as left. Linux only: other hosts' file
+/// systems cannot hold the name.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_whose_name_is_not_text_is_left_out_and_its_lossy_lookalike_is_carried_as_itself() {
+    use bravebot_agent::workspace::{CarryBound, StatusRead};
+    use std::os::unix::ffi::OsStrExt;
+    let (scratch, state, workspace) =
+        checked_out_repository("carry-not-text", &[("README", "hello\n")]);
+    std::fs::write(scratch.path.join("tool-\u{FFFD}"), "lookalike\n").unwrap();
+    std::fs::write(
+        scratch.path.join(std::ffi::OsStr::from_bytes(b"tool-\xff")),
+        "invalid\n",
+    )
+    .unwrap();
+    std::fs::write(
+        scratch
+            .path
+            .join(std::ffi::OsStr::from_bytes(b"alone-\xff")),
+        "alone\n",
+    )
+    .unwrap();
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let plan = workspace.plan_carry(&mut policy);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    let carried = workspace.carry_into(&mut policy, &plan, &made, CarryBound::FIXED);
+
+    assert_eq!(carried.written, ["tool-\u{FFFD}"], "{carried:?}");
+    assert!(
+        carried.left.is_empty(),
+        "a path was named that no file in the working directory has: {:?}",
+        carried.left
+    );
+    assert_eq!(
+        carried.status,
+        StatusRead::Partial,
+        "a name that is not text was left out and the status said it was complete"
+    );
+    assert_eq!(
+        std::fs::read_to_string(made.root().join("tool-\u{FFFD}")).unwrap(),
+        "lookalike\n",
+        "the lookalike was given the bytes of the file whose name is not text"
+    );
+    for name in [&b"tool-\xff"[..], &b"alone-\xff"[..]] {
+        assert!(
+            !made.root().join(std::ffi::OsStr::from_bytes(name)).exists(),
+            "a file whose name is not text was carried"
+        );
+    }
+}
+
 /// CHECKOUT-23. A checkout is given no more files than its bound, the files taken out of it count
 /// against that bound before any is written, and what is over is named.
 #[test]
