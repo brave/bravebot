@@ -159,6 +159,8 @@ const READ_KEYS: &[&str] = &[
     "mcp",
     "mcpServers",
     "model",
+    "notificationCondition",
+    "notificationMethod",
     PERMISSIONS_BLOCK,
     "processorModel",
     "promptCacheTtl",
@@ -318,6 +320,14 @@ pub struct Settings {
     /// `None` is the built-in bound, which belongs to the kernel that holds a turn's tree of
     /// delegates, for the reason [`Settings::wheel_rows`] gives about its own count.
     max_running_delegates: Option<u32>,
+    /// What the top-level `notificationMethod` key named, if it named anything.
+    ///
+    /// The word as the file spelled it, for the reason `editor_mode` above keeps one: which words
+    /// name a method is the interface's to say, since it is the one that writes to the terminal.
+    notification_method: Option<String>,
+    /// What the top-level `notificationCondition` key named, if it named anything, kept as
+    /// [`Settings::notification_method`] keeps its word.
+    notification_condition: Option<String>,
     /// What `vetting.auto` said, where the layer that said it was entitled to.
     ///
     /// Read from the **home** layer and no other, which is why [`Settings::layered`] settles this
@@ -1399,6 +1409,8 @@ impl Settings {
                 .and_then(serde_json::Value::as_u64)
                 .filter(|count| *count > 0)
                 .map(|count| u32::try_from(count).unwrap_or(u32::MAX)),
+            notification_method: word(root, "notificationMethod"),
+            notification_condition: word(root, "notificationCondition"),
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
             // from and so the only one entitled to answer.
@@ -1667,6 +1679,21 @@ impl Settings {
     /// delegation off is for, so it is absence, and so is anything that is not a whole count.
     pub fn max_running_delegates(&self) -> Option<u32> {
         self.max_running_delegates
+    }
+
+    /// The way the settings in force ask the terminal to be told a turn ended or a question is
+    /// waiting, if they named one.
+    ///
+    /// The word the file spelled, unrecognised words and all, so the interface that writes to the
+    /// terminal decides which words name a method and reports one it does not know.
+    pub fn notification_method(&self) -> Option<&str> {
+        self.notification_method.as_deref()
+    }
+
+    /// When the settings in force ask for that notice, if they named a condition, as the word the
+    /// file spelled.
+    pub fn notification_condition(&self) -> Option<&str> {
+        self.notification_condition.as_deref()
     }
 
     /// What `vetting.auto` said in the home layer, if it said anything.
@@ -2064,6 +2091,8 @@ impl Settings {
             && self.away_summary_enabled.is_none()
             && self.away_summary_idle_seconds.is_none()
             && self.max_running_delegates.is_none()
+            && self.notification_method.is_none()
+            && self.notification_condition.is_none()
             && self.vetting.is_none()
             && self.narrowing.is_empty()
             // A key named as something other than a boolean said something too, and `doctor` names
@@ -2318,6 +2347,16 @@ impl Settings {
                 self.max_running_delegates
                     .is_some()
                     .then_some("maxRunningDelegates"),
+            )
+            .chain(
+                self.notification_method
+                    .is_some()
+                    .then_some("notificationMethod"),
+            )
+            .chain(
+                self.notification_condition
+                    .is_some()
+                    .then_some("notificationCondition"),
             )
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain(self.narrowing.named())
@@ -7043,6 +7082,39 @@ mod tests {
             .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
             .read();
         assert_eq!(only_global.max_running_delegates(), Some(12));
+    }
+
+    /// VIEW-31: the two keys are words the interface interprets, so each is handed on as written, a
+    /// blank is absence, the nearest layer that named one wins, and this build reads both.
+    #[test]
+    fn a_settings_file_names_how_and_when_the_terminal_is_notified() {
+        let settings = Settings::parse(
+            r#"{"notificationMethod": " bel ", "notificationCondition": "always"}"#,
+        );
+        assert_eq!(settings.notification_method(), Some("bel"));
+        assert_eq!(settings.notification_condition(), Some("always"));
+        assert!(!settings.is_empty());
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            ["notificationMethod", "notificationCondition"]
+        );
+
+        for text in [
+            r#"{"notificationMethod": ""}"#,
+            r#"{"notificationMethod": true}"#,
+            r#"{"tui": {"notificationMethod": "bel"}}"#,
+            "{}",
+        ] {
+            assert_eq!(Settings::parse(text).notification_method(), None, "{text}");
+        }
+
+        let layered = Layers::new("notification-layers")
+            .global(r#"{"notificationMethod": "osc9", "notificationCondition": "always"}"#)
+            .project(r#"{"notificationMethod": "off"}"#)
+            .read();
+        assert_eq!(layered.notification_method(), Some("off"));
+        assert_eq!(layered.notification_condition(), Some("always"));
+        assert_eq!(layered.unread_keys().count(), 0);
     }
 
     /// INPUT-43: the key turns a request that spends on, so only a real `true` does it. A quoted

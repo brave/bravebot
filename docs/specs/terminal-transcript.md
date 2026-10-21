@@ -8,6 +8,7 @@ governs:
   - crates/tui/src/colour_codes.rs
   - crates/tui/src/indicator.rs
   - crates/tui/src/logo.rs
+  - crates/tui/src/notify.rs
   - crates/tui/src/preview.rs
   - crates/tui/src/reasoning.rs
   - crates/tui/src/render.rs
@@ -883,3 +884,59 @@ it was there, and the count gives the person the same for colour codes.
 `verified-by: bravebot_cli::progress::colour_codes_in_a_block_are_counted_and_not_drawn`
 `verified-by: bravebot_cli::progress::only_colour_codes_are_left_out_of_a_block`
 `verified-by: bravebot_cli::progress::a_block_without_colour_codes_says_nothing_about_them`
+
+
+<a id="VIEW-31"></a>
+### VIEW-31: a turn that ends or a question that opens is noticed by a terminal that was left
+
+When the terminal has reported being left and a turn or a command goes from working to ready, or a
+question a turn puts to the person opens (an approval of any kind, or a question from the planner),
+the interface writes one notice to the terminal. A turn that ends with a question still open is
+noticed as ended. The `notificationMethod` setting chooses the notice: `osc9` writes an OSC 9
+sequence, `bel` writes the bell, `off` writes nothing, and `auto`, which is also what any other word
+or no word means, writes OSC 9 where `TERM_PROGRAM` names iTerm.app, WezTerm or ghostty and the bell
+elsewhere. The `notificationCondition` setting `always` writes the notice whether or not the terminal
+was left, and any other word or none writes it only after the terminal reported being left. A terminal
+that reports no focus changes is taken to be in front of the person, so under that default it is
+never written to. A report is taken as the event is read, by whichever prompt or loop reads it, so
+one that arrives while a question is open counts. A state the interface is still in is noticed once,
+not on every frame.
+
+The text is fixed per kind, a message from the catalog that takes no argument (`bravebot: turn finished` and `bravebot: waiting for an answer` in English). It never
+carries a command, a path, a file name, a prompt or any part of a reply, so no byte a turn produced reaches
+the escape sequence. The decision reads the interface's own state, the focus report and the settings. It
+adds no moment to the hooks ([HOOK-2](hooks.md#HOOK-2)), and it is the terminal interface's alone.
+
+**Why.** A person who starts a long turn and switches windows learns that it stopped on a question only by
+looking again. A hook can run a command for either moment ([HOOK-2](hooks.md#HOOK-2)), but the person has
+to write it, and the notice needs no setup.
+
+`verified-by: bravebot_tui::notify::a_turn_that_ends_with_the_terminal_left_is_noticed_once`
+`verified-by: bravebot_tui::notify::a_question_that_opens_with_the_terminal_left_is_noticed_once`
+`verified-by: bravebot_tui::notify::a_focused_terminal_is_noticed_only_where_the_condition_is_always`
+`verified-by: bravebot_tui::notify::a_turn_that_ends_while_a_question_is_open_is_noticed`
+`verified-by: bravebot_tui::notify::off_writes_nothing`
+`verified-by: bravebot_tui::notify::only_a_turn_ending_or_a_question_opening_is_noticed`
+`verified-by: bravebot_tui::notify::auto_chooses_osc9_only_for_a_terminal_known_to_read_it`
+`verified-by: bravebot_tui::notify::a_word_that_names_nothing_is_the_default`
+`verified-by: bravebot_tui::notify::each_method_word_asks_for_its_own_method`
+`verified-by: bravebot_tui::input::the_queue_is_answered_before_the_terminal_and_in_arrival_order`
+`verified-by: bravebot_tui::notify::the_text_of_each_notice_is_fixed_and_carries_no_control_character_of_its_own`
+`verified-by: bravebot_config::settings::a_settings_file_names_how_and_when_the_terminal_is_notified`
+
+
+## Known costs
+
+- **The trust question asked when the interface opens is not noticed.** The terminal has not reported
+  being left when it is drawn, and the person who started the program is looking at it, so
+  [VIEW-31](#VIEW-31) writes nothing for it under any `notificationCondition`. A question put to a
+  person outside a turn is not noticed either, which is the boundary `prompt-shown` has in
+  [hooks.md](hooks.md).
+- **`auto` knows a terminal by `TERM_PROGRAM`, which is not always the terminal.** Inside tmux it
+  names tmux and over ssh it is often unset, so `auto` writes the bell there although the terminal
+  in front may read OSC 9. `notificationMethod` set to `osc9` asks for it by name, and whether the
+  sequence reaches the terminal is up to what sits between.
+- **A terminal that reports no focus changes is never written to under the default condition.** A
+  person whose terminal sends none is taken to be looking, so one who walks away learns nothing
+  unless `notificationCondition` is `always`, which writes the notice to a person who is looking
+  as well.
