@@ -1216,9 +1216,48 @@ def site_checks():
                 draft.first_site([f"{outside}:2 the token", "crates/demo/src/lib.rs:4 the gate"])
                 == gate,
             ),
+            (
+                "a place that names a range or a list of lines is opened at its first line",
+                draft.first_site(["crates/demo/src/lib.rs:4-9 the gate"]) == gate
+                and draft.first_site(["crates/demo/src/lib.rs:4,12-15 the gate"]) == gate,
+            ),
         ]
     finally:
         shutil.rmtree(outside.parent, ignore_errors=True)
+
+
+def bullet_checks():
+    """How an evidence item is written into a body: the place in a code span, then what is there.
+
+    A lane writes a place as one line, a range or several, and a body that closes the span after the
+    first number prints the rest as if it were what is there.
+    """
+    return [
+        (
+            "a place with one line is a code span and what is there follows it",
+            draft.as_bullet("crates/demo/src/lib.rs:4 the gate")
+            == "- `crates/demo/src/lib.rs:4` the gate",
+        ),
+        (
+            "a range of lines stays inside the code span",
+            draft.as_bullet("crates/demo/src/lib.rs:4-9 the gate")
+            == "- `crates/demo/src/lib.rs:4-9` the gate",
+        ),
+        (
+            "a list of lines and ranges stays inside the code span",
+            draft.as_bullet("crates/demo/src/lib.rs:4,12-15 the gate")
+            == "- `crates/demo/src/lib.rs:4,12-15` the gate",
+        ),
+        (
+            "a number that opens what is there is not taken for a line",
+            draft.as_bullet("crates/demo/src/lib.rs:4 12 callers")
+            == "- `crates/demo/src/lib.rs:4` 12 callers",
+        ),
+        (
+            "an item that names no place is kept as written",
+            draft.as_bullet("the clause says so") == "- the clause says so",
+        ),
+    ]
 
 
 def nest_a_spec(root):
@@ -2251,6 +2290,9 @@ def main():
     sited = in_fixture(None, site_checks)
     for name, held in sited:
         note(name, held, "the drafter chose a different place")
+
+    for name, held in bullet_checks():
+        note(name, held, "the bullet was written differently")
 
     selected = in_fixture(nest_a_spec, selection_checks)
     for name, held in selected:

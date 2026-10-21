@@ -3377,6 +3377,21 @@ def test_bodies_say_where_and_why():
         excerpt,
     )
 
+    ranged = dict(
+        finding,
+        evidence=[
+            "crates/core/src/policy.rs:1-3,9 the branch",
+            "crates/agent/src/tools.rs:7-8 the effect",
+        ],
+    )
+    listed = with_cwd(ROOT, lambda: drafts.body_for(ranged))
+    check(
+        "a line range or list in the evidence stays inside the code span that names its file",
+        "- `crates/core/src/policy.rs:1-3,9` the branch" in listed
+        and "- `crates/agent/src/tools.rs:7-8` the effect" in listed,
+        listed[listed.find("Where it is") :][:300],
+    )
+
     outside = Path(tempfile.mkdtemp(prefix="security-audit-selftest-")) / "hosts.yml"
     outside.write_text("github.com:\n  oauth_token: gho_SELFTEST\n", encoding="utf-8")
     poisoned = dict(finding, place=f"{outside}:2 in decide")
