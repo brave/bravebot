@@ -17000,6 +17000,64 @@ fn a_stop_ends_the_running_turn_and_the_prompt_behind_it_still_runs() {
     );
 }
 
+/// CLI-36 and CLI-35: a stop sent to a turn that works towards a condition ends it in the round it
+/// reaches. The judge says `NOT MET` after the first round, the stop arrives while the work sent
+/// back is in flight, and no second check is made. A stop that only reached the first round would
+/// let that one finish, ask the judge again and send the work back once more.
+#[test]
+fn a_stop_ends_the_rounds_of_a_goal_run_reading_lines() {
+    let (arrived, in_flight) = mpsc::channel();
+    let (release, held) = mpsc::channel();
+    let held = std::sync::Mutex::new(held);
+    let answers = AtomicUsize::new(0);
+    let gateway = a_gateway(r#"["tools"]"#, move |body| {
+        if body.contains(THE_JUDGES_WORDS) {
+            return framed(
+                serde_json::json!({"role": "assistant", "content": "NOT MET\nnot yet"}),
+                "stop",
+                (7, 3),
+            );
+        }
+        // The planner's second request is the work sent back, which is the one held.
+        if answers.fetch_add(1, Ordering::SeqCst) == 1 {
+            let _ = arrived.send(());
+            let _ = held
+                .lock()
+                .expect("release")
+                .recv_timeout(Duration::from_secs(60));
+        }
+        framed(
+            serde_json::json!({"role": "assistant", "content": "a round done"}),
+            "stop",
+            (10, 2),
+        )
+    });
+    let scratch = Scratch::new("cli-lines-goal-stop").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["--goal", A_CONDITION]);
+    run.send(&prompt_line("get the build green"));
+    in_flight
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the work sent back is in flight");
+    run.send(r#"{"type":"stop"}"#);
+    run.sync();
+    release.send(()).expect("release the second round");
+    let (lines, _status, stderr) = run.finish();
+
+    let results = results(&lines);
+    assert_eq!(results.len(), 1, "{lines:?}\n{stderr}");
+    assert_eq!(
+        results[0]["ok"], false,
+        "the stopped turn reported success: {lines:?}"
+    );
+    let requests = bodies(&gateway);
+    assert_eq!(
+        checks_among(&requests),
+        1,
+        "the judge was asked again after the stop: {stderr}"
+    );
+}
+
 fn a_gateway_asking_which_cache() -> Gateway {
     a_gateway_following(
         vec![

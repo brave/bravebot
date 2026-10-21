@@ -2007,6 +2007,9 @@ with a result object that says so. The process exits once stdin has closed and e
 ended, with the status of the last turn. A run that is sent no prompt before stdin closes has no task and exits with
 the status for an argument (CLI-6), writing a result object that says so.
 
+With `--goal` (CLI-35) each turn works towards the condition until the judge says it holds,
+and a `stop` ends it in the round it reaches, with no further round and no further check.
+
 **The words of a line.** A line on a pipe is the launching program's words, so they are labelled as
 piped input is (CLI-3), untrusted and private, and the planner is given a reference to them and never
 the words. A `prompt` is then a turn with no prompt of its own and those words as its piped input.
@@ -2139,6 +2142,7 @@ one the person chose to run with the flag.
 `verified-by: bravebot_cli::running::a_steer_on_a_vouched_channel_reaches_the_turn_that_is_running`
 `verified-by: bravebot_cli::running::a_steer_on_a_channel_nobody_vouched_for_waits_for_a_turn_and_is_never_shown`
 `verified-by: bravebot_cli::running::a_stop_ends_the_running_turn_and_the_prompt_behind_it_still_runs`
+`verified-by: bravebot_cli::running::a_stop_ends_the_rounds_of_a_goal_run_reading_lines`
 `verified-by: bravebot_cli::running::a_question_is_put_to_the_program_and_its_pick_reaches_the_planner`
 `verified-by: bravebot_cli::running::a_question_is_declined_when_the_input_ends_without_an_answer`
 `verified-by: bravebot_cli::running::a_line_does_not_approve_a_write`
