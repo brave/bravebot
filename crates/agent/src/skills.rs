@@ -458,6 +458,31 @@ impl Skill {
     pub fn reach(&self) -> Option<&Path> {
         self.reach.as_deref()
     }
+
+    /// A skill whose body carries a label the gate holds back, which no catalogue produces: a skill
+    /// file is read through `Policy::read_trusted_content`, so what it yields is trusted or is not
+    /// a skill at all (SKILL-3). For a test of what a caller does when the gate shows the planner
+    /// nothing of a skill it was handed.
+    #[cfg(test)]
+    pub(crate) fn untrusted_for_a_test(name: &str, body: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            description: "d".to_string(),
+            argument_hint: None,
+            origin: "SKILL.md".to_string(),
+            directory: None,
+            files: Vec::new(),
+            reach: None,
+            source: Source::Home,
+            runs_as: RunsAs::default(),
+            unread: Vec::new(),
+            person_only: true,
+            body: Labelled::new(
+                body.to_string(),
+                bravebot_core::label::Label::untrusted_public(),
+            ),
+        }
+    }
 }
 
 /// Why an `@path` import was not expanded.

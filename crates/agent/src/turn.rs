@@ -5367,6 +5367,55 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// SKILL-18. A skill the person named whose body the gate would not show the planner stops the
+    /// turn with a sentence naming the skill. Nothing of it is put in front of the planner and the
+    /// trail does not record it as supplied, since a turn that went on would run under instructions
+    /// the person believes are in force and are not.
+    #[test]
+    fn a_named_skill_the_gate_holds_back_stops_the_turn_and_supplies_nothing() {
+        let skill = crate::skills::Skill::untrusted_for_a_test("ship-it", "RELEASE-STEPS-BODY");
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "name a skill");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .unwrap();
+        let mut conversation = Conversation::new();
+
+        let refused = admit_named_skill(&mut policy, &mut conversation, &skill)
+            .expect_err("a skill the gate held back was supplied anyway");
+
+        match refused {
+            TurnError::Precommit(said) => assert!(
+                said.contains("ship-it"),
+                "the stop does not name the skill: {said:?}"
+            ),
+            other => panic!("the turn stopped for another reason: {other:?}"),
+        }
+        assert!(
+            conversation.messages().is_empty(),
+            "something of the skill was put in front of the planner: {:?}",
+            conversation
+                .messages()
+                .iter()
+                .map(|stored| stored.message.content.text())
+                .collect::<Vec<_>>()
+        );
+        drop(policy);
+        assert!(
+            !sink.events().iter().any(|e| matches!(
+                e,
+                bravebot_core::event::Event::GatePassed { gate: "provenance", detail }
+                    if detail.contains("named by the user")
+            )),
+            "the trail records a skill as supplied that never reached the planner"
+        );
+    }
+
     /// ADDRESS-8: a turn addressed to a definition arranges no later look and arms no watch, even
     /// where the session is ticking or the caller asked for a look. A turn that is not addressed
     /// keeps what the tick and the caller say.

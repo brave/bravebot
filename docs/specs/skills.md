@@ -477,13 +477,14 @@ taken off, matched exactly against the names found before the turn
 a longer name and the bare name select nothing.
 The driver then puts the skill's instructions in front of the planner as a message after the line
 that named it, shown through `Policy::present` with the label they were read with, and no
-`load_skill` call is made. The result carries the files beside the skill and the reach into its
-directory that `load_skill`'s does ([LOAD-4](tools/load-skill.md#LOAD-4),
-[LOAD-5](tools/load-skill.md#LOAD-5)). The skill's `model` and `effort` apply from the first round,
-since it is in force before the first request goes out ([SKILL-15](#SKILL-15)), and a model an
-addressed definition named stays in force as it does for a skill the planner loads. The trail records the
-skill by name with the size of what went, and the person is told it was loaded, since no tool call is
-drawn for it ([SKILL-11](#SKILL-11)).
+`load_skill` call is made. Where the gate would not show them, the turn stops with a sentence naming
+the skill rather than going on without it, and nothing is recorded as supplied. The result carries
+the files beside the skill and the reach into its directory that `load_skill`'s does
+([LOAD-4](tools/load-skill.md#LOAD-4), [LOAD-5](tools/load-skill.md#LOAD-5)). The skill's `model`
+and `effort` apply from the first round, since it is in force before the first request goes out
+([SKILL-15](#SKILL-15)), and a model an addressed definition named stays in force as it does for a
+skill the planner loads. The trail records the skill by name with the size of what went, and the
+person is told it was loaded, since no tool call is drawn for it ([SKILL-11](#SKILL-11)).
 
 **Under a definition.** An addressed definition's `skills` line limits what its planner may load. It
 does not stop a skill the person names in their own line, which is supplied as in any other turn.
@@ -527,6 +528,7 @@ says not to run it, and a name that cannot be typed. A definition's
 `verified-by: bravebot_agent::turn::text_the_person_did_not_type_names_no_skill`
 `verified-by: bravebot_agent::turn::a_delegate_is_given_no_skill_that_is_kept_from_the_planner`
 `verified-by: bravebot_agent::turn::supplying_a_named_skill_of_the_users_own_opens_its_directory_for_reading`
+`verified-by: bravebot_agent::turn::a_named_skill_the_gate_holds_back_stops_the_turn_and_supplies_nothing`
 `verified-by: bravebot_agent::conversation::a_skill_the_person_named_is_sent_again_word_for_word_after_a_cut`
 `verified-by: bravebot_agent::conversation::the_cut_of_a_skill_says_who_can_read_the_rest`
 `verified-by: bravebot_agent::conversation::a_cut_never_falls_in_front_of_a_skill_the_person_named`
