@@ -2038,7 +2038,11 @@ A mode named while a turn runs is set as it is typed, and `off` waits for the tu
 failure sentence, its `scopes` and `request_path` refusals and the profile its programs start under
 all come from one mode, every stage of the running turn keeps it, and the change applies from the next turn; a delegate spawned by a later turn runs
 under the new mode. A move to `off` asks first, saying that programs then start with no profile, and
-a no keeps the mode. The managed floor holds: a mode looser than the managed file's `sandbox.mode`
+a no keeps the mode. A background job keeps the profile it started under ([RUN-15](tools/run.md#RUN-15)), so a
+move to `read-only` while jobs are running says which ones keep the earlier mode, by the names `/jobs`
+lists, and that `/jobs stop` ends them; with none running it says nothing of jobs
+`verified-by: bravebot_tui::sandbox_command::a_move_to_read_only_names_the_jobs_that_keep_the_earlier_mode`.
+The managed floor holds: a mode looser than the managed file's `sandbox.mode`
 pin, and `off` under a managed `run.network` of `closed`, is refused with a sentence naming the
 file, before anything is asked, and under the pin the sentence says which of reading and writing
 the mode does more of. Otherwise the command ranks as `--sandbox` does, so

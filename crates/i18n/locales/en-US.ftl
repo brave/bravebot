@@ -3920,6 +3920,7 @@ session-sandbox-kept = The sandbox mode stays { $mode }.
 session-sandbox-set = The sandbox mode is { $mode } from the next turn, for the rest of this session.
 session-sandbox-turn-keeps-its-mode = The turn running now, and every program it starts, keeps the mode it began with.
 session-sandbox-set-off = The sandbox mode is off from the next turn, for the rest of this session: programs `run` starts have no profile.
+session-sandbox-jobs-keep-their-mode = Background jobs still running keep the mode they started under and can still write the project: { $jobs }. /jobs stop <name> ends one.
 session-sandbox-refused-mode =
     /sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a session may
     read and write no more than that. { $looser }
