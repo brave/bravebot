@@ -1254,6 +1254,39 @@ fn a_directory_already_on_the_users_path_is_not_added_again() {
     }
 }
 
+/// An entry that names a different directory is not taken for the installed one: a name the
+/// installed directory's is a prefix of, a directory inside it, the directory that holds it, and the
+/// same final name under another parent. Only case and a trailing separator are folded, so each of
+/// these leaves the directory to be added. A comparison on a prefix, or on the last component alone,
+/// would find the directory already there and add nothing.
+#[test]
+fn a_different_directory_on_the_users_path_does_not_stop_the_directory_being_added() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let release = brave("different");
+    let bin = scratch_root().join("path-different").join("bin");
+    let other = scratch_root().join("path-different-other").join("bin");
+    let entries = [
+        format!("{}x", bin.display()),
+        bin.join("sub").display().to_string(),
+        bin.parent().expect("a parent").display().to_string(),
+        other.display().to_string(),
+    ];
+    let stored = entries.join(";");
+    let install = Install::new(tools, "path-different")
+        .off_path()
+        .with_stored_path(&stored);
+    let outcome = install.run_release(&release);
+    assert_installed(&install, &outcome, &release);
+
+    assert_eq!(registry_writes(&outcome), ["write Path"]);
+    assert_eq!(
+        outcome.stored_path_after,
+        Some(format!("{stored};{}", install.bin().display()))
+    );
+}
+
 /// A stored `Path` that is missing or empty becomes the directory alone, and one that ends in a
 /// separator does not gain a second. Joining with a separator whatever came before leaves an empty
 /// entry, which Windows reads as the current directory.
