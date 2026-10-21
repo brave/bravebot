@@ -366,7 +366,8 @@ directory as not in force.
 
 **More places a stage cannot reach.** The browser relay's default directory `~/.bravebot-browser`,
 which holds the secret that drives the browser, is refused like `~/.bravebot` (a relay told to use
-another directory is not covered). On Windows `gcloud` and `gpg` keep their data under
+another directory is not covered, and neither is a state directory that `BRAVEBOT_HOME` puts
+somewhere other than `~/.bravebot`). On Windows `gcloud` and `gpg` keep their data under
 `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, and those are refused too, with the browser
 profiles under `~/AppData/Local` (`BraveSoftware`, `Google/Chrome`, `Chromium`, `Microsoft/Edge`) and
 `~/AppData/Roaming/Mozilla`, and the Windows stores for credentials, keys and vaults under

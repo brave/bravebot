@@ -63,14 +63,23 @@ HNzPcU6aUBlTlXbHvSS1MSD2AQ1aKX3mYpkde0A0Aaw3/J82Zpz3
 PUBKEY
 )"
 
+# BRAVEBOT_HOME names the state directory itself, as it does for the program, and answers before
+# HOME. A value that is empty or not an absolute path names nothing and is passed over.
 # An unset or empty HOME names no profile directory, and then there is no state directory at all:
 # nothing is read from one and nothing written to one (docs/specs/state-directory.md#STATE-2).
 # Joining the name onto nothing makes `/.bravebot`, a location nobody stated, and a record under it
 # would decide where this release lands.
 STATE_DIR=""
 INSTALLED_BY=""
-if [ -n "${HOME:-}" ]; then
-  STATE_DIR="${HOME}/.bravebot"
+case "${BRAVEBOT_HOME:-}" in
+  /*) STATE_DIR="${BRAVEBOT_HOME}" ;;
+  *)
+    if [ -n "${HOME:-}" ]; then
+      STATE_DIR="${HOME}/.bravebot"
+    fi
+    ;;
+esac
+if [ -n "$STATE_DIR" ]; then
   INSTALLED_BY="${STATE_DIR}/installed-by"
 fi
 

@@ -775,6 +775,13 @@ doctor-state-directory-logs = diagnostic logs { $path }
 doctor-state-directory-unprotected = not restricted
 doctor-state-directory-permissions =
     prompt history, session records and saved choices carry your profile directory's permissions
+# A value that is not an absolute path names no directory, so the state directory is the one the
+# profile directory gives and the report above says `HOME` named it. Without this line somebody who
+# set the variable and sees no effect has nothing to tell them it was read and passed over. Only the
+# variable's name is said, as for the proxy variables, since a value may carry a credential.
+doctor-state-directory-passed-over = passed over
+doctor-state-directory-passed-over-detail =
+    { $variable } is not an absolute path, so it names no directory
 # What outlives a session is kept in this directory, so a machine without one keeps none of it, and
 # nothing else in the report says so. Every variable that was looked at is named, since which ones
 # they are is a fact about the platform rather than something the reader should have to know. The

@@ -961,10 +961,23 @@ pub(crate) fn doctor() -> ExitCode {
         resolved
             .as_ref()
             .map(|(variable, path)| (*variable, path.as_path())),
-        bravebot_agent::home::PROFILE_VARIABLES,
+        bravebot_agent::home::STATE_VARIABLES,
         RESTRICTED,
     ) {
         println!("{line}");
+    }
+    if bravebot_agent::home::passed_over() {
+        println!(
+            "{}",
+            aligned(
+                t!(doctor_state_directory_passed_over),
+                t!(
+                    doctor_state_directory_passed_over_detail,
+                    variable = bravebot_agent::home::STATE_VARIABLE
+                ),
+                DETAIL,
+            )
+        );
     }
 
     println!();
@@ -2626,7 +2639,7 @@ mod tests {
     /// left that out would send somebody looking for why a file that is in force is ignored.
     #[test]
     fn a_missing_state_directory_is_reported_with_what_it_costs() {
-        let variables = bravebot_agent::home::PROFILE_VARIABLES;
+        let variables = bravebot_agent::home::STATE_VARIABLES;
         let lines = state_directory(None, variables, RESTRICTED);
         let section = lines.join("\n");
 

@@ -1082,6 +1082,141 @@ fn doctor_names_each_filesystem_rule_with_where_it_came_from() {
     );
 }
 
+/// An imported subscription as the store keeps one, for a test that needs `doctor` to find it.
+const AN_IMPORTED_BATCH: &str = r#"{"version": 1,
+    "order_id": "aaaaaaaa-1111-4222-8333-444444444444",
+    "environment": "production",
+    "item_id": "b7114ccc-b3a5-4951-9a5d-8b7a28731111",
+    "issuer": "brave.com?sku=brave-leo-premium",
+    "credentials": [{"unblinded": "a-token", "valid_from": "2020-01-01T00:00:00Z",
+                     "valid_to": "2099-01-01T00:00:00Z", "spent": false, "rfc": true}]}"#;
+
+/// STATE-2: a directory named in `BRAVEBOT_HOME` is the state directory, and `doctor` says so. The
+/// settings and the imported subscription are read from it and not from `~/.bravebot`, which holds
+/// different ones here, so a crate that kept resolving the directory from `HOME` is the one the
+/// report would name a settings file or a subscription from the wrong place for.
+///
+/// A property of the process: the variable is read from the environment by three crates that cannot
+/// share a resolver, and only a run of the binary joins all three to one report. Each in-crate test
+/// holds one of them against a value handed in.
+#[test]
+fn doctor_reads_the_state_directory_a_person_named_and_says_which_variable_named_it() {
+    let scratch = Scratch::new("cli-running-doctor-relocated-state")
+        .with_settings(r#"{"sandbox": {"filesystem": {"denyRead": ["~/from-the-profile"]}}}"#)
+        .with_file(
+            "moved/settings.json",
+            r#"{"sandbox": {"filesystem": {"denyRead": ["~/from-the-named-directory"]}}}"#,
+        )
+        .with_file("moved/leo-premium.json", AN_IMPORTED_BATCH);
+    let moved = scratch.path.join("moved");
+    let mut environment = BRAVES_HOSTS_AND_A_GATEWAY_TOKEN.to_vec();
+    environment.push((
+        "BRAVEBOT_HOME",
+        moved.to_str().expect("a scratch path is text"),
+    ));
+
+    let output = bravebot(&scratch.path, &environment, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains(&format!(
+            "state directory {}, from BRAVEBOT_HOME",
+            moved.display()
+        )),
+        "the report did not name the directory or the variable that named it: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("denyRead ~/from-the-named-directory"),
+        "the settings in the named directory were not read: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("from-the-profile"),
+        "the settings under the profile directory were read as well: {stdout}"
+    );
+    assert!(
+        stdout.contains("subscription's credential"),
+        "the subscription imported into the named directory was not found: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("not an absolute path"),
+        "a directory that was used was reported as passed over: {stdout}"
+    );
+}
+
+/// STATE-2: a value that is not an absolute path names nothing and is passed over, so the profile
+/// directory answers and the report says `HOME` did. A relative value taken as a directory would
+/// keep a job's state under wherever it was started, and one that stopped the run would be a
+/// guessed location's opposite and as unasked for.
+#[test]
+fn doctor_passes_over_a_relative_value_and_says_home_named_the_state_directory() {
+    let scratch = Scratch::new("cli-running-doctor-relative-state")
+        .with_settings(r#"{"sandbox": {"filesystem": {"denyRead": ["~/from-the-profile"]}}}"#)
+        .with_file(
+            "moved/settings.json",
+            r#"{"sandbox": {"filesystem": {"denyRead": ["~/from-the-named-directory"]}}}"#,
+        );
+    let mut environment = BRAVES_HOSTS_AND_A_GATEWAY_TOKEN.to_vec();
+    environment.push(("BRAVEBOT_HOME", "moved"));
+
+    let output = bravebot_started_in(&scratch.path, &scratch.path, &environment, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    let passed_over = stdout
+        .lines()
+        .find(|line| line.contains("not an absolute path"))
+        .unwrap_or_else(|| panic!("the report did not say the value was passed over: {stdout}"));
+    assert!(
+        passed_over.contains("passed over") && passed_over.contains("BRAVEBOT_HOME"),
+        "the line does not name the variable and say what became of it: {passed_over}"
+    );
+    assert!(
+        !passed_over.contains("moved"),
+        "the line carries the value, which may hold a credential: {passed_over}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "state directory {}, from HOME",
+            scratch.path.join(".bravebot").display()
+        )),
+        "the relative value was not passed over: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("denyRead ~/from-the-profile")
+            && !stdout.contains("from-the-named-directory"),
+        "the relative value was taken as a directory under the working directory: {stdout}"
+    );
+}
+
+/// STATE-2: where `BRAVEBOT_HOME` names nothing and no profile directory is named either, there is
+/// no state directory, and the report says which variables were looked at, `BRAVEBOT_HOME` among
+/// them. Naming only the profile variables would send somebody to set the one that was not going to
+/// answer, and a fallback to the working directory would show a state directory here.
+#[test]
+fn doctor_names_the_variable_for_a_state_directory_where_nothing_names_one() {
+    let scratch = Scratch::new("cli-running-doctor-no-state");
+    let mut environment = BRAVES_HOSTS_AND_A_GATEWAY_TOKEN.to_vec();
+    environment.push(("BRAVEBOT_HOME", "moved"));
+    environment.push(("HOME", ""));
+    environment.push(("USERPROFILE", ""));
+
+    let output = bravebot_started_in(&scratch.path, &scratch.path, &environment, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    let variables = bravebot_agent::home::STATE_VARIABLES.join(" or ");
+    assert!(
+        stdout.contains(&format!("no state directory: {variables} names nothing")),
+        "the report did not name every variable it looked at: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains(&format!("set {variables} to a directory of your own")),
+        "the remedy did not name every variable it looked at: {stdout}{stderr}"
+    );
+    assert!(
+        !scratch.path.join("moved").exists(),
+        "a relative value was made into a directory"
+    );
+}
+
 /// `doctor --sandbox strict` names the flag as the sandbox choice in force rather than calling it
 /// the default (SANDBOX-22).
 ///

@@ -29,7 +29,8 @@ documented-by: docs/website/docs/customize/configuration.md
 ## Scope
 
 `~/.bravebot`, the directory holding what outlives a session, and who on the machine may read what
-is written into it. The prompt history, the model, theme, effort, language and editing choices, the answer to
+is written into it. Where [STATE-2](#STATE-2) puts it elsewhere, every statement here is about that
+directory. The prompt history, the model, theme, effort, language and editing choices, the answer to
 the update question, the answer to `/caffeinate`'s explanation, session records, a language server's index of a workspace, skills, standing
 instructions, an imported subscription, the command lines somebody asked to be remembered past a
 session, the reach somebody remembered for a command, the command lines a shell hook recorded for the terminal still open ([shell-integration.md](shell-integration.md)), the permission rules somebody granted a checkout and the answers to the startup question
@@ -57,7 +58,8 @@ itself.
 
 The programs a `run` starts are refused the whole directory except `sessions/`, which they read and
 never write ([SANDBOX-12](sandboxing.md#SANDBOX-12)). A file added to the directory later is refused
-without a change to any list.
+without a change to any list. That refusal is of `~/.bravebot`, and a directory `BRAVEBOT_HOME` puts
+anywhere else is not covered by it.
 
 Three of those kinds of file are bounded by age: session records, a language server's indexes and the
 files of what a scan found. [STATE-4](#STATE-4) says which are removed, when, and which are left
@@ -124,6 +126,9 @@ the same mode, because what it holds is what the record holds.
 `verified-by: bravebot_tui::state_directory::a_state_directory_an_older_build_left_open_is_narrowed`
 `verified-by: bravebot_tui::state_directory::nothing_above_the_state_directory_is_touched`
 `verified-by: bravebot_tui::state_directory::writing_a_session_narrows_the_state_directory`
+`verified-by: bravebot_session::relocated_state_directory::the_history_is_written_to_the_named_directory_readable_only_by_its_owner`
+`verified-by: bravebot_session::relocated_state_directory::a_named_directory_an_older_build_left_open_is_narrowed_and_nothing_above_it`
+`verified-by: bravebot_session::relocated_state_directory::a_session_is_written_to_the_named_directory`
 `verified-by: bravebot_skus::store::the_directory_it_is_kept_in_is_not_reachable_by_anyone_else`
 `verified-by: bravebot_skus::store::a_file_left_readable_by_something_else_is_narrowed`
 `verified-by: bravebot_skus::store::narrowing_does_not_follow_a_linked_state_directory`
@@ -137,17 +142,30 @@ the same mode, because what it holds is what the record holds.
 `verified-by: bravebot_cli::running::the_hook_steps_over_a_linked_directory_rather_than_narrowing_where_it_leads`
 
 <a id="STATE-2"></a>
-### STATE-2: a machine whose platform names no profile directory has no state directory rather than a guessed one
+### STATE-2: the state directory is the one a person names in the environment or one fixed name under the profile directory the platform states, and a machine with neither has none rather than a guessed one
 
-The directory is one fixed name under the profile directory the platform states in the environment.
-`HOME` states it on Unix. On Windows `HOME` is read first and `USERPROFILE` second, and the first of
-them holding a value answers; a value that is empty states nothing and is passed over. Where none of
-them holds one there is no directory at all: nothing is read, nothing is written, and each caller does
-without. Every one of them doing without is silent, so `doctor` is where the absence is said out loud,
-along with which variables were looked at and what is not kept without a directory to keep it in
-([CLI-7](cli.md#CLI-7)). The crates that sit below the one holding the answer resolve the path
-themselves, since [layering.md](layering.md) forbids them the dependency, and each spells the same
-name, reads the same variables in the same order, and offers the same absence of a fallback.
+`BRAVEBOT_HOME` names the directory itself. It is read from the process environment and from nothing
+else, so no settings file moves it, and a value that is empty or is not an absolute path states
+nothing and is passed over. A directory it names is the state directory as it stands, and is not a
+profile directory with `.bravebot` put under it.
+
+Where it states nothing, the directory is one fixed name under the profile directory the platform
+states in the environment. `HOME` states it on Unix. On Windows `HOME` is read first and
+`USERPROFILE` second, and the first of them holding a value answers; a value that is empty states
+nothing and is passed over. Where none of the variables holds one there is no directory at all:
+nothing is read, nothing is written, and each caller does without. Every one of them doing without
+is silent, so `doctor` is where the absence is said out loud, along with which variables were looked
+at and what is not kept without a directory to keep it in ([CLI-7](cli.md#CLI-7)), and where the
+directory is in force `doctor` names the variable that stated it. A `BRAVEBOT_HOME` that was passed
+over is said to be, by name and not by value, so a person whose attempt to move the directory did
+nothing is told why. The crates that sit below the one
+holding the answer resolve the path themselves, since [layering.md](layering.md) forbids them the
+dependency, and each spells the same name, reads the same variables in the same order, and offers
+the same absence of a fallback.
+
+`BRAVEBOT_HOME` moves what the program keeps and nothing else. The profile directory a leading `~`
+stands for is still the one `HOME` or `USERPROFILE` states, and the file the installer records where
+it installed to is kept in the directory the variable names.
 
 **Why.** Inventing a location where the platform states none is worse than doing without: it would
 mean reading files from somewhere the user never chose, and this is the one directory whose contents
@@ -161,6 +179,17 @@ temporary directory or a compiled-in path would be inventing one however many pl
 before it. Reading `HOME` first on Windows costs nothing and settles the developer running under a
 Unix-like shell there: an environment that sets one has been told where the profile is, and every
 other tool started from it reads that.
+
+`BRAVEBOT_HOME` is not that fallback either. A person set it in their own environment to say where
+the directory is, which is a location somebody stated, so reading it invents none, and two accounts
+or a job that must not share history with the person's own sessions have no other way to say so
+without changing `HOME` for everything else the process starts. It is read from the environment
+alone because this is the one directory whose contents are trusted for being the user's own: a
+settings file, above all one a checkout supplies, that could name it would hand the trust to a
+directory the checkout chose. A value that is not an absolute path is passed over and not resolved,
+since a relative one would name a directory under wherever the session happened to start, which
+nobody stated. Passing it over leaves the profile directory answering, so a machine with a `HOME`
+still has a directory, and a machine with neither still has none.
 
 A rule naming `HOME` alone is a rule under which no stock Windows install has a state directory at
 all, since Windows does not set it: no settings of the user's own, no session to resume, no history
@@ -177,13 +206,31 @@ that invented a fallback would be the case above, whichever crate it happened in
 `verified-by: bravebot_agent::home::an_empty_home_is_treated_as_no_home_at_all`
 `verified-by: bravebot_agent::home::the_profile_directory_answers_where_no_home_is_named`
 `verified-by: bravebot_agent::home::a_named_home_answers_before_the_profile_directory`
+`verified-by: bravebot_agent::home::a_directory_named_in_the_environment_is_the_state_directory_itself`
+`verified-by: bravebot_agent::home::a_directory_named_in_the_environment_answers_before_the_profile_directory`
+`verified-by: bravebot_agent::home::a_value_that_names_no_directory_is_passed_over`
+`verified-by: bravebot_agent::home::a_value_that_names_no_directory_leaves_no_state_directory_to_guess`
+`verified-by: bravebot_agent::home::the_variables_a_report_names_are_the_ones_read`
+`verified-by: bravebot_agent::home::a_value_that_names_no_directory_is_reported_as_passed_over`
+`verified-by: bravebot_agent::home::a_directory_named_in_the_environment_is_the_state_directory_in_every_crate`
 `verified-by: bravebot_skus::store::no_home_directory_is_reported_rather_than_guessed`
 `verified-by: bravebot_skus::store::the_profile_directory_answers_where_no_home_is_named`
 `verified-by: bravebot_skus::store::a_named_home_answers_before_the_profile_directory`
+`verified-by: bravebot_skus::store::a_directory_named_in_the_environment_holds_the_credentials_itself`
+`verified-by: bravebot_skus::store::a_value_that_names_no_directory_is_passed_over`
 `verified-by: bravebot_config::settings::the_state_directory_is_the_home_the_environment_names`
 `verified-by: bravebot_config::settings::an_absent_or_empty_home_yields_no_directory_rather_than_a_guess`
 `verified-by: bravebot_config::settings::the_profile_directory_answers_where_no_home_is_named`
 `verified-by: bravebot_config::settings::a_named_home_answers_before_the_profile_directory`
+`verified-by: bravebot_config::settings::a_directory_named_in_the_environment_is_the_one_settings_are_read_from`
+`verified-by: bravebot_config::settings::a_value_that_names_no_directory_is_passed_over`
+`verified-by: bravebot_cli::running::doctor_reads_the_state_directory_a_person_named_and_says_which_variable_named_it`
+`verified-by: bravebot_cli::running::doctor_passes_over_a_relative_value_and_says_home_named_the_state_directory`
+`verified-by: bravebot_cli::running::doctor_names_the_variable_for_a_state_directory_where_nothing_names_one`
+`verified-by: bravebot_cli::installer_state_directory::the_record_goes_in_the_directory_a_person_named`
+`verified-by: bravebot_cli::installer_state_directory::the_record_goes_under_home_where_no_directory_is_named`
+`verified-by: bravebot_cli::installer_state_directory::a_value_that_names_no_directory_is_passed_over`
+`verified-by: bravebot_cli::installer_state_directory::a_value_that_names_no_directory_leaves_no_state_directory_to_guess`
 
 <a id="STATE-3"></a>
 ### STATE-3: a surface that only reads this directory does not write into it
@@ -342,6 +389,12 @@ age does not end them.
   thread is running, which leaves a record whose trail went first, and still opens, or an index whose
   directory is partly removed, which a server starts on and fills again. A client that loads a record
   as the sweep removes it reads it without its trail.
+- **A directory `BRAVEBOT_HOME` names is narrowed whatever else is kept in it.** STATE-1 gives the
+  state directory mode 0700 and the installer does the same, and the variable can name a directory
+  somebody already uses: their home directory, a shared directory or a project. The program then
+  narrows that directory and writes its own files beside what is there. The name is the person's, so
+  nothing asks whether the directory is one the program made, and the documentation says to name a
+  directory bravebot can have to itself.
 - **Where the platform is given no mode to create with, the files carry whatever the profile
   directory grants them.** STATE-1 is a Unix rule, and the helpers it names compile to a plain
   directory creation and a plain file open elsewhere: on Windows the prompt history, the session
