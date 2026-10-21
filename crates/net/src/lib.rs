@@ -621,6 +621,23 @@ impl Egress {
     /// states them so that what the environment resolves to can be pinned without setting a
     /// variable for every other test in the process.
     fn with_transport(timeouts: Timeouts, transport: &Transport) -> Self {
+        Self::resolving_through(
+            timeouts,
+            transport,
+            ureq::unversioned::resolver::DefaultResolver::default,
+        )
+    }
+
+    /// As [`Egress::with_transport`], with the system's lookup replaced by what `system` makes,
+    /// once for each of the two agents.
+    ///
+    /// Each agent still wraps it as the product does, so a test that makes `system` fail is
+    /// reading how the product reports that failure and not a stand-in's.
+    fn resolving_through<R: ureq::unversioned::resolver::Resolver>(
+        timeouts: Timeouts,
+        transport: &Transport,
+        system: impl Fn() -> R,
+    ) -> Self {
         // ureq gives a phase the earliest of its own deadline and the deadlines of the phases
         // before it (`Timeout::preceeding`, ureq 3.4 src/timings.rs), which its configuration
         // does not say. A number handed over here therefore bounds the phase it names *and* the
@@ -658,10 +675,15 @@ impl Egress {
         let guarded = ureq::Agent::with_parts(
             config.clone(),
             ureq::unversioned::transport::DefaultConnector::default(),
-            address::GuardedResolver::new(),
+            address::GuardedResolver::over(address::Lookup::new(system()), address::is_public),
+        );
+        let agent = ureq::Agent::with_parts(
+            config,
+            ureq::unversioned::transport::DefaultConnector::default(),
+            address::Lookup::new(system()),
         );
         Self {
-            agent: config.into(),
+            agent,
             guarded,
             timeouts,
         }
@@ -1151,9 +1173,14 @@ const STOP_CHECK: Duration = Duration::from_millis(50);
 
 /// Whether a failure to send or to read the reply is worth another attempt.
 ///
-/// Everything here is the connection giving out: a timeout, a socket that went away, a name
-/// that did not resolve because the machine's network was not up yet. A protocol error or a
-/// malformed URL is the request being wrong, and sending it again would be wrong again.
+/// Everything here is the connection giving out: a timeout, a socket that went away, a network
+/// that is down, a name that did not resolve because the machine's network was not up yet. A
+/// protocol error or a malformed URL is the request being wrong, and sending it again would be
+/// wrong again.
+///
+/// A name that failed to resolve is [`ureq::Error::HostNotFound`] by the time it gets here, because
+/// [`address::Lookup`] reports it so: ureq's own error for it is an I/O error of a kind that
+/// [`is_transient_io`] cannot name.
 fn is_transient_call(error: &ureq::Error) -> bool {
     match error {
         ureq::Error::Timeout(_) | ureq::Error::ConnectionFailed | ureq::Error::HostNotFound => true,
@@ -1282,6 +1309,9 @@ fn is_transient_io(error: &std::io::Error) -> bool {
             | BrokenPipe
             | NotConnected
             | WouldBlock
+            | NetworkUnreachable
+            | HostUnreachable
+            | NetworkDown
     )
 }
 
@@ -1622,6 +1652,178 @@ mod tests {
             }
             .is_transient()
         );
+    }
+
+    /// A machine whose network is down reports it as one of three kinds, and a request that is not
+    /// sent again once the network is back ends a turn that has run for many rounds. The kinds a
+    /// request that is wrong or refused gives stay one attempt, so the three are named rather than
+    /// every kind being worth another try.
+    #[test]
+    fn a_network_that_is_down_is_worth_another_attempt() {
+        use std::io::ErrorKind::*;
+        let url = "https://example.com/";
+        for kind in [NetworkUnreachable, HostUnreachable, NetworkDown] {
+            let call = ureq::Error::Io(std::io::Error::from(kind));
+            assert!(is_transient_call(&call), "{kind:?} was sent once");
+            let body = body_failure(url, std::io::Error::from(kind));
+            assert!(body.is_transient(), "{kind:?} on a body was sent once");
+        }
+        for kind in [PermissionDenied, InvalidData, Other] {
+            let call = ureq::Error::Io(std::io::Error::from(kind));
+            assert!(!is_transient_call(&call), "{kind:?} was asked again");
+            let body = body_failure(url, std::io::Error::from(kind));
+            assert!(!body.is_transient(), "{kind:?} on a body was asked again");
+        }
+    }
+
+    /// How a lookup fails. An I/O error is what ureq reports for the system's: its kind is
+    /// `Uncategorized`, which a test cannot construct and a `match` cannot name, so the test
+    /// chooses a kind, and a message the failure must not repeat.
+    #[derive(Debug, Clone, Copy)]
+    enum Failure {
+        Io(std::io::ErrorKind),
+        BadUri,
+        TimedOut,
+    }
+
+    const LOOKUP_TEXT: &str = "SENTINEL-LOOKUP-FAILURE";
+
+    #[derive(Debug)]
+    struct FailedLookup(Failure);
+
+    impl ureq::unversioned::resolver::Resolver for FailedLookup {
+        fn resolve(
+            &self,
+            _: &ureq::http::Uri,
+            _: &ureq::config::Config,
+            _: ureq::unversioned::transport::NextTimeout,
+        ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+            Err(match self.0 {
+                Failure::Io(kind) => ureq::Error::Io(std::io::Error::new(kind, LOOKUP_TEXT)),
+                Failure::BadUri => ureq::Error::BadUri(LOOKUP_TEXT.into()),
+                Failure::TimedOut => ureq::Error::Timeout(ureq::Timeout::Resolve),
+            })
+        }
+    }
+
+    /// The kinds an I/O error from a failed lookup may carry. None is in [`is_transient_io`], so a
+    /// failed lookup is sent again only where it is recognised as a lookup.
+    const LOOKUP_KINDS: [std::io::ErrorKind; 4] = [
+        std::io::ErrorKind::Other,
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::NotFound,
+        std::io::ErrorKind::InvalidInput,
+    ];
+
+    /// The request a backend makes: no fetch in flight, so it goes out on the agent that is not
+    /// guarded, and a person's turn rests on whether this one is sent again.
+    fn requested(egress: &Egress, request: Request) -> Result<Response, EgressError> {
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "ask the model");
+        let mut sink = bravebot_core::event::NullSink;
+        let Ok(mut policy) = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        ) else {
+            panic!("policy begins");
+        };
+        egress.fetch(&mut policy, request, Label::untrusted_public())
+    }
+
+    /// What a request fails with when the lookup does, on each of the two agents: the backend's
+    /// and the one a fetch in flight is sent with, which resolve through resolvers of their own.
+    fn failed_on_both_agents(failure: Failure) -> [(&'static str, EgressError); 2] {
+        let egress = Egress::resolving_through(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, None, None),
+            || FailedLookup(failure),
+        );
+        [
+            (
+                "a backend's request",
+                requested(&egress, Request::get("http://backend.example.test/v1"))
+                    .expect_err("the lookup failed"),
+            ),
+            (
+                "a fetch in flight",
+                fetched(&egress, Request::get("http://docs.example.test/page"))
+                    .expect_err("the lookup failed"),
+            ),
+        ]
+    }
+
+    /// A name that did not resolve is a network that was not up yet, so the request is sent again
+    /// and the person is told the host could not be found rather than that the connection failed.
+    /// Whatever kind the I/O error carries, since the kind a failed lookup really has cannot be
+    /// matched.
+    #[test]
+    fn a_request_whose_name_did_not_resolve_is_worth_another_attempt() {
+        for kind in LOOKUP_KINDS {
+            for (sent, error) in failed_on_both_agents(Failure::Io(kind)) {
+                assert!(
+                    matches!(
+                        &error,
+                        EgressError::Transport { detail, transient: true, .. }
+                            if detail == "the host could not be found"
+                    ),
+                    "{sent} with a lookup failing as {kind:?}: {error:?}"
+                );
+                assert!(error.is_transient());
+                assert!(!error.to_string().contains(LOOKUP_TEXT), "{error}");
+            }
+        }
+    }
+
+    /// Only a lookup that failed as an I/O error is reported as a host not found. A URL the lookup
+    /// could not use is the request being wrong, and a lookup that ran out of time says so.
+    #[test]
+    fn a_lookup_that_failed_another_way_is_reported_as_it_failed() {
+        for (failure, transient, said) in [
+            (Failure::BadUri, false, "the request did not complete"),
+            (Failure::TimedOut, true, "the request timed out"),
+        ] {
+            for (sent, error) in failed_on_both_agents(failure) {
+                assert!(
+                    matches!(
+                        &error,
+                        EgressError::Transport { detail, transient: t, .. }
+                            if detail == said && *t == transient
+                    ),
+                    "{sent} with a lookup failing as {failure:?}: {error:?}"
+                );
+            }
+        }
+    }
+
+    /// The two tests above feed the wrapper an error of a kind the test chose, so they would still
+    /// pass if ureq's own lookup stopped reporting a failed name as an I/O error. This asks the
+    /// system for a name reserved never to exist (RFC 6761). A network that answers every name
+    /// leaves nothing to observe, and so does a lookup that did not finish in time, so those skip.
+    #[test]
+    fn the_systems_own_failed_lookup_is_reported_as_a_host_not_found() {
+        use ureq::unversioned::resolver::{DefaultResolver, Resolver};
+        use ureq::unversioned::transport::{NextTimeout, time::Duration as Bound};
+
+        let lookup = address::Lookup::new(DefaultResolver::default());
+        let uri: ureq::http::Uri = "http://no-such-host.invalid/".parse().expect("a URI");
+        let outcome = lookup.resolve(
+            &uri,
+            &ureq::config::Config::default(),
+            NextTimeout {
+                after: Bound::Exact(Duration::from_secs(20)),
+                reason: ureq::Timeout::Resolve,
+            },
+        );
+        match outcome {
+            Err(ureq::Error::HostNotFound) => {}
+            Ok(_) => eprintln!("skipped: this network resolves a name reserved never to exist"),
+            Err(ureq::Error::Timeout(_)) => eprintln!("skipped: the lookup did not finish in 20s"),
+            Err(other) => panic!("a failed lookup was reported as {other:?}"),
+        }
     }
 
     /// `Retry-After` is whole seconds or an HTTP date, bounded, and a figure only: a value that
@@ -2179,7 +2381,10 @@ mod tests {
             Timeouts::default(),
             &Transport::stated(TrustRoots::Bundled, None, None),
         )
-        .guarded_by(address::GuardedResolver::over(resolver, admits));
+        .guarded_by(address::GuardedResolver::over(
+            address::Lookup::new(resolver),
+            admits,
+        ));
         (egress, lookups)
     }
 

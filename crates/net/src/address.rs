@@ -7,10 +7,12 @@
 //! because it asks it inside the lookup the client makes, the address checked is the address
 //! connected to: ureq connects to what its resolver returns and to nothing else, so there is no
 //! second lookup for an answer to differ in.
+//!
+//! It also holds [`Lookup`], which every agent in this crate resolves through, guarded or not.
 
 use std::net::IpAddr;
 use ureq::config::Config;
-use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
+use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::NextTimeout;
 
 pub(crate) use bravebot_sandbox::address::is_public;
@@ -35,6 +37,43 @@ pub(crate) fn is_refusal(error: &ureq::Error) -> bool {
     matches!(error, ureq::Error::Other(inner) if inner.is::<NotPublic>())
 }
 
+/// The lookup every agent in this crate resolves names through.
+///
+/// A name that fails to resolve reaches ureq as an I/O error whose kind is `Uncategorized`, and
+/// stable Rust does not let a `match` name that kind, so [`crate::is_transient_call`] cannot tell it
+/// from any other I/O failure. The lookup is the one place that knows an I/O error came from a
+/// lookup, so every one is reported here as [`ureq::Error::HostNotFound`], which the egress path
+/// words as a host that could not be found and counts as worth another attempt. That includes a
+/// failure with a cause of its own, a descriptor limit for example, which the Known costs of
+/// `docs/specs/network-egress.md` record.
+#[derive(Debug)]
+pub(crate) struct Lookup {
+    inner: Box<dyn Resolver>,
+}
+
+impl Lookup {
+    /// The lookup `inner` makes, with its failure reported as above.
+    pub(crate) fn new(inner: impl Resolver) -> Self {
+        Self {
+            inner: Box::new(inner),
+        }
+    }
+}
+
+impl Resolver for Lookup {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &Config,
+        timeout: NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        match self.inner.resolve(uri, config, timeout) {
+            Err(ureq::Error::Io(_)) => Err(ureq::Error::HostNotFound),
+            outcome => outcome,
+        }
+    }
+}
+
 /// The resolver a fetch in flight is sent with.
 ///
 /// Refuses when any address the name resolved to is not public, rather than filtering them out:
@@ -45,25 +84,14 @@ pub(crate) fn is_refusal(error: &ureq::Error) -> bool {
 /// an answer to stand behind, and the person approved exactly that host.
 #[derive(Debug)]
 pub(crate) struct GuardedResolver {
-    inner: Box<dyn Resolver>,
+    inner: Lookup,
     admits: fn(IpAddr) -> bool,
 }
 
 impl GuardedResolver {
-    pub(crate) fn new() -> Self {
-        Self {
-            inner: Box::new(DefaultResolver::default()),
-            admits: is_public,
-        }
-    }
-
-    /// As [`GuardedResolver::new`], over an answer a test chooses and a classification it chooses.
-    #[cfg(test)]
-    pub(crate) fn over(inner: impl Resolver, admits: fn(IpAddr) -> bool) -> Self {
-        Self {
-            inner: Box::new(inner),
-            admits,
-        }
+    /// `inner`'s answers, with `admits` deciding which of the addresses it returns are public.
+    pub(crate) fn over(inner: Lookup, admits: fn(IpAddr) -> bool) -> Self {
+        Self { inner, admits }
     }
 }
 
