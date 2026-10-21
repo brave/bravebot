@@ -1529,6 +1529,7 @@ write-remember-where = c'est écrit ici, et supprimer la ligne est le chemin du 
 write-yes = l'écrire
 write-always = toujours pour cette session
 write-remember = s'en souvenir
+write-edit-first = la modifier d'abord
 write-no = ne rien changer
 
 
@@ -2228,8 +2229,8 @@ editor-named-but-missing =
     '{ $command }' est introuvable, et $VISUAL ou $EDITOR le nomme, rien d'autre n'a donc
     été essayé
 editor-exited-badly =
-    { $editor } s'est terminé avec le code { $code }, la ligne est donc inchangée
-editor-was-stopped = { $editor } a été arrêté avant de finir, la ligne est donc inchangée
+    { $editor } s'est terminé avec le code { $code }, ce que vous aviez est donc inchangé
+editor-was-stopped = { $editor } a été arrêté avant de finir, ce que vous aviez est donc inchangé
 editor-would-not-start = { $editor } n'a pas démarré : { $problem }
 
 

@@ -25,7 +25,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [checkouts.md](checkouts.md) | `CHECKOUT` | 23 | a delegate given a checkout of its own, so workers stop editing and building in one tree, and how its work comes back (partly built) |
 | [worktrees.md](worktrees.md) | `WORKTREE` | 10 | a session working in a worktree the driver made for it: asking for one, its name, what the session keeps of it, resuming into it and leaving it (proposed, nothing built) |
 | [turns.md](turns.md) | `TURN` | 13 | how long a turn may go on, what happens when it does not stop, what is said when it produces nothing, checks nothing or runs into its output ceiling, what a session does when it has spent its limit, what is done about the same call three times running, how the reads of one round are run together, what the note under a finished turn says about refusals, what is done about the planner's task list when a turn answers with tasks still open, and what the planner is told when a turn ends in a failure |
-| [prompting.md](prompting.md) | `PROMPT` | 13 | every moment the system stops and puts something to a human, what an answer grants, and where each answer is kept |
+| [prompting.md](prompting.md) | `PROMPT` | 14 | every moment the system stops and puts something to a human, what an answer grants, and where each answer is kept |
 | [permission-modes.md](permission-modes.md) | `MODE` | 14 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |
 | [references.md](references.md) | `REFER` | 6 | directories outside the working one that a person declared in their settings, what declaring one grants, and what the planner is told (repository entries and `@alias` proposed, not built) |
 | [naming-files.md](naming-files.md) | `NAME` | 11 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |
@@ -90,7 +90,7 @@ the routing-versus-content split they share.
 | [tools/repo-map.md](tools/repo-map.md) | `MAP` | 5 | `repo_map` |
 | [tools/read-git.md](tools/read-git.md) | `GIT` | 15 | `read_git` |
 | [tools/lsp.md](tools/lsp.md) | `LSP` | 13 | `lsp` |
-| [tools/write-file.md](tools/write-file.md) | `WRITE` | 6 | `write_file` |
+| [tools/write-file.md](tools/write-file.md) | `WRITE` | 7 | `write_file` |
 | [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 7 | `edit_file` |
 | [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 5 | `spawn_processor` |
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 7 | `spawn_agent` |

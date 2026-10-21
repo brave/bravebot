@@ -543,6 +543,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         }
     }
 
@@ -746,6 +747,29 @@ mod tests {
         let call = confirmer.confirm_mcp_call(&a_call());
         assert_eq!(call.decision, Decision::Reject);
         assert_eq!(call.note(), Some("ask Paris"));
+        responder.join().expect("responder finished");
+    }
+
+    /// WRITE-7: the text a person saved from their editor travels back to the worker as the answer
+    /// to the write, since the worker is where the turn puts the question again. It is no approval.
+    #[test]
+    fn saved_text_travels_back_to_the_worker_and_approves_nothing() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let (answer_tx, answer_rx) = channel();
+
+        let responder = thread::spawn(move || {
+            inbound.recv().expect("a write question arrived");
+            answer_tx
+                .send(Reply::Write(WriteDecision::edit(
+                    "the saved text\n".to_string(),
+                )))
+                .expect("answered");
+        });
+
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        let write = confirmer.confirm_write(&request());
+        assert!(!write.approved());
+        assert_eq!(write.edited(), Some("the saved text\n"));
         responder.join().expect("responder finished");
     }
 

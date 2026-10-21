@@ -2682,6 +2682,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         };
 
         let lines = change(&request).join("\n");
@@ -2728,6 +2729,7 @@ mod tests {
                 credentials: Vec::new(),
                 may_always: false,
                 record: None,
+                may_edit: false,
             })
             .join("\n")
         };
@@ -2801,6 +2803,7 @@ mod tests {
                 credentials: Vec::new(),
                 may_always: false,
                 record: None,
+                may_edit: false,
             })
             .join("\n")
         };
@@ -2826,6 +2829,7 @@ mod tests {
                 credentials: Vec::new(),
                 may_always: false,
                 record: None,
+                may_edit: false,
             })
             .join("\n")
         };
@@ -2855,6 +2859,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         };
 
         let lines = change(&request).join("\n");
@@ -3355,6 +3360,7 @@ mod tests {
                     credentials: Vec::new(),
                     may_always: false,
                     record: None,
+                    may_edit: false,
                 });
             }),
             held(Held::Write)

@@ -572,6 +572,12 @@ possible.
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
 
+In the terminal, the prompt for a write whose `contents` the agent wrote offers `e`, which opens them in
+your editor and puts the write to you again as a diff of the text you saved
+([details](../security/permissions.md#changing-a-write-before-approving-it)). What you saved is
+scanned for credentials, and the agent is told that you changed the contents and not what they say. A
+write from a `contents_ref` does not offer it.
+
 Replacing a **trusted** file with `contents` keeps that file's line endings and its leading byte
 order mark, so a file using `\r\n` stays CRLF and a file that began with a mark still does. This
 happens before the diff you approve is built, so the approval shows the lines the write changes

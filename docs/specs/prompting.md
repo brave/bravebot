@@ -796,3 +796,41 @@ cut does not already hide.
 `verified-by: bravebot_ui_bridge::acp::an_editor_is_told_how_many_characters_of_a_text_draw_as_nothing`
 `verified-by: bravebot_ui_bridge::wire::an_output_and_a_vet_request_carry_how_many_characters_drew_as_nothing`
 `verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs draws the output and vetting cards from requests carrying the spelled text and the agent's sentence, holds the spelled characters and the sentence to the rows each card marks as deciding, holds a request with no sentence to drawing none and a sentence to being drawn as sent, and make check-ui runs it)`
+
+<a id="PROMPT-14"></a>
+### PROMPT-14: the write prompt may hand the body to an editor, and what comes back is not an answer
+
+Where a write is offered an edit, the terminal's prompt binds `e` to it and draws the key in its row.
+Where the write is not offered one, `e` is unbound and the row does not draw it. The key hands the
+terminal to the editor the person set for the prompt box, on a scratch file outside the workspace that
+nobody else can read, which is removed when the editor returns and is named with the extension of the
+path so the editor treats the body as the kind of file it is.
+
+What the editor saved is returned exactly as written, with its line endings and its final newline. It
+is no answer: the turn puts the question again for the new text, and nothing is written until a key at
+that prompt approves. An editor that returns what it was given, or that only adds the final newline a
+body lacked, leaves the question where it was, at the same place in the diff. One that would not start,
+or returned nothing, is said above the question, which stays open. The key opens no note field. It is
+taken only when it arrived on its own, as the key that opens a note is: an editor reads whatever
+arrives after the key that started it.
+
+**Why.** An edit that approved by being saved would write text nobody had looked at as a diff, and a
+key that failed in silence would look the same as a key that does nothing.
+
+**Known cost.** The key is drawn by the terminal alone. The desktop window and a session in lines
+draw the write prompt without it.
+
+`verified-by: bravebot_tui::confirm::the_edit_key_is_bound_only_where_the_request_offers_it`
+`verified-by: bravebot_tui::confirm::the_key_row_offers_the_editor_only_where_the_request_does`
+`verified-by: bravebot_tui::confirm::text_saved_from_the_editor_is_returned_and_approves_nothing`
+`verified-by: bravebot_tui::confirm::an_unchanged_body_leaves_the_question_where_it_was`
+`verified-by: bravebot_tui::confirm::an_editor_that_fails_is_said_above_the_question`
+`verified-by: bravebot_tui::confirm::a_final_newline_the_editor_added_is_not_an_edit`
+`verified-by: bravebot_tui::confirm::an_e_that_arrived_with_other_keys_opens_no_editor`
+`verified-by: bravebot_tui::confirm::the_place_in_a_long_diff_survives_an_editor_that_returns_nothing`
+`verified-by: bravebot_tui::confirm::the_stop_key_stays_whole_beside_the_editor_key_on_a_narrow_terminal`
+`verified-by: bravebot_tui::confirm::every_key_label_is_drawn_whole_beside_the_editor_and_both_standing_answers`
+`verified-by: bravebot_tui::remote_confirm::saved_text_travels_back_to_the_worker_and_approves_nothing`
+`verified-by: bravebot_tui::editor::a_body_comes_back_exactly_as_the_editor_wrote_it`
+`verified-by: bravebot_tui::editor::the_file_a_body_is_edited_in_is_private_named_for_its_kind_and_removed`
+`verified-by: bravebot_tui::editor::a_scratch_file_takes_a_plain_extension_from_the_path_and_nothing_else`

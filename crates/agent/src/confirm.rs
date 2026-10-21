@@ -122,6 +122,17 @@ pub struct WriteRequest {
     /// The one thing the driver can say about whether the file changed since: it compares no
     /// bytes, and the person judges from the difference they are shown.
     pub written_since_checkout: bool,
+    /// Whether the prompt may offer to open the body in the person's editor and write what they
+    /// save ([WRITE-7]).
+    ///
+    /// True exactly where the body is the planner's own `contents` and carries the integrity of a
+    /// context nothing untrusted has been shown to. A body that came from a quarantined reference
+    /// is never offered: the text a person saved from it would still be made of bytes nobody read,
+    /// and trusting it would promote them. A front end that cannot hand the person an editor
+    /// ignores this, and an answer carrying an edit where this is false writes nothing.
+    ///
+    /// [WRITE-7]: ../../../docs/specs/tools/write-file.md
+    pub may_edit: bool,
 }
 
 /// What a processor said about the document it produced, released for the screen an approval is
@@ -1650,6 +1661,11 @@ pub struct WriteDecision {
     ///
     /// [PROMPT-12]: ../../../docs/specs/prompting.md
     pub note: Option<String>,
+    /// The body as the person saved it from their editor, where that is their answer ([WRITE-7]).
+    /// Read through [`WriteDecision::edited`].
+    ///
+    /// [WRITE-7]: ../../../docs/specs/tools/write-file.md
+    pub edited: Option<String>,
 }
 
 impl WriteDecision {
@@ -1673,6 +1689,31 @@ impl WriteDecision {
             .filter(|_| !self.remember && !self.record)
     }
 
+    /// The body the person saved from their editor instead of answering, where they did
+    /// ([WRITE-7]).
+    ///
+    /// Not an approval: the write is put to them again with this as its body, so nothing is written
+    /// from it until a later answer says yes.
+    ///
+    /// [WRITE-7]: ../../../docs/specs/tools/write-file.md
+    pub fn edited(&self) -> Option<&str> {
+        self.edited.as_deref()
+    }
+
+    /// Hand back the body the person saved from their editor.
+    ///
+    /// Refuses, so a driver that does not read [`WriteDecision::edited`] writes nothing from it,
+    /// and carries no standing answer and no note.
+    pub fn edit(body: String) -> Self {
+        Self {
+            decision: Decision::Reject,
+            remember: false,
+            record: false,
+            note: None,
+            edited: Some(body),
+        }
+    }
+
     /// Write it this once.
     pub fn approve() -> Self {
         Self {
@@ -1680,6 +1721,7 @@ impl WriteDecision {
             remember: false,
             record: false,
             note: None,
+            edited: None,
         }
     }
 
@@ -1690,6 +1732,7 @@ impl WriteDecision {
             remember: true,
             record: false,
             note: None,
+            edited: None,
         }
     }
 
@@ -1700,6 +1743,7 @@ impl WriteDecision {
             remember: false,
             record: true,
             note: None,
+            edited: None,
         }
     }
 
@@ -1710,6 +1754,7 @@ impl WriteDecision {
             remember: false,
             record: false,
             note: None,
+            edited: None,
         }
     }
 
@@ -3169,6 +3214,27 @@ mod tests {
         );
     }
 
+    /// WRITE-7: the text a person saved from their editor is no approval, so a caller that never
+    /// reads it refuses, and it carries no standing answer and no note, since neither belongs to a
+    /// question that is about to be put again.
+    #[test]
+    fn a_saved_body_refuses_and_carries_nothing_else() {
+        let saved = WriteDecision::edit("the person's text\n".to_string());
+        assert_eq!(saved.edited(), Some("the person's text\n"));
+        assert!(!saved.approved());
+        assert!(!saved.remember && !saved.record);
+        assert_eq!(saved.note(), None);
+
+        for other in [
+            WriteDecision::approve(),
+            WriteDecision::approve_always(),
+            WriteDecision::approve_and_record(),
+            WriteDecision::reject(),
+        ] {
+            assert_eq!(other.edited(), None);
+        }
+    }
+
     fn gh_plan(args: &[&str]) -> bravebot_core::command::Plan {
         use bravebot_core::command::{Plan, Step, Steps};
         Plan {
@@ -3303,6 +3369,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         }
     }
 
@@ -3901,6 +3968,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         }
     }
 

@@ -5712,7 +5712,14 @@ fn run_turn_animated(
             }
             match message {
                 crate::remote_confirm::ToMain::Write(request) => {
-                    let answer = crate::confirm::ask(terminal, &request);
+                    // The editor takes the terminal and gives it back, so whether the mouse was
+                    // captured is read now, before the prompt holds everything it would be read
+                    // from.
+                    let mouse = session.mouse_captured();
+                    let answer =
+                        crate::confirm::ask_editing(terminal, &request, |terminal, body, path| {
+                            edit_body(terminal, mouse, body, path)
+                        });
                     // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
                     // Set before the answer goes back, so the worker sees it as soon as it wakes.
                     if answer.stops_the_turn() {
@@ -7965,6 +7972,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         })
     }
 

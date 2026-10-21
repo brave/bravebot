@@ -23,7 +23,7 @@ guards:
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 119
+      - crates/core/src/policy.rs: 120
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 2
@@ -155,7 +155,7 @@ guards:
     sites:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 6
-      - crates/core/src/policy.rs: 22
+      - crates/core/src/policy.rs: 24
   - symbol: Policy::adopt_model_output
     sites:
       - crates/agent/src/advisor.rs: 1
@@ -473,6 +473,7 @@ and the content has no say in it.
 | what the planner wrote | the integrity of the context it was written in, and private once private content was let out of quarantine for the planner: a slot `vet_content` let through, output `read_output` read to it, a delegate's report it was given, or a context it resumed that already held one. A workspace file it was shown does not count, because that is the project's own data and counting it would make every call after the first read ask | `verified-by: bravebot_core::policy::model_output_from_a_clean_context_is_trusted` `verified-by: bravebot_core::policy::a_vetted_private_slot_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_vetted_public_slot_leaves_what_the_planner_writes_public` `verified-by: bravebot_core::policy::a_vetted_private_picture_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::output_read_aloud_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_private_report_from_a_delegate_is_held` `verified-by: bravebot_core::policy::a_resumed_context_keeps_what_it_held_and_cannot_be_made_public` |
 | a reply taken out of a transport's envelope | the context's, never the network's | `verified-by: bravebot_core::policy::adopting_model_output_takes_the_context_s_label_not_the_transport_s` |
 | an answer a person typed to a question | trusted, because a person wrote it, and as private as the questions it answers, since the reply repeats them | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` `verified-by: bravebot_core::policy::private_questions_are_asked_and_the_reply_stays_private` |
+| the body a person saved from their editor over a proposed write | trusted and public, because a person wrote it and it goes into their workspace as the proposal it replaces was already going to; refused where that proposal was untrusted or still private | `verified-by: bravebot_core::policy::an_edited_body_is_trusted_and_public` `verified-by: bravebot_core::policy::a_proposal_that_was_not_trusted_and_public_is_not_made_so_by_editing_it` |
 | what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
 | one slot's bytes a person read on their screen and vouched for | trusted and private, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
 | a server's tool list a person vouched for, or the mode that answers for them | trusted and public, because a person read the whole list as it is drawn and said yes, every session, since nothing the driver runs compares a server's bytes with an earlier list | `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement` `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing` |
