@@ -276,6 +276,9 @@ param([Parameter(Position = 0)][string]$Version = "")
         if ($Directory.Contains(";")) {
             throw "the directory's name contains a semicolon, which would split it into two PATH entries"
         }
+        if ($Directory.Contains("%")) {
+            throw "the directory's name contains a percent sign, which Windows would read as the start of a variable"
+        }
         $stored = [string](Get-Item -LiteralPath "HKCU:\Environment").GetValue("Path", "", "DoNotExpandEnvironmentNames")
         if (Test-OnPath $stored ([char]";") $Directory) {
             return $false
@@ -288,7 +291,7 @@ param([Parameter(Position = 0)][string]$Version = "")
         try {
             [Environment]::SetEnvironmentVariable("BRAVEBOT_INSTALL_PATH_CHANGED", $null, "User")
         } catch {
-            $null = $_
+            Write-Host "note: could not tell running programs that your PATH changed, so a terminal started from Explorer may not find bravebot until you sign out and in."
         }
         return $true
     }

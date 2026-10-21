@@ -1354,38 +1354,61 @@ fn a_refused_registry_write_leaves_the_install_and_says_what_is_left() {
     assert_eq!(outcome.session_path, outcome.session_path_before);
 }
 
-/// A directory with a semicolon in its name cannot be one entry of a `PATH`, which a semicolon
-/// divides, so it is not written to the stored value and the script says so. The install is
-/// still in place.
+/// A directory a stored `Path` would misread is not written to it, and the script says which
+/// character and leaves the install in place, the stored value and the session as they were. A
+/// semicolon divides a `PATH`, so the directory would be two entries; a percent sign starts a
+/// `%NAME%` reference, which Windows expands in a stored value, so a new terminal would look in a
+/// different directory than the one installed to, and the next run would not find it there.
 #[test]
-fn a_directory_with_a_semicolon_in_its_name_is_not_put_on_the_path() {
+fn a_directory_a_path_would_misread_is_not_put_on_it() {
     let Some(tools) = setup() else {
         return;
     };
-    let release = brave("semicolon");
-    let root = scratch_root().join("path-semicolon");
-    let directory = root.join("bin;two");
-    let install = Install::new(tools, "path-semicolon")
-        .off_path()
-        .with_stored_path("/opt/one")
-        .installing_to(Some(directory.clone()));
-    let outcome = install.run_release(&release);
+    let release = brave("misread");
+    for (name, leaf, character) in [
+        ("path-semicolon", "bin;two", "semicolon"),
+        ("path-percent", "bin%PCT_TEST%two", "percent sign"),
+    ] {
+        let directory = scratch_root().join(name).join(leaf);
+        let install = Install::new(tools, name)
+            .off_path()
+            .with_stored_path("/opt/one")
+            .installing_to(Some(directory.clone()));
+        let outcome = install.run_release(&release);
 
-    assert!(outcome.succeeded, "{}", outcome.output);
-    assert_eq!(read(&directory.join(BINARY)).as_deref(), Some(&release[..]));
-    assert_eq!(registry_writes(&outcome), Vec::<&str>::new());
-    assert_eq!(outcome.stored_path_after.as_deref(), Some("/opt/one"));
-    assert!(
-        outcome.output.contains("could not add") && outcome.output.contains("semicolon"),
-        "{}",
-        outcome.output
-    );
+        assert!(outcome.succeeded, "{character}: {}", outcome.output);
+        assert_eq!(
+            read(&directory.join(BINARY)).as_deref(),
+            Some(&release[..]),
+            "{character}"
+        );
+        assert_eq!(registry_writes(&outcome), Vec::<&str>::new(), "{character}");
+        assert_eq!(
+            outcome.stored_path_after.as_deref(),
+            Some("/opt/one"),
+            "{character}"
+        );
+        assert_eq!(
+            outcome.session_path, outcome.session_path_before,
+            "{character}"
+        );
+        assert!(
+            outcome.output.contains("could not add") && outcome.output.contains(character),
+            "{character}: {}",
+            outcome.output
+        );
+        assert!(
+            !outcome.output.contains("Added") && !outcome.output.contains("Run: bravebot"),
+            "{character}: {}",
+            outcome.output
+        );
+    }
 }
 
-/// An install that is refused changes nothing about the person's `Path`, since the directory it
-/// would add holds no program. The directory is off the session's `PATH` and the stored value is
-/// present, so a script that put the directory on the `PATH` before it checked what it had
-/// downloaded would write it here.
+/// An install that is refused changes nothing about the person's `Path` or the session's, since
+/// the directory it would add holds no program. The directory is off the session's `PATH` and the
+/// stored value is present, so a script that put the directory on either `PATH` before it checked
+/// what it had downloaded would show it here.
 #[test]
 fn a_refused_install_leaves_the_users_path_alone() {
     let Some(tools) = setup() else {
@@ -1405,6 +1428,7 @@ fn a_refused_install_leaves_the_users_path_alone() {
     ]);
     assert_refused(&install, &outcome, "checksum mismatch");
     assert_eq!(outcome.stored_path_after.as_deref(), Some("/opt/one"));
+    assert_eq!(outcome.session_path, outcome.session_path_before);
 
     let install = Install::new(tools, "path-refused-signer")
         .off_path()
@@ -1412,4 +1436,5 @@ fn a_refused_install_leaves_the_users_path_alone() {
     let outcome = install.run_release(&binary(Some("Valid"), Some("Someone Else")));
     assert_refused(&install, &outcome, "not signed by");
     assert_eq!(outcome.stored_path_after.as_deref(), Some("/opt/one"));
+    assert_eq!(outcome.session_path, outcome.session_path_before);
 }

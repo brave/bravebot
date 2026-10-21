@@ -493,22 +493,23 @@ A directory the session already finds is left alone, and so is one the stored va
 names, whether the entry differs in case, has a separator after it, or is a `%NAME%` reference to
 it. Every other entry is written back as it was: the stored value is read with its `%NAME%`
 references unexpanded and written as an expandable string, and a value that is missing, empty or
-ends in a separator gains no empty entry. A directory whose name holds a semicolon, a stored value
-the account cannot write, and `BRAVEBOT_NO_MODIFY_PATH` set to anything leave the stored value and
-the session as they were, say which directory to add, and do not undo the install. A refused
-install does not read or change the `PATH`.
+ends in a separator gains no empty entry. A directory whose name holds a semicolon or a percent
+sign, a stored value the account cannot write, and `BRAVEBOT_NO_MODIFY_PATH` set to anything leave
+the stored value and the session as they were, say which directory to add, and do not undo the
+install. A refused install does not read or change either `PATH`.
 
 **Why.** The script already knows the directory, so adding it costs the person nothing there, and
-a search through how Windows keeps a `PATH` anywhere else. The stored value is the
-person's, and it outlives the install, so the script changes the one entry it owns: reading it
-expanded and writing that back replaces every `%NAME%` reference with what it names today and leaves
-a plain string that Windows no longer expands, which changes entries this script has no business
-with. The directory goes last because a directory put first decides which program runs under a name
-the `PATH` already resolved, and `bravebot.exe` is no reason to move any other. A semicolon divides a
-`PATH`, so a directory holding one would be written as two entries, neither of them the directory.
-An install that was refused has put nothing where the `PATH` would lead, so there is nothing to add.
-The variable is the way out for a person who manages their `PATH` themselves, and it works through
-`irm | iex`, which cannot take an argument.
+a search through how Windows keeps a `PATH` anywhere else. The stored value is the person's, and it
+outlives the install, so the script changes the one entry it owns: reading it expanded and writing
+that back replaces every `%NAME%` reference with what it names today and leaves a plain string that
+Windows no longer expands, which changes entries this script has no business with. The directory
+goes last because a directory put first decides which program runs under a name the `PATH` already
+resolved, and `bravebot.exe` is no reason to move any other. A semicolon divides a `PATH`, so a
+directory holding one would be written as two entries, neither of them the directory, and a percent
+sign starts a reference Windows expands in a stored value, so a terminal opened later would look in
+a different directory than the one installed to. An install that was refused has put nothing where
+the `PATH` would lead, so there is nothing to add. The variable is the way out for a person who
+manages their `PATH` themselves, and it works through `irm | iex`, which cannot take an argument.
 
 **Note.** The tests replace the calls that read and write the registry with files, so they hold the
 script to what it asks and what it writes, and not to what Windows does with it. What Windows does is
@@ -520,7 +521,7 @@ in Known costs.
 `verified-by: bravebot_cli::installer_powershell::an_empty_or_unterminated_users_path_is_joined_without_an_empty_entry`
 `verified-by: bravebot_cli::installer_powershell::a_person_who_opts_out_keeps_their_path_as_it_is`
 `verified-by: bravebot_cli::installer_powershell::a_refused_registry_write_leaves_the_install_and_says_what_is_left`
-`verified-by: bravebot_cli::installer_powershell::a_directory_with_a_semicolon_in_its_name_is_not_put_on_the_path`
+`verified-by: bravebot_cli::installer_powershell::a_directory_a_path_would_misread_is_not_put_on_it`
 `verified-by: bravebot_cli::installer_powershell::a_refused_install_leaves_the_users_path_alone`
 
 ## Known costs
