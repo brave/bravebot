@@ -825,6 +825,12 @@ pub(crate) fn delegated(
 ///
 /// `cancel` is the person's stop. The request is walked away from when it lands, the error says it
 /// was cancelled, and the conversation is left as it was.
+///
+/// `hooked` is where the hooks a person declared for `compacted` are read and run. They fire once
+/// the summary has been adopted and not otherwise, so a summary refused under COMPACT-1, a request
+/// that failed, a stop and a conversation with nothing to cut fire none (HOOK-2). What one says
+/// went wrong reaches `reporter` as it does for a turn's hooks (HOOK-7). A caller passing `None`
+/// asks for none to be fired.
 #[allow(clippy::too_many_arguments)]
 pub fn compact<S: Sink, R: Reporter>(
     config: &Config,
@@ -836,6 +842,7 @@ pub fn compact<S: Sink, R: Reporter>(
     trust: TrustStore,
     focus: Option<&str>,
     cancel: &Cancel,
+    hooked: Option<Hooked<'_>>,
 ) -> Result<Option<crate::compact::Compacted>, crate::compact::CompactError> {
     let mut routing = Routing::new();
     routing.insert_trusted("task", "summarise the conversation so far");
@@ -861,7 +868,29 @@ pub fn compact<S: Sink, R: Reporter>(
     // for it to have landed in the middle of.
     let done = crate::compact::compact(&mut policy, &mut chat, conversation, 0, focus);
     policy.finish();
+    // After the summary is adopted, recorded and the policy closed, so a hook that fails changes
+    // nothing about the compaction it was told of (HOOK-6, HOOK-7).
+    if let (Ok(Some(_)), Some(hooked)) = (&done, hooked) {
+        fire_hooks(
+            &hooks_in_force(hooked.home),
+            bravebot_config::hooks::Moment::Compacted,
+            None,
+            hooked.workspace,
+            reporter,
+        );
+    }
     done
+}
+
+/// Where [`compact`] finds the hooks a person declared and the directory it runs them in.
+#[derive(Clone, Copy)]
+pub struct Hooked<'a> {
+    /// The user's own directory, which holds `hooks.json` (HOOK-1). `None` where the platform names
+    /// none, which leaves no hooks.
+    pub home: Option<&'a std::path::Path>,
+    /// The workspace the session is working in: a hook runs in its root (HOOK-4) and the session's
+    /// rewind coverage records that a program ran beside it.
+    pub workspace: &'a Workspace,
 }
 
 /// What `/checkouts apply` did.
@@ -2128,6 +2157,16 @@ fn reads_that_run_together(
     if together < 2 { 0 } else { together }
 }
 
+/// The hooks in force for a person whose own directory is `home`.
+///
+/// Not read at all in a safe session, which is what leaves no hook to fire.
+fn hooks_in_force(home: Option<&std::path::Path>) -> bravebot_config::hooks::Hooks {
+    match bravebot_core::safe::engaged() {
+        true => bravebot_config::hooks::Hooks::default(),
+        false => bravebot_config::hooks::Hooks::load(home),
+    }
+}
+
 /// Run the hooks a person attached to `moment`, and answer with what went wrong where something
 /// did.
 ///
@@ -2325,12 +2364,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // Read once, here, rather than at each moment. What the file says is a property of the machine
     // and not of a round, and a turn whose hooks changed halfway through would be the harder thing
     // to explain to whoever edited it mid-session.
-    //
-    // Not read at all in a safe session, which is what leaves no hook to fire.
-    let hooks = match bravebot_core::safe::engaged() {
-        true => bravebot_config::hooks::Hooks::default(),
-        false => bravebot_config::hooks::Hooks::load(task.home.as_deref()),
-    };
+    let hooks = hooks_in_force(task.home.as_deref());
 
     // The turn moments belong to the turn a person asked for. A delegate is a run inside this one,
     // started by a call the person did not make, so firing "the turn began" for each of them would
@@ -3817,6 +3851,15 @@ where
             &mut state.spent,
             &mut state.may_compact,
             &mut state.retries,
+            // A delegate summarises a conversation of its own, which is not the session's (HOOK-2).
+            match task.delegate {
+                None => Some(round_steps::AfterCompacting {
+                    hooks,
+                    workspace,
+                    said: &mut *state.hook_notices,
+                }),
+                Some(_) => None,
+            },
         )?;
 
         // Said before the request goes out, so the longest silence in a turn is explained

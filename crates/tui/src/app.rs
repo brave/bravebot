@@ -4317,6 +4317,10 @@ fn room_won_back(usage: &bravebot_aichat::protocol::Usage) -> u64 {
 /// Either stop key walks away from the request and leaves the conversation as it was, as a failed
 /// summary does (INPUT-4). A summary that has already come back is kept: the stop landed too late
 /// to be one.
+///
+/// A summary that comes back fires the person's `compacted` hooks in `workspace`'s directory
+/// (HOOK-2), and the loop below says which one is running while it holds the screen (HOOK-9). A stop
+/// key does not reach a hook: it runs to its bound, as one after a cancelled turn does.
 fn compact_animated(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
@@ -4324,6 +4328,7 @@ fn compact_animated(
     conversation: Conversation,
     trust: &TrustStore,
     focus: &str,
+    workspace: &Workspace,
 ) -> io::Result<(Conversation, Vec<Stamped>)> {
     // For the reason a turn does it: the summary is one request to the same backend, and a sign-in
     // is not something a worker thread can ask for.
@@ -4337,29 +4342,23 @@ fn compact_animated(
     let focus = (!focus.is_empty()).then(|| focus.to_string());
     let cancel = Cancel::new();
     let worker_cancel = cancel.clone();
+    let worker_workspace = workspace.clone();
+    let home = bravebot_agent::home::directory();
 
     session.begin_aside();
 
     let worker = thread::spawn(move || {
-        let mut sink = Trail::new();
-        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
-        let egress = Egress::new();
-        let mut conversation = conversation;
-        // Reduced to what a person can be told before it crosses back, since the error types are
-        // the kernel's and this thread is the only place they mean anything.
-        let done = turn::compact(
+        summarise_on_a_worker(
             &worker_config,
-            &egress,
-            &mut conversation,
+            conversation,
             model.as_deref(),
-            &mut reporter,
-            &mut sink,
             worker_trust,
             focus.as_deref(),
             &worker_cancel,
+            &worker_workspace,
+            home.as_deref(),
+            to_main,
         )
-        .map_err(|error| error.category().name().to_string());
-        (done, conversation, sink)
     });
 
     loop {
@@ -4379,12 +4378,8 @@ fn compact_animated(
 
         // Drained for the same reason the turn's own loop drains, and waiting on the terminal
         // for the same reason it does: a person may be typing their next prompt while this runs.
-        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| match message {
-            crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
-            crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
-            crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
-            crate::remote_confirm::ToMain::Composing(call) => session.composing(call),
-            _ => {}
+        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
+            compact_reported(session, message)
         });
 
         if !carrying_on {
@@ -4403,6 +4398,69 @@ fn compact_animated(
     compact_ended(session, config.context_budget, &done, cancel.is_cancelled());
 
     Ok((conversation, sink.events().to_vec()))
+}
+
+/// What the thread `compact_animated` starts runs: the summary, and the hooks a person declared for
+/// `compacted` once it is adopted, in the directory the session works in (HOOK-2).
+///
+/// Apart from [`compact_animated`] so that what the terminal hands the agent, the state directory
+/// the hooks are read from and the workspace they run in, is somewhere a test can call without a
+/// terminal.
+#[allow(clippy::too_many_arguments)]
+fn summarise_on_a_worker(
+    config: &Config,
+    conversation: Conversation,
+    model: Option<&str>,
+    trust: TrustStore,
+    focus: Option<&str>,
+    cancel: &Cancel,
+    workspace: &Workspace,
+    home: Option<&Path>,
+    to_main: mpsc::Sender<crate::remote_confirm::ToMain>,
+) -> (
+    Result<Option<bravebot_agent::compact::Compacted>, String>,
+    Conversation,
+    Trail,
+) {
+    let mut sink = Trail::new();
+    let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
+    let egress = Egress::new();
+    let mut conversation = conversation;
+    // Reduced to what a person can be told before it crosses back, since the error types are
+    // the kernel's and this thread is the only place they mean anything.
+    let done = turn::compact(
+        config,
+        &egress,
+        &mut conversation,
+        model,
+        &mut reporter,
+        &mut sink,
+        trust,
+        focus,
+        cancel,
+        Some(turn::Hooked { home, workspace }),
+    )
+    .map_err(|error| error.category().name().to_string());
+    (done, conversation, sink)
+}
+
+/// Take what the thread summarising the conversation says while it works.
+///
+/// Apart from [`compact_animated`] so that what a hook running after the summary shows, and says
+/// when it goes wrong, is somewhere a test can call.
+fn compact_reported(session: &mut Session, message: crate::remote_confirm::ToMain) {
+    match message {
+        crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
+        crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
+        crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
+        crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
+        crate::remote_confirm::ToMain::Composing(call) => session.composing(call),
+        crate::remote_confirm::ToMain::HookStarted(moment, program) => {
+            session.hook_running(moment, program)
+        }
+        crate::remote_confirm::ToMain::HookFinished => session.hook_over(),
+        _ => {}
+    }
 }
 
 /// Take what a summary came back with, and say what the person needs to know of it.
@@ -25027,6 +25085,159 @@ mod tests {
         assert_eq!(session.status, Status::Idle);
         assert!(!session.handoff_pending(), "a stopped brief was offered");
         assert!(session.input().is_empty());
+    }
+
+    /// A loopback model answering every request with `words`, streamed the way the real one is.
+    #[cfg(unix)]
+    fn a_model_answering_every_request(words: &'static str) -> String {
+        use std::io::{BufRead, BufReader, Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let address = format!("http://{}", listener.local_addr().expect("an address"));
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                let mut length = 0usize;
+                while matches!(reader.read_line(&mut line), Ok(read) if read > 2) {
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    line.clear();
+                }
+                let mut body = vec![0u8; length];
+                let _ = reader.read_exact(&mut body);
+                let frames = format!(
+                    "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{words}\"}}}}]}}\n\n\
+                     data: {{\"choices\":[{{\"finish_reason\":\"stop\"}}],\"usage\":{{\"prompt_tokens\":400,\"completion_tokens\":20}}}}\n\n"
+                );
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                    frames.len()
+                );
+                let _ = reader.into_inner().write_all(response.as_bytes());
+            }
+        });
+        address
+    }
+
+    /// HOOK-2, HOOK-9: the thread `/compact` starts runs the person's `compacted` hook once the
+    /// summary is adopted, in the session's directory, and tells the screen which hook is running.
+    /// A terminal that handed the agent no hooks would shorten the conversation and fire nothing.
+    #[cfg(unix)]
+    #[test]
+    fn the_thread_that_summarises_fires_the_hooks_in_the_sessions_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = crate::testutil::scratch_dir("bravebot-app-compact-hook");
+        let _ = std::fs::remove_dir_all(&directory);
+        let home = directory.join("state");
+        std::fs::create_dir_all(&home).expect("a state directory");
+        let note = directory.join("note");
+        std::fs::write(&note, "#!/bin/sh\ncat >> fired.txt\n").expect("a script");
+        std::fs::set_permissions(&note, std::fs::Permissions::from_mode(0o755)).expect("exec");
+        std::fs::write(
+            home.join("hooks.json"),
+            format!(
+                r#"{{"hooks": [{{"on": "compacted", "run": [{:?}]}}]}}"#,
+                note.canonicalize().expect("canonical")
+            ),
+        )
+        .expect("a hooks file");
+        let workspace = Workspace::new(&directory).expect("workspace");
+        let endpoint = a_model_answering_every_request("they were porting the parser");
+        let config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+            _ => None,
+        })
+        .expect("config");
+        let mut conversation = Conversation::new();
+        for (prompt, answer) in [
+            ("port the parser to the new lexer", "started on it"),
+            ("what about the error type", "widened it"),
+            ("now the tests", "updated them"),
+            ("carry on", "carrying on"),
+        ] {
+            conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+            conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+        }
+        let (to_main, from_worker) = mpsc::channel();
+
+        let (done, shortened, _trail) = summarise_on_a_worker(
+            &config,
+            conversation,
+            None,
+            TrustStore::new("/work"),
+            None,
+            &Cancel::new(),
+            &workspace,
+            Some(&home),
+            to_main,
+        );
+
+        let fired = std::fs::read_to_string(directory.join("fired.txt"));
+        let said: Vec<String> = from_worker
+            .try_iter()
+            .filter_map(|message| match message {
+                crate::remote_confirm::ToMain::HookStarted(moment, _) => {
+                    Some(format!("started {moment}"))
+                }
+                crate::remote_confirm::ToMain::HookFinished => Some("finished".to_string()),
+                _ => None,
+            })
+            .collect();
+        std::fs::remove_dir_all(&directory).ok();
+
+        assert!(matches!(done, Ok(Some(_))), "no summary was adopted");
+        assert!(shortened.len() < 8, "the conversation was not shortened");
+        assert_eq!(
+            fired.expect("the hook did not run in the session's directory"),
+            "{\"event\":\"compacted\"}\n"
+        );
+        assert_eq!(said, ["started compacted", "finished"]);
+    }
+
+    /// HOOK-9, HOOK-7: a `compacted` hook runs on the thread that summarised, so the screen is told
+    /// which one holds it while it runs and what went wrong when it ended badly. A loop that
+    /// dropped those messages would show a frozen `/compact` for as long as the hook took, and say
+    /// nothing of a hook that failed.
+    #[test]
+    fn a_hook_running_after_a_summary_is_named_and_its_trouble_said() {
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+
+        compact_reported(
+            &mut session,
+            crate::remote_confirm::ToMain::HookStarted("compacted", "notify".to_string()),
+        );
+        assert_eq!(
+            session.indicator().expect("working").verb,
+            t!(indicator_hook, moment = "compacted", program = "notify")
+        );
+
+        compact_reported(&mut session, crate::remote_confirm::ToMain::HookFinished);
+        assert_ne!(
+            session.indicator().expect("working").verb,
+            t!(indicator_hook, moment = "compacted", program = "notify"),
+            "the hook was still named after it was over"
+        );
+
+        let said = t!(
+            hook_failed,
+            moment = "compacted",
+            program = "notify",
+            status = "exit status: 3"
+        );
+        compact_reported(
+            &mut session,
+            crate::remote_confirm::ToMain::Notice(said.to_string()),
+        );
+        assert_eq!(last_note(&session), said);
     }
 
     /// A summary that came back is kept however late the stop landed: the worker has already

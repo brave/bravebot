@@ -362,6 +362,10 @@ mod tests {
             announcement(Moment::CheckoutMade),
             "{\"event\":\"checkout-made\"}\n"
         );
+        assert_eq!(
+            announcement(Moment::Compacted),
+            "{\"event\":\"compacted\"}\n"
+        );
     }
 
     /// SANDBOX-30: a hook's bare program name is looked up as every program started unconfined is,

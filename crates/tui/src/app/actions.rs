@@ -456,6 +456,7 @@ impl Held<'_> {
             std::mem::take(self.conversation),
             &self.answers.trust,
             focus,
+            self.workspace,
         )?;
         *self.conversation = shortened;
         save_compacted(

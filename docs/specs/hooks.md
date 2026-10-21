@@ -66,7 +66,7 @@ learn.
 `verified-by: by-construction (one path is ever built, by joining the file name onto the state directory the caller was given; nothing reads a hooks file from a working directory or an ancestor of one)`
 
 <a id="HOOK-2"></a>
-### HOOK-2: five moments, and each fires the hooks written for it
+### HOOK-2: six moments, and each fires the hooks written for it
 
 A declaration names one moment. These are the moments:
 
@@ -77,6 +77,7 @@ A declaration names one moment. These are the moments:
 | `turn-finished` | when the turn a person asked for is over, however it ended |
 | `prompt-shown` | just before a prompt or an `ask_user` question is put to a person who can answer it |
 | `checkout-made` | once the driver has written a checkout for a delegate, before that delegate's first request |
+| `compacted` | after a summary has been adopted in place of the older part of the conversation |
 
 A `tool-finished` entry may name a `tool`, and then fires for calls of that name alone; one that
 names none fires for every call. A tool named on any of the other moments is about a call
@@ -103,6 +104,18 @@ nothing, and so does one started inside a checkout, which works in the checkout 
 delegate and neither the planner nor the other delegates of the call, and a call that gives several
 delegates a checkout runs their hooks at the same time. A person's setup command for a new checkout
 is what it is for ([CHECKOUT-22](checkouts.md#CHECKOUT-22)).
+
+`compacted` is about a conversation that was shortened, so it fires once for each summary adopted
+([COMPACT-1](compaction.md#COMPACT-1), [COMPACT-10](compaction.md#COMPACT-10)) and for none that was
+not: not one the gate refused, not one whose request failed or was stopped, and not a compaction
+asked for where there was nothing to cut. It fires for a summary the budget forced, which includes
+the one that answers a request the service refused as written
+([COMPACT-14](compaction.md#COMPACT-14)), and for `/compact`, after the same point in each and
+before the next request is sent. It does not fire for a delegate summarising the conversation of
+its own, which the person never held. It is told the moment and nothing of the summary, the
+messages it replaced or how many (HOOK-5), the compaction is the same whatever the hook does
+(HOOK-6), and a hook that fails leaves the conversation shortened and is said to the person
+(HOOK-7).
 
 **Why.** A short vocabulary in a person's own terms, rather than the events the audit trail
 records: those say which gate decided what, and somebody wanting their formatter to run should not
@@ -138,6 +151,16 @@ and a turn that died is exactly when they want telling.
 `verified-by: bravebot_agent::turn::a_delegate_given_no_checkout_fires_no_checkout_hook`
 `verified-by: bravebot_agent::turn::a_fan_out_into_checkouts_fires_the_hook_once_for_each_checkout_and_in_that_one`
 `verified-by: bravebot_agent::turn::a_delegate_started_inside_a_checkout_does_not_fire_the_hook_again`
+`verified-by: bravebot_agent::turn::a_hook_fires_when_the_budget_forces_a_compaction`
+`verified-by: bravebot_agent::turn::a_hook_fires_when_a_person_compacts_the_conversation`
+`verified-by: bravebot_agent::turn::a_hook_fires_when_a_refused_request_is_answered_by_a_compaction`
+`verified-by: bravebot_agent::turn::a_compaction_runs_no_hook_that_was_written_for_another_moment`
+`verified-by: bravebot_agent::turn::a_summary_the_budget_forced_and_the_gate_refused_fires_no_hook`
+`verified-by: bravebot_agent::turn::a_summary_a_person_asked_for_and_the_gate_refused_fires_no_hook`
+`verified-by: bravebot_agent::turn::a_conversation_with_nothing_to_cut_fires_no_hook`
+`verified-by: bravebot_agent::turn::a_summary_that_could_not_be_made_fires_no_hook`
+`verified-by: bravebot_agent::turn::a_delegate_s_compaction_fires_no_compacted_hook`
+`verified-by: bravebot_tui::app::the_thread_that_summarises_fires_the_hooks_in_the_sessions_directory`
 
 <a id="HOOK-3"></a>
 ### HOOK-3: a hook is a program and its arguments, never a line a shell parses
@@ -259,6 +282,8 @@ decision is taken from something a person wrote rather than from something a pro
 `verified-by: bravebot_agent::turn::a_failing_prompt_hook_leaves_the_question_alone`
 `verified-by: bravebot_agent::turn::a_checkout_hook_that_fails_is_said_and_its_delegate_still_runs`
 `verified-by: bravebot_agent::turn::a_setup_that_cannot_start_or_outstays_its_bound_leaves_the_delegate_running_in_a_kept_checkout`
+`verified-by: bravebot_agent::turn::a_failing_hook_does_not_undo_the_compaction_the_budget_forced`
+`verified-by: bravebot_agent::turn::a_failing_hook_does_not_undo_a_compaction_a_person_asked_for`
 `verified-by: by-construction (a hook's standard output and standard error are discarded at the spawn and read by nothing; its status reaches one sentence said to the person and no branch)`
 
 <a id="HOOK-7"></a>
@@ -270,6 +295,8 @@ bound in seconds. The bound is 30 seconds unless the entry states a `timeout`, w
 of seconds from 1 to 600; an entry whose `timeout` is anything else declares no hook, as HOOK-3 treats
 a malformed argument. It reaches a live display as
 it happens and the turn's own account of itself as well, so a run with nowhere to draw says it too.
+A `compacted` hook that `/compact` fires has no turn and so no account, and reaches the live display
+alone.
 A turn that fails has no account, and a caller that draws nothing as the turn runs keeps what it was
 told and says it beside the failure.
 A moment inside a delegate is a moment of the turn that spawned it and reaches that turn's account,
@@ -374,6 +401,7 @@ A check is announced the same way, for the same reason.
 `verified-by: bravebot_agent::turn::a_reporter_is_told_which_hook_holds_the_turn`
 `verified-by: bravebot_ui_bridge::reporting::a_running_hook_crosses_as_a_pair_naming_the_moment_and_the_program`
 `verified-by: bravebot_tui::state::a_running_hook_names_the_indicator_and_gives_it_back`
+`verified-by: bravebot_tui::app::a_hook_running_after_a_summary_is_named_and_its_trouble_said`
 
 `prompt-shown` is the exception to the first sentence: it fires from the confirmer, which has no
 display to hand, and a running status drawn over the prompt it precedes would be gone before the
@@ -442,6 +470,21 @@ somewhere to say it, which is the end of the call the question came up in.
 - **A hook stopped at its bound is stopped alone.** The program it started is killed and the
   programs that one started are not, so a setup script stopped in the middle of an install leaves
   the install running while the delegate starts.
+- **`compacted` does not say who asked.** A compaction a person asked for and one the budget forced
+  fire the same hooks with the same line, because HOOK-5 hands a hook the moment and nothing else. A
+  hook that must tell them apart has no way to, and widening what a hook is told is a decision to
+  take when a use case needs it. Two moment names would answer it without touching HOOK-5, at the
+  cost of a person declaring a hook twice for the same reaction.
+- **There is no moment before a compaction.** A hook runs after the summary has been adopted, so one
+  that has to save something while the full history is still in the request has nowhere to attach.
+  Firing before would be advisory only (HOOK-6) and would fire for a summary the gate then refuses
+  ([COMPACT-1](compaction.md#COMPACT-1)) or that fails, which leaves the conversation as it was.
+- **A stop key does not reach a `compacted` hook.** A summary that came back is kept however late the
+  stop landed, and the hook then runs to its bound (HOOK-7), as `turn-finished` does after a turn
+  that was cancelled. After `/compact` the screen is held by it, with its program named (HOOK-9),
+  for up to that long.
+- **A delegate's compaction fires nothing.** The delegate's conversation is its own, so a person
+  whose delegates compact does not hear of it.
 - **There is no moment for a session.** A session is many turns, and something that should happen
   once when the program opens fires per turn instead. The interactive interface is where a session
   begins and ends, and nothing there fires a hook yet.

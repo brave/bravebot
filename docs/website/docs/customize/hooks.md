@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Hooks
-description: Run a command of your own when a turn starts, when a tool call finishes, when a turn is over, when a question is waiting on you, or when a checkout is made for a delegate.
+description: Run a command of your own when a turn starts, when a tool call finishes, when a turn is over, when a question is waiting on you, when a checkout is made for a delegate, or when a conversation is compacted.
 ---
 
 # Hooks
@@ -30,7 +30,7 @@ inside a checkout, so a command named in one would be a command that arrived wit
 }
 ```
 
-## The five moments
+## The six moments
 
 Each entry names one moment in `on`:
 
@@ -41,6 +41,7 @@ Each entry names one moment in `on`:
 | `turn-finished` | when the turn you asked for is over, however it ended |
 | `prompt-shown` | just before a prompt or a question is put to you |
 | `checkout-made` | once a checkout has been made for a delegate, before that delegate's first request |
+| `compacted` | after a summary has replaced the older part of the conversation in the request |
 
 `turn-finished` fires even when the turn was cancelled or failed on its first request, because the
 commonest thing to attach to it is telling somebody who walked away, and a turn that died is exactly
@@ -82,6 +83,14 @@ checkout, which works in the checkout it was given. A setup that fails is report
 delegate runs in the checkout as it stands. A checkout this hook ran in is kept for you to remove with
 [`/checkouts remove`](../reference/commands.md#checkouts-apply-n--remove-n), as one a delegate ran a
 program in is.
+
+`compacted` lets a command react to the session losing its detailed history: save notes, log the
+event, or tell you. It fires once for each summary that was adopted, whether the context budget
+forced it in the middle of a turn or you asked for it with `/compact`. It does not fire when there
+was nothing worth summarising, when the summary was refused or could not be made, or for a delegate
+summarising its own conversation. It is told that a compaction happened and nothing of the summary
+or of what it replaced, like every hook, and what it prints does not reach the planner. It cannot
+undo the compaction, and one that fails is reported while the conversation stays shortened.
 
 ## A hook is a program and its arguments
 
@@ -212,3 +221,6 @@ since you mistyped its path.
   programs that one started keep running.
 - **There is no moment for a session.** Something that should happen once when the program opens fires
   per turn instead.
+- **`compacted` does not say who asked, and there is no moment before a compaction.** A compaction you
+  asked for and one the budget forced run the same hooks with the same line. A command that has to
+  save something while the full history is still in the request has no moment to attach to.
