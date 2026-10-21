@@ -1130,6 +1130,47 @@ fn a_run_request_carries_the_written_files_and_directories_spelled_for_a_person(
     );
 }
 
+/// PROMPT-1, PATH-003: a directory whose name holds a byte that is not UTF-8 reaches the desktop
+/// spelled with that byte, so the card does not draw it as the directory its replacement character
+/// spells. The held directory is sent with the replacement character, as it always was.
+#[cfg(unix)]
+#[test]
+fn a_run_request_carries_a_directory_that_is_not_text_spelled_as_the_bytes_it_holds() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Pipeline, Stage};
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let run = |directory: &[u8]| {
+        let pipeline = Pipeline::new(vec![Stage::new("ls", vec![])]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/bin/ls".into()], "/w");
+        request.confined = Some(bravebot_agent::Confined {
+            reads_the_machine: false,
+            directories: vec![std::path::PathBuf::from(OsStr::from_bytes(directory))],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: Vec::new(),
+            writes_git_directories: false,
+        });
+        wire::run_request(1, &request)
+    };
+    let invalid = run(b"/work/a\xffb");
+    let lookalike = run("/work/a\u{fffd}b".as_bytes());
+    assert_eq!(
+        invalid["confinement"]["shownDirectories"],
+        json!(["\"/work/a\\xffb\""])
+    );
+    assert_eq!(
+        lookalike["confinement"]["shownDirectories"],
+        json!(["/work/a\u{fffd}b"])
+    );
+    assert_ne!(
+        invalid["confinement"]["shownDirectories"],
+        lookalike["confinement"]["shownDirectories"]
+    );
+}
+
 /// SANDBOX-26: the desktop draws no `confined`, so the names a line asked for cross as their own
 /// field, or the desktop would approve a grant it never showed. Empty is sent for a line that
 /// asked for nothing, in the test above, so a missing field means an old build.

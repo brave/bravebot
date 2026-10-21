@@ -1071,48 +1071,85 @@ impl ServerRequest {
 /// A file name as a person is shown it, so a name that would draw as nothing, or as another name,
 /// is drawn as what it is.
 ///
-/// A name that is empty, has whitespace at either end, or holds a character that draws as nothing
-/// (a zero-width character, a bidirectional control, a tag character, a no-break space) comes back
-/// quoted with each such character spelled `\u{..}`, a space at an edge as `␣`, and a control
-/// character as its picture (DEL as its own, a C1 control as `\u{..}`). Any other name comes back
-/// unchanged, so the plain case reads as it always did. Every
-/// front end that names a path in a prompt draws it through this, so the three cannot disagree
-/// about which names are marked.
+/// A name that is empty, has a space at either end of it or of a directory in it, or holds a
+/// character that draws as nothing (a zero-width character, a bidirectional control, a tag
+/// character, a no-break space) or as a blank cell (the blank braille pattern) comes back quoted
+/// with each such character spelled `\u{..}`, a space at an edge as `␣`, and a control character
+/// as its picture (DEL as its own, a C1 control as `\u{..}`). Any other name comes back unchanged,
+/// so the plain case reads as it always did. Every front end that names a path in a prompt draws
+/// it through this, so the three cannot disagree about which names are marked.
 pub fn shown_name(name: &str) -> String {
-    let invisible = |c: char| {
-        c.is_control()
-            || (c.is_whitespace() && c != ' ')
-            || bravebot_core::invisible::draws_as_nothing(c)
-    };
-    let edge = name.starts_with(char::is_whitespace) || name.ends_with(char::is_whitespace);
-    if !name.is_empty() && !edge && !name.chars().any(invisible) {
-        return name.to_string();
-    }
-    let last = name.chars().count().saturating_sub(1);
-    let mut out = String::from("\"");
-    for (at, c) in name.chars().enumerate() {
-        match c {
-            ' ' if at == 0 || at == last => out.push('\u{2423}'),
-            '"' => out.push_str("\\\""),
-            '\u{7f}' => out.push('\u{2421}'),
-            c if (c as u32) < 0x20 => {
-                out.push(char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'));
-            }
-            c if invisible(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
+    shown(&name.chars().map(Piece::Char).collect::<Vec<_>>())
 }
 
 /// [`shown_name`] over a path held as one, for the prompts and lists that draw a path rather than
 /// a name the planner wrote.
 ///
-/// The conversion is for display and decides nothing: the path stays a `Path` everywhere a grant
-/// or a rule is made from it.
+/// A byte of the path that is not part of a UTF-8 character is spelled `\xNN` and the name is
+/// quoted, so two paths that differ only in such bytes are not drawn alike. The path stays a `Path`
+/// everywhere a grant or a rule is made from it: this is for display and decides nothing.
 pub fn shown_path(path: &std::path::Path) -> String {
-    shown_name(&path.to_string_lossy())
+    let mut pieces = Vec::new();
+    for chunk in path.as_os_str().as_encoded_bytes().utf8_chunks() {
+        pieces.extend(chunk.valid().chars().map(Piece::Char));
+        pieces.extend(chunk.invalid().iter().copied().map(Piece::Byte));
+    }
+    shown(&pieces)
+}
+
+/// One thing a name holds: a character, or a byte that is not part of one.
+#[derive(Clone, Copy)]
+enum Piece {
+    Char(char),
+    Byte(u8),
+}
+
+fn shown(pieces: &[Piece]) -> String {
+    let invisible = |c: char| {
+        c.is_control()
+            || (c.is_whitespace() && c != ' ')
+            || bravebot_core::invisible::draws_as_nothing(c)
+            || bravebot_core::invisible::draws_as_blank(c)
+    };
+    // The start and end of the name and of each directory in it, which is where a space stops
+    // being between two words and becomes part of what a name ends in.
+    let edge = |at: Option<usize>| match at.and_then(|at| pieces.get(at)) {
+        None => true,
+        Some(Piece::Char(c)) => std::path::is_separator(*c),
+        Some(Piece::Byte(_)) => false,
+    };
+    let spaced_at_an_edge = |at: usize| edge(at.checked_sub(1)) || edge(Some(at + 1));
+    let plain = !pieces.is_empty()
+        && !pieces.iter().enumerate().any(|(at, piece)| match *piece {
+            Piece::Byte(_) => true,
+            Piece::Char(' ') => spaced_at_an_edge(at),
+            Piece::Char(c) => invisible(c),
+        });
+    let mut out = String::new();
+    if plain {
+        for piece in pieces {
+            if let Piece::Char(c) = *piece {
+                out.push(c);
+            }
+        }
+        return out;
+    }
+    out.push('"');
+    for (at, piece) in pieces.iter().enumerate() {
+        match *piece {
+            Piece::Byte(byte) => out.push_str(&format!("\\x{byte:02x}")),
+            Piece::Char(' ') if spaced_at_an_edge(at) => out.push('\u{2423}'),
+            Piece::Char('"') => out.push_str("\\\""),
+            Piece::Char('\u{7f}') => out.push('\u{2421}'),
+            Piece::Char(c) if (c as u32) < 0x20 => {
+                out.push(char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'));
+            }
+            Piece::Char(c) if invisible(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            Piece::Char(c) => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// A quarantined file the model would like to read.
@@ -2927,6 +2964,9 @@ mod tests {
             ("a\u{e0041}b", "\"a\\u{e0041}b\""),
             ("a\u{fe0f}b", "\"a\\u{fe0f}b\""),
             ("a\u{3164}b", "\"a\\u{3164}b\""),
+            ("\u{2800}", "\"\\u{2800}\""),
+            ("a\u{2800}b", "\"a\\u{2800}b\""),
+            ("\u{2801}", "\u{2801}"),
             ("a\u{34f}b", "\"a\\u{34f}b\""),
             ("a\u{1b}b", "\"a\u{241b}b\""),
             ("a\u{7f}b", "\"a\u{2421}b\""),
@@ -2997,6 +3037,73 @@ mod tests {
             shown_path(std::path::Path::new("/opt/in\u{202e}clude")),
             "\"/opt/in\\u{202e}clude\""
         );
+    }
+
+    /// PROMPT-1: a space at the end of a directory inside a path is spelled as one at the end of the
+    /// whole name is, so `/work/state /file` cannot read as `/work/state/file`. A space between two
+    /// words, and a name with no space at an edge, is left as it is.
+    #[test]
+    fn a_directory_in_a_path_that_starts_or_ends_in_a_space_is_shown_as_what_it_is() {
+        for (name, shown) in [
+            ("/work/state/file", "/work/state/file"),
+            ("/work/my state/file", "/work/my state/file"),
+            ("/work/state /file", "\"/work/state\u{2423}/file\""),
+            ("/work/ state/file", "\"/work/\u{2423}state/file\""),
+            ("/work/ /file", "\"/work/\u{2423}/file\""),
+            ("state /", "\"state\u{2423}/\""),
+            ("/work/state /file ", "\"/work/state\u{2423}/file\u{2423}\""),
+        ] {
+            assert_eq!(shown_name(name), shown, "{name:?}");
+            assert_eq!(shown_path(std::path::Path::new(name)), shown, "{name:?}");
+        }
+        assert_ne!(
+            shown_name("/work/state /file"),
+            shown_name("/work/state/file")
+        );
+    }
+
+    /// PROMPT-1: a backslash is a directory separator only where the host says it is, so a Unix
+    /// name that holds one is not marked for the space after it.
+    #[cfg(unix)]
+    #[test]
+    fn a_space_after_a_backslash_is_part_of_the_name_where_a_backslash_is_not_a_separator() {
+        assert_eq!(shown_name("a\\ b"), "a\\ b");
+    }
+
+    /// PROMPT-1, PATH-003: a path holding a byte that is not UTF-8 is drawn with that byte spelled,
+    /// so it is not drawn as the name its replacement-character rendering spells, and two paths that
+    /// differ only in such bytes are not drawn alike. A character that is valid UTF-8 is drawn as
+    /// itself next to one that is not.
+    #[cfg(unix)]
+    #[test]
+    fn a_byte_that_is_not_text_is_shown_as_the_byte_and_not_as_another_name() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let shown = |bytes: &[u8]| shown_path(std::path::Path::new(OsStr::from_bytes(bytes)));
+        assert_eq!(shown(b"tool-\xff"), "\"tool-\\xff\"");
+        assert_eq!(shown(b"tool-\xfe"), "\"tool-\\xfe\"");
+        assert_eq!(shown("tool-\u{fffd}".as_bytes()), "tool-\u{fffd}");
+        assert_eq!(
+            shown(b"/work/caf\xc3\xa9-\xe9/x"),
+            "\"/work/caf\u{e9}-\\xe9/x\""
+        );
+        assert_eq!(shown(b"a\xc3"), "\"a\\xc3\"");
+        assert_eq!(shown(b"\xf0\x9f\x98"), "\"\\xf0\\x9f\\x98\"");
+        assert_eq!(
+            shown(b"/work/state /f\xff"),
+            "\"/work/state\u{2423}/f\\xff\""
+        );
+        let drawn = [
+            shown(b"tool-\xff"),
+            shown(b"tool-\xfe"),
+            shown(b"tool-"),
+            shown("tool-\u{fffd}".as_bytes()),
+        ];
+        for (at, one) in drawn.iter().enumerate() {
+            for other in &drawn[at + 1..] {
+                assert_ne!(one, other);
+            }
+        }
     }
 
     /// PROMPT-12: a note is one line, cut to a length, and nothing where there is nothing in it.
