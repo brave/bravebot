@@ -433,12 +433,9 @@ and a session with no skill beyond a built-in are both silent on it, and a sessi
 silent because of the second reason is not thereby marked told: a skill written into the project
 later in the session still gets its own turn to be named.
 
-**Why.** Holding most skills back by default, per [SKILL-18](#SKILL-18), means a planner that
-never thinks to call `search_skills` never learns one exists. A count says whether the call could
-find anything at all, and a name is the hint for when it might be worth making, which costs one
-message, once, against paying the room a full listing would have cost on every turn of the
-session, and the message has to be part of the conversation to be worth anything at all: a
-planner cannot remember a sentence the request never sent back to it again.
+**Why.** Without the message, a planner that never thinks to call `search_skills` never learns an
+unlisted skill exists. A count and names cost one message, once per session, against the room a
+full listing would cost on every turn of it.
 
 `verified-by: bravebot_agent::skills::other_skill_names_is_empty_for_a_curated_catalogue`
 `verified-by: bravebot_agent::turn::the_skills_overview_is_said_once_per_session_not_once_per_turn`
