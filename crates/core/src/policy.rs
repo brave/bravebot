@@ -17212,18 +17212,49 @@ five
         }
 
         /// AGENT-6. The list is read as `kind` is, so a private one is refused before any name in
-        /// it is compared with anything.
+        /// it is compared with anything. It names a server the run holds no grant for, so a
+        /// comparison made first would refuse it as a capability and name the servers held.
         #[test]
         fn a_private_server_list_cannot_direct_a_delegate() {
             let mut sink = RecordingSink::new();
             let mut policy = holding_weather_and_notes(&mut sink);
 
-            let private = Labelled::new(vec!["weather".to_string()], Label::untrusted_private());
+            let private = Labelled::new(vec!["gmail".to_string()], Label::untrusted_private());
             let err = policy
                 .before_delegate(&argument("worker"), &argument("fix it"), Some(&private))
                 .expect_err("a private list must not steer a delegate");
             assert_eq!(err.principle, Principle::Confinement);
-            assert!(format!("{err}").contains("mcp_servers"), "{err}");
+            let said = format!("{err}");
+            assert!(said.contains("mcp_servers"), "{said}");
+            assert!(
+                !said.contains("gmail") && !said.contains("weather"),
+                "the confinement refusal compared the list with the run's grants: {said}"
+            );
+        }
+
+        /// AGENT-6. Names are compared with the run's grants only after the integrity gate has
+        /// passed. A list naming a server the run holds no grant for, from a run that has met
+        /// something untrusted, is refused by the integrity gate, so the refusal says nothing
+        /// about which servers the run holds.
+        #[test]
+        fn a_fallen_run_is_refused_before_a_server_list_is_compared_with_its_grants() {
+            let mut sink = RecordingSink::new();
+            let mut fallen =
+                holding_weather_and_notes(&mut sink).resuming(crate::label::Integrity::Untrusted);
+
+            let err = fallen
+                .before_delegate(
+                    &argument("worker"),
+                    &argument("fix it"),
+                    Some(&keeping(&["gmail"])),
+                )
+                .expect_err("a fallen run cannot delegate");
+            assert_eq!(err.principle, Principle::IntegrityGate);
+            let said = format!("{err}");
+            assert!(
+                !said.contains("gmail") && !said.contains("weather"),
+                "the integrity refusal compared the list with the run's grants: {said}"
+            );
         }
 
         fn a_definition_budgeted_at(tokens: Option<u64>) -> crate::delegate::Definitions {

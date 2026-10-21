@@ -135,6 +135,7 @@ narrowing, so the most a list can do is leave the worker as it would have been
 `verified-by: bravebot_core::policy::a_worker_delegate_holds_the_servers_its_parent_holds_and_no_other`
 `verified-by: bravebot_agent::tools::a_server_list_that_is_not_a_list_of_names_is_refused`
 `verified-by: bravebot_agent::mcp::a_worker_spawned_keeping_no_server_is_offered_no_servers_tool`
+`verified-by: bravebot_core::policy::a_fallen_run_is_refused_before_a_server_list_is_compared_with_its_grants`
 
 <a id="AGENT-7"></a>
 ### AGENT-7: `budget` bounds each delegate's tokens, and can only lower the definition's

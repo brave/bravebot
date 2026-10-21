@@ -28585,6 +28585,19 @@ mod tests {
             );
         }
 
+        // Past what the session remembers it rewinds nothing and says how far back it does go,
+        // not as far as it can, which would leave a tree younger than the person believes.
+        held.rewind_command("4");
+        assert_eq!(
+            held.session.turns, 3,
+            "`/rewind 4` went back as far as the session could"
+        );
+        assert_eq!(
+            held.session.transcript.last().expect("a note").text,
+            t!(session_rewind_goes_no_further, kept = 3),
+            "`/rewind 4` did not say how far back the session goes"
+        );
+
         held.rewind_command("2");
         assert_eq!(
             held.session.turns, 1,

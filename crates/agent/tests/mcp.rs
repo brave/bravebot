@@ -1684,6 +1684,57 @@ fn bypassing_answers_both_prompts_and_records_nothing() {
     );
 }
 
+/// Asking for screening gives the check's word the two promotions of one slot's bytes and nothing
+/// else, so a server's list is answered and offered under bypass with no check made of it
+/// (CHECK-10, MODE-4). A list is a standing offer to the planner for the session and no word
+/// answers it, so a check here is a model call over a whole list that nobody reads.
+#[test]
+fn screening_asked_for_makes_no_check_of_a_servers_list_under_bypass() {
+    let scratch = Scratch::new("bypass-screening");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut refusing = Answering::new(Decision::Reject, CallDecision::approve_and_stand());
+    let mut confirmer = bravebot_agent::Confining::new(&mut refusing, PermissionMode::Bypass, true);
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast")
+            .with_mcp(Some(session))
+            .with_permission_mode(PermissionMode::Bypass)
+            .with_auto_vetting(true),
+        &mut confirmer,
+    );
+
+    assert!(
+        refusing.lists.is_empty() && refusing.calls.is_empty(),
+        "bypassing asked somebody because the run asked for screening"
+    );
+    let sent: Vec<String> = chat.try_iter().collect();
+    assert!(
+        !sent
+            .iter()
+            .any(|body| body.contains(A_CHECK_ASKING) && body.contains(DESCRIPTION)),
+        "a list nobody reads was checked because the run asked for screening"
+    );
+    assert_eq!(methods(&server), ["tools/call"], "the call was not made");
+    assert!(
+        !std::fs::read_to_string(approvals_file(&scratch.state()))
+            .unwrap_or_default()
+            .contains("tools"),
+        "bypassing recorded a vouch for the list"
+    );
+    assert!(
+        !tools_file(&scratch.state()).exists(),
+        "bypassing recorded a standing answer"
+    );
+}
+
 /// A list offered in bypass stays offered once the session cycles out of the mode, since its words
 /// are already in the context the planner writes from, and from then on each call is asked.
 #[test]

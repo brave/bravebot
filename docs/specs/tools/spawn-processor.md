@@ -33,6 +33,7 @@ It is the only thing steering the call, and it comes from a context holding noth
 wrote.
 
 `verified-by: bravebot_core::policy::a_private_instruction_cannot_direct_a_processor`
+`verified-by: bravebot_agent::tools::a_processor_cannot_be_started_from_a_context_that_met_untrusted_content`
 
 <a id="SPAWN-3"></a>
 ### SPAWN-3: the result is a reference, never text

@@ -140,6 +140,7 @@ number for work done in a directory they own.
 `verified-by: bravebot_tui::render::a_finished_delegate_says_what_it_reported`
 `verified-by: bravebot_tui::render::a_delegate_that_could_not_finish_reports_nothing`
 `verified-by: bravebot_agent::turn::what_a_delegate_reported_reaches_the_person_watching`
+`verified-by: bravebot_tui::render::a_finished_delegates_work_is_still_there_to_be_opened`
 
 <a id="WATCH-6"></a>
 ### WATCH-6: a reply a delegate is writing is drawn nowhere
@@ -215,6 +216,7 @@ at the last one and know that it is the last.
 `verified-by: bravebot_tui::render::a_delegates_view_ends_on_what_it_reported`
 `verified-by: bravebot_tui::render::a_delegates_view_does_not_open_on_the_mark`
 `verified-by: bravebot_tui::app::n_and_p_move_between_delegates`
+`verified-by: bravebot_tui::render::a_delegates_view_names_what_it_was_asked_above_its_lines_and_keeps_it_there`
 
 <a id="WATCH-9"></a>
 ### WATCH-9: the view takes every key, and the way out is read against the nearest level
